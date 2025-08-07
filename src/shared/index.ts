@@ -71,6 +71,24 @@ import { EvolutionApiProvider } from "./providers/whatsapp-provider/implementati
 
 import { NotificationService } from "./services/notification-service";
 
+import { IMailProvider } from "./providers/mail-provider/IMail-provider";
+
+import { EtherealMailProvider } from "./providers/mail-provider/implementations/ethereal-mail-provider";
+import { ResendMailProvider } from "./providers/mail-provider/implementations/resend-mail-provider";
+
+import { env } from "../env";
+
+const mailProviderMap = {
+  development: new EtherealMailProvider(),
+  production: new ResendMailProvider(),
+  test: new EtherealMailProvider(),
+};
+
+container.registerInstance<IMailProvider>(
+  "MailProvider",
+  mailProviderMap[env.NODE_ENV],
+);
+
 container.registerSingleton<IWhatsAppProvider>(
   "WhatsAppProvider",
   EvolutionApiProvider,

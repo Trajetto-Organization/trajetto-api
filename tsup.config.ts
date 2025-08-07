@@ -41,8 +41,6 @@ export default defineConfig({
     "amqplib",
     "socket.io",
     "fastify",
-    "reflect-metadata",
-    "tsyringe",
     // Other native Node.js modules
     "crypto",
     "fs",
@@ -170,10 +168,8 @@ export default defineConfig({
     ),
   },
 
-  // Tree-shaking - mais conservador para preservar side-effects
-  treeshake: {
-    preset: "safest"
-  },
+  // Tree-shaking
+  treeshake: true,
 
   // Output Settings
   outExtension({ format }) {
