@@ -76,6 +76,11 @@ container.registerSingleton<IWhatsAppProvider>(
   EvolutionApiProvider,
 );
 
+container.registerSingleton<NotificationService>(
+  "NotificationService",
+  NotificationService,
+);
+
 container.registerSingleton<IUserRepository>("UserRepository", UserRepository);
 container.registerSingleton<IUsersTokensRepository>(
   "UsersTokensRepository",
@@ -165,9 +170,4 @@ container.registerSingleton<IFineRepository>("FineRepository", FineRepository);
 container.registerSingleton<ITrafficViolationCodeRepository>(
   "TrafficViolationCodeRepository",
   TrafficViolationCodeRepository,
-);
-
-container.registerSingleton<NotificationService>(
-  "NotificationService",
-  NotificationService,
 );

@@ -41,6 +41,8 @@ export default defineConfig({
     "amqplib",
     "socket.io",
     "fastify",
+    "tsyringe",
+    "reflect-metadata", // Keep external to preserve original import order
     // Other native Node.js modules
     "crypto",
     "fs",
@@ -154,6 +156,57 @@ export default defineConfig({
         );
       }
 
+      // Intelligent dependency injection order enforcement
+      console.log("🔧 Garantindo ordem correta de DI...");
+
+      const serverPath = "build/server.js";
+      let content = await fs.readFile(serverPath, "utf8");
+
+      // Smart detection: find the FIRST occurrence of tsyringe in the file
+      const firstTsyringeMatch = content.match(
+        /(?:var|const|let).*?require\(['"]tsyringe['"]\)/,
+      );
+      const firstReflectMatch = content.match(
+        /require\(['"]reflect-metadata['"]\)/,
+      );
+
+      if (
+        firstTsyringeMatch &&
+        (!firstReflectMatch ||
+          content.indexOf(firstTsyringeMatch[0]) <
+            content.indexOf(firstReflectMatch[0]))
+      ) {
+        // Clean approach: remove ALL reflect-metadata requires
+        content = content.replace(
+          /require\(['"]reflect-metadata['"]\);?\s*\n?/g,
+          "",
+        );
+
+        // Insert reflect-metadata right at the beginning, respecting the original code structure
+        const strictMatch = content.match(/(['"])use strict\1;\s*/);
+        if (strictMatch && strictMatch.index !== undefined) {
+          const insertPoint = strictMatch.index + strictMatch[0].length;
+
+          const before = content.substring(0, insertPoint);
+          const after = content.substring(insertPoint);
+
+          content =
+            before +
+            "\n// Polyfill for dependency injection\nrequire('reflect-metadata');\n" +
+            after;
+        } else {
+          // Fallback: add at the very top
+          content =
+            "// Polyfill for dependency injection\nrequire('reflect-metadata');\n" +
+            content;
+        }
+
+        await fs.writeFile(serverPath, content, "utf8");
+        console.log("✅ Ordem de DI otimizada seguindo estrutura original");
+      } else {
+        console.log("✅ Ordem de DI já respeitada");
+      }
+
       console.log("✅ Build completed successfully!");
     } catch (error) {
       console.error("❌ Erro ao copiar assets:", error);
@@ -168,7 +221,7 @@ export default defineConfig({
     ),
   },
 
-  // Tree-shaking
+  // Tree-shaking enabled but controlled
   treeshake: true,
 
   // Output Settings

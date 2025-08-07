@@ -222,10 +222,9 @@ class WhatsAppQueueProvider {
         `[WhatsAppQueue] Processing status update for business ${event.businessId}: ${event.isConnected ? "connected" : "disconnected"}`,
       );
 
-      // Import the repository directly instead of using tsyringe
-      const { UserRepository } = await import("@/modules/user/repositories/user-repository");
-      const userRepository = new UserRepository();
-      
+      const { container } = await import("tsyringe");
+
+      const userRepository = container.resolve<any>("UserRepository");
       const whatsappUsers = await userRepository.findBusinessAdminsForWhatsApp(
         event.businessId,
       );
@@ -310,9 +309,8 @@ class WhatsAppQueueProvider {
         `[WhatsAppQueue] Processing instance deletion for business ${event.businessId}`,
       );
 
-      // Import the repository directly instead of using tsyringe
-      const { UserRepository } = await import("@/modules/user/repositories/user-repository");
-      const userRepository = new UserRepository();
+      const { container } = await import("tsyringe");
+      const userRepository = container.resolve<any>("UserRepository");
 
       // Wait to see if it is a recreation
       await new Promise((resolve) => setTimeout(resolve, 3000));

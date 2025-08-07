@@ -1,5 +1,3 @@
-import "reflect-metadata";
-
 import EmailWorkerService from "../shared/services/email-worker-service";
 import WhatsAppWorkerService from "../shared/services/whatsapp-worker-service";
 
