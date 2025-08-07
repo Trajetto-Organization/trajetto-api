@@ -37,7 +37,7 @@ services:
       DEL_INSTANCE: "false"
 
       # 📱 Session Settings - Minimal
-      CONFIG_SESSION_PHONE_CLIENT: Trajetto
+      CONFIG_SESSION_PHONE_CLIENT: Windows
       CONFIG_SESSION_PHONE_NAME: Chrome
       CONFIG_SESSION_PHONE_VERSION: "2.3000.1023204200"
 

@@ -83,8 +83,7 @@ class EvolutionApiProvider implements IWhatsAppProvider {
           syncFullHistory: false,
           markMessagesRead: false,
           autoRead: false,
-          phoneClient: "Trajetto Sistema",
-          browser: ["Trajetto", "Desktop", "1.0.0"],
+          phoneClient: "Windows",
         },
         webhook: {
           url: finalWebhookUrl,

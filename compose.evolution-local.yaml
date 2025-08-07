@@ -37,7 +37,7 @@ services:
       DEL_INSTANCE: false
 
       # 📱 Session Settings - Minimal
-      CONFIG_SESSION_PHONE_CLIENT: Trajetto
+      CONFIG_SESSION_PHONE_CLIENT: Windows
       CONFIG_SESSION_PHONE_NAME: Chrome
       CONFIG_SESSION_PHONE_VERSION: 2.3000.1023204200
 
@@ -86,7 +86,8 @@ services:
       SQS_ENABLED: false
       WEBSOCKET_ENABLED: false
       WEBSOCKET_GLOBAL_EVENTS: false
-      TYPEBOT_ENABLED: false
+      TYPEBOT_ENABLED: true
+      TYPEBOT_API_VERSION: latest
       CHATWOOT_ENABLED: false
       OPENAI_ENABLED: false
       DIFY_ENABLED: false
