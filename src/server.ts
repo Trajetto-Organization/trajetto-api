@@ -1,3 +1,6 @@
+import "reflect-metadata";
+import "./shared";
+
 import { app } from "./http";
 import { env } from "./env";
 

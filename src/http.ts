@@ -1,6 +1,3 @@
-import "reflect-metadata";
-import "./shared";
-
 import fastify from "fastify";
 import fastifyRateLimit from "@fastify/rate-limit";
 
