@@ -1,0 +1,97 @@
+version: "3.8"
+
+services:
+  trajetto-database:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DATABASE}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - minha_rede
+    restart: always
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USERNAME} -d ${POSTGRES_DATABASE}",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  trajetto-rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    ports:
+      - "15672:15672" # UI
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - minha_rede
+    restart: always
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  api:
+    image: intrajetto/trajetto:latest
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}?schema=public
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@${RABBITMQ_HOST}:${RABBITMQ_PORT}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_SECRET_REFRESH_TOKEN: ${JWT_SECRET_REFRESH_TOKEN}
+      HTTP_REQUEST: ${HTTP_REQUEST}
+      CLOUDINARY_LOGO_IMAGE: ${CLOUDINARY_LOGO_IMAGE}
+      RESEND_SECRET_KEY: ${RESEND_SECRET_KEY}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL}
+      MASTER_USER_EMAIL: ${MASTER_USER_EMAIL}
+      MASTER_USER_INITIAL_PASSWORD: ${MASTER_USER_INITIAL_PASSWORD}
+    deploy:
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.api.rule=Host(`trajettoapi.thorsolucoes.com.br`)
+        - traefik.http.routers.api.entrypoints=websecure
+        - traefik.http.routers.api.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.api.priority=1
+        - traefik.http.routers.api.service=api
+        - traefik.http.services.api.loadbalancer.server.port=3333
+        - traefik.http.services.api.loadbalancer.passHostHeader=true
+        - traefik.docker.network=minha_rede
+    networks:
+      - minha_rede
+    depends_on:
+      - trajetto-database
+      - trajetto-rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3333/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  postgres_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+networks:
+  minha_rede:
+    external: true

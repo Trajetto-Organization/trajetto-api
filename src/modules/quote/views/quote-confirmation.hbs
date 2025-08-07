@@ -1,0 +1,256 @@
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Confirmação de Solicitação - Trajetto</title>
+    <style>
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        line-height: 1.6;
+        color: #333;
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+        background-color: #f8f9fa;
+      }
+      .container {
+        background: white;
+        border-radius: 12px;
+        padding: 30px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      .header {
+        text-align: center;
+        margin-bottom: 30px;
+        padding-bottom: 20px;
+        border-bottom: 2px solid #d81b60;
+      }
+      .logo {
+        font-size: 28px;
+        font-weight: bold;
+        color: #d81b60;
+        margin-bottom: 10px;
+      }
+      .title {
+        color: #2c3e50;
+        font-size: 24px;
+        margin-bottom: 10px;
+      }
+      .subtitle {
+        color: #6c757d;
+        font-size: 16px;
+      }
+      .success-icon {
+        font-size: 64px;
+        margin: 20px 0;
+      }
+      .content-section {
+        margin: 25px 0;
+        padding: 20px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        border-left: 4px solid #28a745;
+      }
+      .highlight-box {
+        background: linear-gradient(135deg, #e3f2fd, #f3e5f5);
+        border-radius: 8px;
+        padding: 25px;
+        margin: 25px 0;
+        text-align: center;
+      }
+      .next-steps {
+        background: white;
+        border: 2px solid #d81b60;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 25px 0;
+      }
+      .steps-list {
+        list-style: none;
+        padding: 0;
+      }
+      .steps-list li {
+        display: flex;
+        align-items: center;
+        margin: 15px 0;
+        padding: 10px;
+        background: #f8f9fa;
+        border-radius: 6px;
+      }
+      .step-number {
+        background: #d81b60;
+        color: white;
+        border-radius: 50%;
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        margin-right: 15px;
+        flex-shrink: 0;
+      }
+      .contact-info {
+        background: #e8f5e8;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 25px 0;
+      }
+      .contact-item {
+        display: flex;
+        align-items: center;
+        margin: 10px 0;
+      }
+      .contact-icon {
+        margin-right: 12px;
+        font-size: 18px;
+      }
+      .benefits-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 15px;
+        margin: 25px 0;
+      }
+      .benefit-item {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+        text-align: center;
+        border: 1px solid #e9ecef;
+      }
+      .benefit-icon {
+        font-size: 24px;
+        margin-bottom: 8px;
+      }
+      .footer {
+        text-align: center;
+        margin-top: 30px;
+        padding-top: 20px;
+        border-top: 1px solid #e9ecef;
+        color: #6c757d;
+        font-size: 14px;
+      }
+      @media (max-width: 600px) {
+        .benefits-grid {
+          grid-template-columns: 1fr;
+        }
+        .steps-list li {
+          flex-direction: column;
+          text-align: center;
+        }
+        .step-number {
+          margin-bottom: 10px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div class="logo">🚛 Trajetto</div>
+        <div class="success-icon">✅</div>
+        <h1 class="title">Solicitação Recebida!</h1>
+        <p class="subtitle">Obrigado por seu interesse no Trajetto</p>
+      </div>
+
+      <div class="content-section">
+        <p><strong>Olá, {{name}}!</strong></p>
+        <p>Recebemos sua solicitação de orçamento para a
+          <strong>{{company}}</strong>
+          e ficamos muito animados em ajudá-lo a transformar a gestão da sua
+          frota!</p>
+      </div>
+
+      <div class="highlight-box">
+        <h3 style="margin-top: 0; color: #d81b60;">📊 Sua Solicitação</h3>
+        <p><strong>Empresa:</strong> {{company}}</p>
+        <p><strong>Tamanho da Frota:</strong> {{fleetSize}}</p>
+        <p style="margin-bottom: 0;"><strong>Tempo de Resposta:</strong>
+          Até 24 horas</p>
+      </div>
+
+      <div class="next-steps">
+        <h3 style="color: #d81b60; margin-top: 0;">🎯 Próximos Passos</h3>
+        <ul class="steps-list">
+          <li>
+            <span class="step-number">1</span>
+            <span>Nossa equipe comercial analisará suas necessidades específicas</span>
+          </li>
+          <li>
+            <span class="step-number">2</span>
+            <span>Entraremos em contato em até 24 horas para agendar uma
+              demonstração</span>
+          </li>
+          <li>
+            <span class="step-number">3</span>
+            <span>Apresentaremos uma proposta personalizada para sua frota</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="benefits-grid">
+        <div class="benefit-item">
+          <div class="benefit-icon">📱</div>
+          <strong>Monitoramento 24/7</strong>
+          <p style="font-size: 14px; margin: 5px 0 0 0;">Controle total em tempo
+            real</p>
+        </div>
+        <div class="benefit-item">
+          <div class="benefit-icon">💰</div>
+          <strong>Redução de 30%</strong>
+          <p style="font-size: 14px; margin: 5px 0 0 0;">Nos custos operacionais</p>
+        </div>
+        <div class="benefit-item">
+          <div class="benefit-icon">🔧</div>
+          <strong>Manutenção Inteligente</strong>
+          <p style="font-size: 14px; margin: 5px 0 0 0;">Prevenção automática</p>
+        </div>
+        <div class="benefit-item">
+          <div class="benefit-icon">📈</div>
+          <strong>Relatórios Avançados</strong>
+          <p style="font-size: 14px; margin: 5px 0 0 0;">Análises detalhadas</p>
+        </div>
+      </div>
+
+      <div class="contact-info">
+        <h3 style="color: #28a745; margin-top: 0;">📞 Precisa de Ajuda Imediata?</h3>
+        <div class="contact-item">
+          <span class="contact-icon">📧</span>
+          <span>E-mail:
+            <a
+              href="mailto:{{supportEmail}}"
+              style="color: #d81b60;"
+            >{{supportEmail}}</a></span>
+        </div>
+        <div class="contact-item">
+          <span class="contact-icon">📱</span>
+          <span>Telefone:
+            <a
+              href="tel:{{salesPhone}}"
+              style="color: #d81b60;"
+            >{{salesPhone}}</a></span>
+        </div>
+        <div class="contact-item">
+          <span class="contact-icon">🕒</span>
+          <span>Horário: Segunda a Sexta, 8h às 18h</span>
+        </div>
+      </div>
+
+      <div
+        style="background: linear-gradient(135deg, #d81b60, #c2185b); color: white; border-radius: 8px; padding: 20px; text-align: center; margin: 25px 0;"
+      >
+        <h3 style="margin-top: 0;">🚀 Enquanto Você Espera...</h3>
+        <p style="margin-bottom: 0;">Que tal conhecer alguns de nossos casos de
+          sucesso? Veja como outras empresas transformaram suas operações com o
+          Trajetto!</p>
+      </div>
+
+      <div class="footer">
+        <p>Este e-mail foi enviado automaticamente pelo sistema Trajetto.</p>
+        <p>Se você não solicitou este orçamento, pode ignorar este e-mail.</p>
+        <p>© {{year}} Trajetto - Todos os direitos reservados</p>
+      </div>
+    </div>
+  </body>
+</html>

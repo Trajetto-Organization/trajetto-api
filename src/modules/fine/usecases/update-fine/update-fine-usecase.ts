@@ -1,0 +1,205 @@
+import { inject, injectable } from "tsyringe";
+
+import { IFineRepository } from "../../repositories/IFine-repository";
+import { ITrafficViolationCodeRepository } from "../../repositories/ITraffic-violation-code-repository";
+
+import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
+import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+
+import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
+import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+
+import { Fine, UpdateFineProps } from "../../dtos/fine-dto";
+
+import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
+
+import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
+import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
+
+import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
+import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
+
+import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
+import { TrafficViolationCodeNotFoundError } from "../errors/traffic-violation-code-not-found-error";
+
+import { NotificationService } from "@/shared/services/notification-service";
+
+import { AppError } from "@/shared/errors/AppError";
+import { formatCurrency } from "@/config/format-values";
+
+@injectable()
+class UpdateFineUseCase {
+  constructor(
+    @inject("UserRepository")
+    private user: IUserRepository,
+    @inject("FineRepository")
+    private fine: IFineRepository,
+    @inject("BranchRepository")
+    private branch: IBranchRepository,
+    @inject("DriverRepository")
+    private driver: IDriverRepository,
+    @inject("VehicleRepository")
+    private vehicle: IVehicleRepository,
+    @inject("TrafficViolationCodeRepository")
+    private trafficViolationCode: ITrafficViolationCodeRepository,
+    @inject("NotificationService")
+    private notificationService: NotificationService,
+  ) {}
+
+  async execute(
+    fineData: UpdateFineProps,
+    fineId: string,
+    userId: string,
+  ): Promise<Fine> {
+    const findUser = await this.user.findUserById(userId);
+
+    if (!findUser) {
+      throw new ResourceNotFoundError();
+    }
+
+    const existingFine = await this.fine.findFineById(fineId);
+
+    if (!existingFine) {
+      throw new AppError("Multa não encontrada!", 404);
+    }
+
+    if (
+      findUser.role !== "MASTER" &&
+      existingFine.businessId !== findUser.businessId
+    ) {
+      throw new AppError(
+        "Você não tem permissão para alterar esta multa!",
+        403,
+      );
+    }
+
+    if (fineData.branchId) {
+      const findBranch = await this.branch.findBranchById(fineData.branchId);
+      if (!findBranch) {
+        throw new BranchNotFoundError();
+      }
+      if (findBranch.businessId !== existingFine.businessId) {
+        throw new BranchNotBelongBusinessError();
+      }
+    }
+
+    if (fineData.driverId) {
+      const findDriver = await this.driver.findDriverById(fineData.driverId);
+      if (!findDriver) {
+        throw new DriverNotFoundError();
+      }
+      if (findDriver.businessId !== existingFine.businessId) {
+        throw new DriverNotBelongBusinessError();
+      }
+    }
+
+    if (fineData.vehicleId) {
+      const findVehicle = await this.vehicle.findVehicleById(
+        fineData.vehicleId,
+      );
+
+      if (!findVehicle) {
+        throw new VehicleNotFoundError();
+      }
+
+      if (findVehicle.businessId !== existingFine.businessId) {
+        throw new VehicleNotBelongBusinessError();
+      }
+    }
+
+    let newTrafficViolationCode = null;
+
+    if (fineData.trafficViolationCodeId) {
+      newTrafficViolationCode =
+        await this.trafficViolationCode.findTrafficViolationCodeById(
+          fineData.trafficViolationCodeId,
+        );
+
+      if (!newTrafficViolationCode) {
+        throw new TrafficViolationCodeNotFoundError();
+      }
+
+      if (
+        fineData.trafficViolationCodeId !==
+          existingFine.trafficViolationCodeId &&
+        !fineData.points
+      ) {
+        fineData.points = newTrafficViolationCode.points;
+      }
+    }
+
+    if (fineData.violation_date && fineData.due_date) {
+      const violationDate = new Date(fineData.violation_date);
+      const dueDate = new Date(fineData.due_date);
+
+      if (dueDate <= violationDate) {
+        throw new AppError(
+          "A data de vencimento deve ser posterior à data da infração!",
+          400,
+        );
+      }
+    } else if (fineData.violation_date) {
+      const violationDate = new Date(fineData.violation_date);
+      const existingDueDate = new Date(existingFine.due_date);
+
+      if (existingDueDate <= violationDate) {
+        throw new AppError(
+          "A nova data da infração não pode ser posterior à data de vencimento existente!",
+          400,
+        );
+      }
+    } else if (fineData.due_date) {
+      const dueDate = new Date(fineData.due_date);
+      const existingViolationDate = new Date(existingFine.violation_date);
+
+      if (dueDate <= existingViolationDate) {
+        throw new AppError(
+          "A nova data de vencimento deve ser posterior à data da infração existente!",
+          400,
+        );
+      }
+    }
+
+    if (fineData.payment_date) {
+      const paymentDate = new Date(fineData.payment_date);
+      const violationDate = new Date(
+        fineData.violation_date || existingFine.violation_date,
+      );
+
+      if (paymentDate < violationDate) {
+        throw new AppError(
+          "A data de pagamento não pode ser anterior à data da infração!",
+          400,
+        );
+      }
+    }
+
+    try {
+      const updatedFine = await this.fine.updateFine({
+        fineData,
+        fineId,
+      });
+
+      // Process activity asynchronously without blocking the main flow
+      this.notificationService.createActivityIfEnabled({
+        type: "Multa",
+        action: "update",
+        entityId: updatedFine.id,
+        description: `Multa atualizada | Valor: ${formatCurrency(Number(updatedFine.amount))} | ID: ${updatedFine.id}`,
+        status: "Atualizado",
+        performedBy: userId,
+        businessId: existingFine.businessId,
+      });
+
+      return updatedFine;
+    } catch (error) {
+      throw new AppError(
+        "Houve um erro ao tentar atualizar a multa! Por favor, tente novamente.",
+        500,
+      );
+    }
+  }
+}
+
+export { UpdateFineUseCase };

@@ -1,0 +1,19 @@
+{
+  "name": "router-engine-infra",
+  "main": "index.ts",
+  "scripts": {
+    "pulumi:up": "pulumi up",
+    "pulumi:cancel": "pulumi cancel",
+    "pulumi:preview": "pulumi preview"
+  },
+  "devDependencies": {
+    "@types/node": "^18",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@pulumi/aws": "^6.0.0",
+    "@pulumi/awsx": "^2.0.2",
+    "@pulumi/hcloud": "1.23.0",
+    "@pulumi/pulumi": "^3.113.0"
+  }
+}

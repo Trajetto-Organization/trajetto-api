@@ -1,0 +1,109 @@
+version: "3.8"
+
+services:
+  trajetto-database:
+    image: "bitnami/postgresql"
+    container_name: trajetto-database
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    env_file:
+      - .env # Loads the base variables
+    environment:
+      # Use .env variables to configure PostgreSQL
+      - POSTGRES_USER=${POSTGRES_USERNAME}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DATABASE}
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    volumes:
+      - postgres_data:/bitnami/postgresql
+    networks:
+      - trajetto-network
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USERNAME} -d ${POSTGRES_DATABASE}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  trajetto-rabbitmq:
+    image: "rabbitmq:3-management"
+    container_name: trajetto-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672" # Connection
+      - "15672:15672" # UI
+    env_file:
+      - .env
+    environment:
+      # Use .env variables to configure RabbitMQ
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+      - RABBITMQ_DEFAULT_VHOST=/
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - trajetto-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  trajetto-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: trajetto-api
+    restart: unless-stopped
+    ports:
+      - "3333:3333"
+    depends_on:
+      trajetto-database:
+        condition: service_healthy
+      trajetto-rabbitmq:
+        condition: service_healthy
+    env_file:
+      - .env # Loads ALL base variables from .env
+    environment:
+      # CONSTRUCTS URLs dynamically using .env variables
+      # DATABASE_URL is constructed here with the correct host for Docker
+      - DATABASE_URL=postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@trajetto-database:5432/${POSTGRES_DATABASE}?schema=public
+
+      # RABBITMQ_URL is constructed here with the correct host for Docker
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@trajetto-rabbitmq:5672
+
+      # Override only what needs to be different in production
+      - NODE_ENV=production
+      - PORT=3333
+      - HOSTNAME=0.0.0.0
+    networks:
+      - trajetto-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3333/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s # More time for complete initialization
+
+volumes:
+  postgres_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+networks:
+  trajetto-network:
+    driver: bridge

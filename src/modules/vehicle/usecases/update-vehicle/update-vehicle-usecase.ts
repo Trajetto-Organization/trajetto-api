@@ -1,0 +1,209 @@
+import { inject, injectable } from "tsyringe";
+import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
+
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+
+import { IVehicleTypeRepository } from "@/modules/vehicle-type/repositories/IVehicle-type-repository";
+import { IFuelTypeRepository } from "@/modules/fuel-type/repositories/IFuel-type-repository";
+
+import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
+
+import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+import { NotificationService } from "@/shared/services/notification-service";
+
+import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+
+import { VehicleTypeNotFoundError } from "@/modules/vehicle-type/usecases/errors/vehicle-type-not-found-error";
+import { FuelTypeNotFoundError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-found-error";
+
+import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
+import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
+
+import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";
+import { VehicleNotBelongBusinessError } from "../errors/vehicle-not-belong-business-error";
+
+import { VehicleTypeNotBelongBusinessError } from "@/modules/vehicle-type/usecases/errors/vehicle-type-not-belong-business-error";
+import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-belong-business-error";
+
+import { Vehicle, UpdateVehicleProps } from "../../dtos/vehicle-dto";
+
+import { VehicleModelYearError } from "../errors/vehicle-model-year-error";
+
+import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
+import { VehicleCurrentMileageCanNotBeUpdatedError } from "../errors/vehicle-current-mileage-can-not-be-updated";
+
+import { translateVehicleStatus } from "@/config/format-values";
+import { AppError } from "@/shared/errors/AppError";
+
+@injectable()
+class UpdateVehicleUseCase {
+  constructor(
+    @inject("UserRepository")
+    private user: IUserRepository,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
+    @inject("VehicleTypeRepository")
+    private vehicleType: IVehicleTypeRepository,
+    @inject("FuelTypeRepository")
+    private fuelType: IFuelTypeRepository,
+    @inject("DriverRepository")
+    private driver: IDriverRepository,
+    @inject("BranchRepository")
+    private branch: IBranchRepository,
+    @inject("VehicleRepository")
+    private vehicle: IVehicleRepository,
+    @inject("NotificationService")
+    private notificationService: NotificationService,
+  ) {}
+
+  async execute(
+    vehicleData: UpdateVehicleProps,
+    vehicleId: string,
+    businessId: string,
+    userId: string,
+  ): Promise<Vehicle> {
+    const findUser = await this.user.findUserById(userId);
+
+    if (!findUser) {
+      throw new ResourceNotFoundError();
+    }
+
+    const findBusiness = await this.business.findBusinessById(businessId);
+
+    if (!findBusiness) {
+      throw new BusinessNotFoundError();
+    }
+
+    const findVehicle = await this.vehicle.findVehicleById(vehicleId);
+
+    if (!findVehicle) {
+      throw new VehicleNotFoundError();
+    }
+
+    if (findVehicle.businessId !== businessId) {
+      throw new VehicleNotBelongBusinessError();
+    }
+
+    if (
+      findUser.role !== "MASTER" &&
+      vehicleData.current_mileage !== undefined &&
+      vehicleData.current_mileage !== findVehicle.current_mileage
+    ) {
+      throw new VehicleCurrentMileageCanNotBeUpdatedError();
+    }
+
+    // Additional checks for relationships
+    if (vehicleData.vehicleTypeId) {
+      const findVehicleType = await this.vehicleType.findVehicleTypeById(
+        vehicleData.vehicleTypeId,
+      );
+
+      if (!findVehicleType) {
+        throw new VehicleTypeNotFoundError();
+      }
+
+      if (findVehicleType.businessId !== businessId) {
+        throw new VehicleTypeNotBelongBusinessError();
+      }
+    }
+
+    // FuelType is mandatory
+    if (vehicleData.fuelTypeId) {
+      const findFuelType = await this.fuelType.findFuelTypeById(
+        vehicleData.fuelTypeId,
+      );
+
+      if (!findFuelType) {
+        throw new FuelTypeNotFoundError();
+      }
+
+      if (findFuelType.businessId !== businessId) {
+        throw new FuelTypeNotBelongBusinessError();
+      }
+    }
+
+    // Validate relationship between model year and year of manufacture
+    let manufacturingYear: number | null = null;
+    let modelYear: number | null = null;
+
+    // Determine the year of manufacture based on update data or existing vehicle
+    if (vehicleData.manufacturing_year) {
+      manufacturingYear = new Date(
+        vehicleData.manufacturing_year,
+      ).getFullYear();
+    } else if (findVehicle.manufacturing_year) {
+      manufacturingYear = new Date(
+        findVehicle.manufacturing_year,
+      ).getFullYear();
+    }
+
+    // Determine model year based on update data or existing vehicle
+    if (vehicleData.model_year) {
+      modelYear = new Date(vehicleData.model_year).getFullYear();
+    } else if (findVehicle.model_year) {
+      modelYear = new Date(findVehicle.model_year).getFullYear();
+    }
+
+    // If both years are known, validate the relationship between them
+    if (manufacturingYear !== null && modelYear !== null) {
+      if (modelYear < manufacturingYear || modelYear > manufacturingYear + 1) {
+        throw new VehicleModelYearError();
+      }
+    }
+
+    // Driver is optional
+    if (vehicleData.driverId) {
+      const findDriver = await this.driver.findDriverById(vehicleData.driverId);
+
+      if (!findDriver) {
+        throw new DriverNotFoundError();
+      }
+
+      if (findDriver.businessId !== businessId) {
+        throw new VehicleNotBelongBusinessError();
+      }
+    }
+
+    // Branch is optional
+    if (vehicleData.branchId) {
+      const findBranch = await this.branch.findBranchById(vehicleData.branchId);
+
+      if (!findBranch) {
+        throw new BranchNotFoundError();
+      }
+
+      if (findBranch.businessId !== businessId) {
+        throw new BranchNotBelongBusinessError();
+      }
+    }
+
+    try {
+      const updatedVehicle = await this.vehicle.updateVehicle({
+        vehicleData,
+        vehicleId,
+      });
+
+      // Process activity asynchronously without blocking the main flow
+      this.notificationService.createActivityIfEnabled({
+        type: "Veículo",
+        action: "update",
+        entityId: vehicleId,
+        description: `Veículo ${updatedVehicle.license_plate} atualizado | ID: ${updatedVehicle.id}`,
+        status: translateVehicleStatus(updatedVehicle.status) || "Atualizado",
+        performedBy: userId,
+        businessId,
+      });
+
+      return updatedVehicle;
+    } catch (error) {
+      throw new AppError(
+        "Houve um erro ao tentar atualizar o veículo! Por favor, tente novamente.",
+        500,
+      );
+    }
+  }
+}
+
+export { UpdateVehicleUseCase };

@@ -1,0 +1,131 @@
+version: "3.7"
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--port", "6379"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - minha_rede
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1024M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  evolution_v2:
+    image: atendai/evolution-api:v2.2.3
+    hostname: "{{.Service.Name}}.{{.Task.Slot}}"
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks:
+      - minha_rede
+    depends_on:
+      - redis
+    environment:
+      # 🚀 Server Settings - Optimized
+      SERVER_URL: ${EVOLUTION_API_URL}
+      DEL_INSTANCE: false
+
+      # 📱 Session Settings - Minimal
+      CONFIG_SESSION_PHONE_CLIENT: Trajetto
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      CONFIG_SESSION_PHONE_VERSION: 2.3000.1023204200
+
+      # ⚙️ General Settings - Essential Only
+      QRCODE_LIMIT: 5
+      LANGUAGE: pt-BR
+
+      # 📋 Message Settings - Prevent Auto-Read
+      AUTO_READ_MESSAGES: false
+      MARK_MESSAGES_READ: false
+      READ_MESSAGES: false
+      READ_STATUS: false
+
+      # 🔐 Authentication
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: true
+
+      # 🗄️ Database - Minimal Saving (Only Essential)
+      DATABASE_ENABLED: true
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@${POSTGRES_DATABASE}:${POSTGRES_PORT}/evolution_api
+      DATABASE_CONNECTION_CLIENT_NAME: evolution_v2
+      DATABASE_SAVE_DATA_INSTANCE: true
+      DATABASE_SAVE_DATA_NEW_MESSAGE: false # ❌ Disabled - Resource heavy
+      DATABASE_SAVE_MESSAGE_UPDATE: false # ❌ Disabled - Not needed
+      DATABASE_SAVE_DATA_CONTACTS: false # ❌ Disabled - Not needed
+      DATABASE_SAVE_DATA_CHATS: false # ❌ Disabled - Not needed
+      DATABASE_SAVE_DATA_LABELS: false # ❌ Disabled - Not needed
+      DATABASE_SAVE_DATA_HISTORIC: false # ❌ Disabled - Resource heavy
+
+      # 📦 Redis Cache - Optimized
+      CACHE_REDIS_ENABLED: true
+      CACHE_REDIS_URI: redis://redis-evolution:6379/1
+      CACHE_REDIS_PREFIX_KEY: trajetto_evolution
+      CACHE_REDIS_SAVE_INSTANCES: true
+      CACHE_LOCAL_ENABLED: false
+
+      # 🌐 Webhook - Smart Filtering
+      WEBHOOK_GLOBAL_URL: ${EVOLUTION_API_URL}/evolution/webhook
+      WEBHOOK_GLOBAL_ENABLED: true
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: true
+
+      # 🚫 Disabled Services (Resource Optimization)
+      PROVIDER_ENABLED: false
+      RABBITMQ_ENABLED: false
+      SQS_ENABLED: false
+      WEBSOCKET_ENABLED: false
+      WEBSOCKET_GLOBAL_EVENTS: false
+      TYPEBOT_ENABLED: false
+      CHATWOOT_ENABLED: false
+      OPENAI_ENABLED: false
+      DIFY_ENABLED: false
+      S3_ENABLED: false
+
+      # 💼 WhatsApp Business Settings
+      WA_BUSINESS_TOKEN_WEBHOOK: evolution
+      WA_BUSINESS_URL: https://graph.facebook.com
+      WA_BUSINESS_VERSION: v20.0
+      WA_BUSINESS_LANGUAGE: pt_BR
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1024M
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.evolution_v2.rule=Host(`whatsapp-api.thorsolucoes.com.br`)
+        - traefik.http.routers.evolution_v2.entrypoints=websecure
+        - traefik.http.routers.evolution_v2.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.evolution_v2.priority=1
+        - traefik.http.routers.evolution_v2.service=evolution_v2
+        - traefik.http.services.evolution_v2.loadbalancer.server.port=8080
+        - traefik.http.services.evolution_v2.loadbalancer.passHostHeader=true
+
+volumes:
+  evolution_instances:
+    external: true
+    name: evolution_v2_data
+  redis_data:
+    external: true
+    name: redis_data
+
+networks:
+  minha_rede:
+    external: true
+    name: minha_rede

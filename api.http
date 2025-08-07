@@ -1,0 +1,765 @@
+@baseUrl = http://localhost:3333
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiYnVzaW5lc3NJZCI6bnVsbCwicHJvZmlsZUFjY2VzcyI6bnVsbCwiaWF0IjoxNzUzODQwODYyLCJleHAiOjE3NTM4NzY4NjIsInN1YiI6IjU1YTQ5MmY1LWE2YjAtNGEzOC1iZDY0LWVjYmE4NjhlZjZkMyJ9.rUPptbErW5Ii4VB-SdHEsTvlepxEl4qHMh36lUH1gOg
+@refresh_token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6Im1hc3RlckBhZG1pbi5jb20iLCJpYXQiOjE3NTM0MDU5NjksImV4cCI6MTc1MzQ5MjM2OSwic3ViIjoiOGRhZmY4ZjQtY2QwYS00ODgzLWFkYjAtMDZmODA0ZjI1OTM3In0.WTv7cz3TAaBf6TwuzjHyVFwwJH3I7nngwoKGndf3Qb0
+@forgot_verification_token = b3c16b35-54c4-47e7-9ca1-86a87c4b45f7
+@page = 1
+@pageSize = 10
+
+## User Requests
+
+POST {{baseUrl}}/user/create-user
+Content-Type: application/json
+Authorization: Bearer {{token}} 
+
+{
+    "name": "Test App",
+    "email": "test@gmail.com",
+    "password": "1234567",
+    "role": "BUSINESS_ADMIN",
+    "businessId": "355bf3b2-66c4-462b-a021-a0813abe1fe5",
+    "profileAccessId": "227d3746-65c1-4a46-8baa-9745951d0f3f"
+}
+
+###
+
+POST {{baseUrl}}/user/session
+Content-Type: application/json
+
+{
+    "email": "master@admin.com",
+    "password": "SenhaSegura123@"
+}
+
+###
+
+POST {{baseUrl}}/user/refresh-token
+Content-Type: application/json
+
+{
+    "token": "{{refresh_token}}"
+}
+
+###
+
+POST {{baseUrl}}/user/resend-two-factor-code
+Content-Type: application/json
+
+{
+    "email": "test@gmail.com"
+}
+
+###
+
+POST {{baseUrl}}/user/two-factor-verification
+Content-Type: application/json
+
+{
+    "email": "test@gmail.com",
+    "code": "617058"
+}
+
+###
+
+POST {{baseUrl}}/user/forgot/password
+Content-Type: application/json
+
+{
+    "email": "test@gmail.com"
+}
+
+###
+
+GET {{baseUrl}}/user/forgot-verification?token={{forgot_verification_token}}
+Content-Type: application/json
+
+###
+
+POST {{baseUrl}}/user/reset/password?token={{forgot_verification_token}}
+Content-Type: application/json
+
+{
+    "password": "12345678"
+}
+
+###
+
+GET {{baseUrl}}/user/me
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+###
+
+PATCH {{baseUrl}}/user/username
+Content-Type: application/json
+Authorization: Bearer {{token}} 
+
+{
+    "name": "Test User"
+}
+
+###
+
+PATCH {{baseUrl}}/user/password
+Content-Type: application/json
+Authorization: Bearer {{token}} 
+
+{
+    "currentPassword": "1234568",
+    "newPassword": "123456789"
+}
+
+###
+
+PATCH {{baseUrl}}/user/twofactor
+Authorization: Bearer {{token}} 
+
+###
+
+PATCH {{baseUrl}}/user/update-user/3d564814-59a5-4cdf-954a-a67962454f35
+Content-Type: application/json
+Authorization: Bearer {{token}} 
+
+{
+    "name": "New Test",
+    "businessId": "4c0ebfec-4a24-4e5a-8235-3a95990b5ae1",
+    "profileAccessId": "17f2998c-659d-4147-a074-5950655aa0aa"
+}
+
+###
+
+DELETE {{baseUrl}}/user/delete-user/80c51e85-8ac8-436f-b197-dd0a1ec8b6f3
+Authorization: Bearer {{token}} 
+
+###
+
+GET {{baseUrl}}/user/list-users?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}} 
+
+## Business Requests
+
+###
+
+POST {{baseUrl}}/business/create-business
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "cep": "25715221",
+    "city": "New Business",
+    "cnpj": "12345678000100",
+    "street": "Street A",
+    "address_number": "100",
+    "uf": "uf",
+    "complement": "Complement",
+    "cnae": "1234567",
+    "corporate_reason": "Trajetto Corporation",
+    "email": "newbusiness@example.com",
+    "responsible_name": "Responsible One",
+    "telephone": "1234567890",
+    "erp_code": "ERP100",
+    "fantasy_name": "New Fantasia"
+}
+
+###
+
+PATCH {{baseUrl}}/business/update-business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "cep": "33456675",
+    "city": "Updated City",
+    "cnpj": "12313123123123",
+    "street": "Updated Street",
+    "address_number": "1890A",
+    "uf": "uf",
+    "complement": "complement",
+    "cnae": "1234567",
+    "corporate_reason": "Updated Corporate Reason",
+    "email": "updatebusiness@example.com",
+    "responsible_name": "Update Responsible",
+    "telephone": "1334567890",
+    "erp_code": "ERP345",
+    "fantasy_name": "Updated Company"
+}
+
+###
+
+DELETE {{baseUrl}}/business/delete-business/0676b91c-837d-451d-ba6e-da1033894866
+Authorization: Bearer {{token}}
+
+###
+
+GET {{baseUrl}}/business/list-business?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+## Profile Access Requests
+
+###
+
+POST {{baseUrl}}/profile-access/create-profile-access
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Admin",
+    "businessId": "0342fa82-1b8a-4dd4-8809-eeb2c9968847"
+}
+
+###
+
+PATCH {{baseUrl}}/profile-access/update-profile-access/1908a009-bb50-49ed-85c9-f2483b65c92e
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Updated Profile Access",
+    "businessId": "355bf3b2-66c4-462b-a021-a0813abe1fe5"
+}
+
+###
+
+DELETE {{baseUrl}}/profile-access/delete-profile-access/1908a009-bb50-49ed-85c9-f2483b65c92e
+Authorization: Bearer {{token}}
+
+###
+
+GET {{baseUrl}}/profile-access/list-profile-access?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+## Permission Requests
+
+###
+
+POST {{baseUrl}}/permission/create-permission
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "action": "New Permission Test",
+    "permissionKey": "profile_access_manage",
+    "canRead": true,
+    "canWrite": true,
+    "businessId": "4c0ebfec-4a24-4e5a-8235-3a95990b5ae1",
+    "profileAccessId": "5d913030-e8c7-4aab-9930-1cd7616057fd"
+}
+
+###
+
+PATCH {{baseUrl}}/permission/update-permission/10193dfc-ae85-451d-8014-89cdd0c9a0e4
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "action": "Updated Profile Access",
+    "canRead": true,
+    "canWrite": false,
+    "businessId": "4c0ebfec-4a24-4e5a-8235-3a95990b5ae1",
+    "profileAccessId": "1908a009-bb50-49ed-85c9-f2483b65c92e"
+}
+
+###
+
+DELETE {{baseUrl}}/permission/delete-permission/10193dfc-ae85-451d-8014-89cdd0c9a0e4
+Authorization: Bearer {{token}}
+
+###
+
+GET {{baseUrl}}/permission/list-permission?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+## Branch Requests
+
+###
+
+POST {{baseUrl}}/branch/create-branch/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "cep": "25715221",
+    "city": "New Business",
+    "cnpj": "12345678000101",
+    "street": "Street A",
+    "address_number": "100",
+    "uf": "uf",
+    "complement": "Complement",
+    "cnae": "1234567",
+    "corporate_reason": "Trajetto Corporation Updated",
+    "email": "newbusiness@example.com.yas",
+    "responsible_name": "Responsible One",
+    "telephone": "1234567890",
+    "erp_code": "ERP107",
+    "fantasy_name": "New Fantasia"
+}
+
+###
+
+GET {{baseUrl}}/branch/list-branch?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+PATCH {{baseUrl}}/branch/update-branch/249420ea-b37e-4fab-b2fa-68463dde198d/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "cep": "25715221",
+    "city": "New Business",
+    "cnpj": "12345678000100",
+    "street": "Street A",
+    "address_number": "100",
+    "uf": "uf",
+    "complement": "Complement",
+    "cnae": "1234567",
+    "corporate_reason": "Trajetto Corporations",
+    "email": "newbusiness@example.com.br.yas.br",
+    "responsible_name": "Responsible One",
+    "telephone": "1234567890",
+    "erp_code": "ERP100",
+    "fantasy_name": "New Fantasia"
+}
+
+###
+
+DELETE {{baseUrl}}/branch/delete-branch/20e155c5-4872-40b2-8004-654b5f6b2838/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Authorization: Bearer {{token}}
+
+## Supplier Requests
+
+###
+
+POST {{baseUrl}}/supplier/create-supplier/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Fornecedor Mirims",
+    "cnpj": "12345678000103",
+    "cep": "25715221",
+    "city": "New Business",
+    "uf": "uf",
+    "street": "Street A",
+    "address_number": "100",
+    "complement": "",
+    "telephone": "1234567890",
+    "email": "newbusiness@example.com.yasss"
+}
+
+###
+
+GET {{baseUrl}}/supplier/list-supplier?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+GET {{baseUrl}}/supplier/list-supplier-business?businessId=b50ff064-a014-4e10-8a27-8275ce948be1&page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+PATCH {{baseUrl}}/supplier/update-supplier/050106cf-b303-4390-8831-2511abd2568e/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Fornecedor Mirim",
+    "cnpj": "12345678000104",
+    "cep": "25715221",
+    "city": "New Business",
+    "uf": "uf",
+    "street": "Street A",
+    "address_number": "100",
+    "complement": "Complement",
+    "telephone": "",
+    "email": "newbusiness@example.com.br"
+}
+
+###
+
+DELETE {{baseUrl}}/supplier/delete-supplier/1390f5a0-5247-452f-bb31-ccbc382aecb2/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Authorization: Bearer {{token}}
+
+## Vehicle Type Requests
+
+###
+
+POST {{baseUrl}}/vehicle-type/create-vehicle-type/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "description": "Vehicle Description",
+    "number_of_axles": 10
+}
+
+###
+
+GET {{baseUrl}}/vehicle-type/list-vehicle-type?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+PATCH {{baseUrl}}/vehicle-type/update-vehicle-type/92eb27c9-595a-4eb7-9c89-6c943cb5a807/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "description": "Vehicle Descriptions",
+    "number_of_axles": 10
+}
+
+###
+
+DELETE {{baseUrl}}/vehicle-type/delete-vehicle-type/92eb27c9-595a-4eb7-9c89-6c943cb5a807/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Authorization: Bearer {{token}}
+
+## Fuel Type Requests
+
+###
+
+POST {{baseUrl}}/fuel-type/create-fuel-type/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "description": "Combustível para você"
+}
+
+###
+
+GET {{baseUrl}}/fuel-type/list-fuel-type?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+PATCH {{baseUrl}}/fuel-type/update-fuel-type/ef3557ff-570b-479a-9a19-edeec9b5b3a0/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "description": "Diesel"
+}
+
+###
+
+DELETE {{baseUrl}}/fuel-type/delete-fuel-type/4b49f5d1-7097-4a06-8294-1ac48e6e6bfa/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Authorization: Bearer {{token}}
+
+## Part Requests
+
+###
+
+POST {{baseUrl}}/part/create-part/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "description": "Peça de caminhãos",
+    "unit_price": 10
+}
+
+###
+
+GET {{baseUrl}}/part/list-part?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+PATCH {{baseUrl}}/part/update-part/c240ef74-39f7-4ad9-a83b-d51b56f91280/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "description": "Peça de",
+    "unit_price": 20
+}
+
+###
+
+DELETE {{baseUrl}}/part/delete-part/fd1db2c3-29fe-4218-932d-8613702599fe/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Authorization: Bearer {{token}}
+
+## Driver Requests
+
+###
+
+POST {{baseUrl}}/driver/create-driver/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "João Batista",
+    "birth_date": "2000-03-24T19:35:10.416Z",
+    "cnh": "11111111112",
+    "cpf": "11111111112",
+    "rg": "286423637",
+    "cep": "25715221",
+    "city": "Petrópolis",
+    "uf": "RJ",
+    "street": "Carangola",
+    "address_number": "111",
+    "complement": "Ao lado do escritório Trajetto",
+    "status": "ACTIVE",
+    "contract_type": "OWNED"
+}
+
+###
+
+GET {{baseUrl}}/driver/list-driver?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+GET {{baseUrl}}/driver/list-driver-business?businessId=bec58f2c-a5f0-48d2-aa59-e45e8382b890&page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+PATCH {{baseUrl}}/driver/update-driver/898baf29-b839-4348-b15c-c69f59b40183/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "João Bastos",
+    "birth_date": "2000-03-24T19:35:10.416Z",
+    "cnh": "11111111112",
+    "cpf": "11111111112",
+    "rg": "286423637",
+    "cep": "25715221",
+    "city": "Petrópolis",
+    "uf": "RJ",
+    "street": "Carangola",
+    "address_number": "111",
+    "complement": "Ao lado do escritório Trajetto",
+    "status": "ACTIVE",
+    "contract_type": "OWNED"
+}
+
+###
+
+DELETE {{baseUrl}}/driver/delete-driver/faf7eeb6-37ef-47b3-ae7b-bec566c5f73d/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Authorization: Bearer {{token}}
+
+## Vehicle Requests
+
+###
+POST {{baseUrl}}/vehicle/create-vehicle/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "description": "João Batista",
+    "license_plate": "kqz1334",
+    "brand": "Chevrolet",
+    "model": "Car",
+    "acquisition_date": "2000-03-24T19:35:10.416Z",
+    "fleet_type": "THIRD_PARTY",
+    "last_maintenance_date": "2000-03-24T19:35:10.416Z",
+    "current_mileage": 10,
+    "last_maintenance_mileage": 1970,
+    "maintenance_interval_km": 1000,
+    "maintenance_interval_months": 50,
+    "renavam": "11111111112",
+    "manufacturing_year": 1960,
+    "model_year": 1950,
+    "km_per_liter": 10,
+    "number_of_axles": 4,
+    "status": "ACTIVE",
+    "fuelTypeId": "3f4251b4-df38-4961-bf7e-5d2c85529586"
+}
+
+###
+
+GET {{baseUrl}}/vehicle/list-vehicle?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+PATCH {{baseUrl}}/vehicle/update-vehicle/c0e428bb-df3e-448a-b301-0cf42203b027/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "description": "Vehicle Test",
+    "license_plate": "kqz1333",
+    "brand": "Chevrolet",
+    "model": "Car",
+    "acquisition_date": "2000-03-24T19:35:10.416Z",
+    "fleet_type": "THIRD_PARTY",
+    "last_maintenance_date": "2000-03-24T19:35:10.416Z",
+    "current_mileage": 10,
+    "last_maintenance_mileage": 1970,
+    "maintenance_interval_km": 1000,
+    "maintenance_interval_months": 50,
+    "renavam": "11111111111",
+    "manufacturing_year": 1960,
+    "model_year": 1950,
+    "km_per_liter": 10,
+    "number_of_axles": 4,
+    "status": "ACTIVE",
+    "fuelTypeId": "ef3557ff-570b-479a-9a19-edeec9b5b3a0"
+}
+
+###
+
+DELETE {{baseUrl}}/vehicle/delete-vehicle/29112f90-0283-4197-b8ca-fbd9c1f139ee/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+Authorization: Bearer {{token}}
+
+## Service Order Requests
+
+###
+
+POST {{baseUrl}}/service-order/create-service-order/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "date": "2000-03-24T19:35:10.416Z",
+    "completition_date": "2000-03-24T19:35:10.416Z",
+    "maintenance_type": "INTERNAL",
+    "total_amount": 0,
+    "vehicleId": "de954af9-0faa-493a-9107-7ce28135b621",
+    "responsibleUserId": "9cb6ee34-8dba-4b9c-a334-072b485e751d",
+    "branchId": "e48ff2e1-133b-4b76-b371-9a8875b448c1",
+    "supplierId": "1390f5a0-5247-452f-bb31-ccbc382aecb2"
+}
+
+###
+
+GET {{baseUrl}}/service-order/list-service-order?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+PATCH {{baseUrl}}/service-order/update-service-order/5b132d3c-b02c-4e84-9dd9-5c2e761e1e39/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "date": "2000-03-24T19:35:10.416Z",
+    "completition_date": "2000-03-24T19:35:10.416Z",
+    "maintenance_type": "EXTERNAL",
+    "total_amount": 0,
+    "vehicleId": "de954af9-0faa-493a-9107-7ce28135b621",
+    "responsibleUserId": "9cb6ee34-8dba-4b9c-a334-072b485e751d",
+    "branchId": "e48ff2e1-133b-4b76-b371-9a8875b448c1",
+    "supplierId": "1390f5a0-5247-452f-bb31-ccbc382aecb2"
+}
+
+###
+
+DELETE {{baseUrl}}/service-order/delete-service-order/b7bae3ab-8ef1-4d7f-b0b8-a5964d1bf66f/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Authorization: Bearer {{token}}
+
+## Service Order Part Requests
+
+###
+
+POST {{baseUrl}}/service-order-part/create-service-order-part/5b132d3c-b02c-4e84-9dd9-5c2e761e1e39/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "unit_price": 1,
+    "quantity": 10,
+    "discount_percentage": 15,
+    "partId": "8df455bd-1f44-4c52-bf78-4091f03e37c1"
+}
+
+###
+
+GET {{baseUrl}}/service-order-part/list-service-order-part?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+PATCH {{baseUrl}}/service-order-part/update-service-order-part/e8b2ef38-21ea-4dbb-8279-515753deb335/serviceOrder/5b132d3c-b02c-4e84-9dd9-5c2e761e1e39/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "unit_price": 100000,
+    "quantity": 10,
+    "discount_percentage": 15,
+    "partId": "8df455bd-1f44-4c52-bf78-4091f03e37c1"
+}
+
+###
+
+DELETE {{baseUrl}}/service-order-part/delete-service-order-part/0bd6a6e5-cb7d-4877-bf35-34e4974cefab/serviceOrder/5b132d3c-b02c-4e84-9dd9-5c2e761e1e39/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Authorization: Bearer {{token}}
+
+## Account Payable Requests
+
+###
+
+POST {{baseUrl}}/account-payable/create-account-payable/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "issue_date": "2025-03-24T19:35:10.416Z",
+    "due_date": "2025-04-24T19:35:10.416Z",
+    "payment_date": "2026-03-24T19:35:10.416Z",
+    "amount": 1000,
+    "amount_paid": 1000,
+    "branchId": "e48ff2e1-133b-4b76-b371-9a8875b448c1"
+}
+
+###
+
+GET {{baseUrl}}/account-payable/list-account-payable?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+PATCH {{baseUrl}}/account-payable/update-account-payable/a343fb96-bcee-4469-a52c-686f47bb9470/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "issue_date": "2025-03-24T19:35:10.416Z",
+    "due_date": "2025-04-24T19:35:10.416Z",
+    "payment_date": "2025-03-24T19:35:10.416Z",
+    "amount": 1000,
+    "amount_paid": 1000,
+    "branchId": "e48ff2e1-133b-4b76-b371-9a8875b448c1"
+}
+
+###
+
+DELETE {{baseUrl}}/account-payable/delete-account-payable/a343fb96-bcee-4469-a52c-686f47bb9470/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Authorization: Bearer {{token}}
+
+## WhatsApp

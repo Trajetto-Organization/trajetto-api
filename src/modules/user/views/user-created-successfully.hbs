@@ -1,0 +1,100 @@
+<html>
+  <head>
+    <style>
+      body {
+        background-color: #efeef1;
+        font-family: HelveticaNeue, Helvetica, Arial, sans-serif;
+      }
+      .container {
+        max-width: 580px;
+        margin: 30px auto;
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.1);
+      }
+      .footer {
+        max-width: 580px;
+        margin: 0 auto;
+        text-align: center;
+        color: #706a7b;
+        font-size: 12px;
+      }
+      .content {
+        padding: 20px;
+      }
+      .logo {
+        text-align: center;
+        padding-bottom: 30px;
+      }
+      .logo img {
+        display: block;
+        margin: 0 auto;
+        max-width: 150px;
+        height: auto;
+      }
+      .sections-borders {
+        width: 100%;
+        display: flex;
+        margin-bottom: 20px;
+      }
+      .section-border {
+        border-bottom: 1px solid rgb(238, 238, 238);
+        width: 249px;
+      }
+      .section-center {
+        border-bottom: 1px solid #d50057;
+        width: 102px;
+      }
+      .paragraph {
+        line-height: 1.5;
+        font-size: 14px;
+        margin-bottom: 15px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="logo">
+        <img width="150" src="{{logo}}" alt="Trajetto Logo" />
+      </div>
+
+      <div class="sections-borders">
+        <div class="section-border"></div>
+        <div class="section-center"></div>
+        <div class="section-border"></div>
+      </div>
+
+      <div class="content">
+        <p class="paragraph">Olá {{name}},</p>
+        <p class="paragraph">
+          Gostaríamos de informar que sua conta no Trajetto foi criada com
+          sucesso! 🥳🎉
+        </p>
+        <p class="paragraph">
+          Por segurança, recomendamos que você altere a sua senha no primeiro
+          acesso.
+        </p>
+        <p class="paragraph">
+          <p style="margin-bottom: 3px;">
+            Abaixo, seguem os seus dados de acesso:
+          </p>
+          <br />
+          <strong>E-mail:</strong>
+          {{email}}<br />
+          <strong>Senha:</strong>
+          {{password}}
+        </p>
+        <p class="paragraph">
+          Obrigado,<br />
+          Equipe |
+          <strong>Trajetto</strong>
+        </p>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>© {{year}} Trajetto, Todos os direitos reservados</p>
+    </div>
+  </body>
+</html>

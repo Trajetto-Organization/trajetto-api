@@ -1,0 +1,672 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  MASTER
+  BUSINESS_ADMIN
+  BUSINESS_USER
+}
+
+enum VehicleStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+  IN_ROUTE
+}
+
+enum QuoteStatus {
+  PENDING
+  CONTACTED
+  CLOSED
+  CONVERTED
+}
+
+enum DriverStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ContractType {
+  OWNED
+  THIRD_PARTY
+}
+
+enum FleetType {
+  OWNED
+  THIRD_PARTY
+}
+
+enum MaintenanceType {
+  INTERNAL
+  EXTERNAL
+}
+
+enum ViolationGravity {
+  LIGHT // Light (3 points)
+  MEDIUM // Average (4 points)
+  SERIOUS // Serious (5 points)
+  VERY_SERIOUS // Very serious (7 points)
+  NO_POINTS // No punctuation
+}
+
+model Business {
+  id               String  @id @default(uuid())
+  corporate_reason String  @unique
+  fantasy_name     String?
+  cep              String
+  city             String
+  uf               String
+  street           String
+  address_number   String
+  cnpj             String  @unique
+  complement       String?
+  cnae             String
+  erp_code         String? @unique
+  responsible_name String
+  telephone        String
+  email            String  @unique
+
+  users User[]
+
+  ProfileAccess ProfileAccess[]
+  Permission    Permission[]
+
+  vehicleTypes      VehicleType[]
+  vehicles          Vehicle[]
+  drivers           Driver[]
+  parts             Part[]
+  fuelTypes         FuelType[]
+  serviceOrders     ServiceOrder[]
+  serviceOrderParts ServiceOrderPart[]
+  accountsPayable   AccountPayable[]
+
+  branches  Branch[]
+  suppliers Supplier[]
+
+  Activity     Activity[]
+  Notification Notification[]
+
+  created_at   DateTime       @default(now())
+  updated_at   DateTime       @updatedAt
+  KanbanColumn KanbanColumn[]
+  Fine         Fine[]
+
+  @@map("business")
+}
+
+model User {
+  id             String    @id @default(uuid())
+  name           String
+  email          String    @unique
+  email_verified DateTime? @map("email_verified")
+  password       String
+  avatar         String?
+  role           UserRole
+
+  business   Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String?
+
+  profileAccess   ProfileAccess? @relation(fields: [profileAccessId], references: [id])
+  profileAccessId String?
+
+  RefreshToken RefreshToken[]
+
+  serviceOrders   ServiceOrder[] // Responsible user
+  accountsPayable AccountPayable[] // User who registered
+  Notification    Notification[]
+  Activity        Activity[]
+
+  two_factor_enabled Boolean @default(false)
+  access_revoked     Boolean @default(false)
+
+  TwoFactorConfirmation TwoFactorConfirmation?
+  KanbanCard            KanbanCard[]
+
+  // WhatsApp fields
+  whatsapp_notifications_enabled Boolean @default(false)
+  whatsapp_phone                 String?
+
+  whatsapp_instance_connected Boolean @default(false)
+
+  email_notifications_enabled    Boolean @default(true)
+  activity_notifications_enabled Boolean @default(true)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("user")
+}
+
+model ProfileAccess {
+  id   String @id @default(uuid())
+  name String // Profile name (e.g. "Manager", "Analyst")
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String // Relates the profile to a company
+
+  permissions Permission[] // Relationship to specific permissions
+  users       User[] // Users who have this profile
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([name, businessId]) // 🔒 Ensure unique names per company
+  @@map("profile_access")
+}
+
+model Permission {
+  id     String @id @default(uuid())
+  action String // Permission name (e.g. "Manage Users")
+
+  permissionKey String @default("")
+
+  canRead  Boolean @default(false) // Read permission
+  canWrite Boolean @default(false) // Write permission
+
+  profileAccess   ProfileAccess @relation(fields: [profileAccessId], references: [id], onDelete: Cascade)
+  profileAccessId String
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([action, profileAccessId, businessId]) // Prevents duplication of permissions on the same profile and company
+  @@map("permission")
+}
+
+model RefreshToken {
+  id            String   @id @default(uuid())
+  refresh_token String
+  expires_in    DateTime
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+
+  created_at DateTime @default(now())
+
+  @@map("refresh_token")
+}
+
+model ForgotPasswordVerificationToken {
+  id      String   @id @default(uuid())
+  email   String   @unique
+  token   String   @unique
+  expires DateTime
+
+  @@unique([email, token])
+  @@map("forgot_password_verification_token")
+}
+
+model EmailVerificationToken {
+  id      String   @id @default(uuid())
+  email   String   @unique
+  token   String   @unique
+  expires DateTime
+
+  @@unique([email, token])
+  @@map("email_verification_token")
+}
+
+model TwoFactorConfirmation {
+  id     String @id @default(uuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  @@unique([userId])
+  @@map("two_factor_confirmation")
+}
+
+model TwoFactorToken {
+  id      String   @id @default(uuid())
+  email   String   @unique
+  token   String   @unique
+  expires DateTime
+
+  @@unique([email, token])
+  @@map("two_factor_token")
+}
+
+model Branch {
+  id               String  @id @default(uuid())
+  corporate_reason String  @unique
+  fantasy_name     String?
+  cep              String
+  city             String
+  uf               String
+  street           String
+  address_number   String
+  cnpj             String  @unique
+  complement       String?
+  cnae             String
+  erp_code         String? @unique
+  responsible_name String
+  telephone        String
+  email            String  @unique
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  vehicles        Vehicle[]
+  drivers         Driver[]
+  serviceOrders   ServiceOrder[]
+  accountsPayable AccountPayable[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  Fine       Fine[]
+
+  @@map("branch")
+}
+
+model Supplier {
+  id             String  @id @default(uuid())
+  name           String
+  cnpj           String
+  cep            String?
+  city           String?
+  uf             String?
+  street         String?
+  address_number String?
+  complement     String?
+  telephone      String?
+  email          String?
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  parts         Part[]
+  serviceOrders ServiceOrder[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("supplier")
+}
+
+model VehicleType {
+  id              String @id @default(uuid())
+  description     String
+  number_of_axles Int
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  vehicles Vehicle[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("vehicle_type")
+}
+
+model FuelType {
+  id          String @id @default(uuid())
+  description String
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  vehicles Vehicle[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("fuel_type")
+}
+
+model Driver {
+  id             String       @id @default(uuid())
+  name           String
+  birth_date     DateTime
+  cnh            String       @unique
+  cpf            String       @unique
+  rg             String       @unique
+  cep            String
+  city           String
+  uf             String
+  street         String
+  address_number String
+  complement     String?
+  status         DriverStatus
+  contract_type  ContractType
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  branch   Branch? @relation(fields: [branchId], references: [id])
+  branchId String?
+
+  vehicles Vehicle[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  Fine       Fine[]
+
+  @@map("driver")
+}
+
+model Vehicle {
+  id                          String        @id @default(uuid())
+  description                 String
+  license_plate               String        @unique
+  brand                       String
+  model                       String
+  acquisition_date            DateTime
+  fleet_type                  FleetType
+  fleet_id                    String?
+  last_maintenance_date       DateTime?
+  current_mileage             Float
+  last_maintenance_mileage    Float?
+  maintenance_interval_km     Float
+  maintenance_interval_months Int
+  renavam                     String        @unique
+  manufacturing_year          DateTime
+  model_year                  DateTime
+  km_per_liter                Int
+  number_of_axles             Int
+  status                      VehicleStatus
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  vehicleType   VehicleType? @relation(fields: [vehicleTypeId], references: [id])
+  vehicleTypeId String?
+
+  fuelType   FuelType @relation(fields: [fuelTypeId], references: [id])
+  fuelTypeId String
+
+  driver   Driver? @relation(fields: [driverId], references: [id])
+  driverId String?
+
+  branch   Branch? @relation(fields: [branchId], references: [id])
+  branchId String?
+
+  serviceOrders ServiceOrder[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  Fine       Fine[]
+
+  @@map("vehicle")
+}
+
+model Part {
+  id          String  @id @default(uuid())
+  description String
+  unit_price  Decimal @db.Decimal(10, 2)
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  supplier   Supplier? @relation(fields: [supplierId], references: [id])
+  supplierId String?
+
+  serviceOrderParts ServiceOrderPart[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("part")
+}
+
+model ServiceOrder {
+  id               String          @id @default(uuid())
+  date             DateTime        @default(now())
+  completion_date  DateTime?
+  maintenance_type MaintenanceType
+  total_amount     Decimal         @db.Decimal(10, 2)
+
+  // 📸 SNAPSHOT: Vehicle data at the time of OS creation
+  current_mileage_at_service          Float? // Current mileage when creating the OS
+  maintenance_interval_km_at_service  Float? // Vehicle service interval when the OS was created
+  last_maintenance_mileage_at_service Float? // Last vehicle review when the OS was created
+
+  // 🔧 NEW MILEAGE: Reported by mechanic upon completion
+  new_mileage_after_service Float? // New mileage after service
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id])
+  vehicleId String
+
+  responsibleUser   User   @relation(fields: [responsibleUserId], references: [id])
+  responsibleUserId String
+
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branchId String
+
+  supplier   Supplier? @relation(fields: [supplierId], references: [id])
+  supplierId String?
+
+  parts           ServiceOrderPart[]
+  accountsPayable AccountPayable[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("service_order")
+}
+
+model ServiceOrderPart {
+  id                  String   @id @default(uuid())
+  unit_price          Decimal  @db.Decimal(10, 2)
+  quantity            Int
+  discount_percentage Decimal? @default(0) @db.Decimal(5, 2)
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  serviceOrder   ServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  serviceOrderId String
+
+  part   Part   @relation(fields: [partId], references: [id])
+  partId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("service_order_part")
+}
+
+model AccountPayable {
+  id           String    @id @default(uuid())
+  issue_date   DateTime  @default(now())
+  due_date     DateTime
+  payment_date DateTime?
+  amount       Decimal   @db.Decimal(10, 2)
+  amount_paid  Decimal?  @db.Decimal(10, 2)
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branchId String
+
+  serviceOrder   ServiceOrder? @relation(fields: [serviceOrderId], references: [id])
+  serviceOrderId String?
+
+  registrationUser   User   @relation(fields: [registrationUserId], references: [id])
+  registrationUserId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("account_payable")
+}
+
+model Activity {
+  id                 String    @id @default(uuid())
+  type               String // "vehicle", "user", "service-order", etc.
+  action             String // "create", "update", "delete", etc.
+  entityId           String
+  description        String
+  status             String
+  businessId         String?
+  visibilityLevel    String? // "SYSTEM", "COMPANY", "USER" - controls hierarchical visibility
+  performingUserRole String? // Role of user who performed the action
+  business           Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user               User?     @relation(fields: [performedBy], references: [id], onDelete: Cascade)
+  performedBy        String
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  @@index([businessId])
+  @@index([created_at])
+  @@index([visibilityLevel])
+  @@index([performedBy])
+  @@map("activity")
+}
+
+// For notifications targeted to specific users
+model Notification {
+  id         String    @id @default(uuid())
+  type       String // "service-order", "vehicle", etc.
+  title      String
+  message    String
+  link       String?
+  read       Boolean   @default(false)
+  entityId   String?
+  businessId String?
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String // recipient user ID
+  business   Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([businessId])
+  @@index([read])
+  @@map("notification")
+}
+
+model Quote {
+  id           String      @id @default(uuid())
+  name         String
+  company      String
+  email        String
+  telephone    String
+  fleet_size   String      @map("fleet_size")
+  message      String?
+  status       QuoteStatus @default(PENDING)
+  contacted_at DateTime?   @map("contacted_at")
+  notes        String?
+  created_at   DateTime    @default(now()) @map("created_at")
+  updated_at   DateTime    @updatedAt @map("updated_at")
+
+  @@index([email])
+  @@index([status])
+  @@index([created_at])
+  @@map("quote")
+}
+
+model KanbanColumn {
+  id       String @id @default(uuid())
+  title    String
+  color    String
+  position Int
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  cards KanbanCard[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId, position])
+  @@index([businessId])
+  @@map("kanban_column")
+}
+
+model KanbanCard {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  priority    String
+  dueDate     DateTime @map("due_date")
+  position    Int
+  completed   Boolean  @default(false)
+
+  column   KanbanColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  columnId String
+
+  assignedUser   User?   @relation(fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignedUserId String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([columnId, position])
+  @@index([columnId])
+  @@index([assignedUserId])
+  @@map("kanban_card")
+}
+
+// Table of infraction codes (DETRAN data)
+model TrafficViolationCode {
+  id               String           @id @default(uuid())
+  code             String           @unique // Código da infração (ex: 5010)
+  sub_code         Int              @default(0) // Desdobramento (0, 1, 2...)
+  description      String // Description of the infraction
+  legal_basis      String // Legal support (CTB)
+  violator_type    String // Offender Type (Driver, Owner)
+  gravity          ViolationGravity // Gravity of the infraction
+  gravity_raw      String // Original file gravity
+  points           Int // Points on the driver's license
+  competent_agency String // Competent body
+
+  fines Fine[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([code, sub_code])
+  @@index([code])
+  @@index([gravity])
+  @@map("traffic_violation_code")
+}
+
+// Fines table
+model Fine {
+  id             String    @id @default(uuid())
+  violation_date DateTime // Date of infraction
+  due_date       DateTime // Expiration date
+  payment_date   DateTime? // Payment date
+  amount         Decimal   @db.Decimal(10, 2) // Fine amount
+  points         Int // Applied points
+  location       String? // Location of infraction
+  observation    String? // Observations
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branchId String
+
+  driver   Driver @relation(fields: [driverId], references: [id])
+  driverId String
+
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id])
+  vehicleId String
+
+  trafficViolationCode   TrafficViolationCode @relation(fields: [trafficViolationCodeId], references: [id])
+  trafficViolationCodeId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId])
+  @@index([driverId])
+  @@index([vehicleId])
+  @@index([due_date])
+  @@index([violation_date])
+  @@map("fine")
+}

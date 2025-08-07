@@ -1,0 +1,130 @@
+import { FastifyInstance } from "fastify";
+
+import { CreateBranchController } from "@/modules/branch/usecases/create-branch/create-branch-controller";
+import { DeleteBranchController } from "@/modules/branch/usecases/delete-branch/delete-branch-controller";
+
+import { verifyPermission } from "@/modules/middlewares/verify-permission";
+import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
+
+import { ListBranchController } from "@/modules/branch/usecases/list-branch/list-branch-controller";
+import { UpdateBranchController } from "@/modules/branch/usecases/update-branch/update-branch-controller";
+
+import { ListBranchBusinessController } from "@/modules/branch/usecases/list-branch-business/list-branch-business-controller";
+import {
+  branchResponses,
+  branchSchemas,
+} from "./documentation/branch-documentation";
+
+const createBranchController = new CreateBranchController();
+const deleteBranchController = new DeleteBranchController();
+
+const updateBranchController = new UpdateBranchController();
+const listBranchController = new ListBranchController();
+
+const listBranchBusinessController = new ListBranchBusinessController();
+
+async function branchRoutes(app: FastifyInstance) {
+  app.post(
+    "/create-branch/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("branch_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["branch"],
+        description: "Create a new branch",
+        params: branchSchemas.businessIdParam,
+        body: branchSchemas.createBranch,
+        response: {
+          201: branchResponses.branchCreated,
+          400: branchResponses.createBranchErrors,
+          500: branchResponses.internalServerError,
+        },
+      },
+    },
+    createBranchController.handle,
+  );
+
+  app.get(
+    "/list-branch",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("branch_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["branch"],
+        description: "List branches for a business",
+        querystring: branchSchemas.listBranch,
+        response: {
+          200: branchResponses.branchList,
+          400: branchResponses.listBranchErrors,
+          500: branchResponses.internalServerError,
+        },
+      },
+    },
+    listBranchController.handle,
+  );
+
+  app.get(
+    "/list-branch-business",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("branch_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["supplier"],
+        description: "List supplier business",
+        querystring: branchSchemas.listBranchBusiness,
+        response: {
+          200: branchResponses.branchBusinessList,
+          400: branchResponses.listBranchBusinessErrors,
+          500: branchResponses.internalServerError,
+        },
+      },
+    },
+    listBranchBusinessController.handle,
+  );
+
+  app.patch(
+    "/update-branch/:branchId/business/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("branch_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["branch"],
+        description: "Update a branch",
+        params: branchSchemas.updateDeleteBranch,
+        body: branchSchemas.updateBranch,
+        response: {
+          200: branchResponses.branchUpdated,
+          400: branchResponses.updateBranchErrors,
+          500: branchResponses.internalServerError,
+        },
+      },
+    },
+    updateBranchController.handle,
+  );
+
+  app.delete(
+    "/delete-branch/:branchId/business/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("branch_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["branch"],
+        description: "Delete a branch",
+        params: branchSchemas.updateDeleteBranch,
+        response: {
+          200: branchResponses.branchDeleted,
+          400: branchResponses.deleteBranchErrors,
+          500: branchResponses.internalServerError,
+        },
+      },
+    },
+    deleteBranchController.handle,
+  );
+}
+
+export { branchRoutes };

@@ -1,0 +1,83 @@
+import { inject, injectable } from "tsyringe";
+
+import { IKanbanRepository } from "@/modules/kanban/repositories/IKanban-repository";
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+
+import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+
+import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+
+import { ReorderKanbanColumnsProps } from "../../dtos/kanban-dto";
+
+import { KanbanInvalidPositionError } from "../errors/kanban-invalid-position-error";
+import { AppError } from "@/shared/errors/AppError";
+
+@injectable()
+class ReorderKanbanColumnsUseCase {
+  constructor(
+    @inject("UserRepository")
+    private user: IUserRepository,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
+    @inject("KanbanRepository")
+    private kanban: IKanbanRepository,
+  ) {}
+
+  async execute(
+    data: ReorderKanbanColumnsProps,
+    userId: string,
+  ): Promise<void> {
+    const findUser = await this.user.findUserById(userId);
+
+    if (!findUser) {
+      throw new ResourceNotFoundError();
+    }
+
+    const findBusiness = await this.business.findBusinessById(data.businessId);
+
+    if (!findBusiness) {
+      throw new BusinessNotFoundError();
+    }
+
+    // Verify user permissions
+    if (findUser.role !== "MASTER") {
+      if (findUser.businessId !== data.businessId) {
+        throw new AppError(
+          "Você não tem permissão para reordenar colunas nesta empresa.",
+          403,
+        );
+      }
+    }
+
+    // Validate positions
+    const positions = data.columns.map((col) => col.position);
+    const uniquePositions = new Set(positions);
+
+    if (positions.length !== uniquePositions.size) {
+      throw new KanbanInvalidPositionError();
+    }
+
+    // Verify all columns belong to the business
+    for (const column of data.columns) {
+      const col = await this.kanban.findColumnById(column.id);
+      if (!col || col.businessId !== data.businessId) {
+        throw new AppError(
+          "Uma ou mais colunas não pertencem a esta empresa.",
+          400,
+        );
+      }
+    }
+
+    try {
+      await this.kanban.reorderColumns(data);
+    } catch (error) {
+      throw new AppError(
+        "Houve um erro ao tentar reordenar as colunas! Por favor, tente novamente.",
+        500,
+      );
+    }
+  }
+}
+
+export { ReorderKanbanColumnsUseCase };
