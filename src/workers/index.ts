@@ -1,3 +1,5 @@
+import "reflect-metadata";
+
 import EmailWorkerService from "../shared/services/email-worker-service";
 import WhatsAppWorkerService from "../shared/services/whatsapp-worker-service";
 
@@ -11,7 +13,7 @@ export async function initializeWorkers(): Promise<void> {
       EmailWorkerService.getInstance().initialize(),
       WhatsAppWorkerService.getInstance().initialize(),
     ]);
-    
+
     console.log("[WorkerSystem] Sistema de workers inicializado com sucesso");
   } catch (error) {
     console.error("[WorkerSystem] Erro ao inicializar workers:", error);
@@ -29,7 +31,7 @@ export async function shutdownWorkers(): Promise<void> {
       EmailWorkerService.getInstance().shutdown(),
       WhatsAppWorkerService.getInstance().shutdown(),
     ]);
-    
+
     console.log("[WorkerSystem] Sistema de workers encerrado com sucesso");
   } catch (error) {
     console.error("[WorkerSystem] Erro ao encerrar workers:", error);
