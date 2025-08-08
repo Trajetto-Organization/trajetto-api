@@ -26,7 +26,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/intrajetto/trajetto-api
+          images: ghcr.io/trajetto-organization/trajetto-api
           tags: |
             type=ref,event=branch
             type=ref,event=pr
