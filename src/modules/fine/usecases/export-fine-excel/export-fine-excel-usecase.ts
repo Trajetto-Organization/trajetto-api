@@ -31,6 +31,14 @@ class ExportFineExcelUseCase {
         search,
       );
 
+      // Check if there are any fines to export
+      if (!fines || fines.length === 0) {
+        throw new AppError(
+          "Nenhuma multa encontrada para exportar. Certifique-se de que existem dados antes de gerar o relatório.",
+          400,
+        );
+      }
+
       // Prepare data for Excel
       const excelData = fines.map((fine) => ({
         ID: fine.id,
