@@ -1,0 +1,154 @@
+import { inject, injectable } from "tsyringe";
+import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
+
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
+
+import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+import { IFuelTypeRepository } from "@/modules/fuel-type/repositories/IFuel-type-repository";
+
+import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
+import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+
+import { NotificationService } from "@/shared/services/notification-service";
+
+import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+
+import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
+import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
+
+import { FuelTypeNotFoundError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-found-error";
+import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
+
+import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
+import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
+
+import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-belong-business-error";
+import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
+
+import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
+
+import { AppError } from "@/shared/errors/AppError";
+import { Fuel, CreateFuelProps } from "../../dtos/fuel-dto";
+
+@injectable()
+class CreateFuelUseCase {
+  constructor(
+    @inject("UserRepository")
+    private user: IUserRepository,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
+    @inject("VehicleRepository")
+    private vehicle: IVehicleRepository,
+    @inject("DriverRepository")
+    private driver: IDriverRepository,
+    @inject("FuelTypeRepository")
+    private fuelType: IFuelTypeRepository,
+    @inject("BranchRepository")
+    private branch: IBranchRepository,
+    @inject("FuelRepository")
+    private fuel: IFuelRepository,
+    @inject("NotificationService")
+    private notificationService: NotificationService,
+  ) {}
+
+  async execute(fuelData: CreateFuelProps, userId: string): Promise<Fuel> {
+    const findUser = await this.user.findUserById(userId);
+
+    if (!findUser) {
+      throw new ResourceNotFoundError();
+    }
+
+    // Validate business exists
+    const findBusiness = await this.business.findBusinessById(
+      fuelData.businessId,
+    );
+
+    if (!findBusiness) {
+      throw new BusinessNotFoundError();
+    }
+
+    // Validate vehicle exists and belongs to business
+    const findVehicle = await this.vehicle.findVehicleById(fuelData.vehicleId);
+
+    if (!findVehicle) {
+      throw new VehicleNotFoundError();
+    }
+
+    if (findVehicle.businessId !== fuelData.businessId) {
+      throw new VehicleNotBelongBusinessError();
+    }
+
+    // Validate mileage (cannot be less than current vehicle mileage)
+    if (fuelData.current_mileage < findVehicle.current_mileage) {
+      throw new VehicleMileageInvalidError();
+    }
+
+    // Validate driver exists and belongs to business
+    const findDriver = await this.driver.findDriverById(fuelData.driverId);
+
+    if (!findDriver) {
+      throw new DriverNotFoundError();
+    }
+
+    if (findDriver.businessId !== fuelData.businessId) {
+      throw new DriverNotBelongBusinessError();
+    }
+
+    // Validate fuel type exists and belongs to business
+    const findFuelType = await this.fuelType.findFuelTypeById(
+      fuelData.fuelTypeId,
+    );
+    if (!findFuelType) {
+      throw new FuelTypeNotFoundError();
+    }
+
+    if (findFuelType.businessId !== fuelData.businessId) {
+      throw new FuelTypeNotBelongBusinessError();
+    }
+
+    // Validate branch exists and belongs to business
+    const findBranch = await this.branch.findBranchById(fuelData.branchId);
+    if (!findBranch) {
+      throw new BranchNotFoundError();
+    }
+
+    if (findBranch.businessId !== fuelData.businessId) {
+      throw new BranchNotBelongBusinessError();
+    }
+
+    try {
+      // Create fuel record
+      const fuelCreated = await this.fuel.createFuel(fuelData);
+
+      // Update vehicle mileage to the current_mileage from fuel record
+      await this.vehicle.updateVehicle({
+        vehicleId: fuelData.vehicleId,
+        vehicleData: {
+          current_mileage: fuelData.current_mileage,
+        },
+      });
+
+      // Process activity asynchronously without blocking the main flow
+      this.notificationService.createActivityIfEnabled({
+        type: "fuel",
+        action: "create",
+        entityId: fuelCreated.id,
+        description: `Abastecimento criado para o veículo ${findVehicle.license_plate} - ${findVehicle.description}`,
+        status: "Criado",
+        performedBy: userId,
+        businessId: fuelData.businessId,
+      });
+
+      return fuelCreated;
+    } catch (error) {
+      throw new AppError(
+        "Houve um erro ao tentar criar o abastecimento! Por favor, tente novamente.",
+        500,
+      );
+    }
+  }
+}
+
+export { CreateFuelUseCase };

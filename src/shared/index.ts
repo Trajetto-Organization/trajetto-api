@@ -27,6 +27,9 @@ import { IVehicleTypeRepository } from "@/modules/vehicle-type/repositories/IVeh
 import { FuelTypeRepository } from "@/modules/fuel-type/repositories/fuel-type-repository";
 import { IFuelTypeRepository } from "@/modules/fuel-type/repositories/IFuel-type-repository";
 
+import { FuelRepository } from "@/modules/fuel/repositories/fuel-repository";
+import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
+
 import { PartRepository } from "@/modules/part/repositories/part-repository";
 import { IPartRepository } from "@/modules/part/repositories/IPart-repository";
 
@@ -109,6 +112,8 @@ container.registerSingleton<IFuelTypeRepository>(
   "FuelTypeRepository",
   FuelTypeRepository,
 );
+
+container.registerSingleton<IFuelRepository>("FuelRepository", FuelRepository);
 container.registerSingleton<IPartRepository>("PartRepository", PartRepository);
 
 container.registerSingleton<IDriverRepository>(

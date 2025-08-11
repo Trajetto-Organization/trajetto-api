@@ -10,7 +10,9 @@ import { supplierRoutes } from "./supplier-routes";
 import { profileAccessRoutes } from "./profile-access-routes";
 
 import { vehicleTypeRoutes } from "./vehicle-type-routes";
+
 import { fuelTypeRoutes } from "./fuel-type-routes";
+import { fuelRoutes } from "./fuel-routes";
 
 import { partRoutes } from "./part-routes";
 import { driverRoutes } from "./driver-routes";
@@ -41,6 +43,7 @@ async function routes(app: FastifyInstance) {
   app.register(supplierRoutes, { prefix: "/supplier" });
   app.register(vehicleTypeRoutes, { prefix: "/vehicle-type" });
   app.register(fuelTypeRoutes, { prefix: "/fuel-type" });
+  app.register(fuelRoutes, { prefix: "/fuel" });
   app.register(partRoutes, { prefix: "/part" });
   app.register(driverRoutes, { prefix: "/driver" });
   app.register(vehicleRoutes, { prefix: "/vehicle" });

@@ -6,6 +6,7 @@ type PermissionKey =
   | "vehicle_type_manage"
   | "supplier_manage"
   | "fuel_type_manage"
+  | "fuel_manage"
   | "part_manage"
   | "driver_manage"
   | "vehicle_manage"
@@ -23,6 +24,7 @@ enum EnumPermissionKey {
   VEHICLE_TYPE_MANAGE = "vehicle_type_manage",
   SUPPLIER_MANAGE = "supplier_manage",
   FUEL_TYPE_MANAGE = "fuel_type_manage",
+  FUEL_MANAGE = "fuel_manage",
   PART_MANAGE = "part_manage",
   DRIVER_MANAGE = "driver_manage",
   VEHICLE_MANAGE = "vehicle_manage",
@@ -41,6 +43,7 @@ const permissionLabels = {
   vehicle_type_manage: "Gerenciar tipos de veículos",
   supplier_manage: "Gerenciar Fornecedores",
   fuel_type_manage: "Gerenciar tipos de combustíveis",
+  fuel_manage: "Gerenciar Abastecimentos",
   part_manage: "Gerenciar Peças",
   driver_manage: "Gerenciar Motoristas",
   vehicle_manage: "Gerenciar Veículos",

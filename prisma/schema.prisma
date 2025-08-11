@@ -96,6 +96,7 @@ model Business {
   updated_at   DateTime       @updatedAt
   KanbanColumn KanbanColumn[]
   Fine         Fine[]
+  Fuel         Fuel[]
 
   @@map("business")
 }
@@ -261,6 +262,7 @@ model Branch {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
   Fine       Fine[]
+  Fuel       Fuel[]
 
   @@map("branch")
 }
@@ -314,6 +316,7 @@ model FuelType {
   businessId String
 
   vehicles Vehicle[]
+  fuels    Fuel[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -348,6 +351,7 @@ model Driver {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
   Fine       Fine[]
+  Fuel       Fuel[]
 
   @@map("driver")
 }
@@ -393,6 +397,7 @@ model Vehicle {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
   Fine       Fine[]
+  Fuel       Fuel[]
 
   @@map("vehicle")
 }
@@ -669,4 +674,41 @@ model Fine {
   @@index([due_date])
   @@index([violation_date])
   @@map("fine")
+}
+
+model Fuel {
+  id                String   @id @default(uuid())
+  current_mileage   Float // Current vehicle mileage at the time of refueling
+  liters_amount     Decimal  @db.Decimal(10, 3) // Quantity of liters supplied
+  price_per_liter   Decimal  @db.Decimal(10, 3) // Value per liter
+  total_amount      Decimal  @db.Decimal(10, 2) // Total value (quantity * price per liter)
+  odometer_photo    String? // Odometer Photo Path (PWA only)
+  odometer_verified Boolean  @default(false) // If the photo has been verified by AI
+  notes             String? // Optional remarks
+  refueling_date    DateTime @default(now()) // Supply date
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branchId String
+
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id])
+  vehicleId String
+
+  driver   Driver @relation(fields: [driverId], references: [id])
+  driverId String
+
+  fuelType   FuelType @relation(fields: [fuelTypeId], references: [id])
+  fuelTypeId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId])
+  @@index([branchId])
+  @@index([vehicleId])
+  @@index([driverId])
+  @@index([refueling_date])
+  @@map("fuel")
 }
