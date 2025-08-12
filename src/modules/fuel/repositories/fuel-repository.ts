@@ -1,6 +1,6 @@
 import database from "@/../infra/database";
 
-import { formatDate } from "@/config/format-values";
+import { formatDate, formatCurrency } from "@/config/format-values";
 import { Decimal } from "@prisma/client/runtime/library";
 
 import { IFuelRepository } from "./IFuel-repository";
@@ -8,11 +8,13 @@ import {
   Fuel,
   CreateFuelProps,
   ListFuelProps,
+  ListFuelFormattedProps,
   ListFuelByBusinessIdProps,
   UpdateFuel,
   ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
-  FuelWithRelations,
+  FuelFormatted,
+  FuelWithRelationsFormatted,
 } from "../dtos/fuel-dto";
 
 class FuelRepository implements IFuelRepository {
@@ -46,7 +48,7 @@ class FuelRepository implements IFuelRepository {
     businessId,
     currentUserRole,
     search,
-  }: ListFuelByBusinessIdProps): Promise<ListFuelProps> {
+  }: ListFuelByBusinessIdProps): Promise<ListFuelFormattedProps> {
     const skip = (page - 1) * pageSize;
     const normalizedSearch = search ? search.trim().toLowerCase() : "";
 
@@ -141,12 +143,13 @@ class FuelRepository implements IFuelRepository {
       where: whereCondition,
     });
 
-    const transformedFuelData = fuelData.map((fuel) => ({
+    const transformedFuelData: FuelFormatted[] = fuelData.map((fuel) => ({
       id: fuel.id ?? "N/A",
       current_mileage: fuel.current_mileage ?? 0,
-      liters_amount: fuel.liters_amount ?? new Decimal(0),
-      price_per_liter: fuel.price_per_liter ?? new Decimal(0),
-      total_amount: fuel.total_amount ?? new Decimal(0),
+      liters_amount:
+        fuel.liters_amount?.toFixed(3).replace(".", ",") ?? "0,000",
+      price_per_liter: formatCurrency(fuel.price_per_liter?.toNumber() ?? 0),
+      total_amount: formatCurrency(fuel.total_amount?.toNumber() ?? 0),
       odometer_photo: fuel.odometer_photo ?? "N/A",
       odometer_verified: fuel.odometer_verified ?? false,
       notes: fuel.notes ?? "N/A",
@@ -257,7 +260,7 @@ class FuelRepository implements IFuelRepository {
 
   async findFuelByIdWithRelations(
     fuelId: string,
-  ): Promise<FuelWithRelations | null> {
+  ): Promise<FuelWithRelationsFormatted | null> {
     const fuel = await this.prisma.fuel.findUnique({
       where: { id: fuelId },
       include: {
@@ -305,10 +308,14 @@ class FuelRepository implements IFuelRepository {
 
     return {
       ...fuel,
+      liters_amount:
+        fuel.liters_amount?.toFixed(3).replace(".", ",") ?? "0,000",
+      price_per_liter: formatCurrency(fuel.price_per_liter?.toNumber() ?? 0),
+      total_amount: formatCurrency(fuel.total_amount?.toNumber() ?? 0),
       refueling_date: formatDate(fuel.refueling_date, "pt-BR"),
       created_at: formatDate(fuel.created_at, "pt-BR"),
       updated_at: formatDate(fuel.updated_at, "pt-BR"),
-    } as FuelWithRelations;
+    } as FuelWithRelationsFormatted;
   }
 
   async getFuelByIdAndBusiness({
@@ -328,7 +335,7 @@ class FuelRepository implements IFuelRepository {
   async getFuelByIdAndBusinessWithRelations({
     businessId,
     fuelId,
-  }: GetFuelByIdAndBusinessProps): Promise<FuelWithRelations | null> {
+  }: GetFuelByIdAndBusinessProps): Promise<FuelWithRelationsFormatted | null> {
     const fuel = await this.prisma.fuel.findFirst({
       where: {
         id: fuelId,
@@ -379,10 +386,14 @@ class FuelRepository implements IFuelRepository {
 
     return {
       ...fuel,
+      liters_amount:
+        fuel.liters_amount?.toFixed(3).replace(".", ",") ?? "0,000",
+      price_per_liter: formatCurrency(fuel.price_per_liter?.toNumber() ?? 0),
+      total_amount: formatCurrency(fuel.total_amount?.toNumber() ?? 0),
       refueling_date: formatDate(fuel.refueling_date, "pt-BR"),
       created_at: formatDate(fuel.created_at, "pt-BR"),
       updated_at: formatDate(fuel.updated_at, "pt-BR"),
-    } as FuelWithRelations;
+    } as FuelWithRelationsFormatted;
   }
 }
 

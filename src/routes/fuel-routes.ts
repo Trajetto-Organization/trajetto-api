@@ -11,6 +11,11 @@ import { DeleteFuelController } from "@/modules/fuel/usecases/delete-fuel/delete
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import {
+  fuelSchemas,
+  fuelResponses,
+} from "./documentation/fuel-documentation";
+
 const createFuelController = new CreateFuelController();
 const listFuelController = new ListFuelController();
 
@@ -43,6 +48,12 @@ async function fuelRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
         description: "List fuel records",
+        querystring: fuelSchemas.listFuel,
+        response: {
+          200: fuelResponses.fuelList,
+          400: fuelResponses.listFuelErrors,
+          500: fuelResponses.internalServerError,
+        },
       },
     },
     listFuelController.handle,
@@ -57,6 +68,12 @@ async function fuelRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
         description: "List fuel records by business",
+        querystring: fuelSchemas.listFuelBusiness,
+        response: {
+          200: fuelResponses.fuelList,
+          400: fuelResponses.listFuelBusinessErrors,
+          500: fuelResponses.internalServerError,
+        },
       },
     },
     listFuelBusinessController.handle,

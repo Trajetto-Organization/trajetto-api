@@ -6,7 +6,6 @@ import { DeleteFuelUseCase } from "./delete-fuel-usecase";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
-import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDeleteFuelSchema } from "@/schemas/update-delete-fuel-schema";
 
 import { FuelNotFoundError } from "../errors/fuel-not-found-error";
@@ -16,9 +15,7 @@ class DeleteFuelController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { businessId } = updateDeleteBusinessSchema.parse(request.params);
-    const { fuelId } = updateDeleteFuelSchema.parse(request.params);
-
+    const { businessId, fuelId } = updateDeleteFuelSchema.parse(request.params);
     const deleteFuelUseCase = container.resolve(DeleteFuelUseCase);
 
     try {

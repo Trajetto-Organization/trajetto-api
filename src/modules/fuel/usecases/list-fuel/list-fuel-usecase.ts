@@ -4,7 +4,7 @@ import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { ListFuelProps } from "../../dtos/fuel-dto";
+import { ListFuelFormattedProps } from "../../dtos/fuel-dto";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -22,7 +22,7 @@ class ListFuelUseCase {
     page: number,
     pageSize: number,
     search?: string,
-  ): Promise<ListFuelProps> {
+  ): Promise<ListFuelFormattedProps> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -37,6 +37,7 @@ class ListFuelUseCase {
         currentUserRole: findUser.role,
         search,
       });
+
       return fuels;
     } catch (error) {
       throw new AppError(
