@@ -168,6 +168,7 @@ class UserRepository implements IUserRepository {
       two_factor_enabled: user.two_factor_enabled ?? "N/A",
       access_revoked: user.access_revoked ?? "N/A",
       email_verified: user.email_verified ? true : false,
+      whatsapp_phone: user.whatsapp_phone ?? "N/A",
       ...(currentUserRole === "MASTER"
         ? { corporate_reason: user.business?.corporate_reason ?? "N/A" }
         : {}),
@@ -277,7 +278,10 @@ class UserRepository implements IUserRepository {
     return findUserByEmail;
   }
 
-  async findUserByEmailAndBusinessId(email: string, businessId: string): Promise<User | null> {
+  async findUserByEmailAndBusinessId(
+    email: string,
+    businessId: string,
+  ): Promise<User | null> {
     const user = await this.prisma.user.findFirst({
       where: {
         email: {
@@ -528,7 +532,9 @@ class UserRepository implements IUserRepository {
     return updatedUser;
   }
 
-  async findUserWithConnectedWhatsAppByPhone(phoneNumber: string): Promise<User | null> {
+  async findUserWithConnectedWhatsAppByPhone(
+    phoneNumber: string,
+  ): Promise<User | null> {
     const user = await this.prisma.user.findFirst({
       where: {
         whatsapp_phone: phoneNumber,
@@ -541,7 +547,10 @@ class UserRepository implements IUserRepository {
     return user;
   }
 
-  async findUserWithWhatsAppByPhone(phoneNumber: string, excludeUserId?: string): Promise<User | null> {
+  async findUserWithWhatsAppByPhone(
+    phoneNumber: string,
+    excludeUserId?: string,
+  ): Promise<User | null> {
     const user = await this.prisma.user.findFirst({
       where: {
         whatsapp_phone: phoneNumber,
@@ -554,7 +563,10 @@ class UserRepository implements IUserRepository {
     return user;
   }
 
-  async findAllUsersWithDisconnectedWhatsAppByPhone(phoneNumber: string, excludeUserId?: string): Promise<User[]> {
+  async findAllUsersWithDisconnectedWhatsAppByPhone(
+    phoneNumber: string,
+    excludeUserId?: string,
+  ): Promise<User[]> {
     const users = await this.prisma.user.findMany({
       where: {
         whatsapp_phone: phoneNumber,
