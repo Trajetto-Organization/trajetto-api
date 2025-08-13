@@ -181,7 +181,7 @@ class UpdateFuelUseCase {
         : await this.vehicle.findVehicleById(findFuel.vehicleId);
 
       this.notificationService.createActivityIfEnabled({
-        type: "fuel",
+        type: "Abastecimento",
         action: "update",
         entityId: fuelId,
         description: `Abastecimento atualizado para o veículo ${vehicleForNotification?.license_plate} - ${vehicleForNotification?.description}`,

@@ -132,7 +132,7 @@ class CreateFuelUseCase {
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({
-        type: "fuel",
+        type: "Abastecimento",
         action: "create",
         entityId: fuelCreated.id,
         description: `Abastecimento criado para o veículo ${findVehicle.license_plate} - ${findVehicle.description}`,

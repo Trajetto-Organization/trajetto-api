@@ -17,7 +17,9 @@ import { FuelTypeNotFoundError } from "../errors/fuel-type-not-found-error";
 import { FuelTypeNotBelongBusinessError } from "../errors/fuel-type-not-belong-business-error";
 
 import { FuelTypeHasAssociatedVehiclesError } from "../errors/fuel-type-has-associated-vehicles-error";
+import { FuelTypeHasAssociatedFuelError } from "../errors/fuel-type-has-associated-fuel-error";
 
+import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 import { FuelType } from "../../dtos/fuel-type-dto";
 
 @injectable()
@@ -31,6 +33,8 @@ class DeleteFuelTypeUseCase {
     private fuelType: IFuelTypeRepository,
     @inject("VehicleRepository")
     private vehicle: IVehicleRepository,
+    @inject("FuelRepository")
+    private fuel: IFuelRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -67,6 +71,12 @@ class DeleteFuelTypeUseCase {
 
     if (associatedVehicles.length > 0) {
       throw new FuelTypeHasAssociatedVehiclesError(associatedVehicles.length);
+    }
+
+    const associatedFuels = await this.fuel.findFuelsByFuelTypeId(fuelTypeId);
+
+    if (associatedFuels.length > 0) {
+      throw new FuelTypeHasAssociatedFuelError(associatedFuels.length);
     }
 
     try {

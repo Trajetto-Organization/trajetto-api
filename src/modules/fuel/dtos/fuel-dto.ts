@@ -58,13 +58,13 @@ interface UpdateFuel {
 interface FuelFormatted {
   id: string;
   current_mileage: number;
-  liters_amount: string;
+  liters_amount: Decimal;
   price_per_liter: string;
   total_amount: string;
   odometer_photo?: string | null;
   odometer_verified: boolean;
   notes?: string | null;
-  refueling_date: string;
+  refueling_date: Date;
   businessId: string;
   branchId: string;
   vehicleId: string;

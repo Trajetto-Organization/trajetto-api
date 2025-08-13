@@ -15,6 +15,8 @@ import { VehicleNotBelongBusinessError } from "../errors/vehicle-not-belong-busi
 import { VehicleHasAssociatedFinesError } from "../errors/vehicle-has-associated-fines-error";
 import { VehicleHasAssociatedServiceOrdersError } from "../errors/vehicle-has-associated-service-orders-error";
 
+import { VehicleHasAssociatedFuelError } from "../errors/vehicle-has-associated-fuel-error";
+
 class DeleteVehicleController {
   async handle(
     request: FastifyRequest,
@@ -55,6 +57,10 @@ class DeleteVehicleController {
       }
 
       if (error instanceof VehicleHasAssociatedServiceOrdersError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof VehicleHasAssociatedFuelError) {
         return reply.status(403).send({ message: error.message });
       }
 

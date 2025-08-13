@@ -17,7 +17,10 @@ import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";
 import { VehicleHasAssociatedServiceOrdersError } from "../errors/vehicle-has-associated-service-orders-error";
 import { IServiceOrderRepository } from "@/modules/service-order/repositories/IService-order-repository";
 
+import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
+
 import { VehicleHasAssociatedFinesError } from "../errors/vehicle-has-associated-fines-error";
+import { VehicleHasAssociatedFuelError } from "../errors/vehicle-has-associated-fuel-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import { Vehicle } from "../../dtos/vehicle-dto";
@@ -35,6 +38,8 @@ class DeleteVehicleUseCase {
     private fine: IFineRepository,
     @inject("ServiceOrderRepository")
     private serviceOrder: IServiceOrderRepository,
+    @inject("FuelRepository")
+    private fuel: IFuelRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -79,6 +84,12 @@ class DeleteVehicleUseCase {
       throw new VehicleHasAssociatedServiceOrdersError(
         associatedServiceOrders.length,
       );
+    }
+
+    const associatedFuels = await this.fuel.findFuelsByVehicleId(vehicleId);
+
+    if (associatedFuels.length > 0) {
+      throw new VehicleHasAssociatedFuelError(associatedFuels.length);
     }
 
     try {

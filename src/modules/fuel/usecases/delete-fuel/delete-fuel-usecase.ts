@@ -70,7 +70,7 @@ class DeleteFuelUseCase {
       const deletedFuel = await this.fuel.deleteFuel(fuelId);
 
       this.notificationService.createActivityIfEnabled({
-        type: "fuel",
+        type: "Abastecimento",
         action: "delete",
         entityId: deletedFuel.id,
         description: `Abastecimento excluído do veículo ${findFuel.vehicle.license_plate} - ${findFuel.vehicle.description}`,

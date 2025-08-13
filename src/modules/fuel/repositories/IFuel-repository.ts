@@ -34,6 +34,9 @@ interface IFuelRepository {
     businessId,
     fuelId,
   }: GetFuelByIdAndBusinessProps): Promise<FuelWithRelationsFormatted | null>;
+  findFuelsByVehicleId: (vehicleId: string) => Promise<Fuel[]>;
+  findFuelsByDriverId: (driverId: string) => Promise<Fuel[]>;
+  findFuelsByFuelTypeId: (fuelTypeId: string) => Promise<Fuel[]>;
 }
 
 export { IFuelRepository };

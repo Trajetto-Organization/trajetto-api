@@ -146,14 +146,13 @@ class FuelRepository implements IFuelRepository {
     const transformedFuelData: FuelFormatted[] = fuelData.map((fuel) => ({
       id: fuel.id ?? "N/A",
       current_mileage: fuel.current_mileage ?? 0,
-      liters_amount:
-        fuel.liters_amount?.toFixed(3).replace(".", ",") ?? "0,000",
+      liters_amount: fuel.liters_amount ?? "0,000",
       price_per_liter: formatCurrency(fuel.price_per_liter?.toNumber() ?? 0),
       total_amount: formatCurrency(fuel.total_amount?.toNumber() ?? 0),
       odometer_photo: fuel.odometer_photo ?? "N/A",
       odometer_verified: fuel.odometer_verified ?? false,
       notes: fuel.notes ?? "N/A",
-      refueling_date: formatDate(fuel.refueling_date, "pt-BR") ?? "N/A",
+      refueling_date: fuel.refueling_date ?? "N/A",
       businessId: fuel.businessId ?? "N/A",
       branchId: fuel.branchId ?? "N/A",
       vehicleId: fuel.vehicleId ?? "N/A",
@@ -394,6 +393,30 @@ class FuelRepository implements IFuelRepository {
       created_at: formatDate(fuel.created_at, "pt-BR"),
       updated_at: formatDate(fuel.updated_at, "pt-BR"),
     } as FuelWithRelationsFormatted;
+  }
+
+  async findFuelsByVehicleId(vehicleId: string): Promise<Fuel[]> {
+    const fuels = await this.prisma.fuel.findMany({
+      where: { vehicleId },
+    });
+
+    return fuels;
+  }
+
+  async findFuelsByDriverId(driverId: string): Promise<Fuel[]> {
+    const fuels = await this.prisma.fuel.findMany({
+      where: { driverId },
+    });
+
+    return fuels;
+  }
+
+  async findFuelsByFuelTypeId(fuelTypeId: string): Promise<Fuel[]> {
+    const fuels = await this.prisma.fuel.findMany({
+      where: { fuelTypeId },
+    });
+
+    return fuels;
   }
 }
 

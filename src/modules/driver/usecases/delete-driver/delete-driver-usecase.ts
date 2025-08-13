@@ -17,6 +17,9 @@ import { DriverNotFoundError } from "../errors/driver-not-found-error";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { DriverHasAssociatedFinesError } from "../errors/driver-has-associated-fines-error";
+import { DriverHasAssociatedFuelError } from "../errors/driver-has-associated-fuel-error";
+
+import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 import { Driver } from "../../dtos/driver-dto";
 
 @injectable()
@@ -30,6 +33,8 @@ class DeleteDriverUseCase {
     private driver: IDriverRepository,
     @inject("FineRepository")
     private fine: IFineRepository,
+    @inject("FuelRepository")
+    private fuel: IFuelRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -65,6 +70,12 @@ class DeleteDriverUseCase {
 
     if (associatedFines.length > 0) {
       throw new DriverHasAssociatedFinesError(associatedFines.length);
+    }
+
+    const associatedFuels = await this.fuel.findFuelsByDriverId(driverId);
+
+    if (associatedFuels.length > 0) {
+      throw new DriverHasAssociatedFuelError(associatedFuels.length);
     }
 
     try {

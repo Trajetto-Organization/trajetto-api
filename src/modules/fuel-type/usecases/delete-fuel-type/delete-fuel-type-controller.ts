@@ -13,6 +13,7 @@ import { FuelTypeNotBelongBusinessError } from "../errors/fuel-type-not-belong-b
 import { FuelTypeHasAssociatedVehiclesError } from "../errors/fuel-type-has-associated-vehicles-error";
 
 import { FuelTypeNotFoundError } from "../errors/fuel-type-not-found-error";
+import { FuelTypeHasAssociatedFuelError } from "../errors/fuel-type-has-associated-fuel-error";
 
 class DeleteFuelTypeController {
   async handle(
@@ -50,6 +51,10 @@ class DeleteFuelTypeController {
       }
 
       if (error instanceof FuelTypeHasAssociatedVehiclesError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof FuelTypeHasAssociatedFuelError) {
         return reply.status(403).send({ message: error.message });
       }
 
