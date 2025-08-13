@@ -8,7 +8,7 @@ import {
 } from "../dtos/fine-dto";
 
 import { IFineRepository } from "./IFine-repository";
-import { formatDate, formatCurrency } from "@/config/format-values";
+import { formatDate, formatCurrency, formatCpf } from "@/config/format-values";
 
 class FineRepository implements IFineRepository {
   constructor(private prisma = database) {}
@@ -166,7 +166,7 @@ class FineRepository implements IFineRepository {
         branchName: fine.branch.corporate_reason ?? "N/A",
         driverId: fine.driverId ?? "N/A",
         driverName: fine.driver.name ?? "N/A",
-        driverCpf: fine.driver.cpf ?? "N/A",
+        driverCpf: formatCpf(fine.driver.cpf) ?? "N/A",
         vehicleId: fine.vehicleId ?? "N/A",
         vehicleLicensePlate: fine.vehicle.license_plate ?? "N/A",
         vehicleDescription: fine.vehicle.description ?? "N/A",
