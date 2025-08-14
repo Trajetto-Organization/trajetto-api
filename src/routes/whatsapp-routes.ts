@@ -11,6 +11,11 @@ import { WhatsAppSettingsController } from "@/modules/whatsapp/usecases/manage-s
 
 import { getRateLimiterConfig } from "@/modules/middlewares/rate-limiter";
 
+import {
+  whatsappSchemas,
+  whatsappResponses,
+} from "./documentation/whatsapp-documentation";
+
 const connectQRCodeController = new ConnectQRCodeController();
 const whatsAppStatusController = new WhatsAppStatusController();
 
@@ -24,10 +29,16 @@ async function whatsappRoutes(app: FastifyInstance) {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
       schema: {
-        tags: ["WhatsApp - Configurações"],
-        summary: "Obter configurações WhatsApp",
-        description: "Obtém configurações atuais do WhatsApp do usuário",
         security: [{ bearerAuth: [] }],
+        tags: ["whatsapp"],
+        summary: "Get WhatsApp settings",
+        description:
+          "Retrieve current WhatsApp configuration settings for the authenticated user",
+        response: {
+          200: whatsappResponses.settingsRetrieved,
+          400: whatsappResponses.resourceNotFound,
+          500: whatsappResponses.internalServerError,
+        },
       },
     },
     settingsController.getSettings,
@@ -42,11 +53,17 @@ async function whatsappRoutes(app: FastifyInstance) {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
       schema: {
-        tags: ["WhatsApp - Configurações"],
-        summary: "Atualizar configurações WhatsApp",
-        description:
-          "Habilita/desabilita WhatsApp e configura número de telefone",
         security: [{ bearerAuth: [] }],
+        tags: ["whatsapp"],
+        summary: "Update WhatsApp settings",
+        description:
+          "Enable/disable WhatsApp notifications and configure phone number settings",
+        body: whatsappSchemas.updateWhatsAppSettings,
+        response: {
+          200: whatsappResponses.settingsUpdated,
+          400: whatsappResponses.settingsErrors,
+          500: whatsappResponses.internalServerError,
+        },
       },
     },
     settingsController.updateSettings,
@@ -61,10 +78,16 @@ async function whatsappRoutes(app: FastifyInstance) {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
       schema: {
-        tags: ["WhatsApp - Status"],
-        summary: "Verificar status da conexão WhatsApp",
-        description: "Verifica e atualiza o status atual da conexão WhatsApp",
         security: [{ bearerAuth: [] }],
+        tags: ["whatsapp"],
+        summary: "Check WhatsApp connection status",
+        description:
+          "Verify and update the current WhatsApp connection status for the user",
+        response: {
+          200: whatsappResponses.statusRetrieved,
+          400: whatsappResponses.statusErrors,
+          500: whatsappResponses.internalServerError,
+        },
       },
     },
     whatsAppStatusController.handle,
@@ -79,10 +102,16 @@ async function whatsappRoutes(app: FastifyInstance) {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
       schema: {
-        tags: ["WhatsApp - Conexão"],
-        summary: "Obter QR Code para conexão WhatsApp",
-        description: "Gera QR Code para conectar WhatsApp via escaneamento",
         security: [{ bearerAuth: [] }],
+        tags: ["whatsapp"],
+        summary: "Generate QR code for WhatsApp connection",
+        description:
+          "Generate a QR code that can be scanned to connect WhatsApp to the system",
+        response: {
+          200: whatsappResponses.qrCodeGenerated,
+          400: whatsappResponses.qrCodeErrors,
+          500: whatsappResponses.internalServerError,
+        },
       },
     },
     connectQRCodeController.handle,
@@ -90,6 +119,14 @@ async function whatsappRoutes(app: FastifyInstance) {
 
   app.post(
     "/webhook/:instanceName",
+    {
+      schema: {
+        tags: ["whatsapp"],
+        summary: "WhatsApp webhook endpoint",
+        description:
+          "Receive webhook events from WhatsApp service for message and status updates",
+      },
+    },
     webhookController.handle.bind(webhookController),
   );
 }

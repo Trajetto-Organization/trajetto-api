@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { trendsPeriodSchema } from "@/schemas/trends-period-schema";
+
 const dashboardSchemas = {
   countByDateRangeQuery: z.object({
     startDate: z.string().describe("Data de início no formato YYYY-MM-DD"),
@@ -19,11 +21,126 @@ const dashboardSchemas = {
       ])
       .describe("Entidade a ser contabilizada"),
   }),
+  trendsQuery: trendsPeriodSchema,
 };
 
 const dashboardResponses = {
   countByDateRange: z.object({
     count: z.number().describe("Total de registros no período"),
+  }),
+  dashboardOverview: z.object({
+    counts: z.object({
+      vehicles: z.object({
+        currentMonth: z.number().describe("Number of vehicles created in current month"),
+        lastMonth: z.number().describe("Number of vehicles created in last month"),
+      }),
+      drivers: z.object({
+        currentMonth: z.number().describe("Number of drivers created in current month"),
+        lastMonth: z.number().describe("Number of drivers created in last month"),
+      }),
+      businesses: z.object({
+        currentMonth: z.number().describe("Number of businesses created in current month"),
+        lastMonth: z.number().describe("Number of businesses created in last month"),
+      }),
+      branches: z.object({
+        currentMonth: z.number().describe("Number of branches created in current month"),
+        lastMonth: z.number().describe("Number of branches created in last month"),
+      }),
+      parts: z.object({
+        currentMonth: z.number().describe("Number of parts created in current month"),
+        lastMonth: z.number().describe("Number of parts created in last month"),
+      }),
+      suppliers: z.object({
+        currentMonth: z.number().describe("Number of suppliers created in current month"),
+        lastMonth: z.number().describe("Number of suppliers created in last month"),
+      }),
+      serviceOrders: z.object({
+        currentMonth: z.number().describe("Number of service orders created in current month"),
+        lastMonth: z.number().describe("Number of service orders created in last month"),
+      }),
+      users: z.object({
+        currentMonth: z.number().describe("Number of users created in current month"),
+        lastMonth: z.number().describe("Number of users created in last month"),
+      }),
+      fines: z.object({
+        currentMonth: z.number().describe("Number of fines created in current month"),
+        lastMonth: z.number().describe("Number of fines created in last month"),
+      }),
+    }),
+    vehicleStatus: z.object({
+      ACTIVE: z.number().describe("Number of active vehicles"),
+      INACTIVE: z.number().describe("Number of inactive vehicles"),
+      BLOCKED: z.number().describe("Number of blocked vehicles"),
+      IN_ROUTE: z.number().describe("Number of vehicles in route"),
+    }),
+    activityTrends: z.array(
+      z.object({
+        month: z.string().describe("Month name"),
+        vehicles: z.number().describe("Number of vehicles"),
+        drivers: z.number().describe("Number of drivers"),
+        businesses: z.number().describe("Number of businesses"),
+        branches: z.number().describe("Number of branches"),
+        parts: z.number().describe("Number of parts"),
+        suppliers: z.number().describe("Number of suppliers"),
+        serviceOrders: z.number().describe("Number of service orders"),
+        users: z.number().describe("Number of users"),
+        fines: z.number().describe("Number of fines"),
+      })
+    ),
+    maintenanceStats: z.object({
+      pending: z.number().describe("Number of pending maintenances"),
+      recent: z.number().describe("Number of recent maintenances"),
+      overdue: z.number().describe("Number of overdue maintenances"),
+    }),
+    recentActivity: z.array(
+      z.object({
+        id: z.string().describe("Activity ID"),
+        type: z.string().describe("Activity type"),
+        description: z.string().describe("Activity description"),
+        userEmail: z.string().describe("User email"),
+        userName: z.string().describe("User name"),
+        userRole: z.string().describe("User role"),
+        business_name: z.string().optional().describe("Business name"),
+        date: z.string().describe("Activity creation date"),
+        status: z.string().describe("Activity status"),
+      })
+    ),
+    vehiclesByType: z.array(
+      z.object({
+        name: z.string().describe("Vehicle type name"),
+        count: z.number().describe("Number of vehicles of this type"),
+      })
+    ),
+    maintenanceCosts: z.array(
+      z.object({
+        month: z.string().describe("Month name"),
+        preventive: z.number().describe("Preventive maintenance costs"),
+        corrective: z.number().describe("Corrective maintenance costs"),
+      })
+    ),
+  }),
+  dashboardTrends: z.object({
+    activityTrends: z.array(
+      z.object({
+        date: z.string().describe("Date or month"),
+        vehicles: z.number().describe("Number of vehicles"),
+        drivers: z.number().describe("Number of drivers"),
+        businesses: z.number().describe("Number of businesses"),
+        branches: z.number().describe("Number of branches"),
+        parts: z.number().describe("Number of parts"),
+        suppliers: z.number().describe("Number of suppliers"),
+        serviceOrders: z.number().describe("Number of service orders"),
+        users: z.number().describe("Number of users"),
+        fines: z.number().describe("Number of fines"),
+      })
+    ),
+    maintenanceCosts: z.array(
+      z.object({
+        date: z.string().describe("Date or month"),
+        preventive: z.number().describe("Preventive maintenance costs"),
+        corrective: z.number().describe("Corrective maintenance costs"),
+      })
+    ),
   }),
   vehicleStatusCount: z.object({
     ACTIVE: z.number().describe("Total de veículos ativos"),
@@ -47,6 +164,9 @@ const dashboardResponses = {
         count: z.number().describe("Quantidade de veículos"),
       }),
     ),
+  }),
+  resourceNotFound: z.object({
+    message: z.string().default("Recurso não encontrado!"),
   }),
   internalServerError: z.object({
     message: z.string().default("Erro interno do servidor"),

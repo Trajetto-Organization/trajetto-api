@@ -34,7 +34,8 @@ async function serviceOrderRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
-        description: "Create a new service order",
+        summary: "Create a new service order",
+        description: "Register a new vehicle maintenance or repair service order with parts, labor, and scheduling details",
         params: serviceOrderSchemas.businessIdParam,
         body: serviceOrderSchemas.createServiceOrder,
         response: {
@@ -55,7 +56,8 @@ async function serviceOrderRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
-        description: "List service orders",
+        summary: "List service orders",
+        description: "Retrieve a paginated list of vehicle service orders with optional search and status filtering",
         querystring: serviceOrderSchemas.listServiceOrder,
         response: {
           200: serviceOrderResponses.serviceOrderList,
@@ -75,7 +77,8 @@ async function serviceOrderRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
-        description: "List service order business",
+        summary: "List service orders by business",
+        description: "Retrieve a paginated list of service orders filtered by specific business with search capabilities",
         querystring: serviceOrderSchemas.listServiceOrderBusinessSchema,
         response: {
           200: serviceOrderResponses.serviceOrderList,
@@ -95,7 +98,8 @@ async function serviceOrderRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
-        description: "Update service order information",
+        summary: "Update a service order",
+        description: "Update existing service order details including status, parts, labor costs, and completion information",
         params: serviceOrderSchemas.serviceOrderBusinessParams,
         body: serviceOrderSchemas.updateServiceOrder,
         response: {
@@ -116,7 +120,8 @@ async function serviceOrderRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
-        description: "Delete a service order",
+        summary: "Delete a service order",
+        description: "Permanently remove a service order record and all associated maintenance history",
         params: serviceOrderSchemas.serviceOrderBusinessParams,
         response: {
           200: serviceOrderResponses.serviceOrderDeleted,

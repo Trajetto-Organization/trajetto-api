@@ -1,4 +1,5 @@
 import { FastifyInstance } from "fastify";
+import { z } from "zod";
 
 import { CreateKanbanColumnController } from "@/modules/kanban/usecases/create-column/create-column-controller";
 import { UpdateKanbanColumnController } from "@/modules/kanban/usecases/update-column/update-column-controller";
@@ -16,6 +17,11 @@ import { ReorderKanbanCardsController } from "@/modules/kanban/usecases/reorder-
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
+
+import {
+  kanbanSchemas,
+  kanbanResponses,
+} from "./documentation/kanban-documentation";
 
 const createKanbanColumnController = new CreateKanbanColumnController();
 const updateKanbanColumnController = new UpdateKanbanColumnController();
@@ -40,7 +46,20 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        description: "Create a new kanban column",
+        summary: "Create a new kanban column",
+        description:
+          "Create a new kanban board column with title, color, and position for organizing workflow tasks",
+        params: kanbanSchemas.businessIdParam,
+        body: kanbanSchemas.createColumn,
+        response: {
+          201: kanbanResponses.columnCreated,
+          400: z.union([
+            kanbanResponses.resourceNotFound,
+            kanbanResponses.businessNotFound,
+            kanbanResponses.validationError,
+          ]),
+          500: kanbanResponses.internalServerError,
+        },
       },
     },
     createKanbanColumnController.handle,
@@ -54,7 +73,21 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        description: "Update a kanban column",
+        summary: "Update a kanban column",
+        description:
+          "Update existing kanban column information including title, color, and visual properties",
+        params: kanbanSchemas.updateDeleteColumn,
+        body: kanbanSchemas.updateColumn,
+        response: {
+          200: kanbanResponses.columnUpdated,
+          400: z.union([
+            kanbanResponses.resourceNotFound,
+            kanbanResponses.businessNotFound,
+            kanbanResponses.kanbanColumnNotFound,
+            kanbanResponses.validationError,
+          ]),
+          500: kanbanResponses.internalServerError,
+        },
       },
     },
     updateKanbanColumnController.handle,
@@ -68,7 +101,19 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        description: "Delete a kanban column",
+        summary: "Delete a kanban column",
+        description:
+          "Permanently remove a kanban column and all associated cards from the board",
+        params: kanbanSchemas.updateDeleteColumn,
+        response: {
+          200: kanbanResponses.columnDeleted,
+          400: z.union([
+            kanbanResponses.resourceNotFound,
+            kanbanResponses.businessNotFound,
+            kanbanResponses.kanbanColumnNotFound,
+          ]),
+          500: kanbanResponses.internalServerError,
+        },
       },
     },
     deleteKanbanColumnController.handle,
@@ -82,7 +127,18 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        description: "Reorder kanban columns",
+        summary: "Reorder kanban columns",
+        description:
+          "Change the position and order of kanban columns on the board for better workflow organization",
+        body: kanbanSchemas.reorderColumns,
+        response: {
+          200: kanbanResponses.columnsReordered,
+          400: z.union([
+            kanbanResponses.resourceNotFound,
+            kanbanResponses.validationError,
+          ]),
+          500: kanbanResponses.internalServerError,
+        },
       },
     },
     reorderKanbanColumnsController.handle,
@@ -95,7 +151,19 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        description: "List kanban by business",
+        summary: "List kanban board",
+        description:
+          "Retrieve complete kanban board with all columns, cards, and task assignments for a specific business",
+        params: kanbanSchemas.businessIdParam,
+        querystring: kanbanSchemas.listKanban,
+        response: {
+          200: kanbanResponses.kanbanList,
+          400: z.union([
+            kanbanResponses.resourceNotFound,
+            kanbanResponses.businessNotFound,
+          ]),
+          500: kanbanResponses.internalServerError,
+        },
       },
     },
     listKanbanController.handle,
@@ -109,7 +177,19 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        description: "Create a new kanban card",
+        summary: "Create a new kanban card",
+        description:
+          "Create a new task card with title, description, priority, due date, and assignment details",
+        body: kanbanSchemas.createCard,
+        response: {
+          201: kanbanResponses.cardCreated,
+          400: z.union([
+            kanbanResponses.resourceNotFound,
+            kanbanResponses.validationError,
+          ]),
+          404: kanbanResponses.kanbanColumnNotFound,
+          500: kanbanResponses.internalServerError,
+        },
       },
     },
     createKanbanCardController.handle,
@@ -123,7 +203,20 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        description: "Update a kanban card",
+        summary: "Update a kanban card",
+        description:
+          "Update existing task card information including content, priority, completion status, and assignments",
+        params: kanbanSchemas.updateDeleteCard,
+        body: kanbanSchemas.updateCard,
+        response: {
+          200: kanbanResponses.cardUpdated,
+          400: z.union([
+            kanbanResponses.resourceNotFound,
+            kanbanResponses.kanbanCardNotFound,
+            kanbanResponses.validationError,
+          ]),
+          500: kanbanResponses.internalServerError,
+        },
       },
     },
     updateKanbanCardController.handle,
@@ -137,7 +230,17 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        description: "Delete a kanban card",
+        summary: "Delete a kanban card",
+        description: "Permanently remove a task card from the kanban board",
+        params: kanbanSchemas.updateDeleteCard,
+        response: {
+          200: kanbanResponses.cardDeleted,
+          400: z.union([
+            kanbanResponses.resourceNotFound,
+            kanbanResponses.kanbanCardNotFound,
+          ]),
+          500: kanbanResponses.internalServerError,
+        },
       },
     },
     deleteKanbanCardController.handle,
@@ -151,7 +254,18 @@ async function kanbanRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
-        description: "Reorder kanban cards",
+        summary: "Reorder kanban cards",
+        description:
+          "Change the position and order of task cards within columns or move cards between different columns",
+        body: kanbanSchemas.reorderCards,
+        response: {
+          200: kanbanResponses.cardsReordered,
+          400: z.union([
+            kanbanResponses.resourceNotFound,
+            kanbanResponses.validationError,
+          ]),
+          500: kanbanResponses.internalServerError,
+        },
       },
     },
     reorderKanbanCardsController.handle,

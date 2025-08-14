@@ -29,7 +29,8 @@ async function permissionRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
-        description: "Create new permission",
+        summary: "Create a new permission",
+        description: "Register a new system permission with access control rules and resource restrictions",
         body: permissionSchemas.createPermission,
         response: {
           201: permissionResponses.permissionCreated,
@@ -49,7 +50,8 @@ async function permissionRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
-        description: "List permissions",
+        summary: "List permissions",
+        description: "Retrieve a paginated list of system permissions with their access control configurations",
         querystring: permissionSchemas.listPermission,
         response: {
           200: permissionResponses.permissionList,
@@ -69,7 +71,8 @@ async function permissionRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
-        description: "Update permission",
+        summary: "Update a permission",
+        description: "Update existing permission settings including access rules and resource restrictions",
         params: permissionSchemas.updateDeletePermission,
         body: permissionSchemas.updatePermission,
         response: {
@@ -91,7 +94,8 @@ async function permissionRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
-        description: "Delete permission",
+        summary: "Delete a permission",
+        description: "Permanently remove a permission from the system access control configuration",
         params: permissionSchemas.updateDeletePermission,
         response: {
           200: permissionResponses.permissionDeleted,

@@ -1,4 +1,5 @@
 import { FastifyInstance } from "fastify";
+import { z } from "zod";
 
 import { CreateFuelController } from "@/modules/fuel/usecases/create-fuel/create-fuel-controller";
 import { ListFuelController } from "@/modules/fuel/usecases/list-fuel/list-fuel-controller";
@@ -11,10 +12,7 @@ import { DeleteFuelController } from "@/modules/fuel/usecases/delete-fuel/delete
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
-import {
-  fuelSchemas,
-  fuelResponses,
-} from "./documentation/fuel-documentation";
+import { fuelSchemas, fuelResponses } from "./documentation/fuel-documentation";
 
 const createFuelController = new CreateFuelController();
 const listFuelController = new ListFuelController();
@@ -33,7 +31,29 @@ async function fuelRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
-        description: "Create a new fuel record",
+        summary: "Create a new fuel record",
+        description:
+          "Register a new fuel refueling record for a vehicle with driver, mileage, and fuel details",
+        params: fuelSchemas.updateDeleteBusiness,
+        body: fuelSchemas.createFuel,
+        response: {
+          201: fuelResponses.fuelCreated,
+          400: z.union([
+            fuelResponses.resourceNotFound,
+            fuelResponses.businessNotFound,
+            fuelResponses.vehicleNotFound,
+            fuelResponses.driverNotFound,
+            fuelResponses.fuelTypeNotFound,
+            fuelResponses.branchNotFound,
+            fuelResponses.vehicleNotBelongBusiness,
+            fuelResponses.driverNotBelongBusiness,
+            fuelResponses.fuelTypeNotBelongBusiness,
+            fuelResponses.branchNotBelongBusiness,
+            fuelResponses.vehicleMileageInvalid,
+            fuelResponses.validationError,
+          ]),
+          500: fuelResponses.internalServerError,
+        },
       },
     },
     createFuelController.handle,
@@ -47,7 +67,9 @@ async function fuelRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
-        description: "List fuel records",
+        summary: "List fuel records",
+        description:
+          "Retrieve a paginated list of fuel refueling records with optional search filters",
         querystring: fuelSchemas.listFuel,
         response: {
           200: fuelResponses.fuelList,
@@ -67,7 +89,9 @@ async function fuelRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
-        description: "List fuel records by business",
+        summary: "List fuel records by business",
+        description:
+          "Retrieve a paginated list of fuel refueling records filtered by business with optional search",
         querystring: fuelSchemas.listFuelBusiness,
         response: {
           200: fuelResponses.fuelList,
@@ -87,7 +111,31 @@ async function fuelRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
-        description: "Update a fuel record",
+        summary: "Update a fuel record",
+        description:
+          "Update information about an existing fuel refueling record including mileage, fuel details, and related entities",
+        params: fuelSchemas.updateDeleteFuel,
+        body: fuelSchemas.updateFuel,
+        response: {
+          200: fuelResponses.fuelUpdated,
+          400: z.union([
+            fuelResponses.resourceNotFound,
+            fuelResponses.businessNotFound,
+            fuelResponses.fuelNotFound,
+            fuelResponses.vehicleNotFound,
+            fuelResponses.driverNotFound,
+            fuelResponses.fuelTypeNotFound,
+            fuelResponses.branchNotFound,
+            fuelResponses.fuelNotBelongBusiness,
+            fuelResponses.vehicleNotBelongBusiness,
+            fuelResponses.driverNotBelongBusiness,
+            fuelResponses.fuelTypeNotBelongBusiness,
+            fuelResponses.branchNotBelongBusiness,
+            fuelResponses.vehicleMileageInvalid,
+            fuelResponses.validationError,
+          ]),
+          500: fuelResponses.internalServerError,
+        },
       },
     },
     updateFuelController.handle,
@@ -101,7 +149,25 @@ async function fuelRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
-        description: "Delete a fuel record",
+        summary: "Delete a fuel record",
+        description:
+          "Permanently delete a fuel refueling record from the system",
+        params: fuelSchemas.updateDeleteFuel,
+        response: {
+          200: fuelResponses.fuelDeleted,
+          400: z.union([
+            fuelResponses.resourceNotFound,
+            fuelResponses.businessNotFound,
+            fuelResponses.fuelNotFound,
+          ]),
+          403: fuelResponses.fuelNotBelongBusiness,
+          404: z.union([
+            fuelResponses.resourceNotFound,
+            fuelResponses.businessNotFound,
+            fuelResponses.fuelNotFound,
+          ]),
+          500: fuelResponses.internalServerError,
+        },
       },
     },
     deleteFuelController.handle,

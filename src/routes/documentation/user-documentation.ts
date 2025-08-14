@@ -24,6 +24,7 @@ import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 
 import { getUserSchema } from "@/schemas/get-user-schema";
+import { revokeUserAccessSchema } from "@/schemas/revoke-user-access-schema";
 
 const userSchemas = {
   createUser: createUserSchema,
@@ -40,6 +41,7 @@ const userSchemas = {
   updateUserName: updateUserNameSchema,
   listUsers: listPagesSchema,
   listUserBusiness: listPagesByBusinessSchema,
+  revokeUserAccess: revokeUserAccessSchema,
 };
 
 const userResponses = {
@@ -108,6 +110,10 @@ const userResponses = {
     message: z
       .string()
       .default("Autenticação de dois fatores atualizada com sucesso!"),
+  }),
+
+  userAccessRevoked: z.object({
+    message: z.string().default("Revogação de acesso atualizada com sucesso!"),
   }),
 
   forgotPasswordVerificationSuccess: z.object({
@@ -222,6 +228,12 @@ const userResponses = {
       .default(
         "Usuário não tem permissão para atualizar o seu próprio usuário.",
       ),
+  }),
+
+  cannotRevokeOwnAccess: z.object({
+    message: z
+      .string()
+      .default("Usuário não pode revogar o acesso de si mesmo."),
   }),
 
   invalidToken: z.object({

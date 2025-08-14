@@ -31,7 +31,8 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        description: "Listar notificações do usuário",
+        summary: "List user notifications",
+        description: "Retrieve a paginated list of notifications for the authenticated user with optional filtering",
         querystring: notificationSchemas.listNotificationsQuery,
         response: {
           200: notificationResponses.notificationsList,
@@ -49,7 +50,8 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        description: "Contar notificações não lidas",
+        summary: "Count unread notifications",
+        description: "Get the total count of unread notifications for the authenticated user",
         response: {
           200: notificationResponses.unreadCount,
           500: notificationResponses.internalServerError,
@@ -66,7 +68,8 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        description: "Marcar notificação como lida",
+        summary: "Mark notification as read",
+        description: "Mark a specific notification as read by its ID",
         params: notificationSchemas.notificationIdParam,
         response: {
           200: notificationResponses.notificationMarkedAsRead,
@@ -84,7 +87,8 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        description: "Marcar todas as notificações como lidas",
+        summary: "Mark all notifications as read",
+        description: "Mark all notifications as read for the authenticated user",
         response: {
           200: notificationResponses.allNotificationsMarkedAsRead,
           500: notificationResponses.internalServerError,
@@ -101,7 +105,8 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        description: "Excluir notificação",
+        summary: "Delete notification",
+        description: "Permanently delete a specific notification by its ID",
         params: notificationSchemas.notificationIdParam,
         response: {
           200: notificationResponses.notificationDeleted,

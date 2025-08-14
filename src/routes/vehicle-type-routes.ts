@@ -34,7 +34,8 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicleType"],
-        description: "Create a new vehicle type",
+        summary: "Create a new vehicle type",
+        description: "Register a new vehicle type category (truck, van, car, etc.) with specifications and classification details",
         params: vehicleTypeSchemas.businessIdParam,
         body: vehicleTypeSchemas.createVehicleType,
         response: {
@@ -55,7 +56,8 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicleType"],
-        description: "List vehicle types",
+        summary: "List vehicle types",
+        description: "Retrieve a paginated list of vehicle type categories with their specifications and classifications",
         querystring: vehicleTypeSchemas.listVehicleType,
         response: {
           200: vehicleTypeResponses.vehicleTypeList,
@@ -75,7 +77,8 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicleType"],
-        description: "List vehicle type business",
+        summary: "List vehicle types by business",
+        description: "Retrieve a paginated list of vehicle types filtered by specific business with search capabilities",
         querystring: vehicleTypeSchemas.listVehicleTypeBusiness,
         response: {
           200: vehicleTypeResponses.vehicleTypeList,
@@ -95,7 +98,8 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicleType"],
-        description: "Update vehicle type information",
+        summary: "Update a vehicle type",
+        description: "Update existing vehicle type information including specifications and classification details",
         params: vehicleTypeSchemas.vehicleTypeBusinessParams,
         body: vehicleTypeSchemas.updateVehicleType,
         response: {
@@ -116,7 +120,8 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicleType"],
-        description: "Delete a vehicle type",
+        summary: "Delete a vehicle type",
+        description: "Permanently remove a vehicle type category from the system and associated vehicle classifications",
         params: vehicleTypeSchemas.vehicleTypeBusinessParams,
         response: {
           200: vehicleTypeResponses.vehicleTypeDeleted,

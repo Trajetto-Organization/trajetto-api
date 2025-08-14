@@ -33,7 +33,8 @@ async function driverRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        description: "Create a new driver",
+        summary: "Create a new driver",
+        description: "Register a new driver in the fleet management system with personal information, license details, and business association",
         params: driverSchemas.businessIdParam,
         body: driverSchemas.createDriver,
         response: {
@@ -54,7 +55,8 @@ async function driverRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        description: "List drivers",
+        summary: "List drivers",
+        description: "Retrieve a paginated list of drivers with optional search functionality and filtering capabilities",
         querystring: driverSchemas.listDriver,
         response: {
           200: driverResponses.driverList,
@@ -74,7 +76,8 @@ async function driverRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        description: "List driver business",
+        summary: "List drivers by business",
+        description: "Retrieve a paginated list of drivers filtered by specific business with optional search and pagination controls",
         querystring: driverSchemas.listDriverBusiness,
         response: {
           200: driverResponses.driverList,
@@ -94,7 +97,8 @@ async function driverRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        description: "Update driver information",
+        summary: "Update a driver",
+        description: "Update existing driver information including personal details, contact information, and license data",
         params: driverSchemas.driverBusinessParams,
         body: driverSchemas.updateDriver,
         response: {
@@ -115,7 +119,8 @@ async function driverRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        description: "Delete a driver",
+        summary: "Delete a driver",
+        description: "Permanently remove a driver record from the fleet management system",
         params: driverSchemas.driverBusinessParams,
         response: {
           200: driverResponses.driverDeleted,

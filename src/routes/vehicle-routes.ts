@@ -35,7 +35,9 @@ async function vehicleRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle"],
-        description: "Create a new vehicle",
+        summary: "Create a new vehicle",
+        description:
+          "Register a new vehicle in the fleet management system with specifications and operational details",
         params: vehicleSchemas.businessIdParam,
         body: vehicleSchemas.createVehicle,
         response: {
@@ -56,7 +58,9 @@ async function vehicleRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle"],
-        description: "List vehicles",
+        summary: "List vehicles",
+        description:
+          "Retrieve a paginated list of fleet vehicles with optional search and filtering capabilities",
         querystring: vehicleSchemas.listVehicle,
         response: {
           200: vehicleResponses.vehicleList,
@@ -76,7 +80,9 @@ async function vehicleRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle"],
-        description: "List vehicle business",
+        summary: "List vehicles by business",
+        description:
+          "Retrieve a paginated list of vehicles filtered by specific business with search functionality",
         querystring: vehicleSchemas.listVehicleBusinessSchema,
         response: {
           200: vehicleResponses.vehicleList,
@@ -93,6 +99,19 @@ async function vehicleRoutes(app: FastifyInstance) {
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("vehicle_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["vehicle"],
+        summary: "Get a vehicle",
+        description:
+          "Retrieve detailed information about a specific vehicle by its ID and business ID",
+        params: vehicleSchemas.getVehicle,
+        response: {
+          200: vehicleResponses.vehicleReturned,
+          400: vehicleResponses.getVehicleErrors,
+          500: vehicleResponses.internalServerError,
+        },
+      },
     },
     getVehicleController.handle,
   );
@@ -105,7 +124,9 @@ async function vehicleRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle"],
-        description: "Update vehicle information",
+        summary: "Update a vehicle",
+        description:
+          "Update existing vehicle information including specifications, maintenance data, and operational status",
         params: vehicleSchemas.vehicleBusinessParams,
         body: vehicleSchemas.updateVehicle,
         response: {
@@ -126,7 +147,9 @@ async function vehicleRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle"],
-        description: "Delete a vehicle",
+        summary: "Delete a vehicle",
+        description:
+          "Permanently remove a vehicle from the fleet management system and all associated records",
         params: vehicleSchemas.vehicleBusinessParams,
         response: {
           200: vehicleResponses.vehicleDeleted,

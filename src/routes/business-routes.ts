@@ -30,7 +30,8 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        description: "Create a new business",
+        summary: "Create a new business",
+        description: "Register a new business entity in the fleet management system with company information and administrative details",
         body: businessSchemas.createBusiness,
         response: {
           201: businessResponses.businessCreated,
@@ -50,7 +51,8 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        description: "List a business",
+        summary: "List businesses",
+        description: "Retrieve a paginated list of business entities with optional search and filtering capabilities",
         querystring: businessSchemas.listBusiness,
         response: {
           200: businessResponses.businessList,
@@ -70,7 +72,8 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        description: "Update business information",
+        summary: "Update a business",
+        description: "Update existing business information including company details, contact information, and administrative settings",
         params: businessSchemas.updateDeleteBusiness,
         body: businessSchemas.updateBusiness,
         response: {
@@ -91,7 +94,8 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        description: "Delete a business",
+        summary: "Delete a business",
+        description: "Permanently remove a business entity and all associated data from the fleet management system",
         params: businessSchemas.updateDeleteBusiness,
         response: {
           200: businessResponses.businessDeleted,

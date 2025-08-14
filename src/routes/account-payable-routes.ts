@@ -29,7 +29,8 @@ async function accountPayableRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["account-payable"],
-        description: "Create a new account payable",
+        summary: "Create a new account payable",
+        description: "Register a new financial obligation or bill to be paid with amount, due date, supplier information, and payment details",
         params: accountPayableSchemas.businessIdParam,
         body: accountPayableSchemas.createAccountPayable,
         response: {
@@ -50,7 +51,8 @@ async function accountPayableRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["account-payable"],
-        description: "List account payables",
+        summary: "List accounts payable",
+        description: "Retrieve a paginated list of financial obligations and bills with payment status, amounts, and supplier information",
         querystring: accountPayableSchemas.listAccountPayable,
         response: {
           200: accountPayableResponses.accountPayableList,
@@ -70,7 +72,8 @@ async function accountPayableRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["account-payable"],
-        description: "Update account payable information",
+        summary: "Update an account payable",
+        description: "Update existing financial obligation details including payment status, amounts, due dates, and associated information",
         params: accountPayableSchemas.accountPayableBusinessParams,
         body: accountPayableSchemas.updateAccountPayable,
         response: {
@@ -91,7 +94,8 @@ async function accountPayableRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["account-payable"],
-        description: "Delete an account payable",
+        summary: "Delete an account payable",
+        description: "Permanently remove a financial obligation record from the accounts payable system",
         params: accountPayableSchemas.accountPayableBusinessParams,
         response: {
           200: accountPayableResponses.accountPayableDeleted,

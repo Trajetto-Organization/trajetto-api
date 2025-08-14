@@ -33,7 +33,8 @@ async function fuelTypeRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuelType"],
-        description: "Create a new fuel type",
+        summary: "Create a new fuel type",
+        description: "Register a new fuel type category (gasoline, diesel, ethanol, etc.) with pricing information and business association",
         params: fuelTypeSchemas.businessIdParam,
         body: fuelTypeSchemas.createFuelType,
         response: {
@@ -54,7 +55,8 @@ async function fuelTypeRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuelType"],
-        description: "List fuel types",
+        summary: "List fuel types",
+        description: "Retrieve a paginated list of available fuel type categories with their descriptions and pricing information",
         querystring: fuelTypeSchemas.listFuelType,
         response: {
           200: fuelTypeResponses.fuelTypeList,
@@ -74,7 +76,8 @@ async function fuelTypeRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuelType"],
-        description: "List fuel type business",
+        summary: "List fuel types by business",
+        description: "Retrieve a paginated list of fuel type categories filtered by specific business with optional search functionality",
         querystring: fuelTypeSchemas.listFuelTypeBusiness,
         response: {
           200: fuelTypeResponses.fuelTypeList,
@@ -94,7 +97,8 @@ async function fuelTypeRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuelType"],
-        description: "Update fuel type information",
+        summary: "Update a fuel type",
+        description: "Update existing fuel type information including description, pricing details, and category specifications",
         params: fuelTypeSchemas.fuelTypeBusinessParams,
         body: fuelTypeSchemas.updateFuelType,
         response: {
@@ -115,7 +119,8 @@ async function fuelTypeRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuelType"],
-        description: "Delete a fuel type",
+        summary: "Delete a fuel type",
+        description: "Permanently remove a fuel type category from the system and all associated refueling records",
         params: fuelTypeSchemas.fuelTypeBusinessParams,
         response: {
           200: fuelTypeResponses.fuelTypeDeleted,
