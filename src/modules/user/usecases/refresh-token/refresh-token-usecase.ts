@@ -43,6 +43,14 @@ class RefreshTokenUseCase {
       throw new InvalidCredentialsError();
     }
 
+    // Check if user access has been revoked
+    if (findUserByEmail.access_revoked) {
+      throw new AppError(
+        "Seu acesso foi revogado! Para acessar a plataforma novamente, por favor contate o administrador.",
+        403,
+      );
+    }
+
     const userToken = await this.usersTokens.findUserTokenByIdAndRefreshToken({
       user_id,
       refresh_token: token,
