@@ -58,6 +58,17 @@ class CreateUserUseCase {
     this.emailQueue = new EmailWorkerAdapter("createUserEmailQueue");
   }
 
+  // Generate a random password with letters, numbers and special characters
+  private generateRandomPassword(): string {
+    const chars =
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+    let password = "";
+    for (let i = 0; i < 12; i++) {
+      password += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return password;
+  }
+
   async execute(
     {
       password,
@@ -74,6 +85,17 @@ class CreateUserUseCase {
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    // Only MASTER users can provide custom passwords
+    if (password && findUser.role !== "MASTER") {
+      throw new AppError(
+        "Apenas usuários com nível de acesso Master podem definir senhas personalizadas. A senha será gerada automaticamente.",
+        403,
+      );
+    }
+
+    // Generate automatic password for non-MASTER users or when no password is provided
+    const finalPassword = password || this.generateRandomPassword();
 
     if (!this.allowedRoles[findUser.role].includes(role)) {
       throw new AppError(
@@ -109,7 +131,7 @@ class CreateUserUseCase {
       throw new BusinessNotFoundError();
     }
 
-    const hashedPassword = await hash(password, 6);
+    const hashedPassword = await hash(finalPassword, 6);
     const userAlreadyExists = await this.user.findUserByEmail(email);
 
     if (userAlreadyExists) {
@@ -156,7 +178,7 @@ class CreateUserUseCase {
           moduleName: "user",
           additionalVariablesProperties: {
             email: email,
-            password: password,
+            password: finalPassword,
             logo: this.cloudinaryLogo,
           },
         }),

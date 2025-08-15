@@ -69,7 +69,8 @@ const createUserSchema = z
       .max(100, "A senha deve ter no máximo 100 caracteres.")
       .refine((value) => !/\s/.test(value), {
         message: "A senha não deve conter espaços.",
-      }),
+      })
+      .optional(),
     role: roleEnum,
     businessId: z.string().min(1, "A empresa é obrigatória!"),
     profileAccessId: z.string().optional(),

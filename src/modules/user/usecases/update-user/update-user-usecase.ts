@@ -97,6 +97,14 @@ class UpdateUserUseCase {
       }
     }
 
+    // Only MASTER users can update passwords
+    if (userData.password && findUser.role !== "MASTER") {
+      throw new AppError(
+        "Apenas usuários com nível de acesso Master podem alterar senhas de outros usuários.",
+        403,
+      );
+    }
+
     let hashedPassword: string | undefined;
     if (userData.password) {
       hashedPassword = await hash(userData.password, 6);

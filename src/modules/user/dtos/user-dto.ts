@@ -12,7 +12,7 @@ enum UserBusinessRole {
 }
 
 interface CreateUserProps {
-  password: string;
+  password?: string;
   email: string;
   name: string;
   role: UserRole;
