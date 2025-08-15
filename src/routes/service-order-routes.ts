@@ -35,7 +35,8 @@ async function serviceOrderRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
         summary: "Create a new service order",
-        description: "Register a new vehicle maintenance or repair service order with parts, labor, and scheduling details",
+        description:
+          "Register a new vehicle maintenance or repair service order with parts, labor, and scheduling details",
         params: serviceOrderSchemas.businessIdParam,
         body: serviceOrderSchemas.createServiceOrder,
         response: {
@@ -57,7 +58,8 @@ async function serviceOrderRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
         summary: "List service orders",
-        description: "Retrieve a paginated list of vehicle service orders with optional search and status filtering",
+        description:
+          "Retrieve a paginated list of vehicle service orders with optional search and status filtering",
         querystring: serviceOrderSchemas.listServiceOrder,
         response: {
           200: serviceOrderResponses.serviceOrderList,
@@ -78,7 +80,8 @@ async function serviceOrderRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
         summary: "List service orders by business",
-        description: "Retrieve a paginated list of service orders filtered by specific business with search capabilities",
+        description:
+          "Retrieve a paginated list of service orders filtered by specific business with search capabilities",
         querystring: serviceOrderSchemas.listServiceOrderBusinessSchema,
         response: {
           200: serviceOrderResponses.serviceOrderList,
@@ -99,7 +102,8 @@ async function serviceOrderRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
         summary: "Update a service order",
-        description: "Update existing service order details including status, parts, labor costs, and completion information",
+        description:
+          "Update existing service order details including status, parts, labor costs, and completion information",
         params: serviceOrderSchemas.serviceOrderBusinessParams,
         body: serviceOrderSchemas.updateServiceOrder,
         response: {
@@ -121,7 +125,8 @@ async function serviceOrderRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
         summary: "Delete a service order",
-        description: "Permanently remove a service order record and all associated maintenance history",
+        description:
+          "Permanently remove a service order record and all associated maintenance history",
         params: serviceOrderSchemas.serviceOrderBusinessParams,
         response: {
           200: serviceOrderResponses.serviceOrderDeleted,
