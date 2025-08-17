@@ -326,6 +326,21 @@ const createVehicleSchema = z
         "O ano do modelo deve ser igual ao ano de fabricação ou no máximo um ano posterior",
       path: ["model_year"],
     },
+  )
+  .refine(
+    (data) => {
+      if (data.last_maintenance_mileage && data.current_mileage) {
+        return data.last_maintenance_mileage <= data.current_mileage;
+      }
+
+      // If any of the mileages are missing, validation passes.
+      return true;
+    },
+    {
+      message:
+        "A quilometragem da última revisão não pode ser superior à quilometragem atual",
+      path: ["last_maintenance_mileage"],
+    },
   );
 
 export { createVehicleSchema };

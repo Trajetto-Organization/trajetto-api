@@ -61,7 +61,7 @@ interface UpdateVehicleProps {
   fleet_type?: "OWNED" | "THIRD_PARTY";
   fleet_id?: string | null;
   last_maintenance_date?: Date | null | string;
-  current_mileage?: number;
+  current_mileage?: number | null;
   last_maintenance_mileage?: number | null;
   maintenance_interval_km?: number;
   maintenance_interval_months?: number;
