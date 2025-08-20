@@ -71,6 +71,9 @@ class ExportFineExcelUseCase {
           value ? ExcelExportService.formatters.date(value) : "Não pago",
       },
       { header: "Filial", key: "branchName", width: 20 },
+      ...(findUser.role === "MASTER"
+        ? [{ header: "Empresa", key: "businessName", width: 25 }]
+        : []),
       { header: "Local", key: "location", width: 25 },
       { header: "Observações", key: "observation", width: 30 },
       {

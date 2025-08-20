@@ -8,6 +8,7 @@ import { ListFuelBusinessController } from "@/modules/fuel/usecases/list-fuel-bu
 import { UpdateFuelController } from "@/modules/fuel/usecases/update-fuel/update-fuel-controller";
 
 import { DeleteFuelController } from "@/modules/fuel/usecases/delete-fuel/delete-fuel-controller";
+import { ExportFuelExcelController } from "@/modules/fuel/usecases/export-fuel-excel/export-fuel-excel-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -21,6 +22,7 @@ const listFuelBusinessController = new ListFuelBusinessController();
 const updateFuelController = new UpdateFuelController();
 
 const deleteFuelController = new DeleteFuelController();
+const exportFuelExcelController = new ExportFuelExcelController();
 
 async function fuelRoutes(app: FastifyInstance) {
   app.post(
@@ -171,6 +173,26 @@ async function fuelRoutes(app: FastifyInstance) {
       },
     },
     deleteFuelController.handle,
+  );
+
+  app.get(
+    "/export-fuel-excel",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("fuel_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["fuel"],
+        summary: "Export fuel records to Excel",
+        description:
+          "Export all fuel refueling records to an Excel file with optional search filters",
+        querystring: fuelSchemas.exportFuelsQuery,
+        produces: [
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ],
+      },
+    },
+    exportFuelExcelController.handle,
   );
 }
 

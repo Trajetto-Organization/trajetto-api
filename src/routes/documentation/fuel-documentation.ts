@@ -16,6 +16,9 @@ const fuelSchemas = {
   updateDeleteBusiness: updateDeleteBusinessSchema,
   listFuel: listPagesSchema,
   listFuelBusiness: listPagesByBusinessSchema,
+  exportFuelsQuery: z.object({
+    search: z.string().optional().describe("Search term to filter fuels"),
+  }),
 };
 
 const fuelResponses = {

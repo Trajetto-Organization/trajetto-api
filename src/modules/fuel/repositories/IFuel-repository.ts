@@ -37,6 +37,11 @@ interface IFuelRepository {
   findFuelsByVehicleId: (vehicleId: string) => Promise<Fuel[]>;
   findFuelsByDriverId: (driverId: string) => Promise<Fuel[]>;
   findFuelsByFuelTypeId: (fuelTypeId: string) => Promise<Fuel[]>;
+  getAllFuelsForExport: (
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ) => Promise<any[]>;
 }
 
 export { IFuelRepository };

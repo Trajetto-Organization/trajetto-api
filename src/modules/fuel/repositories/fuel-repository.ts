@@ -418,6 +418,124 @@ class FuelRepository implements IFuelRepository {
 
     return fuels;
   }
+
+  async getAllFuelsForExport(
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ): Promise<any[]> {
+    const normalizedSearch = search ? search.trim().toLowerCase() : "";
+
+    const orConditions: any[] = [];
+
+    if (normalizedSearch) {
+      orConditions.push(
+        { id: { contains: normalizedSearch, mode: "insensitive" } },
+        { notes: { contains: normalizedSearch, mode: "insensitive" } },
+        {
+          vehicle: {
+            OR: [
+              {
+                description: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              {
+                license_plate: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              { brand: { contains: normalizedSearch, mode: "insensitive" } },
+              { model: { contains: normalizedSearch, mode: "insensitive" } },
+            ],
+          },
+        },
+        {
+          driver: {
+            OR: [
+              { name: { contains: normalizedSearch, mode: "insensitive" } },
+              { cnh: { contains: normalizedSearch, mode: "insensitive" } },
+            ],
+          },
+        },
+        {
+          fuelType: {
+            description: { contains: normalizedSearch, mode: "insensitive" },
+          },
+        },
+      );
+    }
+
+    const whereCondition = {
+      ...(userRole !== "MASTER" && { businessId: businessId }),
+      ...(orConditions.length > 0 && { OR: orConditions }),
+    };
+
+    const fuels = await this.prisma.fuel.findMany({
+      where: whereCondition,
+      include: {
+        business: {
+          select: {
+            corporate_reason: true,
+          },
+        },
+        branch: {
+          select: {
+            corporate_reason: true,
+          },
+        },
+        vehicle: {
+          select: {
+            description: true,
+            license_plate: true,
+            brand: true,
+            model: true,
+          },
+        },
+        driver: {
+          select: {
+            name: true,
+            cnh: true,
+          },
+        },
+        fuelType: {
+          select: {
+            description: true,
+          },
+        },
+      },
+      orderBy: {
+        refueling_date: "desc",
+      },
+    });
+
+    return fuels.map((fuel) => ({
+      id: fuel.id,
+      vehicleLicensePlate: fuel.vehicle?.license_plate || "N/A",
+      vehicleDescription: fuel.vehicle?.description || "N/A",
+      vehicleBrand: fuel.vehicle?.brand || "N/A",
+      vehicleModel: fuel.vehicle?.model || "N/A",
+      driverName: fuel.driver?.name || "N/A",
+      driverCnh: fuel.driver?.cnh || "N/A",
+      fuelTypeDescription: fuel.fuelType?.description || "N/A",
+      litersAmount: fuel.liters_amount?.toFixed(3) || "0,000",
+      pricePerLiter: fuel.price_per_liter?.toNumber() || 0,
+      totalAmount: fuel.total_amount?.toNumber() || 0,
+      currentMileage: fuel.current_mileage || 0,
+      odometerPhoto: fuel.odometer_photo || "N/A",
+      odometerVerified: fuel.odometer_verified ? "Sim" : "Não",
+      notes: fuel.notes || "N/A",
+      refueling_date: fuel.refueling_date,
+      branchName: fuel.branch?.corporate_reason || "N/A",
+      ...(userRole === "MASTER" && {
+        businessName: fuel.business?.corporate_reason || "N/A",
+      }),
+      created_at: fuel.created_at,
+      updated_at: fuel.updated_at,
+    }));
+  }
 }
 
 export { FuelRepository };
