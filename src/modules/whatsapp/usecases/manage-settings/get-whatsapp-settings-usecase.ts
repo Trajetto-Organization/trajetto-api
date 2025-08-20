@@ -25,14 +25,10 @@ class GetWhatsAppSettingsUseCase {
       throw new ResourceNotFoundError();
     }
 
-    if (user.role !== "BUSINESS_ADMIN") {
-      throw new AppError(
-        "Apenas administradores de empresa podem gerenciar configurações WhatsApp",
-        403,
-      );
-    }
-
-    const instanceName = generateWhatsAppInstanceName(user.email, user.businessId || "master");
+    const instanceName = generateWhatsAppInstanceName(
+      user.email,
+      user.businessId || "master",
+    );
 
     try {
       // Check connection status if WhatsApp is enabled

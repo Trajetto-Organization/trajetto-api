@@ -10,6 +10,7 @@ import { WhatsAppNumberNotConfiguredError } from "../errors/whatsapp-number-not-
 
 import { WhatsAppAlreadyConnectedError } from "../errors/whatsapp-already-connected-error";
 import { WhatsAppPhoneAlreadyInUseError } from "../errors/whatsapp-phone-already-in-use-error";
+
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -31,13 +32,6 @@ class ConnectQRCodeUseCase {
       throw new ResourceNotFoundError();
     }
 
-    if (user.role !== "BUSINESS_ADMIN") {
-      throw new AppError(
-        "Apenas administradores de empresa podem acessar QR Code",
-        403,
-      );
-    }
-
     if (!user.whatsapp_notifications_enabled) {
       throw new WhatsAppNotConnectedError();
     }
@@ -48,8 +42,11 @@ class ConnectQRCodeUseCase {
     }
 
     // Check if phone number is already being used by another connected user
-    const existingConnectedUser = await this.userRepository.findUserWithConnectedWhatsAppByPhone(user.whatsapp_phone);
-    
+    const existingConnectedUser =
+      await this.userRepository.findUserWithConnectedWhatsAppByPhone(
+        user.whatsapp_phone,
+      );
+
     if (existingConnectedUser && existingConnectedUser.id !== userId) {
       throw new WhatsAppPhoneAlreadyInUseError();
     }

@@ -7,7 +7,6 @@ import { IWhatsAppProvider } from "@/shared/providers/whatsapp-provider/IWhatsAp
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { WhatsAppNotConnectedError } from "../errors/whatsapp-not-connected-error";
 
-import { AppError } from "@/shared/errors/AppError";
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 
 @injectable()
@@ -24,13 +23,6 @@ class WhatsAppStatusUseCase {
 
     if (!user) {
       throw new ResourceNotFoundError();
-    }
-
-    if (user.role !== "BUSINESS_ADMIN") {
-      throw new AppError(
-        "Apenas administradores de empresa podem verificar status WhatsApp",
-        403,
-      );
     }
 
     if (!user.whatsapp_notifications_enabled) {

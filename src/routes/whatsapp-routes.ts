@@ -1,7 +1,5 @@
 import { FastifyInstance } from "fastify";
-
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
-import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 
 import { ConnectQRCodeController } from "@/modules/whatsapp/usecases/connect-qrcode/connect-qrcode-controller";
 import { WhatsAppStatusController } from "@/modules/whatsapp/usecases/whatsapp-status/whatsapp-status-controller";
@@ -27,7 +25,6 @@ async function whatsappRoutes(app: FastifyInstance) {
     "/settings",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["whatsapp"],
@@ -51,7 +48,6 @@ async function whatsappRoutes(app: FastifyInstance) {
         rateLimit: getRateLimiterConfig({ max: 5 }),
       },
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["whatsapp"],
@@ -76,7 +72,6 @@ async function whatsappRoutes(app: FastifyInstance) {
         rateLimit: getRateLimiterConfig({ max: 5 }),
       },
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["whatsapp"],
@@ -100,7 +95,6 @@ async function whatsappRoutes(app: FastifyInstance) {
         rateLimit: getRateLimiterConfig({ max: 5 }),
       },
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["whatsapp"],

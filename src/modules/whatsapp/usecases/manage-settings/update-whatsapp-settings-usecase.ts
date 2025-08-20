@@ -35,13 +35,6 @@ class UpdateWhatsAppSettingsUseCase {
       throw new ResourceNotFoundError();
     }
 
-    if (user.role !== "BUSINESS_ADMIN") {
-      throw new AppError(
-        "Apenas administradores de empresa podem gerenciar configurações WhatsApp",
-        403,
-      );
-    }
-
     const isPhoneChanging =
       phoneNumber && user.whatsapp_phone && phoneNumber !== user.whatsapp_phone;
 
@@ -55,8 +48,11 @@ class UpdateWhatsAppSettingsUseCase {
 
     // Check if phone number is already being used by another connected user
     if (enabled && phoneNumber) {
-      const existingConnectedUser = await this.userRepository.findUserWithConnectedWhatsAppByPhone(phoneNumber);
-      
+      const existingConnectedUser =
+        await this.userRepository.findUserWithConnectedWhatsAppByPhone(
+          phoneNumber,
+        );
+
       if (existingConnectedUser && existingConnectedUser.id !== userId) {
         throw new WhatsAppPhoneAlreadyInUseError();
       }
@@ -119,7 +115,7 @@ class UpdateWhatsAppSettingsUseCase {
     console.log(`[WhatsApp] 🔴 Disabling WhatsApp for user: ${userId}`);
 
     // Update settings in database - KEEP the phone number for easy reconfiguration
-    // This also automatically "releases" the number for other users since 
+    // This also automatically "releases" the number for other users since
     // whatsapp_notifications_enabled becomes false
     await this.userRepository.updateWhatsAppSettings({
       userId,
@@ -135,7 +131,9 @@ class UpdateWhatsAppSettingsUseCase {
       this.disconnectInstanceAsync(instanceName, userId);
     }
 
-    console.log(`[WhatsApp] 📞 Phone number ${phoneNumber} released for other users`);
+    console.log(
+      `[WhatsApp] 📞 Phone number ${phoneNumber} released for other users`,
+    );
 
     return {
       enabled: false,

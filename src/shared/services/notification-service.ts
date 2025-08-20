@@ -83,9 +83,9 @@ class NotificationService {
       const shouldSendEmail =
         user.email_notifications_enabled && notificationData.shouldSendEmail;
 
-      // WhatsApp only for BUSINESS_ADMIN
+      // WhatsApp for BUSINESS_ADMIN and BUSINESS_USER
       const shouldSendWhatsApp =
-        user.role === "BUSINESS_ADMIN" &&
+        (user.role === "BUSINESS_ADMIN" || user.role === "BUSINESS_USER") &&
         user.whatsapp_notifications_enabled &&
         notificationData.shouldSendWhatsApp &&
         notificationData.whatsAppMessage;
