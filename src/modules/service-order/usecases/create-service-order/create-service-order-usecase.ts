@@ -9,6 +9,7 @@ import { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-r
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { NotificationService } from "@/shared/services/notification-service";
+import { KanbanService } from "@/shared/services/kanban-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
@@ -64,6 +65,8 @@ class CreateServiceOrderUseCase {
     private serviceOrder: IServiceOrderRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("KanbanService")
+    private kanbanService: KanbanService,
   ) {}
 
   private buildServiceOrderNotificationText({
@@ -151,7 +154,7 @@ class CreateServiceOrderUseCase {
         "[Ordens de serviço] Erro ao processar notificações:",
         error,
       );
-      // Não impede a criação da ordem de serviço
+      // Does not prevent the creation of the service order
     }
   }
 
@@ -357,6 +360,22 @@ class CreateServiceOrderUseCase {
         vehicleSnapshot,
         userId,
       );
+
+      // Create kanban card asynchronously without blocking the main flow
+      console.log(
+        `[ServiceOrder] Criando card no kanban para ordem ${serviceOrderCreated.id}`,
+      );
+      this.kanbanService.createCardFromServiceOrder({
+        serviceOrderId: serviceOrderCreated.id,
+        vehicleLicensePlate: findVehicle.license_plate || "",
+        totalAmount: Number(serviceOrderCreated.total_amount) || 0,
+        maintenanceType: serviceOrderData.maintenance_type,
+        orderDate: serviceOrderData.date,
+        completionDate: serviceOrderData.completion_date,
+        responsibleUserId: serviceOrderData.responsibleUserId,
+        businessId: serviceOrderData.businessId,
+        createdByUserId: userId,
+      });
 
       return serviceOrderCreated;
     } catch (error) {

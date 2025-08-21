@@ -73,6 +73,7 @@ import { IWhatsAppProvider } from "./providers/whatsapp-provider/IWhatsApp-provi
 import { EvolutionApiProvider } from "./providers/whatsapp-provider/implementations/evolution-api-provider";
 
 import { NotificationService } from "./services/notification-service";
+import { KanbanService } from "./services/kanban-service";
 
 container.registerSingleton<IWhatsAppProvider>(
   "WhatsAppProvider",
@@ -83,6 +84,8 @@ container.registerSingleton<NotificationService>(
   "NotificationService",
   NotificationService,
 );
+
+container.registerSingleton<KanbanService>("KanbanService", KanbanService);
 
 container.registerSingleton<IUserRepository>("UserRepository", UserRepository);
 container.registerSingleton<IUsersTokensRepository>(

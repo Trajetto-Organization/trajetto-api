@@ -424,6 +424,17 @@ class KanbanRepository implements IKanbanRepository {
     return lastColumn ? lastColumn.position + 1 : 0;
   }
 
+  async getFirstColumnByBusinessId(
+    businessId: string,
+  ): Promise<KanbanColumn | null> {
+    const firstColumn = await this.prisma.kanbanColumn.findFirst({
+      where: { businessId },
+      orderBy: { position: "asc" },
+    });
+
+    return firstColumn;
+  }
+
   async reorderColumns(data: ReorderKanbanColumnsProps): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       const tempUpdates = data.columns.map((column, index) =>
@@ -484,7 +495,7 @@ class KanbanRepository implements IKanbanRepository {
       filteredData.dueDate = new Date(filteredData.dueDate as string);
     }
 
-    // ✅ Tratamento específico para o campo completed
+    // Specific treatment for the completed field
     if (filteredData.completed !== undefined) {
       filteredData.completed = Boolean(filteredData.completed);
     }
@@ -556,7 +567,6 @@ class KanbanRepository implements IKanbanRepository {
     });
 
     if (!card) return null;
-
     return this.mapCard(card);
   }
 
