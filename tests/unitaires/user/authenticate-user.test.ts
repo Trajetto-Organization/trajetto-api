@@ -5,28 +5,25 @@ import { AuthenticateUserUseCase } from "@/modules/user/usecases/authenticate-us
 import { InvalidCredentialsError } from "@/modules/user/usecases/errors/invalid-credentials-error";
 
 import { UserNotFoundPermissionOrProfileAccess } from "@/modules/user/usecases/errors/user-not-found-permission-profile-access-error";
-import { InMemoryMailProvider } from "@/shared/providers/mail-provider/in-memory/in-memory-mail-provider";
+import { UserRevokedAccessError } from "@/modules/user/usecases/errors/user-revoked-access-error";
 
-import { InMemoryUsersTokens } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
 import { AppError } from "@/shared/errors/AppError";
 
 describe("Authenticate User UseCase", () => {
   let userInMemory: InMemoryUserRepository;
-  let usersTokensInMemory: InMemoryUsersTokens;
+  let usersTokensInMemory: InMemoryUserTokensRepository;
 
-  let mailProvider: InMemoryMailProvider;
   let authenticateUserUseCase: AuthenticateUserUseCase;
 
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-    usersTokensInMemory = new InMemoryUsersTokens();
+    usersTokensInMemory = new InMemoryUserTokensRepository();
 
-    mailProvider = new InMemoryMailProvider();
     authenticateUserUseCase = new AuthenticateUserUseCase(
       userInMemory,
-      mailProvider,
       usersTokensInMemory,
     );
   });
@@ -46,6 +43,9 @@ describe("Authenticate User UseCase", () => {
 
     user.role = "MASTER";
 
+    user.email_verified = new Date();
+    user.two_factor_enabled = false;
+
     const result = await authenticateUserUseCase.execute({
       email: "user@example.com",
       password,
@@ -57,7 +57,34 @@ describe("Authenticate User UseCase", () => {
     expect(result.role).toBe(user.role);
   });
 
-  it("should not be able to authenticate with two-factor enabled", async () => {
+  it("should send email verification when email is not verified", async () => {
+    const password = "password123";
+    const hashedPassword = await hash(password, 6);
+
+    const user = await userInMemory.createUser({
+      email: "unverified@example.com",
+      password: hashedPassword,
+      name: "Unverified User",
+      businessId: "some-business-id",
+      profileAccessId: "some-profile-id",
+      role: "MASTER",
+    });
+
+    user.email_verified = null;
+
+    const result = await authenticateUserUseCase.execute({
+      email: "unverified@example.com",
+      password,
+    });
+
+    expect(result).toHaveProperty(
+      "emailVerificationMessage",
+      "Um token de verificação foi enviado para este e-mail!",
+    );
+    expect(result).toHaveProperty("emailVerification", true);
+  });
+
+  it("should send two-factor code when two-factor is enabled", async () => {
     const password = "password123";
     const hashedPassword = await hash(password, 6);
 
@@ -70,10 +97,8 @@ describe("Authenticate User UseCase", () => {
       role: "MASTER",
     });
 
-    await userInMemory.updateTwoFactorAuthentication({
-      userId: user.id,
-      isTwoFactorEnabled: false,
-    });
+    user.email_verified = new Date();
+    user.two_factor_enabled = true;
 
     const result = await authenticateUserUseCase.execute({
       email: "twofactor@example.com",
@@ -85,6 +110,29 @@ describe("Authenticate User UseCase", () => {
       "Um código de verificação foi enviado para este e-mail!",
     );
     expect(result).toHaveProperty("isTwoFactorVerification", true);
+  });
+
+  it("should throw UserRevokedAccessError if user access is revoked", async () => {
+    const password = "password123";
+    const hashedPassword = await hash(password, 6);
+
+    const user = await userInMemory.createUser({
+      email: "revoked@example.com",
+      password: hashedPassword,
+      name: "Revoked User",
+      businessId: "some-business-id",
+      profileAccessId: "some-profile-id",
+      role: "MASTER",
+    });
+
+    user.access_revoked = true;
+
+    await expect(
+      authenticateUserUseCase.execute({
+        email: "revoked@example.com",
+        password,
+      }),
+    ).rejects.toBeInstanceOf(UserRevokedAccessError);
   });
 
   it("should not be able to authenticate with wrong e-mail", async () => {
@@ -133,7 +181,7 @@ describe("Authenticate User UseCase", () => {
     const password = "password123";
     const hashedPassword = await hash(password, 6);
 
-    await userInMemory.createUser({
+    const user = await userInMemory.createUser({
       email: "nopermission@example.com",
       password: hashedPassword,
       name: "No Permission User",
@@ -141,6 +189,11 @@ describe("Authenticate User UseCase", () => {
       profileAccessId: "some-profile-id",
       role: "BUSINESS_USER",
     });
+
+    user.email_verified = new Date();
+    user.two_factor_enabled = false;
+
+    user.profileAccess = null;
 
     await expect(
       authenticateUserUseCase.execute({
@@ -170,7 +223,9 @@ describe("Authenticate User UseCase", () => {
       role: "MASTER",
     });
 
+    user.email_verified = new Date();
     user.two_factor_enabled = false;
+
     user.role = "MASTER";
 
     await expect(
@@ -201,12 +256,10 @@ describe("Authenticate User UseCase", () => {
       role: "MASTER",
     });
 
-    user.role = "MASTER";
+    user.email_verified = new Date();
+    user.two_factor_enabled = true;
 
-    await userInMemory.updateTwoFactorAuthentication({
-      userId: user.id,
-      isTwoFactorEnabled: false,
-    });
+    user.role = "MASTER";
 
     await expect(
       authenticateUserUseCase.execute({
@@ -229,12 +282,10 @@ describe("Authenticate User UseCase", () => {
       role: "MASTER",
     });
 
-    user.role = "MASTER";
+    user.email_verified = new Date();
+    user.two_factor_enabled = true;
 
-    await userInMemory.updateTwoFactorAuthentication({
-      userId: user.id,
-      isTwoFactorEnabled: false,
-    });
+    user.role = "MASTER";
 
     const existingToken = {
       email: user.email,
@@ -245,7 +296,6 @@ describe("Authenticate User UseCase", () => {
     const createTwoFactorToken =
       await usersTokensInMemory.createTwoFactorToken(existingToken);
 
-    await usersTokensInMemory.deleteTwoFactorToken(createTwoFactorToken.id);
     const deleteSpy = vi.spyOn(usersTokensInMemory, "deleteTwoFactorToken");
 
     await authenticateUserUseCase.execute({
@@ -269,12 +319,10 @@ describe("Authenticate User UseCase", () => {
       role: "MASTER",
     });
 
-    user.role = "MASTER";
+    user.email_verified = new Date();
+    user.two_factor_enabled = true;
 
-    await userInMemory.updateTwoFactorAuthentication({
-      userId: user.id,
-      isTwoFactorEnabled: false,
-    });
+    user.role = "MASTER";
 
     const createConfirmationToken =
       await usersTokensInMemory.createTwoFactorConfirmation(user.id);
@@ -292,5 +340,70 @@ describe("Authenticate User UseCase", () => {
     expect(deleteConfirmationSpy).toHaveBeenCalledWith(
       createConfirmationToken.id,
     );
+  });
+
+  it("should throw AppError when email verification token creation fails", async () => {
+    vi.spyOn(
+      usersTokensInMemory,
+      "createEmailVerificationToken",
+    ).mockImplementationOnce(async () => {
+      throw new Error("Email token creation failed");
+    });
+
+    const password = "password123";
+    const hashedPassword = await hash(password, 6);
+
+    const user = await userInMemory.createUser({
+      email: "failemail@example.com",
+      password: hashedPassword,
+      name: "Fail Email User",
+      businessId: "some-business-id",
+      profileAccessId: "some-profile-id",
+      role: "MASTER",
+    });
+
+    user.email_verified = null;
+
+    await expect(
+      authenticateUserUseCase.execute({
+        email: "failemail@example.com",
+        password,
+      }),
+    ).rejects.toThrow(AppError);
+  });
+
+  it("should delete existing email verification token if found", async () => {
+    const password = "password123";
+    const hashedPassword = await hash(password, 6);
+
+    const user = await userInMemory.createUser({
+      email: "existingemail@example.com",
+      password: hashedPassword,
+      name: "Existing Email User",
+      businessId: "some-business-id",
+      profileAccessId: "some-profile-id",
+      role: "MASTER",
+    });
+
+    user.email_verified = null;
+
+    const existingEmailToken =
+      await usersTokensInMemory.createEmailVerificationToken({
+        email: user.email,
+        token: "oldtoken",
+        expires: new Date(new Date().getTime() + 60 * 60 * 1000),
+      });
+
+    const deleteSpy = vi.spyOn(
+      usersTokensInMemory,
+      "deleteEmailVerificationToken",
+    );
+
+    await authenticateUserUseCase.execute({
+      email: "existingemail@example.com",
+      password,
+    });
+
+    expect(deleteSpy).toHaveBeenCalledWith(existingEmailToken.id);
   });
 });

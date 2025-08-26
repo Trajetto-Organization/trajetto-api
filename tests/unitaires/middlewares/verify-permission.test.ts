@@ -104,7 +104,10 @@ describe("Verify Permission middleware", () => {
     );
 
     expect(done).toHaveBeenCalledWith(
-      new AppError("Permissão não encontrada.", 403),
+      new AppError(
+        "Permissão não encontrada! Usuário não possui permissão para visualizar este conteúdo.",
+        403,
+      ),
     );
   });
 

@@ -4,7 +4,9 @@ import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-m
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
+
 import { CreateProfileAccessUseCase } from "@/modules/profile-access/usecases/create-profile-access/create-profile-access-usecase";
+import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
@@ -17,6 +19,7 @@ describe("Create Profile Access UseCase", () => {
   let businessInMemory: InMemoryBusinessRepository;
 
   let profileAccessInMemory: InMemoryProfileAccessRepository;
+  let notificationService: NotificationService;
   let profileAccess: CreateProfileAccessUseCase;
 
   beforeEach(() => {
@@ -24,10 +27,19 @@ describe("Create Profile Access UseCase", () => {
     businessInMemory = new InMemoryBusinessRepository();
 
     profileAccessInMemory = new InMemoryProfileAccessRepository();
+
+    // Create a mock NotificationService
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
+
     profileAccess = new CreateProfileAccessUseCase(
       userInMemory,
       profileAccessInMemory,
       businessInMemory,
+      notificationService,
     );
   });
 
@@ -82,6 +94,19 @@ describe("Create Profile Access UseCase", () => {
     expect(foundProfile?.name).toBe("New Profile Access");
 
     expect(foundProfile?.businessId).toBe(createdBusiness.id);
+
+    // Verify that notification service was called
+    expect(notificationService.createActivityIfEnabled).toHaveBeenCalledWith({
+      type: "Perfil de acesso",
+      action: "create",
+      entityId: createdProfileAccess.id,
+      description: expect.stringContaining(
+        `Perfil de acesso criado com sucesso: New Profile Access`,
+      ),
+      status: "Completo",
+      performedBy: createdUser.id,
+      businessId: createdBusiness.id,
+    });
   });
 
   it("should throw ResourceNotFoundError if user does not exist", async () => {

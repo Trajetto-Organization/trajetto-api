@@ -14,8 +14,9 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
-import { InMemoryMailProvider } from "@/shared/providers/mail-provider/in-memory/in-memory-mail-provider";
+import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 
+import { NotificationService } from "@/shared/services/notification-service";
 import { AppError } from "@/shared/errors/AppError";
 
 describe("Create User UseCase", () => {
@@ -23,8 +24,9 @@ describe("Create User UseCase", () => {
   let businessInMemory: InMemoryBusinessRepository;
 
   let profileAccessInMemory: InMemoryProfileAccessRepository;
-  let mailProvider: InMemoryMailProvider;
+  let usersTokensInMemory: InMemoryUserTokensRepository;
 
+  let notificationService: NotificationService;
   let createUserUseCase: CreateUserUseCase;
 
   beforeEach(() => {
@@ -32,17 +34,23 @@ describe("Create User UseCase", () => {
     businessInMemory = new InMemoryBusinessRepository();
 
     profileAccessInMemory = new InMemoryProfileAccessRepository();
-    mailProvider = new InMemoryMailProvider();
+    usersTokensInMemory = new InMemoryUserTokensRepository();
+
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
 
     createUserUseCase = new CreateUserUseCase(
       userInMemory,
       businessInMemory,
       profileAccessInMemory,
-      mailProvider,
+      usersTokensInMemory,
+      notificationService,
     );
   });
 
-  // Cenário de sucesso já testado:
   it("should be able to create a user", async () => {
     const businessData = {
       corporate_reason: "Test Business",
@@ -130,7 +138,6 @@ describe("Create User UseCase", () => {
     ).rejects.toBeInstanceOf(ResourceNotFoundError);
   });
 
-  // Cenário 2: Nível de acesso do admin não permite criar o usuário
   it("should throw AppError if admin user's role does not allow creating target role", async () => {
     const business = await businessInMemory.createBusiness({
       corporate_reason: "Test Business",

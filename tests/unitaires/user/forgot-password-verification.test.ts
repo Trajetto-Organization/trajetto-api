@@ -3,7 +3,7 @@ import { hash } from "bcrypt";
 
 import { v4 as uuidV4 } from "uuid";
 
-import { InMemoryUsersTokens } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
 import { ForgotPasswordVerificationUseCase } from "@/modules/user/usecases/forgot-password-verification/forgot-password-verification-usecase";
@@ -13,7 +13,7 @@ import { ExpiredTokenError } from "@/modules/user/usecases/errors/expired-token-
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
 let userInMemory: InMemoryUserRepository;
-let usersTokensInMemory: InMemoryUsersTokens;
+let usersTokensInMemory: InMemoryUserTokensRepository;
 
 let forgotPasswordVerificationUseCase: ForgotPasswordVerificationUseCase;
 let token: string;
@@ -21,7 +21,7 @@ let token: string;
 describe("Forgot Password Verification UseCase", () => {
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-    usersTokensInMemory = new InMemoryUsersTokens();
+    usersTokensInMemory = new InMemoryUserTokensRepository();
 
     forgotPasswordVerificationUseCase = new ForgotPasswordVerificationUseCase(
       userInMemory,

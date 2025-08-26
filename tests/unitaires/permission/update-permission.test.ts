@@ -6,6 +6,7 @@ import { InMemoryPermissionRepository } from "@/modules/permission/repositories/
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
 
+import { NotificationService } from "@/shared/services/notification-service";
 import { UpdatePermissionUseCase } from "@/modules/permission/usecases/update-permission/update-permission-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
@@ -27,6 +28,7 @@ describe("Update Permission UseCase", () => {
   let businessInMemory: InMemoryBusinessRepository;
   let profileAccessInMemory: InMemoryProfileAccessRepository;
 
+  let notificationService: NotificationService;
   let updatePermissionUseCase: UpdatePermissionUseCase;
 
   beforeEach(() => {
@@ -36,11 +38,19 @@ describe("Update Permission UseCase", () => {
     businessInMemory = new InMemoryBusinessRepository();
     profileAccessInMemory = new InMemoryProfileAccessRepository();
 
+    // Create a mock NotificationService
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
+
     updatePermissionUseCase = new UpdatePermissionUseCase(
       userInMemory,
       permissionInMemory,
       businessInMemory,
       profileAccessInMemory,
+      notificationService,
     );
   });
 
@@ -99,6 +109,19 @@ describe("Update Permission UseCase", () => {
 
     expect(updatedPermission.id).toEqual(permission.id);
     expect(updatedPermission.action).toEqual("Updated Action 8");
+
+    // Verify that notification service was called
+    expect(notificationService.createActivityIfEnabled).toHaveBeenCalledWith({
+      type: "Permissão",
+      action: "update",
+      entityId: permission.id,
+      description: expect.stringContaining(
+        "Permissão atualizada com sucesso: Updated Action 8",
+      ),
+      status: "Atualizado",
+      performedBy: user.id,
+      businessId: createdBusiness.id,
+    });
   });
 
   it("should throw ResourceNotFoundError if user does not exist", async () => {

@@ -4,7 +4,7 @@ import { ZodError } from "zod";
 import { createBusinessSchema } from "@/schemas/create-business-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
-import { listBusinessSchema } from "@/schemas/list-business-schema";
+import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 
 describe("Create Business Zod Validation Fields", () => {
   it("should pass validation with valid data", () => {
@@ -47,8 +47,13 @@ describe("Create Business Zod Validation Fields", () => {
       fantasy_name: "",
     };
 
+    const expectedData = {
+      ...data,
+      erp_code: null, // Schema converts empty string to null
+    };
+
     const parsed = createBusinessSchema.parse(data);
-    expect(parsed).toEqual(data);
+    expect(parsed).toEqual(expectedData);
   });
 
   it("should validate CEP field", () => {
@@ -413,6 +418,7 @@ describe("Create Business Zod Validation Fields", () => {
           const hasMessage = error.errors.some((e) =>
             e.message.includes(errorMessage),
           );
+
           expect(hasMessage).toBeTruthy();
         } else {
           expect.fail("Unexpected error type");
@@ -498,6 +504,7 @@ describe("Create Business Zod Validation Fields", () => {
           const hasMessage = error.errors.some((e) =>
             e.message.includes(errorMessage),
           );
+
           expect(hasMessage).toBeTruthy();
         } else {
           expect.fail("Unexpected error type");
@@ -707,26 +714,32 @@ describe("Create Business Zod Validation Fields", () => {
   });
 
   it("should validate valid query parameters", () => {
-    const validData = { page: "2", pageSize: "5" };
-    const parsed = listBusinessSchema.parse(validData);
+    const validData = { page: "2", pageSize: "5", businessId: "business-123" };
+    const parsed = listPagesByBusinessSchema.parse(validData);
 
     expect(parsed.page).toBe(2);
     expect(parsed.pageSize).toBe(5);
+
+    expect(parsed.businessId).toBe("business-123");
   });
 
   it("should default page to 1 if invalid", () => {
-    const data = { page: "", pageSize: "5" };
-    const parsed = listBusinessSchema.parse(data);
+    const data = { page: "", pageSize: "5", businessId: "business-123" };
+    const parsed = listPagesByBusinessSchema.parse(data);
 
     expect(parsed.page).toBe(1);
     expect(parsed.pageSize).toBe(5);
+
+    expect(parsed.businessId).toBe("business-123");
   });
 
   it("should default pageSize to 2 if invalid", () => {
-    const data = { page: "2", pageSize: "" };
-    const parsed = listBusinessSchema.parse(data);
+    const data = { page: "2", pageSize: "", businessId: "business-123" };
+    const parsed = listPagesByBusinessSchema.parse(data);
 
     expect(parsed.page).toBe(2);
     expect(parsed.pageSize).toBe(2);
+
+    expect(parsed.businessId).toBe("business-123");
   });
 });

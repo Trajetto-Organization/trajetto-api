@@ -10,6 +10,8 @@ import auth from "@/config/auth";
 import { InvalidCredentialsError } from "../errors/invalid-credentials-error";
 
 import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
+import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
+
 import { AppError } from "@/shared/errors/AppError";
 
 interface RefreshTokenProps {
@@ -45,10 +47,7 @@ class RefreshTokenUseCase {
 
     // Check if user access has been revoked
     if (findUserByEmail.access_revoked) {
-      throw new AppError(
-        "Seu acesso foi revogado! Para acessar a plataforma novamente, por favor contate o administrador.",
-        403,
-      );
+      throw new UserRevokedAccessError();
     }
 
     const userToken = await this.usersTokens.findUserTokenByIdAndRefreshToken({

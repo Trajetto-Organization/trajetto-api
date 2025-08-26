@@ -6,6 +6,8 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
 import { InMemoryPermissionRepository } from "@/modules/permission/repositories/in-memory/in-memory-permission-repository";
 
+import { NotificationService } from "@/shared/services/notification-service";
+
 import { CreatePermissionUseCase } from "@/modules/permission/usecases/create-permission/create-permission-usecase";
 import { AppError } from "@/shared/errors/AppError";
 
@@ -25,6 +27,7 @@ describe("Create Permission UseCase", () => {
   let businessInMemory: InMemoryBusinessRepository;
   let profileAccessInMemory: InMemoryProfileAccessRepository;
 
+  let notificationService: NotificationService;
   let createPermission: CreatePermissionUseCase;
 
   beforeEach(() => {
@@ -34,11 +37,19 @@ describe("Create Permission UseCase", () => {
     businessInMemory = new InMemoryBusinessRepository();
     profileAccessInMemory = new InMemoryProfileAccessRepository();
 
+    // Create a mock NotificationService
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
+
     createPermission = new CreatePermissionUseCase(
       userInMemory,
       permissionInMemory,
       businessInMemory,
       profileAccessInMemory,
+      notificationService,
     );
   });
 
@@ -90,6 +101,19 @@ describe("Create Permission UseCase", () => {
 
     expect(permission.action).toEqual("New Permission Action");
     expect(permission.permissionKey).toEqual("profile_access_manage");
+
+    // Verify that notification service was called
+    expect(notificationService.createActivityIfEnabled).toHaveBeenCalledWith({
+      type: "Permissão",
+      action: "create",
+      entityId: permission.id,
+      description: expect.stringContaining(
+        "Permissão criada com sucesso: New Permission Action",
+      ),
+      status: "Completo",
+      performedBy: createdUser.id,
+      businessId: createdBusiness.id,
+    });
   });
 
   it("should throw ResourceNotFoundError if user does not exist", async () => {

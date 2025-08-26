@@ -8,33 +8,29 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 
 import { EmailNotFoundError } from "@/modules/user/usecases/errors/email-not-found-error";
 
-import { InMemoryUsersTokens } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
-import { InMemoryMailProvider } from "@/shared/providers/mail-provider/in-memory/in-memory-mail-provider";
+import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 
 import { AppError } from "@/shared/errors/AppError";
 
 let userInMemory: InMemoryUserRepository;
-let usersTokensInMemory: InMemoryUsersTokens;
 
-let mailProvider: InMemoryMailProvider;
+let usersTokensInMemory: InMemoryUserTokensRepository;
 let sendForgotPasswordMailUseCase: SendForgotPasswordMailUseCase;
 
 describe("Send Forgot Password Mail UseCase", () => {
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-    usersTokensInMemory = new InMemoryUsersTokens();
+    usersTokensInMemory = new InMemoryUserTokensRepository();
 
-    mailProvider = new InMemoryMailProvider();
     sendForgotPasswordMailUseCase = new SendForgotPasswordMailUseCase(
       userInMemory,
-      mailProvider,
       usersTokensInMemory,
     );
   });
 
   it("should be able to send a forgot password mail to user", async () => {
     const enqueueEmailSpy = vi.spyOn(
-      sendForgotPasswordMailUseCase["emailQueueProvider"],
+      sendForgotPasswordMailUseCase["emailQueue"],
       "enqueueEmail",
     );
 
@@ -56,7 +52,7 @@ describe("Send Forgot Password Mail UseCase", () => {
 
   it("should be able to send a forgot password mail to user if token exists", async () => {
     const enqueueEmailSpy = vi.spyOn(
-      sendForgotPasswordMailUseCase["emailQueueProvider"],
+      sendForgotPasswordMailUseCase["emailQueue"],
       "enqueueEmail",
     );
 

@@ -44,8 +44,13 @@ describe("Create Business Zod Validation Fields", () => {
       fantasy_name: "",
     };
 
+    const expectedData = {
+      ...data,
+      erp_code: null, // Schema converts empty string to null
+    };
+
     const parsed = updateBusinessSchema.parse(data);
-    expect(parsed).toEqual(data);
+    expect(parsed).toEqual(expectedData);
   });
 
   it("should validate CEP field", () => {

@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 
-import { listProfileBusinessAccessSchema } from "@/schemas/list-profile-business-schema";
+import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 import { ZodError } from "zod";
 
 describe("listProfileBusinessAccessSchema", () => {
   it("should parse valid input correctly", () => {
     const input = { page: "3", pageSize: "10", businessId: "company" };
-    const result = listProfileBusinessAccessSchema.parse(input);
+    const result = listPagesByBusinessSchema.parse(input);
 
     expect(result.page).toBe(3);
     expect(result.pageSize).toBe(10);
@@ -16,7 +16,7 @@ describe("listProfileBusinessAccessSchema", () => {
 
   it("should fallback to default values for page and pageSize when empty strings are provided", () => {
     const input = { page: "", pageSize: "", businessId: "company" };
-    const result = listProfileBusinessAccessSchema.parse(input);
+    const result = listPagesByBusinessSchema.parse(input);
 
     expect(result.page).toBe(1);
     expect(result.pageSize).toBe(2);
@@ -28,7 +28,7 @@ describe("listProfileBusinessAccessSchema", () => {
     const input = { page: "-1", pageSize: "5", businessId: "company" };
 
     try {
-      listProfileBusinessAccessSchema.parse(input);
+      listPagesByBusinessSchema.parse(input);
       expect.fail("Expected validation to fail for page < 1");
     } catch (error) {
       if (error instanceof ZodError) {
@@ -46,7 +46,7 @@ describe("listProfileBusinessAccessSchema", () => {
     const input = { page: "5", pageSize: "-1", businessId: "company" };
 
     try {
-      listProfileBusinessAccessSchema.parse(input);
+      listPagesByBusinessSchema.parse(input);
       expect.fail("Expected validation to fail for pageSize < 1");
     } catch (error) {
       if (error instanceof ZodError) {
@@ -68,7 +68,7 @@ describe("listProfileBusinessAccessSchema", () => {
     const input = { page: "5", pageSize: "10", businessId: "" };
 
     try {
-      listProfileBusinessAccessSchema.parse(input);
+      listPagesByBusinessSchema.parse(input);
       expect.fail("Expected validation to fail for empty businessId");
     } catch (error) {
       if (error instanceof ZodError) {
@@ -88,7 +88,7 @@ describe("listProfileBusinessAccessSchema", () => {
     const input = { page: "5", pageSize: "10" };
 
     try {
-      listProfileBusinessAccessSchema.parse(input);
+      listPagesByBusinessSchema.parse(input);
       expect.fail("Expected validation to fail for missing businessId");
     } catch (error) {
       if (error instanceof ZodError) {

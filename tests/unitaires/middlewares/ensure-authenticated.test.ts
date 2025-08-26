@@ -52,6 +52,45 @@ describe("Ensure Authenticated Middleware", () => {
     });
   });
 
+  it("should throw an AppError with status 403 if user access is revoked", async () => {
+    vi.spyOn(require("jsonwebtoken"), "verify").mockReturnValue({ sub: "123" });
+
+    const fakeUser: User = {
+      id: "some-id",
+      name: "User Test",
+      email: "test@example.com",
+      role: "MASTER",
+      password: "1234567",
+      access_revoked: true, // User has revoked access
+      profileAccess: {
+        name: "Profile Name",
+        permissions: [
+          {
+            id: "permission-key",
+            action: "New Permission",
+            canRead: true,
+            canWrite: true,
+            permissionKey: "some-permission-key",
+          },
+        ],
+      },
+    };
+
+    vi.spyOn(UserRepository.prototype, "findUserById").mockResolvedValue(
+      fakeUser,
+    );
+
+    const request = {
+      headers: { authorization: "Bearer valid-token" },
+    } as FastifyRequest;
+    const reply = {} as FastifyReply;
+
+    await expect(ensureAuthenticated(request, reply)).rejects.toMatchObject({
+      message: expect.stringContaining("Seu acesso foi revogado!"),
+      statusCode: 401, // Because it's wrapped in the catch block
+    });
+  });
+
   it("should set request.user if token is valid and user is found", async () => {
     vi.spyOn(require("jsonwebtoken"), "verify").mockReturnValue({ sub: "123" });
 
@@ -61,6 +100,7 @@ describe("Ensure Authenticated Middleware", () => {
       email: "test@example.com",
       role: "MASTER",
       password: "1234567",
+      access_revoked: false, // User has active access
       profileAccess: {
         name: "Profile Name",
         permissions: [

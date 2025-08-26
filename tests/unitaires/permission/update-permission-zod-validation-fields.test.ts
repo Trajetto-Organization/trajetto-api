@@ -171,8 +171,13 @@ describe("Update Permission Zod Validation Fields", () => {
     const result = updatePermissionSchema.safeParse(invalidData);
 
     expect(result.success).toBe(false);
-    expect(result.error?.format().permissionKey?._errors).toContain(
-      "A permissão informada não é válida. Valores válidos: profile_access_manage, user_permission_manage, user_registration_manage",
+    const errorMessage =
+      result.error?.format().permissionKey?._errors?.[0] || "";
+    expect(errorMessage).toContain(
+      "A permissão informada não é válida. Valores válidos:",
     );
+    expect(errorMessage).toContain("branch_manage");
+    expect(errorMessage).toContain("profile_access_manage");
+    expect(errorMessage).toContain("user_permission_manage");
   });
 });

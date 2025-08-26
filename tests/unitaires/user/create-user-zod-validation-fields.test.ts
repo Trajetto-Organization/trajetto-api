@@ -100,7 +100,7 @@ describe("Create User Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().name?._errors).toContain(
-      "O nome não deve exceder 100 caracteres.",
+      "O nome de usuário não deve exceder 100 caracteres.",
     );
   });
 
@@ -118,7 +118,7 @@ describe("Create User Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().name?._errors).toContain(
-      "O nome não deve conter espaços consecutivos.",
+      "O nome de usuário não deve conter espaços consecutivos.",
     );
   });
 
@@ -136,7 +136,7 @@ describe("Create User Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().name?._errors).toContain(
-      "Por favor, insira o nome completo.",
+      "Por favor, insira o nome de usuário completo.",
     );
   });
 

@@ -5,7 +5,7 @@ import { v4 as uuidV4 } from "uuid";
 
 import { ResetUserPasswordUseCase } from "@/modules/user/usecases/reset-user-password/reset-user-password-usecase";
 
-import { InMemoryUsersTokens } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
 import { InvalidTokenError } from "@/modules/user/usecases/errors/invalid-token-error";
@@ -16,7 +16,7 @@ import { AppError } from "@/shared/errors/AppError";
 
 let userInMemory: InMemoryUserRepository;
 
-let usersTokensInMemory: InMemoryUsersTokens;
+let usersTokensInMemory: InMemoryUserTokensRepository;
 let resetUserPasswordUseCase: ResetUserPasswordUseCase;
 
 let token: string;
@@ -24,7 +24,7 @@ let token: string;
 describe("Reset User Password UseCase", () => {
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-    usersTokensInMemory = new InMemoryUsersTokens();
+    usersTokensInMemory = new InMemoryUserTokensRepository();
 
     resetUserPasswordUseCase = new ResetUserPasswordUseCase(
       userInMemory,

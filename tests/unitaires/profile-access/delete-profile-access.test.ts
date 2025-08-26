@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
 
+import { NotificationService } from "@/shared/services/notification-service";
 import { DeleteProfileAccessUseCase } from "@/modules/profile-access/usecases/delete-profile-access/delete-profile-access-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
@@ -15,15 +16,24 @@ describe("Delete Profile Access UseCase", () => {
   let userInMemory: InMemoryUserRepository;
   let profileAccessInMemory: InMemoryProfileAccessRepository;
 
+  let notificationService: NotificationService;
   let deleteProfileAccess: DeleteProfileAccessUseCase;
 
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
     profileAccessInMemory = new InMemoryProfileAccessRepository();
 
+    // Create a mock NotificationService
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
+
     deleteProfileAccess = new DeleteProfileAccessUseCase(
       userInMemory,
       profileAccessInMemory,
+      notificationService,
     );
   });
 
@@ -57,6 +67,19 @@ describe("Delete Profile Access UseCase", () => {
       createdProfileAccess.id,
     );
     expect(foundProfile).toBeNull();
+
+    // Verify that notification service was called
+    expect(notificationService.createActivityIfEnabled).toHaveBeenCalledWith({
+      type: "Perfil de acesso",
+      action: "delete",
+      entityId: createdProfileAccess.id,
+      description: expect.stringContaining(
+        `Perfil de acesso excluído: Test Profile Access`,
+      ),
+      status: "Deletado",
+      performedBy: createdUser.id,
+      businessId: "some-business-id",
+    });
   });
 
   it("should throw ResourceNotFoundError if user does not exist", async () => {

@@ -5,10 +5,16 @@ import {
   CreateUserProps,
   ListUsers,
   ListUsersByRoleAndBusinessProps,
+  ListUserBusinessProps,
   UpdateTwoFactorAuthentication,
   UpdateUser,
   UpdateUserName,
   UpdateUserPassword,
+  UpdateUserEmailVerification,
+  UpdateUserAccessRevocation,
+  UpdateUserWhatsAppSettings,
+  UpdateEmailNotifications,
+  UpdateActivityNotifications,
   User,
 } from "../../dtos/user-dto";
 
@@ -19,16 +25,27 @@ class InMemoryUserRepository implements IUserRepository {
     email,
     password,
     name,
+    role,
+    businessId,
     profileAccessId,
   }: CreateUserProps): Promise<User> {
     const user: User = {
       id: uuidV4(),
-      role: "BUSINESS_USER",
+      role: role || "BUSINESS_USER",
       email,
       name,
-      password,
+      password: password || "default-password",
+      businessId,
       profileAccessId,
       two_factor_enabled: false,
+      access_revoked: false,
+      email_verified: null,
+      avatar: null,
+      whatsapp_notifications_enabled: false,
+      email_notifications_enabled: true,
+      activity_notifications_enabled: true,
+      whatsapp_phone: null,
+      whatsapp_instance_connected: false,
     };
 
     this.user.push(user);
@@ -140,13 +157,187 @@ class InMemoryUserRepository implements IUserRepository {
       return null;
     }
 
-    if (isTwoFactorEnabled) {
-      user.two_factor_enabled = false;
+    user.two_factor_enabled = isTwoFactorEnabled;
+    return user;
+  }
+
+  async listUserBusiness({
+    page,
+    pageSize,
+    businessId,
+  }: ListUserBusinessProps): Promise<ListUsers> {
+    const filteredUsers = this.user.filter(
+      (user) => user.businessId === businessId,
+    );
+    const skip = (page - 1) * pageSize;
+    const slicedUsers = filteredUsers.slice(skip, skip + pageSize);
+
+    const users = slicedUsers.map((user) => ({
+      ...user,
+      profileAccess: user.profileAccess ? user.profileAccess.name : null,
+    }));
+
+    const totalCount = filteredUsers.length;
+    return { data: users, total: totalCount };
+  }
+
+  async updateEmailVerification({
+    email,
+    email_verified,
+    userId,
+  }: UpdateUserEmailVerification): Promise<User | null> {
+    const user = this.user.find((user) => user.id === userId);
+
+    if (!user) {
       return null;
     }
 
-    user.two_factor_enabled = true;
+    user.email = email;
+    user.email_verified = email_verified;
     return user;
+  }
+
+  async findUserByEmailAndBusinessId(
+    email: string,
+    businessId: string,
+  ): Promise<User | null> {
+    const findUser = this.user.find(
+      (user) => user.email === email && user.businessId === businessId,
+    );
+
+    return findUser || null;
+  }
+
+  async findUsersByBusiness(businessId: string): Promise<User[]> {
+    return this.user.filter((user) => user.businessId === businessId);
+  }
+
+  async updateUserAccessRevocation({
+    userId,
+    isAccessRevoke,
+  }: UpdateUserAccessRevocation): Promise<User | null> {
+    const user = this.user.find((user) => user.id === userId);
+
+    if (!user) {
+      return null;
+    }
+
+    user.access_revoked = isAccessRevoke;
+    return user;
+  }
+
+  async updateWhatsAppSettings({
+    userId,
+    whatsapp_notifications_enabled,
+    whatsapp_phone,
+  }: UpdateUserWhatsAppSettings): Promise<User | null> {
+    const user = this.user.find((user) => user.id === userId);
+
+    if (!user) {
+      return null;
+    }
+
+    user.whatsapp_notifications_enabled = whatsapp_notifications_enabled;
+    if (whatsapp_phone !== undefined) {
+      user.whatsapp_phone = whatsapp_phone;
+    }
+    return user;
+  }
+
+  async findBusinessAdminsByBusinessId(businessId: string): Promise<User[]> {
+    return this.user.filter(
+      (user) =>
+        user.businessId === businessId && user.role === "BUSINESS_ADMIN",
+    );
+  }
+
+  async findBusinessAdminsForWhatsApp(businessId: string): Promise<User[]> {
+    return this.user.filter(
+      (user) =>
+        user.businessId === businessId &&
+        user.role === "BUSINESS_ADMIN" &&
+        user.whatsapp_notifications_enabled &&
+        user.whatsapp_phone,
+    );
+  }
+
+  async updateWhatsAppInstanceStatus(
+    userId: string,
+    connected: boolean,
+  ): Promise<User | null> {
+    const user = this.user.find((user) => user.id === userId);
+
+    if (!user) {
+      return null;
+    }
+
+    user.whatsapp_instance_connected = connected;
+    return user;
+  }
+
+  async updateEmailNotifications({
+    userId,
+    email_notifications_enabled,
+  }: UpdateEmailNotifications): Promise<User | null> {
+    const user = this.user.find((user) => user.id === userId);
+
+    if (!user) {
+      return null;
+    }
+
+    user.email_notifications_enabled = email_notifications_enabled;
+    return user;
+  }
+
+  async updateActivityNotifications({
+    userId,
+    activity_notifications_enabled,
+  }: UpdateActivityNotifications): Promise<User | null> {
+    const user = this.user.find((user) => user.id === userId);
+
+    if (!user) {
+      return null;
+    }
+
+    user.activity_notifications_enabled = activity_notifications_enabled;
+    return user;
+  }
+
+  async findUserWithConnectedWhatsAppByPhone(
+    phoneNumber: string,
+  ): Promise<User | null> {
+    const findUser = this.user.find(
+      (user) =>
+        user.whatsapp_phone === phoneNumber &&
+        user.whatsapp_instance_connected === true,
+    );
+
+    return findUser || null;
+  }
+
+  async findUserWithWhatsAppByPhone(
+    phoneNumber: string,
+    excludeUserId?: string,
+  ): Promise<User | null> {
+    const findUser = this.user.find(
+      (user) =>
+        user.whatsapp_phone === phoneNumber &&
+        (excludeUserId ? user.id !== excludeUserId : true),
+    );
+
+    return findUser || null;
+  }
+
+  async findAllUsersWithDisconnectedWhatsAppByPhone(
+    phoneNumber: string,
+    excludeUserId?: string,
+  ): Promise<User[]> {
+    return this.user.filter(
+      (user) =>
+        user.whatsapp_phone === phoneNumber &&
+        user.whatsapp_instance_connected === false &&
+        (excludeUserId ? user.id !== excludeUserId : true),
+    );
   }
 }
 

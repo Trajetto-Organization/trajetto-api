@@ -6,27 +6,19 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { UpdateUserPasswordUseCase } from "@/modules/user/usecases/update-user-password/update-user-password-usecase";
 
-import { InMemoryMailProvider } from "@/shared/providers/mail-provider/in-memory/in-memory-mail-provider";
-
 import { UpdateUserPasswordNotMatchError } from "@/modules/user/usecases/errors/update-user-password-not-match-error";
 import { UserUpdateIsSamePasswordError } from "@/modules/user/usecases/errors/update-user-is-same-password-error";
 
 import { AppError } from "@/shared/errors/AppError";
 
 let userInMemory: InMemoryUserRepository;
-let mailProvider: InMemoryMailProvider;
-
 let updateUserPasswordUseCase: UpdateUserPasswordUseCase;
 
 describe("Update User Password UseCase", () => {
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-    mailProvider = new InMemoryMailProvider();
 
-    updateUserPasswordUseCase = new UpdateUserPasswordUseCase(
-      userInMemory,
-      mailProvider,
-    );
+    updateUserPasswordUseCase = new UpdateUserPasswordUseCase(userInMemory);
   });
 
   it("should be able to update user password", async () => {

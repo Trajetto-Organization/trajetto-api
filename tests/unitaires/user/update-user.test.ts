@@ -16,7 +16,7 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
-import { InMemoryMailProvider } from "@/shared/providers/mail-provider/in-memory/in-memory-mail-provider";
+import { NotificationService } from "@/shared/services/notification-service";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -25,7 +25,7 @@ describe("Update User UseCase", () => {
   let businessInMemory: InMemoryBusinessRepository;
 
   let profileAccessInMemory: InMemoryProfileAccessRepository;
-  let mailProvider: InMemoryMailProvider;
+  let notificationService: NotificationService;
 
   let updateUserUseCase: UpdateUserUseCase;
 
@@ -34,13 +34,19 @@ describe("Update User UseCase", () => {
     businessInMemory = new InMemoryBusinessRepository();
 
     profileAccessInMemory = new InMemoryProfileAccessRepository();
-    mailProvider = new InMemoryMailProvider();
+
+    // Create a mock NotificationService
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
 
     updateUserUseCase = new UpdateUserUseCase(
       userInMemory,
       businessInMemory,
       profileAccessInMemory,
-      mailProvider,
+      notificationService,
     );
   });
 

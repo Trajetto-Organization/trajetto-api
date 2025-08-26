@@ -31,11 +31,32 @@ class InMemoryProfileAccessRepository implements IProfileAccessRepository {
   async listProfileAccess({
     page,
     pageSize,
+    businessId,
+    currentUserRole,
+    profileAccessId,
+    search,
   }: ListProfileAccessProps): Promise<ListProfileAccess> {
+    let filteredProfiles = this.profileAccess;
+
+    // Filter by business if not MASTER
+    if (currentUserRole !== "MASTER") {
+      filteredProfiles = filteredProfiles.filter(
+        (profile) => profile.businessId === businessId,
+      );
+    }
+
+    // Apply search filter
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filteredProfiles = filteredProfiles.filter((profile) =>
+        profile.name.toLowerCase().includes(searchLower),
+      );
+    }
+
     const skip = (page - 1) * pageSize;
 
-    const data = this.profileAccess.slice(skip, skip + pageSize);
-    const total = this.profileAccess.length;
+    const data = filteredProfiles.slice(skip, skip + pageSize);
+    const total = filteredProfiles.length;
 
     return { data, total };
   }

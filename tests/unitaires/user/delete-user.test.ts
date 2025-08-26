@@ -6,15 +6,38 @@ import { UserCannotBeDeletedByHimselfError } from "@/modules/user/usecases/error
 import { DeleteUserUseCase } from "@/modules/user/usecases/delete-user/delete-user-usecase";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
+import { InMemoryServiceOrderRepository } from "@/modules/service-order/repositories/in-memory/in-memory-service-order-repository";
+import { InMemoryAccountPayableRepository } from "@/modules/account-payable/repositories/in-memory/in-memory-account-payable-repository";
+
+import { NotificationService } from "@/shared/services/notification-service";
 import { AppError } from "@/shared/errors/AppError";
 
 describe("Delete User UseCase", () => {
   let userInMemory: InMemoryUserRepository;
+  let serviceOrderInMemory: InMemoryServiceOrderRepository;
+
+  let accountPayableInMemory: InMemoryAccountPayableRepository;
+  let notificationService: NotificationService;
+
   let deleteUserUseCase: DeleteUserUseCase;
 
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-    deleteUserUseCase = new DeleteUserUseCase(userInMemory);
+    serviceOrderInMemory = new InMemoryServiceOrderRepository();
+    accountPayableInMemory = new InMemoryAccountPayableRepository();
+
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
+
+    deleteUserUseCase = new DeleteUserUseCase(
+      userInMemory,
+      serviceOrderInMemory,
+      accountPayableInMemory,
+      notificationService,
+    );
   });
 
   it("should be able to delete a user", async () => {

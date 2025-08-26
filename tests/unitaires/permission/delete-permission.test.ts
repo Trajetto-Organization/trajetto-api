@@ -4,7 +4,9 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { InMemoryPermissionRepository } from "@/modules/permission/repositories/in-memory/in-memory-permission-repository";
 
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
+
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
+import { NotificationService } from "@/shared/services/notification-service";
 
 import { DeletePermissionUseCase } from "@/modules/permission/usecases/delete-permission/delete-permission-usecase";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
@@ -21,6 +23,7 @@ describe("Delete Permission UseCase", () => {
   let businessInMemory: InMemoryBusinessRepository;
   let profileAccessInMemory: InMemoryProfileAccessRepository;
 
+  let notificationService: NotificationService;
   let deletePermission: DeletePermissionUseCase;
 
   beforeEach(() => {
@@ -30,9 +33,17 @@ describe("Delete Permission UseCase", () => {
     businessInMemory = new InMemoryBusinessRepository();
     profileAccessInMemory = new InMemoryProfileAccessRepository();
 
+    // Create a mock NotificationService
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
+
     deletePermission = new DeletePermissionUseCase(
       userInMemory,
       permissionInMemory,
+      notificationService,
     );
   });
 
@@ -82,6 +93,19 @@ describe("Delete Permission UseCase", () => {
       createdUser.id,
     );
     expect(deletedPermission.id).toEqual(permission.id);
+
+    // Verify that notification service was called
+    expect(notificationService.createActivityIfEnabled).toHaveBeenCalledWith({
+      type: "Permissão",
+      action: "delete",
+      entityId: permission.id,
+      description: expect.stringContaining(
+        `Permissão excluída: ${permission.action}`,
+      ),
+      status: "Deletado",
+      performedBy: createdUser.id,
+      businessId: permission.businessId,
+    });
   });
 
   it("should throw ResourceNotFoundError if user does not exist", async () => {

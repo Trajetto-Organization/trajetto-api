@@ -114,6 +114,140 @@ describe("List Profile Business Use Case", () => {
     ).rejects.toBeInstanceOf(ResourceNotFoundError);
   });
 
+  it("should handle pagination correctly", async () => {
+    const businessData = {
+      corporate_reason: "Test Business",
+      cnpj: "12345678000100",
+      fantasy_name: "Test Fantasia",
+      cep: "12345678",
+      city: "Test City",
+      uf: "TS",
+      street: "Test Street",
+      address_number: "123",
+      telephone: "1111111111",
+      email: "business@example.com",
+      cnae: "1234567",
+      responsible_name: "Responsible Person",
+      erp_code: "ERP123",
+    };
+
+    const createdBusiness = await businessInMemory.createBusiness(businessData);
+
+    const createdUser = await userInMemory.createUser({
+      email: "test@example.com",
+      password: "password",
+      name: "Test User",
+      businessId: createdBusiness.id as string,
+      profileAccessId: "some-profile-id",
+      role: "BUSINESS_USER",
+    });
+
+    // Create 5 profiles for this business
+    for (let i = 1; i <= 5; i++) {
+      await profileAccessInMemory.createProfileAccess({
+        name: `Profile ${i}`,
+        businessId: createdBusiness.id as string,
+      });
+    }
+
+    // Get first page (2 items)
+    const firstPage = await listProfileBusinessUseCase.execute(
+      createdUser.id,
+      1,
+      2,
+      createdBusiness.id as string,
+    );
+
+    expect(firstPage.data.length).toBe(2);
+    expect(firstPage.total).toBe(5);
+
+    // Get second page (2 items)
+    const secondPage = await listProfileBusinessUseCase.execute(
+      createdUser.id,
+      2,
+      2,
+      createdBusiness.id as string,
+    );
+
+    expect(secondPage.data.length).toBe(2);
+    expect(secondPage.total).toBe(5);
+  });
+
+  it("should return only profiles for the specified business", async () => {
+    const businessData1 = {
+      corporate_reason: "Business 1",
+      cnpj: "12345678000100",
+      fantasy_name: "Business 1 Fantasy",
+      cep: "12345678",
+      city: "City 1",
+      uf: "TS",
+      street: "Street 1",
+      address_number: "123",
+      telephone: "1111111111",
+      email: "business1@example.com",
+      cnae: "1234567",
+      responsible_name: "Responsible 1",
+      erp_code: "ERP123",
+    };
+
+    const businessData2 = {
+      corporate_reason: "Business 2",
+      cnpj: "98765432000100",
+      fantasy_name: "Business 2 Fantasy",
+      cep: "87654321",
+      city: "City 2",
+      uf: "TS",
+      street: "Street 2",
+      address_number: "456",
+      telephone: "2222222222",
+      email: "business2@example.com",
+      cnae: "7654321",
+      responsible_name: "Responsible 2",
+      erp_code: "ERP456",
+    };
+
+    const business1 = await businessInMemory.createBusiness(businessData1);
+    const business2 = await businessInMemory.createBusiness(businessData2);
+
+    const createdUser = await userInMemory.createUser({
+      email: "test@example.com",
+      password: "password",
+      name: "Test User",
+      businessId: business1.id as string,
+      profileAccessId: "some-profile-id",
+      role: "BUSINESS_USER",
+    });
+
+    // Create profiles for business 1
+    await profileAccessInMemory.createProfileAccess({
+      name: "Business 1 Profile 1",
+      businessId: business1.id as string,
+    });
+
+    await profileAccessInMemory.createProfileAccess({
+      name: "Business 1 Profile 2",
+      businessId: business1.id as string,
+    });
+
+    // Create profile for business 2 (should not be returned)
+    await profileAccessInMemory.createProfileAccess({
+      name: "Business 2 Profile",
+      businessId: business2.id as string,
+    });
+
+    const result = await listProfileBusinessUseCase.execute(
+      createdUser.id,
+      1,
+      10,
+      business1.id as string,
+    );
+
+    expect(result.data.length).toBe(2);
+    expect(result.total).toBe(2);
+    expect(result.data[0].name).toBe("Business 1 Profile 1");
+    expect(result.data[1].name).toBe("Business 1 Profile 2");
+  });
+
   it("should throw AppError if list profile business operation fails", async () => {
     const createdUser = await userInMemory.createUser({
       email: "test@example.com",
@@ -142,7 +276,7 @@ describe("List Profile Business Use Case", () => {
 
     const createdBusiness = await businessInMemory.createBusiness(businessData);
 
-    // 🛠 Simulates an error when deleting the access profile
+    // 🛠 Simulates an error when listing profile business
     vi.spyOn(
       profileAccessInMemory,
       "listProfileBusiness",

@@ -6,6 +6,8 @@ import { InMemoryProfileAccessRepository } from "@/modules/profile-access/reposi
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { UpdateProfileAccessUseCase } from "@/modules/profile-access/usecases/update-profile-access/update-profile-access-usecase";
 
+import { NotificationService } from "@/shared/services/notification-service";
+
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
@@ -21,6 +23,8 @@ describe("Update Profile Access UseCase", () => {
   let businessInMemory: InMemoryBusinessRepository;
 
   let profileAccessInMemory: InMemoryProfileAccessRepository;
+  let notificationService: NotificationService;
+
   let updateProfileAccess: UpdateProfileAccessUseCase;
 
   beforeEach(() => {
@@ -28,10 +32,19 @@ describe("Update Profile Access UseCase", () => {
     businessInMemory = new InMemoryBusinessRepository();
 
     profileAccessInMemory = new InMemoryProfileAccessRepository();
+
+    // Create a mock NotificationService
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
+
     updateProfileAccess = new UpdateProfileAccessUseCase(
       userInMemory,
       profileAccessInMemory,
       businessInMemory,
+      notificationService,
     );
   });
 
@@ -78,8 +91,20 @@ describe("Update Profile Access UseCase", () => {
 
     expect(updatedProfileAccess).toHaveProperty("id");
     expect(updatedProfileAccess.name).toBe("Updated Profile");
-
     expect(updatedProfileAccess.businessId).toBe(createdBusiness.id);
+
+    // Verify that notification service was called
+    expect(notificationService.createActivityIfEnabled).toHaveBeenCalledWith({
+      type: "Perfil de acesso",
+      action: "update",
+      entityId: updatedProfileAccess.id,
+      description: expect.stringContaining(
+        `Perfil de acesso atualizado com sucesso: Updated Profile`,
+      ),
+      status: "Atualizado",
+      performedBy: createdUser.id,
+      businessId: createdBusiness.id,
+    });
   });
 
   it("should throw ResourceNotFoundError if user does not exist", async () => {

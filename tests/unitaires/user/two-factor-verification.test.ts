@@ -8,7 +8,7 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { TwoFactorVerificationUseCase } from "@/modules/user/usecases/two-factor-verification/two-factor-verification-usecase";
 import { ExpiredCodeError } from "@/modules/user/usecases/errors/expired-code-error";
 
-import { InMemoryUsersTokens } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { InvalidTwoFactorCodeError } from "@/modules/user/usecases/errors/invalid-two-factor-code-error";
@@ -17,7 +17,7 @@ import { AppError } from "@/shared/errors/AppError";
 
 let userInMemory: InMemoryUserRepository;
 
-let usersTokensInMemory: InMemoryUsersTokens;
+let usersTokensInMemory: InMemoryUserTokensRepository;
 let twoFactorVerificationUseCase: TwoFactorVerificationUseCase;
 
 let twoFactorToken: string;
@@ -25,7 +25,7 @@ let twoFactorToken: string;
 describe("Two factor Verification Vode UseCase", () => {
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-    usersTokensInMemory = new InMemoryUsersTokens();
+    usersTokensInMemory = new InMemoryUserTokensRepository();
 
     twoFactorVerificationUseCase = new TwoFactorVerificationUseCase(
       userInMemory,
@@ -132,6 +132,7 @@ describe("Two factor Verification Vode UseCase", () => {
       name: "User Test",
       password: "user@1234567",
       role: "MASTER",
+      access_revoked: false,
     });
 
     // Mock the compare function to return false

@@ -1,6 +1,6 @@
-// src/modules/middlewares/notification-context.ts
 import { AppError } from "@/shared/errors/AppError";
 import { FastifyRequest, FastifyReply } from "fastify";
+
 import { container } from "tsyringe";
 import { IUserRepository } from "../user/repositories/IUser-repository";
 
@@ -22,12 +22,12 @@ export async function notificationContext(
   request: FastifyRequest,
   reply: FastifyReply,
 ) {
-  // Este middleware é executado APÓS ensureAuthenticated
-  // então request.user já está disponível
+  // This middleware is executed AFTER ensureAuthenticated
+  // then request.user is already available
 
   const { id: userId } = request.user;
 
-  // Buscar preferências do usuário (pode ser cacheado)
+  // Fetch user preferences (may be cached)
   const userRepository = container.resolve<IUserRepository>("UserRepository");
   const user = await userRepository.findUserById(userId);
 

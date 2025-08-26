@@ -8,7 +8,9 @@ import { RefreshTokenNotExistsError } from "../errors/refresh-token-not-exists-e
 import { InvalidCredentialsError } from "../errors/invalid-credentials-error";
 
 import { RefreshTokenUseCase } from "./refresh-token-usecase";
+
 import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
+import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
 
 class RefreshTokenController {
   async handle(
@@ -28,6 +30,10 @@ class RefreshTokenController {
       }
 
       if (error instanceof UserNotFoundPermissionOrProfileAccess) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof UserRevokedAccessError) {
         return reply.status(403).send({ message: error.message });
       }
 

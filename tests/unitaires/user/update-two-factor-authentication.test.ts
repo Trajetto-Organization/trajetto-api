@@ -31,19 +31,17 @@ describe("Update Two Factor Authentication UseCase", () => {
       role: "MASTER",
     });
 
-    await userInMemory.updateTwoFactorAuthentication({
-      userId: user.id,
-      isTwoFactorEnabled: true,
-    });
-
+    // User starts with 2FA disabled (default)
     expect(user.two_factor_enabled).toBe(false);
 
+    // Call UseCase to toggle (should enable 2FA)
     await updateTwoFactorAuthenticationUseCase.execute({
       userId: user.id,
     });
 
+    // Verify 2FA is now enabled
     const updatedUserAfterEnable = await userInMemory.findUserById(user.id);
-    expect(updatedUserAfterEnable?.two_factor_enabled).toBe(false);
+    expect(updatedUserAfterEnable?.two_factor_enabled).toBe(true);
   });
 
   it("should disable two-factor authentication when it is currently enabled", async () => {
@@ -59,17 +57,24 @@ describe("Update Two Factor Authentication UseCase", () => {
       role: "MASTER",
     });
 
+    // First enable 2FA
     await userInMemory.updateTwoFactorAuthentication({
       userId: user.id,
-      isTwoFactorEnabled: false,
+      isTwoFactorEnabled: true,
     });
 
+    // Verify 2FA is enabled
+    const userWith2FA = await userInMemory.findUserById(user.id);
+    expect(userWith2FA?.two_factor_enabled).toBe(true);
+
+    // Call UseCase to toggle (should disable 2FA)
     await updateTwoFactorAuthenticationUseCase.execute({
       userId: user.id,
     });
 
-    const updatedUserAfterEnable = await userInMemory.findUserById(user.id);
-    expect(updatedUserAfterEnable?.two_factor_enabled).toBe(true);
+    // Verify 2FA is now disabled
+    const updatedUserAfterDisable = await userInMemory.findUserById(user.id);
+    expect(updatedUserAfterDisable?.two_factor_enabled).toBe(false);
   });
 
   it("should not be able to update two factor authentication with wrong id", async () => {

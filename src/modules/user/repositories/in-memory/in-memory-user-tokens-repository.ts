@@ -12,7 +12,7 @@ import {
   CreateTwoFactorToken,
 } from "../../dtos/user-tokens-dto";
 
-class InMemoryUsersTokens implements IUsersTokensRepository {
+class InMemoryUserTokensRepository implements IUsersTokensRepository {
   public refreshTokenItems: UserRefreshTokenProps[] = [];
   public forgotPasswordVerificationTokens: VerificationToken[] = [];
 
@@ -87,7 +87,9 @@ class InMemoryUsersTokens implements IUsersTokensRepository {
   }
 
   async deleteTwoFactorToken(twoFactorId: string): Promise<void> {
-    this.twoFactorTokens.filter((item) => item.id !== twoFactorId);
+    this.twoFactorTokens = this.twoFactorTokens.filter(
+      (item) => item.id !== twoFactorId,
+    );
   }
 
   async createTwoFactorConfirmation(
@@ -118,7 +120,7 @@ class InMemoryUsersTokens implements IUsersTokensRepository {
   async deleteTwoFactorConfirmation(
     twoFactorConfirmationId: string,
   ): Promise<void> {
-    this.twoFactorConfirmationTokens.filter(
+    this.twoFactorConfirmationTokens = this.twoFactorConfirmationTokens.filter(
       (item) => item.id !== twoFactorConfirmationId,
     );
   }
@@ -173,6 +175,56 @@ class InMemoryUsersTokens implements IUsersTokensRepository {
         (item) => item.id !== tokenId,
       );
   }
+
+  async createEmailVerificationToken({
+    email,
+    token,
+    expires,
+  }: CreateVerificationToken): Promise<VerificationToken> {
+    const verificationToken: VerificationToken = {
+      id: uuidV4(),
+      email,
+      token,
+      expires,
+    };
+
+    this.emailVerificationTokens.push(verificationToken);
+    return verificationToken;
+  }
+
+  async findEmailVerificationTokenByEmail(
+    email: string,
+  ): Promise<VerificationToken | null> {
+    const token = this.emailVerificationTokens.find(
+      (item) => item.email === email,
+    );
+
+    if (!token) {
+      return null;
+    }
+
+    return token;
+  }
+
+  async findEmailVerificationTokenByToken(
+    token: string,
+  ): Promise<VerificationToken | null> {
+    const verificationToken = this.emailVerificationTokens.find(
+      (item) => item.token === token,
+    );
+
+    if (!verificationToken) {
+      return null;
+    }
+
+    return verificationToken;
+  }
+
+  async deleteEmailVerificationToken(tokenId: string): Promise<void> {
+    this.emailVerificationTokens = this.emailVerificationTokens.filter(
+      (item) => item.id !== tokenId,
+    );
+  }
 }
 
-export { InMemoryUsersTokens };
+export { InMemoryUserTokensRepository };

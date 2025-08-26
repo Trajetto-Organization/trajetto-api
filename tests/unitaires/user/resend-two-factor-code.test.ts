@@ -8,27 +8,20 @@ import { ResendTwoFactorError } from "@/modules/user/usecases/errors/resend-two-
 import { AppError } from "@/shared/errors/AppError";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
-import { InMemoryUsersTokens } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
-
-import { InMemoryMailProvider } from "@/shared/providers/mail-provider/in-memory/in-memory-mail-provider";
+import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 
 describe("Resend Two Factor Code UseCase", () => {
   let userInMemory: InMemoryUserRepository;
-  let usersTokensInMemory: InMemoryUsersTokens;
+  let usersTokensInMemory: InMemoryUserTokensRepository;
 
-  let mailProvider: InMemoryMailProvider;
   let resendTwoFactorCodeUseCase: ResendTwoFactorCodeUseCase;
 
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-    usersTokensInMemory = new InMemoryUsersTokens();
-
-    mailProvider = new InMemoryMailProvider();
-    vi.spyOn(mailProvider, "sendMail");
+    usersTokensInMemory = new InMemoryUserTokensRepository();
 
     resendTwoFactorCodeUseCase = new ResendTwoFactorCodeUseCase(
       userInMemory,
-      mailProvider,
       usersTokensInMemory,
     );
   });

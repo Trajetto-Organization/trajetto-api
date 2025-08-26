@@ -39,13 +39,47 @@ class InMemoryPermissionRepository implements IPermissionRepository {
   async listPermission({
     page,
     pageSize,
+    search,
+    currentUserRole,
+    businessId,
+    profileAccessId,
   }: ListPermissionProps): Promise<ListPermission> {
+    let filteredPermissions = this.permissions;
+
+    // Filter by business if not MASTER
+    if (currentUserRole !== "MASTER") {
+      filteredPermissions = filteredPermissions.filter(
+        (permission) => permission.businessId === businessId,
+      );
+    }
+
+    // Filter by profileAccess if BUSINESS_USER
+    if (currentUserRole === "BUSINESS_USER") {
+      filteredPermissions = filteredPermissions.filter(
+        (permission) => permission.profileAccessId === profileAccessId,
+      );
+    }
+
+    // Apply search filter
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filteredPermissions = filteredPermissions.filter(
+        (permission) =>
+          permission.action.toLowerCase().includes(searchLower) ||
+          (permission.permissionKey &&
+            permission.permissionKey.toLowerCase().includes(searchLower)),
+      );
+    }
+
     const skip = (page - 1) * pageSize;
-    const paginatedPermissions = this.permissions.slice(skip, skip + pageSize);
+    const paginatedPermissions = filteredPermissions.slice(
+      skip,
+      skip + pageSize,
+    );
 
     return {
       data: paginatedPermissions,
-      total: this.permissions.length,
+      total: filteredPermissions.length,
     };
   }
 

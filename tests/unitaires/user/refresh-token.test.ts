@@ -7,39 +7,35 @@ import auth from "@/config/auth";
 import { RefreshTokenUseCase } from "@/modules/user/usecases/refresh-token/refresh-token-usecase";
 import { RefreshTokenNotExistsError } from "@/modules/user/usecases/errors/refresh-token-not-exists-error";
 
-import { InMemoryUsersTokens } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
 import { AuthenticateUserUseCase } from "@/modules/user/usecases/authenticate-user/authenticate-user-usecase";
-import { InMemoryMailProvider } from "@/shared/providers/mail-provider/in-memory/in-memory-mail-provider";
 
 import { UserNotFoundPermissionOrProfileAccess } from "@/modules/user/usecases/errors/user-not-found-permission-profile-access-error";
 import { InvalidCredentialsError } from "@/modules/user/usecases/errors/invalid-credentials-error";
 
+import { UserRevokedAccessError } from "@/modules/user/usecases/errors/user-revoked-access-error";
 import { AppError } from "@/shared/errors/AppError";
 
 let userInMemory: InMemoryUserRepository;
 let authenticateUserUseCase: AuthenticateUserUseCase;
 
-let mailProvider: InMemoryMailProvider;
-let usersTokensInMemory: InMemoryUsersTokens;
-
+let usersTokensInMemory: InMemoryUserTokensRepository;
 let refreshTokenUseCase: RefreshTokenUseCase;
 
 describe("Refresh Token UseCase", () => {
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-    usersTokensInMemory = new InMemoryUsersTokens();
+    usersTokensInMemory = new InMemoryUserTokensRepository();
 
     refreshTokenUseCase = new RefreshTokenUseCase(
       userInMemory,
       usersTokensInMemory,
     );
-    mailProvider = new InMemoryMailProvider();
 
     authenticateUserUseCase = new AuthenticateUserUseCase(
       userInMemory,
-      mailProvider,
       usersTokensInMemory,
     );
   });
@@ -58,6 +54,8 @@ describe("Refresh Token UseCase", () => {
     });
 
     userCreated.role = "MASTER";
+    userCreated.email_verified = new Date();
+    userCreated.two_factor_enabled = false;
 
     const user = await authenticateUserUseCase.execute({
       email: "user@example.com",
@@ -191,5 +189,110 @@ describe("Refresh Token UseCase", () => {
         500,
       ),
     );
+  });
+
+  it("should throw UserRevokedAccessError if user access is revoked", async () => {
+    const user = await userInMemory.createUser({
+      email: "revoked@example.com",
+      password: "hashedpassword",
+      name: "Revoked User",
+      businessId: "business-id",
+      profileAccessId: "profile-id",
+      role: "MASTER",
+    });
+
+    user.access_revoked = true;
+
+    const validToken = sign({ email: user.email }, auth.secret_refresh_token, {
+      subject: user.id,
+      expiresIn: auth.expires_in_refresh_token,
+    });
+
+    await expect(
+      refreshTokenUseCase.execute(validToken),
+    ).rejects.toBeInstanceOf(UserRevokedAccessError);
+  });
+
+  it("should successfully refresh token for BUSINESS_USER with valid profileAccess", async () => {
+    const user = await userInMemory.createUser({
+      email: "businessuser-valid@example.com",
+      password: "hashedpassword",
+      name: "Business User Valid",
+      businessId: "business-id",
+      profileAccessId: "profile-id",
+      role: "BUSINESS_USER",
+    });
+
+    user.profileAccess = {
+      name: "Valid Access",
+      permissions: [
+        {
+          id: "permission-id",
+          permissionKey: "READ",
+          action: "read",
+          canRead: true,
+          canWrite: false,
+        },
+      ],
+    };
+
+    const validToken = sign({ email: user.email }, auth.secret_refresh_token, {
+      subject: user.id,
+      expiresIn: auth.expires_in_refresh_token,
+    });
+
+    vi.spyOn(
+      usersTokensInMemory,
+      "findUserTokenByIdAndRefreshToken",
+    ).mockResolvedValue({
+      id: "token-id",
+      userId: user.id,
+      refresh_token: validToken,
+      expires_in: new Date(Date.now() + 3600000),
+    });
+
+    const deleteSpy = vi.spyOn(
+      usersTokensInMemory,
+      "deleteUserRefreshTokenById",
+    );
+
+    const result = await refreshTokenUseCase.execute(validToken);
+
+    expect(result).toHaveProperty("refresh_token");
+    expect(result).toHaveProperty("token");
+
+    expect(deleteSpy).toHaveBeenCalledWith("token-id");
+  });
+
+  it("should delete old refresh token before creating new one", async () => {
+    const password = "password123";
+    const hashedPassword = await hash(password, 6);
+
+    const userCreated = await userInMemory.createUser({
+      email: "delete-token@example.com",
+      password: hashedPassword,
+      name: "Delete Token User",
+      businessId: "some-business-id",
+      profileAccessId: "some-profile-id",
+      role: "MASTER",
+    });
+
+    userCreated.role = "MASTER";
+
+    userCreated.email_verified = new Date();
+    userCreated.two_factor_enabled = false;
+
+    const user = await authenticateUserUseCase.execute({
+      email: "delete-token@example.com",
+      password: "password123",
+    });
+
+    const deleteSpy = vi.spyOn(
+      usersTokensInMemory,
+      "deleteUserRefreshTokenById",
+    );
+
+    await refreshTokenUseCase.execute(user.refresh_token as string);
+    expect(deleteSpy).toHaveBeenCalled();
   });
 });

@@ -34,7 +34,7 @@ class UserRepository implements IUserRepository {
   }: CreateUserProps): Promise<User> {
     const data: {
       email: string;
-      password: string;
+      password?: string;
       name: string;
       role: UserRole;
       businessId: string;
@@ -45,13 +45,24 @@ class UserRepository implements IUserRepository {
       name,
       role,
       businessId,
+      profileAccessId,
     };
 
     if (role !== "BUSINESS_ADMIN") {
       data.profileAccessId = profileAccessId;
     }
 
-    const userCreated = await this.prisma.user.create({ data });
+    const userCreated = await this.prisma.user.create({
+      data: {
+        email,
+        password: password as string,
+        name,
+        role,
+        businessId,
+        profileAccessId,
+      },
+    });
+
     return userCreated;
   }
 
