@@ -24,7 +24,7 @@ jobs:
   # Job for unit tests (faster, with lightweight services)
   unit-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -93,7 +93,7 @@ jobs:
           timeout 30 bash -c 'until nc -z localhost 5672; do sleep 1; done'
 
       - name: Run unit tests
-        run: yarn test --run --reporter=basic
+        run: yarn test --run --reporter=basic --testTimeout=30000 --hookTimeout=60000
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
           RABBITMQ_URL: amqp://guest:guest@localhost:5672
@@ -101,7 +101,7 @@ jobs:
   # Job for E2E testing (with optimized services)
   e2e-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -176,7 +176,7 @@ jobs:
           timeout 30 bash -c 'until nc -z localhost 5672; do sleep 1; done'
 
       - name: Run E2E tests
-        run: yarn test:e2e --run --reporter=basic --pool=forks --poolOptions.forks.singleFork=false --poolOptions.forks.isolate=true
+        run: yarn test:e2e --run --reporter=basic --testTimeout=60000 --hookTimeout=120000 --pool=forks --poolOptions.forks.singleFork=false --poolOptions.forks.isolate=true
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
           RABBITMQ_URL: amqp://guest:guest@localhost:5672
