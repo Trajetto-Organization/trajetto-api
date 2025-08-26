@@ -148,6 +148,7 @@ describe("Authenticate user (E2E)", () => {
         name: "New User Test",
         role: "BUSINESS_USER",
         password: await hash("1234567", 6),
+        email_verified: new Date(),
       },
     });
 
@@ -159,6 +160,29 @@ describe("Authenticate user (E2E)", () => {
     expect(response.statusCode).toEqual(403);
     expect(response.body.message).toEqual(
       "Usuário sem perfil de acesso ou permissões configuradas! Por favor, contate o administrador.",
+    );
+  });
+
+  it("should return 403 if the user access is revoked", async () => {
+    await prisma.user.create({
+      data: {
+        email: "revokeduser@example.com",
+        name: "Revoked User",
+        role: "BUSINESS_USER",
+        password: await hash("1234567", 6),
+        email_verified: new Date(),
+        access_revoked: true,
+      },
+    });
+
+    const response = await request(serverInstance).post("/user/session").send({
+      email: "revokeduser@example.com",
+      password: "1234567",
+    });
+
+    expect(response.statusCode).toEqual(403);
+    expect(response.body.message).toEqual(
+      "Seu acesso foi revogado! Para acessar a plataforma novamente, por favor contate o administrador.",
     );
   });
 

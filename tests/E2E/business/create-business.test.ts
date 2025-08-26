@@ -74,7 +74,9 @@ describe("Create Business E2E", () => {
       .send(businessData);
 
     expect(response.statusCode).toEqual(201);
-    expect(response.body.message).toBe("Empresa criada com sucesso!");
+    expect(response.body.message).toBe(
+      "Empresa e filial matriz criadas com sucesso!",
+    );
   });
 
   it("should throw ResourceNotFoundError if user does not exist", async () => {

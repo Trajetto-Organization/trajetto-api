@@ -9,6 +9,8 @@ import { app, serverInstance } from "@/http";
 import { RefreshTokenUseCase } from "@/modules/user/usecases/refresh-token/refresh-token-usecase";
 import { InvalidCredentialsError } from "@/modules/user/usecases/errors/invalid-credentials-error";
 
+import { hash } from "bcrypt";
+
 import auth from "@/config/auth";
 import prisma from "infra/database";
 
@@ -109,6 +111,45 @@ describe("Refresh token (E2E)", () => {
 
     expect(response.status).toBe(401);
     expect(response.body.message).toEqual("Assinatura de token inválida!");
+  });
+
+  it("should return 403 if the user access is revoked", async () => {
+    const revokedUser = await prisma.user.create({
+      data: {
+        email: "revoked-refresh@example.com",
+        name: "Revoked Refresh User",
+        role: "BUSINESS_USER",
+        password: await hash("1234567", 6),
+        email_verified: new Date(),
+        access_revoked: true,
+      },
+    });
+
+    const revokedUserRefreshToken = sign(
+      { email: revokedUser.email },
+      auth.secret_refresh_token,
+      {
+        subject: revokedUser.id,
+        expiresIn: auth.expires_in_refresh_token,
+      },
+    );
+
+    await prisma.refreshToken.create({
+      data: {
+        userId: revokedUser.id,
+        refresh_token: revokedUserRefreshToken,
+        expires_in: new Date(Date.now() + 24 * 60 * 60 * 1000), // 1 day
+      },
+    });
+
+    const response = await request(serverInstance)
+      .post("/user/refresh-token")
+      .send({ token: revokedUserRefreshToken });
+
+    expect(response.status).toBe(403);
+    expect(response.body.message).toEqual(
+      "Seu acesso foi revogado! Para acessar a plataforma novamente, por favor contate o administrador.",
+    );
   });
 
   it("should throw Internal server error if an unknown error occurs", async () => {

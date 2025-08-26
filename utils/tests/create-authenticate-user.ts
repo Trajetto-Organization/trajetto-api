@@ -37,6 +37,7 @@ async function createAuthenticateUser({
       name: "Test User",
       password: await hash("1234567", 6),
       role: userRole,
+      email_verified: new Date(),
     },
   });
 

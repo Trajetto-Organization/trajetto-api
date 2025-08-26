@@ -41,7 +41,7 @@ describe("List Users E2E", () => {
     });
 
     const response = await request(serverInstance)
-      .get("/user/list-users")
+      .get("/user/list-user")
       .set("Authorization", `Bearer ${userAuthenticated}`)
       .query({ page: 1, pageSize: 10 });
 
@@ -72,7 +72,7 @@ describe("List Users E2E", () => {
     });
 
     const response = await request(serverInstance)
-      .get("/user/list-users")
+      .get("/user/list-user")
       .set("Authorization", `Bearer ${userAuthenticated}`)
       .query({ page: 1, pageSize: 10, search: "Unique" });
 
@@ -95,7 +95,7 @@ describe("List Users E2E", () => {
     });
 
     const response = await request(serverInstance)
-      .get("/user/list-users")
+      .get("/user/list-user")
       .set("Authorization", `Bearer ${userAuthenticated}`)
       .query({ page: 1, pageSize: 10 });
 
@@ -109,7 +109,7 @@ describe("List Users E2E", () => {
     });
 
     const response = await request(serverInstance)
-      .get("/user/list-users")
+      .get("/user/list-user")
       .set("Authorization", `Bearer ${userAuthenticated}`)
       .query({ page: 1, pageSize: 10 });
 
