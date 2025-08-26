@@ -21,10 +21,40 @@ env:
   RESEND_FROM_EMAIL: test@example.com
 
 jobs:
-  # Job for unit tests (faster, without services)
+  # Job for unit tests (faster, with lightweight services)
   unit-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+          POSTGRES_INITDB_ARGS: "--auth-host=trust --auth-local=trust"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+          --shm-size=512mb
+        ports:
+          - 5432:5432
+
+      rabbitmq:
+        image: rabbitmq:3.13-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: guest
+          RABBITMQ_DEFAULT_PASS: guest
+        options: >-
+          --health-cmd "rabbitmq-diagnostics check_port_connectivity"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5672:5672
 
     steps:
       - name: Checkout repository
@@ -56,6 +86,11 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile --prefer-offline
+
+      - name: Wait for services
+        run: |
+          timeout 30 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
+          timeout 30 bash -c 'until nc -z localhost 5672; do sleep 1; done'
 
       - name: Run unit tests
         run: yarn test --run --reporter=basic
