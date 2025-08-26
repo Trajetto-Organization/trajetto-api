@@ -25,6 +25,20 @@ jobs:
         ports:
           - 5432:5432
 
+      rabbitmq:
+        image: rabbitmq:3.13-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: guest
+          RABBITMQ_DEFAULT_PASS: guest
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 30s
+          --health-timeout 30s
+          --health-retries 5
+        ports:
+          - 5672:5672
+          - 15672:15672
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
