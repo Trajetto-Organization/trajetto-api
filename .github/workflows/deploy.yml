@@ -9,6 +9,8 @@ on:
 env:
   # Common environment variables for all jobs
   NODE_ENV: test
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+  RABBITMQ_URL: amqp://guest:guest@localhost:5672
   JWT_SECRET: test-jwt-secret-key-for-github-actions-only
   JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
   HTTP_REQUEST: http://localhost:3000
@@ -16,15 +18,10 @@ env:
   EVOLUTION_API_URL: http://localhost:8080/test
   EVOLUTION_API_KEY: test-evolution-api-key
   EVOLUTION_HTTP_REQUEST: http://localhost:3333
-  CLOUDINARY_LOGO_IMAGE: https://res.cloudinary.com/test/image/upload/test-logo.png
-  RESEND_SECRET_KEY: test-resend-key
-  RESEND_FROM_EMAIL: test@example.com
 
 jobs:
-  # Job for unit tests (faster, with lightweight services)
-  unit-tests:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
 
     services:
       postgres:
@@ -33,28 +30,27 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: test_db
-          POSTGRES_INITDB_ARGS: "--auth-host=trust --auth-local=trust"
         options: >-
           --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
-          --shm-size=512mb
-        ports:
-          - 5432:5432
-
-      rabbitmq:
-        image: rabbitmq:3.13-alpine
-        env:
-          RABBITMQ_DEFAULT_USER: guest
-          RABBITMQ_DEFAULT_PASS: guest
-        options: >-
-          --health-cmd "rabbitmq-diagnostics check_port_connectivity"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
         ports:
+          - 5432:5432
+
+      rabbitmq:
+        image: rabbitmq:3.13-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: guest
+          RABBITMQ_DEFAULT_PASS: guest
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 30s
+          --health-timeout 30s
+          --health-retries 5
+        ports:
           - 5672:5672
+          - 15672:15672
 
     steps:
       - name: Checkout repository
@@ -66,124 +62,31 @@ jobs:
           node-version: "20"
           cache: "yarn"
 
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
-
-      - name: Cache yarn cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-
-      - name: Cache node_modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node_modules-${{ hashFiles('**/yarn.lock') }}
-
       - name: Install dependencies
-        run: yarn install --frozen-lockfile --prefer-offline
+        run: yarn install --frozen-lockfile
 
       - name: Wait for services
         run: |
-          timeout 30 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
-          timeout 30 bash -c 'until nc -z localhost 5672; do sleep 1; done'
+          timeout 60 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
+          timeout 60 bash -c 'until nc -z localhost 5672; do sleep 1; done'
+
+      - name: Create tmp directory
+        run: mkdir -p src/tmp
 
       - name: Run unit tests
-        run: yarn test --run --reporter=basic --testTimeout=30000 --hookTimeout=60000
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
-          RABBITMQ_URL: amqp://guest:guest@localhost:5672
+        run: yarn test --run --reporter=basic
 
-  # Job for E2E testing (with optimized services)
-  e2e-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test_db
-          POSTGRES_INITDB_ARGS: "--auth-host=trust --auth-local=trust"
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-          --shm-size=1gb
-        ports:
-          - 5432:5432
-
-      rabbitmq:
-        image: rabbitmq:3.13-alpine
-        env:
-          RABBITMQ_DEFAULT_USER: guest
-          RABBITMQ_DEFAULT_PASS: guest
-        options: >-
-          --health-cmd "rabbitmq-diagnostics check_port_connectivity"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-        ports:
-          - 5672:5672
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "yarn"
-
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
-
-      - name: Cache yarn cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-
-      - name: Cache node_modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node_modules-${{ hashFiles('**/yarn.lock') }}
-
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile --prefer-offline
-
-      - name: Setup test environment
+      - name: Setup E2E test environment
         run: |
           yarn test:create-prisma-environment
           yarn test:install-prisma-environment
-          mkdir -p src/tmp
-
-      - name: Wait for services
-        run: |
-          timeout 30 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
-          timeout 30 bash -c 'until nc -z localhost 5672; do sleep 1; done'
 
       - name: Run E2E tests
-        run: yarn test:e2e --run --reporter=basic --testTimeout=60000 --hookTimeout=120000 --pool=forks --poolOptions.forks.singleFork=false --poolOptions.forks.isolate=true
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
-          RABBITMQ_URL: amqp://guest:guest@localhost:5672
+        run: yarn test:e2e --run --reporter=basic
 
   build-and-push:
     runs-on: ubuntu-latest
-    needs: [unit-tests, e2e-tests]
+    needs: test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
