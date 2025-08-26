@@ -45,12 +45,31 @@ jobs:
 
       - name: Run unit tests
         run: yarn test
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672
+          HTTP_REQUEST: http://localhost:3000
+          API_HTTP_REQUEST: http://localhost:3333
+          JWT_SECRET: test-jwt-secret-key-for-github-actions-only
+          JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
+          EVOLUTION_API_URL: http://localhost:8080/test
+          EVOLUTION_API_KEY: test-evolution-api-key
+          EVOLUTION_HTTP_REQUEST: http://localhost:3333
 
       - name: Run E2E tests
         run: yarn test:e2e
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
           NODE_ENV: test
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672
+          HTTP_REQUEST: http://localhost:3000
+          API_HTTP_REQUEST: http://localhost:3333
+          JWT_SECRET: test-jwt-secret-key-for-github-actions-only
+          JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
+          EVOLUTION_API_URL: http://localhost:8080/test
+          EVOLUTION_API_KEY: test-evolution-api-key
+          EVOLUTION_HTTP_REQUEST: http://localhost:3333
 
   build-and-push:
     runs-on: ubuntu-latest

@@ -12,7 +12,7 @@ const envSchema = z.object({
   JWT_SECRET_REFRESH_TOKEN: z.string(),
   CLOUDINARY_LOGO_IMAGE: z.string(),
   EVOLUTION_API_URL: z.string(),
-  EVOLUTION_API_KEY: z.string(),
+  EVOLUTION_API_KEY: z.string().optional(),
   EVOLUTION_HTTP_REQUEST: z.string().optional(),
   RESEND_SECRET_KEY: z.string().optional(),
   RESEND_FROM_EMAIL: z.string().optional(),
