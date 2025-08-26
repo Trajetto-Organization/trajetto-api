@@ -168,6 +168,7 @@ jobs:
         run: |
           yarn test:create-prisma-environment
           yarn test:install-prisma-environment
+          mkdir -p src/tmp
 
       - name: Wait for services
         run: |
@@ -175,7 +176,7 @@ jobs:
           timeout 30 bash -c 'until nc -z localhost 5672; do sleep 1; done'
 
       - name: Run E2E tests
-        run: yarn test:e2e --run --reporter=basic --pool=forks --poolOptions.forks.singleFork=true
+        run: yarn test:e2e --run --reporter=basic --pool=forks --poolOptions.forks.singleFork=false --poolOptions.forks.isolate=true
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
           RABBITMQ_URL: amqp://guest:guest@localhost:5672
