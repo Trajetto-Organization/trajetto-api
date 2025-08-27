@@ -10,6 +10,8 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { WhatsAppAlreadyConnectedError } from "../errors/whatsapp-already-connected-error";
 import { WhatsAppPhoneAlreadyInUseError } from "../errors/whatsapp-phone-already-in-use-error";
 
+import { WhatsAppBusinessInstanceNotFoundError } from "../errors/whatsapp-business-instance-not-found-error";
+
 class ConnectQRCodeController {
   async handle(request: FastifyRequest, reply: FastifyReply) {
     const { id: userId } = request.user;
@@ -26,6 +28,10 @@ class ConnectQRCodeController {
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof WhatsAppBusinessInstanceNotFoundError) {
+        return reply.status(404).send({ message: error.message });
       }
 
       if (error instanceof WhatsAppNotConnectedError) {

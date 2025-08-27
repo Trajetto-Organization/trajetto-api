@@ -1,7 +1,8 @@
 import WhatsAppWorkerService from "./whatsapp-worker-service";
+import { env } from "@/env";
 
 interface SendWhatsAppNotificationProps {
-  instanceName: string;
+  instanceName?: string; // Optional now, will use business instance
   phoneNumber: string;
   message: string;
   userId?: string;
@@ -30,7 +31,13 @@ class WhatsAppService {
     data: SendWhatsAppNotificationProps,
   ): Promise<void> {
     try {
-      await this.whatsAppWorkerService.enqueueWhatsApp(queueName, data);
+      // Always use the business instance for sending notifications
+      const notificationData = {
+        ...data,
+        instanceName: env.TRAJETTO_WHATSAPP_INSTANCE_NAME,
+      };
+      
+      await this.whatsAppWorkerService.enqueueWhatsApp(queueName, notificationData);
       console.log(`[WhatsAppService] Successfully enqueued WhatsApp message to ${data.phoneNumber}`);
     } catch (error) {
       console.error("[WhatsAppService] Error enqueueing WhatsApp message:", error);

@@ -16,11 +16,11 @@ class EvolutionApiProvider implements IWhatsAppProvider {
   constructor() {
     this.client = axios.create({
       baseURL: env.EVOLUTION_API_URL,
-      timeout: 30000,
       headers: {
         "Content-Type": "application/json",
         apikey: env.EVOLUTION_API_KEY,
       },
+      timeout: 30000,
     });
 
     this.setupInterceptors();
@@ -71,40 +71,16 @@ class EvolutionApiProvider implements IWhatsAppProvider {
         instanceName,
         token: this.generateToken(instanceName),
         qrcode: true,
-        integration: "WHATSAPP-BAILEYS",
         number: normalizedPhone,
-        settings: {
-          rejectCall: false,
-          msgCall: "Sistema não aceita chamadas",
-          groupsIgnore: false,
-          alwaysOnline: false,
-          readMessages: false,
-          readStatus: false,
-          syncFullHistory: false,
-          markMessagesRead: false,
-          autoRead: false,
-          phoneClient: "Windows",
-        },
+        integration: "WHATSAPP-BAILEYS",
         webhook: {
           url: finalWebhookUrl,
-          webhook_by_events: true,
-          webhook_base64: false,
           events: [
             "QRCODE_UPDATED",
             "CONNECTION_UPDATE",
-            "MESSAGES_UPSERT",
-            "SEND_MESSAGE",
-            "INSTANCE_DELETE",
             "LOGOUT_INSTANCE",
-            "CONNECTION.UPDATE",
-            "QRCODE.UPDATED",
-            "connection.update",
-            "qrcode.updated",
-            "messages.upsert",
+            "REMOVE_INSTANCE",
           ],
-        },
-        auth: {
-          authType: "md",
         },
       };
 
@@ -232,10 +208,8 @@ class EvolutionApiProvider implements IWhatsAppProvider {
         {
           number: normalizedPhone,
           text: message,
-          options: {
-            markIsOnline: false,
-            delay: 1000,
-          },
+          delay: 1000,
+          linkPreview: false,
         },
       );
 

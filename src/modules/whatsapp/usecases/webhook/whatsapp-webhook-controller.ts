@@ -86,6 +86,7 @@ class WhatsAppWebhookController {
     // Process only essential events
     const essentialEvents = [
       "CONNECTION_UPDATE",
+      "QRCODE_UPDATED",
       "INSTANCE_DELETE",
       "LOGOUT_INSTANCE",
       "REMOVE_INSTANCE",
@@ -160,6 +161,10 @@ class WhatsAppWebhookController {
         case "CONNECTION_UPDATE":
           await this.handleConnectionUpdate(payload, businessId, instanceName);
           break;
+        case "QRCODE_UPDATED":
+          // QR Code updated - no specific action needed, just acknowledge
+          console.log(`[Webhook] 📱 QR Code updated: ${instanceName}`);
+          break;
         case "INSTANCE_DELETE":
         case "LOGOUT_INSTANCE":
         case "REMOVE_INSTANCE":
@@ -219,14 +224,6 @@ class WhatsAppWebhookController {
       INSTANCE_DELETE: "INSTANCE_DELETE",
       LOGOUT_INSTANCE: "INSTANCE_DELETE",
       REMOVE_INSTANCE: "INSTANCE_DELETE",
-
-      // MESSAGE variations
-      messages_upsert: "MESSAGES_UPSERT",
-      "messages.upsert": "MESSAGES_UPSERT",
-      MESSAGES_UPSERT: "MESSAGES_UPSERT",
-      send_message: "SEND_MESSAGE",
-      "send.message": "SEND_MESSAGE",
-      SEND_MESSAGE: "SEND_MESSAGE",
     };
 
     return eventMap[eventLower] || eventMap[eventUpper] || eventUpper;

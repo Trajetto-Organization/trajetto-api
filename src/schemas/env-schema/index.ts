@@ -14,6 +14,8 @@ const envSchema = z.object({
   EVOLUTION_API_URL: z.string(),
   EVOLUTION_API_KEY: z.string(),
   EVOLUTION_HTTP_REQUEST: z.string().optional(),
+  TRAJETTO_WHATSAPP_BUSINESS_PHONE: z.string(),
+  TRAJETTO_WHATSAPP_INSTANCE_NAME: z.string(),
   RESEND_SECRET_KEY: z.string().optional(),
   RESEND_FROM_EMAIL: z.string().optional(),
 });

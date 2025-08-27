@@ -10,10 +10,13 @@ import { WhatsAppNumberRequiredError } from "../errors/whatsapp-number-required-
 import { WhatsAppPhoneUpdateNotAllowedError } from "../errors/whatsapp-phone-update-not-allowed-error";
 import { WhatsAppPhoneAlreadyInUseError } from "../errors/whatsapp-phone-already-in-use-error";
 
-import { AppError } from "@/shared/errors/AppError";
+import { WhatsAppBusinessInstanceNotFoundError } from "../errors/whatsapp-business-instance-not-found-error";
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 
 import { WhatsAppWebhookController } from "../webhook/whatsapp-webhook-controller";
+
+import { AppError } from "@/shared/errors/AppError";
+import { env } from "@/env";
 
 @injectable()
 class UpdateWhatsAppSettingsUseCase {
@@ -46,6 +49,43 @@ class UpdateWhatsAppSettingsUseCase {
       throw new WhatsAppNumberRequiredError();
     }
 
+    // Check if business instance exists when enabling WhatsApp
+    if (enabled) {
+      const businessInstanceName = env.TRAJETTO_WHATSAPP_INSTANCE_NAME;
+
+      try {
+        const businessInstanceStatus =
+          await this.whatsAppProvider.getConnectionStatus(businessInstanceName);
+
+        if (businessInstanceStatus.status === "not_exists") {
+          throw new WhatsAppBusinessInstanceNotFoundError();
+        }
+        if (businessInstanceStatus.status !== "connected") {
+          throw new AppError(
+            "A instância de negócio do WhatsApp não está conectada. Entre em contato com o suporte.",
+            400,
+          );
+        }
+      } catch (error: any) {
+        // If it's a 404 error, the instance doesn't exist
+        if (error.response?.status === 404) {
+          throw new WhatsAppBusinessInstanceNotFoundError();
+        }
+        // Re-throw our custom errors
+        if (
+          error instanceof WhatsAppBusinessInstanceNotFoundError ||
+          error instanceof AppError
+        ) {
+          throw error;
+        }
+        // For other errors, let them pass through to maintain existing behavior
+        console.log(
+          "[WhatsApp] Error checking business instance, proceeding anyway:",
+          error.message,
+        );
+      }
+    }
+
     // Check if phone number is already being used by another connected user
     if (enabled && phoneNumber) {
       const existingConnectedUser =
@@ -58,6 +98,7 @@ class UpdateWhatsAppSettingsUseCase {
       }
     }
 
+    // Use per-user instance names
     const instanceName = generateWhatsAppInstanceName(
       user.email,
       user.businessId || "master",
@@ -187,8 +228,8 @@ class UpdateWhatsAppSettingsUseCase {
       }
     }
 
-    // Configure instance asynchronously
-    this.setupInstanceAsync(instanceName, phoneNumber, userId, phoneChanged);
+    // For user instance, just check connection status without recreating
+    this.checkUserInstanceAsync(instanceName, userId);
 
     return {
       enabled: true,
@@ -199,73 +240,42 @@ class UpdateWhatsAppSettingsUseCase {
   }
 
   /**
-   * ⚡ Configure instance asynchronously with better error handling
+   * 👤 Check user instance connection status without recreation
    */
-  private async setupInstanceAsync(
+  private async checkUserInstanceAsync(
     instanceName: string,
-    phoneNumber: string,
     userId: string,
-    recreateInstance: boolean,
   ): Promise<void> {
     try {
-      console.log(`[WhatsApp] 🔧 Setting up async instance: ${instanceName}`);
+      console.log(
+        `[WhatsApp] 🔍 Checking user instance status: ${instanceName}`,
+      );
 
-      // Add delay to avoid conflicts with rapid toggles
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Add small delay to avoid conflicts
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
-      // Delete instance if necessary
-      if (recreateInstance) {
-        console.log(`[WhatsApp] 🗑️ Deleting existing instance for recreation`);
-        try {
-          await this.whatsAppProvider.deleteInstance(instanceName);
-          // Wait a bit after deleting to avoid conflicts
-          await new Promise((resolve) => setTimeout(resolve, 3000)); // INCREASED to 3 seconds
-        } catch (error) {
-          console.log(`[WhatsApp] ℹ️ No instance to delete or already deleted`);
-        }
-      }
-
-      // Check if instance exists
+      // Check current connection status
       const status =
         await this.whatsAppProvider.getConnectionStatus(instanceName);
+      const isConnected = status.status === "connected";
 
-      if (status.status === "not_exists" || recreateInstance) {
-        console.log(`[WhatsApp] 🆕 Creating new instance`);
-
-        const createResult = await this.whatsAppProvider.createInstance({
-          instanceName,
-          phoneNumber,
-        });
-
-        if (!createResult.success) {
-          console.error(
-            `[WhatsApp] ❌ Error creating instance: ${createResult.message}`,
-          );
-          return;
-        }
-
-        console.log(`[WhatsApp] ✅ Instance created successfully`);
-      }
-
-      // Wait longer before checking final status
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Check final status
-      const finalStatus =
-        await this.whatsAppProvider.getConnectionStatus(instanceName);
-      const isConnected = finalStatus.status === "connected";
-
-      // Update status in database
+      // Update user's connection status in database
       await this.userRepository.updateWhatsAppInstanceStatus(
         userId,
         isConnected,
       );
 
       console.log(
-        `[WhatsApp] ✅ Setup completo. Status final: ${isConnected ? "conectado" : "desconectado"}`,
+        `[WhatsApp] ✅ User instance check complete. Status: ${isConnected ? "conectado" : "desconectado"}`,
       );
+
+      if (!isConnected) {
+        console.log(
+          `[WhatsApp] ⚠️ User instance not connected. User needs to scan QR code.`,
+        );
+      }
     } catch (error) {
-      console.error(`[WhatsApp] ❌ Error in setupInstanceAsync:`, error);
+      console.error(`[WhatsApp] ❌ Error checking user instance:`, error);
       await this.userRepository.updateWhatsAppInstanceStatus(userId, false);
     }
   }

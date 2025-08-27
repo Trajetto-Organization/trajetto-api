@@ -12,6 +12,8 @@ import { WhatsAppPhoneUpdateNotAllowedError } from "../errors/whatsapp-phone-upd
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { WhatsAppPhoneAlreadyInUseError } from "../errors/whatsapp-phone-already-in-use-error";
 
+import { WhatsAppBusinessInstanceNotFoundError } from "../errors/whatsapp-business-instance-not-found-error";
+
 class WhatsAppSettingsController {
   async getSettings(request: FastifyRequest, reply: FastifyReply) {
     const { id: userId } = request.user;
@@ -58,6 +60,10 @@ class WhatsAppSettingsController {
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof WhatsAppBusinessInstanceNotFoundError) {
+        return reply.status(404).send({ message: error.message });
       }
 
       if (error instanceof WhatsAppNumberRequiredError) {

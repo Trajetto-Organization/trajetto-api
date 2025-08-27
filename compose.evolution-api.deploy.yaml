@@ -1,4 +1,4 @@
-version: "3.7"
+version: "3.8"
 
 services:
   redis:
@@ -34,67 +34,64 @@ services:
     environment:
       # 🚀 Server Settings - Optimized
       SERVER_URL: ${EVOLUTION_API_URL}
-      DEL_INSTANCE: "false"
+      DEL_INSTANCE: false
 
       # 📱 Session Settings - Minimal
       CONFIG_SESSION_PHONE_CLIENT: Windows
       CONFIG_SESSION_PHONE_NAME: Chrome
-      CONFIG_SESSION_PHONE_VERSION: "2.3000.1023204200"
+      CONFIG_SESSION_PHONE_VERSION: 2.3000.1023204200
 
       # ⚙️ General Settings - Essential Only
-      QRCODE_LIMIT: "5"
+      QRCODE_LIMIT: 5
       LANGUAGE: pt-BR
-      LOG_LEVEL: ERROR
-      LOG_COLOR: "false"
 
       # 📋 Message Settings - Prevent Auto-Read
-      AUTO_READ_MESSAGES: "false"
-      MARK_MESSAGES_READ: "false"
-      READ_MESSAGES: "false"
-      READ_STATUS: "false"
+      AUTO_READ_MESSAGES: false
+      MARK_MESSAGES_READ: false
+      READ_MESSAGES: false
+      READ_STATUS: false
 
       # 🔐 Authentication
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
-      AUTHENTICATION_TYPE: apikey
-      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: true
 
       # 🗄️ Database - Minimal Saving (Only Essential)
-      DATABASE_ENABLED: "true"
+      DATABASE_ENABLED: true
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@trajetto-database:5432/evolution_api
       DATABASE_CONNECTION_CLIENT_NAME: evolution_v2
-      DATABASE_SAVE_DATA_INSTANCE: "true"
-      DATABASE_SAVE_DATA_NEW_MESSAGE: "false" # ❌ Disabled - Resource heavy
-      DATABASE_SAVE_MESSAGE_UPDATE: "false" # ❌ Disabled - Not needed
-      DATABASE_SAVE_DATA_CONTACTS: "false" # ❌ Disabled - Not needed
-      DATABASE_SAVE_DATA_CHATS: "false" # ❌ Disabled - Not needed
-      DATABASE_SAVE_DATA_LABELS: "false" # ❌ Disabled - Not needed
-      DATABASE_SAVE_DATA_HISTORIC: "false" # ❌ Disabled - Resource heavy
+      DATABASE_SAVE_DATA_INSTANCE: true
+      DATABASE_SAVE_DATA_NEW_MESSAGE: false # ❌ Disabled - Resource heavy
+      DATABASE_SAVE_MESSAGE_UPDATE: false # ❌ Disabled - Not needed
+      DATABASE_SAVE_DATA_CONTACTS: false # ❌ Disabled - Not needed
+      DATABASE_SAVE_DATA_CHATS: false # ❌ Disabled - Not needed
+      DATABASE_SAVE_DATA_LABELS: false # ❌ Disabled - Not needed
+      DATABASE_SAVE_DATA_HISTORIC: false # ❌ Disabled - Resource heavy
 
       # 📦 Redis Cache - Optimized
-      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_ENABLED: true
       CACHE_REDIS_URI: redis://redis:6379/1
       CACHE_REDIS_PREFIX_KEY: trajetto_evolution
-      CACHE_REDIS_SAVE_INSTANCES: "true"
-      CACHE_LOCAL_ENABLED: "false"
+      CACHE_REDIS_SAVE_INSTANCES: true
+      CACHE_LOCAL_ENABLED: false
 
       # 🌐 Webhook - Smart Filtering
       WEBHOOK_GLOBAL_URL: ${EVOLUTION_API_URL}/evolution/webhook
-      WEBHOOK_GLOBAL_ENABLED: "true"
-      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "true"
+      WEBHOOK_GLOBAL_ENABLED: false
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: false
 
       # 🚫 Disabled Services (Resource Optimization)
-      PROVIDER_ENABLED: "false"
-      RABBITMQ_ENABLED: "false"
-      SQS_ENABLED: "false"
-      WEBSOCKET_ENABLED: "false"
-      WEBSOCKET_GLOBAL_EVENTS: "false"
-      TYPEBOT_ENABLED: "true"
-      TYPEBOT_API_VERSION: "latest"
-      CHATWOOT_ENABLED: "false"
-      OPENAI_ENABLED: "false"
-      DIFY_ENABLED: "false"
-      S3_ENABLED: "false"
+      PROVIDER_ENABLED: false
+      RABBITMQ_ENABLED: false
+      SQS_ENABLED: false
+      WEBSOCKET_ENABLED: false
+      WEBSOCKET_GLOBAL_EVENTS: false
+      TYPEBOT_ENABLED: true
+      TYPEBOT_API_VERSION: latest
+      CHATWOOT_ENABLED: false
+      OPENAI_ENABLED: false
+      DIFY_ENABLED: false
+      S3_ENABLED: false
 
       # 💼 WhatsApp Business Settings
       WA_BUSINESS_TOKEN_WEBHOOK: evolution
