@@ -13,6 +13,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { WhatsAppPhoneAlreadyInUseError } from "../errors/whatsapp-phone-already-in-use-error";
 
 import { WhatsAppBusinessInstanceNotFoundError } from "../errors/whatsapp-business-instance-not-found-error";
+import { WhatsAppBusinessNotConnected } from "../errors/whatsapp-business-not-connected-error";
 
 class WhatsAppSettingsController {
   async getSettings(request: FastifyRequest, reply: FastifyReply) {
@@ -64,6 +65,10 @@ class WhatsAppSettingsController {
 
       if (error instanceof WhatsAppBusinessInstanceNotFoundError) {
         return reply.status(404).send({ message: error.message });
+      }
+
+      if (error instanceof WhatsAppBusinessNotConnected) {
+        return reply.status(400).send({ message: error.message });
       }
 
       if (error instanceof WhatsAppNumberRequiredError) {

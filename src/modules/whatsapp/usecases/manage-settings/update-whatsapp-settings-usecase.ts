@@ -13,6 +13,7 @@ import { WhatsAppPhoneAlreadyInUseError } from "../errors/whatsapp-phone-already
 import { WhatsAppBusinessInstanceNotFoundError } from "../errors/whatsapp-business-instance-not-found-error";
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 
+import { WhatsAppBusinessNotConnected } from "../errors/whatsapp-business-not-connected-error";
 import { WhatsAppWebhookController } from "../webhook/whatsapp-webhook-controller";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -60,11 +61,9 @@ class UpdateWhatsAppSettingsUseCase {
         if (businessInstanceStatus.status === "not_exists") {
           throw new WhatsAppBusinessInstanceNotFoundError();
         }
+
         if (businessInstanceStatus.status !== "connected") {
-          throw new AppError(
-            "A instância de negócio do WhatsApp não está conectada. Entre em contato com o suporte.",
-            400,
-          );
+          throw new WhatsAppBusinessNotConnected();
         }
       } catch (error: any) {
         // If it's a 404 error, the instance doesn't exist
@@ -101,7 +100,7 @@ class UpdateWhatsAppSettingsUseCase {
     // Use per-user instance names
     const instanceName = generateWhatsAppInstanceName(
       user.email,
-      user.businessId || "master",
+      user.businessId as string,
     );
 
     try {

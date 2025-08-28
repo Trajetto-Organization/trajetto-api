@@ -82,7 +82,7 @@ class ConnectQRCodeUseCase {
     // Generate user-specific instance name
     const instanceName = generateWhatsAppInstanceName(
       user.email,
-      user.businessId || "master",
+      user.businessId as string,
     );
 
     try {

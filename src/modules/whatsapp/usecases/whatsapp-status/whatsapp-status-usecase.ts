@@ -31,7 +31,7 @@ class WhatsAppStatusUseCase {
 
     const instanceName = generateWhatsAppInstanceName(
       user.email,
-      user.businessId || "master",
+      user.businessId as string,
     );
 
     try {
