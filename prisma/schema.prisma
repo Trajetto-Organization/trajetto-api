@@ -682,7 +682,7 @@ model Fuel {
   liters_amount     Decimal  @db.Decimal(10, 3) // Quantity of liters supplied
   price_per_liter   Decimal  @db.Decimal(10, 3) // Value per liter
   total_amount      Decimal  @db.Decimal(10, 2) // Total value (quantity * price per liter)
-  odometer_photo    String? // Odometer Photo Path (PWA only)
+  odometer_photo    String? // Odometer Photo Path (Mobile only)
   odometer_verified Boolean  @default(false) // If the photo has been verified by AI
   notes             String? // Optional remarks
   refueling_date    DateTime @default(now()) // Supply date
