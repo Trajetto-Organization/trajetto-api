@@ -1,5 +1,8 @@
+import { UserRepository } from "@/modules/user/repositories/user-repository";
 import { IWhatsAppProvider } from "@/shared/providers/whatsapp-provider/IWhatsApp-provider";
+
 import { FastifyRequest, FastifyReply } from "fastify";
+import { container } from "tsyringe";
 
 interface WebhookPayload {
   event?: string;
@@ -12,12 +15,13 @@ interface WebhookPayload {
   key?: any;
   pushName?: string;
   participant?: string;
+  sender?: string;
 }
 
 // Cache to track ongoing user operations
 interface UserOperation {
   userId: string;
-  operation: "enabling" | "disabling" | "recreating";
+  operation: "enabling" | "disabling" | "recreating" | "validation_disconnect";
   instanceName: string;
   timestamp: number;
 }
@@ -44,6 +48,13 @@ class WhatsAppWebhookController {
     setTimeout(() => {
       this.userOperationsCache.delete(key);
     }, 30000);
+  }
+
+  // Method to manually clear a user operation
+  static clearUserOperation(userId: string, instanceName: string): void {
+    const key = `${userId}-${instanceName}`;
+    this.userOperationsCache.delete(key);
+    console.log(`[Webhook] 🧹 Cleared user operation: ${key}`);
   }
 
   // Method to check if user operation is in progress
@@ -251,34 +262,94 @@ class WhatsAppWebhookController {
       );
 
       if (userId) {
-        // Send immediate WebSocket notification to specific user
-        await this.sendRealtimeNotification(userId, {
-          type: "whatsapp_connection",
-          message: isConnected
-            ? "WhatsApp conectado com sucesso!"
-            : "WhatsApp foi desconectado",
-          data: {
-            connected: isConnected,
+        // If connected successfully, validate phone number FIRST
+        let validConnection = isConnected;
+        if (isConnected) {
+          validConnection = await this.validateConnectedPhoneNumber(
+            userId,
             instanceName,
-            connectionState,
-            shouldReconnect: !isConnected,
-          },
-        });
+            payload,
+          );
+        }
+
+        // Send WebSocket notification based on validation result
+        // Only send notification for successful connections or validation failures
+        // Skip generic "foi desconectado" messages
+
+        if (validConnection) {
+          // ✅ Successful connection
+          await this.sendRealtimeNotification(userId, {
+            type: "whatsapp_connection",
+            message: "WhatsApp conectado com sucesso!",
+            data: {
+              connected: true,
+              instanceName,
+              connectionState,
+              shouldReconnect: false,
+            },
+          });
+        } else if (!validConnection && isConnected) {
+          // ❌ Phone validation failed - send specific error
+          const mismatchInfo = await this.getPhoneMismatchInfo(userId, payload);
+          if (mismatchInfo) {
+            await this.sendRealtimeNotification(userId, {
+              type: "whatsapp_phone_mismatch",
+              message: `Número incorreto conectado! Esperado: ${mismatchInfo.registered}, conectado: ${mismatchInfo.connected}. A conexão foi encerrada por segurança.`,
+              data: {
+                connected: false,
+                instanceName,
+                connectionState,
+                shouldReconnect: false,
+                registeredPhone: mismatchInfo.registered,
+                connectedPhone: mismatchInfo.connected,
+                reason: "phone_number_mismatch",
+              },
+            });
+          } else {
+            await this.sendRealtimeNotification(userId, {
+              type: "whatsapp_phone_mismatch",
+              message:
+                "Número incorreto conectado. A conexão foi encerrada por segurança.",
+              data: {
+                connected: false,
+                instanceName,
+                connectionState,
+                shouldReconnect: false,
+                reason: "phone_number_mismatch",
+              },
+            });
+          }
+        } else {
+          // 🔇 Normal disconnection - don't send generic message
+          console.log(
+            `[Webhook] 🔇 Skipping generic disconnection notification for: ${userEmail}`,
+          );
+        }
+
+        // Notification already sent above based on specific conditions
 
         // Update database status for the specific user
-        await this.updateUserWhatsAppStatus(userId, isConnected);
+        await this.updateUserWhatsAppStatus(userId, validConnection);
 
-        // If connected successfully, clean up duplicate disconnected instances
-        if (isConnected) {
+        // If connected successfully AND validation passed, clean up duplicate disconnected instances
+        // Only cleanup if it was a legitimate connection, not a failed validation
+        if (validConnection && isConnected) {
+          console.log(
+            `[Webhook] 🧹 Executing cleanup for legitimate connection: ${userEmail}`,
+          );
           await this.cleanupDuplicateDisconnectedInstances(
             userId,
             userEmail,
             businessId,
           );
+        } else {
+          console.log(
+            `[Webhook] 🚫 Skipping cleanup - validConnection: ${validConnection}, isConnected: ${isConnected}`,
+          );
         }
 
         // If disconnected, log that the phone number is now available for other users
-        if (!isConnected) {
+        if (!validConnection) {
           console.log(
             `[Webhook] 📞 Phone number released for other users after disconnection: ${userEmail}`,
           );
@@ -310,6 +381,26 @@ class WhatsAppWebhookController {
         userEmail,
         businessId,
       );
+
+      // Check if this deletion is from a validation disconnect
+      if (userId) {
+        const userOperation = this.isUserOperationInProgress(
+          businessId,
+          instanceName,
+        );
+
+        if (
+          userOperation &&
+          userOperation.operation === "validation_disconnect"
+        ) {
+          console.log(
+            `[Webhook] 🔒 Ignoring instance deletion from phone validation: ${userEmail}`,
+          );
+          // Clean up the operation record
+          WhatsAppWebhookController.clearUserOperation(userId, instanceName);
+          return; // Exit early, don't disable notifications
+        }
+      }
 
       if (userId) {
         // Send immediate WebSocket notification to specific user
@@ -516,6 +607,233 @@ class WhatsAppWebhookController {
   /**
    * 🧹 Clean up duplicate disconnected instances when a user successfully connects
    */
+  /**
+   * Validates that the connected phone number matches the user's registered number
+   */
+  private async validateConnectedPhoneNumber(
+    userId: string,
+    instanceName: string,
+    payload: WebhookPayload,
+  ): Promise<boolean> {
+    try {
+      console.log(
+        `[Webhook] 🔍 Validating connected phone number for user ${userId}`,
+      );
+      console.log(
+        `[Webhook] 📋 Raw webhook payload:`,
+        JSON.stringify(payload, null, 2),
+      );
+
+      // Get user's registered phone number
+      const repository = new UserRepository();
+      const user = await repository.findUserById(userId);
+
+      if (!user?.whatsapp_phone) {
+        console.log("[Webhook] ⚠️ User has no registered phone number");
+        return true; // Allow connection if no phone registered
+      }
+
+      // Try to extract phone from webhook payload first
+      let connectedPhoneNumber = this.extractPhoneFromPayload(
+        payload.data,
+        payload,
+      );
+
+      // If not found in payload, query Evolution API for instance details
+      if (!connectedPhoneNumber) {
+        console.log(
+          "[Webhook] 📞 Phone number not in payload, querying Evolution API...",
+        );
+        connectedPhoneNumber =
+          await this.getConnectedPhoneFromAPI(instanceName);
+      }
+
+      if (!connectedPhoneNumber) {
+        console.log("[Webhook] ⚠️ Could not determine connected phone number");
+        return true; // Allow connection if can't determine phone
+      }
+
+      // Normalize both numbers for comparison
+      const registeredNumber = this.normalizePhoneNumber(user.whatsapp_phone);
+      const connectedNumber = this.normalizePhoneNumber(connectedPhoneNumber);
+
+      console.log(
+        `[Webhook] 🔍 Comparing registered: ${registeredNumber} vs connected: ${connectedNumber}`,
+      );
+
+      // If numbers don't match, disconnect and mark as invalid
+      if (registeredNumber !== connectedNumber) {
+        console.log(
+          `[Webhook] ❌ Phone number mismatch detected! Disconnecting instance.`,
+        );
+
+        // Mark this as a validation operation to ignore subsequent webhooks
+        this.registerValidationOperation(userId, instanceName);
+
+        // Delete the instance to completely remove from WhatsApp devices
+        try {
+          const whatsAppProvider =
+            container.resolve<IWhatsAppProvider>("WhatsAppProvider");
+          await whatsAppProvider.deleteInstance(instanceName);
+          console.log(`[Webhook] 🗑️ Instance deleted due to phone mismatch`);
+        } catch (deleteError) {
+          console.error(
+            "[Webhook] Error deleting mismatched instance:",
+            deleteError,
+          );
+        }
+
+        return false; // Invalid connection
+      } else {
+        console.log(
+          `[Webhook] ✅ Phone number validation passed for user ${userId}`,
+        );
+        return true; // Valid connection
+      }
+    } catch (error) {
+      console.error(
+        "[Webhook] Error validating connected phone number:",
+        error,
+      );
+      return true; // Allow connection on error to avoid blocking
+    }
+  }
+
+  /**
+   * Register a validation disconnect operation to ignore subsequent webhooks
+   */
+  private registerValidationOperation(
+    userId: string,
+    instanceName: string,
+  ): void {
+    WhatsAppWebhookController.registerUserOperation(
+      userId,
+      "validation_disconnect",
+      instanceName,
+    );
+  }
+
+  /**
+   * Get phone mismatch information for detailed notification
+   */
+  private async getPhoneMismatchInfo(
+    userId: string,
+    payload: WebhookPayload,
+  ): Promise<{ registered: string; connected: string } | null> {
+    try {
+      // Get user's registered phone number
+      const repository = new UserRepository();
+      const user = await repository.findUserById(userId);
+
+      if (!user?.whatsapp_phone) {
+        return null;
+      }
+
+      // Try to extract connected phone from payload
+      const connectedPhoneNumber = this.extractPhoneFromPayload(
+        payload.data,
+        payload,
+      );
+
+      if (!connectedPhoneNumber) {
+        return null;
+      }
+
+      // Normalize both numbers
+      const registeredNumber = this.normalizePhoneNumber(user.whatsapp_phone);
+      const connectedNumber = this.normalizePhoneNumber(connectedPhoneNumber);
+
+      return {
+        registered: registeredNumber,
+        connected: connectedNumber,
+      };
+    } catch (error) {
+      console.error("[Webhook] Error getting phone mismatch info:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Extract phone number from webhook payload
+   */
+  private extractPhoneFromPayload(
+    data: any,
+    payload?: WebhookPayload,
+  ): string | null {
+    if (!data) return null;
+
+    // Try different possible paths for phone number in payload
+    const possiblePaths = [
+      data?.wuid, // Evolution API uses this field
+      data?.sender, // Also in Evolution API payload
+      data?.user?.id,
+      data?.me?.id,
+      data?.remoteJid,
+      data?.number,
+      data?.phone,
+      data?.phoneNumber,
+      data?.me?.user,
+      // Also check root level fields from payload
+      payload?.sender, // sender at root level
+    ];
+
+    for (const path of possiblePaths) {
+      console.log(`[Webhook] 🔍 Checking path:`, path);
+      if (typeof path === "string" && path.includes("@")) {
+        // Extract number from WhatsApp JID format (5521999999999@s.whatsapp.net)
+        const extractedNumber = path.split("@")[0];
+        console.log(`[Webhook] ✅ Extracted phone from JID:`, extractedNumber);
+        return extractedNumber;
+      } else if (typeof path === "string" && /^\d+$/.test(path)) {
+        // Direct phone number
+        console.log(`[Webhook] ✅ Found direct phone number:`, path);
+        return path;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Query Evolution API to get connected phone number
+   */
+  private async getConnectedPhoneFromAPI(
+    instanceName: string,
+  ): Promise<string | null> {
+    try {
+      const whatsAppProvider =
+        container.resolve<IWhatsAppProvider>("WhatsAppProvider");
+      const status = await whatsAppProvider.getConnectionStatus(instanceName);
+
+      // Check if the status response contains phone number information
+      if (status?.phoneNumber) {
+        return status.phoneNumber;
+      }
+
+      // If not available in status, try to get instance details
+      // This might require additional API call depending on Evolution API capabilities
+      return null;
+    } catch (error) {
+      console.error("[Webhook] Error getting phone from API:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Normalize phone number for comparison
+   */
+  private normalizePhoneNumber(phone: string): string {
+    // Remove all non-digit characters
+    let cleaned = phone.replace(/\D/g, "");
+
+    // Add Brazil code if not present and number has 11 digits
+    if (!cleaned.startsWith("55") && cleaned.length === 11) {
+      cleaned = "55" + cleaned;
+    }
+
+    return cleaned;
+  }
+
   private async cleanupDuplicateDisconnectedInstances(
     connectedUserId: string,
     userEmail: string,
