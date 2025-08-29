@@ -30,7 +30,9 @@ interface IKanbanRepository {
   ) => Promise<ListKanbanColumnProps>;
   getNextColumnPosition: (businessId: string) => Promise<number>;
   reorderColumns: (data: ReorderKanbanColumnsProps) => Promise<void>;
-  getFirstColumnByBusinessId: (businessId: string) => Promise<KanbanColumn | null>;
+  getFirstColumnByBusinessId: (
+    businessId: string,
+  ) => Promise<KanbanColumn | null>;
 
   // Card methods
   createCard: (cardData: CreateKanbanCardProps) => Promise<KanbanCard>;

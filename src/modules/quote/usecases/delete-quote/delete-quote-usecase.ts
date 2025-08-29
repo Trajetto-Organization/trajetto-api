@@ -6,6 +6,9 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { Quote } from "../../dtos/quote-dto";
 
+import { QuoteAccessDeniedError } from "../errors/quote-access denied-error";
+import { QuoteNotFoundError } from "../errors/quote-not-found-error";
+
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
@@ -25,13 +28,13 @@ class DeleteQuoteUseCase {
     }
 
     if (user.role !== "MASTER") {
-      throw new AppError("Acesso negado", 403);
+      throw new QuoteAccessDeniedError();
     }
 
     const quote = await this.quoteRepository.findQuoteById(quoteId);
 
     if (!quote) {
-      throw new AppError("Orçamento não encontrado", 404);
+      throw new QuoteNotFoundError();
     }
 
     try {

@@ -36,11 +36,19 @@ class WhatsAppService {
         ...data,
         instanceName: env.TRAJETTO_WHATSAPP_INSTANCE_NAME,
       };
-      
-      await this.whatsAppWorkerService.enqueueWhatsApp(queueName, notificationData);
-      console.log(`[WhatsAppService] Successfully enqueued WhatsApp message to ${data.phoneNumber}`);
+
+      await this.whatsAppWorkerService.enqueueWhatsApp(
+        queueName,
+        notificationData,
+      );
+      console.log(
+        `[WhatsAppService] Successfully enqueued WhatsApp message to ${data.phoneNumber}`,
+      );
     } catch (error) {
-      console.error("[WhatsAppService] Error enqueueing WhatsApp message:", error);
+      console.error(
+        "[WhatsAppService] Error enqueueing WhatsApp message:",
+        error,
+      );
       // Don't throw error to prevent blocking the main operation
     }
   }

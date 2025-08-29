@@ -34,7 +34,8 @@ async function profileAccessRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
         summary: "Create a new profile access",
-        description: "Register a new user profile access template with permission sets and role configurations",
+        description:
+          "Register a new user profile access template with permission sets and role configurations",
         body: profileAccessSchemas.createProfileAccess,
         response: {
           201: profileAccessResponses.profileAccessCreated,
@@ -55,7 +56,8 @@ async function profileAccessRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
         summary: "List profile access",
-        description: "Retrieve a paginated list of user profile access templates with their permission configurations",
+        description:
+          "Retrieve a paginated list of user profile access templates with their permission configurations",
         querystring: profileAccessSchemas.listProfileAccess,
         response: {
           200: profileAccessResponses.profileAccessList,
@@ -76,7 +78,8 @@ async function profileAccessRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
         summary: "List profiles by business",
-        description: "Retrieve a paginated list of profile access templates filtered by specific business",
+        description:
+          "Retrieve a paginated list of profile access templates filtered by specific business",
         querystring: profileAccessSchemas.listProfileBusiness,
         response: {
           200: profileAccessResponses.profileBusinessList,
@@ -97,7 +100,8 @@ async function profileAccessRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
         summary: "Update a profile access",
-        description: "Update existing profile access template including permission sets and role configurations",
+        description:
+          "Update existing profile access template including permission sets and role configurations",
         params: profileAccessSchemas.updateDeleteProfileAccess,
         body: profileAccessSchemas.updateProfileAccess,
         response: {
@@ -120,7 +124,8 @@ async function profileAccessRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
         summary: "Delete a profile access",
-        description: "Permanently remove a profile access template and revoke associated user permissions",
+        description:
+          "Permanently remove a profile access template and revoke associated user permissions",
         params: profileAccessSchemas.updateDeleteProfileAccess,
         response: {
           200: profileAccessResponses.profileAccessDeleted,

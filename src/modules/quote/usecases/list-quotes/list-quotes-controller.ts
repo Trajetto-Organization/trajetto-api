@@ -7,6 +7,8 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { listQuotesQuerySchema } from "@/schemas/list-quotes-query-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
+import { QuoteAccessDeniedError } from "../errors/quote-access denied-error";
+
 class ListQuotesController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
@@ -44,6 +46,10 @@ class ListQuotesController {
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof QuoteAccessDeniedError) {
+        return reply.status(403).send({ message: error.message });
       }
 
       throw error;

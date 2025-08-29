@@ -32,7 +32,8 @@ async function fineRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["fine"],
         summary: "Create a new fine",
-        description: "Register a new traffic violation fine for a driver and vehicle",
+        description:
+          "Register a new traffic violation fine for a driver and vehicle",
         params: fineSchemas.updateDeleteBusiness,
         body: fineSchemas.createFine,
         response: {
@@ -68,7 +69,8 @@ async function fineRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["fine"],
         summary: "List fines",
-        description: "Retrieve a paginated list of traffic violation fines with optional search filters",
+        description:
+          "Retrieve a paginated list of traffic violation fines with optional search filters",
         querystring: fineSchemas.listFines,
         response: {
           200: fineResponses.finesList,
@@ -89,9 +91,12 @@ async function fineRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["fine"],
         summary: "Export fines to Excel",
-        description: "Export a comprehensive fines report to Excel format with optional search filters",
+        description:
+          "Export a comprehensive fines report to Excel format with optional search filters",
         querystring: fineSchemas.exportFinesQuery,
-        produces: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+        produces: [
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ],
       },
     },
     exportFineExcelController.handle,
@@ -106,7 +111,8 @@ async function fineRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["fine"],
         summary: "Update a fine",
-        description: "Update information about an existing traffic violation fine",
+        description:
+          "Update information about an existing traffic violation fine",
         params: fineSchemas.updateDeleteFine,
         body: fineSchemas.updateFine,
         response: {

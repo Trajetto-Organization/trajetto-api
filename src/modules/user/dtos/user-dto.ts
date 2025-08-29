@@ -18,6 +18,9 @@ interface CreateUserProps {
   role: UserRole;
   businessId: string;
   profileAccessId?: string;
+  whatsapp_notifications_enabled?: boolean;
+  whatsapp_phone?: string | null;
+  whatsapp_instance_connected?: boolean;
 }
 
 interface UpdateUserProps {

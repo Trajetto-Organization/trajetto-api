@@ -132,7 +132,8 @@ class ConnectQRCodeUseCase {
       // If it's one of our custom errors, re-throw it
       if (
         error instanceof WhatsAppAlreadyConnectedError ||
-        error instanceof WhatsAppBusinessInstanceNotFoundError
+        error instanceof WhatsAppBusinessInstanceNotFoundError ||
+        error instanceof AppError
       ) {
         throw error;
       }

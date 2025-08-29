@@ -31,7 +31,8 @@ async function partRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["part"],
         summary: "Create a new part",
-        description: "Register a new vehicle part or component in the inventory system with specifications and pricing",
+        description:
+          "Register a new vehicle part or component in the inventory system with specifications and pricing",
         params: partSchemas.businessIdParam,
         body: partSchemas.createPart,
         response: {
@@ -53,7 +54,8 @@ async function partRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["part"],
         summary: "List parts",
-        description: "Retrieve a paginated list of vehicle parts and components with optional search and filtering",
+        description:
+          "Retrieve a paginated list of vehicle parts and components with optional search and filtering",
         querystring: partSchemas.listPart,
         response: {
           200: partResponses.partList,
@@ -74,7 +76,8 @@ async function partRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["part"],
         summary: "List parts by business",
-        description: "Retrieve a paginated list of vehicle parts filtered by specific business with search capabilities",
+        description:
+          "Retrieve a paginated list of vehicle parts filtered by specific business with search capabilities",
         querystring: partSchemas.listPartBusinessSchema,
         response: {
           200: partResponses.partList,
@@ -95,7 +98,8 @@ async function partRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["part"],
         summary: "Update a part",
-        description: "Update existing vehicle part information including specifications, pricing, and inventory details",
+        description:
+          "Update existing vehicle part information including specifications, pricing, and inventory details",
         params: partSchemas.partBusinessParams,
         body: partSchemas.updatePart,
         response: {
@@ -117,7 +121,8 @@ async function partRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["part"],
         summary: "Delete a part",
-        description: "Permanently remove a vehicle part or component from the inventory system",
+        description:
+          "Permanently remove a vehicle part or component from the inventory system",
         params: partSchemas.partBusinessParams,
         response: {
           200: partResponses.partDeleted,

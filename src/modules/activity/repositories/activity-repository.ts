@@ -32,15 +32,17 @@ class ActivityRepository implements IActivityRepository {
     const normalizedSearch = search ? search.trim().toLowerCase() : "";
 
     // Get current user to check activity_notifications_enabled
-    const currentUser = userId ? await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { 
-        id: true, 
-        role: true, 
-        businessId: true,
-        activity_notifications_enabled: true 
-      }
-    }) : null;
+    const currentUser = userId
+      ? await this.prisma.user.findUnique({
+          where: { id: userId },
+          select: {
+            id: true,
+            role: true,
+            businessId: true,
+            activity_notifications_enabled: true,
+          },
+        })
+      : null;
 
     const orConditions: any[] = [];
 
@@ -86,27 +88,27 @@ class ActivityRepository implements IActivityRepository {
         ...whereCondition,
         AND: [
           { businessId: currentUser?.businessId }, // Same company
-          { 
+          {
             user: {
-              NOT: { role: "MASTER" } // Exclude MASTER activities
-            }
-          }
-        ]
+              NOT: { role: "MASTER" }, // Exclude MASTER activities
+            },
+          },
+        ],
       };
     } else if (currentUserRole === "BUSINESS_USER") {
       // BUSINESS_USER always sees their own activities
       // activity_notifications_enabled only controls real-time notifications, not activity viewing
       whereCondition = {
         ...whereCondition,
-        performedBy: currentUser?.id // Only their own activities
+        performedBy: currentUser?.id, // Only their own activities
       };
     } else {
       // Default fallback - exclude MASTER activities for non-MASTER roles
       whereCondition = {
         ...whereCondition,
         user: {
-          NOT: { role: "MASTER" }
-        }
+          NOT: { role: "MASTER" },
+        },
       };
     }
 

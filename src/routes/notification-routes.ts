@@ -32,7 +32,8 @@ async function notificationRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
         summary: "List user notifications",
-        description: "Retrieve a paginated list of notifications for the authenticated user with optional filtering",
+        description:
+          "Retrieve a paginated list of notifications for the authenticated user with optional filtering",
         querystring: notificationSchemas.listNotificationsQuery,
         response: {
           200: notificationResponses.notificationsList,
@@ -51,7 +52,8 @@ async function notificationRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
         summary: "Count unread notifications",
-        description: "Get the total count of unread notifications for the authenticated user",
+        description:
+          "Get the total count of unread notifications for the authenticated user",
         response: {
           200: notificationResponses.unreadCount,
           500: notificationResponses.internalServerError,
@@ -88,7 +90,8 @@ async function notificationRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
         summary: "Mark all notifications as read",
-        description: "Mark all notifications as read for the authenticated user",
+        description:
+          "Mark all notifications as read for the authenticated user",
         response: {
           200: notificationResponses.allNotificationsMarkedAsRead,
           500: notificationResponses.internalServerError,

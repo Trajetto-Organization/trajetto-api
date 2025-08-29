@@ -22,7 +22,8 @@ async function trafficViolationCodeRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["traffic-violation-code"],
         summary: "List traffic violation codes",
-        description: "Retrieve a paginated list of DETRAN traffic violation codes with optional search filters and gravity levels",
+        description:
+          "Retrieve a paginated list of DETRAN traffic violation codes with optional search filters and gravity levels",
         querystring: trafficViolationCodeSchemas.listTrafficViolationCode,
         response: {
           200: trafficViolationCodeResponses.trafficViolationCodeList,

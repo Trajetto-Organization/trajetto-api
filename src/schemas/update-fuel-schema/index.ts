@@ -30,8 +30,7 @@ const updateFuelSchema = z.object({
     },
     z
       .number({
-        invalid_type_error:
-          "A quilometragem atual deve ser um número válido.",
+        invalid_type_error: "A quilometragem atual deve ser um número válido.",
       })
       .nonnegative("A quilometragem atual deve ser um valor não negativo.")
       .min(0.1, "A quilometragem atual deve ser maior que zero.")
@@ -163,13 +162,22 @@ const updateFuelSchema = z.object({
       }
     })
     .optional(),
-  vehicleId: z.string().uuid("O ID do veículo deve ser um UUID válido.").optional(),
-  driverId: z.string().uuid("O ID do motorista deve ser um UUID válido.").optional(),
+  vehicleId: z
+    .string()
+    .uuid("O ID do veículo deve ser um UUID válido.")
+    .optional(),
+  driverId: z
+    .string()
+    .uuid("O ID do motorista deve ser um UUID válido.")
+    .optional(),
   fuelTypeId: z
     .string()
     .uuid("O ID do tipo de combustível deve ser um UUID válido.")
     .optional(),
-  branchId: z.string().uuid("O ID da filial deve ser um UUID válido.").optional(),
+  branchId: z
+    .string()
+    .uuid("O ID da filial deve ser um UUID válido.")
+    .optional(),
 });
 
 export { updateFuelSchema };

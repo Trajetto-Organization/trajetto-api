@@ -18,7 +18,10 @@ class WhatsAppWorkerAdapter {
     try {
       await this.workerManager.enqueueWhatsApp(queueName, data);
     } catch (error) {
-      console.error("[WhatsAppWorkerAdapter] Error enqueueing WhatsApp:", error);
+      console.error(
+        "[WhatsAppWorkerAdapter] Error enqueueing WhatsApp:",
+        error,
+      );
       throw error;
     }
   }
@@ -30,7 +33,10 @@ class WhatsAppWorkerAdapter {
     try {
       await this.workerManager.startWorker(queueName);
     } catch (error) {
-      console.error(`[WhatsAppWorkerAdapter] Error starting worker for queue ${queueName}:`, error);
+      console.error(
+        `[WhatsAppWorkerAdapter] Error starting worker for queue ${queueName}:`,
+        error,
+      );
       throw error;
     }
   }

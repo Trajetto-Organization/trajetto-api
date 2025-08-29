@@ -28,6 +28,9 @@ class InMemoryUserRepository implements IUserRepository {
     role,
     businessId,
     profileAccessId,
+    whatsapp_notifications_enabled,
+    whatsapp_phone,
+    whatsapp_instance_connected,
   }: CreateUserProps): Promise<User> {
     const user: User = {
       id: uuidV4(),
@@ -41,11 +44,11 @@ class InMemoryUserRepository implements IUserRepository {
       access_revoked: false,
       email_verified: null,
       avatar: null,
-      whatsapp_notifications_enabled: false,
+      whatsapp_notifications_enabled: whatsapp_notifications_enabled ?? false,
       email_notifications_enabled: true,
       activity_notifications_enabled: true,
-      whatsapp_phone: null,
-      whatsapp_instance_connected: false,
+      whatsapp_phone: whatsapp_phone ?? null,
+      whatsapp_instance_connected: whatsapp_instance_connected ?? false,
     };
 
     this.user.push(user);

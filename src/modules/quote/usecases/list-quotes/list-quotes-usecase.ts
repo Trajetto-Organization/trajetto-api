@@ -7,6 +7,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { ListQuotesResult, QuoteStatus } from "../../dtos/quote-dto";
 
 import { AppError } from "@/shared/errors/AppError";
+import { QuoteAccessDeniedError } from "../errors/quote-access denied-error";
 
 interface ListQuotesRequest {
   userId: string;
@@ -39,7 +40,7 @@ class ListQuotesUseCase {
     }
 
     if (user.role !== "MASTER") {
-      throw new AppError("Acesso negado", 403);
+      throw new QuoteAccessDeniedError();
     }
 
     try {
@@ -52,7 +53,10 @@ class ListQuotesUseCase {
 
       return quotes;
     } catch (error) {
-      throw new AppError("Erro ao listar solicitações de orçamento", 500);
+      throw new AppError(
+        "Houve um erro ao tentar listar as solicitações de orçamento",
+        500,
+      );
     }
   }
 }

@@ -30,7 +30,8 @@ async function permissionRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
         summary: "Create a new permission",
-        description: "Register a new system permission with access control rules and resource restrictions",
+        description:
+          "Register a new system permission with access control rules and resource restrictions",
         body: permissionSchemas.createPermission,
         response: {
           201: permissionResponses.permissionCreated,
@@ -51,7 +52,8 @@ async function permissionRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
         summary: "List permissions",
-        description: "Retrieve a paginated list of system permissions with their access control configurations",
+        description:
+          "Retrieve a paginated list of system permissions with their access control configurations",
         querystring: permissionSchemas.listPermission,
         response: {
           200: permissionResponses.permissionList,
@@ -72,7 +74,8 @@ async function permissionRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
         summary: "Update a permission",
-        description: "Update existing permission settings including access rules and resource restrictions",
+        description:
+          "Update existing permission settings including access rules and resource restrictions",
         params: permissionSchemas.updateDeletePermission,
         body: permissionSchemas.updatePermission,
         response: {
@@ -95,7 +98,8 @@ async function permissionRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
         summary: "Delete a permission",
-        description: "Permanently remove a permission from the system access control configuration",
+        description:
+          "Permanently remove a permission from the system access control configuration",
         params: permissionSchemas.updateDeletePermission,
         response: {
           200: permissionResponses.permissionDeleted,

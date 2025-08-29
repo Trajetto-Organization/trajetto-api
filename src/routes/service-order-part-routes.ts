@@ -30,7 +30,8 @@ async function serviceOrderPartRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["service-order-part"],
         summary: "Add a part to a service order",
-        description: "Associate a vehicle part or component with a service order including quantity and pricing details",
+        description:
+          "Associate a vehicle part or component with a service order including quantity and pricing details",
         params: serviceOrderPartSchemas.createServiceOrderPartParams,
         body: serviceOrderPartSchemas.createServiceOrderPart,
         response: {
@@ -52,7 +53,8 @@ async function serviceOrderPartRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["service-order-part"],
         summary: "List service order parts",
-        description: "Retrieve a list of all parts and components associated with service orders",
+        description:
+          "Retrieve a list of all parts and components associated with service orders",
         querystring: serviceOrderPartSchemas.listServiceOrderPart,
         response: {
           200: serviceOrderPartResponses.serviceOrderPartList,
@@ -73,7 +75,8 @@ async function serviceOrderPartRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["service-order-part"],
         summary: "Update a service order part",
-        description: "Update part information within a service order including quantity, pricing, and replacement details",
+        description:
+          "Update part information within a service order including quantity, pricing, and replacement details",
         params: serviceOrderPartSchemas.serviceOrderPartParams,
         body: serviceOrderPartSchemas.updateServiceOrderPart,
         response: {
@@ -95,7 +98,8 @@ async function serviceOrderPartRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["service-order-part"],
         summary: "Remove a part from a service order",
-        description: "Remove a part or component association from a service order and update inventory accordingly",
+        description:
+          "Remove a part or component association from a service order and update inventory accordingly",
         params: serviceOrderPartSchemas.serviceOrderPartParams,
         response: {
           200: serviceOrderPartResponses.serviceOrderPartDeleted,

@@ -185,7 +185,8 @@ async function userRoutes(app: FastifyInstance) {
       schema: {
         tags: ["user"],
         summary: "Verify password reset token",
-        description: "Verify the validity of a password reset token received via email before allowing password change",
+        description:
+          "Verify the validity of a password reset token received via email before allowing password change",
         querystring: userSchemas.forgotPasswordVerification,
         response: {
           200: userResponses.forgotPasswordVerificationSuccess,
@@ -207,7 +208,8 @@ async function userRoutes(app: FastifyInstance) {
       schema: {
         tags: ["user"],
         summary: "Reset user password",
-        description: "Reset user password using a valid token received through the forgot password process",
+        description:
+          "Reset user password using a valid token received through the forgot password process",
         querystring: userSchemas.forgotPasswordVerification,
         body: userSchemas.forgotPassword,
         response: {
@@ -233,7 +235,8 @@ async function userRoutes(app: FastifyInstance) {
       schema: {
         tags: ["user"],
         summary: "Request password reset",
-        description: "Send a password reset email with verification token to the user's registered email address",
+        description:
+          "Send a password reset email with verification token to the user's registered email address",
         body: userSchemas.sendForgotPassword,
         response: {
           200: userResponses.forgotPasswordEmailSent,
@@ -251,7 +254,8 @@ async function userRoutes(app: FastifyInstance) {
       schema: {
         tags: ["user"],
         summary: "Refresh authentication token",
-        description: "Generate new access and refresh tokens using a valid refresh token to maintain user session",
+        description:
+          "Generate new access and refresh tokens using a valid refresh token to maintain user session",
         body: userSchemas.refreshToken,
         response: {
           201: userResponses.tokenRefreshed,
@@ -274,7 +278,8 @@ async function userRoutes(app: FastifyInstance) {
       schema: {
         tags: ["user"],
         summary: "Verify two-factor authentication",
-        description: "Complete user authentication by verifying the two-factor authentication code sent via email",
+        description:
+          "Complete user authentication by verifying the two-factor authentication code sent via email",
         body: userSchemas.twoFactorUser,
         response: {
           200: userResponses.twoFactorSuccess,
@@ -298,7 +303,8 @@ async function userRoutes(app: FastifyInstance) {
       schema: {
         tags: ["user"],
         summary: "Verify user email",
-        description: "Complete user email verification process to activate account and enable email notifications",
+        description:
+          "Complete user email verification process to activate account and enable email notifications",
       },
     },
     emailVerificationController.handle,
@@ -313,7 +319,8 @@ async function userRoutes(app: FastifyInstance) {
       schema: {
         tags: ["user"],
         summary: "Resend two-factor code",
-        description: "Resend the two-factor authentication code via email if the previous code expired or was not received",
+        description:
+          "Resend the two-factor authentication code via email if the previous code expired or was not received",
         body: userSchemas.resendTwoFactorCode,
         response: {
           200: userResponses.genericMessage,
@@ -357,7 +364,8 @@ async function userRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
         summary: "Delete a user",
-        description: "Permanently remove a user account from the system and revoke all associated access permissions",
+        description:
+          "Permanently remove a user account from the system and revoke all associated access permissions",
         params: userSchemas.updateDeleteUser,
         response: {
           200: userResponses.userDeleted,
@@ -379,7 +387,8 @@ async function userRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
         summary: "Update a user",
-        description: "Update existing user account information including profile details and access permissions",
+        description:
+          "Update existing user account information including profile details and access permissions",
         params: userSchemas.updateDeleteUser,
         body: userSchemas.updateUser,
         response: {
@@ -409,7 +418,8 @@ async function userRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
         summary: "Update user password",
-        description: "Change the authenticated user's password by providing current password and new password",
+        description:
+          "Change the authenticated user's password by providing current password and new password",
         body: userSchemas.updateUserPassword,
         response: {
           200: userResponses.passwordUpdated,
@@ -433,7 +443,8 @@ async function userRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
         summary: "Update user name",
-        description: "Update the authenticated user's display name and profile information",
+        description:
+          "Update the authenticated user's display name and profile information",
         body: userSchemas.updateUserName,
         response: {
           200: userResponses.usernameUpdated,
@@ -456,7 +467,8 @@ async function userRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
         summary: "Toggle two-factor authentication",
-        description: "Enable or disable two-factor authentication for the authenticated user's account security",
+        description:
+          "Enable or disable two-factor authentication for the authenticated user's account security",
         response: {
           200: userResponses.twoFactorUpdated,
           400: userResponses.resourceNotFound,
@@ -475,7 +487,8 @@ async function userRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
         summary: "Update email notification settings",
-        description: "Configure email notification preferences for the authenticated user's account",
+        description:
+          "Configure email notification preferences for the authenticated user's account",
         response: {
           200: userResponses.genericMessage,
           400: userResponses.resourceNotFound,
@@ -494,7 +507,8 @@ async function userRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
         summary: "Update activity notification settings",
-        description: "Configure activity notification preferences for system events and updates for the authenticated user",
+        description:
+          "Configure activity notification preferences for system events and updates for the authenticated user",
         response: {
           200: userResponses.genericMessage,
           400: userResponses.resourceNotFound,

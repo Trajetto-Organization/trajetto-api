@@ -33,7 +33,10 @@ interface IUserRepository {
   updateUser: ({ userId, userData }: UpdateUser) => Promise<User>;
   deleteUser: (userId: string) => Promise<User>;
   findUserByEmail: (email: string) => Promise<User | null>;
-  findUserByEmailAndBusinessId: (email: string, businessId: string) => Promise<User | null>;
+  findUserByEmailAndBusinessId: (
+    email: string,
+    businessId: string,
+  ) => Promise<User | null>;
   findUserById: (userId: string) => Promise<User | null>;
   findUsersByBusiness: (businessId: string) => Promise<User[]>;
   updateUserPassword: ({
@@ -68,9 +71,17 @@ interface IUserRepository {
     userId,
     activity_notifications_enabled,
   }: UpdateActivityNotifications) => Promise<User | null>;
-  findUserWithConnectedWhatsAppByPhone: (phoneNumber: string) => Promise<User | null>;
-  findUserWithWhatsAppByPhone: (phoneNumber: string, excludeUserId?: string) => Promise<User | null>;
-  findAllUsersWithDisconnectedWhatsAppByPhone: (phoneNumber: string, excludeUserId?: string) => Promise<User[]>;
+  findUserWithConnectedWhatsAppByPhone: (
+    phoneNumber: string,
+  ) => Promise<User | null>;
+  findUserWithWhatsAppByPhone: (
+    phoneNumber: string,
+    excludeUserId?: string,
+  ) => Promise<User | null>;
+  findAllUsersWithDisconnectedWhatsAppByPhone: (
+    phoneNumber: string,
+    excludeUserId?: string,
+  ) => Promise<User[]>;
 }
 
 export { IUserRepository };

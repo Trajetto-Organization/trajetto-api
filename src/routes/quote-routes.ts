@@ -33,7 +33,8 @@ async function quoteRoutes(app: FastifyInstance) {
       schema: {
         tags: ["quote"],
         summary: "Create a new quote request",
-        description: "Submit a new quote request from potential customers with company information and fleet size details",
+        description:
+          "Submit a new quote request from potential customers with company information and fleet size details",
         body: quoteSchemas.createQuote,
         response: {
           200: quoteResponses.quoteCreated,
@@ -55,7 +56,8 @@ async function quoteRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["quote"],
         summary: "List quote requests",
-        description: "Retrieve a paginated list of customer quote requests with status filtering and search capabilities",
+        description:
+          "Retrieve a paginated list of customer quote requests with status filtering and search capabilities",
         querystring: quoteSchemas.listQuotes,
         response: {
           200: quoteResponses.quotesList,
@@ -76,7 +78,8 @@ async function quoteRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["quote"],
         summary: "Update quote status",
-        description: "Update the status and internal notes of a customer quote request for sales pipeline management",
+        description:
+          "Update the status and internal notes of a customer quote request for sales pipeline management",
         params: quoteSchemas.quoteIdParam,
         body: quoteSchemas.updateQuoteStatus,
         response: {
@@ -101,7 +104,8 @@ async function quoteRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["quote"],
         summary: "Delete a quote request",
-        description: "Permanently remove a customer quote request from the system",
+        description:
+          "Permanently remove a customer quote request from the system",
         params: quoteSchemas.quoteIdParam,
         response: {
           200: quoteResponses.quoteDeleted,

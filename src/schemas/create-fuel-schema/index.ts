@@ -31,8 +31,7 @@ const createFuelSchema = z.object({
     z
       .number({
         required_error: "A quilometragem atual do veículo é obrigatória.",
-        invalid_type_error:
-          "A quilometragem atual deve ser um número válido.",
+        invalid_type_error: "A quilometragem atual deve ser um número válido.",
       })
       .nonnegative("A quilometragem atual deve ser um valor não negativo.")
       .min(0.1, "A quilometragem atual deve ser maior que zero.")

@@ -73,6 +73,7 @@ class UpdateWhatsAppSettingsUseCase {
         // Re-throw our custom errors
         if (
           error instanceof WhatsAppBusinessInstanceNotFoundError ||
+          error instanceof WhatsAppBusinessNotConnected ||
           error instanceof AppError
         ) {
           throw error;

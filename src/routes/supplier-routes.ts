@@ -34,7 +34,8 @@ async function supplierRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
         summary: "Create a new supplier",
-        description: "Register a new supplier company with contact information and business relationship details",
+        description:
+          "Register a new supplier company with contact information and business relationship details",
         params: supplierSchemas.updateDeleteBusiness,
         body: supplierSchemas.createSupplier,
         response: {
@@ -56,7 +57,8 @@ async function supplierRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
         summary: "List suppliers",
-        description: "Retrieve a paginated list of supplier companies with optional search and filtering capabilities",
+        description:
+          "Retrieve a paginated list of supplier companies with optional search and filtering capabilities",
         querystring: supplierSchemas.listSupplier,
         response: {
           200: supplierResponses.supplierList,
@@ -77,7 +79,8 @@ async function supplierRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
         summary: "List suppliers by business",
-        description: "Retrieve a paginated list of suppliers filtered by specific business with search functionality",
+        description:
+          "Retrieve a paginated list of suppliers filtered by specific business with search functionality",
         querystring: supplierSchemas.listSupplierBusiness,
         response: {
           200: supplierResponses.supplierBusinessList,
@@ -98,7 +101,8 @@ async function supplierRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
         summary: "Update a supplier",
-        description: "Update existing supplier information including contact details and business relationship data",
+        description:
+          "Update existing supplier information including contact details and business relationship data",
         params: supplierSchemas.supplierParams,
         body: supplierSchemas.updateSupplier,
         response: {
@@ -121,7 +125,8 @@ async function supplierRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
         summary: "Delete a supplier",
-        description: "Permanently remove a supplier company from the system and associated business relationships",
+        description:
+          "Permanently remove a supplier company from the system and associated business relationships",
         params: supplierSchemas.supplierParams,
         response: {
           200: supplierResponses.supplierDeleted,

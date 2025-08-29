@@ -33,7 +33,8 @@ async function branchRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
         summary: "Create a new branch",
-        description: "Register a new business branch location with address, contact information, and operational details",
+        description:
+          "Register a new business branch location with address, contact information, and operational details",
         params: branchSchemas.businessIdParam,
         body: branchSchemas.createBranch,
         response: {
@@ -55,7 +56,8 @@ async function branchRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
         summary: "List branches",
-        description: "Retrieve a paginated list of business branch locations with optional search and filtering capabilities",
+        description:
+          "Retrieve a paginated list of business branch locations with optional search and filtering capabilities",
         querystring: branchSchemas.listBranch,
         response: {
           200: branchResponses.branchList,
@@ -76,7 +78,8 @@ async function branchRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
         summary: "List branches by business",
-        description: "Retrieve a paginated list of branch locations filtered by specific business with optional search controls",
+        description:
+          "Retrieve a paginated list of branch locations filtered by specific business with optional search controls",
         querystring: branchSchemas.listBranchBusiness,
         response: {
           200: branchResponses.branchBusinessList,
@@ -97,7 +100,8 @@ async function branchRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
         summary: "Update a branch",
-        description: "Update existing branch information including location details, contact information, and operational settings",
+        description:
+          "Update existing branch information including location details, contact information, and operational settings",
         params: branchSchemas.updateDeleteBranch,
         body: branchSchemas.updateBranch,
         response: {
@@ -119,7 +123,8 @@ async function branchRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
         summary: "Delete a branch",
-        description: "Permanently remove a branch location and all associated operational data from the system",
+        description:
+          "Permanently remove a branch location and all associated operational data from the system",
         params: branchSchemas.updateDeleteBranch,
         response: {
           200: branchResponses.branchDeleted,

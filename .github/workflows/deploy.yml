@@ -18,6 +18,8 @@ env:
   EVOLUTION_API_URL: http://localhost:8080/test
   EVOLUTION_API_KEY: test-evolution-api-key
   EVOLUTION_HTTP_REQUEST: http://localhost:3333
+  TRAJETTO_WHATSAPP_BUSINESS_PHONE: 5524999999999
+  TRAJETTO_WHATSAPP_INSTANCE_NAME: Trajetto-Business-Test
 
 jobs:
   test:

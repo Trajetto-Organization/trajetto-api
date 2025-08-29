@@ -36,10 +36,22 @@ class WhatsAppWorkerManager {
       try {
         const workerPath =
           env.NODE_ENV === "production"
-            ? path.resolve(process.cwd(), "build", "workers", "whatsapp-worker.js")
-            : path.resolve(process.cwd(), "src", "workers", "whatsapp-worker.ts");
+            ? path.resolve(
+                process.cwd(),
+                "build",
+                "workers",
+                "whatsapp-worker.js",
+              )
+            : path.resolve(
+                process.cwd(),
+                "src",
+                "workers",
+                "whatsapp-worker.ts",
+              );
 
-        console.log(`[WhatsAppManager] Iniciando worker com caminho: ${workerPath}`);
+        console.log(
+          `[WhatsAppManager] Iniciando worker com caminho: ${workerPath}`,
+        );
 
         const workerOptions = {
           workerData: {
@@ -186,7 +198,9 @@ class WhatsAppWorkerManager {
   }
 
   public async shutdown(): Promise<void> {
-    console.log("[WhatsAppManager] Iniciando desligamento dos workers de WhatsApp...");
+    console.log(
+      "[WhatsAppManager] Iniciando desligamento dos workers de WhatsApp...",
+    );
 
     const shutdownPromises = Array.from(this.workers.entries()).map(
       async ([queueName, worker]) => {
@@ -234,7 +248,9 @@ class WhatsAppWorkerManager {
     );
 
     await Promise.all(shutdownPromises);
-    console.log("[WhatsAppManager] Todos os workers de WhatsApp foram encerrados");
+    console.log(
+      "[WhatsAppManager] Todos os workers de WhatsApp foram encerrados",
+    );
   }
 }
 

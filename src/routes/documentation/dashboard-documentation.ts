@@ -31,39 +31,69 @@ const dashboardResponses = {
   dashboardOverview: z.object({
     counts: z.object({
       vehicles: z.object({
-        currentMonth: z.number().describe("Number of vehicles created in current month"),
-        lastMonth: z.number().describe("Number of vehicles created in last month"),
+        currentMonth: z
+          .number()
+          .describe("Number of vehicles created in current month"),
+        lastMonth: z
+          .number()
+          .describe("Number of vehicles created in last month"),
       }),
       drivers: z.object({
-        currentMonth: z.number().describe("Number of drivers created in current month"),
-        lastMonth: z.number().describe("Number of drivers created in last month"),
+        currentMonth: z
+          .number()
+          .describe("Number of drivers created in current month"),
+        lastMonth: z
+          .number()
+          .describe("Number of drivers created in last month"),
       }),
       businesses: z.object({
-        currentMonth: z.number().describe("Number of businesses created in current month"),
-        lastMonth: z.number().describe("Number of businesses created in last month"),
+        currentMonth: z
+          .number()
+          .describe("Number of businesses created in current month"),
+        lastMonth: z
+          .number()
+          .describe("Number of businesses created in last month"),
       }),
       branches: z.object({
-        currentMonth: z.number().describe("Number of branches created in current month"),
-        lastMonth: z.number().describe("Number of branches created in last month"),
+        currentMonth: z
+          .number()
+          .describe("Number of branches created in current month"),
+        lastMonth: z
+          .number()
+          .describe("Number of branches created in last month"),
       }),
       parts: z.object({
-        currentMonth: z.number().describe("Number of parts created in current month"),
+        currentMonth: z
+          .number()
+          .describe("Number of parts created in current month"),
         lastMonth: z.number().describe("Number of parts created in last month"),
       }),
       suppliers: z.object({
-        currentMonth: z.number().describe("Number of suppliers created in current month"),
-        lastMonth: z.number().describe("Number of suppliers created in last month"),
+        currentMonth: z
+          .number()
+          .describe("Number of suppliers created in current month"),
+        lastMonth: z
+          .number()
+          .describe("Number of suppliers created in last month"),
       }),
       serviceOrders: z.object({
-        currentMonth: z.number().describe("Number of service orders created in current month"),
-        lastMonth: z.number().describe("Number of service orders created in last month"),
+        currentMonth: z
+          .number()
+          .describe("Number of service orders created in current month"),
+        lastMonth: z
+          .number()
+          .describe("Number of service orders created in last month"),
       }),
       users: z.object({
-        currentMonth: z.number().describe("Number of users created in current month"),
+        currentMonth: z
+          .number()
+          .describe("Number of users created in current month"),
         lastMonth: z.number().describe("Number of users created in last month"),
       }),
       fines: z.object({
-        currentMonth: z.number().describe("Number of fines created in current month"),
+        currentMonth: z
+          .number()
+          .describe("Number of fines created in current month"),
         lastMonth: z.number().describe("Number of fines created in last month"),
       }),
     }),
@@ -85,7 +115,7 @@ const dashboardResponses = {
         serviceOrders: z.number().describe("Number of service orders"),
         users: z.number().describe("Number of users"),
         fines: z.number().describe("Number of fines"),
-      })
+      }),
     ),
     maintenanceStats: z.object({
       pending: z.number().describe("Number of pending maintenances"),
@@ -103,20 +133,20 @@ const dashboardResponses = {
         business_name: z.string().optional().describe("Business name"),
         date: z.string().describe("Activity creation date"),
         status: z.string().describe("Activity status"),
-      })
+      }),
     ),
     vehiclesByType: z.array(
       z.object({
         name: z.string().describe("Vehicle type name"),
         count: z.number().describe("Number of vehicles of this type"),
-      })
+      }),
     ),
     maintenanceCosts: z.array(
       z.object({
         month: z.string().describe("Month name"),
         preventive: z.number().describe("Preventive maintenance costs"),
         corrective: z.number().describe("Corrective maintenance costs"),
-      })
+      }),
     ),
   }),
   dashboardTrends: z.object({
@@ -132,14 +162,14 @@ const dashboardResponses = {
         serviceOrders: z.number().describe("Number of service orders"),
         users: z.number().describe("Number of users"),
         fines: z.number().describe("Number of fines"),
-      })
+      }),
     ),
     maintenanceCosts: z.array(
       z.object({
         date: z.string().describe("Date or month"),
         preventive: z.number().describe("Preventive maintenance costs"),
         corrective: z.number().describe("Corrective maintenance costs"),
-      })
+      }),
     ),
   }),
   vehicleStatusCount: z.object({

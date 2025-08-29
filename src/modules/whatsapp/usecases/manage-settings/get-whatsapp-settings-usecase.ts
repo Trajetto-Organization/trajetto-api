@@ -25,12 +25,11 @@ class GetWhatsAppSettingsUseCase {
       throw new ResourceNotFoundError();
     }
 
-    const instanceName = generateWhatsAppInstanceName(
-      user.email,
-      user.businessId || "master",
-    );
-
     try {
+      const instanceName = generateWhatsAppInstanceName(
+        user.email,
+        user.businessId as string,
+      );
       // Check connection status if WhatsApp is enabled
       let instanceConnected = false;
 

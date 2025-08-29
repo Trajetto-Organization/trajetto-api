@@ -103,9 +103,15 @@ const vehicleResponses = {
     license_plate: z.string().describe("Vehicle license plate"),
     brand: z.string().describe("Vehicle brand"),
     model: z.string().describe("Vehicle model"),
-    acquisition_date: z.union([z.string(), z.date()]).describe("Vehicle acquisition date"),
+    acquisition_date: z
+      .union([z.string(), z.date()])
+      .describe("Vehicle acquisition date"),
     fleet_type: z.enum(["OWNED", "THIRD_PARTY"]).describe("Fleet type"),
-    fleet_id: z.string().nullable().optional().describe("Fleet ID if third party"),
+    fleet_id: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("Fleet ID if third party"),
     last_maintenance_date: z
       .union([z.string(), z.date()])
       .nullable()
@@ -124,7 +130,9 @@ const vehicleResponses = {
       .number()
       .describe("Maintenance interval in months"),
     renavam: z.string().describe("Vehicle RENAVAM number"),
-    manufacturing_year: z.union([z.string(), z.date()]).describe("Vehicle manufacturing year"),
+    manufacturing_year: z
+      .union([z.string(), z.date()])
+      .describe("Vehicle manufacturing year"),
     model_year: z.union([z.string(), z.date()]).describe("Vehicle model year"),
     km_per_liter: z.number().describe("Fuel efficiency in km per liter"),
     number_of_axles: z.number().describe("Number of vehicle axles"),
@@ -136,8 +144,12 @@ const vehicleResponses = {
     fuelTypeId: z.string().describe("Fuel type ID"),
     driverId: z.string().nullable().optional().describe("Assigned driver ID"),
     branchId: z.string().nullable().optional().describe("Assigned branch ID"),
-    created_at: z.union([z.string(), z.date()]).describe("Vehicle creation timestamp"),
-    updated_at: z.union([z.string(), z.date()]).describe("Vehicle last update timestamp"),
+    created_at: z
+      .union([z.string(), z.date()])
+      .describe("Vehicle creation timestamp"),
+    updated_at: z
+      .union([z.string(), z.date()])
+      .describe("Vehicle last update timestamp"),
   }),
 
   // Common Error Responses

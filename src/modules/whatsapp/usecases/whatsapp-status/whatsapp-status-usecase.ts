@@ -47,12 +47,16 @@ class WhatsAppStatusUseCase {
 
       // Updates the status in the database if it is different
       if (isConnected !== user.whatsapp_instance_connected) {
-        await this.userRepository.updateWhatsAppInstanceStatus(
-          userId,
-          isConnected,
-        );
-
-        console.log(`[WhatsApp] ✅ Status atualizado no banco: ${isConnected}`);
+        try {
+          await this.userRepository.updateWhatsAppInstanceStatus(
+            userId,
+            isConnected,
+          );
+          console.log(`[WhatsApp] ✅ Status atualizado no banco: ${isConnected}`);
+        } catch (error) {
+          console.error(`[WhatsApp] ⚠️ Erro ao atualizar status no banco:`, error);
+          // Continue execution even if database update fails
+        }
       }
 
       const connectionInfo: ConnectionInfo = {
