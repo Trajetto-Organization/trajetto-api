@@ -9,6 +9,7 @@ import { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-r
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { NotificationService } from "@/shared/services/notification-service";
+
 import { KanbanService } from "@/shared/services/kanban-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
@@ -108,46 +109,41 @@ class CreateServiceOrderUseCase {
         businessId: serviceOrderData.businessId,
       };
 
-      if (
-        serviceOrderData.responsibleUserId &&
-        serviceOrderData.responsibleUserId !== userId
-      ) {
-        const findResponsibleUser = await this.user.findUserById(
-          serviceOrderData.responsibleUserId,
-        );
+      const findResponsibleUser = await this.user.findUserById(
+        serviceOrderData.responsibleUserId,
+      );
 
-        if (findResponsibleUser) {
-          const linkRedirectPage = redirectPage(findResponsibleUser?.role);
+      if (findResponsibleUser) {
+        const linkRedirectPage = redirectPage(findResponsibleUser?.role);
 
-          const notificationData = {
-            userId: serviceOrderData.responsibleUserId,
-            type: "service-order",
-            title: "Nova Ordem de Serviço",
-            message: `Você foi designado como responsável pela ordem de serviço para o veículo ${findVehicle.license_plate || "N/A"}.`,
-            entityId: serviceOrderCreated.id,
-            link: `${this.http_request}/${linkRedirectPage}/service-order?search=${serviceOrderCreated.id}&page=1`,
-            businessId: serviceOrderData.businessId,
-            shouldSendEmail: true,
-            shouldSendWhatsApp: true,
-            whatsAppMessage: this.buildServiceOrderNotificationText({
-              serviceOrderId: serviceOrderCreated.id,
-              vehicleLicensePlate: findVehicle.license_plate || "N/A",
-              totalAmount: serviceOrderCreated.total_amount as string,
-              currentMileage: vehicleSnapshot.current_mileage_at_service,
-              newMileage: serviceOrderData.new_mileage_after_service as number,
-            }),
-            instanceName: generateWhatsAppInstanceName(
-              findResponsibleUser.email,
-              serviceOrderData.businessId,
-            ),
-          };
+        const notificationData = {
+          userId: serviceOrderData.responsibleUserId,
+          type: "service-order",
+          title: "Nova Ordem de Serviço",
+          message: `Você foi designado como responsável pela ordem de serviço para o veículo ${findVehicle.license_plate || "N/A"}.`,
+          entityId: serviceOrderCreated.id,
+          link: `${this.http_request}/${linkRedirectPage}/service-order?search=${serviceOrderCreated.id}&page=1`,
+          businessId: serviceOrderData.businessId,
+          shouldSendEmail: true,
+          shouldSendWhatsApp: true,
+          whatsAppMessage: this.buildServiceOrderNotificationText({
+            serviceOrderId: serviceOrderCreated.id,
+            vehicleLicensePlate: findVehicle.license_plate || "N/A",
+            totalAmount: serviceOrderCreated.total_amount as string,
+            currentMileage: vehicleSnapshot.current_mileage_at_service,
+            newMileage: serviceOrderData.new_mileage_after_service as number,
+          }),
+          instanceName: generateWhatsAppInstanceName(
+            findResponsibleUser.email,
+            serviceOrderData.businessId,
+          ),
+        };
 
-          // Process notification to responsible user (if different from creator)
-          await this.notificationService.processUserNotifications({
-            notification: notificationData,
-            activity: activityData,
-          });
-        }
+        // Process notification to responsible user (if different from creator)
+        await this.notificationService.processUserNotifications({
+          notification: notificationData,
+          activity: activityData,
+        });
       }
     } catch (error) {
       console.error(

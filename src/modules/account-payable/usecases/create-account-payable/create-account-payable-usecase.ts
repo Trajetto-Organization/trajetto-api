@@ -124,7 +124,7 @@ class CreateAccountPayableUseCase {
       }
     } catch (error) {
       console.error("[Contas a pagar] Erro ao processar notificações:", error);
-      // Não impede a criação da conta a pagar
+      // Does not prevent the creation of the account payable
     }
   }
 

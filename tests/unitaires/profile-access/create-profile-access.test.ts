@@ -20,6 +20,7 @@ describe("Create Profile Access UseCase", () => {
 
   let profileAccessInMemory: InMemoryProfileAccessRepository;
   let notificationService: NotificationService;
+
   let profileAccess: CreateProfileAccessUseCase;
 
   beforeEach(() => {
