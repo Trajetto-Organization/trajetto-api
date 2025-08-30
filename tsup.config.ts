@@ -13,6 +13,7 @@ export default defineConfig({
     "workers/email-worker": "./src/workers/email-worker.ts",
     "workers/whatsapp-worker": "./src/workers/whatsapp-worker.ts",
     "import-violation-codes": "./infra/scripts/import-violation-codes.ts",
+    "seed-whatsapp-instance": "./infra/scripts/seed-whatsapp-instance.ts",
   },
 
   // Output Formats
