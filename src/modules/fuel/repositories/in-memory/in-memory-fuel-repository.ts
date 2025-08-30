@@ -1,0 +1,303 @@
+import { v4 as uuidV4 } from "uuid";
+
+import { Decimal } from "@prisma/client/runtime/library";
+import { IFuelRepository } from "../IFuel-repository";
+
+import {
+  Fuel,
+  CreateFuelProps,
+  ListFuelProps,
+  ListFuelFormattedProps,
+  ListFuelByBusinessIdProps,
+  UpdateFuel,
+  ListFuelBusinessProps,
+  GetFuelByIdAndBusinessProps,
+  FuelWithRelationsFormatted,
+} from "../../dtos/fuel-dto";
+
+class InMemoryFuelRepository implements IFuelRepository {
+  public fuels: Fuel[] = [];
+
+  async createFuel(fuelData: CreateFuelProps): Promise<Fuel> {
+    const newFuel: Fuel = {
+      id: uuidV4(),
+      current_mileage: fuelData.current_mileage,
+      liters_amount: new Decimal(fuelData.liters_amount.toString()),
+      price_per_liter: new Decimal(fuelData.price_per_liter.toString()),
+      total_amount: fuelData.total_amount
+        ? new Decimal(fuelData.total_amount.toString())
+        : new Decimal(
+            Number(fuelData.liters_amount) * Number(fuelData.price_per_liter),
+          ),
+      odometer_photo: fuelData.odometer_photo || null,
+      odometer_verified: fuelData.odometer_verified || false,
+      notes: fuelData.notes || null,
+      refueling_date: fuelData.refueling_date,
+      businessId: fuelData.businessId,
+      branchId: fuelData.branchId,
+      vehicleId: fuelData.vehicleId,
+      driverId: fuelData.driverId,
+      fuelTypeId: fuelData.fuelTypeId,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    this.fuels.push(newFuel);
+    return newFuel;
+  }
+
+  async listFuels({
+    page,
+    pageSize,
+    businessId,
+    currentUserRole,
+    search,
+    vehicleId,
+    driverId,
+    fuelTypeId,
+    startDate,
+    endDate,
+  }: ListFuelByBusinessIdProps): Promise<ListFuelFormattedProps> {
+    let filteredFuels = this.fuels.filter(
+      (fuel) => fuel.businessId === businessId,
+    );
+
+    if (vehicleId) {
+      filteredFuels = filteredFuels.filter(
+        (fuel) => fuel.vehicleId === vehicleId,
+      );
+    }
+
+    if (driverId) {
+      filteredFuels = filteredFuels.filter(
+        (fuel) => fuel.driverId === driverId,
+      );
+    }
+
+    if (fuelTypeId) {
+      filteredFuels = filteredFuels.filter(
+        (fuel) => fuel.fuelTypeId === fuelTypeId,
+      );
+    }
+
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      filteredFuels = filteredFuels.filter((fuel) => {
+        const fuelDate = new Date(fuel.refueling_date);
+        return fuelDate >= start && fuelDate <= end;
+      });
+    }
+
+    if (search) {
+      const searchTerm = search.toLowerCase();
+      filteredFuels = filteredFuels.filter(
+        (fuel) =>
+          fuel.id.toLowerCase().includes(searchTerm) ||
+          fuel.notes?.toLowerCase().includes(searchTerm) ||
+          fuel.current_mileage.toString().includes(searchTerm),
+      );
+    }
+
+    const skip = (page - 1) * pageSize;
+    const data = filteredFuels.slice(skip, skip + pageSize) as any[];
+    const total = filteredFuels.length;
+
+    return { data, total };
+  }
+
+  async listFuelBusiness({
+    page,
+    pageSize,
+    businessId,
+  }: ListFuelBusinessProps): Promise<ListFuelProps> {
+    const filteredFuels = this.fuels.filter(
+      (fuel) => fuel.businessId === businessId,
+    );
+
+    const skip = (page - 1) * pageSize;
+    const data = filteredFuels.slice(skip, skip + pageSize);
+    const total = filteredFuels.length;
+
+    return { data, total };
+  }
+
+  async updateFuel({ fuelData, fuelId }: UpdateFuel): Promise<Fuel> {
+    const index = this.fuels.findIndex((fuel) => fuel.id === fuelId);
+
+    if (index === -1) {
+      throw new Error("Fuel not found");
+    }
+
+    const filteredData = Object.fromEntries(
+      Object.entries(fuelData).filter(
+        ([, value]) => value !== undefined && value !== null && value !== "",
+      ),
+    );
+
+    // Convert Decimal fields if they exist in the update
+    const processedData = { ...filteredData };
+    if (processedData.liters_amount) {
+      processedData.liters_amount = new Decimal(
+        processedData.liters_amount.toString(),
+      );
+    }
+    if (processedData.price_per_liter) {
+      processedData.price_per_liter = new Decimal(
+        processedData.price_per_liter.toString(),
+      );
+    }
+    if (processedData.total_amount) {
+      processedData.total_amount = new Decimal(
+        processedData.total_amount.toString(),
+      );
+    }
+
+    const updatedFuel: Fuel = {
+      ...this.fuels[index],
+      ...processedData,
+      updated_at: new Date(),
+    };
+
+    this.fuels[index] = updatedFuel;
+    return updatedFuel;
+  }
+
+  async deleteFuel(fuelId: string): Promise<Fuel> {
+    const index = this.fuels.findIndex((fuel) => fuel.id === fuelId);
+
+    if (index === -1) {
+      throw new Error("Fuel not found");
+    }
+
+    const deletedFuel = this.fuels.splice(index, 1)[0];
+    return deletedFuel;
+  }
+
+  async findFuelById(fuelId: string): Promise<Fuel | null> {
+    const found = this.fuels.find((fuel) => fuel.id === fuelId);
+    return found || null;
+  }
+
+  async findFuelByIdWithRelations(
+    fuelId: string,
+  ): Promise<FuelWithRelationsFormatted | null> {
+    const fuel = this.fuels.find((fuel) => fuel.id === fuelId);
+
+    if (!fuel) {
+      return null;
+    }
+
+    // Mock relations data for testing
+    return {
+      id: fuel.id,
+      current_mileage: fuel.current_mileage,
+      liters_amount: fuel.liters_amount.toString(),
+      price_per_liter: fuel.price_per_liter.toString(),
+      total_amount: fuel.total_amount.toString(),
+      odometer_photo: fuel.odometer_photo,
+      odometer_verified: fuel.odometer_verified,
+      notes: fuel.notes,
+      refueling_date: new Date(fuel.refueling_date).toISOString(),
+      businessId: fuel.businessId,
+      branchId: fuel.branchId,
+      vehicleId: fuel.vehicleId,
+      driverId: fuel.driverId,
+      fuelTypeId: fuel.fuelTypeId,
+      created_at: new Date(fuel.created_at).toISOString(),
+      updated_at: new Date(fuel.updated_at).toISOString(),
+      business: {
+        id: fuel.businessId,
+        corporate_reason: `Business ${fuel.businessId}`,
+        fantasy_name: `Fantasy Business ${fuel.businessId}`,
+      },
+      branch: {
+        id: fuel.branchId,
+        corporate_reason: `Branch ${fuel.branchId}`,
+        fantasy_name: `Fantasy Branch ${fuel.branchId}`,
+      },
+      vehicle: {
+        id: fuel.vehicleId,
+        description: `Vehicle ${fuel.vehicleId}`,
+        license_plate: `ABC-${fuel.vehicleId.substring(0, 4)}`,
+        brand: "Test Brand",
+        model: "Test Model",
+        current_mileage: fuel.current_mileage,
+      },
+      driver: {
+        id: fuel.driverId,
+        name: `Driver ${fuel.driverId}`,
+        cnh: `CNH-${fuel.driverId.substring(0, 8)}`,
+      },
+      fuelType: {
+        id: fuel.fuelTypeId,
+        description: `Fuel Type ${fuel.fuelTypeId}`,
+      },
+    };
+  }
+
+  async getFuelByIdAndBusiness({
+    businessId,
+    fuelId,
+  }: GetFuelByIdAndBusinessProps): Promise<Fuel | null> {
+    const found = this.fuels.find(
+      (fuel) => fuel.id === fuelId && fuel.businessId === businessId,
+    );
+    return found || null;
+  }
+
+  async getFuelByIdAndBusinessWithRelations({
+    businessId,
+    fuelId,
+  }: GetFuelByIdAndBusinessProps): Promise<FuelWithRelationsFormatted | null> {
+    const fuel = this.fuels.find(
+      (fuel) => fuel.id === fuelId && fuel.businessId === businessId,
+    );
+
+    if (!fuel) {
+      return null;
+    }
+
+    return this.findFuelByIdWithRelations(fuelId);
+  }
+
+  async findFuelsByVehicleId(vehicleId: string): Promise<Fuel[]> {
+    return this.fuels.filter((fuel) => fuel.vehicleId === vehicleId);
+  }
+
+  async findFuelsByDriverId(driverId: string): Promise<Fuel[]> {
+    return this.fuels.filter((fuel) => fuel.driverId === driverId);
+  }
+
+  async findFuelsByFuelTypeId(fuelTypeId: string): Promise<Fuel[]> {
+    return this.fuels.filter((fuel) => fuel.fuelTypeId === fuelTypeId);
+  }
+
+  async getAllFuelsForExport(
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ): Promise<any[]> {
+    let filteredFuels = this.fuels.filter(
+      (fuel) => fuel.businessId === businessId,
+    );
+
+    if (search) {
+      const searchTerm = search.toLowerCase();
+      filteredFuels = filteredFuels.filter(
+        (fuel) =>
+          fuel.id.toLowerCase().includes(searchTerm) ||
+          fuel.notes?.toLowerCase().includes(searchTerm) ||
+          fuel.current_mileage.toString().includes(searchTerm),
+      );
+    }
+
+    return filteredFuels;
+  }
+
+  async findFuelsByBusinessId(businessId: string): Promise<Fuel[]> {
+    return this.fuels.filter((fuel) => fuel.businessId === businessId);
+  }
+}
+
+export { InMemoryFuelRepository };
