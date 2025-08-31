@@ -16,7 +16,6 @@ import {
 } from "./dtos/authenticate-user-dto";
 
 import { AuthenticateUser } from "../../dtos/user-dto";
-
 import { authenticateUserSchema } from "@/schemas/authenticate-user-schema";
 
 import { IUserRepository } from "../../repositories/IUser-repository";
@@ -29,7 +28,6 @@ import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
 import { AppError } from "@/shared/errors/AppError";
 
 import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
-
 import { env } from "@/env";
 
 @injectable()
@@ -113,7 +111,7 @@ class AuthenticateUserUseCase {
       await this.emailQueue.enqueueEmail({
         email,
         name,
-        subject: "Two factor verification code",
+        subject: "Código de verificação de dois fatores",
         templateName: "two-factor-verification-code.hbs",
         moduleName: "user",
         additionalVariablesProperties: {
