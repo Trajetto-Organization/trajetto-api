@@ -9,6 +9,8 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { KanbanCardNotFoundError } from "../errors/kanban-card-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
 
+import { NotificationService } from "@/shared/services/notification-service";
+
 @injectable()
 class DeleteKanbanCardUseCase {
   constructor(
@@ -16,6 +18,8 @@ class DeleteKanbanCardUseCase {
     private user: IUserRepository,
     @inject("KanbanRepository")
     private kanban: IKanbanRepository,
+    @inject("NotificationService")
+    private notificationService: NotificationService,
   ) {}
 
   async execute(cardId: string, userId: string): Promise<KanbanCard> {
@@ -49,6 +53,18 @@ class DeleteKanbanCardUseCase {
 
     try {
       const deletedCard = await this.kanban.deleteCard(cardId);
+
+      // Register activity for card deletion
+      this.notificationService.createActivityIfEnabled({
+        type: "Card Kanban",
+        action: "delete",
+        entityId: deletedCard.id,
+        description: `Card "${deletedCard.title}" deletado com sucesso do kanban | ID: ${deletedCard.id}`,
+        status: "Deletado",
+        performedBy: userId,
+        businessId: findColumn.businessId,
+      });
+
       return deletedCard;
     } catch (error) {
       throw new AppError(

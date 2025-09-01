@@ -27,8 +27,21 @@ import {
 } from "../../dtos/account-payable-dto";
 import { formatCurrency } from "@/config/format-values";
 
+import { redirectPage } from "@/shared/utils/link-redirect-page";
+import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
+
+import { env } from "@/env";
+
+interface AccountPayableNotificationTextProps {
+  amount: string;
+  serviceOrderId?: string;
+  accountPaybleId: string;
+}
+
 @injectable()
 class UpdateAccountPayableUseCase {
+  private http_request = env.HTTP_REQUEST;
+
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -43,6 +56,94 @@ class UpdateAccountPayableUseCase {
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
+
+  private buildAccountPayableNotificationText({
+    amount,
+    serviceOrderId,
+    accountPaybleId,
+  }: AccountPayableNotificationTextProps): string {
+    return [
+      `💰 *Conta a Pagar Atualizada! Você foi designado como responsável por uma conta a pagar atualizada*`,
+      `Valor: *${formatCurrency(Number(amount))}*`,
+      `Identificador da conta a pagar: *${accountPaybleId}*`,
+      serviceOrderId && `Identificador da ordem de serviço: *${serviceOrderId}`,
+      `Para mais detalhes, acesse o sistema.`,
+    ].join("\n");
+  }
+
+  private async processNotifications(
+    originalAccountPayable: AccountPayable,
+    updatedAccountPayable: AccountPayable,
+    accountPayableData: UpdateAccountPayableProps,
+    userId: string,
+    businessId: string,
+  ): Promise<void> {
+    try {
+      // Always create activity for account payable update
+      const activityData = {
+        type: "Conta a pagar",
+        action: "update",
+        entityId: updatedAccountPayable.id,
+        description: `Conta a pagar atualizada com sucesso, no valor de ${formatCurrency(Number(updatedAccountPayable.amount))} | ID: ${updatedAccountPayable.id}`,
+        status: "Atualizado",
+        performedBy: userId,
+        businessId,
+      };
+
+      // Check if registrationUserId changed
+      const registrationUserChanged =
+        accountPayableData.registrationUserId !== undefined &&
+        originalAccountPayable.registrationUserId !==
+          accountPayableData.registrationUserId;
+
+      if (registrationUserChanged && accountPayableData.registrationUserId) {
+        // RegistrationUser changed, send notification
+        const registrationUser = await this.user.findUserById(
+          accountPayableData.registrationUserId,
+        );
+
+        if (registrationUser) {
+          const linkRedirectPage = redirectPage(registrationUser.role);
+
+          const notificationData = {
+            userId: accountPayableData.registrationUserId,
+            type: "account-payable",
+            title: "Conta a Pagar Atualizada e Atribuída",
+            message: `Você foi designado como responsável por uma conta a pagar atualizada ${updatedAccountPayable.serviceOrderId ? `| ordem de serviço associada ${updatedAccountPayable.serviceOrderId}` : ""}`,
+            entityId: updatedAccountPayable.id,
+            link: `${this.http_request}/${linkRedirectPage}/account-payable?search=${updatedAccountPayable.id}&page=1`,
+            businessId,
+            shouldSendEmail: true,
+            shouldSendWhatsApp: true,
+            whatsAppMessage: this.buildAccountPayableNotificationText({
+              amount: updatedAccountPayable.amount as string,
+              serviceOrderId: updatedAccountPayable.serviceOrderId as string,
+              accountPaybleId: updatedAccountPayable.id,
+            }),
+            instanceName: generateWhatsAppInstanceName(
+              registrationUser.email,
+              businessId,
+            ),
+          };
+
+          // Process notification to newly assigned user
+          await this.notificationService.processUserNotifications({
+            notification: notificationData,
+            activity: activityData,
+          });
+        }
+      } else {
+        // No registrationUser change, just create activity
+        await this.notificationService.createActivityIfEnabled(activityData);
+      }
+    } catch (error) {
+      console.error(
+        "[Contas a pagar Update] Erro ao processar notificações:",
+        error,
+      );
+      // Does not prevent the account payable update
+    }
+  }
 
   async execute(
     accountPayableData: UpdateAccountPayableProps,
@@ -176,17 +277,14 @@ class UpdateAccountPayableUseCase {
           accountPayableId,
         });
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Conta a pagar",
-        action: "update",
-        entityId: updatedAccountPayable.id,
-        description: `Conta a pagar atualizada com sucesso, no valor de 
-        ${formatCurrency(Number(updatedAccountPayable.amount))} | ID: ${updatedAccountPayable.id}`,
-        status: "Atualizado",
-        performedBy: userId,
+      // Process notifications (activity + conditionally WhatsApp/Email)
+      this.processNotifications(
+        findAccountPayable,
+        updatedAccountPayable,
+        accountPayableData,
+        userId,
         businessId,
-      });
+      );
 
       return updatedAccountPayable;
     } catch (error) {

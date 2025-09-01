@@ -35,9 +35,20 @@ import {
   UpdateServiceOrderProps,
 } from "../../dtos/service-order-dto";
 import { formatCurrency } from "@/config/format-values";
+import { redirectPage } from "@/shared/utils/link-redirect-page";
+import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
+import { env } from "@/env";
+
+interface ServiceOrderNotificationTextProps {
+  totalAmount: string;
+  licensePlate: string;
+  serviceOrderId: string;
+}
 
 @injectable()
 class UpdateServiceOrderUseCase {
+  private http_request = env.HTTP_REQUEST;
+
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -54,6 +65,95 @@ class UpdateServiceOrderUseCase {
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
+
+  private buildServiceOrderNotificationText({
+    totalAmount,
+    licensePlate,
+    serviceOrderId,
+  }: ServiceOrderNotificationTextProps): string {
+    return [
+      `🔧 *Ordem de Serviço Atualizada! Você foi designado como responsável por uma ordem de serviço atualizada*`,
+      `Veículo: *${licensePlate}*`,
+      `Valor total: *${formatCurrency(Number(totalAmount))}*`,
+      `Identificador da OS: *${serviceOrderId}*`,
+      `Para mais detalhes, acesse o sistema.`,
+    ].join("\n");
+  }
+
+  private async processNotifications(
+    originalServiceOrder: ServiceOrder,
+    updatedServiceOrder: ServiceOrder,
+    serviceOrderData: UpdateServiceOrderProps,
+    userId: string,
+    businessId: string,
+    vehicleLicensePlate: string,
+  ): Promise<void> {
+    try {
+      // Always create activity for service order update
+      const activityData = {
+        type: "Ordem de serviço",
+        action: "update",
+        entityId: updatedServiceOrder.id,
+        description: `Ordem de serviço atualizada para o veículo ${vehicleLicensePlate} no valor de ${formatCurrency(Number(updatedServiceOrder.total_amount))} | ID: ${updatedServiceOrder.id}`,
+        status: "Atualizado",
+        performedBy: userId,
+        businessId,
+      };
+
+      // Check if responsibleUserId changed
+      const responsibleUserChanged =
+        serviceOrderData.responsibleUserId !== undefined &&
+        originalServiceOrder.responsibleUserId !==
+          serviceOrderData.responsibleUserId;
+
+      if (responsibleUserChanged && serviceOrderData.responsibleUserId) {
+        // ResponsibleUser changed, send notification
+        const responsibleUser = await this.user.findUserById(
+          serviceOrderData.responsibleUserId,
+        );
+
+        if (responsibleUser) {
+          const linkRedirectPage = redirectPage(responsibleUser.role);
+
+          const notificationData = {
+            userId: serviceOrderData.responsibleUserId,
+            type: "service-order",
+            title: "Ordem de Serviço Atualizada e Atribuída",
+            message: `Você foi designado como responsável por uma ordem de serviço atualizada para o veículo ${vehicleLicensePlate}`,
+            entityId: updatedServiceOrder.id,
+            link: `${this.http_request}/${linkRedirectPage}/service-order?search=${updatedServiceOrder.id}&page=1`,
+            businessId,
+            shouldSendEmail: true,
+            shouldSendWhatsApp: true,
+            whatsAppMessage: this.buildServiceOrderNotificationText({
+              totalAmount: updatedServiceOrder.total_amount as string,
+              licensePlate: vehicleLicensePlate,
+              serviceOrderId: updatedServiceOrder.id,
+            }),
+            instanceName: generateWhatsAppInstanceName(
+              responsibleUser.email,
+              businessId,
+            ),
+          };
+
+          // Process notification to newly assigned user
+          await this.notificationService.processUserNotifications({
+            notification: notificationData,
+            activity: activityData,
+          });
+        }
+      } else {
+        // No responsibleUser change, just create activity
+        await this.notificationService.createActivityIfEnabled(activityData);
+      }
+    } catch (error) {
+      console.error(
+        "[Service Order Update] Erro ao processar notificações:",
+        error,
+      );
+      // Does not prevent the service order update
+    }
+  }
 
   async execute(
     serviceOrderData: UpdateServiceOrderProps,
@@ -290,17 +390,15 @@ class UpdateServiceOrderUseCase {
         serviceOrderData.vehicleId || findServiceOrder.vehicleId,
       );
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Ordem de serviço",
-        action: "update",
-        entityId: updatedServiceOrder.id,
-        description: `Ordem de serviço atualizada para o veículo ${vehicle?.license_plate || "N/A"} 
-        no valor de ${formatCurrency(Number(updatedServiceOrder.total_amount))} | ID: ${updatedServiceOrder.id}`,
-        status: "Atualizado",
-        performedBy: userId,
+      // Process notifications (activity + conditionally WhatsApp/Email)
+      this.processNotifications(
+        findServiceOrder,
+        updatedServiceOrder,
+        serviceOrderData,
+        userId,
         businessId,
-      });
+        vehicle?.license_plate || "N/A",
+      );
 
       return updatedServiceOrder;
     } catch (error) {
