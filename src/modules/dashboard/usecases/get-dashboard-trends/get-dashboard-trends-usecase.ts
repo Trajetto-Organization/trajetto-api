@@ -86,27 +86,32 @@ class GetDashboardTrendsUseCase {
       switch (period) {
         case "7d":
           startDateLocal = new Date(endDateLocal);
-          startDateLocal.setDate(endDateLocal.getDate() - 7);
+          startDateLocal.setDate(endDateLocal.getDate() - 6);
+
           groupBy = "day";
           break;
         case "30d":
           startDateLocal = new Date(endDateLocal);
-          startDateLocal.setDate(endDateLocal.getDate() - 30);
+          startDateLocal.setDate(endDateLocal.getDate() - 29);
+
           groupBy = "day";
           break;
         case "3m":
           startDateLocal = new Date(endDateLocal);
           startDateLocal.setMonth(endDateLocal.getMonth() - 3);
+
           groupBy = "month";
           break;
         case "6m":
           startDateLocal = new Date(endDateLocal);
           startDateLocal.setMonth(endDateLocal.getMonth() - 6);
+
           groupBy = "month";
           break;
         case "12m":
           startDateLocal = new Date(endDateLocal);
           startDateLocal.setFullYear(endDateLocal.getFullYear() - 1);
+
           groupBy = "month";
           break;
       }

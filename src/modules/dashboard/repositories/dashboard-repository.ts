@@ -78,12 +78,14 @@ class DashboardRepository implements IDashboardRepository {
     // Fallback: try local timezone query
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
+
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
     // Check if we're querying for today's date
     const queryDate = new Date(params.startDate);
     const today = new Date();
+
     const isToday =
       queryDate.getFullYear() === today.getFullYear() &&
       queryDate.getMonth() === today.getMonth() &&
@@ -178,10 +180,11 @@ class DashboardRepository implements IDashboardRepository {
     });
 
     const now = new Date();
+
     let pending = 0;
     let recent = 0;
-    let overdue = 0;
 
+    let overdue = 0;
     vehicles.forEach((vehicle) => {
       if (!vehicle.last_maintenance_date) {
         pending++;
@@ -227,44 +230,111 @@ class DashboardRepository implements IDashboardRepository {
     params: MonthlyCostsParams,
     businessId?: string,
   ): Promise<MonthlyCostsResult> {
-    const startDate = new Date(params.startDate + "T00:00:00.000Z");
-    const endDate = new Date(params.endDate + "T23:59:59.999Z");
+    // Try UTC query first
+    const startDateUTC = new Date(params.startDate + "T00:00:00.000Z");
+    const endDateUTC = new Date(params.endDate + "T23:59:59.999Z");
 
-    const whereClause: any = {
-      date: {
-        gte: startDate,
-        lte: endDate,
+    const whereClauseUTC: any = {
+      created_at: {
+        gte: startDateUTC,
+        lte: endDateUTC,
       },
     };
 
     if (businessId) {
-      whereClause.businessId = businessId;
+      whereClauseUTC.businessId = businessId;
     }
 
-    const serviceOrders = await this.prisma.serviceOrder.findMany({
-      where: whereClause,
+    const serviceOrdersUTC = await this.prisma.serviceOrder.findMany({
+      where: whereClauseUTC,
       select: {
         id: true,
         maintenance_type: true,
         total_amount: true,
-        date: true,
+        created_at: true,
       },
     });
 
-    let preventive = 0;
-    let corrective = 0;
+    let preventiveUTC = 0;
+    let correctiveUTC = 0;
 
-    serviceOrders.forEach((order) => {
+    serviceOrdersUTC.forEach((order) => {
       if (order.maintenance_type === "INTERNAL") {
-        preventive += Number(order.total_amount);
+        preventiveUTC += Number(order.total_amount);
       } else {
-        corrective += Number(order.total_amount);
+        correctiveUTC += Number(order.total_amount);
       }
     });
 
+    // If UTC query returns results, use it
+    if (serviceOrdersUTC.length > 0) {
+      return {
+        preventive: preventiveUTC,
+        corrective: correctiveUTC,
+      };
+    }
+
+    // Fallback: try local timezone query
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    // Check if we're querying for today's date
+    const queryDate = new Date(params.startDate);
+    const today = new Date();
+
+    const isToday =
+      queryDate.getFullYear() === today.getFullYear() &&
+      queryDate.getMonth() === today.getMonth() &&
+      queryDate.getDate() === today.getDate();
+
+    if (isToday) {
+      const whereClauseLocal: any = {
+        created_at: {
+          gte: todayStart,
+          lte: todayEnd,
+        },
+      };
+
+      if (businessId) {
+        whereClauseLocal.businessId = businessId;
+      }
+
+      const serviceOrdersLocal = await this.prisma.serviceOrder.findMany({
+        where: whereClauseLocal,
+        select: {
+          id: true,
+          maintenance_type: true,
+          total_amount: true,
+          created_at: true,
+        },
+      });
+
+      let preventiveLocal = 0;
+      let correctiveLocal = 0;
+
+      serviceOrdersLocal.forEach((order) => {
+        if (order.maintenance_type === "INTERNAL") {
+          preventiveLocal += Number(order.total_amount);
+        } else {
+          correctiveLocal += Number(order.total_amount);
+        }
+      });
+
+      // Use local result if it has more orders than UTC result
+      if (serviceOrdersLocal.length > serviceOrdersUTC.length) {
+        return {
+          preventive: preventiveLocal,
+          corrective: correctiveLocal,
+        };
+      }
+    }
+
     return {
-      preventive,
-      corrective,
+      preventive: preventiveUTC,
+      corrective: correctiveUTC,
     };
   }
 

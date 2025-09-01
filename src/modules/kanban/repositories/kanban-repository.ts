@@ -160,6 +160,12 @@ class KanbanRepository implements IKanbanRepository {
         // Search conditions for cards
         const cardSearchConditions: any[] = [
           {
+            id: {
+              contains: normalizedSearch,
+              mode: "insensitive",
+            },
+          },
+          {
             title: {
               contains: normalizedSearch,
               mode: "insensitive",
@@ -300,6 +306,12 @@ class KanbanRepository implements IKanbanRepository {
           } else {
             // Specific search for cards
             const cardWhereConditions: any[] = [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
               {
                 title: {
                   contains: normalizedSearch,
