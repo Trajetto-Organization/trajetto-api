@@ -32,6 +32,10 @@ class UserRepository implements IUserRepository {
     profileAccessId,
     businessId,
   }: CreateUserProps): Promise<User> {
+    if (role === "MASTER") {
+      throw new Error("Cannot create MASTER users through this method. Use dedicated MASTER creation method instead.");
+    }
+
     const userCreated = await this.prisma.user.create({
       data: {
         email,
