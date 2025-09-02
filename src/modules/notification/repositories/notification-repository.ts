@@ -1,5 +1,4 @@
 import database from "@/../infra/database";
-import { formatNotificationDate } from "@/config/format-values";
 
 import {
   Notification,
@@ -56,8 +55,8 @@ class NotificationRepository implements INotificationRepository {
       read: notification.read,
       entityId: notification.entityId || undefined,
       businessId: notification.businessId || null,
-      created_at: formatNotificationDate(notification.created_at, "pt-BR"),
-      updated_at: formatNotificationDate(notification.updated_at, "pt-BR"),
+      created_at: notification.created_at.toISOString(),
+      updated_at: notification.updated_at.toISOString(),
     }));
 
     return {
