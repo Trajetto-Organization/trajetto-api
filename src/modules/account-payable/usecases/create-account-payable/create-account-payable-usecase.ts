@@ -121,6 +121,9 @@ class CreateAccountPayableUseCase {
           notification: notificationData,
           activity: activityData,
         });
+      } else {
+        // Fallback: Create activity even if registration user not found
+        await this.notificationService.createActivityIfEnabled(activityData);
       }
     } catch (error) {
       console.error("[Contas a pagar] Erro ao processar notificações:", error);

@@ -141,6 +141,9 @@ class UpdateServiceOrderUseCase {
             notification: notificationData,
             activity: activityData,
           });
+        } else {
+          // Fallback: Create activity even if responsible user not found
+          await this.notificationService.createActivityIfEnabled(activityData);
         }
       } else {
         // No responsibleUser change, just create activity

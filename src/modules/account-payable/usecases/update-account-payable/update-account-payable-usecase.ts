@@ -131,6 +131,9 @@ class UpdateAccountPayableUseCase {
             notification: notificationData,
             activity: activityData,
           });
+        } else {
+          // Fallback: Create activity even if registration user not found
+          await this.notificationService.createActivityIfEnabled(activityData);
         }
       } else {
         // No registrationUser change, just create activity

@@ -178,37 +178,44 @@ class CreateFineUseCase {
       });
 
       // Send notifications to each administrator (if any)
-      const notificationPromises = notificationRecipients.map(async (admin) => {
-        const instanceName = generateWhatsAppInstanceName(
-          admin.email,
-          businessId,
+      if (notificationRecipients.length > 0) {
+        const notificationPromises = notificationRecipients.map(
+          async (admin) => {
+            const instanceName = generateWhatsAppInstanceName(
+              admin.email,
+              businessId,
+            );
+
+            const notificationData = {
+              userId: admin.id,
+              type: "fine",
+              title: "Nova Multa Registrada",
+              message: `Nova multa de ${formatCurrency(Number(fineCreated.amount))} foi registrada para o veículo ${findVehicle.license_plate}`,
+              entityId: fineCreated.id,
+              link: `${this.http_request}/dashboard/fine?search=${fineCreated.id}&page=1`,
+              businessId: businessId,
+              shouldSendEmail: admin.email_notifications_enabled,
+              shouldSendWhatsApp: admin.whatsapp_notifications_enabled,
+              whatsAppMessage,
+              instanceName,
+            };
+
+            await this.notificationService.processUserNotifications({
+              notification: notificationData,
+              activity: activityData,
+            });
+          },
         );
 
-        const notificationData = {
-          userId: admin.id,
-          type: "fine",
-          title: "Nova Multa Registrada",
-          message: `Nova multa de ${formatCurrency(Number(fineCreated.amount))} foi registrada para o veículo ${findVehicle.license_plate}`,
-          entityId: fineCreated.id,
-          link: `${this.http_request}/dashboard/fine?search=${fineCreated.id}&page=1`,
-          businessId: businessId,
-          shouldSendEmail: admin.email_notifications_enabled,
-          shouldSendWhatsApp: admin.whatsapp_notifications_enabled,
-          whatsAppMessage,
-          instanceName,
-        };
-
-        await this.notificationService.processUserNotifications({
-          notification: notificationData,
-          activity: activityData,
-        });
-      });
-
-      // Wait for all notifications to process
-      await Promise.allSettled(notificationPromises);
+        // Wait for all notifications to process
+        await Promise.allSettled(notificationPromises);
+      } else {
+        // Fallback: Create activity even if no recipients found
+        await this.notificationService.createActivityIfEnabled(activityData);
+      }
     } catch (error) {
       console.error("[Fine] Erro ao processar notificações:", error);
-      // Não impede a criação da multa
+      // Does not prevent the creation of the service order
     }
   }
 

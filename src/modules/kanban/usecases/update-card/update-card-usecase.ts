@@ -132,6 +132,9 @@ class UpdateKanbanCardUseCase {
             notification: notificationData,
             activity: activityData,
           });
+        } else {
+          // Fallback: Create activity even if assigned user not found
+          await this.notificationService.createActivityIfEnabled(activityData);
         }
       } else {
         // No assignedUser change, just create activity
