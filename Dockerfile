@@ -5,7 +5,6 @@ RUN apt-get update && apt-get install -y \
     openssl \
     procps \
     dumb-init \
-    tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -61,7 +60,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3333
 ENV HOSTNAME="0.0.0.0"
-ENV TZ=America/Sao_Paulo
 
 # Copy files needed for production
 COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
