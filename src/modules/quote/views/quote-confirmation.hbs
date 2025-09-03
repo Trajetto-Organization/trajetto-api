@@ -71,8 +71,6 @@
         padding: 0;
       }
       .steps-list li {
-        display: flex;
-        align-items: center;
         margin: 15px 0;
         padding: 10px;
         background: #f8f9fa;
@@ -84,12 +82,12 @@
         border-radius: 50%;
         width: 30px;
         height: 30px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        display: inline-block;
+        text-align: center;
+        line-height: 30px;
         font-weight: bold;
         margin-right: 15px;
-        flex-shrink: 0;
+        vertical-align: top;
       }
       .contact-info {
         background: #e8f5e8;
@@ -98,19 +96,25 @@
         margin: 25px 0;
       }
       .contact-item {
-        display: flex;
-        align-items: center;
         margin: 10px 0;
+        overflow: hidden;
       }
       .contact-icon {
+        display: inline-block;
         margin-right: 12px;
         font-size: 18px;
+        vertical-align: top;
+        width: 20px;
       }
-      .benefits-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 15px;
+      .benefits-table {
+        width: 100%;
         margin: 25px 0;
+        border-collapse: collapse;
+      }
+      .benefits-table td {
+        width: 50%;
+        padding: 10px;
+        vertical-align: top;
       }
       .benefit-item {
         background: #f8f9fa;
@@ -118,6 +122,8 @@
         border-radius: 8px;
         text-align: center;
         border: 1px solid #e9ecef;
+        width: 100%;
+        box-sizing: border-box;
       }
       .benefit-icon {
         font-size: 24px;
@@ -132,15 +138,16 @@
         font-size: 14px;
       }
       @media (max-width: 600px) {
-        .benefits-grid {
-          grid-template-columns: 1fr;
+        .benefits-table td {
+          display: block;
+          width: 100%;
         }
         .steps-list li {
-          flex-direction: column;
           text-align: center;
         }
         .step-number {
-          margin-bottom: 10px;
+          display: block;
+          margin: 0 auto 10px auto;
         }
       }
     </style>
@@ -189,29 +196,43 @@
         </ul>
       </div>
 
-      <div class="benefits-grid">
-        <div class="benefit-item">
-          <div class="benefit-icon">📱</div>
-          <strong>Monitoramento 24/7</strong>
-          <p style="font-size: 14px; margin: 5px 0 0 0;">Controle total em tempo
-            real</p>
-        </div>
-        <div class="benefit-item">
-          <div class="benefit-icon">💰</div>
-          <strong>Redução de 30%</strong>
-          <p style="font-size: 14px; margin: 5px 0 0 0;">Nos custos operacionais</p>
-        </div>
-        <div class="benefit-item">
-          <div class="benefit-icon">🔧</div>
-          <strong>Manutenção Inteligente</strong>
-          <p style="font-size: 14px; margin: 5px 0 0 0;">Prevenção automática</p>
-        </div>
-        <div class="benefit-item">
-          <div class="benefit-icon">📈</div>
-          <strong>Relatórios Avançados</strong>
-          <p style="font-size: 14px; margin: 5px 0 0 0;">Análises detalhadas</p>
-        </div>
-      </div>
+      <table class="benefits-table">
+        <tr>
+          <td>
+            <div class="benefit-item">
+              <div class="benefit-icon">📱</div>
+              <strong>Monitoramento 24/7</strong>
+              <p style="font-size: 14px; margin: 5px 0 0 0;">Controle total em
+                tempo real</p>
+            </div>
+          </td>
+          <td>
+            <div class="benefit-item">
+              <div class="benefit-icon">💰</div>
+              <strong>Redução de 30%</strong>
+              <p style="font-size: 14px; margin: 5px 0 0 0;">Nos custos
+                operacionais</p>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <div class="benefit-item">
+              <div class="benefit-icon">🔧</div>
+              <strong>Manutenção Inteligente</strong>
+              <p style="font-size: 14px; margin: 5px 0 0 0;">Prevenção
+                automática</p>
+            </div>
+          </td>
+          <td>
+            <div class="benefit-item">
+              <div class="benefit-icon">📈</div>
+              <strong>Relatórios Avançados</strong>
+              <p style="font-size: 14px; margin: 5px 0 0 0;">Análises detalhadas</p>
+            </div>
+          </td>
+        </tr>
+      </table>
 
       <div class="contact-info">
         <h3 style="color: #28a745; margin-top: 0;">📞 Precisa de Ajuda Imediata?</h3>

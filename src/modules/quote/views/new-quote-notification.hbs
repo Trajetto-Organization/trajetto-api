@@ -45,19 +45,22 @@
         border-radius: 0 8px 8px 0;
       }
       .info-row {
-        display: flex;
         margin-bottom: 12px;
-        align-items: center;
+        overflow: hidden;
       }
       .info-label {
         font-weight: 600;
         color: #2c3e50;
-        min-width: 120px;
+        display: inline-block;
+        width: 120px;
+        vertical-align: top;
         margin-right: 15px;
       }
       .info-value {
         color: #495057;
-        flex: 1;
+        display: inline-block;
+        width: calc(100% - 135px);
+        vertical-align: top;
       }
       .message-section {
         background: #e3f2fd;
@@ -108,13 +111,14 @@
         margin-left: 10px;
       }
       @media (max-width: 600px) {
-        .info-row {
-          flex-direction: column;
-          align-items: flex-start;
-        }
         .info-label {
-          min-width: auto;
+          display: block;
+          width: 100%;
           margin-bottom: 5px;
+        }
+        .info-value {
+          display: block;
+          width: 100%;
         }
       }
     </style>
