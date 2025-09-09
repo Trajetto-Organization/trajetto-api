@@ -22,6 +22,7 @@ describe("Update Quote Status UseCase", () => {
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
     quoteInMemory = new InMemoryQuoteRepository();
+
     updateQuoteStatus = new UpdateQuoteStatusUseCase(
       userInMemory,
       quoteInMemory,

@@ -38,7 +38,7 @@ describe("Create Driver UseCase", () => {
     businessInMemory = new InMemoryBusinessRepository();
     branchInMemory = new InMemoryBranchRepository();
 
-    notificationService = new InMemoryNotificationService();
+    notificationService = new InMemoryNotificationService(userInMemory);
     createDriver = new CreateDriverUseCase(
       userInMemory,
       businessInMemory,

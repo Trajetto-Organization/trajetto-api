@@ -9,6 +9,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       validPages.forEach((page) => {
         const data = { page };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.data.page).toBe(page);
@@ -23,6 +24,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       stringPages.forEach((page, index) => {
         const data = { page };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.data.page).toBe(expectedPages[index]);
@@ -33,6 +35,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
     it("should default to 1 when page is not provided", () => {
       const data = {};
       const result = listQuotesQuerySchema.safeParse(data);
+
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.page).toBe(1);
@@ -45,6 +48,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       invalidPages.forEach((page) => {
         const data = { page };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(false);
       });
     });
@@ -55,6 +59,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       invalidPages.forEach((page) => {
         const data = { page };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(false);
       });
 
@@ -78,6 +83,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       validPageSizes.forEach((pageSize) => {
         const data = { pageSize };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.data.pageSize).toBe(pageSize);
@@ -92,6 +98,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       stringPageSizes.forEach((pageSize, index) => {
         const data = { pageSize };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.data.pageSize).toBe(expectedPageSizes[index]);
@@ -102,6 +109,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
     it("should default to 10 when pageSize is not provided", () => {
       const data = {};
       const result = listQuotesQuerySchema.safeParse(data);
+
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.pageSize).toBe(10);
@@ -114,6 +122,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       invalidPageSizes.forEach((pageSize) => {
         const data = { pageSize };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(false);
       });
     });
@@ -131,6 +140,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
     it("should accept page size of exactly 100", () => {
       const data = { pageSize: 100 };
       const result = listQuotesQuerySchema.safeParse(data);
+
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.pageSize).toBe(100);
@@ -143,6 +153,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       invalidPageSizes.forEach((pageSize) => {
         const data = { pageSize };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(false);
       });
 
@@ -151,6 +162,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       edgeCases.forEach((pageSize) => {
         const data = { pageSize };
         const result = listQuotesQuerySchema.safeParse(data);
+
         // Some edge cases might be handled by coercion
         if (result.success) {
           expect(typeof result.data.pageSize).toBe("number");
@@ -173,6 +185,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       validSearches.forEach((search) => {
         const data = { search };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.data.search).toBe(search);
@@ -183,6 +196,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
     it("should accept empty search string", () => {
       const data = { search: "" };
       const result = listQuotesQuerySchema.safeParse(data);
+
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.search).toBe("");
@@ -192,6 +206,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
     it("should make search field optional", () => {
       const data = {};
       const result = listQuotesQuerySchema.safeParse(data);
+
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.search).toBeUndefined();
@@ -210,6 +225,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       validSearches.forEach((search) => {
         const data = { search };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.data.search).toBe(search);
@@ -220,6 +236,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
     it("should accept search with numbers", () => {
       const data = { search: "123456789" };
       const result = listQuotesQuerySchema.safeParse(data);
+
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.search).toBe("123456789");
@@ -232,6 +249,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       invalidSearches.forEach((search) => {
         const data = { search };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(false);
       });
     });
@@ -244,6 +262,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
       validStatuses.forEach((status) => {
         const data = { status };
         const result = listQuotesQuerySchema.safeParse(data);
+
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.data.status).toBe(status);
@@ -254,6 +273,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
     it("should make status field optional", () => {
       const data = {};
       const result = listQuotesQuerySchema.safeParse(data);
+
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.status).toBeUndefined();
@@ -394,6 +414,7 @@ describe("List Quotes Query Zod Validation Fields", () => {
     it("should handle empty object with all defaults", () => {
       const data = {};
       const result = listQuotesQuerySchema.safeParse(data);
+
       expect(result.success).toBe(true);
 
       if (result.success) {

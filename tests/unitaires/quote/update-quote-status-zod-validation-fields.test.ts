@@ -9,6 +9,7 @@ describe("Update Quote Status Zod Validation Fields", () => {
       validStatuses.forEach((status) => {
         const data = { status };
         const result = updateQuoteStatusSchema.safeParse(data);
+
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.data.status).toBe(status);

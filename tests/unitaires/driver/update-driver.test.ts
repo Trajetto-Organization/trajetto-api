@@ -40,7 +40,7 @@ describe("Update Driver UseCase", () => {
     businessInMemory = new InMemoryBusinessRepository();
     branchInMemory = new InMemoryBranchRepository();
 
-    notificationService = new InMemoryNotificationService();
+    notificationService = new InMemoryNotificationService(userInMemory);
     updateDriver = new UpdateDriverUseCase(
       userInMemory,
       businessInMemory,

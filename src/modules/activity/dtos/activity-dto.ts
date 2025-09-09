@@ -21,6 +21,10 @@ interface Activity {
   businessId: string | null;
   visibilityLevel?: string | null;
   performingUserRole?: string | null;
+  userEmail?: string;
+  userName?: string;
+  userRole?: string;
+  business_name?: string;
   created_at: Date | string;
   updated_at: Date | string;
 }

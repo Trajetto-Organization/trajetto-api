@@ -42,7 +42,7 @@ describe("Delete Driver UseCase", () => {
     fineInMemory = new InMemoryFineRepository();
 
     fuelInMemory = new InMemoryFuelRepository();
-    notificationService = new InMemoryNotificationService();
+    notificationService = new InMemoryNotificationService(userInMemory);
 
     deleteDriver = new DeleteDriverUseCase(
       userInMemory,

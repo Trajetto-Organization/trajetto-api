@@ -1,11 +1,16 @@
 import {
   CreateActivityProps,
   CreateNotificationProps,
+  NotificationService,
 } from "../notification-service";
 
-class InMemoryNotificationService {
+class InMemoryNotificationService extends NotificationService {
   public activities: CreateActivityProps[] = [];
   public notifications: CreateNotificationProps[] = [];
+
+  constructor(userRepository: any) {
+    super(userRepository);
+  }
 
   async createActivityIfEnabled(
     activityData: CreateActivityProps,
