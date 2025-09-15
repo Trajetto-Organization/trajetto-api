@@ -73,31 +73,7 @@ const updateFuelSchema = z.object({
   ),
   odometer_photo: z.preprocess(
     emptyStringToNull,
-    z
-      .string()
-      .min(1, "A foto do odômetro deve ter um caminho válido.")
-      .optional()
-      .nullable()
-      .superRefine((value, ctx) => {
-        if (value && typeof value === "string") {
-          if (isEmptyOrWhitespace(value)) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message: "O caminho da foto não pode conter apenas espaços.",
-            });
-            return;
-          }
-
-          if (hasSpaceAtEdges(value)) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message:
-                "O caminho da foto não pode começar ou terminar com espaço em branco.",
-            });
-            return;
-          }
-        }
-      }),
+    z.string().min(1, "A foto do odômetro é obrigatória.").optional(),
   ),
   odometer_verified: z.boolean().optional(),
   notes: z.preprocess(
@@ -151,6 +127,7 @@ const updateFuelSchema = z.object({
       // Validation: refueling date cannot be in the future
       const refuelingDate = new Date(val);
       const today = new Date();
+
       today.setHours(23, 59, 59, 999); // End of today
 
       if (refuelingDate > today) {

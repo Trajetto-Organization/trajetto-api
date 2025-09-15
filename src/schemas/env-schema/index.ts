@@ -18,6 +18,14 @@ const envSchema = z.object({
   TRAJETTO_WHATSAPP_INSTANCE_NAME: z.string(),
   RESEND_SECRET_KEY: z.string().optional(),
   RESEND_FROM_EMAIL: z.string().optional(),
+
+  // File Upload Configuration
+  UPLOAD_STORAGE_TYPE: z.enum(["local", "s3"]).default("local"),
+  UPLOAD_LOCAL_PATH: z.string().default("./tmp"),
+  AWS_REGION: z.string().optional(),
+  AWS_S3_BUCKET: z.string().optional(),
+  AWS_ACCESS_KEY_ID: z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
 });
 
 export { envSchema };

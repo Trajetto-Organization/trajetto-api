@@ -71,34 +71,9 @@ const createFuelSchema = z.object({
       .min(0.001, "O preço por litro deve ser maior que zero.")
       .max(99.999, "O preço por litro não pode exceder R$ 99,999."),
   ),
-  odometer_photo: z.preprocess(
-    emptyStringToNull,
-    z
-      .string()
-      .min(1, "A foto do odômetro deve ter um caminho válido.")
-      .optional()
-      .nullable()
-      .superRefine((value, ctx) => {
-        if (value && typeof value === "string") {
-          if (isEmptyOrWhitespace(value)) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message: "O caminho da foto não pode conter apenas espaços.",
-            });
-            return;
-          }
-
-          if (hasSpaceAtEdges(value)) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message:
-                "O caminho da foto não pode começar ou terminar com espaço em branco.",
-            });
-            return;
-          }
-        }
-      }),
-  ),
+  odometer_photo: z
+    .string()
+    .min(1, "A foto do odômetro é obrigatória."),
   notes: z.preprocess(
     emptyStringToNull,
     z

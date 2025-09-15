@@ -5,6 +5,7 @@ import fastify from "fastify";
 import fastifyRateLimit from "@fastify/rate-limit";
 
 import fastifyStatic from "@fastify/static";
+import multipart from "@fastify/multipart";
 
 import { ZodError } from "zod";
 import { env } from "./env";
@@ -25,6 +26,8 @@ import {
 
 import { routes } from "./routes/routes";
 import { AppError } from "./shared/errors/AppError";
+
+import { uploadConfig } from "./config/upload";
 
 import path from "node:path";
 
@@ -49,7 +52,7 @@ app.register(fastifyCors, {
 });
 
 app.register(fastifyStatic, {
-  root: path.join(__dirname, "tmp"),
+  root: path.join(__dirname, "..", "tmp"),
   prefix: "/tmp/",
   decorateReply: false,
 });
@@ -79,6 +82,17 @@ app.register(fastifySwaggerUi, {
 });
 
 app.register(fastifyRateLimit);
+app.register(multipart, {
+  limits: {
+    fileSize: Math.max(
+      uploadConfig.getSizeLimit("odometerPhotos"),
+      uploadConfig.getSizeLimit("avatars"),
+      uploadConfig.getSizeLimit("checklistPhotos"),
+    ),
+    files: 20, // Allow up to 20 files per request for checklist photos etc
+  },
+});
+
 app.register(routes);
 
 app.setErrorHandler((error, _, reply) => {

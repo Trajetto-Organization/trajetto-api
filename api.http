@@ -1,5 +1,5 @@
 @baseUrl = http://localhost:3333
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiYnVzaW5lc3NJZCI6bnVsbCwicHJvZmlsZUFjY2VzcyI6bnVsbCwiaWF0IjoxNzU2MjY0NTI1LCJleHAiOjE3NTYzMDA1MjUsInN1YiI6IjMxODliZWE5LWNhNTItNDUwMC1hYzBmLTE1MmQ2ZmU3OGQzNiJ9.ysHQHEReERP8q6ajn-IZS5DYAH1yzG-xkKyBDWdTTDU
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiYnVzaW5lc3NJZCI6bnVsbCwicHJvZmlsZUFjY2VzcyI6bnVsbCwiaWF0IjoxNzU3OTUwOTMyLCJleHAiOjE3NTc5ODY5MzIsInN1YiI6IjMxODliZWE5LWNhNTItNDUwMC1hYzBmLTE1MmQ2ZmU3OGQzNiJ9.z37UWJIdJtn_tl1IlKCft8NIBetg-y8lDpfRDxhz_xs
 @refresh_token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6Im1hc3RlckBhZG1pbi5jb20iLCJpYXQiOjE3NTM0MDU5NjksImV4cCI6MTc1MzQ5MjM2OSwic3ViIjoiOGRhZmY4ZjQtY2QwYS00ODgzLWFkYjAtMDZmODA0ZjI1OTM3In0.WTv7cz3TAaBf6TwuzjHyVFwwJH3I7nngwoKGndf3Qb0
 @forgot_verification_token = b3c16b35-54c4-47e7-9ca1-86a87c4b45f7
 @page = 1
@@ -762,4 +762,16 @@ Authorization: Bearer {{token}}
 DELETE {{baseUrl}}/account-payable/delete-account-payable/a343fb96-bcee-4469-a52c-686f47bb9470/business/b50ff064-a014-4e10-8a27-8275ce948be1
 Authorization: Bearer {{token}}
 
-## WhatsApp
+### Upload Image Test
+
+POST {{baseUrl}}/upload/test-upload
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="pexel.jpg"
+Content-Type: image/jpeg
+
+< ./test-files/pexel.jpg
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
