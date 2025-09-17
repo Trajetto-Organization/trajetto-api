@@ -35,6 +35,9 @@ import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-er
 import { AppError } from "@/shared/errors/AppError";
 import { Fuel, UpdateFuelProps } from "../../dtos/fuel-dto";
 
+import { UploadService } from "@/shared/services/upload-service";
+import { MultipartFile } from "@fastify/multipart";
+
 interface UpdateFuelRequest {
   fuelId: string;
   businessId: string;
@@ -60,11 +63,14 @@ class UpdateFuelUseCase {
     private fuel: IFuelRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("UploadService")
+    private uploadService: UploadService,
   ) {}
 
   async execute(
     { fuelId, businessId, fuelData }: UpdateFuelRequest,
     userId: string,
+    odometerPhotoFile?: MultipartFile,
   ): Promise<Fuel> {
     const findUser = await this.user.findUserById(userId);
 
@@ -158,10 +164,32 @@ class UpdateFuelUseCase {
     }
 
     try {
+      let finalFuelData = { ...fuelData };
+
+      // If there's a new photo, upload it and delete the old one
+      if (odometerPhotoFile) {
+        // Upload new photo
+        const buffer = await odometerPhotoFile.toBuffer();
+        const uploadResult = await this.uploadService.uploadFile({
+          buffer,
+          filename: odometerPhotoFile.filename || "odometer-photo",
+          mimetype: odometerPhotoFile.mimetype,
+          uploadType: "odometerPhotos",
+        });
+
+        // Delete old photo if it exists
+        if (findFuel.odometer_photo) {
+          await this.uploadService.deleteFile(findFuel.odometer_photo);
+        }
+
+        // Add new photo path to fuel data
+        finalFuelData.odometer_photo = uploadResult.path;
+      }
+
       // Update fuel record
       const updatedFuel = await this.fuel.updateFuel({
         fuelId,
-        fuelData,
+        fuelData: finalFuelData,
       });
 
       // If mileage is updated, update vehicle mileage as well

@@ -24,7 +24,7 @@ interface CreateFuelProps {
   liters_amount: number | string | Decimal;
   price_per_liter: number | string | Decimal;
   total_amount?: number | string | Decimal;
-  odometer_photo?: string | null;
+  odometer_photo?: string;
   odometer_verified?: boolean;
   notes?: string | null;
   refueling_date: Date | string;

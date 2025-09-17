@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MultipartFile } from "@fastify/multipart";
 
 const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
 const isEmptyOrWhitespace = (value: string): boolean =>
@@ -71,9 +72,6 @@ const createFuelSchema = z.object({
       .min(0.001, "O preço por litro deve ser maior que zero.")
       .max(99.999, "O preço por litro não pode exceder R$ 99,999."),
   ),
-  odometer_photo: z
-    .string()
-    .min(1, "A foto do odômetro é obrigatória."),
   notes: z.preprocess(
     emptyStringToNull,
     z
@@ -143,4 +141,29 @@ const createFuelSchema = z.object({
   branchId: z.string().uuid("O ID da filial deve ser um UUID válido."),
 });
 
-export { createFuelSchema };
+// Schema for file validation
+const odometerPhotoSchema = z
+  .custom<MultipartFile>()
+  .refine((file) => file !== undefined && file !== null, {
+    message: "A foto do odômetro é obrigatória.",
+  })
+  .refine((file) => file?.mimetype?.startsWith("image/"), {
+    message: "O arquivo deve ser uma imagem.",
+  })
+  .refine(
+    (file) => {
+      const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+      return allowedTypes.includes(file?.mimetype);
+    },
+    {
+      message: "Tipo de arquivo não suportado. Use apenas JPEG, PNG ou WebP.",
+    }
+  );
+
+// Combined schema for multipart request
+const createFuelMultipartSchema = z.object({
+  body: createFuelSchema,
+  file: odometerPhotoSchema,
+});
+
+export { createFuelSchema, odometerPhotoSchema, createFuelMultipartSchema };

@@ -15,6 +15,8 @@ import { FuelNotBelongBusinessError } from "../errors/fuel-not-belong-business-e
 import { AppError } from "@/shared/errors/AppError";
 import { Fuel } from "../../dtos/fuel-dto";
 
+import { UploadService } from "@/shared/services/upload-service";
+
 interface DeleteFuelRequest {
   fuelId: string;
   businessId: string;
@@ -31,6 +33,8 @@ class DeleteFuelUseCase {
     private fuel: IFuelRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("UploadService")
+    private uploadService: UploadService,
   ) {}
 
   async execute(
@@ -66,6 +70,11 @@ class DeleteFuelUseCase {
     }
 
     try {
+      // Delete odometer photo if it exists
+      if (findFuel.odometer_photo) {
+        await this.uploadService.deleteFile(findFuel.odometer_photo);
+      }
+
       // Delete fuel record
       const deletedFuel = await this.fuel.deleteFuel(fuelId);
 

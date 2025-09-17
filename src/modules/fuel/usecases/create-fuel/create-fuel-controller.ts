@@ -20,7 +20,7 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 
 import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
 
-import { createFuelSchema } from "@/schemas/create-fuel-schema";
+import { createFuelMultipartSchema } from "@/schemas/create-fuel-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 class CreateFuelController {
@@ -28,7 +28,32 @@ class CreateFuelController {
     const { id } = request.user;
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
 
-    const fuelData = createFuelSchema.parse(request.body);
+    const file = await request.file();
+
+    if (!file) {
+      return reply.status(400).send({
+        message: "Arquivo de odômetro é obrigatório.",
+      });
+    }
+
+    // Extract form fields from multipart data
+    const formData: Record<string, any> = {};
+    if (file.fields) {
+      Object.keys(file.fields).forEach((key) => {
+        const field = file.fields[key];
+        if (field && typeof field === "object" && "value" in field) {
+          formData[key] = field.value;
+        }
+      });
+    }
+
+    // Validate multipart data using Zod
+    const { body: fuelData, file: validatedFile } =
+      createFuelMultipartSchema.parse({
+        body: formData,
+        file: file,
+      });
+
     const createFuelUseCase = container.resolve(CreateFuelUseCase);
 
     try {
@@ -38,6 +63,7 @@ class CreateFuelController {
           businessId,
         },
         id,
+        validatedFile,
       );
 
       return reply

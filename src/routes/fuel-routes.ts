@@ -35,9 +35,9 @@ async function fuelRoutes(app: FastifyInstance) {
         tags: ["fuel"],
         summary: "Create a new fuel record",
         description:
-          "Register a new fuel refueling record for a vehicle with driver, mileage, and fuel details",
+          "Register a new fuel refueling record for a vehicle with driver, mileage, and fuel details. Requires multipart/form-data with odometer photo.",
         params: fuelSchemas.updateDeleteBusiness,
-        body: fuelSchemas.createFuel,
+        consumes: ["multipart/form-data"],
         response: {
           201: fuelResponses.fuelCreated,
           400: z.union([
@@ -115,9 +115,9 @@ async function fuelRoutes(app: FastifyInstance) {
         tags: ["fuel"],
         summary: "Update a fuel record",
         description:
-          "Update information about an existing fuel refueling record including mileage, fuel details, and related entities",
+          "Update information about an existing fuel refueling record including mileage, fuel details, and related entities. Supports multipart/form-data for optional odometer photo update.",
         params: fuelSchemas.updateDeleteFuel,
-        body: fuelSchemas.updateFuel,
+        consumes: ["multipart/form-data"],
         response: {
           200: fuelResponses.fuelUpdated,
           400: z.union([

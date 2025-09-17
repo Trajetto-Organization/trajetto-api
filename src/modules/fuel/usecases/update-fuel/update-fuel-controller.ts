@@ -23,15 +23,60 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 
 import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
 
-import { updateFuelSchema } from "@/schemas/update-fuel-schema";
+import { updateFuelMultipartSchema } from "@/schemas/update-fuel-schema";
 import { updateDeleteFuelSchema } from "@/schemas/update-delete-fuel-schema";
 
 class UpdateFuelController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
-
     const { businessId, fuelId } = updateDeleteFuelSchema.parse(request.params);
-    const fuelData = updateFuelSchema.parse(request.body);
+
+    // Use only request.parts() - the most reliable method for multipart in Fastify
+    const formData: Record<string, any> = {};
+    let fileUpload: any = null;
+
+    try {
+      const parts = request.parts();
+
+      for await (const part of parts) {
+        if (part.type === "field") {
+          // Handle empty notes field properly
+          if (
+            part.fieldname === "notes" &&
+            (!part.value || part.value === "")
+          ) {
+            formData[part.fieldname] = null;
+          } else {
+            formData[part.fieldname] = part.value;
+          }
+        } else if (
+          part.type === "file" &&
+          part.fieldname === "odometer_photo"
+        ) {
+          // Create a proper file object that works with our existing validation
+          const buffer = await part.toBuffer();
+
+          fileUpload = {
+            fieldname: part.fieldname,
+            filename: part.filename,
+            encoding: part.encoding,
+            mimetype: part.mimetype,
+            toBuffer: async () => buffer,
+            // Add properties that Zod validation expects
+            type: "file",
+          };
+        }
+      }
+    } catch (error: any) {
+      throw error;
+    }
+
+    // Validate multipart data using Zod
+    const { body: fuelData, file: validatedFile } =
+      updateFuelMultipartSchema.parse({
+        body: formData,
+        file: fileUpload,
+      });
 
     const updateFuelUseCase = container.resolve(UpdateFuelUseCase);
 
@@ -43,6 +88,7 @@ class UpdateFuelController {
           fuelData,
         },
         id,
+        validatedFile,
       );
 
       return reply

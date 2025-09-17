@@ -12,6 +12,7 @@ import pump from "pump";
 import { uploadConfig, UploadType } from "@/config/upload";
 import { v4 as uuid } from "uuid";
 
+import { env } from "@/env";
 import { AppError } from "@/shared/errors/AppError";
 
 export interface UploadResult {
@@ -250,8 +251,9 @@ class UploadService {
     if (uploadConfig.storage.type === "s3") {
       return `https://${uploadConfig.aws.bucket}.s3.${uploadConfig.aws.region}.amazonaws.com/${filePath}`;
     } else {
-      // For local development, you might want to serve files through your API
-      return `/uploads/${filePath}`;
+      // For local development, construct full URL to API server
+      const baseUrl = env.API_HTTP_REQUEST || `http://localhost:${env.PORT}`;
+      return `${baseUrl}/tmp/${filePath}`;
     }
   }
 
@@ -263,7 +265,7 @@ class UploadService {
       // Validate MIME type
       if (!uploadConfig.allowedMimeTypes.images.includes(mimetype)) {
         throw new AppError(
-          "Tipo de arquivo não suportado. Use apenas JPEG, PNG ou WebP.",
+          "Tipo de arquivo não suportado. Use apenas JPEG, JPG, PNG ou WebP.",
           400,
         );
       }
@@ -316,6 +318,7 @@ class UploadService {
       if (error instanceof AppError) {
         throw error;
       }
+
       console.error("Erro no serviço de upload via streaming:", error);
       throw new AppError("Erro interno no upload do arquivo", 500);
     }

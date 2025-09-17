@@ -1,9 +1,12 @@
 import database from "@/../infra/database";
-
 import { formatDate, formatCurrency } from "@/config/format-values";
-import { Decimal } from "@prisma/client/runtime/library";
 
+import { Decimal } from "@prisma/client/runtime/library";
+import { container } from "tsyringe";
+
+import { UploadService } from "@/shared/services/upload-service";
 import { IFuelRepository } from "./IFuel-repository";
+
 import {
   Fuel,
   CreateFuelProps,
@@ -18,7 +21,11 @@ import {
 } from "../dtos/fuel-dto";
 
 class FuelRepository implements IFuelRepository {
-  constructor(private prisma = database) {}
+  private uploadService: UploadService;
+
+  constructor(private prisma = database) {
+    this.uploadService = container.resolve(UploadService);
+  }
 
   async createFuel(fuelData: CreateFuelProps): Promise<Fuel> {
     // Calculate total amount if not provided
@@ -36,6 +43,7 @@ class FuelRepository implements IFuelRepository {
         price_per_liter: pricePerLiter,
         total_amount: totalAmount,
         odometer_verified: fuelData.odometer_verified ?? false,
+        odometer_photo: fuelData.odometer_photo as string,
       },
     });
 
@@ -149,7 +157,9 @@ class FuelRepository implements IFuelRepository {
       liters_amount: fuel.liters_amount ?? "0,000",
       price_per_liter: formatCurrency(fuel.price_per_liter?.toNumber() ?? 0),
       total_amount: formatCurrency(fuel.total_amount?.toNumber() ?? 0),
-      odometer_photo: fuel.odometer_photo ?? "N/A",
+      odometer_photo: fuel.odometer_photo
+        ? this.uploadService.getFileUrl(fuel.odometer_photo)
+        : null,
       odometer_verified: fuel.odometer_verified ?? false,
       notes: fuel.notes ?? "N/A",
       refueling_date: fuel.refueling_date ?? "N/A",

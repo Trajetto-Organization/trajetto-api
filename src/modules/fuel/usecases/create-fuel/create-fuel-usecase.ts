@@ -32,6 +32,9 @@ import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-er
 import { AppError } from "@/shared/errors/AppError";
 import { Fuel, CreateFuelProps } from "../../dtos/fuel-dto";
 
+import { UploadService } from "@/shared/services/upload-service";
+import { MultipartFile } from "@fastify/multipart";
+
 @injectable()
 class CreateFuelUseCase {
   constructor(
@@ -51,9 +54,15 @@ class CreateFuelUseCase {
     private fuel: IFuelRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("UploadService")
+    private uploadService: UploadService,
   ) {}
 
-  async execute(fuelData: CreateFuelProps, userId: string): Promise<Fuel> {
+  async execute(
+    fuelData: CreateFuelProps,
+    userId: string,
+    odometerPhotoFile: MultipartFile,
+  ): Promise<Fuel> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -119,8 +128,23 @@ class CreateFuelUseCase {
     }
 
     try {
+      // Upload odometer photo
+      const buffer = await odometerPhotoFile.toBuffer();
+      const uploadResult = await this.uploadService.uploadFile({
+        buffer,
+        filename: odometerPhotoFile.filename || "odometer-photo",
+        mimetype: odometerPhotoFile.mimetype,
+        uploadType: "odometerPhotos",
+      });
+
+      // Add photo path to fuel data
+      const fuelDataWithPhoto = {
+        ...fuelData,
+        odometer_photo: uploadResult.path,
+      };
+
       // Create fuel record
-      const fuelCreated = await this.fuel.createFuel(fuelData);
+      const fuelCreated = await this.fuel.createFuel(fuelDataWithPhoto);
 
       // Update vehicle mileage to the current_mileage from fuel record
       await this.vehicle.updateVehicle({
