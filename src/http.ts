@@ -7,6 +7,8 @@ import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import multipart from "@fastify/multipart";
 
+import path from "node:path";
+
 import { ZodError } from "zod";
 import { env } from "./env";
 
@@ -28,8 +30,6 @@ import { routes } from "./routes/routes";
 import { AppError } from "./shared/errors/AppError";
 
 import { uploadConfig } from "./config/upload";
-
-import path from "node:path";
 
 const app = fastify({
   logger: true,

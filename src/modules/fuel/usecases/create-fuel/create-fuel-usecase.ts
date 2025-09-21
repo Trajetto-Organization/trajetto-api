@@ -28,6 +28,7 @@ import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/err
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 
 import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
+import { VehicleInvalidStatusForFuelError } from "../errors/vehicle-invalid-status-for-fuel-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import { Fuel, CreateFuelProps } from "../../dtos/fuel-dto";
@@ -87,6 +88,11 @@ class CreateFuelUseCase {
 
     if (findVehicle.businessId !== fuelData.businessId) {
       throw new VehicleNotBelongBusinessError();
+    }
+
+    // Validate vehicle status (only ACTIVE or IN_ROUTE vehicles can be fueled)
+    if (findVehicle.status !== "ACTIVE" && findVehicle.status !== "IN_ROUTE") {
+      throw new VehicleInvalidStatusForFuelError();
     }
 
     // Validate mileage (cannot be less than current vehicle mileage)
