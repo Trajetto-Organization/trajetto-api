@@ -25,7 +25,9 @@ const updateFuelSchema = z.object({
     (val) => {
       if (typeof val === "string") {
         if (val.trim() === "") return undefined;
-        return parseFloat(val.replace(",", "."));
+
+        const cleanedValue = val.replace(/\./g, "").replace(",", ".");
+        return parseFloat(cleanedValue);
       }
       return val;
     },

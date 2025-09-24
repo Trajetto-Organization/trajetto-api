@@ -53,3 +53,4 @@ Thumbs.db
 
 # Upload files
 tmp/*
+!tmp/.gitkeep

@@ -13,6 +13,7 @@ import { vehicleTypeRoutes } from "./vehicle-type-routes";
 
 import { fuelTypeRoutes } from "./fuel-type-routes";
 import { fuelRoutes } from "./fuel-routes";
+import { vehicleChecklistRoutes } from "./vehicle-checklist-routes";
 
 import { partRoutes } from "./part-routes";
 import { driverRoutes } from "./driver-routes";
@@ -47,6 +48,7 @@ async function routes(app: FastifyInstance) {
   app.register(partRoutes, { prefix: "/part" });
   app.register(driverRoutes, { prefix: "/driver" });
   app.register(vehicleRoutes, { prefix: "/vehicle" });
+  app.register(vehicleChecklistRoutes, { prefix: "/vehicle-checklist" });
   app.register(serviceOrderRoutes, { prefix: "/service-order" });
   app.register(serviceOrderPartRoutes, { prefix: "/service-order-part" });
   app.register(accountPayableRoutes, { prefix: "/account-payable" });

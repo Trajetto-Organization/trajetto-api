@@ -25,7 +25,9 @@ const createFuelSchema = z.object({
     (val) => {
       if (typeof val === "string") {
         if (val.trim() === "") return undefined;
-        return parseFloat(val.replace(",", "."));
+
+        const cleanedValue = val.replace(/\./g, "").replace(",", ".");
+        return parseFloat(cleanedValue);
       }
       return val;
     },
@@ -123,6 +125,7 @@ const createFuelSchema = z.object({
       // Validation: refueling date cannot be in the future
       const refuelingDate = new Date(val);
       const today = new Date();
+
       today.setHours(23, 59, 59, 999); // End of today
 
       if (refuelingDate > today) {
@@ -152,12 +155,17 @@ const odometerPhotoSchema = z
   })
   .refine(
     (file) => {
-      const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+      const allowedTypes = [
+        "image/jpeg",
+        "image/jpg",
+        "image/png",
+        "image/webp",
+      ];
       return allowedTypes.includes(file?.mimetype);
     },
     {
       message: "Tipo de arquivo não suportado. Use apenas JPEG, PNG ou WebP.",
-    }
+    },
   );
 
 // Combined schema for multipart request

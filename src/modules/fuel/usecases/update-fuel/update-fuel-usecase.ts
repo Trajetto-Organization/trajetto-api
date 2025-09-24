@@ -115,7 +115,10 @@ class UpdateFuelUseCase {
       }
 
       // Validate vehicle status (only ACTIVE or IN_ROUTE vehicles can be fueled)
-      if (findVehicle.status !== "ACTIVE" && findVehicle.status !== "IN_ROUTE") {
+      if (
+        findVehicle.status !== "ACTIVE" &&
+        findVehicle.status !== "IN_ROUTE"
+      ) {
         throw new VehicleInvalidStatusForFuelError();
       }
 

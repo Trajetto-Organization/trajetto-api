@@ -20,12 +20,15 @@ const envSchema = z.object({
   RESEND_FROM_EMAIL: z.string().optional(),
 
   // File Upload Configuration
-  UPLOAD_STORAGE_TYPE: z.enum(["local", "s3"]).default("local"),
+  UPLOAD_STORAGE_TYPE: z.enum(["local", "r2"]).default("local"),
   UPLOAD_LOCAL_PATH: z.string().default("./tmp"),
-  AWS_REGION: z.string().optional(),
-  AWS_S3_BUCKET: z.string().optional(),
-  AWS_ACCESS_KEY_ID: z.string().optional(),
-  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+
+  // Cloudflare R2 Configuration
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_BUCKET_NAME: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_PUBLIC_DOMAIN: z.string().optional(),
 });
 
 export { envSchema };

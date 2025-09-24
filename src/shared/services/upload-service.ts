@@ -43,11 +43,13 @@ class UploadService {
   private s3?: AWS.S3;
 
   constructor() {
-    if (uploadConfig.storage.type === "s3") {
+    if (uploadConfig.storage.type === "r2") {
       this.s3 = new AWS.S3({
-        accessKeyId: uploadConfig.aws.accessKeyId,
-        secretAccessKey: uploadConfig.aws.secretAccessKey,
-        region: uploadConfig.aws.region,
+        accessKeyId: uploadConfig.r2.accessKeyId,
+        secretAccessKey: uploadConfig.r2.secretAccessKey,
+        endpoint: `https://${uploadConfig.r2.accountId}.r2.cloudflarestorage.com`,
+        region: "auto",
+        signatureVersion: "v4",
       });
     }
   }
@@ -153,40 +155,39 @@ class UploadService {
     });
   }
 
-  private async uploadToS3(
+  private async uploadToR2(
     processedBuffer: Buffer,
     filename: string,
   ): Promise<UploadResult> {
     if (!this.s3) {
-      throw new AppError("S3 não foi configurado corretamente", 500);
+      throw new AppError("R2 não foi configurado corretamente", 500);
     }
 
-    // Use streaming for S3 upload for better memory management
+    // Use streaming for R2 upload for better memory management
     const readableStream = Readable.from(processedBuffer);
 
     const uploadParams: AWS.S3.PutObjectRequest = {
-      Bucket: uploadConfig.aws.bucket,
+      Bucket: uploadConfig.r2.bucket,
       Key: filename,
       Body: readableStream,
       ContentType: "image/webp",
-      ACL: "public-read",
       Metadata: {
         "uploaded-at": new Date().toISOString(),
       },
     };
 
     try {
-      const result = await this.s3.upload(uploadParams).promise();
+      await this.s3.upload(uploadParams).promise();
 
       return {
         filename: path.basename(filename),
         path: filename,
         size: processedBuffer.length,
         mimeType: "image/webp",
-        url: result.Location,
+        url: this.getFileUrl(filename),
       };
     } catch (error) {
-      console.error("Erro ao fazer upload para S3:", error);
+      console.error("Erro ao fazer upload para R2:", error);
       throw new AppError("Erro no upload do arquivo", 500);
     }
   }
@@ -205,8 +206,8 @@ class UploadService {
       const generatedFilename = this.generateFilename(filename, uploadType);
 
       // Upload based on storage type
-      if (uploadConfig.storage.type === "s3") {
-        return await this.uploadToS3(processedBuffer, generatedFilename);
+      if (uploadConfig.storage.type === "r2") {
+        return await this.uploadToR2(processedBuffer, generatedFilename);
       } else {
         return await this.uploadToLocal(processedBuffer, generatedFilename);
       }
@@ -221,14 +222,14 @@ class UploadService {
 
   async deleteFile(filePath: string): Promise<void> {
     try {
-      if (uploadConfig.storage.type === "s3") {
+      if (uploadConfig.storage.type === "r2") {
         if (!this.s3) {
-          throw new AppError("S3 não foi configurado corretamente", 500);
+          throw new AppError("R2 não foi configurado corretamente", 500);
         }
 
         await this.s3
           .deleteObject({
-            Bucket: uploadConfig.aws.bucket,
+            Bucket: uploadConfig.r2.bucket,
             Key: filePath,
           })
           .promise();
@@ -248,8 +249,12 @@ class UploadService {
   }
 
   getFileUrl(filePath: string): string {
-    if (uploadConfig.storage.type === "s3") {
-      return `https://${uploadConfig.aws.bucket}.s3.${uploadConfig.aws.region}.amazonaws.com/${filePath}`;
+    if (uploadConfig.storage.type === "r2") {
+      // Use custom domain if provided, otherwise use R2 public URL
+      if (uploadConfig.r2.publicDomain) {
+        return `https://${uploadConfig.r2.publicDomain}/${filePath}`;
+      }
+      return `https://${uploadConfig.r2.bucket}.${uploadConfig.r2.accountId}.r2.cloudflarestorage.com/${filePath}`;
     } else {
       // For local development, construct full URL to API server
       const baseUrl = env.API_HTTP_REQUEST || `http://localhost:${env.PORT}`;
@@ -299,8 +304,8 @@ class UploadService {
         .webp({ quality: uploadConfig.quality.webp })
         .withMetadata();
 
-      if (uploadConfig.storage.type === "s3") {
-        return await this.uploadStreamToS3(
+      if (uploadConfig.storage.type === "r2") {
+        return await this.uploadStreamToR2(
           stream,
           sharpTransform,
           generatedFilename,
@@ -362,20 +367,20 @@ class UploadService {
     });
   }
 
-  private async uploadStreamToS3(
+  private async uploadStreamToR2(
     inputStream: NodeJS.ReadableStream,
     sharpTransform: sharp.Sharp,
     filename: string,
     fileSize?: number,
   ): Promise<UploadResult> {
     if (!this.s3) {
-      throw new AppError("S3 não foi configurado corretamente", 500);
+      throw new AppError("R2 não foi configurado corretamente", 500);
     }
 
     return new Promise((resolve, reject) => {
       let processedSize = 0;
 
-      // Create pipeline: input -> sharp processing -> S3
+      // Create pipeline: input -> sharp processing -> R2
       const processedStream = inputStream.pipe(sharpTransform);
 
       // Track processed size
@@ -384,11 +389,10 @@ class UploadService {
       });
 
       const uploadParams: AWS.S3.PutObjectRequest = {
-        Bucket: uploadConfig.aws.bucket,
+        Bucket: uploadConfig.r2.bucket,
         Key: filename,
         Body: processedStream,
         ContentType: "image/webp",
-        ACL: "public-read",
         Metadata: {
           "uploaded-at": new Date().toISOString(),
         },
@@ -396,14 +400,14 @@ class UploadService {
 
       this.s3?.upload(uploadParams, (error, result) => {
         if (error) {
-          reject(new AppError("Erro no upload para S3", 500));
+          reject(new AppError("Erro no upload para R2", 500));
         } else {
           resolve({
             filename: path.basename(filename),
             path: filename,
             size: processedSize || fileSize || 0,
             mimeType: "image/webp",
-            url: result.Location,
+            url: this.getFileUrl(filename),
           });
         }
       });

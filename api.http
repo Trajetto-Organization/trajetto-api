@@ -761,17 +761,3 @@ Authorization: Bearer {{token}}
 
 DELETE {{baseUrl}}/account-payable/delete-account-payable/a343fb96-bcee-4469-a52c-686f47bb9470/business/b50ff064-a014-4e10-8a27-8275ce948be1
 Authorization: Bearer {{token}}
-
-### Upload Image Test
-
-POST {{baseUrl}}/upload/test-upload
-Authorization: Bearer {{token}}
-Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
-
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="file"; filename="pexel.jpg"
-Content-Type: image/jpeg
-
-< ./test-files/pexel.jpg
-
-------WebKitFormBoundary7MA4YWxkTrZu0gW--

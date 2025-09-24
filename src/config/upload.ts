@@ -3,14 +3,15 @@ import path from "node:path";
 
 export const uploadConfig = {
   storage: {
-    type: env.UPLOAD_STORAGE_TYPE as "local" | "s3",
+    type: env.UPLOAD_STORAGE_TYPE as "local" | "r2",
     localPath: path.resolve(env.UPLOAD_LOCAL_PATH),
   },
-  aws: {
-    region: env.AWS_REGION || "us-east-1",
-    bucket: env.AWS_S3_BUCKET || "",
-    accessKeyId: env.AWS_ACCESS_KEY_ID || "",
-    secretAccessKey: env.AWS_SECRET_ACCESS_KEY || "",
+  r2: {
+    accountId: env.R2_ACCOUNT_ID || "",
+    bucket: env.R2_BUCKET_NAME || "",
+    accessKeyId: env.R2_ACCESS_KEY_ID || "",
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY || "",
+    publicDomain: env.R2_PUBLIC_DOMAIN || "",
   },
   // Size limits function
   getSizeLimit: (
@@ -18,8 +19,8 @@ export const uploadConfig = {
   ) => {
     const limits = {
       odometerPhotos: 5 * 1024 * 1024, // 5MB
-      avatars: 10 * 1024 * 1024, // 10MB
-      checklistPhotos: 3 * 1024 * 1024, // 3MB
+      avatars: 5 * 1024 * 1024, // 5MB
+      checklistPhotos: 6 * 1024 * 1024, // 6MB
     };
 
     return limits[uploadType];

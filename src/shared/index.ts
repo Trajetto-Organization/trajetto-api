@@ -30,6 +30,9 @@ import { IFuelTypeRepository } from "@/modules/fuel-type/repositories/IFuel-type
 import { FuelRepository } from "@/modules/fuel/repositories/fuel-repository";
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 
+import { VehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/vehicle-checklist-repository";
+import { IVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/IVehicle-checklist-repository";
+
 import { PartRepository } from "@/modules/part/repositories/part-repository";
 import { IPartRepository } from "@/modules/part/repositories/IPart-repository";
 
@@ -120,15 +123,20 @@ container.registerSingleton<IFuelTypeRepository>(
 );
 
 container.registerSingleton<IFuelRepository>("FuelRepository", FuelRepository);
-container.registerSingleton<IPartRepository>("PartRepository", PartRepository);
 
+container.registerSingleton<IPartRepository>("PartRepository", PartRepository);
 container.registerSingleton<IDriverRepository>(
   "DriverRepository",
   DriverRepository,
 );
+
 container.registerSingleton<IVehicleRepository>(
   "VehicleRepository",
   VehicleRepository,
+);
+container.registerSingleton<IVehicleChecklistRepository>(
+  "VehicleChecklistRepository",
+  VehicleChecklistRepository,
 );
 
 container.registerSingleton<IServiceOrderRepository>(

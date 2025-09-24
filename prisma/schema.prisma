@@ -92,11 +92,12 @@ model Business {
   Activity     Activity[]
   Notification Notification[]
 
-  created_at   DateTime       @default(now())
-  updated_at   DateTime       @updatedAt
-  KanbanColumn KanbanColumn[]
-  Fine         Fine[]
-  Fuel         Fuel[]
+  created_at       DateTime           @default(now())
+  updated_at       DateTime           @updatedAt
+  KanbanColumn     KanbanColumn[]
+  Fine             Fine[]
+  Fuel             Fuel[]
+  VehicleChecklist VehicleChecklist[]
 
   @@map("business")
 }
@@ -259,10 +260,11 @@ model Branch {
   serviceOrders   ServiceOrder[]
   accountsPayable AccountPayable[]
 
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-  Fine       Fine[]
-  Fuel       Fuel[]
+  created_at       DateTime           @default(now())
+  updated_at       DateTime           @updatedAt
+  Fine             Fine[]
+  Fuel             Fuel[]
+  VehicleChecklist VehicleChecklist[]
 
   @@map("branch")
 }
@@ -348,10 +350,11 @@ model Driver {
 
   vehicles Vehicle[]
 
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-  Fine       Fine[]
-  Fuel       Fuel[]
+  created_at       DateTime           @default(now())
+  updated_at       DateTime           @updatedAt
+  Fine             Fine[]
+  Fuel             Fuel[]
+  VehicleChecklist VehicleChecklist[]
 
   @@map("driver")
 }
@@ -394,10 +397,11 @@ model Vehicle {
 
   serviceOrders ServiceOrder[]
 
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-  Fine       Fine[]
-  Fuel       Fuel[]
+  created_at       DateTime           @default(now())
+  updated_at       DateTime           @updatedAt
+  Fine             Fine[]
+  Fuel             Fuel[]
+  VehicleChecklist VehicleChecklist[]
 
   @@map("vehicle")
 }
@@ -618,8 +622,8 @@ model KanbanCard {
 // Table of infraction codes (DETRAN data)
 model TrafficViolationCode {
   id               String           @id @default(uuid())
-  code             String           @unique // Código da infração (ex: 5010)
-  sub_code         Int              @default(0) // Desdobramento (0, 1, 2...)
+  code             String           @unique // Infraction code (ex: 5010)
+  sub_code         Int              @default(0) // (0, 1, 2...)
   description      String // Description of the infraction
   legal_basis      String // Legal support (CTB)
   violator_type    String // Offender Type (Driver, Owner)
@@ -711,4 +715,71 @@ model Fuel {
   @@index([driverId])
   @@index([refueling_date])
   @@map("fuel")
+}
+
+model VehicleChecklist {
+  id              String   @id @default(uuid())
+  current_mileage Float // Current vehicle mileage at the time of checklist
+  checklist_date  DateTime @default(now()) // Checklist date
+
+  // External checks
+  tires_condition      String // "good", "bad", "needs_attention"
+  headlights_working   Boolean @default(false)
+  taillights_working   Boolean @default(false)
+  turn_signals_working Boolean @default(false)
+  bumpers_condition    String // "good", "bad", "needs_attention"
+  windshield_condition String // "good", "bad", "needs_attention"
+  mirrors_condition    String // "good", "bad", "needs_attention"
+
+  // Internal checks
+  seatbelts_working        Boolean @default(false)
+  dashboard_working        Boolean @default(false)
+  steering_wheel_condition String // "good", "bad", "needs_attention"
+  brakes_working           Boolean @default(false)
+  clutch_working           Boolean @default(false)
+  fuel_level_adequate      Boolean @default(false)
+
+  // Engine checks
+  oil_level_adequate      Boolean @default(false)
+  radiator_water_adequate Boolean @default(false)
+  brake_fluid_adequate    Boolean @default(false)
+  battery_condition       String // "good", "bad", "needs_attention"
+
+  // Documentation checks
+  driver_license_valid    Boolean @default(false)
+  vehicle_documents_valid Boolean @default(false)
+  insurance_valid         Boolean @default(false)
+
+  // Safety equipment checks
+  fire_extinguisher_valid  Boolean @default(false)
+  warning_triangle_present Boolean @default(false)
+  jack_present             Boolean @default(false)
+  spare_tire_condition     String // "good", "bad", "needs_attention"
+
+  // General observations
+  notes             String? // Optional remarks
+  photos            String[] // Array of photo paths
+  overall_condition String // "approved", "approved_with_restrictions", "rejected"
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branchId String
+
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id])
+  vehicleId String
+
+  driver   Driver @relation(fields: [driverId], references: [id])
+  driverId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId])
+  @@index([branchId])
+  @@index([vehicleId])
+  @@index([driverId])
+  @@index([checklist_date])
+  @@map("vehicle_checklist")
 }
