@@ -13,12 +13,13 @@ import { vehicleTypeRoutes } from "./vehicle-type-routes";
 
 import { fuelTypeRoutes } from "./fuel-type-routes";
 import { fuelRoutes } from "./fuel-routes";
-import { vehicleChecklistRoutes } from "./vehicle-checklist-routes";
 
 import { partRoutes } from "./part-routes";
 import { driverRoutes } from "./driver-routes";
 
 import { vehicleRoutes } from "./vehicle-routes";
+import { vehicleChecklistRoutes } from "./vehicle-checklist-routes";
+
 import { serviceOrderRoutes } from "./service-order-routes";
 
 import { serviceOrderPartRoutes } from "./service-order-part-routes";

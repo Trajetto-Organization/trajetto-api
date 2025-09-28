@@ -32,7 +32,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     const checklistCreated = await this.prisma.vehicleChecklist.create({
       data: {
         ...checklistData,
-        photos: checklistData.photos || [],
+        photos: checklistData.photos,
       },
     });
 
@@ -52,47 +52,69 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     endDate,
   }: ListVehicleChecklistByBusinessIdProps): Promise<ListVehicleChecklistFormattedProps> {
     const skip = (page - 1) * pageSize;
+    const normalizedSearch = search ? search.trim().toLowerCase() : "";
 
-    // Build where conditions
-    const whereConditions: any = {
-      businessId,
-    };
+    const orConditions: any[] = [];
 
-    if (search) {
-      whereConditions.OR = [
+    if (normalizedSearch) {
+      orConditions.push(
+        { id: { contains: normalizedSearch, mode: "insensitive" } },
+        { notes: { contains: normalizedSearch, mode: "insensitive" } },
         {
           vehicle: {
-            license_plate: {
-              contains: search,
-              mode: "insensitive",
-            },
-          },
-        },
-        {
-          vehicle: {
-            description: {
-              contains: search,
-              mode: "insensitive",
-            },
+            OR: [
+              {
+                description: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              {
+                license_plate: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              { brand: { contains: normalizedSearch, mode: "insensitive" } },
+              { model: { contains: normalizedSearch, mode: "insensitive" } },
+            ],
           },
         },
         {
           driver: {
-            name: {
-              contains: search,
-              mode: "insensitive",
-            },
+            OR: [
+              { name: { contains: normalizedSearch, mode: "insensitive" } },
+              { cnh: { contains: normalizedSearch, mode: "insensitive" } },
+            ],
           },
         },
         {
-          notes: {
-            contains: search,
-            mode: "insensitive",
+          branch: {
+            OR: [
+              {
+                corporate_reason: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              {
+                fantasy_name: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+            ],
           },
         },
-      ];
+      );
     }
 
+    const whereConditions: any = {
+      ...(currentUserRole !== "MASTER" && { businessId: businessId }),
+      ...(orConditions.length > 0 && { OR: orConditions }),
+    };
+
+    // Add additional filters
     if (vehicleId) {
       whereConditions.vehicleId = vehicleId;
     }
@@ -112,107 +134,106 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
       };
     }
 
-    const [checklists, total] = await Promise.all([
-      this.prisma.vehicleChecklist.findMany({
-        where: whereConditions,
-        include: {
-          business: {
-            select: {
-              id: true,
-              corporate_reason: true,
-              fantasy_name: true,
-            },
-          },
-          branch: {
-            select: {
-              id: true,
-              corporate_reason: true,
-              fantasy_name: true,
-            },
-          },
-          vehicle: {
-            select: {
-              id: true,
-              description: true,
-              license_plate: true,
-              brand: true,
-              model: true,
-              current_mileage: true,
-            },
-          },
-          driver: {
-            select: {
-              id: true,
-              name: true,
-              cnh: true,
-            },
+    const checklistsData = await this.prisma.vehicleChecklist.findMany({
+      skip,
+      take: pageSize,
+      where: whereConditions,
+      include: {
+        business: {
+          select: {
+            corporate_reason: true,
+            fantasy_name: true,
           },
         },
-        skip,
-        take: pageSize,
-        orderBy: {
-          checklist_date: "desc",
+        branch: {
+          select: {
+            corporate_reason: true,
+            fantasy_name: true,
+          },
         },
-      }),
-      this.prisma.vehicleChecklist.count({
-        where: whereConditions,
-      }),
-    ]);
+        vehicle: {
+          select: {
+            description: true,
+            license_plate: true,
+            brand: true,
+            model: true,
+            current_mileage: true,
+          },
+        },
+        driver: {
+          select: {
+            name: true,
+            cnh: true,
+          },
+        },
+      },
+      orderBy: {
+        checklist_date: "desc",
+      },
+    });
 
-    const formattedChecklists: VehicleChecklistFormatted[] = checklists.map(
-      (checklist) => ({
-        id: checklist.id,
-        current_mileage: checklist.current_mileage,
-        checklist_date: checklist.checklist_date,
-        tires_condition: checklist.tires_condition,
-        headlights_working: checklist.headlights_working,
-        taillights_working: checklist.taillights_working,
-        turn_signals_working: checklist.turn_signals_working,
-        bumpers_condition: checklist.bumpers_condition,
-        windshield_condition: checklist.windshield_condition,
-        mirrors_condition: checklist.mirrors_condition,
-        seatbelts_working: checklist.seatbelts_working,
-        dashboard_working: checklist.dashboard_working,
-        steering_wheel_condition: checklist.steering_wheel_condition,
-        brakes_working: checklist.brakes_working,
-        clutch_working: checklist.clutch_working,
-        fuel_level_adequate: checklist.fuel_level_adequate,
-        oil_level_adequate: checklist.oil_level_adequate,
-        radiator_water_adequate: checklist.radiator_water_adequate,
-        brake_fluid_adequate: checklist.brake_fluid_adequate,
-        battery_condition: checklist.battery_condition,
-        driver_license_valid: checklist.driver_license_valid,
-        vehicle_documents_valid: checklist.vehicle_documents_valid,
-        insurance_valid: checklist.insurance_valid,
-        fire_extinguisher_valid: checklist.fire_extinguisher_valid,
-        warning_triangle_present: checklist.warning_triangle_present,
-        jack_present: checklist.jack_present,
-        spare_tire_condition: checklist.spare_tire_condition,
-        notes: checklist.notes,
-        photos: checklist.photos,
-        overall_condition: checklist.overall_condition,
-        businessId: checklist.businessId,
-        branchId: checklist.branchId,
-        vehicleId: checklist.vehicleId,
-        driverId: checklist.driverId,
-        business_name:
-          checklist.business.fantasy_name ||
-          checklist.business.corporate_reason,
-        branch_name:
-          checklist.branch.fantasy_name || checklist.branch.corporate_reason,
-        vehicle_description: checklist.vehicle.description,
-        vehicle_license_plate: checklist.vehicle.license_plate,
-        vehicle_brand: checklist.vehicle.brand,
-        vehicle_model: checklist.vehicle.model,
-        driver_name: checklist.driver.name,
-        driver_cnh: checklist.driver.cnh,
-        created_at: formatDate(checklist.created_at, "pt-BR"),
-        updated_at: formatDate(checklist.updated_at, "pt-BR"),
-      }),
-    );
+    const total = await this.prisma.vehicleChecklist.count({
+      where: whereConditions,
+    });
+
+    const transformedChecklistData: VehicleChecklistFormatted[] =
+      checklistsData.map((checklist) => ({
+        id: checklist.id ?? "N/A",
+        current_mileage: checklist.current_mileage ?? 0,
+        checklist_date: checklist.checklist_date ?? "N/A",
+        tires_condition: checklist.tires_condition ?? "N/A",
+        headlights_working: checklist.headlights_working ?? false,
+        taillights_working: checklist.taillights_working ?? false,
+        turn_signals_working: checklist.turn_signals_working ?? false,
+        bumpers_condition: checklist.bumpers_condition ?? "N/A",
+        windshield_condition: checklist.windshield_condition ?? "N/A",
+        mirrors_condition: checklist.mirrors_condition ?? "N/A",
+        seatbelts_working: checklist.seatbelts_working ?? false,
+        dashboard_working: checklist.dashboard_working ?? false,
+        steering_wheel_condition: checklist.steering_wheel_condition ?? "N/A",
+        brakes_working: checklist.brakes_working ?? false,
+        clutch_working: checklist.clutch_working ?? false,
+        fuel_level_adequate: checklist.fuel_level_adequate ?? false,
+        oil_level_adequate: checklist.oil_level_adequate ?? false,
+        radiator_water_adequate: checklist.radiator_water_adequate ?? false,
+        brake_fluid_adequate: checklist.brake_fluid_adequate ?? false,
+        battery_condition: checklist.battery_condition ?? "N/A",
+        driver_license_valid: checklist.driver_license_valid ?? false,
+        vehicle_documents_valid: checklist.vehicle_documents_valid ?? false,
+        insurance_valid: checklist.insurance_valid ?? false,
+        fire_extinguisher_valid: checklist.fire_extinguisher_valid ?? false,
+        warning_triangle_present: checklist.warning_triangle_present ?? false,
+        jack_present: checklist.jack_present ?? false,
+        spare_tire_condition: checklist.spare_tire_condition ?? "N/A",
+        notes: checklist.notes ?? "N/A",
+        photos: checklist.photos
+          ? checklist.photos.map((photoPath: string) =>
+              this.uploadService.getFileUrl(photoPath),
+            )
+          : [],
+        overall_condition: checklist.overall_condition ?? "N/A",
+        businessId: checklist.businessId ?? "N/A",
+        branchId: checklist.branchId ?? "N/A",
+        vehicleId: checklist.vehicleId ?? "N/A",
+        driverId: checklist.driverId ?? "N/A",
+        ...(currentUserRole === "MASTER"
+          ? {
+              business_name: checklist.business?.corporate_reason ?? "N/A",
+            }
+          : {}),
+        branch_name: checklist.branch?.corporate_reason ?? "N/A",
+        vehicle_description: checklist.vehicle?.description ?? "N/A",
+        vehicle_license_plate: checklist.vehicle?.license_plate ?? "N/A",
+        vehicle_brand: checklist.vehicle?.brand ?? "N/A",
+        vehicle_model: checklist.vehicle?.model ?? "N/A",
+        driver_name: checklist.driver?.name ?? "N/A",
+        driver_cnh: checklist.driver?.cnh ?? "N/A",
+        created_at: formatDate(checklist.created_at, "pt-BR") ?? "N/A",
+        updated_at: formatDate(checklist.updated_at, "pt-BR") ?? "N/A",
+      }));
 
     return {
-      data: formattedChecklists,
+      data: transformedChecklistData,
       total,
     };
   }
@@ -252,11 +273,16 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     checklistData,
     checklistId,
   }: UpdateVehicleChecklist): Promise<VehicleChecklist> {
+    // Filter out undefined values to prevent overwriting existing data with undefined
+    const filteredData = Object.fromEntries(
+      Object.entries(checklistData).filter(([_, value]) => value !== undefined),
+    );
+
     const updatedChecklist = await this.prisma.vehicleChecklist.update({
       where: {
         id: checklistId,
       },
-      data: checklistData,
+      data: filteredData,
     });
 
     return updatedChecklist;
@@ -269,13 +295,6 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
 
     if (!checklistToDelete) {
       throw new Error("Checklist not found");
-    }
-
-    // Delete photos from storage if they exist
-    if (checklistToDelete.photos && checklistToDelete.photos.length > 0) {
-      for (const photoPath of checklistToDelete.photos) {
-        await this.uploadService.deleteFile(photoPath);
-      }
     }
 
     const deletedChecklist = await this.prisma.vehicleChecklist.delete({
@@ -374,7 +393,11 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
       jack_present: checklist.jack_present,
       spare_tire_condition: checklist.spare_tire_condition,
       notes: checklist.notes,
-      photos: checklist.photos,
+      photos: checklist.photos
+        ? checklist.photos.map((photoPath: string) =>
+            this.uploadService.getFileUrl(photoPath),
+          )
+        : [],
       overall_condition: checklist.overall_condition,
       businessId: checklist.businessId,
       branchId: checklist.branchId,
@@ -480,7 +503,11 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
       jack_present: checklist.jack_present,
       spare_tire_condition: checklist.spare_tire_condition,
       notes: checklist.notes,
-      photos: checklist.photos,
+      photos: checklist.photos
+        ? checklist.photos.map((photoPath: string) =>
+            this.uploadService.getFileUrl(photoPath),
+          )
+        : [],
       overall_condition: checklist.overall_condition,
       businessId: checklist.businessId,
       branchId: checklist.branchId,

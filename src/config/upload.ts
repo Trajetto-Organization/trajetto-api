@@ -20,7 +20,7 @@ export const uploadConfig = {
     const limits = {
       odometerPhotos: 5 * 1024 * 1024, // 5MB
       avatars: 5 * 1024 * 1024, // 5MB
-      checklistPhotos: 6 * 1024 * 1024, // 6MB
+      checklistPhotos: 5 * 1024 * 1024, // 5MB
     };
 
     return limits[uploadType];

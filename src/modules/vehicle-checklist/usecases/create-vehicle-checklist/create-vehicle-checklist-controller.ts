@@ -100,6 +100,24 @@ class CreateVehicleChecklistController {
       });
     }
 
+    // Validate total file size for all uploaded photos
+    let totalSize = 0;
+    const maxTotalSize = 5 * 1024 * 1024; // 5MB total for all files
+
+    for (const [fieldName, files] of Object.entries(photosByField)) {
+      for (const file of files as any[]) {
+        if (file.buffer) {
+          totalSize += file.buffer.length;
+        }
+      }
+    }
+
+    if (totalSize > maxTotalSize) {
+      return reply.status(400).send({
+        message: `O tamanho total dos arquivos excede o limite permitido de 5MB. Tamanho atual: ${(totalSize / 1024 / 1024).toFixed(2)}MB`,
+      });
+    }
+
     let checklistData: any;
 
     try {

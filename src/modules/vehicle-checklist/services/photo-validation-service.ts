@@ -273,6 +273,52 @@ class PhotoValidationService {
       errors,
     };
   }
+
+  // NEW: Enhanced validation for UPDATE operations considering existing photos
+  static validateRequiredPhotosForUpdate(
+    checklistData: any,
+    providedPhotos: { [key: string]: any },
+    existingPhotos: string[] = [],
+    photosToRemove: string[] = [],
+  ): { isValid: boolean; missingPhotos: string[]; errors: string[] } {
+    const validation = this.validatePhotosRequired(checklistData);
+    const missingPhotos: string[] = [];
+    const errors: string[] = [];
+
+    validation.requiredPhotos.forEach((requiredField) => {
+      // Check if field has photos after this update
+      const hasNewPhotos =
+        providedPhotos[requiredField] &&
+        Array.isArray(providedPhotos[requiredField]) &&
+        providedPhotos[requiredField].length > 0;
+
+      // Check if field has existing photos that won't be removed
+      const existingFieldPhotos = existingPhotos.filter(
+        (photoUrl) =>
+          photoUrl.includes(requiredField) &&
+          !photosToRemove.includes(photoUrl),
+      );
+      const hasRemainingExistingPhotos = existingFieldPhotos.length > 0;
+
+      // Field is valid if it has either new photos OR remaining existing photos
+      const hasValidPhotos = hasNewPhotos || hasRemainingExistingPhotos;
+
+      if (!hasValidPhotos) {
+        missingPhotos.push(requiredField);
+        const reason = this.getPhotoRequirementReason(requiredField);
+        errors.push(
+          `Foto obrigatória para '${requiredField}': ${reason}. ` +
+            `Campo requer foto e não há fotos existentes nem novas fotos fornecidas.`,
+        );
+      }
+    });
+
+    return {
+      isValid: missingPhotos.length === 0,
+      missingPhotos,
+      errors,
+    };
+  }
 }
 
 export {

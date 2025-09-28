@@ -77,7 +77,7 @@ interface UpdateVehicleProps {
 }
 
 interface UpdateVehicle {
-  vehicleData: Partial<CreateVehicleProps>;
+  vehicleData: UpdateVehicleProps;
   vehicleId: string;
 }
 
