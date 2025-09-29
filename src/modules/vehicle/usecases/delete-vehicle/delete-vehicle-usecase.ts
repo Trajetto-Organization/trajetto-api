@@ -18,9 +18,12 @@ import { VehicleHasAssociatedServiceOrdersError } from "../errors/vehicle-has-as
 import { IServiceOrderRepository } from "@/modules/service-order/repositories/IService-order-repository";
 
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
+import { IVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/IVehicle-checklist-repository";
 
 import { VehicleHasAssociatedFinesError } from "../errors/vehicle-has-associated-fines-error";
 import { VehicleHasAssociatedFuelError } from "../errors/vehicle-has-associated-fuel-error";
+
+import { VehicleHasAssociatedChecklistsError } from "../errors/vehicle-has-associated-checklists-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import { Vehicle } from "../../dtos/vehicle-dto";
@@ -40,6 +43,8 @@ class DeleteVehicleUseCase {
     private serviceOrder: IServiceOrderRepository,
     @inject("FuelRepository")
     private fuel: IFuelRepository,
+    @inject("VehicleChecklistRepository")
+    private vehicleChecklist: IVehicleChecklistRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -90,6 +95,15 @@ class DeleteVehicleUseCase {
 
     if (associatedFuels.length > 0) {
       throw new VehicleHasAssociatedFuelError(associatedFuels.length);
+    }
+
+    const associatedChecklists =
+      await this.vehicleChecklist.findVehicleChecklistsByVehicleId(vehicleId);
+
+    if (associatedChecklists.length > 0) {
+      throw new VehicleHasAssociatedChecklistsError(
+        associatedChecklists.length,
+      );
     }
 
     try {

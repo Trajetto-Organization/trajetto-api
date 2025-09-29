@@ -16,6 +16,7 @@ import { VehicleHasAssociatedFinesError } from "../errors/vehicle-has-associated
 import { VehicleHasAssociatedServiceOrdersError } from "../errors/vehicle-has-associated-service-orders-error";
 
 import { VehicleHasAssociatedFuelError } from "../errors/vehicle-has-associated-fuel-error";
+import { VehicleHasAssociatedChecklistsError } from "../errors/vehicle-has-associated-checklists-error";
 
 class DeleteVehicleController {
   async handle(
@@ -53,6 +54,10 @@ class DeleteVehicleController {
       }
 
       if (error instanceof VehicleHasAssociatedFinesError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof VehicleHasAssociatedChecklistsError) {
         return reply.status(403).send({ message: error.message });
       }
 

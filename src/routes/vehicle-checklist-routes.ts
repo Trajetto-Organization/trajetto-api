@@ -36,8 +36,14 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
         tags: ["vehicle-checklist"],
         summary: "Create a new vehicle checklist",
         description:
-          "Register a new vehicle inspection checklist with vehicle, driver, and checklist details. Supports multipart/form-data for optional photos.",
+          "Register a new vehicle inspection checklist with vehicle, driver, and checklist details. Supports multipart/form-data for photos. Photos are categorized by field and some are mandatory based on checklist values.",
         consumes: ["multipart/form-data"],
+        params: vehicleChecklistSchemas.businessIdParam,
+        response: {
+          201: vehicleChecklistResponses.vehicleChecklistCreated,
+          400: vehicleChecklistResponses.createVehicleChecklistErrors,
+          500: vehicleChecklistResponses.internalServerError,
+        },
       },
     },
     createVehicleChecklistController.handle,
@@ -98,8 +104,15 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
         tags: ["vehicle-checklist"],
         summary: "Update a vehicle checklist",
         description:
-          "Update an existing vehicle inspection checklist with vehicle, driver, and checklist details. Supports multipart/form-data for optional photos.",
+          "Update an existing vehicle inspection checklist with vehicle, driver, and checklist details. Supports multipart/form-data for photos. All fields are optional. Can add new photos or remove existing ones.",
         consumes: ["multipart/form-data"],
+        params: vehicleChecklistSchemas.updateDeleteVehicleChecklist,
+        response: {
+          200: vehicleChecklistResponses.vehicleChecklistUpdated,
+          400: vehicleChecklistResponses.updateVehicleChecklistErrors,
+          404: vehicleChecklistResponses.vehicleChecklistNotFound,
+          500: vehicleChecklistResponses.internalServerError,
+        },
       },
     },
     updateVehicleChecklistController.handle,

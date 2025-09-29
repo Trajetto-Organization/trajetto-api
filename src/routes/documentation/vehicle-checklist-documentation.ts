@@ -5,7 +5,12 @@ import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
+import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
+import { updateVehicleChecklistSchema } from "@/schemas/update-vehicle-checklist-schema";
+
 const vehicleChecklistSchemas = {
+  createVehicleChecklist: createVehicleChecklistSchema,
+  updateVehicleChecklist: updateVehicleChecklistSchema,
   listVehicleChecklist: listPagesSchema,
   listVehicleChecklistBusiness: listPagesByBusinessSchema,
   updateDeleteVehicleChecklist: z.object({
@@ -13,6 +18,7 @@ const vehicleChecklistSchemas = {
     businessId: z.string().uuid(),
   }),
   updateDeleteBusiness: updateDeleteBusinessSchema,
+  businessIdParam: updateDeleteBusinessSchema,
 };
 
 const vehicleChecklistResponses = {
@@ -145,8 +151,45 @@ const vehicleChecklistResponses = {
       .string()
       .default("Este checklist veicular não pertence a esta empresa."),
   }),
+  vehicleNotBelongBusiness: z.object({
+    message: z
+      .string()
+      .default("O veículo informado não pertence à mesma empresa do usuário."),
+  }),
+  driverNotBelongBusiness: z.object({
+    message: z
+      .string()
+      .default(
+        "O motorista informado não pertence à mesma empresa do usuário.",
+      ),
+  }),
+  branchNotBelongBusiness: z.object({
+    message: z
+      .string()
+      .default("A filial informada não pertence à mesma empresa do usuário."),
+  }),
+  vehicleMileageInvalid: z.object({
+    message: z
+      .string()
+      .default(
+        "A quilometragem informada não pode ser menor que a quilometragem atual do veículo.",
+      ),
+  }),
+  requiredPhotosMissing: z.object({
+    message: z.string().default("Fotos obrigatórias não fornecidas."),
+    errors: z.array(z.string()).optional(),
+    missingPhotos: z.array(z.string()).optional(),
+  }),
+  fileSizeTooLarge: z.object({
+    message: z
+      .string()
+      .default(
+        "O tamanho total dos arquivos excede o limite permitido de 5MB.",
+      ),
+  }),
   validationError: z.object({
     message: z.string().default("Erro de validação nos dados fornecidos."),
+    details: z.string().optional(),
   }),
   listVehicleChecklistErrors: z.union([
     z.object({
@@ -160,6 +203,112 @@ const vehicleChecklistResponses = {
     }),
     z.object({ message: z.string().default("Recurso não encontrado.") }),
     z.object({ message: z.string().default("Empresa não encontrada.") }),
+  ]),
+  createVehicleChecklistErrors: z.union([
+    z.object({
+      message: z.string().default("Erro de validação nos dados fornecidos."),
+      details: z.string().optional(),
+    }),
+    z.object({ message: z.string().default("Recurso não encontrado.") }),
+    z.object({ message: z.string().default("Empresa não encontrada.") }),
+    z.object({ message: z.string().default("Veículo não encontrado.") }),
+    z.object({ message: z.string().default("Motorista não encontrado.") }),
+    z.object({ message: z.string().default("Filial não encontrada.") }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "O veículo informado não pertence à mesma empresa do usuário.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "O motorista informado não pertence à mesma empresa do usuário.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("A filial informada não pertence à mesma empresa do usuário."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "A quilometragem informada não pode ser menor que a quilometragem atual do veículo.",
+        ),
+    }),
+    z.object({
+      message: z.string().default("Fotos obrigatórias não fornecidas."),
+      errors: z.array(z.string()).optional(),
+      missingPhotos: z.array(z.string()).optional(),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "O tamanho total dos arquivos excede o limite permitido de 5MB.",
+        ),
+    }),
+  ]),
+  updateVehicleChecklistErrors: z.union([
+    z.object({
+      message: z.string().default("Erro de validação nos dados fornecidos."),
+      details: z.string().optional(),
+    }),
+    z.object({ message: z.string().default("Recurso não encontrado.") }),
+    z.object({ message: z.string().default("Empresa não encontrada.") }),
+    z.object({
+      message: z.string().default("Checklist veicular não encontrado."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Checklist não encontrado ou não pertence a esta empresa."),
+    }),
+    z.object({ message: z.string().default("Veículo não encontrado.") }),
+    z.object({ message: z.string().default("Motorista não encontrado.") }),
+    z.object({ message: z.string().default("Filial não encontrada.") }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "O veículo informado não pertence à mesma empresa do usuário.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "O motorista informado não pertence à mesma empresa do usuário.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("A filial informada não pertence à mesma empresa do usuário."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "A quilometragem informada não pode ser menor que a quilometragem atual do veículo.",
+        ),
+    }),
+    z.object({
+      message: z.string().default("Fotos obrigatórias não fornecidas."),
+      errors: z.array(z.string()).optional(),
+      missingPhotos: z.array(z.string()).optional(),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "O tamanho total dos arquivos excede o limite permitido de 5MB.",
+        ),
+    }),
   ]),
   internalServerError: z.object({
     message: z.string().default("Erro interno do servidor."),

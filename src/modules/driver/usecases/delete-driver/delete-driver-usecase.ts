@@ -19,7 +19,11 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { DriverHasAssociatedFinesError } from "../errors/driver-has-associated-fines-error";
 import { DriverHasAssociatedFuelError } from "../errors/driver-has-associated-fuel-error";
 
+import { DriverHasAssociatedChecklistsError } from "../errors/driver-has-associated-checklists-error";
+
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
+import { IVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/IVehicle-checklist-repository";
+
 import { Driver } from "../../dtos/driver-dto";
 
 @injectable()
@@ -35,6 +39,8 @@ class DeleteDriverUseCase {
     private fine: IFineRepository,
     @inject("FuelRepository")
     private fuel: IFuelRepository,
+    @inject("VehicleChecklistRepository")
+    private vehicleChecklist: IVehicleChecklistRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -76,6 +82,13 @@ class DeleteDriverUseCase {
 
     if (associatedFuels.length > 0) {
       throw new DriverHasAssociatedFuelError(associatedFuels.length);
+    }
+
+    const associatedChecklists =
+      await this.vehicleChecklist.findVehicleChecklistsByDriverId(driverId);
+
+    if (associatedChecklists.length > 0) {
+      throw new DriverHasAssociatedChecklistsError(associatedChecklists.length);
     }
 
     try {

@@ -12,8 +12,10 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 import { DriverNotBelongBusinessError } from "../errors/driver-not-belong-business-error";
 import { DriverHasAssociatedFinesError } from "../errors/driver-has-associated-fines-error";
 
-import { updateDeleteDriverSchema } from "@/schemas/update-delete-driver-schema";
 import { DriverHasAssociatedFuelError } from "../errors/driver-has-associated-fuel-error";
+import { DriverHasAssociatedChecklistsError } from "../errors/driver-has-associated-checklists-error";
+
+import { updateDeleteDriverSchema } from "@/schemas/update-delete-driver-schema";
 
 class DeleteDriverController {
   async handle(
@@ -51,6 +53,10 @@ class DeleteDriverController {
       }
 
       if (error instanceof DriverHasAssociatedFinesError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof DriverHasAssociatedChecklistsError) {
         return reply.status(403).send({ message: error.message });
       }
 
