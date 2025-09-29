@@ -229,7 +229,7 @@ class AccountPayableRepository implements IAccountPayableRepository {
             : "";
 
           // Combine ID and date for a unique display
-          return `OS#${serviceOrder.id.substring(0, 8)} - ${formattedDate} ${vehicleInfo}`;
+          return `OS#${serviceOrder.id.slice(-12)} - ${formattedDate} ${vehicleInfo}`;
         };
 
         return {
