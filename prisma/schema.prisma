@@ -56,7 +56,7 @@ enum ViolationGravity {
 }
 
 model Business {
-  id               String  @id @default(uuid())
+  id               String  @id @default(uuid(7))
   corporate_reason String  @unique
   fantasy_name     String?
   cep              String
@@ -146,7 +146,7 @@ model User {
 }
 
 model ProfileAccess {
-  id   String @id @default(uuid())
+  id   String @id @default(uuid(7))
   name String // Profile name (e.g. "Manager", "Analyst")
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -163,7 +163,7 @@ model ProfileAccess {
 }
 
 model Permission {
-  id     String @id @default(uuid())
+  id     String @id @default(uuid(7))
   action String // Permission name (e.g. "Manage Users")
 
   permissionKey String @default("")
@@ -236,7 +236,7 @@ model TwoFactorToken {
 }
 
 model Branch {
-  id               String  @id @default(uuid())
+  id               String  @id @default(uuid(7))
   corporate_reason String  @unique
   fantasy_name     String?
   cep              String
@@ -270,7 +270,7 @@ model Branch {
 }
 
 model Supplier {
-  id             String  @id @default(uuid())
+  id             String  @id @default(uuid(7))
   name           String
   cnpj           String
   cep            String?
@@ -295,7 +295,7 @@ model Supplier {
 }
 
 model VehicleType {
-  id              String @id @default(uuid())
+  id              String @id @default(uuid(7))
   description     String
   number_of_axles Int
 
@@ -311,7 +311,7 @@ model VehicleType {
 }
 
 model FuelType {
-  id          String @id @default(uuid())
+  id          String @id @default(uuid(7))
   description String
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -327,7 +327,7 @@ model FuelType {
 }
 
 model Driver {
-  id             String       @id @default(uuid())
+  id             String       @id @default(uuid(7))
   name           String
   birth_date     DateTime
   cnh            String       @unique
@@ -360,7 +360,7 @@ model Driver {
 }
 
 model Vehicle {
-  id                          String        @id @default(uuid())
+  id                          String        @id @default(uuid(7))
   description                 String
   license_plate               String        @unique
   brand                       String
@@ -407,7 +407,7 @@ model Vehicle {
 }
 
 model Part {
-  id          String  @id @default(uuid())
+  id          String  @id @default(uuid(7))
   description String
   unit_price  Decimal @db.Decimal(10, 2)
 
@@ -426,7 +426,7 @@ model Part {
 }
 
 model ServiceOrder {
-  id               String          @id @default(uuid())
+  id               String          @id @default(uuid(7))
   date             DateTime        @default(now())
   completion_date  DateTime?
   maintenance_type MaintenanceType
@@ -465,7 +465,7 @@ model ServiceOrder {
 }
 
 model ServiceOrderPart {
-  id                  String   @id @default(uuid())
+  id                  String   @id @default(uuid(7))
   unit_price          Decimal  @db.Decimal(10, 2)
   quantity            Int
   discount_percentage Decimal? @default(0) @db.Decimal(5, 2)
@@ -486,7 +486,7 @@ model ServiceOrderPart {
 }
 
 model AccountPayable {
-  id           String    @id @default(uuid())
+  id           String    @id @default(uuid(7))
   issue_date   DateTime  @default(now())
   due_date     DateTime
   payment_date DateTime?
@@ -512,7 +512,7 @@ model AccountPayable {
 }
 
 model Activity {
-  id                 String    @id @default(uuid())
+  id                 String    @id @default(uuid(7))
   type               String // "vehicle", "user", "service-order", etc.
   action             String // "create", "update", "delete", etc.
   entityId           String
@@ -536,7 +536,7 @@ model Activity {
 
 // For notifications targeted to specific users
 model Notification {
-  id         String    @id @default(uuid())
+  id         String    @id @default(uuid(7))
   type       String // "service-order", "vehicle", etc.
   title      String
   message    String
@@ -557,7 +557,7 @@ model Notification {
 }
 
 model Quote {
-  id           String      @id @default(uuid())
+  id           String      @id @default(uuid(7))
   name         String
   company      String
   email        String
@@ -577,7 +577,7 @@ model Quote {
 }
 
 model KanbanColumn {
-  id       String @id @default(uuid())
+  id       String @id @default(uuid(7))
   title    String
   color    String
   position Int
@@ -596,7 +596,7 @@ model KanbanColumn {
 }
 
 model KanbanCard {
-  id          String   @id @default(uuid())
+  id          String   @id @default(uuid(7))
   title       String
   description String
   priority    String
@@ -621,7 +621,7 @@ model KanbanCard {
 
 // Table of infraction codes (DETRAN data)
 model TrafficViolationCode {
-  id               String           @id @default(uuid())
+  id               String           @id @default(uuid(7))
   code             String           @unique // Infraction code (ex: 5010)
   sub_code         Int              @default(0) // (0, 1, 2...)
   description      String // Description of the infraction
@@ -645,7 +645,7 @@ model TrafficViolationCode {
 
 // Fines table
 model Fine {
-  id             String    @id @default(uuid())
+  id             String    @id @default(uuid(7))
   violation_date DateTime // Date of infraction
   due_date       DateTime // Expiration date
   payment_date   DateTime? // Payment date
@@ -681,7 +681,7 @@ model Fine {
 }
 
 model Fuel {
-  id                String   @id @default(uuid())
+  id                String   @id @default(uuid(7))
   current_mileage   Float // Current vehicle mileage at the time of refueling
   liters_amount     Decimal  @db.Decimal(10, 3) // Quantity of liters supplied
   price_per_liter   Decimal  @db.Decimal(10, 3) // Value per liter
@@ -718,7 +718,7 @@ model Fuel {
 }
 
 model VehicleChecklist {
-  id              String   @id @default(uuid())
+  id              String   @id @default(uuid(7))
   current_mileage Float // Current vehicle mileage at the time of checklist
   checklist_date  DateTime @default(now()) // Checklist date
 
