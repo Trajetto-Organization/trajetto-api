@@ -8,7 +8,11 @@ import {
 } from "../dtos/service-order-part-dto";
 
 import database from "@/../infra/database";
-import { formatDate, formatCurrency } from "@/config/format-values";
+import {
+  formatDate,
+  formatCurrency,
+  formatServiceOrderDisplay,
+} from "@/config/format-values";
 
 class ServiceOrderPartRepository implements IServiceOrderPartRepository {
   constructor(private prisma = database) {}
@@ -148,6 +152,9 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
               }
             : {}),
           serviceOrderId: serviceOrderPart.serviceOrderId ?? "N/A",
+          serviceOrderDescription: serviceOrderPart.serviceOrder
+            ? formatServiceOrderDisplay(serviceOrderPart.serviceOrder)
+            : "N/A",
           vehicleLicensePlate:
             serviceOrderPart.serviceOrder.vehicle.license_plate ?? "N/A",
           vehicleDescription:

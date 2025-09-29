@@ -14,6 +14,7 @@ import {
   formatCurrency,
   formatNotificationDate,
   translateAccountPayableStatus,
+  formatServiceOrderDisplay,
 } from "@/config/format-values";
 
 class AccountPayableRepository implements IAccountPayableRepository {
@@ -217,20 +218,6 @@ class AccountPayableRepository implements IAccountPayableRepository {
             status = "PENDING"; // Pending deadline
           }
         }
-
-        const formatServiceOrderDisplay = (serviceOrder: any) => {
-          // Format the date in a readable way
-          const formattedDate =
-            formatDate(serviceOrder.date, "pt-BR") || serviceOrder.date;
-
-          // Get vehicle info if available
-          const vehicleInfo = serviceOrder.vehicle.license_plate
-            ? `(Veículo: ${serviceOrder.vehicle.description || ""} - Placa: ${serviceOrder.vehicle.license_plate})`
-            : "";
-
-          // Combine ID and date for a unique display
-          return `OS#${serviceOrder.id.slice(-12)} - ${formattedDate} ${vehicleInfo}`;
-        };
 
         return {
           id: accountPayable.id ?? "N/A",
