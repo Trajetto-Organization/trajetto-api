@@ -226,8 +226,14 @@ const createVehicleChecklistSchema = z.object({
     },
   ),
   vehicleId: z.string().uuid("O ID do veículo deve ser um UUID válido."),
-  driverId: z.string().uuid("O ID do motorista deve ser um UUID válido."),
-  branchId: z.string().uuid("O ID da filial deve ser um UUID válido."),
+  driverId: z
+    .string()
+    .uuid("O ID do motorista deve ser um UUID válido.")
+    .optional(),
+  branchId: z
+    .string()
+    .uuid("O ID da filial deve ser um UUID válido.")
+    .optional(),
 });
 
 // Schema for categorized photo validation

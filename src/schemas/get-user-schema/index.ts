@@ -29,6 +29,7 @@ const getUserSchema = z.object({
   avatar: z.string().nullable().optional(),
   businessId: z.string().nullable().optional(),
   profileAccessId: z.string().nullable().optional(),
+  driverId: z.string().nullable().optional(),
   profileAccess: profileAccessSchema,
 });
 

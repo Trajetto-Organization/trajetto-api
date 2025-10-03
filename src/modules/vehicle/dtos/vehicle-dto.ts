@@ -90,6 +90,8 @@ interface ListVehicleBusinessProps {
   page: number;
   pageSize: number;
   businessId: string;
+  search?: string; // Optional search parameter
+  driverId?: string; // Filter by driver for driver users
 }
 
 interface ListVehicleByBusinessIdProps {

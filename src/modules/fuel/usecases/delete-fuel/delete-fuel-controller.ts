@@ -8,8 +8,10 @@ import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-n
 
 import { updateDeleteFuelSchema } from "@/schemas/update-delete-fuel-schema";
 
-import { FuelNotFoundError } from "../errors/fuel-not-found-error";
+import { DriverCannotDeleteFuelError } from "../errors/driver-cannot-delete-fuel-error";
 import { FuelNotBelongBusinessError } from "../errors/fuel-not-belong-business-error";
+
+import { FuelNotFoundError } from "../errors/fuel-not-found-error";
 
 class DeleteFuelController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -51,6 +53,12 @@ class DeleteFuelController {
 
       if (error instanceof FuelNotBelongBusinessError) {
         return reply.status(403).send({
+          message: error.message,
+        });
+      }
+
+      if (error instanceof DriverCannotDeleteFuelError) {
+        return reply.status(400).send({
           message: error.message,
         });
       }

@@ -24,7 +24,9 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 import { VehicleMileageInvalidError } from "@/modules/fuel/usecases/errors/vehicle-mileage-invalid-error";
 
+import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
 import { AppError } from "@/shared/errors/AppError";
+
 import {
   VehicleChecklist,
   CreateVehicleChecklistProps,
@@ -87,30 +89,58 @@ class CreateVehicleChecklistUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
+    // Security: If user is a driver, verify vehicle belongs to them
+    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
+      if (findVehicle.driverId !== findUser.driverId) {
+        throw new VehicleNotAssignedToDriverError();
+      }
+    }
+
+    // Auto-populate branchId and driverId for driver users
+    if (findUser.driverId) {
+      const driverUser = await this.driver.findDriverById(findUser.driverId);
+      if (driverUser) {
+        checklistData.driverId = findUser.driverId;
+
+        // Force branchId - drivers cannot select branch manually
+        // Priority: Vehicle.branchId → Driver.branchId
+        checklistData.branchId =
+          findVehicle.branchId || driverUser.branchId || undefined;
+      }
+    }
+
     // Validate mileage (cannot be less than current vehicle mileage)
     if (checklistData.current_mileage < findVehicle.current_mileage) {
       throw new VehicleMileageInvalidError();
     }
 
-    // Validate driver exists and belongs to business
-    const findDriver = await this.driver.findDriverById(checklistData.driverId);
+    // Validate driver exists and belongs to business (if driverId is provided)
+    if (checklistData.driverId) {
+      const findDriver = await this.driver.findDriverById(
+        checklistData.driverId,
+      );
 
-    if (!findDriver) {
-      throw new DriverNotFoundError();
+      if (!findDriver) {
+        throw new DriverNotFoundError();
+      }
+
+      if (findDriver.businessId !== checklistData.businessId) {
+        throw new DriverNotBelongBusinessError();
+      }
     }
 
-    if (findDriver.businessId !== checklistData.businessId) {
-      throw new DriverNotBelongBusinessError();
-    }
+    // Validate branch exists and belongs to business (if branchId is provided)
+    if (checklistData.branchId) {
+      const findBranch = await this.branch.findBranchById(
+        checklistData.branchId,
+      );
+      if (!findBranch) {
+        throw new BranchNotFoundError();
+      }
 
-    // Validate branch exists and belongs to business
-    const findBranch = await this.branch.findBranchById(checklistData.branchId);
-    if (!findBranch) {
-      throw new BranchNotFoundError();
-    }
-
-    if (findBranch.businessId !== checklistData.businessId) {
-      throw new BranchNotBelongBusinessError();
+      if (findBranch.businessId !== checklistData.businessId) {
+        throw new BranchNotBelongBusinessError();
+      }
     }
 
     try {

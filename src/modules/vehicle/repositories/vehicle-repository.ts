@@ -140,24 +140,100 @@ class VehicleRepository implements IVehicleRepository {
     page,
     pageSize,
     businessId,
+    search,
+    driverId,
   }: ListVehicleBusinessProps): Promise<ListVehicleProps> {
     const skip = (page - 1) * pageSize;
+
+    // Build search conditions (same logic as listVehicles)
+    const orConditions = [];
+    if (search) {
+      orConditions.push(
+        { license_plate: { contains: search, mode: "insensitive" as const } },
+        { model: { contains: search, mode: "insensitive" as const } },
+        { brand: { contains: search, mode: "insensitive" as const } },
+      );
+    }
+
+    const whereCondition = {
+      businessId,
+      ...(driverId && { driverId: driverId }), // Filter by driver if provided
+      ...(orConditions.length > 0 && { OR: orConditions }),
+    };
 
     const vehicleBusinessData = await this.prisma.vehicle.findMany({
       skip,
       take: pageSize,
-      where: {
-        businessId,
+      where: whereCondition,
+      include: {
+        fuelType: {
+          select: {
+            description: true,
+          },
+        },
+        branch: {
+          select: {
+            corporate_reason: true,
+          },
+        },
+        driver: {
+          select: {
+            name: true,
+            cnh: true,
+          },
+        },
+        vehicleType: {
+          select: {
+            description: true,
+          },
+        },
+      },
+      orderBy: {
+        created_at: "desc",
       },
     });
 
     const total = await this.prisma.vehicle.count({
-      where: {
-        businessId,
-      },
+      where: whereCondition,
     });
 
-    return { data: vehicleBusinessData, total };
+    // Transform data to match Vehicle interface (same as listVehicles)
+    const transformedVehicleData = vehicleBusinessData.map((vehicle) => ({
+      id: vehicle.id,
+      description: vehicle.description ?? "N/A",
+      license_plate: vehicle.license_plate ?? "N/A",
+      brand: vehicle.brand ?? "N/A",
+      model: vehicle.model ?? "N/A",
+      acquisition_date: vehicle.acquisition_date ?? "N/A",
+      fleet_type: vehicle.fleet_type ?? "N/A",
+      fleet_id: vehicle.fleet_id ?? "N/A",
+      last_maintenance_date: vehicle.last_maintenance_date ?? "N/A",
+      current_mileage: vehicle.current_mileage ?? "N/A",
+      last_maintenance_mileage:
+        Number(vehicle.last_maintenance_mileage) ?? "N/A",
+      maintenance_interval_km: vehicle.maintenance_interval_km ?? "N/A",
+      maintenance_interval_months: vehicle.maintenance_interval_months ?? "N/A",
+      renavam: vehicle.renavam ?? "N/A",
+      manufacturing_year: vehicle.manufacturing_year ?? "N/A",
+      model_year: vehicle.model_year ?? "N/A",
+      km_per_liter: vehicle.km_per_liter ?? "N/A",
+      number_of_axles: vehicle.number_of_axles ?? "N/A",
+      status: vehicle.status ?? "N/A",
+      vehicleTypeId: vehicle.vehicleTypeId ?? "N/A",
+      vehicleTypeDescription: vehicle.vehicleType?.description ?? "N/A",
+      fuelTypeId: vehicle.fuelTypeId ?? "N/A",
+      fuelTypeDescription: vehicle.fuelType?.description ?? "N/A",
+      driverId: vehicle.driverId ?? "N/A",
+      driverName: vehicle.driver?.name ?? "N/A",
+      driverCnh: vehicle.driver?.cnh ?? "N/A",
+      branchId: vehicle.branchId ?? "N/A",
+      branchName: vehicle.branch?.corporate_reason ?? "N/A",
+      businessId: vehicle.businessId ?? "N/A",
+      created_at: formatDate(vehicle.created_at, "pt-BR") ?? "N/A",
+      updated_at: formatDate(vehicle.updated_at, "pt-BR") ?? "N/A",
+    }));
+
+    return { data: transformedVehicleData, total };
   }
 
   async updateVehicle({

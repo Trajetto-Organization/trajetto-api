@@ -1,10 +1,11 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { verify } from "jsonwebtoken";
 
-import auth from "@/config/auth";
-
-import { AppError } from "@/shared/errors/AppError";
 import { UserRepository } from "../user/repositories/user-repository";
+import { DriverRepository } from "../driver/repositories/driver-repository";
+
+import auth from "@/config/auth";
+import { AppError } from "@/shared/errors/AppError";
 
 interface UserIdProps {
   sub: string;
@@ -39,10 +40,37 @@ async function ensureAuthenticated(
       );
     }
 
+    // If user has a driverId, fetch driver information
+    let driverInfo = null;
+
+    if (findUserById.driverId) {
+      const driverRepository = new DriverRepository();
+      const driver = await driverRepository.findDriverById(
+        findUserById.driverId,
+      );
+
+      if (driver) {
+        // Check if driver is inactive
+        if (driver.status === "INACTIVE") {
+          throw new AppError(
+            "Seu cadastro como motorista está inativo! Para acessar a plataforma novamente, por favor contate o administrador.",
+            403,
+          );
+        }
+
+        driverInfo = {
+          id: driver.id,
+          branchId: driver.branchId as string,
+        };
+      }
+    }
+
     request.user = {
       id: user_id,
       role: findUserById.role,
       profileAccess: findUserById.profileAccess,
+      driverId: findUserById.driverId,
+      driver: driverInfo,
     };
   } catch (error: any | undefined) {
     throw new AppError(`Invalid Token => ${error.message}`, 401);

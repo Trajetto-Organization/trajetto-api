@@ -31,9 +31,12 @@ class UserRepository implements IUserRepository {
     role,
     profileAccessId,
     businessId,
+    driverId,
   }: CreateUserProps): Promise<User> {
     if (role === "MASTER") {
-      throw new Error("Cannot create MASTER users through this method. Use dedicated MASTER creation method instead.");
+      throw new Error(
+        "Cannot create MASTER users through this method. Use dedicated MASTER creation method instead.",
+      );
     }
 
     const userCreated = await this.prisma.user.create({
@@ -43,7 +46,13 @@ class UserRepository implements IUserRepository {
         name,
         role,
         businessId,
-        profileAccessId: role === "BUSINESS_ADMIN" ? null : profileAccessId,
+        profileAccessId:
+          role === "BUSINESS_ADMIN" ||
+          !profileAccessId ||
+          profileAccessId.trim() === ""
+            ? null
+            : profileAccessId,
+        driverId: !driverId || driverId.trim() === "" ? null : driverId,
       },
     });
 
@@ -147,6 +156,9 @@ class UserRepository implements IUserRepository {
         profileAccess: {
           select: { name: true },
         },
+        driver: {
+          select: { name: true },
+        },
       },
     });
 
@@ -170,6 +182,8 @@ class UserRepository implements IUserRepository {
       businessId: user.businessId ?? "N/A",
       profileAccess: user.profileAccess?.name ?? "N/A",
       profileAccessId: user.profileAccessId ?? "N/A",
+      driverId: user.driverId ?? "N/A",
+      driverName: user.driver?.name ?? "N/A",
       created_at: formatDate(user.created_at, "pt-BR") ?? "N/A",
       updated_at: formatDate(user.updated_at, "pt-BR") ?? "N/A",
     }));
@@ -218,19 +232,66 @@ class UserRepository implements IUserRepository {
   }
 
   async updateUser({ userId, userData }: UpdateUser): Promise<User> {
-    const filteredData = Object.fromEntries(
-      Object.entries(userData).filter(
-        ([, value]) => value !== undefined && value !== null && value !== "",
-      ),
-    );
+    // Extract fields that need special handling
+    const { businessId, profileAccessId, driverId, userType, ...restData } =
+      userData;
 
-    if (filteredData.role === "BUSINESS_ADMIN") {
-      filteredData.profileAccessId = null;
+    // Build base update data (fields that can be updated directly)
+    const updateData: any = {};
+
+    // Add direct fields (excluding undefined values)
+    Object.entries(restData).forEach(([key, value]) => {
+      if (value !== undefined) {
+        updateData[key] = value;
+      }
+    });
+
+    // Handle business relation
+    if (businessId) {
+      updateData.business = {
+        connect: { id: businessId },
+      };
+    }
+
+    // Handle profileAccess relation
+    if (profileAccessId !== undefined) {
+      if (profileAccessId === "" || profileAccessId === null) {
+        updateData.profileAccess = {
+          disconnect: true,
+        };
+      } else {
+        updateData.profileAccess = {
+          connect: { id: profileAccessId },
+        };
+      }
+    }
+
+    // Handle driver relation
+    if (driverId !== undefined) {
+      if (driverId === "" || driverId === null) {
+        updateData.driver = {
+          disconnect: true,
+        };
+      } else {
+        updateData.driver = {
+          connect: { id: driverId },
+        };
+      }
+    }
+
+    // Handle BUSINESS_ADMIN role (should not have profileAccess or driver)
+    if (updateData.role === "BUSINESS_ADMIN") {
+      updateData.profileAccess = {
+        disconnect: true,
+      };
+      updateData.driver = {
+        disconnect: true,
+      };
     }
 
     const updatedUser = await this.prisma.user.update({
       where: { id: userId },
-      data: filteredData,
+      data: updateData,
     });
 
     return updatedUser;
@@ -573,6 +634,41 @@ class UserRepository implements IUserRepository {
     });
 
     return users;
+  }
+
+  async findUserByDriverId(driverId: string): Promise<User | null> {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        driverId,
+      },
+      include: {
+        profileAccess: {
+          select: {
+            name: true,
+            permissions: {
+              select: {
+                id: true,
+                permissionKey: true,
+                action: true,
+                canRead: true,
+                canWrite: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return user;
+  }
+
+  async updateAvatar(userId: string, avatarPath: string | null): Promise<User | null> {
+    const updatedUser = await this.prisma.user.update({
+      where: { id: userId },
+      data: { avatar: avatarPath },
+    });
+
+    return updatedUser;
   }
 }
 

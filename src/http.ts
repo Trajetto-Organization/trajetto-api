@@ -36,7 +36,9 @@ const app = fastify({
 }).withTypeProvider<ZodTypeProvider>();
 
 const serverInstance = app.server;
-app.register(helmet);
+app.register(helmet, {
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+});
 
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
@@ -55,6 +57,10 @@ app.register(fastifyStatic, {
   root: path.join(__dirname, "..", "tmp"),
   prefix: "/tmp/",
   decorateReply: false,
+  setHeaders: (res) => {
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  },
 });
 
 app.register(fastifySwagger, {
@@ -81,7 +87,35 @@ app.register(fastifySwaggerUi, {
   routePrefix: "/docs",
 });
 
-app.register(fastifyRateLimit);
+app.register(fastifyRateLimit, {
+  global: true,
+  max: 300, // 300 requests per minute (5 requests/second) - Suitable for B2B
+  timeWindow: "1 minute",
+  skipOnError: false, // Do not skip rate limit if there is an error in the plugin
+  keyGenerator: (request) => {
+    const forwardedFor = request.headers["x-forwarded-for"];
+    const clientIP =
+      request.headers["cf-connecting-ip"] ||
+      request.headers["x-real-ip"] ||
+      (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor) ||
+      request.socket.remoteAddress;
+    return (Array.isArray(clientIP) ? clientIP[0] : clientIP) || "";
+  },
+  errorResponseBuilder: (req, context) => {
+    return {
+      statusCode: 429,
+      error: "Too Many Requests",
+      message: `Limite de requisições excedido. Por favor, tente novamente mais tarde.`,
+    };
+  },
+  addHeaders: {
+    "x-ratelimit-limit": true, // Add X-RateLimit-Limit header
+    "x-ratelimit-remaining": true, // Add X-RateLimit-Remaining header
+    "x-ratelimit-reset": true, // Add X-RateLimit-Reset header
+    "retry-after": true, // Adds Retry-After header
+  },
+});
+
 app.register(multipart, {
   limits: {
     fileSize: Math.max(

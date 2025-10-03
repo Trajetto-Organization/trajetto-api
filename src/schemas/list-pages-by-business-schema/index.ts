@@ -12,6 +12,12 @@ const listPagesByBusinessSchema = z.object({
   businessId: z
     .string({ required_error: "A empresa é obrigatória!" })
     .min(1, "A empresa é obrigatória!"),
+  search: z
+    .string()
+    .optional()
+    .describe(
+      "Optional search term to filter vehicles by license plate, model, or brand",
+    ),
 });
 
 export { listPagesByBusinessSchema };

@@ -15,7 +15,7 @@ class ListVehicleBusinessController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, businessId } = request.query as z.infer<
+    const { page, pageSize, businessId, search } = request.query as z.infer<
       typeof listPagesByBusinessSchema
     >;
 
@@ -29,6 +29,7 @@ class ListVehicleBusinessController {
         page,
         pageSize,
         businessId,
+        search,
       );
 
       await sendAsNDJSON({

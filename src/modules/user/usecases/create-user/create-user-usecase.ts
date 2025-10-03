@@ -6,8 +6,16 @@ import { v4 as uuidV4 } from "uuid";
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
+import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+
 import { IProfileAccessRepository } from "@/modules/profile-access/repositories/IProfile-access-repository";
 import { UserAlreadyExistsError } from "../errors/user-already-exists.error";
+
+import { DriverAlreadyLinkedToUserError } from "../errors/driver-already-linked-to-user-error";
+import { UserCannotHaveBothDriverAndProfileError } from "../errors/user-cannot-have-both-driver-and-profile-error";
+
+import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
+import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
@@ -54,6 +62,8 @@ class CreateUserUseCase {
     private usersTokens: IUsersTokensRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("DriverRepository")
+    private driver: IDriverRepository,
   ) {
     this.emailQueue = new EmailWorkerAdapter("createUserEmailQueue");
   }
@@ -77,6 +87,7 @@ class CreateUserUseCase {
       role,
       businessId,
       profileAccessId,
+      driverId,
     }: CreateUserProps,
     id: string,
   ): Promise<User> {
@@ -108,7 +119,33 @@ class CreateUserUseCase {
       );
     }
 
-    if (role !== "BUSINESS_ADMIN") {
+    // Validate mutual exclusivity between profileAccessId and driverId
+    if (profileAccessId && driverId) {
+      throw new UserCannotHaveBothDriverAndProfileError();
+    }
+
+    // If driverId is provided, validate driver
+    if (driverId) {
+      const existingDriver = await this.driver.findDriverById(driverId);
+
+      if (!existingDriver) {
+        throw new DriverNotFoundError();
+      }
+
+      // Check if driver belongs to the same business
+      if (existingDriver.businessId !== businessId) {
+        throw new DriverNotBelongBusinessError();
+      }
+
+      // Check if driver is already linked to another user
+      const driverLinkedUser = await this.user.findUserByDriverId(driverId);
+      if (driverLinkedUser) {
+        throw new DriverAlreadyLinkedToUserError();
+      }
+    }
+
+    // If profileAccessId is provided (and not BUSINESS_ADMIN), validate profile
+    if (role !== "BUSINESS_ADMIN" && profileAccessId) {
       const existingProfileAccess =
         await this.profileAccess.findProfileAccessById(
           profileAccessId as string,
@@ -149,6 +186,7 @@ class CreateUserUseCase {
         role,
         businessId,
         profileAccessId,
+        driverId,
       });
 
       const verificationToken =

@@ -28,7 +28,10 @@ import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
 import { AppError } from "@/shared/errors/AppError";
 
 import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
+import { DriverInactiveError } from "../errors/driver-inactive-error";
+
 import { env } from "@/env";
+import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
 @injectable()
 class AuthenticateUserUseCase {
@@ -42,6 +45,8 @@ class AuthenticateUserUseCase {
     private user: IUserRepository,
     @inject("UsersTokensRepository")
     private usersTokens: IUsersTokensRepository,
+    @inject("DriverRepository")
+    private driver: IDriverRepository,
   ) {
     this.emailQueue = new EmailWorkerAdapter("authenticateUserEmailQueue");
   }
@@ -147,6 +152,15 @@ class AuthenticateUserUseCase {
       throw new InvalidCredentialsError();
     }
 
+    // Check if user is a driver and if driver is inactive
+    if (findUser.driverId) {
+      const findDriver = await this.driver.findDriverById(findUser.driverId);
+
+      if (findDriver && findDriver.status === "INACTIVE") {
+        throw new DriverInactiveError();
+      }
+    }
+
     const doesPasswordMatches = await compare(password, findUser.password);
 
     if (!doesPasswordMatches) {
@@ -197,12 +211,17 @@ class AuthenticateUserUseCase {
       });
     }
 
+    // BUSINESS_USER must have either profileAccess OR driverId
     if (findUser.role === "BUSINESS_USER") {
-      if (
-        !findUser.profileAccess ||
-        !findUser.profileAccess.permissions ||
-        findUser.profileAccess.permissions.length === 0
-      ) {
+      const hasProfileAccess =
+        findUser.profileAccess &&
+        findUser.profileAccess.permissions &&
+        findUser.profileAccess.permissions.length > 0;
+
+      const hasDriverId = !!findUser.driverId;
+
+      // If doesn't have profileAccess and doesn't have driverId, throw error
+      if (!hasProfileAccess && !hasDriverId) {
         throw new UserNotFoundPermissionOrProfileAccess();
       }
     }
@@ -218,9 +237,6 @@ class AuthenticateUserUseCase {
     const token = sign(
       {
         role: findUser.role,
-        businessId: findUser.businessId,
-        profileAccess: findUser.profileAccess,
-        permissions: findUser.profileAccess?.permissions,
       },
       secret_token,
       {

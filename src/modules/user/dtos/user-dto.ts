@@ -18,6 +18,7 @@ interface CreateUserProps {
   role: UserRole;
   businessId: string;
   profileAccessId?: string;
+  driverId?: string | null;
   whatsapp_notifications_enabled?: boolean;
   whatsapp_phone?: string | null;
   whatsapp_instance_connected?: boolean;
@@ -29,7 +30,9 @@ interface UpdateUserProps {
   name?: string | null;
   role?: UserRole | null;
   businessId: string;
-  profileAccessId: string;
+  profileAccessId?: string | null;
+  driverId?: string | null;
+  userType?: "employee" | "driver";
   whatsapp_notifications_enabled?: boolean | null;
   whatsapp_phone?: string | null;
 }
@@ -52,6 +55,7 @@ interface User {
   avatar?: string | null;
   businessId?: string | null;
   profileAccessId?: string | null;
+  driverId?: string | null;
   profileAccess?: {
     name: string;
     permissions: {
@@ -120,6 +124,7 @@ interface ListUsersProps {
   corporate_reason?: string | null;
   businessId?: string | null;
   profileAccessId?: string | null;
+  driverId?: string | null;
   profileAccess?: string | null;
   whatsapp_notifications_enabled?: boolean;
   whatsapp_phone?: string | null;

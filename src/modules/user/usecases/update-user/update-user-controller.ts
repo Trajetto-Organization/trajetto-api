@@ -12,8 +12,14 @@ import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 
 import { UserCannotBeUpdatedByHimselfError } from "../errors/user-cannot-be-updated-by-himself-error";
 
-import { updateDeleteUserSchema } from "@/schemas/update-delete-user-schema";
 import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-match-business-error";
+import { DriverAlreadyLinkedToUserError } from "../errors/driver-already-linked-to-user-error";
+
+import { UserCannotHaveBothDriverAndProfileError } from "../errors/user-cannot-have-both-driver-and-profile-error";
+import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
+
+import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
+import { updateDeleteUserSchema } from "@/schemas/update-delete-user-schema";
 
 class UpdateUserController {
   async handle(
@@ -61,6 +67,22 @@ class UpdateUserController {
 
       if (error instanceof UserAlreadyExistsError) {
         return reply.status(409).send({ message: error.message });
+      }
+
+      if (error instanceof DriverNotFoundError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof DriverNotBelongBusinessError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof DriverAlreadyLinkedToUserError) {
+        return reply.status(409).send({ message: error.message });
+      }
+
+      if (error instanceof UserCannotHaveBothDriverAndProfileError) {
+        return reply.status(400).send({ message: error.message });
       }
 
       throw error;

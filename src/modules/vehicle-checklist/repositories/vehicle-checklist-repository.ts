@@ -33,6 +33,8 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
       data: {
         ...checklistData,
         photos: checklistData.photos,
+        branchId: checklistData.branchId!,
+        driverId: checklistData.driverId!,
       },
     });
 

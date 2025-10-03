@@ -28,6 +28,8 @@ import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/err
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 
 import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
+import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
+
 import { VehicleInvalidStatusForFuelError } from "../errors/vehicle-invalid-status-for-fuel-error";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -90,6 +92,29 @@ class CreateFuelUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
+    // Security: If user is a driver, verify vehicle belongs to them
+    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
+      if (findVehicle.driverId !== findUser.driverId) {
+        throw new VehicleNotAssignedToDriverError();
+      }
+    }
+
+    // Auto-populate branchId, driverId, and fuelTypeId for driver users
+    if (findUser.driverId) {
+      const driverUser = await this.driver.findDriverById(findUser.driverId);
+      if (driverUser) {
+        fuelData.driverId = findUser.driverId;
+
+        // Force fuelTypeId to match vehicle's fuel type (drivers cannot change it)
+        fuelData.fuelTypeId = findVehicle.fuelTypeId;
+
+        // Force branchId - drivers cannot select branch manually
+        // Priority: Vehicle.branchId → Driver.branchId
+        fuelData.branchId =
+          findVehicle.branchId || driverUser.branchId || undefined;
+      }
+    }
+
     // Validate vehicle status (only ACTIVE or IN_ROUTE vehicles can be fueled)
     if (findVehicle.status !== "ACTIVE" && findVehicle.status !== "IN_ROUTE") {
       throw new VehicleInvalidStatusForFuelError();
@@ -100,15 +125,17 @@ class CreateFuelUseCase {
       throw new VehicleMileageInvalidError();
     }
 
-    // Validate driver exists and belongs to business
-    const findDriver = await this.driver.findDriverById(fuelData.driverId);
+    // Validate driver exists and belongs to business (if driverId is provided)
+    if (fuelData.driverId) {
+      const findDriver = await this.driver.findDriverById(fuelData.driverId);
 
-    if (!findDriver) {
-      throw new DriverNotFoundError();
-    }
+      if (!findDriver) {
+        throw new DriverNotFoundError();
+      }
 
-    if (findDriver.businessId !== fuelData.businessId) {
-      throw new DriverNotBelongBusinessError();
+      if (findDriver.businessId !== fuelData.businessId) {
+        throw new DriverNotBelongBusinessError();
+      }
     }
 
     // Validate fuel type exists and belongs to business
@@ -123,14 +150,16 @@ class CreateFuelUseCase {
       throw new FuelTypeNotBelongBusinessError();
     }
 
-    // Validate branch exists and belongs to business
-    const findBranch = await this.branch.findBranchById(fuelData.branchId);
-    if (!findBranch) {
-      throw new BranchNotFoundError();
-    }
+    // Validate branch exists and belongs to business (if branchId is provided)
+    if (fuelData.branchId) {
+      const findBranch = await this.branch.findBranchById(fuelData.branchId);
+      if (!findBranch) {
+        throw new BranchNotFoundError();
+      }
 
-    if (findBranch.businessId !== fuelData.businessId) {
-      throw new BranchNotBelongBusinessError();
+      if (findBranch.businessId !== fuelData.businessId) {
+        throw new BranchNotBelongBusinessError();
+      }
     }
 
     try {

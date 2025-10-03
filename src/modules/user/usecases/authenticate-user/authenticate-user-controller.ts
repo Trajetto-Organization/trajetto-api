@@ -8,6 +8,7 @@ import { InvalidCredentialsError } from "../errors/invalid-credentials-error";
 import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
 
 import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
+import { DriverInactiveError } from "../errors/driver-inactive-error";
 
 class AuthenticateUserController {
   async handle(
@@ -61,6 +62,10 @@ class AuthenticateUserController {
       }
 
       if (error instanceof UserRevokedAccessError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof DriverInactiveError) {
         return reply.status(403).send({ message: error.message });
       }
 

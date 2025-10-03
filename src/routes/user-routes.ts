@@ -36,6 +36,9 @@ import { verifyPermission } from "@/modules/middlewares/verify-permission";
 import { ResendTwoFactorCodeController } from "@/modules/user/usecases/resend-two-factor-code/resend-two-factor-code-controller";
 import { UserRevokeAccessController } from "@/modules/user/usecases/user-revoke-access/user-revoke-access-controller";
 
+import { UploadAvatarController } from "@/modules/user/usecases/upload-avatar/upload-avatar-controller";
+import { DeleteAvatarController } from "@/modules/user/usecases/delete-avatar/delete-avatar-controller";
+
 import { userResponses, userSchemas } from "./documentation/user-documentation";
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 
@@ -74,12 +77,15 @@ const updateActivityNotificationsController =
 
 const userRevokeAccessController = new UserRevokeAccessController();
 
+const uploadAvatarController = new UploadAvatarController();
+const deleteAvatarController = new DeleteAvatarController();
+
 async function userRoutes(app: FastifyInstance) {
   app.post(
     "/create-user",
     {
       config: {
-        rateLimit: getRateLimiterConfig({ max: 20 }),
+        rateLimit: getRateLimiterConfig({ max: 10 }),
       },
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("user_registration_manage", "write")],
@@ -205,6 +211,9 @@ async function userRoutes(app: FastifyInstance) {
   app.post(
     "/reset/password",
     {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 4 }),
+      },
       schema: {
         tags: ["user"],
         summary: "Reset user password",
@@ -275,6 +284,9 @@ async function userRoutes(app: FastifyInstance) {
   app.post(
     "/two-factor-verification",
     {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 4 }),
+      },
       schema: {
         tags: ["user"],
         summary: "Verify two-factor authentication",
@@ -539,6 +551,46 @@ async function userRoutes(app: FastifyInstance) {
       },
     },
     userRevokeAccessController.handle,
+  );
+
+  app.patch(
+    "/avatar",
+    {
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Upload or update user avatar",
+        description:
+          "Upload a new avatar image or replace the existing one for the authenticated user",
+        response: {
+          200: userResponses.genericMessage,
+          400: userResponses.resourceNotFound,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    uploadAvatarController.handle,
+  );
+
+  app.delete(
+    "/avatar",
+    {
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Delete user avatar",
+        description:
+          "Remove the avatar image for the authenticated user and reset to default",
+        response: {
+          200: userResponses.genericMessage,
+          400: userResponses.resourceNotFound,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    deleteAvatarController.handle,
   );
 }
 

@@ -18,6 +18,7 @@ interface AuthenticatedUser {
   id: string;
   role: UserRole;
   profileAccess?: ProfileAccess;
+  driverId?: string;
 }
 
 function verifyPermission(
@@ -36,7 +37,32 @@ function verifyPermission(
       return done();
     }
 
-    // For BUSINESS_USER, checks if profile and permission are set
+    // Drivers (BUSINESS_USER with driverId) have specific permissions
+    // They can read vehicles, branches, fuel types and write fuel/checklist
+    if (user.role === "BUSINESS_USER" && user.driverId) {
+      // Define driver permissions with their allowed access types
+      const driverPermissions: Record<string, ("read" | "write")[]> = {
+        vehicle_manage: ["read", "write"], // Read-only access to vehicles
+        fuel_manage: ["read", "write"], // Full access to fuel records
+      };
+
+      const allowedAccessTypes = driverPermissions[permissionKey];
+
+      // Check if driver has permission for this resource and access type
+      if (allowedAccessTypes?.includes(accessType)) {
+        return done(); // Permission granted
+      }
+
+      // Deny access for unauthorized resources
+      return done(
+        new AppError(
+          "Motoristas não possuem permissão para acessar este recurso.",
+          403,
+        ),
+      );
+    }
+
+    // For regular BUSINESS_USER, checks if profile and permission are set
     if (!user.profileAccess) {
       return done(
         new AppError("Perfil de acesso não associado ao usuário.", 401),

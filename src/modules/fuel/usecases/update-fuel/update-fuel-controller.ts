@@ -24,6 +24,8 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
 import { VehicleInvalidStatusForFuelError } from "../errors/vehicle-invalid-status-for-fuel-error";
 
+import { DriverCannotUpdateFuelError } from "../errors/driver-cannot-update-fuel-error";
+
 import { updateFuelMultipartSchema } from "@/schemas/update-fuel-schema";
 import { updateDeleteFuelSchema } from "@/schemas/update-delete-fuel-schema";
 
@@ -149,6 +151,10 @@ class UpdateFuelController {
       }
 
       if (error instanceof VehicleInvalidStatusForFuelError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof DriverCannotUpdateFuelError) {
         return reply.status(400).send({ message: error.message });
       }
 

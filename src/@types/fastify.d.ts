@@ -20,6 +20,11 @@ declare module "fastify" {
       id: string;
       role: UserRole;
       profileAccess?: ProfileAccess | null;
+      driverId?: string | null;
+      driver?: {
+        id: string;
+        branchId: string | null;
+      } | null;
     };
   }
 }

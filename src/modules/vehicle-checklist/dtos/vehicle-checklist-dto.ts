@@ -68,9 +68,9 @@ interface CreateVehicleChecklistProps {
   photos?: string[];
   overall_condition: string;
   businessId: string;
-  branchId: string;
+  branchId?: string; // Optional for driver users (auto-populated)
   vehicleId: string;
-  driverId: string;
+  driverId?: string; // Optional for driver users (auto-populated)
 }
 
 interface UpdateVehicleChecklistProps {

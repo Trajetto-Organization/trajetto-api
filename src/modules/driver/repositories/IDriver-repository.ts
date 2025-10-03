@@ -23,6 +23,12 @@ interface IDriverRepository {
   findDriverByCpf: (cpf: string) => Promise<Driver | null>;
   findDriverByRg: (rg: string) => Promise<Driver | null>;
   findDriverByDriverLicense: (cnh: string) => Promise<Driver | null>;
+  findDriverWithUser: (driverId: string) => Promise<
+    | (Driver & {
+        user?: { id: string; email: string; name: string } | null;
+      })
+    | null
+  >;
 }
 
 export { IDriverRepository };

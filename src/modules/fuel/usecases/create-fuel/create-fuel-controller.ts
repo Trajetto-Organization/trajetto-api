@@ -21,6 +21,8 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
 import { VehicleInvalidStatusForFuelError } from "../errors/vehicle-invalid-status-for-fuel-error";
 
+import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
+
 import { createFuelMultipartSchema } from "@/schemas/create-fuel-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
@@ -116,6 +118,10 @@ class CreateFuelController {
       }
 
       if (error instanceof VehicleInvalidStatusForFuelError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof VehicleNotAssignedToDriverError) {
         return reply.status(400).send({ message: error.message });
       }
 

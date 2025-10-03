@@ -20,6 +20,7 @@ import { DriverHasAssociatedFinesError } from "../errors/driver-has-associated-f
 import { DriverHasAssociatedFuelError } from "../errors/driver-has-associated-fuel-error";
 
 import { DriverHasAssociatedChecklistsError } from "../errors/driver-has-associated-checklists-error";
+import { DriverHasAssociatedUserError } from "../errors/driver-has-associated-user-error";
 
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 import { IVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/IVehicle-checklist-repository";
@@ -70,6 +71,13 @@ class DeleteDriverUseCase {
 
     if (findDriverById.businessId !== businessId) {
       throw new DriverNotBelongBusinessError();
+    }
+
+    // Check if driver is linked to a user account
+    const linkedUser = await this.user.findUserByDriverId(driverId);
+
+    if (linkedUser) {
+      throw new DriverHasAssociatedUserError();
     }
 
     const associatedFines = await this.fine.findFinesByDriverId(driverId);

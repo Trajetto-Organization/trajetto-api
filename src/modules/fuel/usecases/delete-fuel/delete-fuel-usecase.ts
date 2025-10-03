@@ -12,6 +12,8 @@ import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-n
 import { FuelNotFoundError } from "../errors/fuel-not-found-error";
 import { FuelNotBelongBusinessError } from "../errors/fuel-not-belong-business-error";
 
+import { DriverCannotDeleteFuelError } from "../errors/driver-cannot-delete-fuel-error";
+
 import { AppError } from "@/shared/errors/AppError";
 import { Fuel } from "../../dtos/fuel-dto";
 
@@ -46,6 +48,11 @@ class DeleteFuelUseCase {
 
     if (!findUser) {
       throw new ResourceNotFoundError();
+    }
+
+    // Security: Drivers cannot delete fuel records
+    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
+      throw new DriverCannotDeleteFuelError();
     }
 
     // Validate business exists

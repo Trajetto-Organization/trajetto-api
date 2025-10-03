@@ -27,6 +27,7 @@ class ListVehicleBusinessUseCase {
     page: number,
     pageSize: number,
     businessId: string,
+    search?: string,
   ): Promise<ListVehicleProps> {
     const findUser = await this.user.findUserById(userId);
 
@@ -40,11 +41,19 @@ class ListVehicleBusinessUseCase {
       throw new BusinessNotFoundError();
     }
 
+    // Auto-filter by driverId if user is a driver (BUSINESS_USER with driverId)
+    const driverId =
+      findUser.role === "BUSINESS_USER" && findUser.driverId
+        ? findUser.driverId
+        : undefined;
+
     try {
       const vehicleList = await this.vehicle.listVehicleBusiness({
         page,
         pageSize,
         businessId,
+        search,
+        driverId, // Pass driverId to filter vehicles for drivers
       });
 
       return vehicleList;

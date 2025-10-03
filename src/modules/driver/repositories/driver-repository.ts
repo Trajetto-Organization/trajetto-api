@@ -177,6 +177,13 @@ class DriverRepository implements IDriverRepository {
       },
       include: {
         branch: true,
+        User: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+          },
+        },
       },
     });
 
@@ -214,6 +221,31 @@ class DriverRepository implements IDriverRepository {
     });
 
     return findDriverByDriverLicense;
+  }
+
+  async findDriverWithUser(driverId: string): Promise<
+    | (Driver & {
+        user?: { id: string; email: string; name: string } | null;
+      })
+    | null
+  > {
+    const driver = await this.prisma.driver.findUnique({
+      where: {
+        id: driverId,
+      },
+      include: {
+        branch: true,
+        User: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+          },
+        },
+      },
+    });
+
+    return driver;
   }
 }
 

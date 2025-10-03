@@ -17,6 +17,8 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 import { VehicleMileageInvalidError } from "@/modules/fuel/usecases/errors/vehicle-mileage-invalid-error";
 
+import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
+
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
 
@@ -201,6 +203,10 @@ class CreateVehicleChecklistController {
       }
 
       if (error instanceof VehicleMileageInvalidError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof VehicleNotAssignedToDriverError) {
         return reply.status(400).send({ message: error.message });
       }
 

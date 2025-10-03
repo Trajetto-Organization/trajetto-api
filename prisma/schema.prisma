@@ -117,6 +117,9 @@ model User {
   profileAccess   ProfileAccess? @relation(fields: [profileAccessId], references: [id])
   profileAccessId String?
 
+  driver   Driver? @relation(fields: [driverId], references: [id])
+  driverId String? @unique
+
   RefreshToken RefreshToken[]
 
   serviceOrders   ServiceOrder[] // Responsible user
@@ -349,12 +352,14 @@ model Driver {
   branchId String?
 
   vehicles Vehicle[]
+  User     User?
 
-  created_at       DateTime           @default(now())
-  updated_at       DateTime           @updatedAt
   Fine             Fine[]
   Fuel             Fuel[]
   VehicleChecklist VehicleChecklist[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
   @@map("driver")
 }

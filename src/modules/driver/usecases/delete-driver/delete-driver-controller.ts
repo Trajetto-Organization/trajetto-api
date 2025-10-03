@@ -13,7 +13,9 @@ import { DriverNotBelongBusinessError } from "../errors/driver-not-belong-busine
 import { DriverHasAssociatedFinesError } from "../errors/driver-has-associated-fines-error";
 
 import { DriverHasAssociatedFuelError } from "../errors/driver-has-associated-fuel-error";
+
 import { DriverHasAssociatedChecklistsError } from "../errors/driver-has-associated-checklists-error";
+import { DriverHasAssociatedUserError } from "../errors/driver-has-associated-user-error";
 
 import { updateDeleteDriverSchema } from "@/schemas/update-delete-driver-schema";
 
@@ -61,6 +63,10 @@ class DeleteDriverController {
       }
 
       if (error instanceof DriverHasAssociatedFuelError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof DriverHasAssociatedUserError) {
         return reply.status(403).send({ message: error.message });
       }
 

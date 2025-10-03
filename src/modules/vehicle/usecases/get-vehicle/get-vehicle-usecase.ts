@@ -12,6 +12,8 @@ import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-n
 import { Vehicle } from "../../dtos/vehicle-dto";
 import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";
 
+import { VehicleNotAssignedToDriverError } from "../errors/vehicle-not-assigned-to-driver-error";
+
 @injectable()
 class GetVehicleUseCase {
   constructor(
@@ -44,6 +46,13 @@ class GetVehicleUseCase {
 
     if (!findVehicleById) {
       throw new VehicleNotFoundError();
+    }
+
+    // Security: If user is a driver, verify vehicle belongs to them
+    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
+      if (findVehicleById.driverId !== findUser.driverId) {
+        throw new VehicleNotAssignedToDriverError();
+      }
     }
 
     try {

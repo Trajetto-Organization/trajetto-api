@@ -29,9 +29,9 @@ interface CreateFuelProps {
   notes?: string | null;
   refueling_date: Date | string;
   businessId: string;
-  branchId: string;
+  branchId?: string; // Optional for driver users (auto-populated)
   vehicleId: string;
-  driverId: string;
+  driverId?: string; // Optional for driver users (auto-populated)
   fuelTypeId: string;
 }
 

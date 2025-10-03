@@ -11,11 +11,14 @@ import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-n
 import { VehicleChecklistNotFoundError } from "../errors/vehicle-checklist-not-found-error";
 import { VehicleChecklistNotBelongBusinessError } from "../errors/vehicle-checklist-not-belong-business-error";
 
+import { DriverCannotDeleteChecklistError } from "../errors/driver-cannot-delete-checklist-error";
+
 import { NotificationService } from "@/shared/services/notification-service";
 import { VehicleChecklist } from "../../dtos/vehicle-checklist-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
 import { AppError } from "@/shared/errors/AppError";
+
 import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
 
 interface DeleteVehicleChecklistProps {
@@ -50,6 +53,11 @@ class DeleteVehicleChecklistUseCase {
 
     if (!findUser) {
       throw new ResourceNotFoundError();
+    }
+
+    // Security: Drivers cannot delete checklist records
+    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
+      throw new DriverCannotDeleteChecklistError();
     }
 
     const findBusiness = await this.business.findBusinessById(businessId);

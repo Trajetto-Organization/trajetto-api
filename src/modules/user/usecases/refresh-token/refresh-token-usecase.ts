@@ -82,9 +82,6 @@ class RefreshTokenUseCase {
     const newToken = sign(
       {
         role: findUserByEmail.role,
-        businessId: findUserByEmail.businessId,
-        profileAccess: findUserByEmail.profileAccess,
-        permissions: findUserByEmail.profileAccess?.permissions,
       },
       secret_token,
       {

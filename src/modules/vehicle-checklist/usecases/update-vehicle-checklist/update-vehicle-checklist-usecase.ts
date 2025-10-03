@@ -24,6 +24,8 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 import { VehicleMileageInvalidError } from "@/modules/fuel/usecases/errors/vehicle-mileage-invalid-error";
 
+import { DriverCannotUpdateChecklistError } from "../errors/driver-cannot-update-checklist-error";
+
 import { AppError } from "@/shared/errors/AppError";
 import {
   VehicleChecklist,
@@ -116,26 +118,40 @@ class UpdateVehicleChecklistUseCase {
       }
     }
 
-    // If updating vehicle, validate it exists and belongs to business
-    if (checklistData.vehicleId) {
-      const findVehicle = await this.vehicle.findVehicleById(
-        checklistData.vehicleId,
-      );
+    // Determine the vehicle to use (updated or existing)
+    const vehicleId = checklistData.vehicleId || findChecklist.vehicleId;
+    const findVehicle = await this.vehicle.findVehicleById(vehicleId);
 
-      if (!findVehicle) {
-        throw new VehicleNotFoundError();
-      }
+    if (!findVehicle) {
+      throw new VehicleNotFoundError();
+    }
 
-      if (findVehicle.businessId !== businessId) {
-        throw new VehicleNotBelongBusinessError();
-      }
+    // If updating vehicle, validate it belongs to business
+    if (checklistData.vehicleId && findVehicle.businessId !== businessId) {
+      throw new VehicleNotBelongBusinessError();
+    }
 
-      // If updating mileage, validate it's not less than current vehicle mileage
-      if (
-        checklistData.current_mileage !== undefined &&
-        checklistData.current_mileage < findVehicle.current_mileage
-      ) {
-        throw new VehicleMileageInvalidError();
+    // Security: Drivers cannot update checklist records
+    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
+      throw new DriverCannotUpdateChecklistError();
+    }
+
+    // If updating mileage, validate it's not less than current vehicle mileage
+    if (
+      checklistData.current_mileage !== undefined &&
+      checklistData.current_mileage < findVehicle.current_mileage
+    ) {
+      throw new VehicleMileageInvalidError();
+    }
+
+    // Auto-populate branchId for driver users
+    if (findUser.driverId) {
+      const driverUser = await this.driver.findDriverById(findUser.driverId);
+      if (driverUser) {
+        // Force branchId - drivers cannot select branch manually
+        // Priority: Vehicle.branchId → Driver.branchId
+        checklistData.branchId =
+          findVehicle.branchId || driverUser.branchId || undefined;
       }
     }
 

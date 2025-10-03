@@ -9,6 +9,7 @@ import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-n
 import { VehicleChecklistNotFoundError } from "../errors/vehicle-checklist-not-found-error";
 import { VehicleChecklistNotBelongBusinessError } from "../errors/vehicle-checklist-not-belong-business-error";
 
+import { DriverCannotDeleteChecklistError } from "../errors/driver-cannot-delete-checklist-error";
 import { updateDeleteVehicleChecklistSchema } from "@/schemas/update-delete-vehicle-checklist-schema";
 
 class DeleteVehicleChecklistController {
@@ -47,6 +48,10 @@ class DeleteVehicleChecklistController {
 
       if (error instanceof VehicleChecklistNotBelongBusinessError) {
         return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof DriverCannotDeleteChecklistError) {
+        return reply.status(400).send({ message: error.message });
       }
 
       throw error;

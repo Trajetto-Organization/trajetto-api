@@ -74,17 +74,66 @@ const createUserSchema = z
     role: roleEnum,
     businessId: z.string().min(1, "A empresa é obrigatória!"),
     profileAccessId: z.string().optional(),
+    driverId: z
+      .string()
+      .optional()
+      .refine(
+        (val) => !val || val === "" || z.string().uuid().safeParse(val).success,
+        {
+          message: "O ID do motorista deve ser um UUID válido.",
+        },
+      ),
+    userType: z.enum(["employee", "driver"]).optional(),
   })
   .superRefine((data, ctx) => {
-    if (
-      data.role !== "BUSINESS_ADMIN" &&
-      (!data.profileAccessId || data.profileAccessId.trim() === "")
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "O Perfil de acesso é obrigatório!",
-        path: ["profileAccessId"],
-      });
+    // BUSINESS_ADMIN does not need profileAccessId or driverId
+    if (data.role === "BUSINESS_ADMIN") {
+      if (data.profileAccessId || data.driverId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "Administrador de empresa não deve ter perfil de acesso ou motorista vinculado.",
+          path: ["role"],
+        });
+      }
+      return;
+    }
+
+    // BUSINESS_USER needs either profileAccessId OR driverId (but not both)
+    if (data.role === "BUSINESS_USER") {
+      const hasProfile =
+        data.profileAccessId && data.profileAccessId.trim() !== "";
+      const hasDriver = data.driverId && data.driverId.trim() !== "";
+
+      // If you don't have either of these
+      if (!hasProfile && !hasDriver) {
+        // Check userType to determine which error to show
+        if (data.userType === "driver") {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Selecione um motorista!",
+            path: ["driverId"],
+          });
+        } else {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Selecione um perfil de acesso!",
+            path: ["profileAccessId"],
+          });
+        }
+        return;
+      }
+
+      // If you have both
+      if (hasProfile && hasDriver) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "Usuário não pode ter tanto um perfil de acesso quanto um motorista vinculado. Escolha apenas um.",
+          path: ["driverId"],
+        });
+        return;
+      }
     }
   });
 

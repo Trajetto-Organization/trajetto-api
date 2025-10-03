@@ -2,12 +2,20 @@ import { inject, injectable } from "tsyringe";
 import { hash } from "bcrypt";
 
 import { IUserRepository } from "../../repositories/IUser-repository";
+
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
 import { IProfileAccessRepository } from "@/modules/profile-access/repositories/IProfile-access-repository";
 
 import { UserAlreadyExistsError } from "../errors/user-already-exists.error";
 import { BusinessNotFoundError } from "../errors/business-not-found-error";
+
+import { DriverAlreadyLinkedToUserError } from "../errors/driver-already-linked-to-user-error";
+import { UserCannotHaveBothDriverAndProfileError } from "../errors/user-cannot-have-both-driver-and-profile-error";
+
+import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
+import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 
@@ -49,6 +57,8 @@ class UpdateUserUseCase {
     private profileAccess: IProfileAccessRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("DriverRepository")
+    private driver: IDriverRepository,
   ) {
     this.emailQueue = new EmailWorkerAdapter("updateUserEmailQueue");
   }
@@ -72,18 +82,51 @@ class UpdateUserUseCase {
 
     const isChangingToBusinessAdmin = userData.role === "BUSINESS_ADMIN";
 
-    if (!isChangingToBusinessAdmin && userToUpdate.role !== "BUSINESS_ADMIN") {
-      const existingProfileAccess =
-        await this.profileAccess.findProfileAccessById(
-          userData.profileAccessId,
-        );
+    // Validate mutual exclusivity between profileAccessId and driverId
+    if (userData.profileAccessId && userData.driverId) {
+      throw new UserCannotHaveBothDriverAndProfileError();
+    }
 
-      if (!existingProfileAccess) {
-        throw new ProfileAccessNotFoundError();
+    // If driverId is provided, validate driver
+    if (userData.driverId) {
+      const existingDriver = await this.driver.findDriverById(
+        userData.driverId,
+      );
+
+      if (!existingDriver) {
+        throw new DriverNotFoundError();
       }
 
-      if (existingProfileAccess.businessId !== userToUpdate.businessId) {
-        throw new UserProfileNotMatchBusinessError();
+      // Check if driver belongs to the same business as the user
+      if (existingDriver.businessId !== userToUpdate.businessId) {
+        throw new DriverNotBelongBusinessError();
+      }
+
+      // Check if driver is already linked to another user (excluding current user)
+      const driverLinkedUser = await this.user.findUserByDriverId(
+        userData.driverId,
+      );
+      if (driverLinkedUser && driverLinkedUser.id !== userId) {
+        throw new DriverAlreadyLinkedToUserError();
+      }
+    }
+
+    // If profileAccessId is provided (and not changing to BUSINESS_ADMIN), validate profile
+    if (!isChangingToBusinessAdmin && userToUpdate.role !== "BUSINESS_ADMIN") {
+      // Only validate profileAccessId if it's provided and driverId is not provided
+      if (userData.profileAccessId && !userData.driverId) {
+        const existingProfileAccess =
+          await this.profileAccess.findProfileAccessById(
+            userData.profileAccessId,
+          );
+
+        if (!existingProfileAccess) {
+          throw new ProfileAccessNotFoundError();
+        }
+
+        if (existingProfileAccess.businessId !== userToUpdate.businessId) {
+          throw new UserProfileNotMatchBusinessError();
+        }
       }
     }
 
@@ -166,6 +209,7 @@ class UpdateUserUseCase {
 
       return userUpdated;
     } catch (error) {
+      console.log("erro ao atualizar o usuário", error);
       throw new AppError(
         "Houve um erro ao tentar atualizar o usuário! Por favor, tente novamente.",
         500,

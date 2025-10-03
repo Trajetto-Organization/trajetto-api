@@ -44,6 +44,8 @@ class FuelRepository implements IFuelRepository {
         total_amount: totalAmount,
         odometer_verified: fuelData.odometer_verified ?? false,
         odometer_photo: fuelData.odometer_photo as string,
+        branchId: fuelData.branchId!,
+        driverId: fuelData.driverId!,
       },
     });
 

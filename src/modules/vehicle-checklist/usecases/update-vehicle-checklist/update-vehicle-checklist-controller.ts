@@ -17,13 +17,13 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 import { VehicleMileageInvalidError } from "@/modules/fuel/usecases/errors/vehicle-mileage-invalid-error";
 
+import { DriverCannotUpdateChecklistError } from "../errors/driver-cannot-update-checklist-error";
+
 import { updateDeleteVehicleChecklistSchema } from "@/schemas/update-delete-vehicle-checklist-schema";
 import { updateVehicleChecklistSchema } from "@/schemas/update-vehicle-checklist-schema";
 
-import { PhotoValidationService } from "../../services/photo-validation-service";
-import { AppError } from "@/shared/errors/AppError";
-
 import { RequiredPhotosMissingError } from "../errors/required-photos-missing-error";
+import { PhotoValidationService } from "../../services/photo-validation-service";
 
 class UpdateVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -205,6 +205,10 @@ class UpdateVehicleChecklistController {
         return reply.status(400).send({ message: error.message });
       }
 
+      if (error instanceof DriverCannotUpdateChecklistError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
       if (error instanceof RequiredPhotosMissingError) {
         return reply.status(400).send({
           message: error.message,
@@ -217,10 +221,6 @@ class UpdateVehicleChecklistController {
           existingPhotos: error.existingPhotos,
           photosToRemove: error.photosToRemove,
         });
-      }
-
-      if (error instanceof AppError) {
-        return reply.status(error.statusCode).send({ message: error.message });
       }
 
       throw error;

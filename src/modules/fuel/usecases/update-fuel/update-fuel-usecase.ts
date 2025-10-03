@@ -33,6 +33,8 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
 import { VehicleInvalidStatusForFuelError } from "../errors/vehicle-invalid-status-for-fuel-error";
 
+import { DriverCannotUpdateFuelError } from "../errors/driver-cannot-update-fuel-error";
+
 import { AppError } from "@/shared/errors/AppError";
 import { Fuel, UpdateFuelProps } from "../../dtos/fuel-dto";
 
@@ -100,34 +102,48 @@ class UpdateFuelUseCase {
       throw new FuelNotBelongBusinessError();
     }
 
-    // If updating vehicle, validate it exists and belongs to business
-    if (fuelData.vehicleId) {
-      const findVehicle = await this.vehicle.findVehicleById(
-        fuelData.vehicleId,
-      );
+    // Determine the vehicle to use (updated or existing)
+    const vehicleId = fuelData.vehicleId || findFuel.vehicleId;
+    const findVehicle = await this.vehicle.findVehicleById(vehicleId);
 
-      if (!findVehicle) {
-        throw new VehicleNotFoundError();
-      }
+    if (!findVehicle) {
+      throw new VehicleNotFoundError();
+    }
 
-      if (findVehicle.businessId !== businessId) {
-        throw new VehicleNotBelongBusinessError();
-      }
+    // If updating vehicle, validate it belongs to business
+    if (fuelData.vehicleId && findVehicle.businessId !== businessId) {
+      throw new VehicleNotBelongBusinessError();
+    }
 
-      // Validate vehicle status (only ACTIVE or IN_ROUTE vehicles can be fueled)
-      if (
-        findVehicle.status !== "ACTIVE" &&
-        findVehicle.status !== "IN_ROUTE"
-      ) {
-        throw new VehicleInvalidStatusForFuelError();
-      }
+    // Security: Drivers cannot update fuel records
+    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
+      throw new DriverCannotUpdateFuelError();
+    }
 
-      // Validate mileage (cannot be less than current vehicle mileage)
-      if (
-        fuelData.current_mileage &&
-        fuelData.current_mileage < findVehicle.current_mileage
-      ) {
-        throw new VehicleMileageInvalidError();
+    // Validate vehicle status (only ACTIVE or IN_ROUTE vehicles can be fueled)
+    if (findVehicle.status !== "ACTIVE" && findVehicle.status !== "IN_ROUTE") {
+      throw new VehicleInvalidStatusForFuelError();
+    }
+
+    // Validate mileage (cannot be less than current vehicle mileage)
+    if (
+      fuelData.current_mileage &&
+      fuelData.current_mileage < findVehicle.current_mileage
+    ) {
+      throw new VehicleMileageInvalidError();
+    }
+
+    // Auto-populate branchId and fuelTypeId for driver users
+    if (findUser.driverId) {
+      const driverUser = await this.driver.findDriverById(findUser.driverId);
+      if (driverUser) {
+        // Force fuelTypeId to match vehicle's fuel type (drivers cannot change it)
+        fuelData.fuelTypeId = findVehicle.fuelTypeId;
+
+        // Force branchId - drivers cannot select branch manually
+        // Priority: Vehicle.branchId → Driver.branchId
+        fuelData.branchId =
+          findVehicle.branchId || driverUser.branchId || undefined;
       }
     }
 
