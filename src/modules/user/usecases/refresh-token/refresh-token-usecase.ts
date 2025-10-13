@@ -61,12 +61,17 @@ class RefreshTokenUseCase {
 
     await this.usersTokens.deleteUserRefreshTokenById(userToken.id);
 
+    // BUSINESS_USER must have either profileAccess OR driverId
     if (findUserByEmail.role === "BUSINESS_USER") {
-      if (
-        !findUserByEmail.profileAccess ||
-        !findUserByEmail.profileAccess.permissions ||
-        findUserByEmail.profileAccess.permissions.length === 0
-      ) {
+      const hasProfileAccess =
+        findUserByEmail.profileAccess &&
+        findUserByEmail.profileAccess.permissions &&
+        findUserByEmail.profileAccess.permissions.length > 0;
+
+      const hasDriverId = !!findUserByEmail.driverId;
+
+      // If doesn't have profileAccess and doesn't have driverId, throw error
+      if (!hasProfileAccess && !hasDriverId) {
         throw new UserNotFoundPermissionOrProfileAccess();
       }
     }
@@ -82,6 +87,7 @@ class RefreshTokenUseCase {
     const newToken = sign(
       {
         role: findUserByEmail.role,
+        driverId: findUserByEmail.driverId || null,
       },
       secret_token,
       {

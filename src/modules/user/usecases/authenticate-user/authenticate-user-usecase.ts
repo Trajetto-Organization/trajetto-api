@@ -237,6 +237,7 @@ class AuthenticateUserUseCase {
     const token = sign(
       {
         role: findUser.role,
+        driverId: findUser.driverId || null,
       },
       secret_token,
       {

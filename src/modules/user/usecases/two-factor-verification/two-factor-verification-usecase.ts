@@ -84,12 +84,17 @@ class TwoFactorVerificationUseCase {
       );
     }
 
+    // BUSINESS_USER must have either profileAccess OR driverId
     if (user.role === "BUSINESS_USER") {
-      if (
-        !user.profileAccess ||
-        !user.profileAccess.permissions ||
-        user.profileAccess.permissions.length === 0
-      ) {
+      const hasProfileAccess =
+        user.profileAccess &&
+        user.profileAccess.permissions &&
+        user.profileAccess.permissions.length > 0;
+
+      const hasDriverId = !!user.driverId;
+
+      // If doesn't have profileAccess and doesn't have driverId, throw error
+      if (!hasProfileAccess && !hasDriverId) {
         throw new UserNotFoundPermissionOrProfileAccess();
       }
     }
@@ -105,9 +110,7 @@ class TwoFactorVerificationUseCase {
     const token = sign(
       {
         role: user.role,
-        businessId: user.businessId,
-        profileAccess: user.profileAccess,
-        permissions: user.profileAccess?.permissions,
+        driverId: user.driverId || null,
       },
       secret_token,
       {
