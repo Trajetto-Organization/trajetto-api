@@ -15,6 +15,9 @@ import {
   ListKanbanColumnProps,
 } from "../dtos/kanban-dto";
 
+import { UploadService } from "@/shared/services/upload-service";
+import { container } from "tsyringe";
+
 // Mapping priorities from Portuguese to English
 const PRIORITY_MAPPING: Record<string, string[]> = {
   baixa: ["low"],
@@ -44,17 +47,29 @@ const getPrioritiesFromSearch = (searchTerm: string): string[] => {
 };
 
 class KanbanRepository implements IKanbanRepository {
-  private mapCard(card: any): KanbanCard {
+  private uploadService: UploadService;
+
+  constructor(private prisma = database) {
+    this.uploadService = container.resolve(UploadService);
+  }
+
+  private mapCard = (card: any): KanbanCard => {
     return {
       ...card,
       dueDate: formatDate(card.dueDate, "pt-BR"),
       completed: card.completed || false,
       created_at: formatDate(card.created_at, "pt-BR"),
       updated_at: formatDate(card.updated_at, "pt-BR"),
+      assignedUser: card.assignedUser
+        ? {
+            ...card.assignedUser, // Keeps id, name, email
+            avatar: card.assignedUser.avatar
+              ? this.uploadService.getFileUrl(card.assignedUser.avatar)
+              : null,
+          }
+        : null,
     };
-  }
-
-  constructor(private prisma = database) {}
+  };
 
   async createColumn(
     columnData: CreateKanbanColumnProps,
