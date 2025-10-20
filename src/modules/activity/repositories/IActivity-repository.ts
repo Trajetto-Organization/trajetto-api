@@ -14,6 +14,14 @@ interface IActivityRepository {
     businessId,
     search,
   }: ListRecentActivitiesProps) => Promise<ListActivityProps>;
+  listAllActivities: ({
+    page,
+    pageSize,
+    currentUserRole,
+    businessId,
+    search,
+    userId,
+  }: ListRecentActivitiesProps) => Promise<ListActivityProps>;
 }
 
 export { IActivityRepository };

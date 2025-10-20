@@ -3,6 +3,8 @@ import { FastifyInstance } from "fastify";
 import { dashboardRoutes } from "./dashboard-routes";
 import { notificationRoutes } from "./notification-routes";
 
+import { activityRoutes } from "./activity-routes";
+
 import { businessRoutes } from "./business-routes";
 import { branchRoutes } from "./branch-routes";
 
@@ -40,6 +42,7 @@ import { whatsappRoutes } from "./whatsapp-routes";
 async function routes(app: FastifyInstance) {
   app.register(dashboardRoutes, { prefix: "/dashboard" });
   app.register(notificationRoutes, { prefix: "/notification" });
+  app.register(activityRoutes, { prefix: "/activity" });
   app.register(businessRoutes, { prefix: "/business" });
   app.register(branchRoutes, { prefix: "/branch" });
   app.register(supplierRoutes, { prefix: "/supplier" });

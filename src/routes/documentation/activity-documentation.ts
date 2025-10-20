@@ -1,4 +1,6 @@
 import { listRecentActivitiesSchema } from "@/schemas/list-recent-activities-schema";
+import { listPagesSchema } from "@/schemas/list-pages-schema";
+
 import { z } from "zod";
 
 const activitySchemas = {
@@ -10,6 +12,7 @@ const activitySchemas = {
     status: z.string().describe("Status relacionado à ação"),
   }),
   listActivitiesQuery: listRecentActivitiesSchema,
+  listAllActivitiesQuery: listPagesSchema,
 };
 
 const activityResponses = {
@@ -27,6 +30,10 @@ const activityResponses = {
         status: z.string(),
         performedBy: z.string(),
         businessId: z.string().nullable(),
+        userEmail: z.string().optional(),
+        userName: z.string().optional(),
+        userRole: z.string().optional(),
+        business_name: z.string().optional(),
         created_at: z.string(),
         updated_at: z.string(),
       }),
@@ -35,6 +42,12 @@ const activityResponses = {
   }),
   internalServerError: z.object({
     message: z.string().default("Erro interno do servidor"),
+  }),
+  resourceNotFound: z.object({
+    message: z.string().default("Recurso não encontrado"),
+  }),
+  unauthorized: z.object({
+    message: z.string().default("Não autorizado"),
   }),
 };
 
