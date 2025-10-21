@@ -120,8 +120,8 @@ class CreateFuelUseCase {
       throw new VehicleInvalidStatusForFuelError();
     }
 
-    // Validate mileage (cannot be less than current vehicle mileage)
-    if (fuelData.current_mileage < findVehicle.current_mileage) {
+    // Validate mileage (must be strictly greater than current vehicle mileage)
+    if (fuelData.current_mileage <= findVehicle.current_mileage) {
       throw new VehicleMileageInvalidError();
     }
 

@@ -176,6 +176,7 @@ const createServiceOrderSchema = z
           data.current_mileage_at_service
         );
       }
+
       return true;
     },
     {
@@ -190,6 +191,7 @@ const createServiceOrderSchema = z
       if (data.completion_date && !data.new_mileage_after_service) {
         return false;
       }
+
       return true;
     },
     {
@@ -200,17 +202,16 @@ const createServiceOrderSchema = z
   )
   .refine(
     (data) => {
-      // Validation: new mileage must be >= current mileage
+      // Validation: new mileage must be > current mileage (strictly greater)
       if (data.new_mileage_after_service && data.current_mileage_at_service) {
-        return (
-          data.new_mileage_after_service >= data.current_mileage_at_service
-        );
+        return data.new_mileage_after_service > data.current_mileage_at_service;
       }
+
       return true;
     },
     {
       message:
-        "A nova quilometragem deve ser maior ou igual à quilometragem atual do veículo",
+        "A nova quilometragem deve ser maior que a quilometragem atual do veículo",
       path: ["new_mileage_after_service"],
     },
   );

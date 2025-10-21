@@ -258,13 +258,14 @@ class CreateServiceOrderUseCase {
       );
     }
 
-    // 🔧 VALIDATION: New mileage must be >= current vehicle mileage
+    // 🔧 VALIDATION: New mileage must be > current vehicle mileage (strictly greater)
     if (serviceOrderData.new_mileage_after_service) {
       if (
-        serviceOrderData.new_mileage_after_service < findVehicle.current_mileage
+        serviceOrderData.new_mileage_after_service <=
+        findVehicle.current_mileage
       ) {
         throw new AppError(
-          `A nova quilometragem (${serviceOrderData.new_mileage_after_service}) não pode ser menor que a quilometragem atual do veículo (${findVehicle.current_mileage})`,
+          `A nova quilometragem (${serviceOrderData.new_mileage_after_service} km) deve ser maior que a quilometragem atual do veículo (${findVehicle.current_mileage} km)`,
           400,
         );
       }

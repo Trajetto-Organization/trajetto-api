@@ -125,12 +125,16 @@ class UpdateFuelUseCase {
       throw new VehicleInvalidStatusForFuelError();
     }
 
-    // Validate mileage (cannot be less than current vehicle mileage)
+    // Validate mileage only if it was changed
+    // If mileage is being updated and is different from the original fuel mileage
     if (
       fuelData.current_mileage &&
-      fuelData.current_mileage < findVehicle.current_mileage
+      fuelData.current_mileage !== findFuel.current_mileage
     ) {
-      throw new VehicleMileageInvalidError();
+      // New mileage must be strictly greater than current vehicle mileage
+      if (fuelData.current_mileage <= findVehicle.current_mileage) {
+        throw new VehicleMileageInvalidError();
+      }
     }
 
     // Auto-populate branchId and fuelTypeId for driver users

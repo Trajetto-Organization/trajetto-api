@@ -214,6 +214,7 @@ const updateServiceOrderSchema = z
           data.current_mileage_at_service
         );
       }
+
       return true;
     },
     {
@@ -228,27 +229,12 @@ const updateServiceOrderSchema = z
       if (data.completion_date && !data.new_mileage_after_service) {
         return false;
       }
+
       return true;
     },
     {
       message:
         "A nova quilometragem é obrigatória quando a ordem de serviço é finalizada",
-      path: ["new_mileage_after_service"],
-    },
-  )
-  .refine(
-    (data) => {
-      // Validation: new mileage must be >= current mileage
-      if (data.new_mileage_after_service && data.current_mileage_at_service) {
-        return (
-          data.new_mileage_after_service >= data.current_mileage_at_service
-        );
-      }
-      return true;
-    },
-    {
-      message:
-        "A nova quilometragem deve ser maior ou igual à quilometragem atual do veículo",
       path: ["new_mileage_after_service"],
     },
   );
