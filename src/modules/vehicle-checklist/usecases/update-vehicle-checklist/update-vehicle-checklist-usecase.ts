@@ -136,10 +136,10 @@ class UpdateVehicleChecklistUseCase {
       throw new DriverCannotUpdateChecklistError();
     }
 
-    // If updating mileage, validate it's not less than current vehicle mileage
+    // If updating mileage, validate it must be strictly greater than current vehicle mileage
     if (
       checklistData.current_mileage !== undefined &&
-      checklistData.current_mileage < findVehicle.current_mileage
+      checklistData.current_mileage <= findVehicle.current_mileage
     ) {
       throw new VehicleMileageInvalidError();
     }
