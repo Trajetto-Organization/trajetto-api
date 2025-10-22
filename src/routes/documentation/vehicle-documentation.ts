@@ -67,6 +67,8 @@ const vehicleResponses = {
         branchId: z.string().nullable(),
         branchName: z.string().optional(),
         businessId: z.string(),
+        last_fuel_mileage: z.number().nullable().optional(),
+        last_fuel_date: z.string().nullable().optional(),
         created_at: z.string(),
         updated_at: z.string(),
       }),
@@ -144,6 +146,16 @@ const vehicleResponses = {
     fuelTypeId: z.string().describe("Fuel type ID"),
     driverId: z.string().nullable().optional().describe("Assigned driver ID"),
     branchId: z.string().nullable().optional().describe("Assigned branch ID"),
+    last_fuel_mileage: z
+      .number()
+      .nullable()
+      .optional()
+      .describe("Mileage at last fuel refill"),
+    last_fuel_date: z
+      .union([z.string(), z.date()])
+      .nullable()
+      .optional()
+      .describe("Date of last fuel refill"),
     created_at: z
       .union([z.string(), z.date()])
       .describe("Vehicle creation timestamp"),

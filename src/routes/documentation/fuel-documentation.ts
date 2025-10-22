@@ -147,6 +147,42 @@ const fuelResponses = {
         .default("Empresa não encontrada! Por favor, tente novamente."),
     }),
   ]),
+  fuelReturned: z
+    .object({
+      id: z.string().describe("Fuel record ID"),
+      current_mileage: z.number().describe("Current vehicle mileage"),
+      liters_amount: z
+        .union([z.number(), z.instanceof(Object)])
+        .describe("Amount of fuel in liters"),
+      price_per_liter: z
+        .union([z.number(), z.instanceof(Object)])
+        .describe("Price per liter"),
+      total_amount: z
+        .union([z.number(), z.instanceof(Object)])
+        .describe("Total amount paid"),
+      odometer_photo: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("Odometer photo path"),
+      odometer_verified: z.boolean().describe("Whether odometer is verified"),
+      notes: z.string().nullable().optional().describe("Additional notes"),
+      refueling_date: z
+        .union([z.string(), z.date()])
+        .describe("Date of refueling"),
+      businessId: z.string().describe("Business ID"),
+      branchId: z.string().describe("Branch ID"),
+      vehicleId: z.string().describe("Vehicle ID"),
+      driverId: z.string().describe("Driver ID"),
+      fuelTypeId: z.string().describe("Fuel type ID"),
+      created_at: z
+        .union([z.string(), z.date()])
+        .describe("Creation timestamp"),
+      updated_at: z
+        .union([z.string(), z.date()])
+        .describe("Last update timestamp"),
+    })
+    .nullable(),
   internalServerError: z.object({
     message: z.string().default("Erro interno do servidor"),
   }),

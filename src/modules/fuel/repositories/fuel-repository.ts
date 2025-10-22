@@ -548,6 +548,25 @@ class FuelRepository implements IFuelRepository {
       updated_at: fuel.updated_at,
     }));
   }
+
+  async getPreviousFuelByVehicleId(
+    vehicleId: string,
+    currentFuelDate: Date | string,
+  ): Promise<Fuel | null> {
+    const previousFuel = await this.prisma.fuel.findFirst({
+      where: {
+        vehicleId,
+        refueling_date: {
+          lt: new Date(currentFuelDate),
+        },
+      },
+      orderBy: {
+        refueling_date: "desc",
+      },
+    });
+
+    return previousFuel;
+  }
 }
 
 export { FuelRepository };

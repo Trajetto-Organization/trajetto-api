@@ -10,6 +10,8 @@ import { UpdateFuelController } from "@/modules/fuel/usecases/update-fuel/update
 import { DeleteFuelController } from "@/modules/fuel/usecases/delete-fuel/delete-fuel-controller";
 import { ExportFuelExcelController } from "@/modules/fuel/usecases/export-fuel-excel/export-fuel-excel-controller";
 
+import { GetPreviousFuelController } from "@/modules/fuel/usecases/get-previous-fuel/get-previous-fuel-controller";
+
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
@@ -23,6 +25,8 @@ const updateFuelController = new UpdateFuelController();
 
 const deleteFuelController = new DeleteFuelController();
 const exportFuelExcelController = new ExportFuelExcelController();
+
+const getPreviousFuelController = new GetPreviousFuelController();
 
 async function fuelRoutes(app: FastifyInstance) {
   app.post(
@@ -193,6 +197,47 @@ async function fuelRoutes(app: FastifyInstance) {
       },
     },
     exportFuelExcelController.handle,
+  );
+
+  app.get(
+    "/get-previous-fuel/:vehicleId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("fuel_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["fuel"],
+        summary: "Get previous fuel record for a vehicle",
+        description:
+          "Retrieve the previous fuel refueling record for a specific vehicle before a given date",
+        params: z.object({
+          vehicleId: z.string().uuid("O ID do veículo é obrigatório!"),
+        }),
+        querystring: z.object({
+          date: z.string({
+            required_error: "A data do abastecimento atual é obrigatória!",
+          }),
+          businessId: z
+            .string({ required_error: "O ID da empresa é obrigatório!" })
+            .uuid("O ID da empresa deve ser um UUID válido!"),
+        }),
+        response: {
+          200: fuelResponses.fuelReturned,
+          400: z.union([
+            fuelResponses.resourceNotFound,
+            fuelResponses.businessNotFound,
+            fuelResponses.vehicleNotFound,
+          ]),
+          404: z.object({
+            message: z
+              .string()
+              .default("Nenhum abastecimento anterior encontrado."),
+          }),
+          500: fuelResponses.internalServerError,
+        },
+      },
+    },
+    getPreviousFuelController.handle,
   );
 }
 

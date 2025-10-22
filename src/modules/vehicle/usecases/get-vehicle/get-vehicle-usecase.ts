@@ -9,10 +9,11 @@ import { AppError } from "@/shared/errors/AppError";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
-import { Vehicle } from "../../dtos/vehicle-dto";
+import { VehicleWithLastFuel } from "../../dtos/vehicle-dto";
 import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";
 
 import { VehicleNotAssignedToDriverError } from "../errors/vehicle-not-assigned-to-driver-error";
+import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 
 @injectable()
 class GetVehicleUseCase {
@@ -23,13 +24,15 @@ class GetVehicleUseCase {
     private vehicle: IVehicleRepository,
     @inject("BusinessRepository")
     private business: IBusinessRepository,
+    @inject("FuelRepository")
+    private fuel: IFuelRepository,
   ) {}
 
   async execute(
     userId: string,
     vehicleId: string,
     businessId: string,
-  ): Promise<Vehicle | null> {
+  ): Promise<VehicleWithLastFuel | null> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -61,7 +64,24 @@ class GetVehicleUseCase {
         vehicleId,
       });
 
-      return getVehicle;
+      if (!getVehicle) {
+        return null;
+      }
+
+      // Get the last fuel record for this vehicle
+      const lastFuel = await this.fuel.getPreviousFuelByVehicleId(
+        vehicleId,
+        new Date(),
+      );
+
+      // Return vehicle with last fuel data
+      const vehicleWithLastFuel: VehicleWithLastFuel = {
+        ...getVehicle,
+        last_fuel_mileage: lastFuel?.current_mileage || null,
+        last_fuel_date: lastFuel?.refueling_date || null,
+      };
+
+      return vehicleWithLastFuel;
     } catch (error) {
       throw new AppError("Não foi possível recuperar o veículo!", 500);
     }

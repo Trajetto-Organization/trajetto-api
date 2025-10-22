@@ -107,6 +107,11 @@ interface GetVehicleByIdAndBusinessProps {
   vehicleId: string;
 }
 
+interface VehicleWithLastFuel extends Vehicle {
+  last_fuel_mileage?: number | null;
+  last_fuel_date?: Date | string | null;
+}
+
 export {
   Vehicle,
   CreateVehicleProps,
@@ -116,4 +121,5 @@ export {
   ListVehicleByBusinessIdProps,
   ListVehicleBusinessProps,
   GetVehicleByIdAndBusinessProps,
+  VehicleWithLastFuel,
 };

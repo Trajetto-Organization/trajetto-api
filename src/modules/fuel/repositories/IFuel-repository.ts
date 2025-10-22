@@ -42,6 +42,10 @@ interface IFuelRepository {
     userRole: string,
     search?: string,
   ) => Promise<any[]>;
+  getPreviousFuelByVehicleId: (
+    vehicleId: string,
+    currentFuelDate: Date | string,
+  ) => Promise<Fuel | null>;
 }
 
 export { IFuelRepository };
