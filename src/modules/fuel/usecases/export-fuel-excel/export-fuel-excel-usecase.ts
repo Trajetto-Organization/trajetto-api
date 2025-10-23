@@ -65,7 +65,6 @@ class ExportFuelExcelUseCase {
         formatter: ExcelExportService.formatters.currency,
       },
       { header: "Quilometragem Atual", key: "currentMileage", width: 18 },
-      { header: "Foto do Hodômetro", key: "odometerPhoto", width: 20 },
       { header: "Hodômetro Verificado", key: "odometerVerified", width: 20 },
       { header: "Observações", key: "notes", width: 30 },
       {

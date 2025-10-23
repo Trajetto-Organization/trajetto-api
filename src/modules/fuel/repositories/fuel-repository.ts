@@ -536,7 +536,6 @@ class FuelRepository implements IFuelRepository {
       pricePerLiter: fuel.price_per_liter?.toNumber() || 0,
       totalAmount: fuel.total_amount?.toNumber() || 0,
       currentMileage: fuel.current_mileage || 0,
-      odometerPhoto: fuel.odometer_photo || "N/A",
       odometerVerified: fuel.odometer_verified ? "Sim" : "Não",
       notes: fuel.notes || "N/A",
       refueling_date: fuel.refueling_date,

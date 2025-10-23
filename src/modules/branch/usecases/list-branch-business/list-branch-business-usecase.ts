@@ -41,13 +41,13 @@ class ListBranchBusinessUseCase {
     }
 
     try {
-      const supplierList = await this.branch.listBranchBusiness({
+      const branchList = await this.branch.listBranchBusiness({
         page,
         pageSize,
         businessId,
       });
 
-      return supplierList;
+      return branchList;
     } catch (error) {
       throw new AppError(
         "Não foi possível recuperar a lista de filiais por empresa!",
