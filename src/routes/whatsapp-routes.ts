@@ -114,6 +114,12 @@ async function whatsappRoutes(app: FastifyInstance) {
   app.post(
     "/webhook/:instanceName",
     {
+      config: {
+        rateLimit: getRateLimiterConfig({
+          max: 1000, // 1000 requests per minute - High limit for Evolution API bursts
+        }),
+      },
+      logLevel: "silent", // Disable HTTP logs for webhook endpoint (reduces log spam from Evolution API heartbeats)
       schema: {
         tags: ["whatsapp"],
         summary: "WhatsApp webhook endpoint",

@@ -30,6 +30,12 @@ class WhatsAppWebhookController {
   // Temporary cache for user operations
   private static userOperationsCache = new Map<string, UserOperation>();
 
+  // Unified cache to track last connection state per instance (prevent log spam)
+  private static lastInstanceStateCache = new Map<
+    string,
+    { state: string; timestamp: number }
+  >();
+
   // Method for recording user operation
   static registerUserOperation(
     userId: string,
@@ -119,11 +125,6 @@ class WhatsAppWebhookController {
       });
     }
 
-    // Essential log kept only for important events
-    if (eventType === "CONNECTION_UPDATE" || eventType === "INSTANCE_DELETE") {
-      console.log(`[Webhook] 📨 ${eventType}: ${instanceName}`);
-    }
-
     try {
       const businessId = this.extractBusinessId(instanceName);
 
@@ -134,6 +135,37 @@ class WhatsAppWebhookController {
           message: "Webhook recebido, mas instanceName inválido",
           instanceName,
         });
+      }
+
+      // Check if this is a business instance to avoid log spam
+      const isBusinessInstance = this.isBusinessInstance(
+        instanceName,
+        businessId,
+      );
+
+      // Essential log kept only for important events (but skip heartbeats)
+      if (
+        !isBusinessInstance &&
+        (eventType === "CONNECTION_UPDATE" || eventType === "INSTANCE_DELETE")
+      ) {
+        // Only log state changes for user instances, ignore heartbeat repetitions
+        const lastState =
+          WhatsAppWebhookController.lastInstanceStateCache.get(instanceName);
+        const now = Date.now();
+
+        // For user instances, we want more frequent updates (every 2 minutes for health check)
+        const shouldLog =
+          !lastState ||
+          eventType !== lastState.state ||
+          now - lastState.timestamp > 120000; // 2 minutes
+
+        if (shouldLog) {
+          console.log(`[Webhook] 📨 ${eventType}: ${instanceName}`);
+          WhatsAppWebhookController.lastInstanceStateCache.set(instanceName, {
+            state: eventType,
+            timestamp: now,
+          });
+        }
       }
 
       // Check ongoing user operations
@@ -249,6 +281,37 @@ class WhatsAppWebhookController {
     const isConnected = this.isConnectionStateConnected(connectionState);
 
     const userEmail = this.extractUserEmail(instanceName);
+
+    // Detect and ignore business instance (system-level instance for sending messages)
+    const isBusinessInstance = this.isBusinessInstance(
+      instanceName,
+      businessId,
+    );
+
+    if (isBusinessInstance) {
+      // Only log state changes for business instance, ignore heartbeat repetitions
+      const lastState =
+        WhatsAppWebhookController.lastInstanceStateCache.get(instanceName);
+      const now = Date.now();
+
+      // Log only if state changed or it's been more than 5 minutes since last log
+      const shouldLog =
+        !lastState ||
+        lastState.state !== connectionState ||
+        now - lastState.timestamp > 300000;
+
+      if (shouldLog) {
+        console.log(
+          `[Webhook] 📞 Business instance ${connectionState}: ${instanceName}`,
+        );
+        WhatsAppWebhookController.lastInstanceStateCache.set(instanceName, {
+          state: connectionState,
+          timestamp: now,
+        });
+      }
+
+      return; // Exit early - business instance doesn't notify users
+    }
 
     console.log(
       `[Webhook] 🔌 ${connectionState} (${isConnected ? "connected" : "disconnected"}) - ${userEmail}`,
@@ -372,6 +435,19 @@ class WhatsAppWebhookController {
     instanceName: string,
   ): Promise<void> {
     const userEmail = this.extractUserEmail(instanceName);
+
+    // Detect and ignore business instance
+    const isBusinessInstance = this.isBusinessInstance(
+      instanceName,
+      businessId,
+    );
+
+    if (isBusinessInstance) {
+      console.log(
+        `[Webhook] 📞 Business instance deleted: ${instanceName} - No user notification needed`,
+      );
+      return; // Exit early - business instance doesn't notify users
+    }
 
     console.log(`[Webhook] 🗑️ Instance deleted: ${userEmail}`);
 
@@ -510,7 +586,7 @@ class WhatsAppWebhookController {
   ): Promise<string | null> {
     try {
       if (email === "unknown" || businessId === "unknown") {
-        // Invalid parameters log removido
+        // Invalid parameters
         return null;
       }
 
@@ -924,6 +1000,30 @@ class WhatsAppWebhookController {
         error,
       );
     }
+  }
+
+  /**
+   * 🔍 Check if instance is a business instance (system-level, not user-specific)
+   */
+  private isBusinessInstance(
+    instanceName: string,
+    businessId: string,
+  ): boolean {
+    const businessInstanceName = process.env.TRAJETTO_WHATSAPP_INSTANCE_NAME;
+
+    // Check if it matches the configured business instance name
+    if (businessInstanceName && instanceName === businessInstanceName) {
+      return true;
+    }
+
+    // Fallback: Check for common business instance patterns
+    // (master, Official, or other system-level identifiers)
+    const systemBusinessIds = ["master", "Official", "system", "trajetto"];
+    if (systemBusinessIds.includes(businessId)) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
