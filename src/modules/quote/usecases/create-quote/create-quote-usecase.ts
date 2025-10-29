@@ -43,7 +43,7 @@ class CreateQuoteUseCase {
     try {
       // Email to sales team
       await this.emailQueue.enqueueEmail({
-        email: "intrajetto@gmail.com",
+        email: "contato@intrajetto.com",
         name: "Equipe de Vendas",
         subject: `Nova Solicitação de Orçamento - ${quote.company}`,
         templateName: "new-quote-notification.hbs",
@@ -70,7 +70,7 @@ class CreateQuoteUseCase {
         additionalVariablesProperties: {
           company: quote.company,
           fleetSize: this.translateFleetSize(quote.fleet_size),
-          supportEmail: "intrajetto@gmail.com",
+          supportEmail: "contato@intrajetto.com",
           salesPhone: "(11) 99999-9999",
         },
       });
