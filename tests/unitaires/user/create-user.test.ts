@@ -17,6 +17,8 @@ import { InMemoryProfileAccessRepository } from "@/modules/profile-access/reposi
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 
 import { NotificationService } from "@/shared/services/notification-service";
+import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+
 import { AppError } from "@/shared/errors/AppError";
 
 describe("Create User UseCase", () => {
@@ -27,6 +29,8 @@ describe("Create User UseCase", () => {
   let usersTokensInMemory: InMemoryUserTokensRepository;
 
   let notificationService: NotificationService;
+  let driverInMemory: InMemoryDriverRepository;
+
   let createUserUseCase: CreateUserUseCase;
 
   beforeEach(() => {
@@ -42,12 +46,14 @@ describe("Create User UseCase", () => {
       processUserNotifications: vi.fn(),
     } as any;
 
+    driverInMemory = new InMemoryDriverRepository();
     createUserUseCase = new CreateUserUseCase(
       userInMemory,
       businessInMemory,
       profileAccessInMemory,
       usersTokensInMemory,
       notificationService,
+      driverInMemory,
     );
   });
 

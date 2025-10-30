@@ -14,6 +14,14 @@ import { InvalidCodeForUserError } from "@/modules/user/usecases/errors/invalid-
 
 import prisma from "infra/database";
 
+vi.mock("@/modules/middlewares/rate-limiter", () => ({
+  getRateLimiterConfig: () => ({
+    max: 100,
+    timeWindow: 60 * 1000,
+    skip: () => true,
+  }),
+}));
+
 let userId: string;
 let profileAccessId: string;
 

@@ -117,6 +117,21 @@ class InMemoryDriverRepository implements IDriverRepository {
     const found = this.drivers.find((driver) => driver.cnh === cnh);
     return found || null;
   }
+
+  async findDriverWithUser(
+    driverId: string,
+  ): Promise<
+    | (Driver & { user?: { id: string; email: string; name: string } | null })
+    | null
+  > {
+    const found = this.drivers.find((driver) => driver.id === driverId);
+
+    if (!found) {
+      return null;
+    }
+
+    return found || null;
+  }
 }
 
 export { InMemoryDriverRepository };

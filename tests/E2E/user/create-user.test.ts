@@ -121,6 +121,25 @@ describe("Create User E2E", () => {
       },
     });
 
+    // Create another business to test mismatch
+    const anotherBusiness = await prisma.business.create({
+      data: {
+        corporate_reason: "Another Business Corp",
+        cnpj: "98765432000199",
+        fantasy_name: "Another Business",
+        cep: "87654321",
+        city: "City B",
+        uf: "CB",
+        street: "Street B",
+        address_number: "200",
+        telephone: "0987654321",
+        email: "another@example.com",
+        cnae: "2222222",
+        responsible_name: "Another Responsible",
+        erp_code: "ERP002",
+      },
+    });
+
     const response = await request(serverInstance)
       .post("/user/create-user")
       .set("Authorization", `Bearer ${userAuthenticated}`)
@@ -129,7 +148,7 @@ describe("Create User E2E", () => {
         email: uniqueEmail,
         name: "New Example",
         role: "BUSINESS_USER",
-        businessId: "non-exist-business-id",
+        businessId: anotherBusiness.id, // Different business from profileAccess
         profileAccessId: profileAccess.id,
       });
 
@@ -161,31 +180,6 @@ describe("Create User E2E", () => {
   });
 
   it("should throw BusinessNotFoundError if business is not found", async () => {
-    const business = await prisma.business.create({
-      data: {
-        corporate_reason: uniqueCorporateReason,
-        cnpj: uniqueCNPJ,
-        fantasy_name: "New Fantasia",
-        cep: "12345678",
-        city: "City A",
-        uf: "CA",
-        street: "Street A",
-        address_number: "100",
-        telephone: "1234567890",
-        email: uniqueEmail,
-        cnae: "1111111",
-        responsible_name: "Responsible One",
-        erp_code: uniqueERPCode,
-      },
-    });
-
-    const profileAccess = await prisma.profileAccess.create({
-      data: {
-        businessId: business.id as string,
-        name: "Profile Access",
-      },
-    });
-
     const response = await request(serverInstance)
       .post("/user/create-user")
       .set("Authorization", `Bearer ${userAuthenticated}`)
@@ -194,8 +188,8 @@ describe("Create User E2E", () => {
         email: "gabriel@example.com",
         name: "New Example",
         role: "BUSINESS_ADMIN",
-        businessId: "non-exist-business-id",
-        profileAccessId: profileAccess.id,
+        businessId: "00000000-0000-0000-0000-000000000000", // Valid UUID but non-existent
+        // BUSINESS_ADMIN doesn't need profileAccessId
       });
 
     expect(response.statusCode).toEqual(400);

@@ -9,6 +9,14 @@ import { app, serverInstance } from "@/http";
 
 import { ResetUserPasswordUseCase } from "@/modules/user/usecases/reset-user-password/reset-user-password-usecase";
 
+vi.mock("@/modules/middlewares/rate-limiter", () => ({
+  getRateLimiterConfig: () => ({
+    max: 100,
+    timeWindow: 60 * 1000,
+    skip: () => true,
+  }),
+}));
+
 let token: string;
 let randomEmail: string;
 

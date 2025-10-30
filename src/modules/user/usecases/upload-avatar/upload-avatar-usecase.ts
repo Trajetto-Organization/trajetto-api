@@ -25,13 +25,11 @@ class UploadAvatarUseCase {
       throw new ResourceNotFoundError();
     }
 
-    try {
-      // If user already has an avatar, delete the old one
-      if (findUser.avatar) {
-        await this.uploadService.deleteFile(findUser.avatar);
-      }
+    let newAvatarPath: string | null = null;
+    const oldAvatarPath = findUser.avatar;
 
-      // Upload new avatar photo
+    try {
+      // Step 1: Upload new avatar photo first (before touching database or deleting old file)
       const buffer = await avatarFile.toBuffer();
       const uploadResult = await this.uploadService.uploadFile({
         buffer,
@@ -40,17 +38,24 @@ class UploadAvatarUseCase {
         uploadType: "avatars",
       });
 
-      // Update user avatar path
-      const updatedUser = await this.user.updateAvatar(
-        userId,
-        uploadResult.path,
-      );
+      newAvatarPath = uploadResult.path;
+
+      // Step 2: Try to update user avatar path in database
+      const updatedUser = await this.user.updateAvatar(userId, newAvatarPath);
 
       if (!updatedUser) {
+        // Rollback: Delete the newly uploaded file since database update failed
+        await this.uploadService.deleteFile(newAvatarPath);
+
         throw new AppError(
           "Houve um erro ao tentar atualizar o avatar do usuário! Por favor, tente novamente.",
           500,
         );
+      }
+
+      // Step 3: Only delete old avatar after successful database update
+      if (oldAvatarPath) {
+        await this.uploadService.deleteFile(oldAvatarPath);
       }
 
       return {
@@ -60,6 +65,16 @@ class UploadAvatarUseCase {
           : null,
       };
     } catch (error) {
+      // If upload succeeded but something failed after, clean up the new file
+      if (newAvatarPath) {
+        try {
+          await this.uploadService.deleteFile(newAvatarPath);
+        } catch (cleanupError) {
+          // Log cleanup error but don't throw to preserve original error
+          console.error("Failed to cleanup uploaded file:", cleanupError);
+        }
+      }
+
       // If it's an AppError (validation, business logic), rethrow it
       if (error instanceof AppError) {
         throw error;

@@ -11,7 +11,6 @@ describe("Create Activity UseCase", () => {
 
   beforeEach(() => {
     activityInMemory = new InMemoryActivityRepository();
-
     createActivityUseCase = new CreateActivityUseCase(activityInMemory);
   });
 

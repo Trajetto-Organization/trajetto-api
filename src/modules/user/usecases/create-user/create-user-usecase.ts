@@ -124,6 +124,14 @@ class CreateUserUseCase {
       throw new UserCannotHaveBothDriverAndProfileError();
     }
 
+    // Validate business exists FIRST before checking relationships
+    const findBusinessByCorporateReason =
+      await this.business.findBusinessById(businessId);
+
+    if (!findBusinessByCorporateReason) {
+      throw new BusinessNotFoundError();
+    }
+
     // If driverId is provided, validate driver
     if (driverId) {
       const existingDriver = await this.driver.findDriverById(driverId);
@@ -159,13 +167,6 @@ class CreateUserUseCase {
       if (existingProfileAccess.businessId !== businessId) {
         throw new UserProfileNotMatchBusinessError();
       }
-    }
-
-    const findBusinessByCorporateReason =
-      await this.business.findBusinessById(businessId);
-
-    if (!findBusinessByCorporateReason) {
-      throw new BusinessNotFoundError();
     }
 
     const hashedPassword = await hash(finalPassword, 6);

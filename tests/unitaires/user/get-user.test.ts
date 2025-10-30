@@ -4,15 +4,20 @@ import { hash } from "bcrypt";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { GetUserUseCase } from "@/modules/user/usecases/get-user/get-user-usecase";
 
+import { UploadService } from "@/shared/services/upload-service";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
 let userInMemory: InMemoryUserRepository;
+let uploadService: UploadService;
+
 let getUser: GetUserUseCase;
 
 describe("Get User UseCase", () => {
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-    getUser = new GetUserUseCase(userInMemory);
+    uploadService = new UploadService();
+
+    getUser = new GetUserUseCase(userInMemory, uploadService);
   });
 
   it("should be able to get user", async () => {

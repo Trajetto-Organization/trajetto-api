@@ -13,6 +13,8 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { AuthenticateUserUseCase } from "@/modules/user/usecases/authenticate-user/authenticate-user-usecase";
 
 import { UserNotFoundPermissionOrProfileAccess } from "@/modules/user/usecases/errors/user-not-found-permission-profile-access-error";
+import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+
 import { InvalidCredentialsError } from "@/modules/user/usecases/errors/invalid-credentials-error";
 
 import { UserRevokedAccessError } from "@/modules/user/usecases/errors/user-revoked-access-error";
@@ -22,12 +24,16 @@ let userInMemory: InMemoryUserRepository;
 let authenticateUserUseCase: AuthenticateUserUseCase;
 
 let usersTokensInMemory: InMemoryUserTokensRepository;
+let driverInMemory: InMemoryDriverRepository;
+
 let refreshTokenUseCase: RefreshTokenUseCase;
 
 describe("Refresh Token UseCase", () => {
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
     usersTokensInMemory = new InMemoryUserTokensRepository();
+
+    driverInMemory = new InMemoryDriverRepository();
 
     refreshTokenUseCase = new RefreshTokenUseCase(
       userInMemory,
@@ -37,6 +43,7 @@ describe("Refresh Token UseCase", () => {
     authenticateUserUseCase = new AuthenticateUserUseCase(
       userInMemory,
       usersTokensInMemory,
+      driverInMemory,
     );
   });
 

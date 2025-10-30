@@ -34,9 +34,9 @@ class InMemoryFuelRepository implements IFuelRepository {
       notes: fuelData.notes || null,
       refueling_date: fuelData.refueling_date,
       businessId: fuelData.businessId,
-      branchId: fuelData.branchId,
+      branchId: fuelData.branchId as string,
       vehicleId: fuelData.vehicleId,
-      driverId: fuelData.driverId,
+      driverId: fuelData.driverId as string,
       fuelTypeId: fuelData.fuelTypeId,
       created_at: new Date(),
       updated_at: new Date(),
@@ -297,6 +297,40 @@ class InMemoryFuelRepository implements IFuelRepository {
 
   async findFuelsByBusinessId(businessId: string): Promise<Fuel[]> {
     return this.fuels.filter((fuel) => fuel.businessId === businessId);
+  }
+
+  async getPreviousFuelByVehicleId(
+    vehicleId: string,
+    currentFuelDate: Date | string,
+  ): Promise<Fuel | null> {
+    const vehicleFuels = this.fuels.filter(
+      (fuel) => fuel.vehicleId === vehicleId,
+    );
+
+    if (vehicleFuels.length === 0) {
+      return null;
+    }
+
+    const currentDate = new Date(currentFuelDate);
+
+    // Filter fuels that are before the current fuel date
+    const previousFuels = vehicleFuels.filter((fuel) => {
+      const fuelDate = new Date(fuel.refueling_date);
+      return fuelDate < currentDate;
+    });
+
+    if (previousFuels.length === 0) {
+      return null;
+    }
+
+    // Sort by date descending and return the most recent previous fuel
+    previousFuels.sort((a, b) => {
+      const dateA = new Date(a.refueling_date).getTime();
+      const dateB = new Date(b.refueling_date).getTime();
+      return dateB - dateA;
+    });
+
+    return previousFuels[0];
   }
 }
 

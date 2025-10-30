@@ -10,21 +10,25 @@ import { UserRevokedAccessError } from "@/modules/user/usecases/errors/user-revo
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
+import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
 import { AppError } from "@/shared/errors/AppError";
 
 describe("Authenticate User UseCase", () => {
   let userInMemory: InMemoryUserRepository;
   let usersTokensInMemory: InMemoryUserTokensRepository;
 
+  let driverInMemory: InMemoryDriverRepository;
   let authenticateUserUseCase: AuthenticateUserUseCase;
 
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
     usersTokensInMemory = new InMemoryUserTokensRepository();
 
+    driverInMemory = new InMemoryDriverRepository();
     authenticateUserUseCase = new AuthenticateUserUseCase(
       userInMemory,
       usersTokensInMemory,
+      driverInMemory,
     );
   });
 

@@ -57,8 +57,8 @@ class InMemorySupplierRepository implements ISupplierRepository {
 
     const skip = (page - 1) * pageSize;
     const data = filteredSuppliers.slice(skip, skip + pageSize);
-    const total = filteredSuppliers.length;
 
+    const total = filteredSuppliers.length;
     return { data, total };
   }
 
@@ -139,7 +139,9 @@ class InMemorySupplierRepository implements ISupplierRepository {
   }
 
   async findSupplierByEmail(email: string): Promise<Supplier | null> {
-    const supplier = this.suppliers.find((supplier) => supplier.email === email);
+    const supplier = this.suppliers.find(
+      (supplier) => supplier.email === email,
+    );
 
     return supplier || null;
   }

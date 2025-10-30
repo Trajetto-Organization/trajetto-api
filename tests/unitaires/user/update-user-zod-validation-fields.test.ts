@@ -156,7 +156,7 @@ describe("Update User Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().profileAccessId?._errors).toContain(
-      "O Perfil de acesso é obrigatório!",
+      "Selecione um perfil de acesso!",
     );
   });
 

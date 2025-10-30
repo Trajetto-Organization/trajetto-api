@@ -111,6 +111,25 @@ class InMemoryActivityRepository implements IActivityRepository {
     };
   }
 
+  async listAllActivities({
+    page,
+    pageSize,
+    currentUserRole,
+    businessId,
+    search,
+    userId,
+  }: ListRecentActivitiesProps): Promise<ListActivityProps> {
+    // listAllActivities has the same logic as listRecentActivities for in-memory
+    return this.listRecentActivities({
+      page,
+      pageSize,
+      currentUserRole,
+      businessId,
+      search,
+      userId,
+    });
+  }
+
   addActivity(activityData: Partial<Activity>): Activity {
     const activity: Activity = {
       id: activityData.id || uuidV4(),

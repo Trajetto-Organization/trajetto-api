@@ -14,12 +14,12 @@ interface ServiceOrder {
   created_at: Date | string;
   updated_at: Date | string;
 
-  // 📸 SNAPSHOT: Dados do veículo no momento da criação da OS
+  // 📸 SNAPSHOT: Vehicle data at the time the work order was created.
   current_mileage_at_service?: number | null;
   maintenance_interval_km_at_service?: number | null;
   last_maintenance_mileage_at_service?: number | null;
 
-  // 🔧 NOVA QUILOMETRAGEM: Informada na conclusão
+  // 🔧 NEW MILEAGE: Provided upon completion
   new_mileage_after_service?: number | null;
 
   // Extended fields for the interface only (do not exist in the database)

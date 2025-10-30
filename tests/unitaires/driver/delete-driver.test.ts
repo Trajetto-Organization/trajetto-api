@@ -7,6 +7,7 @@ import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-m
 import { InMemoryFineRepository } from "@/modules/fine/repositories/in-memory/in-memory-fine-repository";
 
 import { InMemoryFuelRepository } from "@/modules/fuel/repositories/in-memory/in-memory-fuel-repository";
+import { InMemoryVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/in-memory/in-memory-vehicle-checklist-repository";
 import { InMemoryNotificationService } from "@/shared/services/in-memory/in-memory-notification-service";
 
 import { DeleteDriverUseCase } from "@/modules/driver/usecases/delete-driver/delete-driver-usecase";
@@ -30,8 +31,9 @@ describe("Delete Driver UseCase", () => {
   let fineInMemory: InMemoryFineRepository;
 
   let fuelInMemory: InMemoryFuelRepository;
-  let notificationService: InMemoryNotificationService;
+  let vehicleChecklistInMemory: InMemoryVehicleChecklistRepository;
 
+  let notificationService: InMemoryNotificationService;
   let deleteDriver: DeleteDriverUseCase;
 
   beforeEach(() => {
@@ -42,14 +44,16 @@ describe("Delete Driver UseCase", () => {
     fineInMemory = new InMemoryFineRepository();
 
     fuelInMemory = new InMemoryFuelRepository();
-    notificationService = new InMemoryNotificationService(userInMemory);
+    vehicleChecklistInMemory = new InMemoryVehicleChecklistRepository();
 
+    notificationService = new InMemoryNotificationService(userInMemory);
     deleteDriver = new DeleteDriverUseCase(
       userInMemory,
       businessInMemory,
       driverInMemory,
       fineInMemory,
       fuelInMemory,
+      vehicleChecklistInMemory,
       notificationService,
     );
   });

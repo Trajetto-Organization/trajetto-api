@@ -264,6 +264,14 @@ class InMemoryUserRepository implements IUserRepository {
     );
   }
 
+  async findUserByDriverId(driverId: string): Promise<User | null> {
+    const findUserByDriverId = this.user.find(
+      (user) => user.driverId === driverId,
+    );
+
+    return findUserByDriverId || null;
+  }
+
   async updateWhatsAppInstanceStatus(
     userId: string,
     connected: boolean,
@@ -341,6 +349,20 @@ class InMemoryUserRepository implements IUserRepository {
         user.whatsapp_instance_connected === false &&
         (excludeUserId ? user.id !== excludeUserId : true),
     );
+  }
+
+  async updateAvatar(
+    userId: string,
+    avatarPath: string | null,
+  ): Promise<User | null> {
+    const user = this.user.find((user) => user.id === userId);
+
+    if (!user) {
+      return null;
+    }
+
+    user.avatar = avatarPath;
+    return user;
   }
 }
 

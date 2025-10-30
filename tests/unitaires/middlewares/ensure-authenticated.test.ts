@@ -128,6 +128,8 @@ describe("Ensure Authenticated Middleware", () => {
 
     expect(request.user).toEqual({
       id: "123",
+      driver: null,
+      driverId: undefined,
       role: fakeUser.role,
       profileAccess: fakeUser.profileAccess,
     });

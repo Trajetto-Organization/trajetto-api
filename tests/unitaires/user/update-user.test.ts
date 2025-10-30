@@ -18,6 +18,7 @@ import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-m
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
 import { NotificationService } from "@/shared/services/notification-service";
 
+import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
 import { AppError } from "@/shared/errors/AppError";
 
 describe("Update User UseCase", () => {
@@ -27,6 +28,7 @@ describe("Update User UseCase", () => {
   let profileAccessInMemory: InMemoryProfileAccessRepository;
   let notificationService: NotificationService;
 
+  let driverInMemory: InMemoryDriverRepository;
   let updateUserUseCase: UpdateUserUseCase;
 
   beforeEach(() => {
@@ -41,12 +43,14 @@ describe("Update User UseCase", () => {
       createNotificationIfEnabled: vi.fn(),
       processUserNotifications: vi.fn(),
     } as any;
+    driverInMemory = new InMemoryDriverRepository();
 
     updateUserUseCase = new UpdateUserUseCase(
       userInMemory,
       businessInMemory,
       profileAccessInMemory,
       notificationService,
+      driverInMemory,
     );
   });
 
