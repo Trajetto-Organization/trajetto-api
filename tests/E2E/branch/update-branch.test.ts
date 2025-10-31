@@ -41,6 +41,7 @@ describe("Update Branch E2E", () => {
 
     userAuthenticated = authData.token;
     businessId = authData.businessId;
+
     originalExecuteMethod = UpdateBranchUseCase.prototype.execute;
   });
 

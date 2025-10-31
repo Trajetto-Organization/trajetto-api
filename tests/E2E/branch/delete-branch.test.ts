@@ -27,6 +27,7 @@ describe("Delete Branch E2E", () => {
 
     userAuthenticated = authData.token;
     businessId = authData.businessId;
+
     originalExecuteMethod = DeleteBranchUseCase.prototype.execute;
   });
 
