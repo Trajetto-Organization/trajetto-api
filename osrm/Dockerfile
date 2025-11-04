@@ -1,0 +1,65 @@
+# ============================================
+# OSRM Dockerfile - BRASIL
+# ============================================
+# Region: Brasil (All)
+# Data: ~2GB download → ~15-20GB processed
+
+FROM ghcr.io/project-osrm/osrm-backend:latest AS builder
+
+WORKDIR /data
+
+# Download Brazil region (using Alpine Linux apk)
+RUN apk add --no-cache wget && \
+    echo "📥 Downloading BRAZIL OSM data (~2GB)..." && \
+    wget -O /data/brazil-latest.osm.pbf \
+      http://download.geofabrik.de/south-america/brazil-latest.osm.pbf && \
+    echo "✅ Download complete" && \
+    ls -lh /data/brazil-latest.osm.pbf
+
+# Extract - Auto-detects available CPU cores
+# 🚨 ESTE PASSO REQUER MUITA RAM
+RUN echo "🔧 Step 1/3: Extracting..." && \
+    osrm-extract -p /opt/car.lua /data/brazil-latest.osm.pbf && \
+    echo "✅ Extract complete"
+
+# Partition - Uses default optimal cell-size
+# 🚨 ESTE PASSO TAMBÉM REQUER MUITA RAM
+RUN echo "🔧 Step 2/3: Partitioning..." && \
+    osrm-partition /data/brazil-latest.osrm && \
+    echo "✅ Partition complete"
+
+# Customize (10-20min)
+RUN echo "🔧 Step 3/3: Customizing..." && \
+    osrm-customize /data/brazil-latest.osrm && \
+    echo "✅ Customize complete"
+
+# List all generated files (for debugging)
+RUN echo "📊 All generated files:" && ls -lh /data/
+
+# Cleanup ONLY the large source file (keep all processed files)
+RUN rm -f /data/brazil-latest.osm.pbf && \
+    echo "📊 Files for runtime:" && ls -lh /data/
+
+# ============================================
+# RUNTIME
+# ============================================
+# This final stage contains ONLY the OSRM + the processed data.
+FROM ghcr.io/project-osrm/osrm-backend:latest
+
+LABEL region="brazil-monolith"
+LABEL description="OSRM for all of Brasil"
+LABEL version="1.0"
+
+WORKDIR /data
+
+# Copy ALL OSRM processed files (source .osm.pbf already deleted in builder)
+COPY --from=builder /data/brazil-latest.osrm* /data/
+
+EXPOSE 5000
+
+# Testing a real long-distance route (SP to Manaus) to ensure the data loaded.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f -s "http://localhost:5000/route/v1/driving/-46.6333,-23.5505;-60.0217,-3.1190" > /dev/null || exit 1
+
+# Command to start the route server.
+CMD ["osrm-routed", "--algorithm", "mld", "/data/brazil-latest.osrm"]

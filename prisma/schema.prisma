@@ -91,6 +91,7 @@ model Business {
 
   Activity     Activity[]
   Notification Notification[]
+  Route        Route[]
 
   created_at       DateTime           @default(now())
   updated_at       DateTime           @updatedAt
@@ -353,6 +354,7 @@ model Driver {
 
   vehicles Vehicle[]
   User     User?
+  routes   Route[]
 
   Fine             Fine[]
   Fuel             Fuel[]
@@ -401,6 +403,7 @@ model Vehicle {
   branchId String?
 
   serviceOrders ServiceOrder[]
+  routes        Route[]
 
   created_at       DateTime           @default(now())
   updated_at       DateTime           @updatedAt
@@ -787,4 +790,39 @@ model VehicleChecklist {
   @@index([driverId])
   @@index([checklist_date])
   @@map("vehicle_checklist")
+}
+
+model Route {
+  id            String  @id @default(uuid(7))
+  origin        Json // {lat: number, lng: number, address?: string}
+  destination   Json // {lat: number, lng: number, address?: string}
+  waypoints     Json // Array of {lat: number, lng: number, address?: string}
+  distance      Float // Distance in meters
+  duration      Float // Duration in seconds
+  geometry      Json // GeoJSON {type: "LineString", coordinates: [[lng, lat]]}
+  estimatedCost Decimal @db.Decimal(10, 2) // Estimated cost of the route
+  status        String  @default("pending") // pending, in_progress, completed, cancelled
+  metadata      Json? // Flexible additional data
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
+  vehicleId String?
+
+  driver   Driver? @relation(fields: [driverId], references: [id])
+  driverId String?
+
+  simulationId String? // FK for Simulation (will be created in the next step)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId])
+  @@index([vehicleId])
+  @@index([driverId])
+  @@index([status])
+  @@index([simulationId])
+  @@index([created_at])
+  @@map("route")
 }

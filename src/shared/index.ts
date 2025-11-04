@@ -72,8 +72,14 @@ import { TrafficViolationCodeRepository } from "@/modules/fine/repositories/traf
 import { IFineRepository } from "@/modules/fine/repositories/IFine-repository";
 import { ITrafficViolationCodeRepository } from "@/modules/fine/repositories/ITraffic-violation-code-repository";
 
+import { IRouteRepository } from "@/modules/routing/repositories/IRoute-repository";
+import { RouteRepository } from "@/modules/routing/repositories/route-repository";
+
 import { IWhatsAppProvider } from "./providers/whatsapp-provider/IWhatsApp-provider";
 import { EvolutionApiProvider } from "./providers/whatsapp-provider/implementations/evolution-api-provider";
+
+import { IRoutingProvider } from "./providers/routing-provider/IRouting-provider";
+import { OSRMProvider } from "./providers/routing-provider/implementations/osrm-provider";
 
 import { NotificationService } from "./services/notification-service";
 import { KanbanService } from "./services/kanban-service";
@@ -85,6 +91,7 @@ container.registerSingleton<IWhatsAppProvider>(
   EvolutionApiProvider,
 );
 
+container.registerSingleton<IRoutingProvider>("RoutingProvider", OSRMProvider);
 container.registerSingleton<NotificationService>(
   "NotificationService",
   NotificationService,
@@ -189,4 +196,9 @@ container.registerSingleton<IFineRepository>("FineRepository", FineRepository);
 container.registerSingleton<ITrafficViolationCodeRepository>(
   "TrafficViolationCodeRepository",
   TrafficViolationCodeRepository,
+);
+
+container.registerSingleton<IRouteRepository>(
+  "RouteRepository",
+  RouteRepository,
 );
