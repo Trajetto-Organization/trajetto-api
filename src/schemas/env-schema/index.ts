@@ -6,7 +6,7 @@ const envSchema = z.object({
     .default("development"),
   PORT: z.coerce.number().default(3333),
   RABBITMQ_URL: z.string(),
-  OSRM_URL: z.string(),
+  OSRM_URL: z.string().optional(),
   HTTP_REQUEST: z.string(),
   API_HTTP_REQUEST: z.string().optional(),
   JWT_SECRET: z.string(),

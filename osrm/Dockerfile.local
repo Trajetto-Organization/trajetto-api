@@ -1,0 +1,66 @@
+# ============================================
+# OSRM Dockerfile - LOCAL (Testing)
+# ============================================
+# Region: Centro-Oeste (DF, GO, MT, MS)
+# Data: 134MB download → ~1GB processed
+# Build time: ~3-5min ⚡
+# Build RAM: ~1.5GB (works on ANY machine)
+# Runtime RAM: ~200MB
+#
+# Purpose: Ultra-lightweight for testing routing logic
+# Coverage: Brasília, Goiânia, Cuiabá, Campo Grande
+# Good for: Fast testing if routing system works correctly
+
+FROM ghcr.io/project-osrm/osrm-backend:latest AS builder
+
+WORKDIR /data
+
+# Download Centro-Oeste region (lightest, perfect for testing)
+RUN apk add --no-cache wget && \
+    echo "📥 Downloading Centro-Oeste (134MB)..." && \
+    wget -O /data/local.osm.pbf \
+      http://download.geofabrik.de/south-america/brazil/centro-oeste-latest.osm.pbf && \
+    echo "✅ Download complete" && \
+    ls -lh /data/local.osm.pbf
+
+# Extract - Auto-detects available CPU cores
+RUN echo "🔧 Step 1/3: Extracting..." && \
+    osrm-extract -p /opt/car.lua /data/local.osm.pbf && \
+    echo "✅ Extract complete"
+
+# Partition - Uses default optimal cell-size
+RUN echo "🔧 Step 2/3: Partitioning..." && \
+    osrm-partition /data/local.osrm && \
+    echo "✅ Partition complete"
+
+# Customize
+RUN echo "🔧 Step 3/3: Customizing..." && \
+    osrm-customize /data/local.osrm && \
+    echo "✅ Customize complete"
+
+# Cleanup source file
+RUN rm -f /data/local.osm.pbf && \
+    echo "📊 Final data:" && ls -lh /data/
+
+# ============================================
+# RUNTIME
+# ============================================
+FROM ghcr.io/project-osrm/osrm-backend:latest
+
+LABEL region="local-centro-oeste"
+LABEL description="OSRM for Centro-Oeste (testing)"
+LABEL version="1.0"
+
+WORKDIR /data
+
+# Copy ALL processed files
+COPY --from=builder /data/local.osrm* /data/
+
+EXPOSE 5000
+
+# Healthcheck: Brasília → Goiânia (~200km)
+# Coordinates: Brasília (-47.9292,-15.7801) → Goiânia (-49.2646,-16.6869)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f -s "http://localhost:5000/route/v1/driving/-47.9292,-15.7801;-49.2646,-16.6869" > /dev/null || exit 1
+
+CMD ["osrm-routed", "--algorithm", "mld", "/data/local.osrm"]

@@ -8,22 +8,22 @@ FROM ghcr.io/project-osrm/osrm-backend:latest AS builder
 
 WORKDIR /data
 
-# Download Brazil region (using Alpine Linux apk)
+# Download Brasil region (using Alpine Linux apk)
 RUN apk add --no-cache wget && \
-    echo "📥 Downloading BRAZIL OSM data (~2GB)..." && \
+    echo "📥 Downloading BRASIL OSM data (~2GB)..." && \
     wget -O /data/brazil-latest.osm.pbf \
       http://download.geofabrik.de/south-america/brazil-latest.osm.pbf && \
     echo "✅ Download complete" && \
     ls -lh /data/brazil-latest.osm.pbf
 
 # Extract - Auto-detects available CPU cores
-# 🚨 ESTE PASSO REQUER MUITA RAM
+# 🚨 THIS STEP REQUIRES A LOT OF RAM
 RUN echo "🔧 Step 1/3: Extracting..." && \
     osrm-extract -p /opt/car.lua /data/brazil-latest.osm.pbf && \
     echo "✅ Extract complete"
 
 # Partition - Uses default optimal cell-size
-# 🚨 ESTE PASSO TAMBÉM REQUER MUITA RAM
+# 🚨 THIS STEP REQUIRES A LOT OF RAM
 RUN echo "🔧 Step 2/3: Partitioning..." && \
     osrm-partition /data/brazil-latest.osrm && \
     echo "✅ Partition complete"
@@ -46,7 +46,7 @@ RUN rm -f /data/brazil-latest.osm.pbf && \
 # This final stage contains ONLY the OSRM + the processed data.
 FROM ghcr.io/project-osrm/osrm-backend:latest
 
-LABEL region="brazil-monolith"
+LABEL region="brazil"
 LABEL description="OSRM for all of Brasil"
 LABEL version="1.0"
 

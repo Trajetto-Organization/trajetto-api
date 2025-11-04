@@ -4,14 +4,14 @@ services:
   trajetto-osrm:
     build:
       context: ./osrm
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.local
     image: trajetto-osrm
     container_name: trajetto-osrm
     restart: unless-stopped
     ports:
       - "5000:5000"
     healthcheck:
-      test: "curl -f -s 'http://localhost:5000/route/v1/driving/-46.6333,-23.5505;-43.1729,-22.9068' > /dev/null"
+      test: "curl -f -s 'http://localhost:5000/route/v1/driving/-47.9292,-15.7801;-49.2646,-16.6869' > /dev/null"
       interval: 30s
       timeout: 10s
       retries: 3
