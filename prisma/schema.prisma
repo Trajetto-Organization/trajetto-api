@@ -794,6 +794,8 @@ model VehicleChecklist {
 
 model Route {
   id            String  @id @default(uuid(7))
+  name          String? // Route name (e.g. "Rota Brasília - Goiânia")
+  description   String? // Optional description
   origin        Json // {lat: number, lng: number, address?: string}
   destination   Json // {lat: number, lng: number, address?: string}
   waypoints     Json // Array of {lat: number, lng: number, address?: string}

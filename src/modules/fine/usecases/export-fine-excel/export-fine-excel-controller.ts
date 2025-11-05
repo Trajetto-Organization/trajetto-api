@@ -14,7 +14,6 @@ class ExportFineExcelController {
     const { id } = request.user;
 
     const exportFineExcelUseCase = container.resolve(ExportFineExcelUseCase);
-
     const result = await exportFineExcelUseCase.execute(id, search);
 
     reply

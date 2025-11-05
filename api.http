@@ -1,7 +1,9 @@
 @baseUrl = http://localhost:3333
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiYnVzaW5lc3NJZCI6bnVsbCwicHJvZmlsZUFjY2VzcyI6bnVsbCwiaWF0IjoxNzU3OTUwOTMyLCJleHAiOjE3NTc5ODY5MzIsInN1YiI6IjMxODliZWE5LWNhNTItNDUwMC1hYzBmLTE1MmQ2ZmU3OGQzNiJ9.z37UWJIdJtn_tl1IlKCft8NIBetg-y8lDpfRDxhz_xs
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiZHJpdmVySWQiOm51bGwsImlhdCI6MTc2MjM0NDQwMiwiZXhwIjoxNzYyMzgwNDAyLCJzdWIiOiIzMTg5YmVhOS1jYTUyLTQ1MDAtYWMwZi0xNTJkNmZlNzhkMzYifQ.ihPhVc3_hW1iIbGYS0eybupZQjdRJ-Cv-F5KYmeeXeE
 @refresh_token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6Im1hc3RlckBhZG1pbi5jb20iLCJpYXQiOjE3NTM0MDU5NjksImV4cCI6MTc1MzQ5MjM2OSwic3ViIjoiOGRhZmY4ZjQtY2QwYS00ODgzLWFkYjAtMDZmODA0ZjI1OTM3In0.WTv7cz3TAaBf6TwuzjHyVFwwJH3I7nngwoKGndf3Qb0
 @forgot_verification_token = b3c16b35-54c4-47e7-9ca1-86a87c4b45f7
+@businessId = 019992a1-4e4e-7880-81d7-ff63f04b1bd5
+@routeId = 019a5403-55d8-77b2-89d5-b91754fae416
 @page = 1
 @pageSize = 10
 
@@ -16,7 +18,7 @@ Authorization: Bearer {{token}}
     "email": "test@gmail.com",
     "password": "1234567",
     "role": "BUSINESS_ADMIN",
-    "businessId": "355bf3b2-66c4-462b-a021-a0813abe1fe5",
+    "businessId": "{{businessId}}",
     "profileAccessId": "227d3746-65c1-4a46-8baa-9745951d0f3f"
 }
 
@@ -121,7 +123,7 @@ Authorization: Bearer {{token}}
 
 {
     "name": "New Test",
-    "businessId": "4c0ebfec-4a24-4e5a-8235-3a95990b5ae1",
+    "businessId": "{{businessId}}",
     "profileAccessId": "17f2998c-659d-4147-a074-5950655aa0aa"
 }
 
@@ -207,7 +209,7 @@ Authorization: Bearer {{token}}
 
 {
     "name": "Admin",
-    "businessId": "0342fa82-1b8a-4dd4-8809-eeb2c9968847"
+    "businessId": "{{businessId}}"
 }
 
 ###
@@ -218,7 +220,7 @@ Authorization: Bearer {{token}}
 
 {
     "name": "Updated Profile Access",
-    "businessId": "355bf3b2-66c4-462b-a021-a0813abe1fe5"
+    "businessId": "{{businessId}}"
 }
 
 ###
@@ -246,7 +248,7 @@ Authorization: Bearer {{token}}
     "permissionKey": "profile_access_manage",
     "canRead": true,
     "canWrite": true,
-    "businessId": "4c0ebfec-4a24-4e5a-8235-3a95990b5ae1",
+    "businessId": "{{businessId}}",
     "profileAccessId": "5d913030-e8c7-4aab-9930-1cd7616057fd"
 }
 
@@ -260,7 +262,7 @@ Authorization: Bearer {{token}}
     "action": "Updated Profile Access",
     "canRead": true,
     "canWrite": false,
-    "businessId": "4c0ebfec-4a24-4e5a-8235-3a95990b5ae1",
+    "businessId": "{{businessId}}",
     "profileAccessId": "1908a009-bb50-49ed-85c9-f2483b65c92e"
 }
 
@@ -760,4 +762,170 @@ Authorization: Bearer {{token}}
 ###
 
 DELETE {{baseUrl}}/account-payable/delete-account-payable/a343fb96-bcee-4469-a52c-686f47bb9470/business/b50ff064-a014-4e10-8a27-8275ce948be1
+Authorization: Bearer {{token}}
+
+## Routing Requests
+
+###
+
+# Calculate route - Brasília to Goiânia
+POST {{baseUrl}}/routes/calculate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "origin": {
+        "lat": -15.7801,
+        "lng": -47.9292
+    },
+    "destination": {
+        "lat": -16.6869,
+        "lng": -49.2646
+    },
+    "costPerKm": 2.5,
+    "businessId": "{{businessId}}"
+}
+
+###
+
+# Calculate route with waypoints - Brasília -> Anápolis -> Goiânia
+POST {{baseUrl}}/routes/calculate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "origin": {
+        "lat": -15.7801,
+        "lng": -47.9292
+    },
+    "destination": {
+        "lat": -16.6869,
+        "lng": -49.2646
+    },
+    "waypoints": [
+        {
+            "lat": -16.3281,
+            "lng": -48.9534
+        }
+    ],
+    "costPerKm": 3.0,
+    "businessId": "{{businessId}}"
+}
+
+###
+
+# Optimize route - Multiple points in Centro-Oeste
+POST {{baseUrl}}/routes/optimize
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "coordinates": [
+        {
+            "lat": -15.7801,
+            "lng": -47.9292,
+            "name": "Brasília"
+        },
+        {
+            "lat": -16.3281,
+            "lng": -48.9534,
+            "name": "Anápolis"
+        },
+        {
+            "lat": -16.6869,
+            "lng": -49.2646,
+            "name": "Goiânia"
+        }
+    ],
+    "businessId": "{{businessId}}"
+}
+
+###
+
+# Create route - NO data calculated (UseCase calculates automatically) ⚡
+POST {{baseUrl}}/routes/create
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Rota Brasília - Goiânia",
+    "description": "Rota de teste Centro-Oeste - Auto-cálculo",
+    "origin": {
+        "lat": -15.7801,
+        "lng": -47.9292,
+        "address": "Brasília, DF"
+    },
+    "destination": {
+        "lat": -16.6869,
+        "lng": -49.2646,
+        "address": "Goiânia, GO"
+    },
+    "status": "PENDING",
+    "businessId": "{{businessId}}"
+}
+
+###
+
+# Create route - COM calculated data (optimized - does not recalculate) 🚀
+POST {{baseUrl}}/routes/create
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Rota Brasília - Goiânia Otimizada",
+    "description": "Rota com dados pré-calculados",
+    "origin": {
+        "lat": -15.7801,
+        "lng": -47.9292,
+        "address": "Brasília, DF"
+    },
+    "destination": {
+        "lat": -16.6869,
+        "lng": -49.2646,
+        "address": "Goiânia, GO"
+    },
+    "distance": 205496.9,
+    "duration": 10589.3,
+    "geometry": {
+        "type": "LineString",
+        "coordinates": [[-47.929198, -15.7801], [-49.264618, -16.686892]]
+    },
+    "estimatedCost": 164.39,
+    "status": "PENDING",
+    "businessId": "{{businessId}}"
+}
+
+###
+
+# List routes by business
+GET {{baseUrl}}/routes/business/{{businessId}}?page={{page}}&pageSize={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+# Get specific route (replace routeId with actual ID)
+GET {{baseUrl}}/routes/{{routeId}}/business/{{businessId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+###
+
+# Update route (replace routeId with actual ID)
+PUT {{baseUrl}}/routes/{{routeId}}/business/{{businessId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Rota Atualizada",
+    "status": "IN_PROGRESS",
+    "vehicleId": null,
+    "driverId": null
+}
+
+###
+
+# Delete route (replace routeId with actual ID)
+DELETE {{baseUrl}}/routes/{{routeId}}/business/{{businessId}}
 Authorization: Bearer {{token}}

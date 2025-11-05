@@ -19,6 +19,8 @@ const coordinateSchema = z.object({
 
 const routeObjectSchema = z.object({
   id: z.string().uuid(),
+  name: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
   origin: coordinateSchema,
   destination: coordinateSchema,
   waypoints: z.array(coordinateSchema),
@@ -28,15 +30,33 @@ const routeObjectSchema = z.object({
     type: z.string(),
     coordinates: z.array(z.array(z.number())),
   }),
-  estimatedCost: z.number(),
+  estimatedCost: z.union([z.number(), z.any()]).transform((val) => {
+    // Handle Prisma Decimal objects
+    if (typeof val === "object" && val !== null && "toNumber" in val) {
+      return val.toNumber();
+    }
+    return Number(val);
+  }),
   status: z.string(),
   businessId: z.string().uuid(),
   vehicleId: z.string().uuid().nullable(),
   driverId: z.string().uuid().nullable(),
   simulationId: z.string().uuid().nullable(),
   metadata: z.record(z.unknown()),
-  created_at: z.string(),
-  updated_at: z.string(),
+  created_at: z.union([z.string(), z.date()]).transform((val) => {
+    // Handle Date objects
+    if (val instanceof Date) {
+      return val.toISOString();
+    }
+    return val;
+  }),
+  updated_at: z.union([z.string(), z.date()]).transform((val) => {
+    // Handle Date objects
+    if (val instanceof Date) {
+      return val.toISOString();
+    }
+    return val;
+  }),
   vehicle: z
     .object({
       id: z.string(),
@@ -98,13 +118,19 @@ export const routingResponses = {
   }),
 
   calculateRouteErrors: z.union([
-    z.object({ message: z.literal("Usuário não encontrado!") }),
-    z.object({ message: z.literal("Empresa não encontrada!") }),
-    z.object({ message: z.literal("Veículo não encontrado!") }),
+    z.object({ message: z.string().default("Recurso não encontrado!") }),
     z.object({
-      message: z.literal(
-        "Erro ao calcular rota. Verifique as coordenadas e tente novamente.",
-      ),
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({ message: z.string().default("Veículo não encontrado!") }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Erro ao calcular rota. Verifique as coordenadas e tente novamente.",
+        ),
     }),
   ]),
 
@@ -115,12 +141,18 @@ export const routingResponses = {
   }),
 
   optimizeRouteErrors: z.union([
-    z.object({ message: z.literal("Usuário não encontrado!") }),
-    z.object({ message: z.literal("Empresa não encontrada!") }),
+    z.object({ message: z.string().default("Recurso não encontrado!") }),
     z.object({
-      message: z.literal(
-        "É necessário fornecer pelo menos 2 coordenadas para otimizar a rota!",
-      ),
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "É necessário fornecer pelo menos 2 coordenadas para otimizar a rota!",
+        ),
     }),
   ]),
 
@@ -131,10 +163,37 @@ export const routingResponses = {
   }),
 
   createRouteErrors: z.union([
-    z.object({ message: z.literal("Usuário não encontrado!") }),
-    z.object({ message: z.literal("Empresa não encontrada!") }),
-    z.object({ message: z.literal("Veículo não encontrado!") }),
-    z.object({ message: z.literal("Motorista não encontrado!") }),
+    z.object({ message: z.string().default("Recurso não encontrado!") }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({ message: z.string().default("Veículo não encontrado!") }),
+    z.object({ message: z.string().default("Motorista não encontrado!") }),
+    z.object({
+      message: z.string().default("Sem permissão para acessar esta empresa!"),
+    }),
+    z.object({
+      message: z.string().default("Veículo não pertence a esta empresa!"),
+    }),
+    z.object({
+      message: z.string().default("Motorista não pertence a esta empresa!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Erro ao calcular dados da rota. Verifique as coordenadas fornecidas.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Houve um erro ao tentar criar a rota! Por favor, tente novamente.",
+        ),
+    }),
   ]),
 
   // List Routes
@@ -144,21 +203,29 @@ export const routingResponses = {
   }),
 
   listRoutesErrors: z.union([
-    z.object({ message: z.literal("Usuário não encontrado!") }),
-    z.object({ message: z.literal("Empresa não encontrada!") }),
+    z.object({ message: z.string().default("Recurso não encontrado!") }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
   ]),
 
   // Get Route
   routeDetails: routeObjectSchema,
 
   getRouteErrors: z.union([
-    z.object({ message: z.literal("Usuário não encontrado!") }),
-    z.object({ message: z.literal("Empresa não encontrada!") }),
-    z.object({ message: z.literal("Rota não encontrada!") }),
+    z.object({ message: z.string().default("Recurso não encontrado!") }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({ message: z.string().default("Rota não encontrada!") }),
   ]),
 
   routeNotFound: z.object({
-    message: z.literal("Rota não encontrada!"),
+    message: z.string().default("Rota não encontrada!"),
   }),
 
   // Update Route
@@ -168,11 +235,15 @@ export const routingResponses = {
   }),
 
   updateRouteErrors: z.union([
-    z.object({ message: z.literal("Usuário não encontrado!") }),
-    z.object({ message: z.literal("Empresa não encontrada!") }),
-    z.object({ message: z.literal("Veículo não encontrado!") }),
-    z.object({ message: z.literal("Motorista não encontrado!") }),
-    z.object({ message: z.literal("Rota não encontrada!") }),
+    z.object({ message: z.string().default("Recurso não encontrado!") }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({ message: z.string().default("Veículo não encontrado!") }),
+    z.object({ message: z.string().default("Motorista não encontrado!") }),
+    z.object({ message: z.string().default("Rota não encontrada!") }),
   ]),
 
   // Delete Route
@@ -182,13 +253,17 @@ export const routingResponses = {
   }),
 
   deleteRouteErrors: z.union([
-    z.object({ message: z.literal("Usuário não encontrado!") }),
-    z.object({ message: z.literal("Empresa não encontrada!") }),
-    z.object({ message: z.literal("Rota não encontrada!") }),
+    z.object({ message: z.string().default("Recurso não encontrado!") }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({ message: z.string().default("Rota não encontrada!") }),
   ]),
 
-  // Generic
+  // Common error responses
   internalServerError: z.object({
-    message: z.string(),
+    message: z.string().default("Internal server error"),
   }),
 };

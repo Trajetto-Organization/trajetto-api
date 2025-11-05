@@ -7,6 +7,8 @@ import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repo
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
 import { IRouteRepository } from "../../repositories/IRoute-repository";
+import { IRoutingProvider } from "@/shared/providers/routing-provider/IRouting-provider";
+
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
@@ -31,6 +33,8 @@ class CreateRouteUseCase {
     private driver: IDriverRepository,
     @inject("RouteRepository")
     private route: IRouteRepository,
+    @inject("RoutingProvider")
+    private routingProvider: IRoutingProvider,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -78,8 +82,60 @@ class CreateRouteUseCase {
       }
     }
 
+    // ⭐ SMART LOGIC: Automatically calculates if fields are missing.
+    if (
+      !data.distance ||
+      !data.duration ||
+      !data.geometry ||
+      !data.estimatedCost
+    ) {
+      console.log(
+        "[CreateRouteUseCase] Campos calculados não fornecidos. Calculando automaticamente...",
+      );
+
+      try {
+        // Creates coordinate array: [origin, ...waypoints, destination]
+        const coordinates = [
+          data.origin,
+          ...(data.waypoints || []),
+          data.destination,
+        ];
+
+        // Calculates via OSRM
+        const routeCalculation = await this.routingProvider.calculateRoute({
+          coordinates,
+          alternatives: false,
+          steps: false,
+        });
+
+        // Fill in calculated fields.
+        data.distance = routeCalculation.distance;
+        data.duration = routeCalculation.duration;
+
+        data.geometry = routeCalculation.geometry;
+
+        // Calculates estimated cost (if not provided)
+        if (!data.estimatedCost) {
+          const costPerKm = data.costPerKm || 2.5;
+          data.estimatedCost = routeCalculation.distanceKm * costPerKm;
+        }
+
+        console.log(
+          `[CreateRouteUseCase] Cálculo automático concluído: ${routeCalculation.distanceKm}km, ${routeCalculation.durationFormatted}`,
+        );
+      } catch (error) {
+        console.error("[CreateRouteUseCase] Erro ao calcular rota:", error);
+        throw new AppError(
+          "Erro ao calcular dados da rota. Verifique as coordenadas fornecidas.",
+          400,
+        );
+      }
+    }
+
     try {
-      const createdRoute = await this.route.createRoute(data);
+      const createdRoute = await this.route.createRoute(
+        data as Required<CreateRouteProps>,
+      );
 
       this.notificationService.createActivityIfEnabled({
         type: "Rota",

@@ -59,6 +59,11 @@ class GetRouteUseCase {
 
       return foundRoute;
     } catch (error) {
+      // Re-throw known errors without wrapping them
+      if (error instanceof RouteNotFoundError) {
+        throw error;
+      }
+
       console.error("[GetRouteUseCase] Error:", error);
       throw new AppError(
         "Houve um erro ao tentar buscar a rota! Por favor, tente novamente.",

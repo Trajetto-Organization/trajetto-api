@@ -17,13 +17,15 @@ class RouteRepository implements IRouteRepository {
   async createRoute(data: CreateRouteProps): Promise<Route> {
     const route = await this.prisma.route.create({
       data: {
+        name: data.name,
+        description: data.description,
         origin: data.origin as any,
         destination: data.destination as any,
         waypoints: (data.waypoints || []) as any,
-        distance: data.distance,
-        duration: data.duration,
+        distance: data.distance as number,
+        duration: data.duration as number,
         geometry: data.geometry as any,
-        estimatedCost: new Decimal(data.estimatedCost),
+        estimatedCost: new Decimal(data.estimatedCost as number),
         status: data.status || "pending",
         businessId: data.businessId,
         vehicleId: data.vehicleId,
@@ -175,6 +177,10 @@ class RouteRepository implements IRouteRepository {
 
   async updateRoute(props: UpdateRouteProps): Promise<Route> {
     const updateData: any = {};
+
+    if (props.name !== undefined) updateData.name = props.name;
+    if (props.description !== undefined)
+      updateData.description = props.description;
 
     if (props.origin) updateData.origin = props.origin;
     if (props.destination) updateData.destination = props.destination;
@@ -344,6 +350,8 @@ class RouteRepository implements IRouteRepository {
   private transformRouteData(route: any): Route {
     return {
       id: route.id,
+      name: route.name,
+      description: route.description,
       origin: route.origin as Coordinate,
       destination: route.destination as Coordinate,
       waypoints: (route.waypoints as Coordinate[]) || [],

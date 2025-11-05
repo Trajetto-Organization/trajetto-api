@@ -7,6 +7,8 @@ const coordinateSchema = z.object({
 });
 
 const updateRouteSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
   origin: coordinateSchema.optional(),
   destination: coordinateSchema.optional(),
   waypoints: z.array(coordinateSchema).optional(),

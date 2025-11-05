@@ -8,6 +8,8 @@ interface Coordinate {
 
 interface Route {
   id: string;
+  name?: string | null;
+  description?: string | null;
   origin: Coordinate;
   destination: Coordinate;
   waypoints: Coordinate[];
@@ -39,15 +41,25 @@ interface Route {
 }
 
 interface CreateRouteProps {
+  // Identification
+  name?: string;
+  description?: string;
+
+  // Mandatory data
   origin: Coordinate;
   destination: Coordinate;
   waypoints?: Coordinate[];
-  distance: number;
-  duration: number;
-  geometry: { type: string; coordinates: number[][] };
-  estimatedCost: number;
-  status?: string;
   businessId: string;
+
+  // Calculated fields - OPTIONAL (UseCase calculates if not provided)
+  distance?: number;
+  duration?: number;
+  geometry?: { type: string; coordinates: number[][] };
+  estimatedCost?: number;
+  costPerKm?: number; // For automatic calculation
+
+  // Duties
+  status?: string;
   vehicleId?: string;
   driverId?: string;
   simulationId?: string;
@@ -56,6 +68,8 @@ interface CreateRouteProps {
 
 interface UpdateRouteProps {
   id: string;
+  name?: string;
+  description?: string;
   origin?: Coordinate;
   destination?: Coordinate;
   waypoints?: Coordinate[];

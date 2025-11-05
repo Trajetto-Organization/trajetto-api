@@ -7,19 +7,42 @@ const coordinateSchema = z.object({
 });
 
 const createRouteSchema = z.object({
+  // Route identification
+  name: z.string().min(1, "O nome da rota é obrigatório.").optional(),
+  description: z.string().optional(),
+
+  // Mandatory data
   businessId: z.string().uuid("O ID da empresa deve ser um UUID válido."),
   origin: coordinateSchema,
   destination: coordinateSchema,
   waypoints: z.array(coordinateSchema).optional(),
-  distance: z.number().min(0, "A distância deve ser maior ou igual a 0."),
-  duration: z.number().min(0, "A duração deve ser maior ou igual a 0."),
-  geometry: z.object({
-    type: z.string(),
-    coordinates: z.array(z.array(z.number())),
-  }),
+
+  // Calculated fields - OPTIONAL (UseCase calculates automatically if not submitted)
+  distance: z
+    .number()
+    .min(0, "A distância deve ser maior ou igual a 0.")
+    .optional(),
+  duration: z
+    .number()
+    .min(0, "A duração deve ser maior ou igual a 0.")
+    .optional(),
+  geometry: z
+    .object({
+      type: z.string(),
+      coordinates: z.array(z.array(z.number())),
+    })
+    .optional(),
   estimatedCost: z
     .number()
-    .min(0, "O custo estimado deve ser maior ou igual a 0."),
+    .min(0, "O custo estimado deve ser maior ou igual a 0.")
+    .optional(),
+  costPerKm: z
+    .number()
+    .min(0, "O custo por km deve ser maior ou igual a 0.")
+    .optional()
+    .default(2.5),
+
+  // Assignments and metadata
   status: z.string().optional(),
   vehicleId: z
     .string()

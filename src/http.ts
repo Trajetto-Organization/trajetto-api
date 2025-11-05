@@ -2,7 +2,9 @@ import "reflect-metadata";
 import "./shared";
 
 import fastify from "fastify";
+
 import fastifyRateLimit from "@fastify/rate-limit";
+import fastifyCompress from "@fastify/compress";
 
 import fastifyStatic from "@fastify/static";
 import multipart from "@fastify/multipart";
@@ -42,6 +44,21 @@ app.register(helmet, {
 
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
+
+// Enable gzip/deflate/brotli compression for all responses
+app.register(fastifyCompress, {
+  global: true,
+  threshold: 1024, // Only compress responses > 1KB
+  encodings: ["gzip", "deflate", "br"], // Support gzip, deflate, and brotli
+  zlibOptions: {
+    level: 6, // Compression level (1-9, 6 is default and balanced)
+  },
+  brotliOptions: {
+    params: {
+      [require("zlib").constants.BROTLI_PARAM_QUALITY]: 4, // Brotli quality (0-11, 4 is fast)
+    },
+  },
+});
 
 app.register(fastifyCors, {
   origin: [
