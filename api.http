@@ -1,9 +1,10 @@
 @baseUrl = http://localhost:3333
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiZHJpdmVySWQiOm51bGwsImlhdCI6MTc2MjM0NDQwMiwiZXhwIjoxNzYyMzgwNDAyLCJzdWIiOiIzMTg5YmVhOS1jYTUyLTQ1MDAtYWMwZi0xNTJkNmZlNzhkMzYifQ.ihPhVc3_hW1iIbGYS0eybupZQjdRJ-Cv-F5KYmeeXeE
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiZHJpdmVySWQiOm51bGwsImlhdCI6MTc2MjQyOTM2MSwiZXhwIjoxNzYyNDY1MzYxLCJzdWIiOiIzMTg5YmVhOS1jYTUyLTQ1MDAtYWMwZi0xNTJkNmZlNzhkMzYifQ.ss9BmZi254s7W00KAATJUbRDJQWb5bjY10EDW1Fybyc
 @refresh_token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6Im1hc3RlckBhZG1pbi5jb20iLCJpYXQiOjE3NTM0MDU5NjksImV4cCI6MTc1MzQ5MjM2OSwic3ViIjoiOGRhZmY4ZjQtY2QwYS00ODgzLWFkYjAtMDZmODA0ZjI1OTM3In0.WTv7cz3TAaBf6TwuzjHyVFwwJH3I7nngwoKGndf3Qb0
 @forgot_verification_token = b3c16b35-54c4-47e7-9ca1-86a87c4b45f7
 @businessId = 019992a1-4e4e-7880-81d7-ff63f04b1bd5
 @routeId = 019a5403-55d8-77b2-89d5-b91754fae416
+@simulationId = 019a5902-7591-70b2-a112-4459c7dd432e
 @page = 1
 @pageSize = 10
 
@@ -928,4 +929,244 @@ Authorization: Bearer {{token}}
 
 # Delete route (replace routeId with actual ID)
 DELETE {{baseUrl}}/routes/{{routeId}}/business/{{businessId}}
+Authorization: Bearer {{token}}
+
+###
+
+## Simulation Requests
+
+# Run simulation - SYNC (≤5 routes - processed immediately)
+POST {{baseUrl}}/simulations/run
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Simulação Teste - Sync",
+    "description": "Simulação com 3 rotas processada sincronamente",
+    "businessId": "{{businessId}}",
+    "routes": [
+        {
+            "name": "Rota 1 - Brasília Centro",
+            "origin": {
+                "lat": -15.7801,
+                "lng": -47.9292
+            },
+            "destination": {
+                "lat": -15.8267,
+                "lng": -48.0501
+            }
+        },
+        {
+            "name": "Rota 2 - Brasília Sul",
+            "origin": {
+                "lat": -15.8267,
+                "lng": -48.0501
+            },
+            "destination": {
+                "lat": -15.8697,
+                "lng": -47.9208
+            }
+        },
+        {
+            "name": "Rota 3 - Retorno ao Centro",
+            "origin": {
+                "lat": -15.8697,
+                "lng": -47.9208
+            },
+            "destination": {
+                "lat": -15.7801,
+                "lng": -47.9292
+            }
+        }
+    ],
+    "metadata": {
+        "environment": "test",
+        "purpose": "sync_processing_test"
+    }
+}
+
+###
+
+# Run simulation - ASYNC (>5 routes - queued for background processing)
+POST {{baseUrl}}/simulations/run
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Simulação Teste - Async",
+    "description": "Simulação com 6 rotas processada assincronamente via RabbitMQ",
+    "businessId": "{{businessId}}",
+    "routes": [
+        {
+            "name": "Rota 1 - Brasília -> Goiânia",
+            "origin": {
+                "lat": -15.7801,
+                "lng": -47.9292
+            },
+            "destination": {
+                "lat": -16.6869,
+                "lng": -49.2646
+            },
+            "vehicleId": null,
+            "driverId": null
+        },
+        {
+            "name": "Rota 2 - Goiânia -> Anápolis",
+            "origin": {
+                "lat": -16.6869,
+                "lng": -49.2646
+            },
+            "destination": {
+                "lat": -16.3281,
+                "lng": -48.9534
+            }
+        },
+        {
+            "name": "Rota 3 - Anápolis -> Luziânia",
+            "origin": {
+                "lat": -16.3281,
+                "lng": -48.9534
+            },
+            "destination": {
+                "lat": -16.2528,
+                "lng": -47.9503
+            }
+        },
+        {
+            "name": "Rota 4 - Luziânia -> Formosa",
+            "origin": {
+                "lat": -16.2528,
+                "lng": -47.9503
+            },
+            "destination": {
+                "lat": -15.5372,
+                "lng": -47.3344
+            }
+        },
+        {
+            "name": "Rota 5 - Formosa -> Planaltina",
+            "origin": {
+                "lat": -15.5372,
+                "lng": -47.3344
+            },
+            "destination": {
+                "lat": -15.6177,
+                "lng": -47.6142
+            }
+        },
+        {
+            "name": "Rota 6 - Planaltina -> Brasília",
+            "origin": {
+                "lat": -15.6177,
+                "lng": -47.6142
+            },
+            "destination": {
+                "lat": -15.7801,
+                "lng": -47.9292
+            }
+        }
+    ],
+    "metadata": {
+        "environment": "test",
+        "purpose": "async_processing_test"
+    }
+}
+
+###
+
+# Create simulation - Without processing (only creates the record)
+POST {{baseUrl}}/simulations/create
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Simulação Armazenada",
+    "description": "Simulação criada mas não processada ainda",
+    "businessId": "{{businessId}}",
+    "routes": [
+        {
+            "name": "Rota Teste",
+            "origin": {
+                "lat": -15.7801,
+                "lng": -47.9292
+            },
+            "destination": {
+                "lat": -16.6869,
+                "lng": -49.2646
+            },
+            "waypoints": [
+                {
+                    "lat": -16.0000,
+                    "lng": -48.5000
+                }
+            ]
+        }
+    ],
+    "metadata": {
+        "environment": "test",
+        "purpose": "storage_only"
+    }
+}
+
+###
+
+# List simulations by business
+GET {{baseUrl}}/simulations/business/{{businessId}}?page=1&limit=10
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+# List simulations with search filter
+GET {{baseUrl}}/simulations/business/{{businessId}}?page=1&limit=10&search=Sync
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+# Get specific simulation (replace simulationId with actual ID)
+GET {{baseUrl}}/simulations/{{simulationId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+###
+
+# Update simulation (replace simulationId with actual ID)
+PUT {{baseUrl}}/simulations/{{simulationId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Simulação Atualizada",
+    "description": "Descrição modificada após criação",
+    "status": "completed",
+    "metadata": {
+        "environment": "production",
+        "updated": true
+    }
+}
+
+###
+
+# Update simulation - Partial update (only name)
+PUT {{baseUrl}}/simulations/{{simulationId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "name": "Nome Atualizado"
+}
+
+###
+
+# Delete simulation (replace simulationId with actual ID)
+DELETE {{baseUrl}}/simulations/{{simulationId}}
+Authorization: Bearer {{token}}
+
+###
+
+# Approve simulation - Creates real routes from simulation results (replace simulationId with actual ID)
+POST {{baseUrl}}/simulations/{{simulationId}}/approve
 Authorization: Bearer {{token}}

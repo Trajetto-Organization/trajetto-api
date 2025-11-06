@@ -15,7 +15,8 @@ type PermissionKey =
   | "account_payable_manage"
   | "kanban_manage"
   | "fine_manage"
-  | "route_manage";
+  | "route_manage"
+  | "simulation_manage";
 
 enum EnumPermissionKey {
   BRANCH_MANAGE = "branch_manage",
@@ -35,6 +36,7 @@ enum EnumPermissionKey {
   KANBAN_MANAGE = "kanban_manage",
   FINE_MANAGE = "fine_manage",
   ROUTE_MANAGE = "route_manage",
+  SIMULATION_MANAGE = "simulation_manage",
 }
 
 const permissionLabels = {
@@ -55,6 +57,7 @@ const permissionLabels = {
   kanban_manage: "Gerenciar Kanban",
   fine_manage: "Gerenciar Multas",
   route_manage: "Gerenciar Rotas",
+  simulation_manage: "Gerenciar Simulações de Rotas",
 };
 
 export { PermissionKey, EnumPermissionKey, permissionLabels };

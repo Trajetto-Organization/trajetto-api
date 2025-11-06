@@ -1,4 +1,3 @@
-import { injectable } from "tsyringe";
 import { IRoutingProvider } from "../IRouting-provider";
 
 import {
@@ -7,7 +6,6 @@ import {
 } from "@/modules/routing/dtos/route-dto";
 import { env } from "@/env";
 
-@injectable()
 class OSRMProvider implements IRoutingProvider {
   private baseURL = env.OSRM_URL || "http://localhost:5000";
 

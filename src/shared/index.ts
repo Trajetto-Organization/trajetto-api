@@ -75,6 +75,9 @@ import { ITrafficViolationCodeRepository } from "@/modules/fine/repositories/ITr
 import { IRouteRepository } from "@/modules/routing/repositories/IRoute-repository";
 import { RouteRepository } from "@/modules/routing/repositories/route-repository";
 
+import { ISimulationRepository } from "@/modules/simulation/repositories/ISimulation-repository";
+import { SimulationRepository } from "@/modules/simulation/repositories/simulation-repository";
+
 import { IWhatsAppProvider } from "./providers/whatsapp-provider/IWhatsApp-provider";
 import { EvolutionApiProvider } from "./providers/whatsapp-provider/implementations/evolution-api-provider";
 
@@ -201,4 +204,8 @@ container.registerSingleton<ITrafficViolationCodeRepository>(
 container.registerSingleton<IRouteRepository>(
   "RouteRepository",
   RouteRepository,
+);
+container.registerSingleton<ISimulationRepository>(
+  "SimulationRepository",
+  SimulationRepository,
 );

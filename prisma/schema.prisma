@@ -92,6 +92,7 @@ model Business {
   Activity     Activity[]
   Notification Notification[]
   Route        Route[]
+  Simulation   Simulation[]
 
   created_at       DateTime           @default(now())
   updated_at       DateTime           @updatedAt
@@ -815,7 +816,8 @@ model Route {
   driver   Driver? @relation(fields: [driverId], references: [id])
   driverId String?
 
-  simulationId String? // FK for Simulation (will be created in the next step)
+  simulation   Simulation? @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+  simulationId String?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -827,4 +829,26 @@ model Route {
   @@index([simulationId])
   @@index([created_at])
   @@map("route")
+}
+
+model Simulation {
+  id          String  @id @default(uuid(7))
+  name        String // Simulation name (e.g. "Operação Sexta-feira")
+  description String? // Optional description
+  status      String  @default("pending") // pending, processing, completed, failed, cancelled
+  results     Json? // Results data: {routes: [], totalDistance: number, totalDuration: number, totalCost: number}
+  metadata    Json? // Flexible additional data (filters, config, etc)
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  routes Route[] // Routes belonging to this simulation
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId])
+  @@index([status])
+  @@index([created_at])
+  @@map("simulation")
 }
