@@ -39,6 +39,8 @@ import { trafficViolationCodeRoutes } from "./traffic-violation-code-routes";
 import { routingRoutes } from "./routing-routes";
 import { simulationRoutes } from "./simulation-routes";
 
+import { vehicleAssignmentRoutes } from "./vehicle-assignment-routes";
+
 import { healthRoutes } from "./health-routes";
 import { whatsappRoutes } from "./whatsapp-routes";
 
@@ -68,6 +70,7 @@ async function routes(app: FastifyInstance) {
   app.register(trafficViolationCodeRoutes, { prefix: "/traffic-violation" });
   app.register(routingRoutes, { prefix: "/routes" });
   app.register(simulationRoutes, { prefix: "/simulations" });
+  app.register(vehicleAssignmentRoutes, { prefix: "/vehicle-assignment" });
   app.register(whatsappRoutes, { prefix: "/whatsapp" });
   app.register(healthRoutes);
 }

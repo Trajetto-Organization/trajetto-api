@@ -89,10 +89,11 @@ model Business {
   branches  Branch[]
   suppliers Supplier[]
 
-  Activity     Activity[]
-  Notification Notification[]
-  Route        Route[]
-  Simulation   Simulation[]
+  Activity          Activity[]
+  Notification      Notification[]
+  Route             Route[]
+  Simulation        Simulation[]
+  VehicleAssignment VehicleAssignment[]
 
   created_at       DateTime           @default(now())
   updated_at       DateTime           @updatedAt
@@ -353,9 +354,10 @@ model Driver {
   branch   Branch? @relation(fields: [branchId], references: [id])
   branchId String?
 
-  vehicles Vehicle[]
-  User     User?
-  routes   Route[]
+  vehicles          Vehicle[]
+  User              User?
+  routes            Route[]
+  VehicleAssignment VehicleAssignment[]
 
   Fine             Fine[]
   Fuel             Fuel[]
@@ -403,8 +405,9 @@ model Vehicle {
   branch   Branch? @relation(fields: [branchId], references: [id])
   branchId String?
 
-  serviceOrders ServiceOrder[]
-  routes        Route[]
+  serviceOrders     ServiceOrder[]
+  routes            Route[]
+  VehicleAssignment VehicleAssignment[]
 
   created_at       DateTime           @default(now())
   updated_at       DateTime           @updatedAt
@@ -819,6 +822,8 @@ model Route {
   simulation   Simulation? @relation(fields: [simulationId], references: [id], onDelete: Cascade)
   simulationId String?
 
+  VehicleAssignment VehicleAssignment[]
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -851,4 +856,43 @@ model Simulation {
   @@index([status])
   @@index([created_at])
   @@map("simulation")
+}
+
+model VehicleAssignment {
+  id String @id @default(uuid(7))
+
+  // Route assignment 
+  route   Route  @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  routeId String
+
+  // Vehicle assignment 
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleId String
+
+  // Driver assignment 
+  driver   Driver? @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  driverId String?
+
+  // Scheduled date for this assignment
+  scheduledDate DateTime
+
+  // Assignment status
+  status String @default("pending") // pending, in_progress, completed, cancelled
+
+  // Additional notes
+  notes String? @db.Text
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId])
+  @@index([routeId])
+  @@index([vehicleId])
+  @@index([driverId])
+  @@index([scheduledDate])
+  @@index([status])
+  @@map("vehicle_assignment")
 }

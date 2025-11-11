@@ -78,6 +78,9 @@ import { RouteRepository } from "@/modules/routing/repositories/route-repository
 import { ISimulationRepository } from "@/modules/simulation/repositories/ISimulation-repository";
 import { SimulationRepository } from "@/modules/simulation/repositories/simulation-repository";
 
+import { IVehicleAssignmentRepository } from "@/modules/vehicle-assignment/repositories/IVehicleAssignment-repository";
+import { VehicleAssignmentRepository } from "@/modules/vehicle-assignment/repositories/vehicle-assignment-repository";
+
 import { IWhatsAppProvider } from "./providers/whatsapp-provider/IWhatsApp-provider";
 import { EvolutionApiProvider } from "./providers/whatsapp-provider/implementations/evolution-api-provider";
 
@@ -208,4 +211,9 @@ container.registerSingleton<IRouteRepository>(
 container.registerSingleton<ISimulationRepository>(
   "SimulationRepository",
   SimulationRepository,
+);
+
+container.registerSingleton<IVehicleAssignmentRepository>(
+  "VehicleAssignmentRepository",
+  VehicleAssignmentRepository,
 );
