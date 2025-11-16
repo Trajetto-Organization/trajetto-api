@@ -97,6 +97,7 @@ model Business {
 
   created_at       DateTime           @default(now())
   updated_at       DateTime           @updatedAt
+  FleetAnalytics   FleetAnalytics[]
   KanbanColumn     KanbanColumn[]
   Fine             Fine[]
   Fuel             Fuel[]
@@ -895,4 +896,41 @@ model VehicleAssignment {
   @@index([scheduledDate])
   @@index([status])
   @@map("vehicle_assignment")
+}
+
+model FleetAnalytics {
+  id String @id @default(uuid(7))
+
+  // Analytics type: route_efficiency, cost_analysis, vehicle_utilization, fuel_consumption, maintenance_cost
+  analyticsType String
+
+  // Period: daily, weekly, monthly, custom
+  period String
+
+  // Date range
+  startDate DateTime
+  endDate   DateTime
+
+  // Results stored as flexible JSON
+  // Examples:
+  // - route_efficiency: { avgSpeed: 45.5, totalDistance: 1200, avgDuration: 3600, efficiency: 85 }
+  // - cost_analysis: { totalCost: 5000, fuelCost: 2000, maintenanceCost: 1500, otherCosts: 1500 }
+  // - vehicle_utilization: { totalVehicles: 20, activeVehicles: 15, utilizationRate: 75 }
+  results Json
+
+  // Additional metadata (filters used, configuration, etc)
+  metadata Json?
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId])
+  @@index([analyticsType])
+  @@index([period])
+  @@index([startDate, endDate])
+  @@index([created_at])
+  @@map("fleet_analytics")
 }

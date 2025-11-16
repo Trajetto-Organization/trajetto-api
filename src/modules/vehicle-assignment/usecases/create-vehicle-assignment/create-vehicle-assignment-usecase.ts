@@ -116,20 +116,27 @@ class CreateVehicleAssignmentUseCase {
     }
 
     // Create assignment
-    const assignment = await this.vehicleAssignment.createAssignment(data);
+    try {
+      const assignment = await this.vehicleAssignment.createAssignment(data);
 
-    // Create activity log
-    this.notificationService.createActivityIfEnabled({
-      type: "VehicleAssignment",
-      action: "create",
-      entityId: assignment.id,
-      description: `Atribuição criada | Veículo ${findVehicle.license_plate} para rota ${findRoute.name || findRoute.id}`,
-      status: "active",
-      performedBy: userId,
-      businessId: data.businessId,
-    });
+      // Create activity log
+      this.notificationService.createActivityIfEnabled({
+        type: "VehicleAssignment",
+        action: "create",
+        entityId: assignment.id,
+        description: `Atribuição criada | Veículo ${findVehicle.license_plate} para rota ${findRoute.name || findRoute.id}`,
+        status: "active",
+        performedBy: userId,
+        businessId: data.businessId,
+      });
 
-    return assignment;
+      return assignment;
+    } catch (error) {
+      throw new AppError(
+        "Houve um erro ao tentar criar a atribuição! Por favor, tente novamente.",
+        500,
+      );
+    }
   }
 }
 

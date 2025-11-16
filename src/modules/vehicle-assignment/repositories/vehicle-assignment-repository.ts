@@ -520,12 +520,21 @@ class VehicleAssignmentRepository implements IVehicleAssignmentRepository {
       routeId: assignment.routeId,
       vehicleId: assignment.vehicleId,
       driverId: assignment.driverId,
-      scheduledDate: assignment.scheduledDate,
+      scheduledDate:
+        assignment.scheduledDate instanceof Date
+          ? assignment.scheduledDate
+          : new Date(assignment.scheduledDate),
       status: assignment.status,
       notes: assignment.notes,
       businessId: assignment.businessId,
-      created_at: assignment.created_at,
-      updated_at: assignment.updated_at,
+      created_at:
+        assignment.created_at instanceof Date
+          ? assignment.created_at
+          : new Date(assignment.created_at),
+      updated_at:
+        assignment.updated_at instanceof Date
+          ? assignment.updated_at
+          : new Date(assignment.updated_at),
       route: assignment.route
         ? {
             id: assignment.route.id,
@@ -534,7 +543,9 @@ class VehicleAssignmentRepository implements IVehicleAssignmentRepository {
             destination: assignment.route.destination as any,
             distance: assignment.route.distance,
             duration: assignment.route.duration,
-            estimatedCost: Number(assignment.route.estimatedCost),
+            estimatedCost: assignment.route.estimatedCost
+              ? Number(assignment.route.estimatedCost)
+              : 0,
           }
         : undefined,
       vehicle: assignment.vehicle

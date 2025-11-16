@@ -30,7 +30,7 @@ async function vehicleAssignmentRoutes(app: FastifyInstance) {
     "/create-assignment/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("route_manage", "write")],
+      preHandler: [verifyPermission("vehicle_assignment_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-assignment"],
@@ -53,7 +53,7 @@ async function vehicleAssignmentRoutes(app: FastifyInstance) {
     "/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("route_manage", "read")],
+      preHandler: [verifyPermission("vehicle_assignment_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-assignment"],
@@ -76,13 +76,13 @@ async function vehicleAssignmentRoutes(app: FastifyInstance) {
     "/:businessId/:assignmentId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("route_manage", "read")],
+      preHandler: [verifyPermission("vehicle_assignment_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-assignment"],
         summary: "Search assignment by ID",
         description: "Returns the complete details of a specific assignment.",
-        params: vehicleAssignmentSchemas.getAssignmentParams,
+        params: vehicleAssignmentSchemas.assignmentParams,
         response: {
           200: vehicleAssignmentResponses.assignmentDetails,
           400: vehicleAssignmentResponses.getAssignmentErrors,
@@ -97,14 +97,14 @@ async function vehicleAssignmentRoutes(app: FastifyInstance) {
     "/:businessId/:assignmentId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("route_manage", "write")],
+      preHandler: [verifyPermission("vehicle_assignment_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-assignment"],
         summary: "Update assignment",
         description:
           "Updates the data for an existing assignment (vehicle, driver, date, status, notes).",
-        params: vehicleAssignmentSchemas.updateAssignmentParams,
+        params: vehicleAssignmentSchemas.assignmentParams,
         body: vehicleAssignmentSchemas.updateAssignment,
         response: {
           200: vehicleAssignmentResponses.assignmentUpdated,
@@ -120,13 +120,13 @@ async function vehicleAssignmentRoutes(app: FastifyInstance) {
     "/:businessId/:assignmentId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("route_manage", "write")],
+      preHandler: [verifyPermission("vehicle_assignment_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-assignment"],
         summary: "Remove assignment",
         description: "Remove an existing vehicle assignment.",
-        params: vehicleAssignmentSchemas.deleteAssignmentParams,
+        params: vehicleAssignmentSchemas.assignmentParams,
         response: {
           200: vehicleAssignmentResponses.assignmentDeleted,
           400: vehicleAssignmentResponses.deleteAssignmentErrors,

@@ -33,6 +33,35 @@ interface IServiceOrderRepository {
   findServiceOrdersByResponsibleUserId: (
     responsibleUserId: string,
   ) => Promise<ServiceOrder[]>;
+
+  // Analytics methods
+  getTotalCostByDateRange: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ) => Promise<number>;
+  getServiceOrderCountByDateRange: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ) => Promise<number>;
+  getCostByMaintenanceType: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ) => Promise<{ preventive: number; corrective: number }>;
+  getServiceOrderDataByVehicle: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ) => Promise<
+    Array<{
+      vehicleId: string;
+      vehiclePlate: string;
+      totalCost: number;
+      totalServices: number;
+    }>
+  >;
 }
 
 export { IServiceOrderRepository };

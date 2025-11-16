@@ -342,6 +342,144 @@ class ServiceOrderRepository implements IServiceOrderRepository {
 
     return serviceOrders;
   }
+
+  // Analytics methods
+  async getTotalCostByDateRange(
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<number> {
+    const result = await this.prisma.serviceOrder.aggregate({
+      where: {
+        businessId,
+        date: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      _sum: {
+        total_amount: true,
+      },
+    });
+
+    return Number(result._sum.total_amount) || 0;
+  }
+
+  async getServiceOrderCountByDateRange(
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<number> {
+    const count = await this.prisma.serviceOrder.count({
+      where: {
+        businessId,
+        date: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+    });
+
+    return count;
+  }
+
+  async getCostByMaintenanceType(
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<{ preventive: number; corrective: number }> {
+    // INTERNAL = preventive, EXTERNAL = corrective
+    // Execute both aggregations in parallel for better performance
+    const [preventiveResult, correctiveResult] = await Promise.all([
+      this.prisma.serviceOrder.aggregate({
+        where: {
+          businessId,
+          maintenance_type: "INTERNAL",
+          date: {
+            gte: startDate,
+            lte: endDate,
+          },
+        },
+        _sum: {
+          total_amount: true,
+        },
+      }),
+      this.prisma.serviceOrder.aggregate({
+        where: {
+          businessId,
+          maintenance_type: "EXTERNAL",
+          date: {
+            gte: startDate,
+            lte: endDate,
+          },
+        },
+        _sum: {
+          total_amount: true,
+        },
+      }),
+    ]);
+
+    return {
+      preventive: Number(preventiveResult._sum.total_amount) || 0,
+      corrective: Number(correctiveResult._sum.total_amount) || 0,
+    };
+  }
+
+  async getServiceOrderDataByVehicle(
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<
+    Array<{
+      vehicleId: string;
+      vehiclePlate: string;
+      totalCost: number;
+      totalServices: number;
+    }>
+  > {
+    const serviceOrders = await this.prisma.serviceOrder.groupBy({
+      by: ["vehicleId"],
+      where: {
+        businessId,
+        date: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      _sum: {
+        total_amount: true,
+      },
+      _count: {
+        id: true,
+      },
+    });
+
+    // Get vehicle details for each vehicleId (filter out null values)
+    const serviceOrdersWithVehicles = serviceOrders.filter(
+      (so): so is typeof so & { vehicleId: string } => so.vehicleId !== null,
+    );
+
+    const vehicleData = await Promise.all(
+      serviceOrdersWithVehicles.map(async (so) => {
+        const vehicle = await this.prisma.vehicle.findUnique({
+          where: { id: so.vehicleId },
+          select: {
+            id: true,
+            license_plate: true,
+          },
+        });
+
+        return {
+          vehicleId: so.vehicleId,
+          vehiclePlate: vehicle?.license_plate || "N/A",
+          totalCost: Number(so._sum?.total_amount) || 0,
+          totalServices: so._count.id,
+        };
+      }),
+    );
+
+    return vehicleData;
+  }
 }
 
 export { ServiceOrderRepository };

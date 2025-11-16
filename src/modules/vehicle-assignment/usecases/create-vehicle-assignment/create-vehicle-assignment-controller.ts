@@ -12,10 +12,8 @@ import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not
 import { RouteNotFoundError } from "@/modules/routing/usecases/errors/route-not-found-error";
 import { VehicleAlreadyAssignedError } from "../errors/vehicle-already-assigned-error";
 
-import {
-  createVehicleAssignmentSchema,
-  businessIdParamSchema,
-} from "@/routes/documentation/vehicle-assignment-schemas";
+import { createVehicleAssignmentSchema } from "@/schemas/create-vehicle-assignment-schema";
+import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 class CreateVehicleAssignmentController {
   async handle(
@@ -23,7 +21,7 @@ class CreateVehicleAssignmentController {
     reply: FastifyReply,
   ): Promise<FastifyReply> {
     const { id: userId } = request.user;
-    const { businessId } = businessIdParamSchema.parse(request.params);
+    const { businessId } = updateDeleteBusinessSchema.parse(request.params);
 
     const vehicleAssignmentData = createVehicleAssignmentSchema.parse(
       request.body,

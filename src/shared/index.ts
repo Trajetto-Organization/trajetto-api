@@ -81,6 +81,9 @@ import { SimulationRepository } from "@/modules/simulation/repositories/simulati
 import { IVehicleAssignmentRepository } from "@/modules/vehicle-assignment/repositories/IVehicleAssignment-repository";
 import { VehicleAssignmentRepository } from "@/modules/vehicle-assignment/repositories/vehicle-assignment-repository";
 
+import { IFleetAnalyticsRepository } from "@/modules/fleet-analytics/repositories/IFleetAnalytics-repository";
+import { FleetAnalyticsRepository } from "@/modules/fleet-analytics/repositories/fleet-analytics-repository";
+
 import { IWhatsAppProvider } from "./providers/whatsapp-provider/IWhatsApp-provider";
 import { EvolutionApiProvider } from "./providers/whatsapp-provider/implementations/evolution-api-provider";
 
@@ -216,4 +219,8 @@ container.registerSingleton<ISimulationRepository>(
 container.registerSingleton<IVehicleAssignmentRepository>(
   "VehicleAssignmentRepository",
   VehicleAssignmentRepository,
+);
+container.registerSingleton<IFleetAnalyticsRepository>(
+  "FleetAnalyticsRepository",
+  FleetAnalyticsRepository,
 );

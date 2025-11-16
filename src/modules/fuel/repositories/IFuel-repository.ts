@@ -46,6 +46,41 @@ interface IFuelRepository {
     vehicleId: string,
     currentFuelDate: Date | string,
   ) => Promise<Fuel | null>;
+
+  // Analytics methods
+  getTotalCostByDateRange: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ) => Promise<number>;
+  getTotalLitersByDateRange: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ) => Promise<number>;
+  getFuelDataByVehicle: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ) => Promise<
+    Array<{
+      vehicleId: string;
+      vehiclePlate: string;
+      totalLiters: number;
+      totalCost: number;
+    }>
+  >;
+  getFuelDataByType: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ) => Promise<
+    Array<{
+      fuelType: string;
+      totalLiters: number;
+      totalCost: number;
+    }>
+  >;
 }
 
 export { IFuelRepository };

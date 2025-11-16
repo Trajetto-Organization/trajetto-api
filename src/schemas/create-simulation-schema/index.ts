@@ -13,8 +13,8 @@ const routeForSimulationSchema = z.object({
   origin: coordinateSchema,
   destination: coordinateSchema,
   waypoints: z.array(coordinateSchema).optional(),
-  vehicleId: z.string().uuid("ID do veículo inválido").optional().nullable(),
-  driverId: z.string().uuid("ID do motorista inválido").optional().nullable(),
+  vehicleId: z.string().uuid("ID do veículo inválido").optional(),
+  driverId: z.string().uuid("ID do motorista inválido").optional(),
 });
 
 const createSimulationSchema = z.object({

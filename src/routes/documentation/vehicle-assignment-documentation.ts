@@ -1,53 +1,48 @@
 import { z } from "zod";
 
-import {
-  createVehicleAssignmentSchema,
-  updateVehicleAssignmentSchema,
-  listVehicleAssignmentsQuerySchema,
-  businessIdParamSchema,
-  getAssignmentParamsSchema,
-  updateAssignmentParamsSchema,
-  deleteAssignmentParamsSchema,
-} from "./vehicle-assignment-schemas";
+import { createVehicleAssignmentSchema } from "@/schemas/create-vehicle-assignment-schema";
+import { updateVehicleAssignmentSchema } from "@/schemas/update-vehicle-assignment-schema";
 
-const coordinateSchema = z.object({
-  lat: z.number(),
-  lng: z.number(),
-  address: z.string().optional(),
-});
+import { listVehicleAssignmentsQuerySchema } from "@/schemas/list-vehicle-assignments-query-schema";
+import { vehicleAssignmentParamsSchema } from "@/schemas/vehicle-assignment-params-schema";
 
-const vehicleAssignmentObjectSchema = z.object({
-  id: z.string().uuid(),
-  routeId: z.string().uuid(),
-  vehicleId: z.string().uuid(),
-  driverId: z.string().uuid().nullable(),
+import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
+
+// Shared schema for assignment object with relationships
+const assignmentObjectSchema = z.object({
+  id: z.string(),
+  routeId: z.string(),
+  vehicleId: z.string(),
+  driverId: z.string().nullable(),
   scheduledDate: z.union([z.string(), z.date()]).transform((val) => {
-    if (val instanceof Date) {
-      return val.toISOString();
-    }
+    if (val instanceof Date) return val.toISOString();
     return val;
   }),
   status: z.string(),
   notes: z.string().nullable(),
-  businessId: z.string().uuid(),
+  businessId: z.string(),
   created_at: z.union([z.string(), z.date()]).transform((val) => {
-    if (val instanceof Date) {
-      return val.toISOString();
-    }
+    if (val instanceof Date) return val.toISOString();
     return val;
   }),
   updated_at: z.union([z.string(), z.date()]).transform((val) => {
-    if (val instanceof Date) {
-      return val.toISOString();
-    }
+    if (val instanceof Date) return val.toISOString();
     return val;
   }),
   route: z
     .object({
       id: z.string(),
-      name: z.string().nullable().optional(),
-      origin: coordinateSchema,
-      destination: coordinateSchema,
+      name: z.string().nullable(),
+      origin: z.object({
+        lat: z.number(),
+        lng: z.number(),
+        address: z.string().optional(),
+      }),
+      destination: z.object({
+        lat: z.number(),
+        lng: z.number(),
+        address: z.string().optional(),
+      }),
       distance: z.number(),
       duration: z.number(),
       estimatedCost: z.number(),
@@ -73,84 +68,167 @@ const vehicleAssignmentObjectSchema = z.object({
     .optional(),
 });
 
-export const vehicleAssignmentSchemas = {
-  businessIdParam: businessIdParamSchema,
-  getAssignmentParams: getAssignmentParamsSchema,
-  updateAssignmentParams: updateAssignmentParamsSchema,
-  deleteAssignmentParams: deleteAssignmentParamsSchema,
+const vehicleAssignmentSchemas = {
   createAssignment: createVehicleAssignmentSchema,
   updateAssignment: updateVehicleAssignmentSchema,
   listAssignmentsQuery: listVehicleAssignmentsQuerySchema,
+  businessIdParam: updateDeleteBusinessSchema,
+  assignmentParams: vehicleAssignmentParamsSchema,
 };
 
-export const vehicleAssignmentResponses = {
-  // Create Assignment
+const vehicleAssignmentResponses = {
   assignmentCreated: z.object({
     message: z.string().default("Atribuição criada com sucesso!"),
-    assignment: vehicleAssignmentObjectSchema,
+    assignment: assignmentObjectSchema,
   }),
 
   createAssignmentErrors: z.union([
-    z.object({ message: z.string().default("Recurso não encontrado!") }),
-    z.object({ message: z.string().default("Empresa não encontrada! Por favor, tente novamente.") }),
-    z.object({ message: z.string().default("Sem permissão para acessar esta empresa!") }),
-    z.object({ message: z.string().default("Rota não encontrada!") }),
-    z.object({ message: z.string().default("Veículo não encontrado!") }),
-    z.object({ message: z.string().default("Motorista não encontrado!") }),
-    z.object({ message: z.string().default("Veículo não pertence a esta empresa!") }),
-    z.object({ message: z.string().default("Motorista não pertence a esta empresa!") }),
-    z.object({ message: z.string().default("Veículo já está atribuído para esta data e horário!") }),
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z.string().default("Rota não encontrada!"),
+    }),
+    z.object({
+      message: z.string().default("Veículo não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Motorista não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Veículo não pertence a esta empresa!"),
+    }),
+    z.object({
+      message: z.string().default("Motorista não pertence a esta empresa!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Veículo já está atribuído para esta data e horário!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Houve um erro ao tentar criar a atribuição! Por favor, tente novamente.",
+        ),
+    }),
   ]),
 
-  // List Assignments
   assignmentsList: z.object({
-    data: z.array(vehicleAssignmentObjectSchema),
+    data: z.array(assignmentObjectSchema),
     total: z.number(),
   }),
 
   listAssignmentsErrors: z.union([
-    z.object({ message: z.string().default("Recurso não encontrado!") }),
-    z.object({ message: z.string().default("Empresa não encontrada! Por favor, tente novamente.") }),
-    z.object({ message: z.string().default("Sem permissão para acessar esta empresa!") }),
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Houve um erro ao tentar listar as atribuições! Por favor, tente novamente.",
+        ),
+    }),
   ]),
 
-  // Get Assignment
-  assignmentDetails: vehicleAssignmentObjectSchema,
+  assignmentDetails: assignmentObjectSchema,
 
   getAssignmentErrors: z.union([
-    z.object({ message: z.string().default("Recurso não encontrado!") }),
-    z.object({ message: z.string().default("Empresa não encontrada! Por favor, tente novamente.") }),
-    z.object({ message: z.string().default("Atribuição não encontrada!") }),
-    z.object({ message: z.string().default("Sem permissão para acessar esta empresa!") }),
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z.string().default("Atribuição não encontrada!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Houve um erro ao tentar buscar a atribuição! Por favor, tente novamente.",
+        ),
+    }),
   ]),
 
-  // Update Assignment
   assignmentUpdated: z.object({
     message: z.string().default("Atribuição atualizada com sucesso!"),
-    assignment: vehicleAssignmentObjectSchema,
+    assignment: assignmentObjectSchema,
   }),
 
   updateAssignmentErrors: z.union([
-    z.object({ message: z.string().default("Recurso não encontrado!") }),
-    z.object({ message: z.string().default("Empresa não encontrada! Por favor, tente novamente.") }),
-    z.object({ message: z.string().default("Atribuição não encontrada!") }),
-    z.object({ message: z.string().default("Sem permissão para acessar esta empresa!") }),
-    z.object({ message: z.string().default("Veículo não encontrado!") }),
-    z.object({ message: z.string().default("Motorista não encontrado!") }),
-    z.object({ message: z.string().default("Veículo não pertence a esta empresa!") }),
-    z.object({ message: z.string().default("Motorista não pertence a esta empresa!") }),
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z.string().default("Atribuição não encontrada!"),
+    }),
+    z.object({
+      message: z.string().default("Veículo não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Motorista não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Veículo não pertence a esta empresa!"),
+    }),
+    z.object({
+      message: z.string().default("Motorista não pertence a esta empresa!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Houve um erro ao tentar atualizar a atribuição! Por favor, tente novamente.",
+        ),
+    }),
   ]),
 
-  // Delete Assignment
   assignmentDeleted: z.object({
     message: z.string().default("Atribuição removida com sucesso!"),
-    assignment: vehicleAssignmentObjectSchema,
+    assignment: assignmentObjectSchema,
   }),
 
   deleteAssignmentErrors: z.union([
-    z.object({ message: z.string().default("Recurso não encontrado!") }),
-    z.object({ message: z.string().default("Empresa não encontrada! Por favor, tente novamente.") }),
-    z.object({ message: z.string().default("Atribuição não encontrada!") }),
-    z.object({ message: z.string().default("Sem permissão para acessar esta empresa!") }),
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z.string().default("Atribuição não encontrada!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Houve um erro ao tentar remover a atribuição! Por favor, tente novamente.",
+        ),
+    }),
   ]),
 };
+
+export { vehicleAssignmentSchemas, vehicleAssignmentResponses };

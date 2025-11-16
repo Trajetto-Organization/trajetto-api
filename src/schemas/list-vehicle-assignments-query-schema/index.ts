@@ -13,8 +13,8 @@ const listVehicleAssignmentsQuerySchema = z.object({
   status: z
     .enum(["pending", "in_progress", "completed", "cancelled"])
     .optional(),
-  vehicleId: z.string().uuid().optional(),
-  driverId: z.string().uuid().optional(),
+  vehicleId: z.string().optional(),
+  driverId: z.string().optional(),
 });
 
 export { listVehicleAssignmentsQuerySchema };

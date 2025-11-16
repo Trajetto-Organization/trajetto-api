@@ -1,3 +1,5 @@
+import "reflect-metadata";
+
 import { parentPort, workerData } from "node:worker_threads";
 
 import { FleetCommandQueueProvider } from "../jobs/fleet-command-queue";

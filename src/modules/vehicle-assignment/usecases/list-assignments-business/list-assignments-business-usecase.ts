@@ -47,8 +47,15 @@ class ListAssignmentsBusinessUseCase {
       }
     }
 
-    const result = await this.vehicleAssignment.listAssignments(props);
-    return result;
+    try {
+      const result = await this.vehicleAssignment.listAssignments(props);
+      return result;
+    } catch (error) {
+      throw new AppError(
+        "Houve um erro ao tentar listar as atribuições! Por favor, tente novamente.",
+        500,
+      );
+    }
   }
 }
 

@@ -7,7 +7,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
 import { VehicleAssignmentNotFoundError } from "../errors/vehicle-assignment-not-found-error";
-import { getAssignmentParamsSchema } from "@/routes/documentation/vehicle-assignment-schemas";
+import { vehicleAssignmentParamsSchema } from "@/schemas/vehicle-assignment-params-schema";
 
 class GetAssignmentController {
   async handle(
@@ -15,7 +15,7 @@ class GetAssignmentController {
     reply: FastifyReply,
   ): Promise<FastifyReply> {
     const { id: userId } = request.user;
-    const { businessId, assignmentId } = getAssignmentParamsSchema.parse(
+    const { businessId, assignmentId } = vehicleAssignmentParamsSchema.parse(
       request.params,
     );
 

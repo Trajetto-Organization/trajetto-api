@@ -11,10 +11,8 @@ import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not
 
 import { VehicleAssignmentNotFoundError } from "../errors/vehicle-assignment-not-found-error";
 
-import {
-  updateVehicleAssignmentSchema,
-  updateAssignmentParamsSchema,
-} from "@/routes/documentation/vehicle-assignment-schemas";
+import { updateVehicleAssignmentSchema } from "@/schemas/update-vehicle-assignment-schema";
+import { vehicleAssignmentParamsSchema } from "@/schemas/vehicle-assignment-params-schema";
 
 class UpdateAssignmentController {
   async handle(
@@ -22,7 +20,7 @@ class UpdateAssignmentController {
     reply: FastifyReply,
   ): Promise<FastifyReply> {
     const { id: userId } = request.user;
-    const { businessId, assignmentId } = updateAssignmentParamsSchema.parse(
+    const { businessId, assignmentId } = vehicleAssignmentParamsSchema.parse(
       request.params,
     );
 

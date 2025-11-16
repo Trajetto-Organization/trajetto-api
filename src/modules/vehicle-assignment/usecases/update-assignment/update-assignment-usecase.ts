@@ -96,19 +96,26 @@ class UpdateAssignmentUseCase {
       }
     }
 
-    const assignment = await this.vehicleAssignment.updateAssignment(data);
+    try {
+      const assignment = await this.vehicleAssignment.updateAssignment(data);
 
-    this.notificationService.createActivityIfEnabled({
-      type: "VehicleAssignment",
-      action: "update",
-      entityId: assignment.id,
-      description: `Atribuição atualizada | ${assignment.id}`,
-      status: "active",
-      performedBy: userId,
-      businessId: data.businessId,
-    });
+      this.notificationService.createActivityIfEnabled({
+        type: "VehicleAssignment",
+        action: "update",
+        entityId: assignment.id,
+        description: `Atribuição atualizada | ${assignment.id}`,
+        status: "active",
+        performedBy: userId,
+        businessId: data.businessId,
+      });
 
-    return assignment;
+      return assignment;
+    } catch (error) {
+      throw new AppError(
+        "Houve um erro ao tentar atualizar a atribuição! Por favor, tente novamente.",
+        500,
+      );
+    }
   }
 }
 

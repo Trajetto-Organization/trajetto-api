@@ -20,6 +20,18 @@ interface IRouteRepository {
   findRoutesByVehicle: (vehicleId: string) => Promise<Route[]>;
   findRoutesByDriver: (driverId: string) => Promise<Route[]>;
   countRoutesByBusiness: (businessId: string) => Promise<number>;
+
+  // Analytics methods
+  findRoutesByDateRange: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ) => Promise<Route[]>;
+  getTotalDistanceByDateRange: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ) => Promise<number>;
 }
 
 export { IRouteRepository };

@@ -1,10 +1,25 @@
 @baseUrl = http://localhost:3333
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiZHJpdmVySWQiOm51bGwsImlhdCI6MTc2MjQyOTM2MSwiZXhwIjoxNzYyNDY1MzYxLCJzdWIiOiIzMTg5YmVhOS1jYTUyLTQ1MDAtYWMwZi0xNTJkNmZlNzhkMzYifQ.ss9BmZi254s7W00KAATJUbRDJQWb5bjY10EDW1Fybyc
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiZHJpdmVySWQiOm51bGwsImlhdCI6MTc2MzMwMzY1NiwiZXhwIjoxNzYzMzM5NjU2LCJzdWIiOiI4MDUzZmZiMS0wOTJlLTRkMDItYWU3Mi0zOGY3ZmNjM2NkYTgifQ.UkE0n1ZJ7LqRdpbCn_OW10vQObA8Lhf9LKHRai55n9M
 @refresh_token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6Im1hc3RlckBhZG1pbi5jb20iLCJpYXQiOjE3NTM0MDU5NjksImV4cCI6MTc1MzQ5MjM2OSwic3ViIjoiOGRhZmY4ZjQtY2QwYS00ODgzLWFkYjAtMDZmODA0ZjI1OTM3In0.WTv7cz3TAaBf6TwuzjHyVFwwJH3I7nngwoKGndf3Qb0
 @forgot_verification_token = b3c16b35-54c4-47e7-9ca1-86a87c4b45f7
-@businessId = 019992a1-4e4e-7880-81d7-ff63f04b1bd5
-@routeId = 019a5403-55d8-77b2-89d5-b91754fae416
+@userId = b3c16b35-54c4-47e7-9ca1-86a87c4b45f7
+@profileAccessId = b3c16b35-54c4-47e7-9ca1-86a87c4b45f7
+@permissionId = b3c16b35-54c4-47e7-9ca1-86a87c4b45f7
+@businessId = 019a7f0d-f8a9-7b42-bc95-a3ba067169c5
+@branchId = 019a7f0d-f8a9-7b42-bc95-a3ba067169c5
+@supplierId = 019a7f0d-f8a9-7b42-bc95-a3ba067169c5
+@partId = 019a7f0d-f8a9-7b42-bc95-a3ba067169c5
+@serviceOrderId = 019a7f0d-f8a9-7b42-bc95-a3ba067169c5
+@serviceOrderPartId = 019a7f0d-f8a9-7b42-bc95-a3ba067169c5
+@accountPayableId = 019a7f0d-f8a9-7b42-bc95-a3ba067169c5
+@routeId = 019a7f53-1ee5-76f2-9ff1-5f4c47059eff
 @simulationId = 019a5902-7591-70b2-a112-4459c7dd432e
+@assignmentId = 019a8003-9736-7a91-a1e5-8c61e63b9e42
+@driverId = 019a7f6a-00b1-7170-b8d0-16555a7707bf
+@fuelTypeId = 019a7f5e-df42-7663-a289-e988f2dd1fb3
+@vehicleId = 019a7f66-4ecc-7292-9a2a-ba08ddb2804c
+@vehicleTypeId = 019a7f5a-57eb-7373-8e31-ffaca912da3f
+@analyticsId = 019a8d17-0c57-7e22-9298-c6457ce16af7
 @page = 1
 @pageSize = 10
 
@@ -20,7 +35,7 @@ Authorization: Bearer {{token}}
     "password": "1234567",
     "role": "BUSINESS_ADMIN",
     "businessId": "{{businessId}}",
-    "profileAccessId": "227d3746-65c1-4a46-8baa-9745951d0f3f"
+    "profileAccessId": "{{profileAccessId}}"
 }
 
 ###
@@ -30,7 +45,7 @@ Content-Type: application/json
 
 {
     "email": "master@admin.com",
-    "password": "22462809"
+    "password": "SenhaSegura123@"
 }
 
 ###
@@ -118,19 +133,19 @@ Authorization: Bearer {{token}}
 
 ###
 
-PATCH {{baseUrl}}/user/update-user/3d564814-59a5-4cdf-954a-a67962454f35
+PATCH {{baseUrl}}/user/update-user/{{userId}}
 Content-Type: application/json
 Authorization: Bearer {{token}} 
 
 {
     "name": "New Test",
     "businessId": "{{businessId}}",
-    "profileAccessId": "17f2998c-659d-4147-a074-5950655aa0aa"
+    "profileAccessId": "{{profileAccessId}}"
 }
 
 ###
 
-DELETE {{baseUrl}}/user/delete-user/80c51e85-8ac8-436f-b197-dd0a1ec8b6f3
+DELETE {{baseUrl}}/user/delete-user/{{userId}}
 Authorization: Bearer {{token}} 
 
 ###
@@ -167,7 +182,7 @@ Authorization: Bearer {{token}}
 
 ###
 
-PATCH {{baseUrl}}/business/update-business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+PATCH {{baseUrl}}/business/update-business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -190,7 +205,7 @@ Authorization: Bearer {{token}}
 
 ###
 
-DELETE {{baseUrl}}/business/delete-business/0676b91c-837d-451d-ba6e-da1033894866
+DELETE {{baseUrl}}/business/delete-business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ###
@@ -215,7 +230,7 @@ Authorization: Bearer {{token}}
 
 ###
 
-PATCH {{baseUrl}}/profile-access/update-profile-access/1908a009-bb50-49ed-85c9-f2483b65c92e
+PATCH {{baseUrl}}/profile-access/update-profile-access/{{profileAccessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -226,7 +241,7 @@ Authorization: Bearer {{token}}
 
 ###
 
-DELETE {{baseUrl}}/profile-access/delete-profile-access/1908a009-bb50-49ed-85c9-f2483b65c92e
+DELETE {{baseUrl}}/profile-access/delete-profile-access/{{profileAccessId}}
 Authorization: Bearer {{token}}
 
 ###
@@ -250,12 +265,12 @@ Authorization: Bearer {{token}}
     "canRead": true,
     "canWrite": true,
     "businessId": "{{businessId}}",
-    "profileAccessId": "5d913030-e8c7-4aab-9930-1cd7616057fd"
+    "profileAccessId": "{{profileAccessId}}"
 }
 
 ###
 
-PATCH {{baseUrl}}/permission/update-permission/10193dfc-ae85-451d-8014-89cdd0c9a0e4
+PATCH {{baseUrl}}/permission/update-permission/{{permissionId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -264,12 +279,12 @@ Authorization: Bearer {{token}}
     "canRead": true,
     "canWrite": false,
     "businessId": "{{businessId}}",
-    "profileAccessId": "1908a009-bb50-49ed-85c9-f2483b65c92e"
+    "profileAccessId": "{{profileAccessId}}"
 }
 
 ###
 
-DELETE {{baseUrl}}/permission/delete-permission/10193dfc-ae85-451d-8014-89cdd0c9a0e4
+DELETE {{baseUrl}}/permission/delete-permission/{{permissionId}}
 Authorization: Bearer {{token}}
 
 ###
@@ -283,7 +298,7 @@ Authorization: Bearer {{token}}
 
 ###
 
-POST {{baseUrl}}/branch/create-branch/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+POST {{baseUrl}}/branch/create-branch/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -313,7 +328,7 @@ Authorization: Bearer {{token}}
 
 ###
 
-PATCH {{baseUrl}}/branch/update-branch/249420ea-b37e-4fab-b2fa-68463dde198d/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+PATCH {{baseUrl}}/branch/update-branch/{{branchId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -336,14 +351,14 @@ Authorization: Bearer {{token}}
 
 ###
 
-DELETE {{baseUrl}}/branch/delete-branch/20e155c5-4872-40b2-8004-654b5f6b2838/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+DELETE {{baseUrl}}/branch/delete-branch/{{branchId}}/business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ## Supplier Requests
 
 ###
 
-POST {{baseUrl}}/supplier/create-supplier/b50ff064-a014-4e10-8a27-8275ce948be1
+POST {{baseUrl}}/supplier/create-supplier/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -369,14 +384,14 @@ Authorization: Bearer {{token}}
 
 ###
 
-GET {{baseUrl}}/supplier/list-supplier-business?businessId=b50ff064-a014-4e10-8a27-8275ce948be1&page={{page}}&pageSize={{pageSize}}
+GET {{baseUrl}}/supplier/list-supplier-business?businessId={{businessId}}&page={{page}}&pageSize={{pageSize}}
 Content-Type: application/json
 Accept-Encoding: gzip
 Authorization: Bearer {{token}}
 
 ###
 
-PATCH {{baseUrl}}/supplier/update-supplier/050106cf-b303-4390-8831-2511abd2568e/business/b50ff064-a014-4e10-8a27-8275ce948be1
+PATCH {{baseUrl}}/supplier/update-supplier/{{supplierId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -395,14 +410,14 @@ Authorization: Bearer {{token}}
 
 ###
 
-DELETE {{baseUrl}}/supplier/delete-supplier/1390f5a0-5247-452f-bb31-ccbc382aecb2/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+DELETE {{baseUrl}}/supplier/delete-supplier/{{supplierId}}/business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ## Vehicle Type Requests
 
 ###
 
-POST {{baseUrl}}/vehicle-type/create-vehicle-type/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+POST {{baseUrl}}/vehicle-type/create-vehicle-type/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -420,7 +435,7 @@ Authorization: Bearer {{token}}
 
 ###
 
-PATCH {{baseUrl}}/vehicle-type/update-vehicle-type/92eb27c9-595a-4eb7-9c89-6c943cb5a807/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+PATCH {{baseUrl}}/vehicle-type/update-vehicle-type/{{vehicleTypeId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -431,19 +446,19 @@ Authorization: Bearer {{token}}
 
 ###
 
-DELETE {{baseUrl}}/vehicle-type/delete-vehicle-type/92eb27c9-595a-4eb7-9c89-6c943cb5a807/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+DELETE {{baseUrl}}/vehicle-type/delete-vehicle-type/{{vehicleTypeId}}/business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ## Fuel Type Requests
 
 ###
 
-POST {{baseUrl}}/fuel-type/create-fuel-type/b50ff064-a014-4e10-8a27-8275ce948be1
+POST {{baseUrl}}/fuel-type/create-fuel-type/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
 {
-    "description": "Combustível para você"
+    "description": "Gasolina"
 }
 
 ###
@@ -455,7 +470,7 @@ Authorization: Bearer {{token}}
 
 ###
 
-PATCH {{baseUrl}}/fuel-type/update-fuel-type/ef3557ff-570b-479a-9a19-edeec9b5b3a0/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+PATCH {{baseUrl}}/fuel-type/update-fuel-type/{{fuelTypeId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -465,14 +480,14 @@ Authorization: Bearer {{token}}
 
 ###
 
-DELETE {{baseUrl}}/fuel-type/delete-fuel-type/4b49f5d1-7097-4a06-8294-1ac48e6e6bfa/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+DELETE {{baseUrl}}/fuel-type/delete-fuel-type/{{fuelTypeId}}/business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ## Part Requests
 
 ###
 
-POST {{baseUrl}}/part/create-part/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+POST {{baseUrl}}/part/create-part/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -490,7 +505,7 @@ Authorization: Bearer {{token}}
 
 ###
 
-PATCH {{baseUrl}}/part/update-part/c240ef74-39f7-4ad9-a83b-d51b56f91280/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+PATCH {{baseUrl}}/part/update-part/{{partId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -501,14 +516,14 @@ Authorization: Bearer {{token}}
 
 ###
 
-DELETE {{baseUrl}}/part/delete-part/fd1db2c3-29fe-4218-932d-8613702599fe/business/b50ff064-a014-4e10-8a27-8275ce948be1
+DELETE {{baseUrl}}/part/delete-part/{{partId}}/business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ## Driver Requests
 
 ###
 
-POST {{baseUrl}}/driver/create-driver/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+POST {{baseUrl}}/driver/create-driver/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -537,14 +552,14 @@ Authorization: Bearer {{token}}
 
 ###
 
-GET {{baseUrl}}/driver/list-driver-business?businessId=bec58f2c-a5f0-48d2-aa59-e45e8382b890&page={{page}}&pageSize={{pageSize}}
+GET {{baseUrl}}/driver/list-driver-business?businessId={{businessId}}&page={{page}}&pageSize={{pageSize}}
 Content-Type: application/json
 Accept-Encoding: gzip
 Authorization: Bearer {{token}}
 
 ###
 
-PATCH {{baseUrl}}/driver/update-driver/898baf29-b839-4348-b15c-c69f59b40183/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+PATCH {{baseUrl}}/driver/update-driver/{{driverId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -566,13 +581,13 @@ Authorization: Bearer {{token}}
 
 ###
 
-DELETE {{baseUrl}}/driver/delete-driver/faf7eeb6-37ef-47b3-ae7b-bec566c5f73d/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+DELETE {{baseUrl}}/driver/delete-driver/{{driverId}}/business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ## Vehicle Requests
 
 ###
-POST {{baseUrl}}/vehicle/create-vehicle/b50ff064-a014-4e10-8a27-8275ce948be1
+POST {{baseUrl}}/vehicle/create-vehicle/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -585,16 +600,16 @@ Authorization: Bearer {{token}}
     "fleet_type": "THIRD_PARTY",
     "last_maintenance_date": "2000-03-24T19:35:10.416Z",
     "current_mileage": 10,
-    "last_maintenance_mileage": 1970,
+    "last_maintenance_mileage": 10,
     "maintenance_interval_km": 1000,
     "maintenance_interval_months": 50,
     "renavam": "11111111112",
-    "manufacturing_year": 1960,
-    "model_year": 1950,
+    "manufacturing_year": "2000-03-24T19:35:10.416Z",
+    "model_year": "2000-03-24T19:35:10.416Z",
     "km_per_liter": 10,
     "number_of_axles": 4,
     "status": "ACTIVE",
-    "fuelTypeId": "3f4251b4-df38-4961-bf7e-5d2c85529586"
+    "fuelTypeId": "{{fuelTypeId}}"
 }
 
 ###
@@ -605,7 +620,7 @@ Accept-Encoding: gzip
 Authorization: Bearer {{token}}
 
 ###
-PATCH {{baseUrl}}/vehicle/update-vehicle/c0e428bb-df3e-448a-b301-0cf42203b027/business/b50ff064-a014-4e10-8a27-8275ce948be1
+PATCH {{baseUrl}}/vehicle/update-vehicle/{{vehicleId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -618,28 +633,28 @@ Authorization: Bearer {{token}}
     "fleet_type": "THIRD_PARTY",
     "last_maintenance_date": "2000-03-24T19:35:10.416Z",
     "current_mileage": 10,
-    "last_maintenance_mileage": 1970,
+    "last_maintenance_mileage": 10,
     "maintenance_interval_km": 1000,
     "maintenance_interval_months": 50,
     "renavam": "11111111111",
-    "manufacturing_year": 1960,
-    "model_year": 1950,
+    "manufacturing_year": "2000-03-24T19:35:10.416Z",
+    "model_year": "2000-03-24T19:35:10.416Z",
     "km_per_liter": 10,
     "number_of_axles": 4,
     "status": "ACTIVE",
-    "fuelTypeId": "ef3557ff-570b-479a-9a19-edeec9b5b3a0"
+    "fuelTypeId": "{{fuelTypeId}}"
 }
 
 ###
 
-DELETE {{baseUrl}}/vehicle/delete-vehicle/29112f90-0283-4197-b8ca-fbd9c1f139ee/business/7ca6fa96-2a90-4b3c-a6f2-22221c521357
+DELETE {{baseUrl}}/vehicle/delete-vehicle/{{vehicleId}}/business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ## Service Order Requests
 
 ###
 
-POST {{baseUrl}}/service-order/create-service-order/b50ff064-a014-4e10-8a27-8275ce948be1
+POST {{baseUrl}}/service-order/create-service-order/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -648,10 +663,10 @@ Authorization: Bearer {{token}}
     "completition_date": "2000-03-24T19:35:10.416Z",
     "maintenance_type": "INTERNAL",
     "total_amount": 0,
-    "vehicleId": "de954af9-0faa-493a-9107-7ce28135b621",
-    "responsibleUserId": "9cb6ee34-8dba-4b9c-a334-072b485e751d",
-    "branchId": "e48ff2e1-133b-4b76-b371-9a8875b448c1",
-    "supplierId": "1390f5a0-5247-452f-bb31-ccbc382aecb2"
+    "vehicleId": "{{vehicleId}}",
+    "responsibleUserId": "{{userId}}",
+    "branchId": "{{branchId}}",
+    "supplierId": "{{supplierId}}"
 }
 
 ###
@@ -662,7 +677,7 @@ Accept-Encoding: gzip
 Authorization: Bearer {{token}}
 
 ###
-PATCH {{baseUrl}}/service-order/update-service-order/5b132d3c-b02c-4e84-9dd9-5c2e761e1e39/business/b50ff064-a014-4e10-8a27-8275ce948be1
+PATCH {{baseUrl}}/service-order/update-service-order/{{serviceOrderId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -671,22 +686,22 @@ Authorization: Bearer {{token}}
     "completition_date": "2000-03-24T19:35:10.416Z",
     "maintenance_type": "EXTERNAL",
     "total_amount": 0,
-    "vehicleId": "de954af9-0faa-493a-9107-7ce28135b621",
-    "responsibleUserId": "9cb6ee34-8dba-4b9c-a334-072b485e751d",
-    "branchId": "e48ff2e1-133b-4b76-b371-9a8875b448c1",
-    "supplierId": "1390f5a0-5247-452f-bb31-ccbc382aecb2"
+    "vehicleId": "{{vehicleId}}",
+    "responsibleUserId": "{{userId}}",
+    "branchId": "{{branchId}}",
+    "supplierId": "{{supplierId}}"
 }
 
 ###
 
-DELETE {{baseUrl}}/service-order/delete-service-order/b7bae3ab-8ef1-4d7f-b0b8-a5964d1bf66f/business/b50ff064-a014-4e10-8a27-8275ce948be1
+DELETE {{baseUrl}}/service-order/delete-service-order/{{serviceOrderId}}/business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ## Service Order Part Requests
 
 ###
 
-POST {{baseUrl}}/service-order-part/create-service-order-part/5b132d3c-b02c-4e84-9dd9-5c2e761e1e39/business/b50ff064-a014-4e10-8a27-8275ce948be1
+POST {{baseUrl}}/service-order-part/create-service-order-part/{{serviceOrderId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -694,7 +709,7 @@ Authorization: Bearer {{token}}
     "unit_price": 1,
     "quantity": 10,
     "discount_percentage": 15,
-    "partId": "8df455bd-1f44-4c52-bf78-4091f03e37c1"
+    "partId": "{{partId}}"
 }
 
 ###
@@ -705,7 +720,7 @@ Accept-Encoding: gzip
 Authorization: Bearer {{token}}
 
 ###
-PATCH {{baseUrl}}/service-order-part/update-service-order-part/e8b2ef38-21ea-4dbb-8279-515753deb335/serviceOrder/5b132d3c-b02c-4e84-9dd9-5c2e761e1e39/business/b50ff064-a014-4e10-8a27-8275ce948be1
+PATCH {{baseUrl}}/service-order-part/update-service-order-part/{{serviceOrderPartId}}/serviceOrder/{{serviceOrderId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -713,19 +728,19 @@ Authorization: Bearer {{token}}
     "unit_price": 100000,
     "quantity": 10,
     "discount_percentage": 15,
-    "partId": "8df455bd-1f44-4c52-bf78-4091f03e37c1"
+    "partId": "{{partId}}"
 }
 
 ###
 
-DELETE {{baseUrl}}/service-order-part/delete-service-order-part/0bd6a6e5-cb7d-4877-bf35-34e4974cefab/serviceOrder/5b132d3c-b02c-4e84-9dd9-5c2e761e1e39/business/b50ff064-a014-4e10-8a27-8275ce948be1
+DELETE {{baseUrl}}/service-order-part/delete-service-order-part/{{serviceOrderPartId}}/serviceOrder/{{serviceOrderId}}/business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ## Account Payable Requests
 
 ###
 
-POST {{baseUrl}}/account-payable/create-account-payable/b50ff064-a014-4e10-8a27-8275ce948be1
+POST {{baseUrl}}/account-payable/create-account-payable/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -735,7 +750,7 @@ Authorization: Bearer {{token}}
     "payment_date": "2026-03-24T19:35:10.416Z",
     "amount": 1000,
     "amount_paid": 1000,
-    "branchId": "e48ff2e1-133b-4b76-b371-9a8875b448c1"
+    "branchId": "{{branchId}}"
 }
 
 ###
@@ -747,7 +762,7 @@ Authorization: Bearer {{token}}
 
 ###
 
-PATCH {{baseUrl}}/account-payable/update-account-payable/a343fb96-bcee-4469-a52c-686f47bb9470/business/b50ff064-a014-4e10-8a27-8275ce948be1
+PATCH {{baseUrl}}/account-payable/update-account-payable/{{accountPayableId}}/business/{{businessId}}
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -757,12 +772,12 @@ Authorization: Bearer {{token}}
     "payment_date": "2025-03-24T19:35:10.416Z",
     "amount": 1000,
     "amount_paid": 1000,
-    "branchId": "e48ff2e1-133b-4b76-b371-9a8875b448c1"
+    "branchId": "{{branchId}}"
 }
 
 ###
 
-DELETE {{baseUrl}}/account-payable/delete-account-payable/a343fb96-bcee-4469-a52c-686f47bb9470/business/b50ff064-a014-4e10-8a27-8275ce948be1
+DELETE {{baseUrl}}/account-payable/delete-account-payable/{{accountPayableId}}/business/{{businessId}}
 Authorization: Bearer {{token}}
 
 ## Routing Requests
@@ -1006,9 +1021,7 @@ Authorization: Bearer {{token}}
             "destination": {
                 "lat": -16.6869,
                 "lng": -49.2646
-            },
-            "vehicleId": null,
-            "driverId": null
+            }
         },
         {
             "name": "Rota 2 - Goiânia -> Anápolis",
@@ -1169,4 +1182,350 @@ Authorization: Bearer {{token}}
 
 # Approve simulation - Creates real routes from simulation results (replace simulationId with actual ID)
 POST {{baseUrl}}/simulations/{{simulationId}}/approve
+Authorization: Bearer {{token}}
+
+###
+
+# Create vehicle assignment
+POST {{baseUrl}}/vehicle-assignment/create-assignment/{{businessId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "routeId": "{{routeId}}",
+    "vehicleId": "{{vehicleId}}",
+    "driverId": "{{driverId}}",
+    "scheduledDate": "2025-12-01T08:00:00.000Z",
+    "status": "pending",
+    "notes": "Primeira atribuição de teste para rota de entregas matinais"
+}
+
+###
+
+# Create vehicle assignment - Without driver (optional)
+POST {{baseUrl}}/vehicle-assignment/create-assignment/{{businessId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "routeId": "{{routeId}}",
+    "vehicleId": "{{vehicleId}}",
+    "scheduledDate": "2025-12-02T14:00:00.000Z",
+    "status": "pending",
+    "notes": "Atribuição sem motorista definido"
+}
+
+###
+
+# Create vehicle assignment - Without optional fields
+POST {{baseUrl}}/vehicle-assignment/create-assignment/{{businessId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "routeId": "{{routeId}}",
+    "vehicleId": "{{vehicleId}}",
+    "scheduledDate": "2025-12-03T10:00:00.000Z",
+    "status": "pending"
+}
+
+###
+
+# List all assignments for business (paginated)
+GET {{baseUrl}}/vehicle-assignment/business/{{businessId}}?page={{page}}&limit={{pageSize}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+# List assignments with filters - By status
+GET {{baseUrl}}/vehicle-assignment/business/{{businessId}}?page=1&limit=10&status=pending
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+# List assignments with filters - By vehicle
+GET {{baseUrl}}/vehicle-assignment/business/{{businessId}}?page=1&limit=10&vehicleId={{vehicleId}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+# List assignments with filters - By driver
+GET {{baseUrl}}/vehicle-assignment/business/{{businessId}}?page=1&limit=10&driverId={{driverId}}
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+# List assignments with search
+GET {{baseUrl}}/vehicle-assignment/business/{{businessId}}?page=1&limit=10&search=entregas
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+# List assignments with multiple filters
+GET {{baseUrl}}/vehicle-assignment/business/{{businessId}}?page=1&limit=10&status=pending&vehicleId={{vehicleId}}&search=teste
+Content-Type: application/json
+Accept-Encoding: gzip
+Authorization: Bearer {{token}}
+
+###
+
+# Get specific assignment details
+GET {{baseUrl}}/vehicle-assignment/{{businessId}}/{{assignmentId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+###
+
+# Update assignment - Full update
+PUT {{baseUrl}}/vehicle-assignment/{{businessId}}/{{assignmentId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "routeId": "{{routeId}}",
+    "vehicleId": "{{vehicleId}}",
+    "driverId": "{{driverId}}",
+    "scheduledDate": "2025-12-05T09:00:00.000Z",
+    "status": "in_progress",
+    "notes": "Atribuição atualizada - motorista e horário modificados"
+}
+
+###
+
+# Update assignment - Change status only
+PUT {{baseUrl}}/vehicle-assignment/{{businessId}}/{{assignmentId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "status": "completed"
+}
+
+###
+
+# Update assignment - Change driver
+PUT {{baseUrl}}/vehicle-assignment/{{businessId}}/{{assignmentId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "driverId": "{{driverId}}"
+}
+
+###
+
+# Update assignment - Remove driver (set to null)
+PUT {{baseUrl}}/vehicle-assignment/{{businessId}}/{{assignmentId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "driverId": null
+}
+
+###
+
+# Update assignment - Change scheduled date and notes
+PUT {{baseUrl}}/vehicle-assignment/{{businessId}}/{{assignmentId}}
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "scheduledDate": "2025-12-10T15:00:00.000Z",
+    "notes": "Data reagendada devido a manutenção do veículo"
+}
+
+###
+
+# Delete assignment
+DELETE {{baseUrl}}/vehicle-assignment/{{businessId}}/{{assignmentId}}
+Authorization: Bearer {{token}}
+
+###
+
+## Fleet Analytics Requests
+
+# Generate Route Efficiency Analytics
+POST {{baseUrl}}/fleet-analytics/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "analyticsType": "route_efficiency",
+    "period": "monthly",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-31T23:59:59.000Z",
+    "metadata": {
+        "description": "Análise de eficiência de rotas - Janeiro 2025"
+    }
+}
+
+###
+
+# Generate Cost Analysis Analytics
+POST {{baseUrl}}/fleet-analytics/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "analyticsType": "cost_analysis",
+    "period": "monthly",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-31T23:59:59.000Z",
+    "metadata": {
+        "description": "Análise de custos - Janeiro 2025"
+    }
+}
+
+###
+
+# Generate Vehicle Utilization Analytics
+POST {{baseUrl}}/fleet-analytics/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "analyticsType": "vehicle_utilization",
+    "period": "monthly",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-31T23:59:59.000Z",
+    "metadata": {
+        "description": "Análise de utilização de veículos - Janeiro 2025"
+    }
+}
+
+###
+
+# Generate Fuel Consumption Analytics
+POST {{baseUrl}}/fleet-analytics/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "analyticsType": "fuel_consumption",
+    "period": "monthly",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-31T23:59:59.000Z",
+    "metadata": {
+        "description": "Análise de consumo de combustível - Janeiro 2025"
+    }
+}
+
+###
+
+# Generate Maintenance Cost Analytics
+POST {{baseUrl}}/fleet-analytics/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "analyticsType": "maintenance_cost",
+    "period": "monthly",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-31T23:59:59.000Z",
+    "metadata": {
+        "description": "Análise de custos de manutenção - Janeiro 2025"
+    }
+}
+
+###
+
+# Generate Analytics - Weekly period
+POST {{baseUrl}}/fleet-analytics/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "analyticsType": "cost_analysis",
+    "period": "weekly",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-07T23:59:59.000Z"
+}
+
+###
+
+# Generate Analytics - Quarterly period
+POST {{baseUrl}}/fleet-analytics/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "analyticsType": "vehicle_utilization",
+    "period": "quarterly",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-03-31T23:59:59.000Z"
+}
+
+###
+
+# Generate Analytics - Yearly period
+POST {{baseUrl}}/fleet-analytics/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "analyticsType": "route_efficiency",
+    "period": "yearly",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-12-31T23:59:59.000Z"
+}
+
+###
+
+# List all analytics for business
+GET {{baseUrl}}/fleet-analytics/business/{{businessId}}?page={{page}}&pageSize={{pageSize}}
+Authorization: Bearer {{token}}
+
+###
+
+# List analytics filtered by type
+GET {{baseUrl}}/fleet-analytics/business/{{businessId}}?page={{page}}&pageSize={{pageSize}}&analyticsType=cost_analysis
+Authorization: Bearer {{token}}
+
+###
+
+# List analytics filtered by period
+GET {{baseUrl}}/fleet-analytics/business/{{businessId}}?page={{page}}&pageSize={{pageSize}}&period=monthly
+Authorization: Bearer {{token}}
+
+###
+
+# List analytics filtered by date range
+GET {{baseUrl}}/fleet-analytics/business/{{businessId}}?page={{page}}&pageSize={{pageSize}}&startDate=2025-01-01T00:00:00.000Z&endDate=2025-01-31T23:59:59.000Z
+Authorization: Bearer {{token}}
+
+###
+
+# List analytics with multiple filters
+GET {{baseUrl}}/fleet-analytics/business/{{businessId}}?page={{page}}&pageSize={{pageSize}}&analyticsType=fuel_consumption&period=monthly&startDate=2025-01-01T00:00:00.000Z&endDate=2025-01-31T23:59:59.000Z
+Authorization: Bearer {{token}}
+
+###
+
+# Get specific analytics by ID (use the ID from the generate response)
+GET {{baseUrl}}/fleet-analytics/{{analyticsId}}
+Authorization: Bearer {{token}}
+
+###
+
+# Delete analytics by ID
+DELETE {{baseUrl}}/fleet-analytics/{{analyticsId}}
 Authorization: Bearer {{token}}

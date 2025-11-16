@@ -5,6 +5,7 @@ import {
 } from "infra/messaging/rabbitmq-connection";
 
 import { SimulationProcessor } from "./processors/simulation-processor";
+import { AnalyticsProcessor } from "./processors/analytics-processor";
 
 interface FleetCommandJobData {
   jobType: "simulation" | "heatmap" | "analytics";
@@ -22,10 +23,12 @@ class FleetCommandQueueProvider {
 
   // Processors
   private simulationProcessor: SimulationProcessor;
+  private analyticsProcessor: AnalyticsProcessor;
 
   constructor(queueName: string = "fleetCommandQueue") {
     this.queueName = queueName;
     this.simulationProcessor = new SimulationProcessor();
+    this.analyticsProcessor = new AnalyticsProcessor();
   }
 
   public async initialize(): Promise<void> {
@@ -149,10 +152,7 @@ class FleetCommandQueueProvider {
           );
           break;
         case "analytics":
-          // To be implemented in next phase
-          console.log(
-            "[FleetCommandQueue] Analytics processor not implemented yet",
-          );
+          await this.analyticsProcessor.process(jobData);
           break;
         default:
           throw new Error(`Unknown job type: ${jobData.jobType}`);

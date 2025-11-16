@@ -47,17 +47,29 @@ class GetAssignmentUseCase {
       }
     }
 
-    const assignment =
-      await this.vehicleAssignment.findAssignmentByBusinessAndId(
-        assignmentId,
-        businessId,
+    try {
+      const assignment =
+        await this.vehicleAssignment.findAssignmentByBusinessAndId(
+          assignmentId,
+          businessId,
+        );
+
+      if (!assignment) {
+        throw new VehicleAssignmentNotFoundError();
+      }
+
+      return assignment;
+    } catch (error) {
+      // Re-throw known errors
+      if (error instanceof VehicleAssignmentNotFoundError) {
+        throw error;
+      }
+
+      throw new AppError(
+        "Houve um erro ao tentar buscar a atribuição! Por favor, tente novamente.",
+        500,
       );
-
-    if (!assignment) {
-      throw new VehicleAssignmentNotFoundError();
     }
-
-    return assignment;
   }
 }
 

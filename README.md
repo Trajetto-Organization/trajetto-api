@@ -729,6 +729,6 @@ Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para ma
 
 **Desenvolvido com ❤️ pela equipe Trajetto**
 
-[Website](https://trajetto.com) • [Documentação](https://docs.trajetto.com) • [Suporte](mailto:support@trajetto.com)
+[Website](https://www.intrajetto.com) • [Documentação](https://docs.trajetto.com) • [Suporte](mailto:contato@trajetto.com)
 
 </div>

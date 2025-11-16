@@ -1,4 +1,5 @@
 import { FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 
 import { container } from "tsyringe";
 import { ListAssignmentsBusinessUseCase } from "./list-assignments-business-usecase";
@@ -6,10 +7,8 @@ import { ListAssignmentsBusinessUseCase } from "./list-assignments-business-usec
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
-import {
-  businessIdParamSchema,
-  listAssignmentsQuerySchema,
-} from "@/routes/documentation/vehicle-assignment-schemas";
+import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
+import { listVehicleAssignmentsQuerySchema } from "@/schemas/list-vehicle-assignments-query-schema";
 
 class ListAssignmentsBusinessController {
   async handle(
@@ -17,9 +16,11 @@ class ListAssignmentsBusinessController {
     reply: FastifyReply,
   ): Promise<FastifyReply> {
     const { id: userId } = request.user;
-    const { businessId } = businessIdParamSchema.parse(request.params);
+    const { businessId } = updateDeleteBusinessSchema.parse(request.params);
 
-    const queryParams = listAssignmentsQuerySchema.parse(request.query);
+    const queryParams = request.query as z.infer<
+      typeof listVehicleAssignmentsQuerySchema
+    >;
 
     const listAssignmentsUseCase = container.resolve(
       ListAssignmentsBusinessUseCase,

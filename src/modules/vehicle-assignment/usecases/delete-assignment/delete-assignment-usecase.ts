@@ -60,20 +60,27 @@ class DeleteAssignmentUseCase {
       throw new VehicleAssignmentNotFoundError();
     }
 
-    const assignment =
-      await this.vehicleAssignment.deleteAssignment(assignmentId);
+    try {
+      const assignment =
+        await this.vehicleAssignment.deleteAssignment(assignmentId);
 
-    this.notificationService.createActivityIfEnabled({
-      type: "VehicleAssignment",
-      action: "delete",
-      entityId: assignment.id,
-      description: `Atribuição removida | ${assignment.id}`,
-      status: "active",
-      performedBy: userId,
-      businessId,
-    });
+      this.notificationService.createActivityIfEnabled({
+        type: "VehicleAssignment",
+        action: "delete",
+        entityId: assignment.id,
+        description: `Atribuição removida | ${assignment.id}`,
+        status: "active",
+        performedBy: userId,
+        businessId,
+      });
 
-    return assignment;
+      return assignment;
+    } catch (error) {
+      throw new AppError(
+        "Houve um erro ao tentar remover a atribuição! Por favor, tente novamente.",
+        500,
+      );
+    }
   }
 }
 

@@ -347,6 +347,67 @@ class RouteRepository implements IRouteRepository {
   }
 
   // Helper method to transform Prisma data → DTO
+  // Analytics methods
+  async findRoutesByDateRange(
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<Route[]> {
+    const routes = await this.prisma.route.findMany({
+      where: {
+        businessId,
+        created_at: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      include: {
+        vehicle: {
+          select: {
+            id: true,
+            description: true,
+            license_plate: true,
+            brand: true,
+            model: true,
+          },
+        },
+        driver: {
+          select: {
+            id: true,
+            name: true,
+            cpf: true,
+          },
+        },
+      },
+      orderBy: {
+        created_at: "desc",
+      },
+    });
+
+    return routes.map((route) => this.transformRouteData(route));
+  }
+
+  async getTotalDistanceByDateRange(
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<number> {
+    const result = await this.prisma.route.aggregate({
+      where: {
+        businessId,
+        created_at: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      _sum: {
+        distance: true,
+      },
+    });
+
+    return result._sum.distance || 0;
+  }
+
   private transformRouteData(route: any): Route {
     return {
       id: route.id,
