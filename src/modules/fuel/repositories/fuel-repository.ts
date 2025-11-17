@@ -711,6 +711,56 @@ class FuelRepository implements IFuelRepository {
 
     return fuelTypeData;
   }
+
+  async getFuelWithLocation(
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+    vehicleId?: string,
+  ): Promise<
+    Array<{
+      id: string;
+      lat: number;
+      lng: number;
+      liters: number;
+      cost: number;
+      fuelType: string;
+      vehicleId: string;
+      licensePlate: string;
+      date: Date;
+    }>
+  > {
+    const fuels = await this.prisma.fuel.findMany({
+      where: {
+        businessId,
+        refueling_date: { gte: startDate, lte: endDate },
+        ...(vehicleId && { vehicleId }),
+        latitude: { not: null }, // Only supplies with coordinates
+        longitude: { not: null },
+      },
+      include: {
+        fuelType: {
+          select: { description: true },
+        },
+        vehicle: {
+          select: { license_plate: true },
+        },
+      },
+      orderBy: { refueling_date: "desc" },
+    });
+
+    return fuels.map((fuel) => ({
+      id: fuel.id,
+      lat: fuel.latitude!,
+      lng: fuel.longitude!,
+      liters: Number(fuel.liters_amount),
+      cost: Number(fuel.total_amount),
+      fuelType: fuel.fuelType.description,
+      vehicleId: fuel.vehicleId,
+      licensePlate: fuel.vehicle.license_plate,
+      date: fuel.refueling_date,
+    }));
+  }
 }
 
 export { FuelRepository };

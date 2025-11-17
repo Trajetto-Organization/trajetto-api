@@ -7,6 +7,8 @@ import {
 import { SimulationProcessor } from "./processors/simulation-processor";
 import { AnalyticsProcessor } from "./processors/analytics-processor";
 
+import { HeatmapProcessor } from "./processors/heatmap-processor";
+
 interface FleetCommandJobData {
   jobType: "simulation" | "heatmap" | "analytics";
   businessId: string;
@@ -23,11 +25,16 @@ class FleetCommandQueueProvider {
 
   // Processors
   private simulationProcessor: SimulationProcessor;
+  private heatmapProcessor: HeatmapProcessor;
+
   private analyticsProcessor: AnalyticsProcessor;
 
   constructor(queueName: string = "fleetCommandQueue") {
     this.queueName = queueName;
+
     this.simulationProcessor = new SimulationProcessor();
+    this.heatmapProcessor = new HeatmapProcessor();
+
     this.analyticsProcessor = new AnalyticsProcessor();
   }
 
@@ -146,10 +153,7 @@ class FleetCommandQueueProvider {
           await this.simulationProcessor.process(jobData);
           break;
         case "heatmap":
-          // To be implemented in next phase
-          console.log(
-            "[FleetCommandQueue] Heatmap processor not implemented yet",
-          );
+          await this.heatmapProcessor.process(jobData);
           break;
         case "analytics":
           await this.analyticsProcessor.process(jobData);

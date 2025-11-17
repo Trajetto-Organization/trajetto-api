@@ -6,6 +6,7 @@ import {
   UpdateServiceOrder,
   ListServiceOrderBusinessProps,
 } from "../dtos/service-order-dto";
+import { ServiceOrderWithLocation } from "@/modules/heatmap/dtos/heatmap-dto";
 
 interface IServiceOrderRepository {
   createServiceOrder: (
@@ -62,6 +63,12 @@ interface IServiceOrderRepository {
       totalServices: number;
     }>
   >;
+  getServiceOrdersWithLocation: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+    vehicleId?: string,
+  ) => Promise<ServiceOrderWithLocation[]>;
 }
 
 export { IServiceOrderRepository };

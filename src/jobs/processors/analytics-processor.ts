@@ -29,8 +29,10 @@ class AnalyticsProcessor {
   constructor() {
     this.analyticsRepo = new FleetAnalyticsRepository();
     this.routeRepo = new RouteRepository();
+
     this.vehicleRepo = new VehicleRepository();
     this.fuelRepo = new FuelRepository();
+
     this.serviceOrderRepo = new ServiceOrderRepository();
   }
 

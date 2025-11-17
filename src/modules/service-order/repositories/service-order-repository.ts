@@ -480,6 +480,51 @@ class ServiceOrderRepository implements IServiceOrderRepository {
 
     return vehicleData;
   }
+
+  async getServiceOrdersWithLocation(
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+    vehicleId?: string,
+  ): Promise<
+    Array<{
+      id: string;
+      lat: number;
+      lng: number;
+      cost: number;
+      maintenanceType: string;
+      vehicleId: string;
+      licensePlate: string;
+      date: Date;
+    }>
+  > {
+    const orders = await this.prisma.serviceOrder.findMany({
+      where: {
+        businessId,
+        date: { gte: startDate, lte: endDate },
+        ...(vehicleId && { vehicleId }),
+        latitude: { not: null }, // Only orders with coordinates
+        longitude: { not: null },
+      },
+      include: {
+        vehicle: {
+          select: { license_plate: true },
+        },
+      },
+      orderBy: { date: "desc" },
+    });
+
+    return orders.map((order) => ({
+      id: order.id,
+      lat: order.latitude!,
+      lng: order.longitude!,
+      cost: Number(order.total_amount),
+      maintenanceType: order.maintenance_type,
+      vehicleId: order.vehicleId,
+      licensePlate: order.vehicle.license_plate,
+      date: order.date,
+    }));
+  }
 }
 
 export { ServiceOrderRepository };

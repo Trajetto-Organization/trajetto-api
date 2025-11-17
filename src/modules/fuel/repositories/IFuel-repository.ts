@@ -9,6 +9,7 @@ import {
   GetFuelByIdAndBusinessProps,
   FuelWithRelationsFormatted,
 } from "../dtos/fuel-dto";
+import { FuelWithLocation } from "@/modules/heatmap/dtos/heatmap-dto";
 
 interface IFuelRepository {
   createFuel: (fuelData: CreateFuelProps) => Promise<Fuel>;
@@ -81,6 +82,12 @@ interface IFuelRepository {
       totalCost: number;
     }>
   >;
+  getFuelWithLocation: (
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+    vehicleId?: string,
+  ) => Promise<FuelWithLocation[]>;
 }
 
 export { IFuelRepository };

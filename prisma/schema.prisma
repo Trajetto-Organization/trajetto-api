@@ -453,6 +453,10 @@ model ServiceOrder {
   // 🔧 NEW MILEAGE: Reported by mechanic upon completion
   new_mileage_after_service Float? // New mileage after service
 
+  // 📍 GEOLOCATION: Location of the service
+  latitude  Float? // Latitude of service location
+  longitude Float? // Longitude of service location
+
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
@@ -665,6 +669,8 @@ model Fine {
   amount         Decimal   @db.Decimal(10, 2) // Fine amount
   points         Int // Applied points
   location       String? // Location of infraction
+  latitude       Float? // Latitude of infraction
+  longitude      Float? // Longitude of infraction
   observation    String? // Observations
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -703,6 +709,8 @@ model Fuel {
   odometer_verified Boolean  @default(false) // If the photo has been verified by AI
   notes             String? // Optional remarks
   refueling_date    DateTime @default(now()) // Supply date
+  latitude          Float? // Latitude of gas station
+  longitude         Float? // Longitude of gas station
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String

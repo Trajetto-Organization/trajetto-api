@@ -1,5 +1,5 @@
 @baseUrl = http://localhost:3333
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiZHJpdmVySWQiOm51bGwsImlhdCI6MTc2MzMwMzY1NiwiZXhwIjoxNzYzMzM5NjU2LCJzdWIiOiI4MDUzZmZiMS0wOTJlLTRkMDItYWU3Mi0zOGY3ZmNjM2NkYTgifQ.UkE0n1ZJ7LqRdpbCn_OW10vQObA8Lhf9LKHRai55n9M
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiTUFTVEVSIiwiZHJpdmVySWQiOm51bGwsImlhdCI6MTc2MzM4ODUwMCwiZXhwIjoxNzYzNDI0NTAwLCJzdWIiOiI4MDUzZmZiMS0wOTJlLTRkMDItYWU3Mi0zOGY3ZmNjM2NkYTgifQ.RbvSnMw1qg6QUj8HYZ3vXM5lxWxUrswQb6FqedrK7zY
 @refresh_token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6Im1hc3RlckBhZG1pbi5jb20iLCJpYXQiOjE3NTM0MDU5NjksImV4cCI6MTc1MzQ5MjM2OSwic3ViIjoiOGRhZmY4ZjQtY2QwYS00ODgzLWFkYjAtMDZmODA0ZjI1OTM3In0.WTv7cz3TAaBf6TwuzjHyVFwwJH3I7nngwoKGndf3Qb0
 @forgot_verification_token = b3c16b35-54c4-47e7-9ca1-86a87c4b45f7
 @userId = b3c16b35-54c4-47e7-9ca1-86a87c4b45f7
@@ -1529,3 +1529,104 @@ Authorization: Bearer {{token}}
 # Delete analytics by ID
 DELETE {{baseUrl}}/fleet-analytics/{{analyticsId}}
 Authorization: Bearer {{token}}
+
+###
+
+## Heatmap Requests
+
+# Generate Fines Heatmap
+POST {{baseUrl}}/heatmap/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "heatmapType": "fines",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-31T23:59:59.000Z"
+}
+
+###
+
+# Generate Fuel Heatmap
+POST {{baseUrl}}/heatmap/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "heatmapType": "fuel",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-31T23:59:59.000Z"
+}
+
+###
+
+# Generate Maintenance Heatmap
+POST {{baseUrl}}/heatmap/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "heatmapType": "maintenance",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-31T23:59:59.000Z"
+}
+
+###
+
+# Generate Heatmap with Vehicle Filter
+POST {{baseUrl}}/heatmap/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "heatmapType": "fines",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-31T23:59:59.000Z",
+    "vehicleId": "{{vehicleId}}"
+}
+
+###
+
+# Generate Heatmap - Weekly period
+POST {{baseUrl}}/heatmap/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "heatmapType": "fuel",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-01-07T23:59:59.000Z"
+}
+
+###
+
+# Generate Heatmap - Quarterly period
+POST {{baseUrl}}/heatmap/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "heatmapType": "maintenance",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-03-31T23:59:59.000Z"
+}
+
+###
+
+# Generate Heatmap - Yearly period
+POST {{baseUrl}}/heatmap/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "businessId": "{{businessId}}",
+    "heatmapType": "fines",
+    "startDate": "2025-01-01T00:00:00.000Z",
+    "endDate": "2025-12-31T23:59:59.000Z"
+}

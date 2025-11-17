@@ -404,6 +404,54 @@ class FineRepository implements IFineRepository {
 
     return fines;
   }
+
+  async getFinesWithLocation(
+    businessId: string,
+    startDate: Date,
+    endDate: Date,
+    vehicleId?: string,
+  ): Promise<
+    Array<{
+      id: string;
+      lat: number;
+      lng: number;
+      amount: number;
+      violationType: string;
+      vehicleId: string;
+      licensePlate: string;
+      date: Date;
+    }>
+  > {
+    const fines = await this.prisma.fine.findMany({
+      where: {
+        businessId,
+        violation_date: { gte: startDate, lte: endDate },
+        ...(vehicleId && { vehicleId }),
+        latitude: { not: null }, // Only fines with coordinates
+        longitude: { not: null },
+      },
+      include: {
+        trafficViolationCode: {
+          select: { description: true },
+        },
+        vehicle: {
+          select: { license_plate: true },
+        },
+      },
+      orderBy: { violation_date: "desc" },
+    });
+
+    return fines.map((fine) => ({
+      id: fine.id,
+      lat: fine.latitude!,
+      lng: fine.longitude!,
+      amount: Number(fine.amount),
+      violationType: fine.trafficViolationCode.description,
+      vehicleId: fine.vehicleId,
+      licensePlate: fine.vehicle.license_plate,
+      date: fine.violation_date,
+    }));
+  }
 }
 
 export { FineRepository };
