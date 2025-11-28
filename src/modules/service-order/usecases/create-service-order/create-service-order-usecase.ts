@@ -38,6 +38,7 @@ import { formatCurrency } from "@/config/format-values";
 import { redirectPage } from "@/shared/utils/link-redirect-page";
 
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
+import { calculateDistance } from "@/shared/utils/geolocation";
 
 interface ServiceOrderNotificationTextProps {
   serviceOrderId: string;
@@ -327,6 +328,73 @@ class CreateServiceOrderUseCase {
         last_maintenance_mileage_at_service:
           findVehicle.last_maintenance_mileage,
       };
+    }
+
+    // 🆕 GEOLOCATION LOGIC: Validate and process location data
+    if (serviceOrderData.created_from === "MOBILE_APP") {
+      // Mobile: Location is REQUIRED
+      if (!serviceOrderData.latitude || !serviceOrderData.longitude) {
+        throw new AppError(
+          "Para registros via aplicativo mobile, a localização é obrigatória.",
+          400,
+        );
+      }
+
+      // 🆕 VALIDATE DISTANCE IF GPS_MANUAL (manual adjustment)
+      if (serviceOrderData.location_source === "GPS_MANUAL") {
+        // Verifica se temos a localização original
+        if (
+          !serviceOrderData.latitude_original ||
+          !serviceOrderData.longitude_original
+        ) {
+          throw new AppError(
+            "Localização original não fornecida para validação de ajuste.",
+            400,
+          );
+        }
+
+        // Calcula e valida a distância
+        const distance = calculateDistance(
+          serviceOrderData.latitude_original,
+          serviceOrderData.longitude_original,
+          serviceOrderData.latitude,
+          serviceOrderData.longitude,
+        );
+
+        if (distance > 500) {
+          throw new AppError(
+            `A localização editada está ${Math.round(distance)}m distante da capturada pelo GPS. Máximo permitido: 500m. Possível inconsistência detectada.`,
+            400,
+          );
+        }
+
+        // Log de auditoria (opcional)
+        console.log(`[AUDIT] GPS ajustado por ${userId} na ordem de serviço`);
+      } else if (!serviceOrderData.location_source) {
+        // Se não tem source, é GPS automático
+        serviceOrderData.location_source = "GPS_AUTO";
+
+        // Copia localização final para original (não foi editada)
+        serviceOrderData.latitude_original = serviceOrderData.latitude;
+        serviceOrderData.longitude_original = serviceOrderData.longitude;
+      }
+    } else if (serviceOrderData.created_from === "WEB_DASHBOARD") {
+      // Web: Location is OPTIONAL
+      if (serviceOrderData.latitude && serviceOrderData.longitude) {
+        serviceOrderData.location_source = "USER_MANUAL";
+      } else {
+        serviceOrderData.location_source = "NONE";
+      }
+    }
+
+    // Add audit fields for web dashboard manual location
+    if (
+      serviceOrderData.created_from === "WEB_DASHBOARD" &&
+      serviceOrderData.latitude &&
+      serviceOrderData.longitude
+    ) {
+      (serviceOrderData as any).location_edited_by = userId;
+      (serviceOrderData as any).location_edited_at = new Date();
     }
 
     try {

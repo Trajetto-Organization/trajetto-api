@@ -33,6 +33,15 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
       last_maintenance_mileage_at_service:
         serviceOrderData.last_maintenance_mileage_at_service,
       new_mileage_after_service: serviceOrderData.new_mileage_after_service,
+      // Geolocation fields
+      latitude: serviceOrderData.latitude || null,
+      longitude: serviceOrderData.longitude || null,
+      latitude_original: serviceOrderData.latitude_original || null,
+      longitude_original: serviceOrderData.longitude_original || null,
+      location_source: serviceOrderData.location_source || null,
+      location_edited_by: null,
+      location_edited_at: null,
+      created_from: serviceOrderData.created_from || "WEB",
       created_at: new Date(),
       updated_at: new Date(),
     };

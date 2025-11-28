@@ -67,6 +67,8 @@ class ExportFuelExcelUseCase {
       { header: "Quilometragem Atual", key: "currentMileage", width: 18 },
       { header: "Hodômetro Verificado", key: "odometerVerified", width: 20 },
       { header: "Observações", key: "notes", width: 30 },
+      { header: "Latitude", key: "latitude", width: 30 },
+      { header: "Longitude", key: "longitude", width: 30 },
       {
         header: "Data do Abastecimento",
         key: "refueling_date",

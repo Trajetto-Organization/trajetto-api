@@ -181,6 +181,8 @@ class FuelRepository implements IFuelRepository {
       driver_name: fuel.driver?.name ?? "N/A",
       driver_cnh: fuel.driver?.cnh ?? "N/A",
       fuel_type_description: fuel.fuelType?.description ?? "N/A",
+      latitude: fuel.latitude !== null ? Number(fuel.latitude) : null,
+      longitude: fuel.longitude !== null ? Number(fuel.longitude) : null,
       created_at: formatDate(fuel.created_at, "pt-BR") ?? "N/A",
       updated_at: formatDate(fuel.updated_at, "pt-BR") ?? "N/A",
     }));
@@ -543,6 +545,8 @@ class FuelRepository implements IFuelRepository {
       ...(userRole === "MASTER" && {
         businessName: fuel.business?.corporate_reason || "N/A",
       }),
+      latitude: fuel.latitude !== null ? Number(fuel.latitude) : "N/A",
+      longitude: fuel.longitude !== null ? Number(fuel.longitude) : "N/A",
       created_at: fuel.created_at,
       updated_at: fuel.updated_at,
     }));
@@ -565,201 +569,6 @@ class FuelRepository implements IFuelRepository {
     });
 
     return previousFuel;
-  }
-
-  // Analytics methods
-  async getTotalCostByDateRange(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-  ): Promise<number> {
-    const result = await this.prisma.fuel.aggregate({
-      where: {
-        businessId,
-        refueling_date: {
-          gte: startDate,
-          lte: endDate,
-        },
-      },
-      _sum: {
-        total_amount: true,
-      },
-    });
-
-    return result._sum.total_amount?.toNumber() || 0;
-  }
-
-  async getTotalLitersByDateRange(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-  ): Promise<number> {
-    const result = await this.prisma.fuel.aggregate({
-      where: {
-        businessId,
-        refueling_date: {
-          gte: startDate,
-          lte: endDate,
-        },
-      },
-      _sum: {
-        liters_amount: true,
-      },
-    });
-
-    return result._sum.liters_amount?.toNumber() || 0;
-  }
-
-  async getFuelDataByVehicle(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-  ): Promise<
-    Array<{
-      vehicleId: string;
-      vehiclePlate: string;
-      totalLiters: number;
-      totalCost: number;
-    }>
-  > {
-    const fuels = await this.prisma.fuel.groupBy({
-      by: ["vehicleId"],
-      where: {
-        businessId,
-        refueling_date: {
-          gte: startDate,
-          lte: endDate,
-        },
-      },
-      _sum: {
-        liters_amount: true,
-        total_amount: true,
-      },
-    });
-
-    // Get vehicle details for each vehicleId (filter out null values)
-    const fuelsWithVehicles = fuels.filter(
-      (fuel): fuel is typeof fuel & { vehicleId: string } =>
-        fuel.vehicleId !== null,
-    );
-
-    const vehicleData = await Promise.all(
-      fuelsWithVehicles.map(async (fuel) => {
-        const vehicle = await this.prisma.vehicle.findUnique({
-          where: { id: fuel.vehicleId },
-          select: {
-            id: true,
-            license_plate: true,
-          },
-        });
-
-        return {
-          vehicleId: fuel.vehicleId,
-          vehiclePlate: vehicle?.license_plate || "N/A",
-          totalLiters: fuel._sum?.liters_amount?.toNumber() || 0,
-          totalCost: fuel._sum?.total_amount?.toNumber() || 0,
-        };
-      }),
-    );
-
-    return vehicleData;
-  }
-
-  async getFuelDataByType(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-  ): Promise<
-    Array<{
-      fuelType: string;
-      totalLiters: number;
-      totalCost: number;
-    }>
-  > {
-    const fuels = await this.prisma.fuel.groupBy({
-      by: ["fuelTypeId"],
-      where: {
-        businessId,
-        refueling_date: {
-          gte: startDate,
-          lte: endDate,
-        },
-      },
-      _sum: {
-        liters_amount: true,
-        total_amount: true,
-      },
-    });
-
-    // Get fuel type details for each fuelTypeId
-    const fuelTypeData = await Promise.all(
-      fuels.map(async (fuel) => {
-        const fuelType = await this.prisma.fuelType.findUnique({
-          where: { id: fuel.fuelTypeId },
-          select: {
-            description: true,
-          },
-        });
-
-        return {
-          fuelType: fuelType?.description || "N/A",
-          totalLiters: fuel._sum.liters_amount?.toNumber() || 0,
-          totalCost: fuel._sum.total_amount?.toNumber() || 0,
-        };
-      }),
-    );
-
-    return fuelTypeData;
-  }
-
-  async getFuelWithLocation(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-    vehicleId?: string,
-  ): Promise<
-    Array<{
-      id: string;
-      lat: number;
-      lng: number;
-      liters: number;
-      cost: number;
-      fuelType: string;
-      vehicleId: string;
-      licensePlate: string;
-      date: Date;
-    }>
-  > {
-    const fuels = await this.prisma.fuel.findMany({
-      where: {
-        businessId,
-        refueling_date: { gte: startDate, lte: endDate },
-        ...(vehicleId && { vehicleId }),
-        latitude: { not: null }, // Only supplies with coordinates
-        longitude: { not: null },
-      },
-      include: {
-        fuelType: {
-          select: { description: true },
-        },
-        vehicle: {
-          select: { license_plate: true },
-        },
-      },
-      orderBy: { refueling_date: "desc" },
-    });
-
-    return fuels.map((fuel) => ({
-      id: fuel.id,
-      lat: fuel.latitude!,
-      lng: fuel.longitude!,
-      liters: Number(fuel.liters_amount),
-      cost: Number(fuel.total_amount),
-      fuelType: fuel.fuelType.description,
-      vehicleId: fuel.vehicleId,
-      licensePlate: fuel.vehicle.license_plate,
-      date: fuel.refueling_date,
-    }));
   }
 }
 

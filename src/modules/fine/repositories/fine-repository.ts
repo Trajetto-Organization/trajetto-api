@@ -22,6 +22,8 @@ class FineRepository implements IFineRepository {
         amount: fineData.amount,
         points: fineData.points,
         location: fineData.location,
+        latitude: fineData.latitude,
+        longitude: fineData.longitude,
         observation: fineData.observation,
         business: {
           connect: { id: fineData.businessId },
@@ -173,6 +175,21 @@ class FineRepository implements IFineRepository {
         trafficViolationCodeId: fine.trafficViolationCodeId ?? "N/A",
         violationCode: `${fine.trafficViolationCode.code}-${fine.trafficViolationCode.sub_code}`,
         violationDescription: fine.trafficViolationCode.description ?? "N/A",
+        // 📍 GEOLOCATION: Proper null handling to avoid Number(null) = 0 issue
+        latitude: fine.latitude !== null ? Number(fine.latitude) : null,
+        longitude: fine.longitude !== null ? Number(fine.longitude) : null,
+        latitude_original:
+          fine.latitude_original !== null
+            ? Number(fine.latitude_original)
+            : null,
+        longitude_original:
+          fine.longitude_original !== null
+            ? Number(fine.longitude_original)
+            : null,
+        location_source: fine.location_source ?? null,
+        location_edited_by: fine.location_edited_by ?? null,
+        location_edited_at: fine.location_edited_at ?? null,
+        created_from: fine.created_from,
         created_at: formatDate(fine.created_at, "pt-BR") ?? "N/A",
         updated_at: formatDate(fine.updated_at, "pt-BR") ?? "N/A",
       };
@@ -296,6 +313,21 @@ class FineRepository implements IFineRepository {
         trafficViolationCodeId: fine.trafficViolationCodeId ?? "N/A",
         violationCode: `${fine.trafficViolationCode.code}-${fine.trafficViolationCode.sub_code}`,
         violationDescription: fine.trafficViolationCode.description ?? "N/A",
+        // 📍 GEOLOCATION: Proper null handling to avoid Number(null) = 0 issue
+        latitude: fine.latitude !== null ? Number(fine.latitude) : null,
+        longitude: fine.longitude !== null ? Number(fine.longitude) : null,
+        latitude_original:
+          fine.latitude_original !== null
+            ? Number(fine.latitude_original)
+            : null,
+        longitude_original:
+          fine.longitude_original !== null
+            ? Number(fine.longitude_original)
+            : null,
+        location_source: fine.location_source ?? null,
+        location_edited_by: fine.location_edited_by ?? null,
+        location_edited_at: fine.location_edited_at ?? null,
+        created_from: fine.created_from,
         created_at: fine.created_at,
         updated_at: fine.updated_at,
       };
@@ -403,54 +435,6 @@ class FineRepository implements IFineRepository {
     });
 
     return fines;
-  }
-
-  async getFinesWithLocation(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-    vehicleId?: string,
-  ): Promise<
-    Array<{
-      id: string;
-      lat: number;
-      lng: number;
-      amount: number;
-      violationType: string;
-      vehicleId: string;
-      licensePlate: string;
-      date: Date;
-    }>
-  > {
-    const fines = await this.prisma.fine.findMany({
-      where: {
-        businessId,
-        violation_date: { gte: startDate, lte: endDate },
-        ...(vehicleId && { vehicleId }),
-        latitude: { not: null }, // Only fines with coordinates
-        longitude: { not: null },
-      },
-      include: {
-        trafficViolationCode: {
-          select: { description: true },
-        },
-        vehicle: {
-          select: { license_plate: true },
-        },
-      },
-      orderBy: { violation_date: "desc" },
-    });
-
-    return fines.map((fine) => ({
-      id: fine.id,
-      lat: fine.latitude!,
-      lng: fine.longitude!,
-      amount: Number(fine.amount),
-      violationType: fine.trafficViolationCode.description,
-      vehicleId: fine.vehicleId,
-      licensePlate: fine.vehicle.license_plate,
-      date: fine.violation_date,
-    }));
   }
 }
 

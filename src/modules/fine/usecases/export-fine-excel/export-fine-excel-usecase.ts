@@ -70,6 +70,8 @@ class ExportFineExcelUseCase {
         formatter: (value) =>
           value ? ExcelExportService.formatters.date(value) : "Não pago",
       },
+      { header: "Latitude", key: "latitude", width: 30 },
+      { header: "Longitude", key: "longitude", width: 30 },
       { header: "Filial", key: "branchName", width: 20 },
       ...(findUser.role === "MASTER"
         ? [{ header: "Empresa", key: "businessName", width: 25 }]

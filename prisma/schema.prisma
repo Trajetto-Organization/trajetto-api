@@ -55,6 +55,18 @@ enum ViolationGravity {
   NO_POINTS // No punctuation
 }
 
+enum LocationSource {
+  GPS_AUTO // GPS captured automatically (not edited)
+  GPS_MANUAL // GPS captured + manual adjustment (driver corrected it)
+  USER_MANUAL // Added manually by user (web dashboard)
+  NONE // No location
+}
+
+enum RecordOrigin {
+  MOBILE_APP // Created via mobile app
+  WEB_DASHBOARD // Created via web dashboard
+}
+
 model Business {
   id               String  @id @default(uuid(7))
   corporate_reason String  @unique
@@ -89,15 +101,12 @@ model Business {
   branches  Branch[]
   suppliers Supplier[]
 
-  Activity          Activity[]
-  Notification      Notification[]
-  Route             Route[]
-  Simulation        Simulation[]
-  VehicleAssignment VehicleAssignment[]
+  Activity     Activity[]
+  Notification Notification[]
 
-  created_at       DateTime           @default(now())
-  updated_at       DateTime           @updatedAt
-  FleetAnalytics   FleetAnalytics[]
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
   KanbanColumn     KanbanColumn[]
   Fine             Fine[]
   Fuel             Fuel[]
@@ -355,10 +364,8 @@ model Driver {
   branch   Branch? @relation(fields: [branchId], references: [id])
   branchId String?
 
-  vehicles          Vehicle[]
-  User              User?
-  routes            Route[]
-  VehicleAssignment VehicleAssignment[]
+  vehicles Vehicle[]
+  User     User?
 
   Fine             Fine[]
   Fuel             Fuel[]
@@ -406,9 +413,7 @@ model Vehicle {
   branch   Branch? @relation(fields: [branchId], references: [id])
   branchId String?
 
-  serviceOrders     ServiceOrder[]
-  routes            Route[]
-  VehicleAssignment VehicleAssignment[]
+  serviceOrders ServiceOrder[]
 
   created_at       DateTime           @default(now())
   updated_at       DateTime           @updatedAt
@@ -453,9 +458,21 @@ model ServiceOrder {
   // 🔧 NEW MILEAGE: Reported by mechanic upon completion
   new_mileage_after_service Float? // New mileage after service
 
-  // 📍 GEOLOCATION: Location of the service
-  latitude  Float? // Latitude of service location
-  longitude Float? // Longitude of service location
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude  Float? @db.DoublePrecision // Latitude of service location
+  longitude Float? @db.DoublePrecision // Longitude of service location
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original  Float? @db.DoublePrecision // Original GPS latitude
+  longitude_original Float? @db.DoublePrecision // Original GPS longitude
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source    LocationSource? // Enum: GPS_AUTO, GPS_MANUAL, USER_MANUAL, NONE
+  location_edited_by String? // User ID who edited location (if applicable)
+  location_edited_at DateTime? // When location was edited
+
+  // 🆕 RECORD ORIGIN: Track where the record was created
+  created_from RecordOrigin @default(WEB_DASHBOARD) // Enum: MOBILE_APP, WEB_DASHBOARD
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
@@ -669,9 +686,23 @@ model Fine {
   amount         Decimal   @db.Decimal(10, 2) // Fine amount
   points         Int // Applied points
   location       String? // Location of infraction
-  latitude       Float? // Latitude of infraction
-  longitude      Float? // Longitude of infraction
-  observation    String? // Observations
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude  Float? @db.DoublePrecision // Latitude of infraction
+  longitude Float? @db.DoublePrecision // Longitude of infraction
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original  Float? @db.DoublePrecision // Original GPS latitude
+  longitude_original Float? @db.DoublePrecision // Original GPS longitude
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source    LocationSource? // Enum: GPS_AUTO, GPS_MANUAL, USER_MANUAL, NONE
+  location_edited_by String? // User ID who edited location (if applicable)
+  location_edited_at DateTime? // When location was edited
+
+  // 🆕 RECORD ORIGIN: Track where the record was created
+  created_from RecordOrigin @default(WEB_DASHBOARD) // Enum: MOBILE_APP, WEB_DASHBOARD
+  observation  String? // Observations
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
@@ -709,8 +740,22 @@ model Fuel {
   odometer_verified Boolean  @default(false) // If the photo has been verified by AI
   notes             String? // Optional remarks
   refueling_date    DateTime @default(now()) // Supply date
-  latitude          Float? // Latitude of gas station
-  longitude         Float? // Longitude of gas station
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude  Float? @db.DoublePrecision // Latitude of gas station
+  longitude Float? @db.DoublePrecision // Longitude of gas station
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original  Float? @db.DoublePrecision // Original GPS latitude
+  longitude_original Float? @db.DoublePrecision // Original GPS longitude
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source    LocationSource? // Enum: GPS_AUTO, GPS_MANUAL, USER_MANUAL, NONE
+  location_edited_by String? // User ID who edited location (if applicable)
+  location_edited_at DateTime? // When location was edited
+
+  // 🆕 RECORD ORIGIN: Track where the record was created
+  created_from RecordOrigin @default(WEB_DASHBOARD) // Enum: MOBILE_APP, WEB_DASHBOARD
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
@@ -803,142 +848,4 @@ model VehicleChecklist {
   @@index([driverId])
   @@index([checklist_date])
   @@map("vehicle_checklist")
-}
-
-model Route {
-  id            String  @id @default(uuid(7))
-  name          String? // Route name (e.g. "Rota Brasília - Goiânia")
-  description   String? // Optional description
-  origin        Json // {lat: number, lng: number, address?: string}
-  destination   Json // {lat: number, lng: number, address?: string}
-  waypoints     Json // Array of {lat: number, lng: number, address?: string}
-  distance      Float // Distance in meters
-  duration      Float // Duration in seconds
-  geometry      Json // GeoJSON {type: "LineString", coordinates: [[lng, lat]]}
-  estimatedCost Decimal @db.Decimal(10, 2) // Estimated cost of the route
-  status        String  @default("pending") // pending, in_progress, completed, cancelled
-  metadata      Json? // Flexible additional data
-
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  businessId String
-
-  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
-  vehicleId String?
-
-  driver   Driver? @relation(fields: [driverId], references: [id])
-  driverId String?
-
-  simulation   Simulation? @relation(fields: [simulationId], references: [id], onDelete: Cascade)
-  simulationId String?
-
-  VehicleAssignment VehicleAssignment[]
-
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-
-  @@index([businessId])
-  @@index([vehicleId])
-  @@index([driverId])
-  @@index([status])
-  @@index([simulationId])
-  @@index([created_at])
-  @@map("route")
-}
-
-model Simulation {
-  id          String  @id @default(uuid(7))
-  name        String // Simulation name (e.g. "Operação Sexta-feira")
-  description String? // Optional description
-  status      String  @default("pending") // pending, processing, completed, failed, cancelled
-  results     Json? // Results data: {routes: [], totalDistance: number, totalDuration: number, totalCost: number}
-  metadata    Json? // Flexible additional data (filters, config, etc)
-
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  businessId String
-
-  routes Route[] // Routes belonging to this simulation
-
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-
-  @@index([businessId])
-  @@index([status])
-  @@index([created_at])
-  @@map("simulation")
-}
-
-model VehicleAssignment {
-  id String @id @default(uuid(7))
-
-  // Route assignment 
-  route   Route  @relation(fields: [routeId], references: [id], onDelete: Cascade)
-  routeId String
-
-  // Vehicle assignment 
-  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  vehicleId String
-
-  // Driver assignment 
-  driver   Driver? @relation(fields: [driverId], references: [id], onDelete: SetNull)
-  driverId String?
-
-  // Scheduled date for this assignment
-  scheduledDate DateTime
-
-  // Assignment status
-  status String @default("pending") // pending, in_progress, completed, cancelled
-
-  // Additional notes
-  notes String? @db.Text
-
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  businessId String
-
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-
-  @@index([businessId])
-  @@index([routeId])
-  @@index([vehicleId])
-  @@index([driverId])
-  @@index([scheduledDate])
-  @@index([status])
-  @@map("vehicle_assignment")
-}
-
-model FleetAnalytics {
-  id String @id @default(uuid(7))
-
-  // Analytics type: route_efficiency, cost_analysis, vehicle_utilization, fuel_consumption, maintenance_cost
-  analyticsType String
-
-  // Period: daily, weekly, monthly, custom
-  period String
-
-  // Date range
-  startDate DateTime
-  endDate   DateTime
-
-  // Results stored as flexible JSON
-  // Examples:
-  // - route_efficiency: { avgSpeed: 45.5, totalDistance: 1200, avgDuration: 3600, efficiency: 85 }
-  // - cost_analysis: { totalCost: 5000, fuelCost: 2000, maintenanceCost: 1500, otherCosts: 1500 }
-  // - vehicle_utilization: { totalVehicles: 20, activeVehicles: 15, utilizationRate: 75 }
-  results Json
-
-  // Additional metadata (filters used, configuration, etc)
-  metadata Json?
-
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  businessId String
-
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-
-  @@index([businessId])
-  @@index([analyticsType])
-  @@index([period])
-  @@index([startDate, endDate])
-  @@index([created_at])
-  @@map("fleet_analytics")
 }

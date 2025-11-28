@@ -38,6 +38,8 @@ import { Fuel, CreateFuelProps } from "../../dtos/fuel-dto";
 import { UploadService } from "@/shared/services/upload-service";
 import { MultipartFile } from "@fastify/multipart";
 
+import { calculateDistance } from "@/shared/utils/geolocation";
+
 @injectable()
 class CreateFuelUseCase {
   constructor(
@@ -162,6 +164,62 @@ class CreateFuelUseCase {
       }
     }
 
+    // 🆕 GEOLOCATION LOGIC: Validate and process location data
+    if (fuelData.created_from === "MOBILE_APP") {
+      // Mobile: Location is REQUIRED
+      if (!fuelData.latitude || !fuelData.longitude) {
+        throw new AppError(
+          "Para registros via aplicativo mobile, a localização é obrigatória.",
+          400,
+        );
+      }
+
+      // 🆕 VALIDATE DISTANCE IF GPS_MANUAL (manual adjustment)
+      if (fuelData.location_source === "GPS_MANUAL") {
+        // Verifica se temos a localização original
+        if (!fuelData.latitude_original || !fuelData.longitude_original) {
+          throw new AppError(
+            "Localização original não fornecida para validação de ajuste.",
+            400,
+          );
+        }
+
+        // Calcula e valida a distância
+        const distance = calculateDistance(
+          fuelData.latitude_original,
+          fuelData.longitude_original,
+          fuelData.latitude,
+          fuelData.longitude,
+        );
+
+        if (distance > 500) {
+          throw new AppError(
+            `A localização editada está ${Math.round(distance)}m distante da capturada pelo GPS. Máximo permitido: 500m. Possível inconsistência detectada.`,
+            400,
+          );
+        }
+
+        // Log de auditoria (opcional)
+        console.log(
+          `[AUDIT] GPS ajustado por ${userId} no fuel: ${Math.round(distance)}m de distância`,
+        );
+      } else if (!fuelData.location_source) {
+        // Se não tem source, é GPS automático
+        fuelData.location_source = "GPS_AUTO";
+
+        // Copia localização final para original (não foi editada)
+        fuelData.latitude_original = fuelData.latitude;
+        fuelData.longitude_original = fuelData.longitude;
+      }
+    } else if (fuelData.created_from === "WEB_DASHBOARD") {
+      // Web: Location is OPTIONAL
+      if (fuelData.latitude && fuelData.longitude) {
+        fuelData.location_source = "USER_MANUAL";
+      } else {
+        fuelData.location_source = "NONE";
+      }
+    }
+
     try {
       // Upload odometer photo
       const buffer = await odometerPhotoFile.toBuffer();
@@ -172,11 +230,21 @@ class CreateFuelUseCase {
         uploadType: "odometerPhotos",
       });
 
-      // Add photo path to fuel data
-      const fuelDataWithPhoto = {
+      // Prepare fuel data with photo and geolocation audit fields
+      const fuelDataWithPhoto: any = {
         ...fuelData,
         odometer_photo: uploadResult.path,
       };
+
+      // Add audit fields for web dashboard manual location
+      if (
+        fuelData.created_from === "WEB_DASHBOARD" &&
+        fuelData.latitude &&
+        fuelData.longitude
+      ) {
+        fuelDataWithPhoto.location_edited_by = userId;
+        fuelDataWithPhoto.location_edited_at = new Date();
+      }
 
       // Create fuel record
       const fuelCreated = await this.fuel.createFuel(fuelDataWithPhoto);

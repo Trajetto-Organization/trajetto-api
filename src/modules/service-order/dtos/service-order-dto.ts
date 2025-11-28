@@ -1,4 +1,5 @@
 import { Decimal } from "@prisma/client/runtime/library";
+import { LocationSource, RecordOrigin } from "@prisma/client";
 
 interface ServiceOrder {
   id: string;
@@ -21,6 +22,22 @@ interface ServiceOrder {
 
   // 🔧 NEW MILEAGE: Provided upon completion
   new_mileage_after_service?: number | null;
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude?: number | null;
+  longitude?: number | null;
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original?: number | null;
+  longitude_original?: number | null;
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source?: LocationSource | null;
+  location_edited_by?: string | null;
+  location_edited_at?: Date | string | null;
+
+  // 🆕 RECORD ORIGIN: Track where the record was created
+  created_from: RecordOrigin;
 
   // Extended fields for the interface only (do not exist in the database)
   vehicleLicensePlate?: string;
@@ -45,6 +62,20 @@ interface CreateServiceOrderProps {
   responsibleUserId: string;
   branchId: string;
   supplierId?: string | null;
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude?: number | null;
+  longitude?: number | null;
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original?: number | null;
+  longitude_original?: number | null;
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source?: LocationSource | null;
+
+  // 🆕 RECORD ORIGIN: Track where the record was created
+  created_from: RecordOrigin;
 }
 
 interface UpdateServiceOrderProps {
@@ -57,6 +88,19 @@ interface UpdateServiceOrderProps {
   responsibleUserId?: string;
   branchId?: string;
   supplierId?: string | null;
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude?: number | null;
+  longitude?: number | null;
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original?: number | null;
+  longitude_original?: number | null;
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source?: LocationSource | null;
+  location_edited_by?: string | null;
+  location_edited_at?: Date | string | null;
 }
 
 interface UpdateServiceOrder {

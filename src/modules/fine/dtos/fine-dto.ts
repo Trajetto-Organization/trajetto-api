@@ -1,4 +1,5 @@
 import { Decimal } from "@prisma/client/runtime/library";
+import { LocationSource, RecordOrigin } from "@prisma/client";
 
 interface Fine {
   id: string;
@@ -16,6 +17,22 @@ interface Fine {
   trafficViolationCodeId: string;
   created_at: Date | string;
   updated_at: Date | string;
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude?: number | null;
+  longitude?: number | null;
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original?: number | null;
+  longitude_original?: number | null;
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source?: LocationSource | null;
+  location_edited_by?: string | null;
+  location_edited_at?: Date | string | null;
+
+  // 🆕 RECORD ORIGIN: Track where the record was created
+  created_from: RecordOrigin;
 
   // Extended fields for interface (do not exist in the bank)
   businessName?: string;
@@ -41,6 +58,20 @@ interface CreateFineProps {
   driverId: string;
   vehicleId: string;
   trafficViolationCodeId: string;
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude?: number | null;
+  longitude?: number | null;
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original?: number | null;
+  longitude_original?: number | null;
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source?: LocationSource | null;
+
+  // 🆕 RECORD ORIGIN: Track where the record was created
+  created_from: RecordOrigin;
 }
 
 interface UpdateFineProps {
@@ -55,6 +86,19 @@ interface UpdateFineProps {
   driverId?: string;
   vehicleId?: string;
   trafficViolationCodeId?: string;
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude?: number | null;
+  longitude?: number | null;
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original?: number | null;
+  longitude_original?: number | null;
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source?: LocationSource | null;
+  location_edited_by?: string | null;
+  location_edited_at?: Date | string | null;
 }
 
 interface UpdateFine {

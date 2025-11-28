@@ -72,23 +72,8 @@ import { TrafficViolationCodeRepository } from "@/modules/fine/repositories/traf
 import { IFineRepository } from "@/modules/fine/repositories/IFine-repository";
 import { ITrafficViolationCodeRepository } from "@/modules/fine/repositories/ITraffic-violation-code-repository";
 
-import { IRouteRepository } from "@/modules/routing/repositories/IRoute-repository";
-import { RouteRepository } from "@/modules/routing/repositories/route-repository";
-
-import { ISimulationRepository } from "@/modules/simulation/repositories/ISimulation-repository";
-import { SimulationRepository } from "@/modules/simulation/repositories/simulation-repository";
-
-import { IVehicleAssignmentRepository } from "@/modules/vehicle-assignment/repositories/IVehicleAssignment-repository";
-import { VehicleAssignmentRepository } from "@/modules/vehicle-assignment/repositories/vehicle-assignment-repository";
-
-import { IFleetAnalyticsRepository } from "@/modules/fleet-analytics/repositories/IFleetAnalytics-repository";
-import { FleetAnalyticsRepository } from "@/modules/fleet-analytics/repositories/fleet-analytics-repository";
-
 import { IWhatsAppProvider } from "./providers/whatsapp-provider/IWhatsApp-provider";
 import { EvolutionApiProvider } from "./providers/whatsapp-provider/implementations/evolution-api-provider";
-
-import { IRoutingProvider } from "./providers/routing-provider/IRouting-provider";
-import { OSRMProvider } from "./providers/routing-provider/implementations/osrm-provider";
 
 import { NotificationService } from "./services/notification-service";
 import { KanbanService } from "./services/kanban-service";
@@ -99,8 +84,6 @@ container.registerSingleton<IWhatsAppProvider>(
   "WhatsAppProvider",
   EvolutionApiProvider,
 );
-
-container.registerSingleton<IRoutingProvider>("RoutingProvider", OSRMProvider);
 container.registerSingleton<NotificationService>(
   "NotificationService",
   NotificationService,
@@ -137,7 +120,6 @@ container.registerSingleton<IFuelTypeRepository>(
   "FuelTypeRepository",
   FuelTypeRepository,
 );
-
 container.registerSingleton<IFuelRepository>("FuelRepository", FuelRepository);
 
 container.registerSingleton<IPartRepository>("PartRepository", PartRepository);
@@ -205,22 +187,4 @@ container.registerSingleton<IFineRepository>("FineRepository", FineRepository);
 container.registerSingleton<ITrafficViolationCodeRepository>(
   "TrafficViolationCodeRepository",
   TrafficViolationCodeRepository,
-);
-
-container.registerSingleton<IRouteRepository>(
-  "RouteRepository",
-  RouteRepository,
-);
-container.registerSingleton<ISimulationRepository>(
-  "SimulationRepository",
-  SimulationRepository,
-);
-
-container.registerSingleton<IVehicleAssignmentRepository>(
-  "VehicleAssignmentRepository",
-  VehicleAssignmentRepository,
-);
-container.registerSingleton<IFleetAnalyticsRepository>(
-  "FleetAnalyticsRepository",
-  FleetAnalyticsRepository,
 );

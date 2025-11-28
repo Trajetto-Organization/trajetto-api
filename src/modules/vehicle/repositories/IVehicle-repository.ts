@@ -31,29 +31,6 @@ interface IVehicleRepository {
     vehicleId,
   }: GetVehicleByIdAndBusinessProps): Promise<Vehicle | null>;
   findVehiclesByFuelTypeId: (fuelTypeId: string) => Promise<Vehicle[]>;
-
-  // Analytics methods
-  countVehiclesByStatus: (
-    businessId: string,
-  ) => Promise<{
-    totalVehicles: number;
-    activeVehicles: number;
-    inactiveVehicles: number;
-    blockedVehicles: number;
-    inRouteVehicles: number;
-  }>;
-  getVehicleUtilizationData: (
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-  ) => Promise<
-    Array<{
-      vehicleId: string;
-      vehiclePlate: string;
-      totalRoutes: number;
-      totalDistance: number;
-    }>
-  >;
 }
 
 export { IVehicleRepository };

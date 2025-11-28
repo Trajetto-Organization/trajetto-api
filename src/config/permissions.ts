@@ -14,11 +14,7 @@ type PermissionKey =
   | "service_order_part_manage"
   | "account_payable_manage"
   | "kanban_manage"
-  | "fine_manage"
-  | "route_manage"
-  | "simulation_manage"
-  | "vehicle_assignment_manage"
-  | "fleet_analytics_manage";
+  | "fine_manage";
 
 enum EnumPermissionKey {
   BRANCH_MANAGE = "branch_manage",
@@ -37,10 +33,6 @@ enum EnumPermissionKey {
   ACCOUNT_PAYABLE_MANAGE = "account_payable_manage",
   KANBAN_MANAGE = "kanban_manage",
   FINE_MANAGE = "fine_manage",
-  ROUTE_MANAGE = "route_manage",
-  SIMULATION_MANAGE = "simulation_manage",
-  VEHICLE_ASSIGNMENT_MANAGE = "vehicle_assignment_manage",
-  FLEET_ANALYTICS_MANAGE = "fleet_analytics_manage",
 }
 
 const permissionLabels = {
@@ -60,10 +52,6 @@ const permissionLabels = {
   account_payable_manage: "Gerenciar Contas a Pagar",
   kanban_manage: "Gerenciar Kanban",
   fine_manage: "Gerenciar Multas",
-  route_manage: "Gerenciar Rotas",
-  simulation_manage: "Gerenciar Simulações de Rotas",
-  vehicle_assignment_manage: "Gerenciar Atribuições de Veículos",
-  fleet_analytics_manage: "Gerenciar Análises da Frota",
 };
 
 export { PermissionKey, EnumPermissionKey, permissionLabels };

@@ -192,6 +192,41 @@ class UpdateFuelUseCase {
       }
     }
 
+    // 📍 GEOLOCATION LOGIC FOR UPDATE: Process location changes
+    // Web dashboard users can add, update, or remove location
+
+    // Check if latitude or longitude were explicitly provided (not undefined)
+    const hasLatitude = "latitude" in fuelData;
+    const hasLongitude = "longitude" in fuelData;
+
+    if (hasLatitude || hasLongitude) {
+      // If both latitude and longitude are provided and not null (adding or updating location)
+      if (
+        fuelData.latitude !== null &&
+        fuelData.longitude !== null &&
+        fuelData.latitude &&
+        fuelData.longitude
+      ) {
+        // Set location source as USER_MANUAL for web dashboard updates
+        fuelData.location_source = "USER_MANUAL";
+
+        // Add audit fields for web dashboard manual location update
+        (fuelData as any).location_edited_by = userId;
+        (fuelData as any).location_edited_at = new Date();
+      }
+      // If either latitude or longitude is null, user is removing the location
+      else if (fuelData.latitude === null || fuelData.longitude === null) {
+        // User is removing the location - set all location fields to null
+        fuelData.latitude = null;
+        fuelData.longitude = null;
+
+        fuelData.location_source = "NONE";
+
+        fuelData.latitude_original = null;
+        fuelData.longitude_original = null;
+      }
+    }
+
     try {
       let finalFuelData = { ...fuelData };
 

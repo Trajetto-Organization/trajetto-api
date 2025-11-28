@@ -43,10 +43,12 @@ class UpdateFuelController {
 
       for await (const part of parts) {
         if (part.type === "field") {
-          // Handle empty notes field properly
+          // Handle empty or "null" string for optional fields
           if (
-            part.fieldname === "notes" &&
-            (!part.value || part.value === "")
+            (part.fieldname === "notes" ||
+              part.fieldname === "latitude" ||
+              part.fieldname === "longitude") &&
+            (!part.value || part.value === "" || part.value === null)
           ) {
             formData[part.fieldname] = null;
           } else {

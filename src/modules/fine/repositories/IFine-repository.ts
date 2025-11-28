@@ -5,7 +5,6 @@ import {
   ListFineByBusinessIdProps,
   UpdateFine,
 } from "../dtos/fine-dto";
-import { FineWithLocation } from "@/modules/heatmap/dtos/heatmap-dto";
 
 interface IFineRepository {
   createFine: (fineData: CreateFineProps) => Promise<Fine>;
@@ -27,12 +26,6 @@ interface IFineRepository {
     startDate: Date,
     endDate: Date,
   ) => Promise<Fine[]>;
-  getFinesWithLocation: (
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-    vehicleId?: string,
-  ) => Promise<FineWithLocation[]>;
 }
 
 export { IFineRepository };

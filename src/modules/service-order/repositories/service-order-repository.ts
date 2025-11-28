@@ -29,6 +29,8 @@ class ServiceOrderRepository implements IServiceOrderRepository {
         last_maintenance_mileage_at_service:
           serviceOrderData.last_maintenance_mileage_at_service,
         new_mileage_after_service: serviceOrderData.new_mileage_after_service,
+        latitude: serviceOrderData.latitude,
+        longitude: serviceOrderData.longitude,
         business: {
           connect: {
             id: serviceOrderData.businessId,
@@ -213,6 +215,25 @@ class ServiceOrderRepository implements IServiceOrderRepository {
         supplierId: serviceOrder.supplierId ?? null,
         supplierName: serviceOrder.supplier?.name ?? "N/A",
         partsCount: serviceOrder.parts.length ?? 0,
+        // 📍 GEOLOCATION: Proper null handling to avoid Number(null) = 0 issue
+        latitude:
+          serviceOrder.latitude !== null ? Number(serviceOrder.latitude) : null,
+        longitude:
+          serviceOrder.longitude !== null
+            ? Number(serviceOrder.longitude)
+            : null,
+        latitude_original:
+          serviceOrder.latitude_original !== null
+            ? Number(serviceOrder.latitude_original)
+            : null,
+        longitude_original:
+          serviceOrder.longitude_original !== null
+            ? Number(serviceOrder.longitude_original)
+            : null,
+        location_source: serviceOrder.location_source ?? null,
+        location_edited_by: serviceOrder.location_edited_by ?? null,
+        location_edited_at: serviceOrder.location_edited_at ?? null,
+        created_from: serviceOrder.created_from,
         created_at: formatDate(serviceOrder.created_at, "pt-BR") ?? "N/A",
         updated_at: formatDate(serviceOrder.updated_at, "pt-BR") ?? "N/A",
       }),
@@ -341,189 +362,6 @@ class ServiceOrderRepository implements IServiceOrderRepository {
     });
 
     return serviceOrders;
-  }
-
-  // Analytics methods
-  async getTotalCostByDateRange(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-  ): Promise<number> {
-    const result = await this.prisma.serviceOrder.aggregate({
-      where: {
-        businessId,
-        date: {
-          gte: startDate,
-          lte: endDate,
-        },
-      },
-      _sum: {
-        total_amount: true,
-      },
-    });
-
-    return Number(result._sum.total_amount) || 0;
-  }
-
-  async getServiceOrderCountByDateRange(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-  ): Promise<number> {
-    const count = await this.prisma.serviceOrder.count({
-      where: {
-        businessId,
-        date: {
-          gte: startDate,
-          lte: endDate,
-        },
-      },
-    });
-
-    return count;
-  }
-
-  async getCostByMaintenanceType(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-  ): Promise<{ preventive: number; corrective: number }> {
-    // INTERNAL = preventive, EXTERNAL = corrective
-    // Execute both aggregations in parallel for better performance
-    const [preventiveResult, correctiveResult] = await Promise.all([
-      this.prisma.serviceOrder.aggregate({
-        where: {
-          businessId,
-          maintenance_type: "INTERNAL",
-          date: {
-            gte: startDate,
-            lte: endDate,
-          },
-        },
-        _sum: {
-          total_amount: true,
-        },
-      }),
-      this.prisma.serviceOrder.aggregate({
-        where: {
-          businessId,
-          maintenance_type: "EXTERNAL",
-          date: {
-            gte: startDate,
-            lte: endDate,
-          },
-        },
-        _sum: {
-          total_amount: true,
-        },
-      }),
-    ]);
-
-    return {
-      preventive: Number(preventiveResult._sum.total_amount) || 0,
-      corrective: Number(correctiveResult._sum.total_amount) || 0,
-    };
-  }
-
-  async getServiceOrderDataByVehicle(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-  ): Promise<
-    Array<{
-      vehicleId: string;
-      vehiclePlate: string;
-      totalCost: number;
-      totalServices: number;
-    }>
-  > {
-    const serviceOrders = await this.prisma.serviceOrder.groupBy({
-      by: ["vehicleId"],
-      where: {
-        businessId,
-        date: {
-          gte: startDate,
-          lte: endDate,
-        },
-      },
-      _sum: {
-        total_amount: true,
-      },
-      _count: {
-        id: true,
-      },
-    });
-
-    // Get vehicle details for each vehicleId (filter out null values)
-    const serviceOrdersWithVehicles = serviceOrders.filter(
-      (so): so is typeof so & { vehicleId: string } => so.vehicleId !== null,
-    );
-
-    const vehicleData = await Promise.all(
-      serviceOrdersWithVehicles.map(async (so) => {
-        const vehicle = await this.prisma.vehicle.findUnique({
-          where: { id: so.vehicleId },
-          select: {
-            id: true,
-            license_plate: true,
-          },
-        });
-
-        return {
-          vehicleId: so.vehicleId,
-          vehiclePlate: vehicle?.license_plate || "N/A",
-          totalCost: Number(so._sum?.total_amount) || 0,
-          totalServices: so._count.id,
-        };
-      }),
-    );
-
-    return vehicleData;
-  }
-
-  async getServiceOrdersWithLocation(
-    businessId: string,
-    startDate: Date,
-    endDate: Date,
-    vehicleId?: string,
-  ): Promise<
-    Array<{
-      id: string;
-      lat: number;
-      lng: number;
-      cost: number;
-      maintenanceType: string;
-      vehicleId: string;
-      licensePlate: string;
-      date: Date;
-    }>
-  > {
-    const orders = await this.prisma.serviceOrder.findMany({
-      where: {
-        businessId,
-        date: { gte: startDate, lte: endDate },
-        ...(vehicleId && { vehicleId }),
-        latitude: { not: null }, // Only orders with coordinates
-        longitude: { not: null },
-      },
-      include: {
-        vehicle: {
-          select: { license_plate: true },
-        },
-      },
-      orderBy: { date: "desc" },
-    });
-
-    return orders.map((order) => ({
-      id: order.id,
-      lat: order.latitude!,
-      lng: order.longitude!,
-      cost: Number(order.total_amount),
-      maintenanceType: order.maintenance_type,
-      vehicleId: order.vehicleId,
-      licensePlate: order.vehicle.license_plate,
-      date: order.date,
-    }));
   }
 }
 

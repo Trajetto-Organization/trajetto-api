@@ -36,14 +36,6 @@ import { kanbanRoutes } from "./kanban.routes";
 import { fineRoutes } from "./fine-routes";
 import { trafficViolationCodeRoutes } from "./traffic-violation-code-routes";
 
-import { routingRoutes } from "./routing-routes";
-import { simulationRoutes } from "./simulation-routes";
-
-import { vehicleAssignmentRoutes } from "./vehicle-assignment-routes";
-import { fleetAnalyticsRoutes } from "./fleet-analytics-routes";
-
-import { heatmapRoutes } from "./heatmap-routes";
-
 import { healthRoutes } from "./health-routes";
 import { whatsappRoutes } from "./whatsapp-routes";
 
@@ -71,11 +63,6 @@ async function routes(app: FastifyInstance) {
   app.register(kanbanRoutes, { prefix: "/kanban" });
   app.register(fineRoutes, { prefix: "/fines" });
   app.register(trafficViolationCodeRoutes, { prefix: "/traffic-violation" });
-  app.register(routingRoutes, { prefix: "/routes" });
-  app.register(simulationRoutes, { prefix: "/simulations" });
-  app.register(vehicleAssignmentRoutes, { prefix: "/vehicle-assignment" });
-  app.register(fleetAnalyticsRoutes, { prefix: "/fleet-analytics" });
-  app.register(heatmapRoutes, { prefix: "/heatmap" });
   app.register(whatsappRoutes, { prefix: "/whatsapp" });
   app.register(healthRoutes);
 }

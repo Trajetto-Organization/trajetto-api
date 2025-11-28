@@ -32,6 +32,15 @@ class InMemoryFineRepository implements IFineRepository {
       driverId: fineData.driverId,
       vehicleId: fineData.vehicleId,
       trafficViolationCodeId: fineData.trafficViolationCodeId,
+      // Geolocation fields
+      latitude: fineData.latitude || null,
+      longitude: fineData.longitude || null,
+      latitude_original: fineData.latitude_original || null,
+      longitude_original: fineData.longitude_original || null,
+      location_source: fineData.location_source || null,
+      location_edited_by: null,
+      location_edited_at: null,
+      created_from: fineData.created_from || "WEB",
       created_at: new Date(),
       updated_at: new Date(),
     };

@@ -304,6 +304,56 @@ class CreateFineUseCase {
       fineData.points = findTrafficViolationCode.points;
     }
 
+    // 🆕 GEOLOCATION LOGIC: Validate and process location data
+    if (fineData.created_from === "MOBILE_APP") {
+      // Mobile: Location is REQUIRED
+      if (!fineData.latitude || !fineData.longitude) {
+        throw new AppError(
+          "Para registros via aplicativo mobile, a localização é obrigatória.",
+          400,
+        );
+      }
+
+      // 🆕 VALIDATE DISTANCE IF GPS_MANUAL (manual adjustment)
+      if (fineData.location_source === "GPS_MANUAL") {
+        // Verifica se temos a localização original
+        if (!fineData.latitude_original || !fineData.longitude_original) {
+          throw new AppError(
+            "Localização original não fornecida para validação de ajuste.",
+            400,
+          );
+        }
+
+        // A validação de distância já é feita pelo schema com isWithinAllowedDistance
+        // Log de auditoria (opcional)
+        console.log(`[AUDIT] GPS ajustado por ${userId} na multa`);
+      } else if (!fineData.location_source) {
+        // Se não tem source, é GPS automático
+        fineData.location_source = "GPS_AUTO";
+
+        // Copia localização final para original (não foi editada)
+        fineData.latitude_original = fineData.latitude;
+        fineData.longitude_original = fineData.longitude;
+      }
+    } else if (fineData.created_from === "WEB_DASHBOARD") {
+      // Web: Location is OPTIONAL
+      if (fineData.latitude && fineData.longitude) {
+        fineData.location_source = "USER_MANUAL";
+      } else {
+        fineData.location_source = "NONE";
+      }
+    }
+
+    // Add audit fields for web dashboard manual location
+    if (
+      fineData.created_from === "WEB_DASHBOARD" &&
+      fineData.latitude &&
+      fineData.longitude
+    ) {
+      (fineData as any).location_edited_by = userId;
+      (fineData as any).location_edited_at = new Date();
+    }
+
     try {
       const fineCreated = await this.fine.createFine(fineData);
 

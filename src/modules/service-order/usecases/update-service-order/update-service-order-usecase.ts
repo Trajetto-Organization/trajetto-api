@@ -34,8 +34,10 @@ import {
   ServiceOrder,
   UpdateServiceOrderProps,
 } from "../../dtos/service-order-dto";
+
 import { formatCurrency } from "@/config/format-values";
 import { redirectPage } from "@/shared/utils/link-redirect-page";
+
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 import { env } from "@/env";
 
@@ -344,6 +346,33 @@ class UpdateServiceOrderUseCase {
             vehicleId: serviceOrderData.vehicleId || findServiceOrder.vehicleId,
           });
         }
+      }
+    }
+
+    // 📍 GEOLOCATION LOGIC FOR UPDATE: Process location changes
+    // Check if latitude or longitude were explicitly provided (not undefined)
+    const hasLatitude = "latitude" in updateData;
+    const hasLongitude = "longitude" in updateData;
+
+    if (hasLatitude || hasLongitude) {
+      // If both latitude and longitude are provided and not null
+      if (
+        updateData.latitude !== null &&
+        updateData.longitude !== null &&
+        updateData.latitude &&
+        updateData.longitude
+      ) {
+        updateData.location_source = "USER_MANUAL";
+        (updateData as any).location_edited_by = userId;
+        (updateData as any).location_edited_at = new Date();
+      }
+      // If either is null, user is removing the location
+      else if (updateData.latitude === null || updateData.longitude === null) {
+        updateData.latitude = null;
+        updateData.longitude = null;
+        updateData.location_source = "NONE";
+        updateData.latitude_original = null;
+        updateData.longitude_original = null;
       }
     }
 

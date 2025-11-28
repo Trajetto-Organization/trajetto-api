@@ -175,6 +175,33 @@ class UpdateFineUseCase {
       }
     }
 
+    // 📍 GEOLOCATION LOGIC FOR UPDATE: Process location changes
+    // Check if latitude or longitude were explicitly provided (not undefined)
+    const hasLatitude = "latitude" in fineData;
+    const hasLongitude = "longitude" in fineData;
+
+    if (hasLatitude || hasLongitude) {
+      // If both latitude and longitude are provided and not null
+      if (
+        fineData.latitude !== null &&
+        fineData.longitude !== null &&
+        fineData.latitude &&
+        fineData.longitude
+      ) {
+        fineData.location_source = "USER_MANUAL";
+        (fineData as any).location_edited_by = userId;
+        (fineData as any).location_edited_at = new Date();
+      }
+      // If either is null, user is removing the location
+      else if (fineData.latitude === null || fineData.longitude === null) {
+        fineData.latitude = null;
+        fineData.longitude = null;
+        fineData.location_source = "NONE";
+        fineData.latitude_original = null;
+        fineData.longitude_original = null;
+      }
+    }
+
     try {
       const updatedFine = await this.fine.updateFine({
         fineData,

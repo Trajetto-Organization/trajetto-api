@@ -1,4 +1,5 @@
 import { Decimal } from "@prisma/client/runtime/library";
+import { LocationSource, RecordOrigin } from "@prisma/client";
 
 interface Fuel {
   id: string;
@@ -15,6 +16,23 @@ interface Fuel {
   vehicleId: string;
   driverId: string;
   fuelTypeId: string;
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude?: number | null;
+  longitude?: number | null;
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original?: number | null;
+  longitude_original?: number | null;
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source?: LocationSource | null;
+  location_edited_by?: string | null;
+  location_edited_at?: Date | string | null;
+
+  // 🆕 RECORD ORIGIN: Track where the record was created
+  created_from: RecordOrigin;
+
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -33,6 +51,20 @@ interface CreateFuelProps {
   vehicleId: string;
   driverId?: string; // Optional for driver users (auto-populated)
   fuelTypeId: string;
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude?: number | null;
+  longitude?: number | null;
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original?: number | null;
+  longitude_original?: number | null;
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source?: LocationSource | null;
+
+  // 🆕 RECORD ORIGIN: Track where the record was created
+  created_from: RecordOrigin;
 }
 
 interface UpdateFuelProps {
@@ -48,6 +80,19 @@ interface UpdateFuelProps {
   vehicleId?: string;
   driverId?: string;
   fuelTypeId?: string;
+
+  // 📍 GEOLOCATION: Final location (edited or original)
+  latitude?: number | null;
+  longitude?: number | null;
+
+  // 📍 GEOLOCATION: Original GPS location (before any manual editing)
+  latitude_original?: number | null;
+  longitude_original?: number | null;
+
+  // 🆕 GEOLOCATION AUDIT: Track location source and edits
+  location_source?: LocationSource | null;
+  location_edited_by?: string | null;
+  location_edited_at?: Date | string | null;
 }
 
 interface UpdateFuel {

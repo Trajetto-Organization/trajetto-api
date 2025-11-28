@@ -38,6 +38,13 @@ class InMemoryFuelRepository implements IFuelRepository {
       vehicleId: fuelData.vehicleId,
       driverId: fuelData.driverId as string,
       fuelTypeId: fuelData.fuelTypeId,
+      // Geolocation fields
+      latitude: fuelData.latitude || null,
+      longitude: fuelData.longitude || null,
+      latitude_original: fuelData.latitude_original || null,
+      longitude_original: fuelData.longitude_original || null,
+      location_source: fuelData.location_source || null,
+      created_from: fuelData.created_from || "WEB",
       created_at: new Date(),
       updated_at: new Date(),
     };
