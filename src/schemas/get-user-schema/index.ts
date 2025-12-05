@@ -17,6 +17,14 @@ const profileAccessSchema = z
   .nullable()
   .optional();
 
+const driverSchema = z
+  .object({
+    id: z.string(),
+    status: z.string(),
+  })
+  .nullable()
+  .optional();
+
 const getUserSchema = z.object({
   id: z.string(),
   role: z.nativeEnum(EnumUserRole),
@@ -30,6 +38,7 @@ const getUserSchema = z.object({
   businessId: z.string().nullable().optional(),
   profileAccessId: z.string().nullable().optional(),
   driverId: z.string().nullable().optional(),
+  driver: driverSchema,
   profileAccess: profileAccessSchema,
 });
 

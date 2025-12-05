@@ -9,6 +9,11 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 
+import {
+  listFuelByVehicleParamsSchema,
+  listFuelByVehicleQuerySchema,
+} from "@/schemas/list-fuel-by-vehicle-schema";
+
 const fuelSchemas = {
   createFuel: createFuelSchema,
   updateFuel: updateFuelSchema,
@@ -16,6 +21,8 @@ const fuelSchemas = {
   updateDeleteBusiness: updateDeleteBusinessSchema,
   listFuel: listPagesSchema,
   listFuelBusiness: listPagesByBusinessSchema,
+  listFuelByVehicleParams: listFuelByVehicleParamsSchema,
+  listFuelByVehicleQuery: listFuelByVehicleQuerySchema,
   exportFuelsQuery: z.object({
     search: z.string().optional().describe("Search term to filter fuels"),
   }),
@@ -91,6 +98,26 @@ const fuelResponses = {
       .string()
       .default("O veículo informado não pertence à mesma empresa do usuário."),
   }),
+  listFuelByVehicleErrors: z.union([
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Veículo não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "O veículo informado não pertence à mesma empresa do usuário.",
+        ),
+    }),
+  ]),
   driverNotBelongBusiness: z.object({
     message: z
       .string()

@@ -7,6 +7,7 @@ import {
   UpdateFuel,
   ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
+  ListFuelByVehicleIdProps,
   FuelWithRelationsFormatted,
 } from "../dtos/fuel-dto";
 
@@ -46,6 +47,9 @@ interface IFuelRepository {
     vehicleId: string,
     currentFuelDate: Date | string,
   ) => Promise<Fuel | null>;
+  listFuelsByVehicleId: (
+    listFuelProps: ListFuelByVehicleIdProps,
+  ) => Promise<ListFuelFormattedProps>;
 }
 
 export { IFuelRepository };

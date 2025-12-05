@@ -42,7 +42,9 @@ function verifyPermission(
     if (user.role === "BUSINESS_USER" && user.driverId) {
       // Define driver permissions with their allowed access types
       const driverPermissions: Record<string, ("read" | "write")[]> = {
-        vehicle_manage: ["read", "write"], // Read-only access to vehicles
+        vehicle_manage: ["read"], // Read-only access to vehicles
+        vehicle_checklist_manage: ["read", "write"], // Read-only access to vehicles
+        service_order_manage: ["read"], // Read-only access to service_orders
         fuel_manage: ["read", "write"], // Full access to fuel records
       };
 

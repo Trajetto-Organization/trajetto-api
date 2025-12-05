@@ -109,7 +109,7 @@ interface FuelFormatted {
   odometer_photo?: string | null;
   odometer_verified: boolean;
   notes?: string | null;
-  refueling_date: Date;
+  refueling_date: Date | string;
   businessId: string;
   branchId: string;
   vehicleId: string;
@@ -208,6 +208,13 @@ interface GetFuelByIdAndBusinessProps {
   fuelId: string;
 }
 
+interface ListFuelByVehicleIdProps {
+  vehicleId: string;
+  businessId: string;
+  page: number;
+  pageSize: number;
+}
+
 interface FuelWithRelations {
   id: string;
   current_mileage: number;
@@ -264,6 +271,7 @@ export {
   ListFuelByBusinessIdProps,
   ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
+  ListFuelByVehicleIdProps,
   FuelWithRelations,
   FuelFormatted,
   FuelWithRelationsFormatted,

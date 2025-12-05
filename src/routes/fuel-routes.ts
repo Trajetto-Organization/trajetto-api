@@ -5,6 +5,8 @@ import { CreateFuelController } from "@/modules/fuel/usecases/create-fuel/create
 import { ListFuelController } from "@/modules/fuel/usecases/list-fuel/list-fuel-controller";
 
 import { ListFuelBusinessController } from "@/modules/fuel/usecases/list-fuel-business/list-fuel-business-controller";
+import { ListFuelByVehicleController } from "@/modules/fuel/usecases/list-fuel-by-vehicle/list-fuel-by-vehicle-controller";
+
 import { UpdateFuelController } from "@/modules/fuel/usecases/update-fuel/update-fuel-controller";
 
 import { DeleteFuelController } from "@/modules/fuel/usecases/delete-fuel/delete-fuel-controller";
@@ -21,6 +23,8 @@ const createFuelController = new CreateFuelController();
 const listFuelController = new ListFuelController();
 
 const listFuelBusinessController = new ListFuelBusinessController();
+const listFuelByVehicleController = new ListFuelByVehicleController();
+
 const updateFuelController = new UpdateFuelController();
 
 const deleteFuelController = new DeleteFuelController();
@@ -238,6 +242,30 @@ async function fuelRoutes(app: FastifyInstance) {
       },
     },
     getPreviousFuelController.handle,
+  );
+
+  app.get(
+    "/list-fuel-by-vehicle/:vehicleId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("fuel_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["fuel"],
+        summary: "List fuel records by vehicle",
+        description:
+          "Retrieve a paginated list of fuel refueling records for a specific vehicle",
+        params: fuelSchemas.listFuelByVehicleParams,
+        querystring: fuelSchemas.listFuelByVehicleQuery,
+        response: {
+          200: fuelResponses.fuelList,
+          400: fuelResponses.listFuelByVehicleErrors,
+          403: fuelResponses.vehicleNotBelongBusiness,
+          500: fuelResponses.internalServerError,
+        },
+      },
+    },
+    listFuelByVehicleController.handle,
   );
 }
 

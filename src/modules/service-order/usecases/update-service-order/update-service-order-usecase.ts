@@ -36,7 +36,7 @@ import {
 } from "../../dtos/service-order-dto";
 
 import { formatCurrency } from "@/config/format-values";
-import { redirectPage } from "@/shared/utils/link-redirect-page";
+import { buildServiceOrderLink } from "@/shared/utils/link-redirect-page";
 
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 import { env } from "@/env";
@@ -115,7 +115,14 @@ class UpdateServiceOrderUseCase {
         );
 
         if (responsibleUser) {
-          const linkRedirectPage = redirectPage(responsibleUser.role);
+          // 🚗 Build correct link for driver or non-driver users
+          const notificationLink = buildServiceOrderLink({
+            baseUrl: this.http_request,
+            role: responsibleUser.role,
+            driverId: responsibleUser.driverId,
+            vehicleId: updatedServiceOrder.vehicleId,
+            serviceOrderId: updatedServiceOrder.id,
+          });
 
           const notificationData = {
             userId: serviceOrderData.responsibleUserId,
@@ -123,7 +130,7 @@ class UpdateServiceOrderUseCase {
             title: "Ordem de Serviço Atualizada e Atribuída",
             message: `Você foi designado como responsável por uma ordem de serviço atualizada para o veículo ${vehicleLicensePlate}`,
             entityId: updatedServiceOrder.id,
-            link: `${this.http_request}/${linkRedirectPage}/service-order?search=${updatedServiceOrder.id}&page=1`,
+            link: notificationLink,
             businessId,
             shouldSendEmail: true,
             shouldSendWhatsApp: true,

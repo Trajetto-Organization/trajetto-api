@@ -1,5 +1,9 @@
 import database from "@/../infra/database";
-import { formatDate, formatCurrency } from "@/config/format-values";
+import {
+  formatDate,
+  formatCurrency,
+  formatNotificationDate,
+} from "@/config/format-values";
 
 import { Decimal } from "@prisma/client/runtime/library";
 import { container } from "tsyringe";
@@ -18,6 +22,7 @@ import {
   GetFuelByIdAndBusinessProps,
   FuelFormatted,
   FuelWithRelationsFormatted,
+  ListFuelByVehicleIdProps,
 } from "../dtos/fuel-dto";
 
 class FuelRepository implements IFuelRepository {
@@ -569,6 +574,98 @@ class FuelRepository implements IFuelRepository {
     });
 
     return previousFuel;
+  }
+
+  async listFuelsByVehicleId({
+    vehicleId,
+    businessId,
+    page,
+    pageSize,
+  }: ListFuelByVehicleIdProps): Promise<ListFuelFormattedProps> {
+    const skip = (page - 1) * pageSize;
+
+    const whereCondition = {
+      vehicleId,
+      businessId,
+    };
+
+    const fuelData = await this.prisma.fuel.findMany({
+      skip,
+      take: pageSize,
+      where: whereCondition,
+      include: {
+        business: {
+          select: {
+            corporate_reason: true,
+          },
+        },
+        branch: {
+          select: {
+            corporate_reason: true,
+          },
+        },
+        vehicle: {
+          select: {
+            description: true,
+            license_plate: true,
+            brand: true,
+            model: true,
+          },
+        },
+        driver: {
+          select: {
+            name: true,
+            cnh: true,
+          },
+        },
+        fuelType: {
+          select: {
+            description: true,
+          },
+        },
+      },
+      orderBy: {
+        created_at: "desc",
+      },
+    });
+
+    const total = await this.prisma.fuel.count({
+      where: whereCondition,
+    });
+
+    const transformedFuelData: FuelFormatted[] = fuelData.map((fuel) => ({
+      id: fuel.id ?? "N/A",
+      current_mileage: fuel.current_mileage ?? 0,
+      liters_amount: fuel.liters_amount ?? "0,000",
+      price_per_liter: formatCurrency(fuel.price_per_liter?.toNumber() ?? 0),
+      total_amount: formatCurrency(fuel.total_amount?.toNumber() ?? 0),
+      odometer_photo: fuel.odometer_photo
+        ? this.uploadService.getFileUrl(fuel.odometer_photo)
+        : null,
+      odometer_verified: fuel.odometer_verified ?? false,
+      notes: fuel.notes ?? "N/A",
+      refueling_date: formatDate(fuel.refueling_date, "pt-BR") ?? "N/A",
+      businessId: fuel.businessId ?? "N/A",
+      branchId: fuel.branchId ?? "N/A",
+      vehicleId: fuel.vehicleId ?? "N/A",
+      driverId: fuel.driverId ?? "N/A",
+      fuelTypeId: fuel.fuelTypeId ?? "N/A",
+      branch_name: fuel.branch?.corporate_reason ?? "N/A",
+      vehicle_description: fuel.vehicle?.description ?? "N/A",
+      vehicle_license_plate: fuel.vehicle?.license_plate ?? "N/A",
+      vehicle_brand: fuel.vehicle?.brand ?? "N/A",
+      vehicle_model: fuel.vehicle?.model ?? "N/A",
+      driver_name: fuel.driver?.name ?? "N/A",
+      driver_cnh: fuel.driver?.cnh ?? "N/A",
+      fuel_type_description: fuel.fuelType?.description ?? "N/A",
+      created_at: formatNotificationDate(fuel.created_at, "pt-BR") ?? "N/A",
+      updated_at: formatDate(fuel.updated_at, "pt-BR") ?? "N/A",
+    }));
+
+    return {
+      data: transformedFuelData,
+      total,
+    };
   }
 }
 

@@ -30,7 +30,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
     "/create-vehicle-checklist/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_manage", "write")],
+      preHandler: [verifyPermission("vehicle_checklist_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-checklist"],
@@ -53,7 +53,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
     "/list-vehicle-checklist",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_manage", "read")],
+      preHandler: [verifyPermission("vehicle_checklist_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-checklist"],
@@ -75,7 +75,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
     "/list-vehicle-checklist-business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_manage", "read")],
+      preHandler: [verifyPermission("vehicle_checklist_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-checklist"],
@@ -98,7 +98,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
     "/update-vehicle-checklist/:checklistId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_manage", "write")],
+      preHandler: [verifyPermission("vehicle_checklist_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-checklist"],
@@ -122,7 +122,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
     "/delete-vehicle-checklist/:checklistId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_manage", "write")],
+      preHandler: [verifyPermission("vehicle_checklist_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-checklist"],

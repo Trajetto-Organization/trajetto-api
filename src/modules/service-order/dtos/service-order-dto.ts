@@ -127,6 +127,13 @@ interface ListServiceOrderByBusinessIdProps {
   search?: string;
 }
 
+interface ListServiceOrderByVehicleIdProps {
+  vehicleId: string;
+  businessId: string;
+  page: number;
+  pageSize: number;
+}
+
 export {
   ServiceOrder,
   CreateServiceOrderProps,
@@ -135,4 +142,5 @@ export {
   ListServiceOrderProps,
   ListServiceOrderByBusinessIdProps,
   ListServiceOrderBusinessProps,
+  ListServiceOrderByVehicleIdProps,
 };

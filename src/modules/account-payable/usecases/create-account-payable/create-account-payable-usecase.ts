@@ -24,7 +24,7 @@ import {
 import { formatCurrency } from "@/config/format-values";
 import { NotificationService } from "@/shared/services/notification-service";
 
-import { redirectPage } from "@/shared/utils/link-redirect-page";
+import { buildAccountPayableLink } from "@/shared/utils/link-redirect-page";
 
 import { AppError } from "@/shared/errors/AppError";
 import { env } from "@/env";
@@ -93,7 +93,12 @@ class CreateAccountPayableUseCase {
         await this.user.findUserById(registrationUserId);
 
       if (findRegistrationUser) {
-        const linkRedirectPage = redirectPage(findRegistrationUser?.role);
+        const notificationLink = buildAccountPayableLink({
+          baseUrl: this.http_request,
+          role: findRegistrationUser.role,
+          driverId: findRegistrationUser.driverId,
+          accountPayableId: accountPayableCreated.id,
+        });
 
         const notificationData = {
           userId: registrationUserId,
@@ -101,7 +106,7 @@ class CreateAccountPayableUseCase {
           title: "Nova Conta a Pagar",
           message: `Você foi designado como responsável por uma nova conta a pagar ${accountPayableCreated.serviceOrderId ? `| ordem de serviço associada ${accountPayableCreated.serviceOrderId}` : ""}`,
           entityId: accountPayableCreated.id,
-          link: `${this.http_request}/${linkRedirectPage}/account-payable?search=${accountPayableCreated.id}&page=1`,
+          link: notificationLink,
           businessId: accountPayableData.businessId,
           shouldSendEmail: true,
           shouldSendWhatsApp: true,

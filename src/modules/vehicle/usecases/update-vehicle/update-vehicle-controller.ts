@@ -26,6 +26,9 @@ import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/err
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 import { VehicleModelYearError } from "../errors/vehicle-model-year-error";
 
+import { VehicleAlreadyExistsError } from "../errors/vehicle-already-exists-error";
+import { VehicleRenavamExistsError } from "../errors/vehicle-renavam-exists-error";
+
 import { VehicleCurrentMileageCanNotBeUpdatedError } from "../errors/vehicle-current-mileage-can-not-be-updated";
 
 class UpdateVehicleController {
@@ -102,6 +105,14 @@ class UpdateVehicleController {
       }
 
       if (error instanceof VehicleCurrentMileageCanNotBeUpdatedError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof VehicleAlreadyExistsError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof VehicleRenavamExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 

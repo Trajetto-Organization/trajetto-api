@@ -27,7 +27,7 @@ import {
 } from "../../dtos/account-payable-dto";
 import { formatCurrency } from "@/config/format-values";
 
-import { redirectPage } from "@/shared/utils/link-redirect-page";
+import { buildAccountPayableLink } from "@/shared/utils/link-redirect-page";
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 
 import { env } from "@/env";
@@ -103,7 +103,12 @@ class UpdateAccountPayableUseCase {
         );
 
         if (registrationUser) {
-          const linkRedirectPage = redirectPage(registrationUser.role);
+          const notificationLink = buildAccountPayableLink({
+            baseUrl: this.http_request,
+            role: registrationUser.role,
+            driverId: registrationUser.driverId,
+            accountPayableId: updatedAccountPayable.id,
+          });
 
           const notificationData = {
             userId: accountPayableData.registrationUserId,
@@ -111,7 +116,7 @@ class UpdateAccountPayableUseCase {
             title: "Conta a Pagar Atualizada e Atribuída",
             message: `Você foi designado como responsável por uma conta a pagar atualizada ${updatedAccountPayable.serviceOrderId ? `| ordem de serviço associada ${updatedAccountPayable.serviceOrderId}` : ""}`,
             entityId: updatedAccountPayable.id,
-            link: `${this.http_request}/${linkRedirectPage}/account-payable?search=${updatedAccountPayable.id}&page=1`,
+            link: notificationLink,
             businessId,
             shouldSendEmail: true,
             shouldSendWhatsApp: true,

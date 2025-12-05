@@ -55,6 +55,7 @@ interface CreateVehicleProps {
 
 interface UpdateVehicleProps {
   description?: string;
+  license_plate?: string;
   brand?: string;
   model?: string;
   acquisition_date?: Date | string;
@@ -65,6 +66,7 @@ interface UpdateVehicleProps {
   last_maintenance_mileage?: number | null;
   maintenance_interval_km?: number;
   maintenance_interval_months?: number;
+  renavam?: string;
   manufacturing_year?: Date | string;
   model_year?: Date | string;
   km_per_liter?: number;

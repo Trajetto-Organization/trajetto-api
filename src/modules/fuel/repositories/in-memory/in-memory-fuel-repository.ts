@@ -12,7 +12,9 @@ import {
   UpdateFuel,
   ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
+  ListFuelByVehicleIdProps,
   FuelWithRelationsFormatted,
+  FuelFormatted,
 } from "../../dtos/fuel-dto";
 
 class InMemoryFuelRepository implements IFuelRepository {
@@ -338,6 +340,63 @@ class InMemoryFuelRepository implements IFuelRepository {
     });
 
     return previousFuels[0];
+  }
+
+  async listFuelsByVehicleId({
+    vehicleId,
+    businessId,
+    page,
+    pageSize,
+  }: ListFuelByVehicleIdProps): Promise<ListFuelFormattedProps> {
+    const skip = (page - 1) * pageSize;
+
+    // Filter fuels by vehicleId and businessId
+    const filteredFuels = this.fuels.filter(
+      (fuel) => fuel.vehicleId === vehicleId && fuel.businessId === businessId,
+    );
+
+    // Sort by refueling_date descending (most recent first)
+    const sortedFuels = filteredFuels.sort((a, b) => {
+      const dateA = new Date(a.refueling_date).getTime();
+      const dateB = new Date(b.refueling_date).getTime();
+      return dateB - dateA;
+    });
+
+    // Paginate
+    const paginatedFuels = sortedFuels.slice(skip, skip + pageSize);
+
+    // Transform to FuelFormatted
+    const transformedFuels: FuelFormatted[] = paginatedFuels.map((fuel) => ({
+      id: fuel.id,
+      current_mileage: fuel.current_mileage,
+      liters_amount: fuel.liters_amount,
+      price_per_liter: fuel.price_per_liter.toString(),
+      total_amount: fuel.total_amount.toString(),
+      odometer_photo: fuel.odometer_photo,
+      odometer_verified: fuel.odometer_verified,
+      notes: fuel.notes ?? "N/A",
+      refueling_date: new Date(fuel.refueling_date),
+      businessId: fuel.businessId,
+      branchId: fuel.branchId,
+      vehicleId: fuel.vehicleId,
+      driverId: fuel.driverId,
+      fuelTypeId: fuel.fuelTypeId,
+      branch_name: `Branch ${fuel.branchId}`,
+      vehicle_description: `Vehicle ${fuel.vehicleId}`,
+      vehicle_license_plate: `ABC-${fuel.vehicleId.substring(0, 4)}`,
+      vehicle_brand: "Test Brand",
+      vehicle_model: "Test Model",
+      driver_name: `Driver ${fuel.driverId}`,
+      driver_cnh: `CNH-${fuel.driverId.substring(0, 8)}`,
+      fuel_type_description: `Fuel Type ${fuel.fuelTypeId}`,
+      created_at: new Date(fuel.created_at).toISOString(),
+      updated_at: new Date(fuel.updated_at).toISOString(),
+    }));
+
+    return {
+      data: transformedFuels,
+      total: sortedFuels.length,
+    };
   }
 }
 

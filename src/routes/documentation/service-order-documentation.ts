@@ -8,6 +8,11 @@ import { updateServiceOrderSchema } from "@/schemas/update-service-order-schema"
 import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 
+import {
+  listServiceOrderByVehicleParamsSchema,
+  listServiceOrderByVehicleQuerySchema,
+} from "@/schemas/list-service-order-by-vehicle-schema";
+
 const serviceOrderBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
   serviceOrderId: z.string().uuid("O ID da ordem de serviço é obrigatório!"),
@@ -17,6 +22,8 @@ const serviceOrderSchemas = {
   createServiceOrder: createServiceOrderSchema,
   listServiceOrder: listPagesSchema,
   listServiceOrderBusinessSchema: listPagesByBusinessSchema,
+  listServiceOrderByVehicleParams: listServiceOrderByVehicleParamsSchema,
+  listServiceOrderByVehicleQuery: listServiceOrderByVehicleQuerySchema,
   updateServiceOrder: updateServiceOrderSchema,
   businessIdParam: updateDeleteBusinessSchema,
   serviceOrderBusinessParams: serviceOrderBusinessParams,
@@ -174,6 +181,27 @@ const serviceOrderResponses = {
       message: z.string().default("Usuário não possui empresa associada!"),
     }),
   ]),
+
+  listServiceOrderByVehicleErrors: z.union([
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Veículo não encontrado."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z.string().default("Este veículo não pertence a esta empresa!"),
+    }),
+  ]),
+
+  vehicleNotBelongBusiness: z.object({
+    message: z.string().default("Este veículo não pertence a esta empresa!"),
+  }),
 
   updateServiceOrderErrors: z.union([
     z.object({

@@ -8,6 +8,7 @@ import {
   ListServiceOrderByBusinessIdProps,
   UpdateServiceOrder,
   ListServiceOrderBusinessProps,
+  ListServiceOrderByVehicleIdProps,
 } from "../../dtos/service-order-dto";
 
 class InMemoryServiceOrderRepository implements IServiceOrderRepository {
@@ -182,6 +183,26 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
     return this.serviceOrders.filter(
       (order) => order.responsibleUserId === responsibleUserId,
     );
+  }
+
+  async listServiceOrdersByVehicleId({
+    vehicleId,
+    businessId,
+    page,
+    pageSize,
+  }: ListServiceOrderByVehicleIdProps): Promise<ListServiceOrderProps> {
+    const filteredOrders = this.serviceOrders.filter(
+      (order) =>
+        order.vehicleId === vehicleId && order.businessId === businessId,
+    );
+
+    const skip = (page - 1) * pageSize;
+    const paginatedOrders = filteredOrders.slice(skip, skip + pageSize);
+
+    return {
+      data: paginatedOrders,
+      total: filteredOrders.length,
+    };
   }
 }
 

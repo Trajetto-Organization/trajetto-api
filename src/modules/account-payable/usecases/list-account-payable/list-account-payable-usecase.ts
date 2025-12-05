@@ -40,8 +40,6 @@ class ListAccountPayableUseCase {
 
       return accountPayables;
     } catch (error) {
-      console.log("Erro do account payables", error);
-
       throw new AppError(
         "Houve um erro ao tentar listar as contas para pagar! Por favor, tente novamente.",
         500,

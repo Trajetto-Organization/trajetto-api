@@ -1,7 +1,15 @@
 import { inject, injectable } from "tsyringe";
 
 import { IKanbanRepository } from "@/modules/kanban/repositories/IKanban-repository";
+import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+
+import { NotificationService } from "@/shared/services/notification-service";
 import { formatCurrency } from "@/config/format-values";
+
+import { redirectPage } from "@/shared/utils/link-redirect-page";
+import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
+
+import { env } from "@/env";
 
 interface CreateCardFromServiceOrderProps {
   serviceOrderId: string;
@@ -27,11 +35,25 @@ interface CreateCardFromEntityProps {
   entityId?: string;
 }
 
+interface KanbanCardNotificationTextProps {
+  title: string;
+  description: string;
+  priority: string;
+  dueDate: Date;
+  cardId: string;
+}
+
 @injectable()
 class KanbanService {
+  private http_request = env.HTTP_REQUEST;
+
   constructor(
     @inject("KanbanRepository")
     private kanban: IKanbanRepository,
+    @inject("UserRepository")
+    private user: IUserRepository,
+    @inject("NotificationService")
+    private notificationService: NotificationService,
   ) {}
 
   private async createDefaultKanbanColumns(businessId: string): Promise<void> {
@@ -175,6 +197,126 @@ class KanbanService {
     return "low";
   }
 
+  private buildKanbanCardNotificationText({
+    title,
+    description,
+    priority,
+    dueDate,
+    cardId,
+  }: KanbanCardNotificationTextProps): string {
+    const getPriorityInfo = (priority: string) => {
+      switch (priority.toLowerCase()) {
+        case "urgent":
+          return { emoji: "🆘", text: "Urgente" };
+        case "high":
+          return { emoji: "🔴", text: "Alta" };
+        case "medium":
+          return { emoji: "🟡", text: "Média" };
+        case "low":
+          return { emoji: "🟢", text: "Baixa" };
+        default:
+          return { emoji: "🟢", text: "Baixa" };
+      }
+    };
+
+    const priorityInfo = getPriorityInfo(priority);
+    const formattedDate = new Date(dueDate).toLocaleDateString("pt-BR");
+
+    return [
+      `📋 *Novo Card Atribuído! Você foi designado como responsável por um novo card no kanban*`,
+      `Título: *${title}*`,
+      `Descrição: ${description}`,
+      `Prioridade: ${priorityInfo.emoji} *${priorityInfo.text}*`,
+      `Data de vencimento: *${formattedDate}*`,
+      `Identificador do card: *${cardId}*`,
+      `Para mais detalhes, acesse o sistema.`,
+    ].join("\n");
+  }
+
+  private async sendCardNotification(
+    cardId: string,
+    cardTitle: string,
+    cardDescription: string,
+    cardPriority: string,
+    cardDueDate: Date,
+    assignedUserId: string,
+    businessId: string,
+    createdByUserId: string,
+  ): Promise<void> {
+    try {
+      // Don't send notification if the assigned user is the creator
+      if (assignedUserId === createdByUserId) {
+        console.log(
+          `[KanbanService] Usuário atribuído é o criador - notificação não enviada`,
+        );
+        return;
+      }
+
+      const assignedUser = await this.user.findUserById(assignedUserId);
+
+      if (!assignedUser) {
+        console.log(
+          `[KanbanService] Usuário atribuído não encontrado - notificação não enviada`,
+        );
+        return;
+      }
+
+      const linkRedirectPage = redirectPage(
+        assignedUser.role,
+        assignedUser.driverId,
+      );
+
+      const activityData = {
+        type: "Card Kanban",
+        action: "create",
+        entityId: cardId,
+        description: `Card "${cardTitle}" criado automaticamente a partir de ordem de serviço | ID: ${cardId}`,
+        status: "Pendente",
+        performedBy: createdByUserId,
+        businessId,
+      };
+
+      const notificationData = {
+        userId: assignedUserId,
+        type: "kanban-card",
+        title: "Novo Card Atribuído",
+        message: `Você foi designado como responsável pelo card "${cardTitle}" no kanban`,
+        entityId: cardId,
+        link: `${this.http_request}/${linkRedirectPage}/kanban?search=${cardId}&page=1`,
+        businessId,
+        shouldSendEmail: true,
+        shouldSendWhatsApp: true,
+        whatsAppMessage: this.buildKanbanCardNotificationText({
+          title: cardTitle,
+          description: cardDescription,
+          priority: cardPriority,
+          dueDate: cardDueDate,
+          cardId,
+        }),
+        instanceName: generateWhatsAppInstanceName(
+          assignedUser.email,
+          businessId,
+        ),
+      };
+
+      // Process notification to assigned user
+      await this.notificationService.processUserNotifications({
+        notification: notificationData,
+        activity: activityData,
+      });
+
+      console.log(
+        `[KanbanService] Notificação enviada para usuário ${assignedUserId}`,
+      );
+    } catch (error) {
+      console.error(
+        `[KanbanService] Erro ao enviar notificação de card:`,
+        error,
+      );
+      // Does not prevent card creation
+    }
+  }
+
   async createCardFromServiceOrder(
     data: CreateCardFromServiceOrderProps,
   ): Promise<void> {
@@ -238,6 +380,21 @@ class KanbanService {
       console.log(
         `[KanbanService] Card criado automaticamente para ordem de serviço ${data.serviceOrderId}. Card ID: ${createdCard.id}`,
       );
+
+      // Send notification to assigned user if there is one
+      const assignedUserId = data.responsibleUserId || data.createdByUserId;
+      if (assignedUserId) {
+        await this.sendCardNotification(
+          createdCard.id,
+          cardData.title,
+          cardData.description,
+          cardData.priority,
+          cardData.dueDate,
+          assignedUserId,
+          data.businessId,
+          data.createdByUserId,
+        );
+      }
     } catch (error) {
       console.error(
         `[KanbanService] Erro ao criar card para ordem de serviço ${data.serviceOrderId}:`,

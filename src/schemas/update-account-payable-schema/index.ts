@@ -16,7 +16,7 @@ const isValidDateString = (value: string): boolean => {
 
 const updateAccountPayableSchema = z
   .object({
-    issue_date: z
+    due_date: z
       .string()
       .min(1, "Data de vencimento é obrigatória.")
       .superRefine((val, ctx) => {

@@ -73,6 +73,12 @@ async function ensureAuthenticated(
       driver: driverInfo,
     };
   } catch (error: any | undefined) {
+    // Re-throw AppError without modifying the message (for access_revoked and driver_inactive)
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    // For other errors (like JWT verification), throw invalid token error
     throw new AppError(`Invalid Token => ${error.message}`, 401);
   }
 }

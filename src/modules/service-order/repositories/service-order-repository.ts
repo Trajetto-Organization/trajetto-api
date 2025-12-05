@@ -6,10 +6,15 @@ import {
   ListServiceOrderByBusinessIdProps,
   UpdateServiceOrder,
   ListServiceOrderBusinessProps,
+  ListServiceOrderByVehicleIdProps,
 } from "../dtos/service-order-dto";
 
 import database from "@/../infra/database";
-import { formatDate, formatCurrency } from "@/config/format-values";
+import {
+  formatDate,
+  formatCurrency,
+  formatNotificationDate,
+} from "@/config/format-values";
 
 class ServiceOrderRepository implements IServiceOrderRepository {
   constructor(private prisma = database) {}
@@ -362,6 +367,134 @@ class ServiceOrderRepository implements IServiceOrderRepository {
     });
 
     return serviceOrders;
+  }
+
+  async listServiceOrdersByVehicleId({
+    vehicleId,
+    businessId,
+    page,
+    pageSize,
+  }: ListServiceOrderByVehicleIdProps): Promise<ListServiceOrderProps> {
+    const skip = (page - 1) * pageSize;
+
+    const whereCondition = {
+      vehicleId,
+      businessId,
+    };
+
+    const serviceOrderData = await this.prisma.serviceOrder.findMany({
+      skip,
+      take: pageSize,
+      where: whereCondition,
+      include: {
+        vehicle: {
+          select: {
+            id: true,
+            license_plate: true,
+            description: true,
+            brand: true,
+            model: true,
+          },
+        },
+        responsibleUser: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        branch: {
+          select: {
+            id: true,
+            corporate_reason: true,
+          },
+        },
+        supplier: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        parts: {
+          select: {
+            id: true,
+            quantity: true,
+            unit_price: true,
+            part: {
+              select: {
+                description: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: {
+        date: "desc",
+      },
+    });
+
+    const total = await this.prisma.serviceOrder.count({
+      where: whereCondition,
+    });
+
+    const transformedServiceOrderData: ServiceOrder[] = serviceOrderData.map(
+      (serviceOrder) => ({
+        id: serviceOrder.id,
+        date: formatDate(serviceOrder.date, "pt-BR"),
+        completion_date: serviceOrder.completion_date
+          ? formatDate(serviceOrder.completion_date, "pt-BR")
+          : null,
+        maintenance_type: serviceOrder.maintenance_type,
+        total_amount: formatCurrency(
+          serviceOrder.total_amount?.toNumber() ?? 0,
+        ),
+        businessId: serviceOrder.businessId,
+        vehicleId: serviceOrder.vehicleId,
+        responsibleUserId: serviceOrder.responsibleUserId,
+        branchId: serviceOrder.branchId,
+        supplierId: serviceOrder.supplierId ?? null,
+        current_mileage_at_service:
+          serviceOrder.current_mileage_at_service ?? null,
+        maintenance_interval_km_at_service:
+          serviceOrder.maintenance_interval_km_at_service ?? null,
+        last_maintenance_mileage_at_service:
+          serviceOrder.last_maintenance_mileage_at_service ?? null,
+        new_mileage_after_service:
+          serviceOrder.new_mileage_after_service ?? null,
+        latitude:
+          serviceOrder.latitude !== null ? Number(serviceOrder.latitude) : null,
+        longitude:
+          serviceOrder.longitude !== null
+            ? Number(serviceOrder.longitude)
+            : null,
+        latitude_original:
+          serviceOrder.latitude_original !== null
+            ? Number(serviceOrder.latitude_original)
+            : null,
+        longitude_original:
+          serviceOrder.longitude_original !== null
+            ? Number(serviceOrder.longitude_original)
+            : null,
+        location_source: serviceOrder.location_source ?? null,
+        location_edited_by: serviceOrder.location_edited_by ?? null,
+        location_edited_at: serviceOrder.location_edited_at
+          ? formatDate(serviceOrder.location_edited_at, "pt-BR")
+          : null,
+        created_from: serviceOrder.created_from,
+        created_at: formatNotificationDate(serviceOrder.created_at, "pt-BR"),
+        updated_at: formatDate(serviceOrder.updated_at, "pt-BR"),
+        vehicleLicensePlate: serviceOrder.vehicle?.license_plate ?? "N/A",
+        vehicleDescription: serviceOrder.vehicle?.description ?? "N/A",
+        responsibleUserName: serviceOrder.responsibleUser?.name ?? "N/A",
+        branchName: serviceOrder.branch?.corporate_reason ?? "N/A",
+        supplierName: serviceOrder.supplier?.name ?? "N/A",
+        partsCount: serviceOrder.parts?.length ?? 0,
+      }),
+    );
+
+    return {
+      data: transformedServiceOrderData,
+      total,
+    };
   }
 }
 

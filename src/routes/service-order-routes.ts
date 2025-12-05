@@ -7,6 +7,7 @@ import { UpdateServiceOrderController } from "@/modules/service-order//usecases/
 import { DeleteServiceOrderController } from "@/modules/service-order//usecases/delete-service-order/delete-service-order-controller";
 
 import { ListServiceOrderBusinessController } from "@/modules/service-order/usecases/list-service-order-business/list-service-order-business-controller";
+import { ListServiceOrderByVehicleController } from "@/modules/service-order/usecases/list-service-order-by-vehicle/list-service-order-by-vehicle-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -21,6 +22,9 @@ const listServiceOrderController = new ListServiceOrderController();
 
 const listServiceOrderBusinessController =
   new ListServiceOrderBusinessController();
+
+const listServiceOrderByVehicleController =
+  new ListServiceOrderByVehicleController();
 
 const updateServiceOrderController = new UpdateServiceOrderController();
 const deleteServiceOrderController = new DeleteServiceOrderController();
@@ -114,6 +118,30 @@ async function serviceOrderRoutes(app: FastifyInstance) {
       },
     },
     updateServiceOrderController.handle,
+  );
+
+  app.get(
+    "/list-service-order-by-vehicle/:vehicleId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("service_order_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["service-order"],
+        summary: "List service orders by vehicle",
+        description:
+          "Retrieve a paginated list of vehicle service orders for a specific vehicle",
+        params: serviceOrderSchemas.listServiceOrderByVehicleParams,
+        querystring: serviceOrderSchemas.listServiceOrderByVehicleQuery,
+        response: {
+          200: serviceOrderResponses.serviceOrderList,
+          400: serviceOrderResponses.listServiceOrderByVehicleErrors,
+          403: serviceOrderResponses.vehicleNotBelongBusiness,
+          500: serviceOrderResponses.internalServerError,
+        },
+      },
+    },
+    listServiceOrderByVehicleController.handle,
   );
 
   app.delete(

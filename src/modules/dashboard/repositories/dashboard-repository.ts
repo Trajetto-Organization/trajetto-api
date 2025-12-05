@@ -53,65 +53,47 @@ class DashboardRepository implements IDashboardRepository {
         throw new Error("Entidade inválida");
     }
 
-    // Try UTC query first
-    const startDateUTC = new Date(params.startDate + "T00:00:00.000Z");
-    const endDateUTC = new Date(params.endDate + "T23:59:59.999Z");
+    // Convert date string to local timezone Date objects
+    // params.startDate and params.endDate are in format "YYYY-MM-DD"
+    const [startYear, startMonth, startDay] = params.startDate
+      .split("-")
+      .map(Number);
+    const [endYear, endMonth, endDay] = params.endDate.split("-").map(Number);
 
-    const whereClauseUTC: any = {
+    // Create dates in local timezone (server timezone - Brazil UTC-3)
+    const startDateLocal = new Date(
+      startYear,
+      startMonth - 1,
+      startDay,
+      0,
+      0,
+      0,
+      0,
+    );
+    const endDateLocal = new Date(
+      endYear,
+      endMonth - 1,
+      endDay,
+      23,
+      59,
+      59,
+      999,
+    );
+
+    const whereClause: any = {
       created_at: {
-        gte: startDateUTC,
-        lte: endDateUTC,
+        gte: startDateLocal,
+        lte: endDateLocal,
       },
     };
 
     if (businessId) {
-      whereClauseUTC.businessId = businessId;
+      whereClause.businessId = businessId;
     }
 
-    const countUTC = await model.count({ where: whereClauseUTC });
+    const count = await model.count({ where: whereClause });
 
-    // If UTC query returns results, use it
-    if (countUTC > 0) {
-      return { count: countUTC };
-    }
-
-    // Fallback: try local timezone query
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-
-    // Check if we're querying for today's date
-    const queryDate = new Date(params.startDate);
-    const today = new Date();
-
-    const isToday =
-      queryDate.getFullYear() === today.getFullYear() &&
-      queryDate.getMonth() === today.getMonth() &&
-      queryDate.getDate() === today.getDate();
-
-    if (isToday) {
-      const whereClauseLocal: any = {
-        created_at: {
-          gte: todayStart,
-          lte: todayEnd,
-        },
-      };
-
-      if (businessId) {
-        whereClauseLocal.businessId = businessId;
-      }
-
-      const countLocal = await model.count({ where: whereClauseLocal });
-
-      // Use local result if it's greater than UTC result
-      if (countLocal > countUTC) {
-        return { count: countLocal };
-      }
-    }
-
-    return { count: countUTC };
+    return { count };
   }
 
   async countVehiclesByStatus(
@@ -230,23 +212,46 @@ class DashboardRepository implements IDashboardRepository {
     params: MonthlyCostsParams,
     businessId?: string,
   ): Promise<MonthlyCostsResult> {
-    // Try UTC query first
-    const startDateUTC = new Date(params.startDate + "T00:00:00.000Z");
-    const endDateUTC = new Date(params.endDate + "T23:59:59.999Z");
+    // Convert date string to local timezone Date objects
+    // params.startDate and params.endDate are in format "YYYY-MM-DD"
+    const [startYear, startMonth, startDay] = params.startDate
+      .split("-")
+      .map(Number);
+    const [endYear, endMonth, endDay] = params.endDate.split("-").map(Number);
 
-    const whereClauseUTC: any = {
+    // Create dates in local timezone (server timezone - Brazil UTC-3)
+    const startDateLocal = new Date(
+      startYear,
+      startMonth - 1,
+      startDay,
+      0,
+      0,
+      0,
+      0,
+    );
+    const endDateLocal = new Date(
+      endYear,
+      endMonth - 1,
+      endDay,
+      23,
+      59,
+      59,
+      999,
+    );
+
+    const whereClause: any = {
       created_at: {
-        gte: startDateUTC,
-        lte: endDateUTC,
+        gte: startDateLocal,
+        lte: endDateLocal,
       },
     };
 
     if (businessId) {
-      whereClauseUTC.businessId = businessId;
+      whereClause.businessId = businessId;
     }
 
-    const serviceOrdersUTC = await this.prisma.serviceOrder.findMany({
-      where: whereClauseUTC,
+    const serviceOrders = await this.prisma.serviceOrder.findMany({
+      where: whereClause,
       select: {
         id: true,
         maintenance_type: true,
@@ -255,86 +260,20 @@ class DashboardRepository implements IDashboardRepository {
       },
     });
 
-    let preventiveUTC = 0;
-    let correctiveUTC = 0;
+    let preventive = 0;
+    let corrective = 0;
 
-    serviceOrdersUTC.forEach((order) => {
+    serviceOrders.forEach((order) => {
       if (order.maintenance_type === "INTERNAL") {
-        preventiveUTC += Number(order.total_amount);
+        preventive += Number(order.total_amount);
       } else {
-        correctiveUTC += Number(order.total_amount);
+        corrective += Number(order.total_amount);
       }
     });
 
-    // If UTC query returns results, use it
-    if (serviceOrdersUTC.length > 0) {
-      return {
-        preventive: preventiveUTC,
-        corrective: correctiveUTC,
-      };
-    }
-
-    // Fallback: try local timezone query
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-
-    // Check if we're querying for today's date
-    const queryDate = new Date(params.startDate);
-    const today = new Date();
-
-    const isToday =
-      queryDate.getFullYear() === today.getFullYear() &&
-      queryDate.getMonth() === today.getMonth() &&
-      queryDate.getDate() === today.getDate();
-
-    if (isToday) {
-      const whereClauseLocal: any = {
-        created_at: {
-          gte: todayStart,
-          lte: todayEnd,
-        },
-      };
-
-      if (businessId) {
-        whereClauseLocal.businessId = businessId;
-      }
-
-      const serviceOrdersLocal = await this.prisma.serviceOrder.findMany({
-        where: whereClauseLocal,
-        select: {
-          id: true,
-          maintenance_type: true,
-          total_amount: true,
-          created_at: true,
-        },
-      });
-
-      let preventiveLocal = 0;
-      let correctiveLocal = 0;
-
-      serviceOrdersLocal.forEach((order) => {
-        if (order.maintenance_type === "INTERNAL") {
-          preventiveLocal += Number(order.total_amount);
-        } else {
-          correctiveLocal += Number(order.total_amount);
-        }
-      });
-
-      // Use local result if it has more orders than UTC result
-      if (serviceOrdersLocal.length > serviceOrdersUTC.length) {
-        return {
-          preventive: preventiveLocal,
-          corrective: correctiveLocal,
-        };
-      }
-    }
-
     return {
-      preventive: preventiveUTC,
-      corrective: correctiveUTC,
+      preventive,
+      corrective,
     };
   }
 

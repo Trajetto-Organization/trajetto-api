@@ -6,6 +6,7 @@ import {
   CreateAccountPayableProps,
   ListAccountPayableProps,
   ListAccountPayableByBusinessIdProps,
+  ListAccountPayableByResponsibleUserIdProps,
   UpdateAccountPayable,
 } from "../../dtos/account-payable-dto";
 
@@ -40,6 +41,26 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
     const { page, pageSize, businessId } = listAccountPayableProps;
     const filteredPayables = this.accountPayables.filter(
       (payable) => payable.businessId === businessId,
+    );
+    const skip = (page - 1) * pageSize;
+    const slicedPayables = filteredPayables.slice(skip, skip + pageSize);
+
+    return {
+      data: slicedPayables,
+      total: filteredPayables.length,
+    };
+  }
+
+  async listAccountPayablesByResponsibleUserId({
+    page,
+    pageSize,
+    responsibleUserId,
+    businessId,
+  }: ListAccountPayableByResponsibleUserIdProps): Promise<ListAccountPayableProps> {
+    const filteredPayables = this.accountPayables.filter(
+      (payable) =>
+        payable.registrationUserId === responsibleUserId &&
+        payable.businessId === businessId,
     );
     const skip = (page - 1) * pageSize;
     const slicedPayables = filteredPayables.slice(skip, skip + pageSize);

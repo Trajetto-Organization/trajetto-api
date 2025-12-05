@@ -4,6 +4,7 @@ import {
   CreateAccountPayableProps,
   ListAccountPayableProps,
   ListAccountPayableByBusinessIdProps,
+  ListAccountPayableByResponsibleUserIdProps,
   UpdateAccountPayable,
   AccountPayableStatus,
 } from "../dtos/account-payable-dto";
@@ -342,6 +343,149 @@ class AccountPayableRepository implements IAccountPayableRepository {
     });
 
     return accountPayables;
+  }
+
+  async listAccountPayablesByResponsibleUserId({
+    page,
+    pageSize,
+    responsibleUserId,
+    businessId,
+  }: ListAccountPayableByResponsibleUserIdProps): Promise<ListAccountPayableProps> {
+    const skip = (page - 1) * pageSize;
+
+    const whereCondition = {
+      registrationUserId: responsibleUserId,
+      businessId,
+    };
+
+    const accountPayableData = await this.prisma.accountPayable.findMany({
+      skip,
+      take: pageSize,
+      where: whereCondition,
+      include: {
+        business: {
+          select: {
+            corporate_reason: true,
+          },
+        },
+        branch: {
+          select: {
+            corporate_reason: true,
+            fantasy_name: true,
+          },
+        },
+        serviceOrder: {
+          select: {
+            id: true,
+            date: true,
+            maintenance_type: true,
+            vehicle: {
+              select: {
+                license_plate: true,
+                description: true,
+              },
+            },
+          },
+        },
+        registrationUser: {
+          select: {
+            name: true,
+          },
+        },
+      },
+      orderBy: {
+        issue_date: "desc",
+      },
+    });
+
+    const total = await this.prisma.accountPayable.count({
+      where: whereCondition,
+    });
+
+    const transformedAccountPayableData: AccountPayable[] =
+      accountPayableData.map((accountPayable) => {
+        // Determine account status based on existing fields
+        let status: AccountPayableStatus = "PENDING";
+        let remainingAmount = Number(accountPayable.amount);
+
+        const currentDate = new Date();
+        const dueDate = new Date(accountPayable.due_date);
+
+        const isOverdue = currentDate > dueDate;
+
+        if (accountPayable.payment_date) {
+          const amountPaid = Number(accountPayable.amount_paid || 0);
+          remainingAmount = Number(accountPayable.amount) - amountPaid;
+
+          const paymentDate = new Date(accountPayable.payment_date);
+          const isPaidLate = paymentDate > dueDate;
+
+          if (amountPaid >= Number(accountPayable.amount)) {
+            // Full payment
+            if (isPaidLate) {
+              status = "LATE"; // Pay late
+            } else {
+              status = "PAID"; // Paid on time
+            }
+
+            remainingAmount = 0;
+          } else if (amountPaid > 0) {
+            // Partial payment
+            if (isPaidLate) {
+              status = "PARTIAL_LATE"; // Partially paid late
+            } else if (isOverdue) {
+              // Paid before the due date, but not yet paid in full and the due date is past
+              status = "PARTIAL_LATE"; // Partial and expired
+            } else {
+              status = "PARTIAL"; // Partial on time
+            }
+          }
+        } else {
+          // No payment date - check if it is overdue
+          if (isOverdue) {
+            status = "OVERDUE"; // Overdue and unpaid
+          } else {
+            status = "PENDING"; // Pending deadline
+          }
+        }
+
+        return {
+          id: accountPayable.id,
+          issue_date: formatNotificationDate(
+            accountPayable.issue_date,
+            "pt-BR",
+          ),
+          due_date: formatDate(accountPayable.due_date, "pt-BR"),
+          payment_date: accountPayable.payment_date
+            ? formatDate(accountPayable.payment_date, "pt-BR")
+            : null,
+          amount: formatCurrency(Number(accountPayable.amount)),
+          amount_paid: accountPayable.amount_paid
+            ? formatCurrency(Number(accountPayable.amount_paid))
+            : null,
+          businessId: accountPayable.businessId,
+          branchId: accountPayable.branchId,
+          serviceOrderId: accountPayable.serviceOrderId ?? null,
+          registrationUserId: accountPayable.registrationUserId,
+          created_at: formatNotificationDate(
+            accountPayable.created_at,
+            "pt-BR",
+          ),
+          updated_at: formatDate(accountPayable.updated_at, "pt-BR"),
+          branchName: accountPayable.branch?.corporate_reason ?? "N/A",
+          serviceOrderDescription: accountPayable.serviceOrder
+            ? formatServiceOrderDisplay(accountPayable.serviceOrder)
+            : "N/A",
+          registrationUserName: accountPayable.registrationUser?.name ?? "N/A",
+          status: translateAccountPayableStatus(status),
+          remainingAmount: formatCurrency(remainingAmount),
+        };
+      });
+
+    return {
+      data: transformedAccountPayableData,
+      total,
+    };
   }
 }
 

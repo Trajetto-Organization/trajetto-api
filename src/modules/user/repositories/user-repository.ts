@@ -387,6 +387,12 @@ class UserRepository implements IUserRepository {
             },
           },
         },
+        driver: {
+          select: {
+            id: true,
+            status: true,
+          },
+        },
       },
     });
 

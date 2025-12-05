@@ -35,7 +35,7 @@ import { AppError } from "@/shared/errors/AppError";
 import { env } from "@/env";
 
 import { formatCurrency } from "@/config/format-values";
-import { redirectPage } from "@/shared/utils/link-redirect-page";
+import { buildServiceOrderLink } from "@/shared/utils/link-redirect-page";
 
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 import { calculateDistance } from "@/shared/utils/geolocation";
@@ -115,7 +115,14 @@ class CreateServiceOrderUseCase {
       );
 
       if (findResponsibleUser) {
-        const linkRedirectPage = redirectPage(findResponsibleUser?.role);
+        // 🚗 Build correct link for driver or non-driver users
+        const notificationLink = buildServiceOrderLink({
+          baseUrl: this.http_request,
+          role: findResponsibleUser?.role,
+          vehicleId: serviceOrderData.vehicleId,
+          driverId: findResponsibleUser?.driverId,
+          serviceOrderId: serviceOrderCreated.id,
+        });
 
         const notificationData = {
           userId: serviceOrderData.responsibleUserId,
@@ -123,7 +130,7 @@ class CreateServiceOrderUseCase {
           title: "Nova Ordem de Serviço",
           message: `Você foi designado como responsável pela ordem de serviço para o veículo ${findVehicle.license_plate || "N/A"}.`,
           entityId: serviceOrderCreated.id,
-          link: `${this.http_request}/${linkRedirectPage}/service-order?search=${serviceOrderCreated.id}&page=1`,
+          link: notificationLink,
           businessId: serviceOrderData.businessId,
           shouldSendEmail: true,
           shouldSendWhatsApp: true,

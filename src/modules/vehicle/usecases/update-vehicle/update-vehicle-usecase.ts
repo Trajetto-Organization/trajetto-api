@@ -24,11 +24,13 @@ import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not
 import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";
 import { VehicleNotBelongBusinessError } from "../errors/vehicle-not-belong-business-error";
 
+import { VehicleAlreadyExistsError } from "../errors/vehicle-already-exists-error";
+import { VehicleRenavamExistsError } from "../errors/vehicle-renavam-exists-error";
+
 import { VehicleTypeNotBelongBusinessError } from "@/modules/vehicle-type/usecases/errors/vehicle-type-not-belong-business-error";
 import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-belong-business-error";
 
 import { Vehicle, UpdateVehicleProps } from "../../dtos/vehicle-dto";
-
 import { VehicleModelYearError } from "../errors/vehicle-model-year-error";
 
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
@@ -92,6 +94,30 @@ class UpdateVehicleUseCase {
       vehicleData.current_mileage !== findVehicle.current_mileage
     ) {
       throw new VehicleCurrentMileageCanNotBeUpdatedError();
+    }
+
+    // Check if license plate is being updated and if it already exists
+    if (
+      vehicleData.license_plate &&
+      vehicleData.license_plate !== findVehicle.license_plate
+    ) {
+      const findVehicleByLicensePlate =
+        await this.vehicle.findVehicleByLicensePlate(vehicleData.license_plate);
+
+      if (findVehicleByLicensePlate) {
+        throw new VehicleAlreadyExistsError();
+      }
+    }
+
+    // Check if RENAVAM is being updated and if it already exists
+    if (vehicleData.renavam && vehicleData.renavam !== findVehicle.renavam) {
+      const findVehicleByRenavam = await this.vehicle.findVehicleByRenavam(
+        vehicleData.renavam,
+      );
+
+      if (findVehicleByRenavam) {
+        throw new VehicleRenavamExistsError();
+      }
     }
 
     // Additional checks for relationships

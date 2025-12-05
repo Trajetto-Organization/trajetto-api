@@ -68,6 +68,13 @@ interface ListAccountPayableByBusinessIdProps {
   search?: string;
 }
 
+interface ListAccountPayableByResponsibleUserIdProps {
+  page: number;
+  pageSize: number;
+  responsibleUserId: string;
+  businessId: string;
+}
+
 export {
   AccountPayable,
   CreateAccountPayableProps,
@@ -75,5 +82,6 @@ export {
   UpdateAccountPayable,
   ListAccountPayableProps,
   ListAccountPayableByBusinessIdProps,
+  ListAccountPayableByResponsibleUserIdProps,
   AccountPayableStatus,
 };

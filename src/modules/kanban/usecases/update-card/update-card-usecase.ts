@@ -102,7 +102,10 @@ class UpdateKanbanCardUseCase {
         );
 
         if (assignedUser) {
-          const linkRedirectPage = redirectPage(assignedUser.role);
+          const linkRedirectPage = redirectPage(
+            assignedUser.role,
+            assignedUser.driverId,
+          );
 
           const notificationData = {
             userId: cardData.assignedUserId,

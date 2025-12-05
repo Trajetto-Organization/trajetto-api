@@ -3,6 +3,8 @@ import { FastifyInstance } from "fastify";
 import { CreateAccountPayableController } from "@/modules/account-payable/usecases/create-account-payable/create-account-payable-controller";
 import { ListAccountPayableController } from "@/modules/account-payable/usecases/list-account-payable/list-account-payable-controller";
 
+import { ListAccountPayableByResponsibleUserController } from "@/modules/account-payable/usecases/list-account-payable-by-responsible-user/list-account-payable-by-responsible-user-controller";
+
 import { UpdateAccountPayableController } from "@/modules/account-payable/usecases/update-account-payable/update-account-payable-controller";
 import { DeleteAccountPayableController } from "@/modules/account-payable/usecases/delete-account-payable/delete-account-payable-controller";
 
@@ -16,6 +18,9 @@ import {
 
 const createAccountPayableController = new CreateAccountPayableController();
 const listAccountPayableController = new ListAccountPayableController();
+
+const listAccountPayableByResponsibleUserController =
+  new ListAccountPayableByResponsibleUserController();
 
 const updateAccountPayableController = new UpdateAccountPayableController();
 const deleteAccountPayableController = new DeleteAccountPayableController();
@@ -64,6 +69,27 @@ async function accountPayableRoutes(app: FastifyInstance) {
       },
     },
     listAccountPayableController.handle,
+  );
+
+  app.get(
+    "/list-account-payable-by-responsible-user",
+    {
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["account-payable"],
+        summary: "List accounts payable by responsible user",
+        description:
+          "Retrieve a paginated list of accounts payable where the authenticated user is the responsible party (typically for drivers/employees)",
+        querystring: accountPayableSchemas.listAccountPayable,
+        response: {
+          200: accountPayableResponses.accountPayableList,
+          400: accountPayableResponses.listAccountPayableErrors,
+          500: accountPayableResponses.internalServerError,
+        },
+      },
+    },
+    listAccountPayableByResponsibleUserController.handle,
   );
 
   app.patch(
