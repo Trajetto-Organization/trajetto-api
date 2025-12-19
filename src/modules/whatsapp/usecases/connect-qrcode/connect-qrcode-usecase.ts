@@ -12,6 +12,8 @@ import { WhatsAppAlreadyConnectedError } from "../errors/whatsapp-already-connec
 import { WhatsAppPhoneAlreadyInUseError } from "../errors/whatsapp-phone-already-in-use-error";
 import { WhatsAppBusinessInstanceNotFoundError } from "../errors/whatsapp-business-instance-not-found-error";
 
+import { WhatsAppBusinessNotConnected } from "../errors/whatsapp-business-not-connected-error";
+
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 import { env } from "@/env";
 
@@ -55,17 +57,17 @@ class ConnectQRCodeUseCase {
 
     // Check if business instance exists and is connected before allowing user to create their own instance
     const businessInstanceName = env.TRAJETTO_WHATSAPP_INSTANCE_NAME;
+
     try {
       const businessStatus =
         await this.whatsAppProvider.getConnectionStatus(businessInstanceName);
+
       if (businessStatus.status === "not_exists") {
         throw new WhatsAppBusinessInstanceNotFoundError();
       }
+
       if (businessStatus.status !== "connected") {
-        throw new AppError(
-          "A instância de negócio do WhatsApp não está conectada. Entre em contato com o suporte.",
-          400,
-        );
+        throw new WhatsAppBusinessNotConnected();
       }
     } catch (error: any) {
       if (error.response?.status === 404) {

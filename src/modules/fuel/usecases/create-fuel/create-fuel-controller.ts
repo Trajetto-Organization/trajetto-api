@@ -21,7 +21,10 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
 import { VehicleInvalidStatusForFuelError } from "../errors/vehicle-invalid-status-for-fuel-error";
 
+import { FuelLocationNotProvidedAdjustmentValidationError } from "../errors/fuel-location-not-provided-adjustment-validation-error";
 import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
+
+import { FuelRegistrationsMobileLocationRequiredError } from "../errors/fuel-registrations-mobile-location-required-error";
 
 import { createFuelMultipartSchema } from "@/schemas/create-fuel-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
@@ -122,6 +125,14 @@ class CreateFuelController {
       }
 
       if (error instanceof VehicleNotAssignedToDriverError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof FuelLocationNotProvidedAdjustmentValidationError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof FuelRegistrationsMobileLocationRequiredError) {
         return reply.status(400).send({ message: error.message });
       }
 

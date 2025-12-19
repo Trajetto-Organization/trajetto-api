@@ -7,6 +7,9 @@ import { reorderKanbanColumnsSchema } from "@/schemas/reorder-kanban-columns-sch
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
+import { KanbanNotAllowedReorderColumnBusinessError } from "../errors/kanban-not-allowed-reorder-column-business-error";
+import { KanbanOneOrMoreColumnNotBelongBusinessError } from "../errors/kanban-one-or-more-column-not-belong-business-error";
+
 import { KanbanInvalidPositionError } from "../errors/kanban-invalid-position-error";
 
 class ReorderKanbanColumnsController {
@@ -23,7 +26,6 @@ class ReorderKanbanColumnsController {
 
     try {
       await reorderKanbanColumnsUseCase.execute(data, id);
-
       return reply
         .status(200)
         .send({ message: "Colunas reordenadas com sucesso!" });
@@ -38,6 +40,14 @@ class ReorderKanbanColumnsController {
 
       if (error instanceof KanbanInvalidPositionError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof KanbanOneOrMoreColumnNotBelongBusinessError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof KanbanNotAllowedReorderColumnBusinessError) {
+        return reply.status(403).send({ message: error.message });
       }
 
       throw error;

@@ -5,6 +5,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { FineNotFoundError } from "../errors/fine-not-found-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { Fine } from "../../dtos/fine-dto";
@@ -30,7 +31,7 @@ class DeleteFineUseCase {
     const existingFine = await this.fine.findFineById(fineId);
 
     if (!existingFine) {
-      throw new AppError("Multa não encontrada!", 404);
+      throw new FineNotFoundError();
     }
 
     try {

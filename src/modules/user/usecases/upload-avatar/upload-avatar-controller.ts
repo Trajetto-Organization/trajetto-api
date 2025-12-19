@@ -2,13 +2,11 @@ import { FastifyRequest, FastifyReply } from "fastify";
 import { container } from "tsyringe";
 
 import { UploadAvatarUseCase } from "./upload-avatar-usecase";
-
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
 class UploadAvatarController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
-
     const file = await request.file();
 
     if (!file) {

@@ -18,6 +18,8 @@ import { UserCannotHaveBothDriverAndProfileError } from "../errors/user-cannot-h
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
+import { UserOnlyMasterBeAbleSetPasswordError } from "../errors/user-only-master-be-able-set-password-error";
+
 class CreateUserController {
   async handle(
     request: FastifyRequest,
@@ -54,6 +56,10 @@ class CreateUserController {
 
       if (error instanceof DriverNotFoundError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof UserOnlyMasterBeAbleSetPasswordError) {
+        return reply.status(403).send({ message: error.message });
       }
 
       if (error instanceof DriverNotBelongBusinessError) {

@@ -3,6 +3,9 @@ import { z } from "zod";
 import { LocationSource } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 
+const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
+const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
+
 // Helper function to convert empty strings to null
 const emptyStringToNull = (value: any) => {
   if (typeof value === "string" && value.trim() === "") {
@@ -109,8 +112,74 @@ const updateFineSchema = z
         .max(20, "A pontuação não pode exceder 20 pontos")
         .optional(),
     ),
-    location: z.string().optional().nullable(),
-    observation: z.string().optional().nullable(),
+    location: z
+      .string()
+      .max(200, "Local da infração deve ter no máximo 200 caracteres")
+      .superRefine((value, ctx) => {
+        if (hasConsecutiveSpaces(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "O nome do local da infração não deve conter espaços consecutivos.",
+          });
+          return;
+        }
+
+        if (hasSpaceAtEdges(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "O nome do local da infração não pode começar ou terminar com espaço em branco.",
+          });
+          return;
+        }
+
+        if (!/^[\p{L}0-9]+(?:[ \-][\p{L}0-9]+)*$/u.test(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "O nome do local da infração deve conter apenas letras (inclusive acentos), números, espaços e traços, sem outros caracteres.",
+          });
+        }
+      })
+      .optional()
+      .or(z.literal("")),
+    observation: z
+      .string()
+      .max(500, "Observações devem ter no máximo 500 caracteres")
+      .superRefine((value, ctx) => {
+        if (value === undefined || value === "") {
+          return;
+        }
+
+        if (hasConsecutiveSpaces(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "O nome da observação não deve conter espaços consecutivos.",
+          });
+          return;
+        }
+
+        if (hasSpaceAtEdges(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "O nome da observação não pode começar ou terminar com espaço em branco.",
+          });
+          return;
+        }
+
+        if (!/^[\p{L}0-9]+(?:[ \-][\p{L}0-9]+)*$/u.test(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "O nome da observação deve conter apenas letras (inclusive acentos), números, espaços e traços, sem outros caracteres.",
+          });
+        }
+      })
+      .optional()
+      .or(z.literal("")),
     branchId: z
       .string()
       .uuid("ID da filial deve ser um UUID válido")

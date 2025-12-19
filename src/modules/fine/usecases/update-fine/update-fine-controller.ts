@@ -18,7 +18,16 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
 import { TrafficViolationCodeNotFoundError } from "../errors/traffic-violation-code-not-found-error";
 
+import { FineNotFoundError } from "../errors/fine-not-found-error";
 import { FineNumberAlreadyExistsError } from "../errors/fine-number-already-exists-error";
+
+import { FineDueDateMustBeAfterInfractionError } from "../errors/fine-due-date-must-be-after-infraction-error";
+import { FinePaymentDateCannotBeEarlierInfractionError } from "../errors/fine-payment-date-cannot-be-earlier-infraction-error";
+
+import { FineUserNotAllowedChangeError } from "../errors/fine-user-not-allowed-change-error";
+import { FineDueDateInfractionCannotBeLaterError } from "../errors/fine-due-date-infraction-cannot-be-later-error";
+
+import { FineDueDateMustBeLaterInfractionError } from "../errors/fine-due-date-must-be-later-infraction-error";
 
 class UpdateFineController {
   async handle(
@@ -63,6 +72,26 @@ class UpdateFineController {
         return reply.status(400).send({ message: error.message });
       }
 
+      if (error instanceof FineDueDateMustBeAfterInfractionError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof FinePaymentDateCannotBeEarlierInfractionError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof FineDueDateInfractionCannotBeLaterError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof FineDueDateMustBeLaterInfractionError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof FineUserNotAllowedChangeError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
       if (error instanceof BranchNotBelongBusinessError) {
         return reply.status(403).send({ message: error.message });
       }
@@ -73,6 +102,10 @@ class UpdateFineController {
 
       if (error instanceof VehicleNotBelongBusinessError) {
         return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof FineNotFoundError) {
+        return reply.status(404).send({ message: error.message });
       }
 
       throw error;

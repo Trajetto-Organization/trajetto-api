@@ -11,6 +11,7 @@ import { WhatsAppAlreadyConnectedError } from "../errors/whatsapp-already-connec
 import { WhatsAppPhoneAlreadyInUseError } from "../errors/whatsapp-phone-already-in-use-error";
 
 import { WhatsAppBusinessInstanceNotFoundError } from "../errors/whatsapp-business-instance-not-found-error";
+import { WhatsAppBusinessNotConnected } from "../errors/whatsapp-business-not-connected-error";
 
 class ConnectQRCodeController {
   async handle(request: FastifyRequest, reply: FastifyReply) {
@@ -47,6 +48,10 @@ class ConnectQRCodeController {
       }
 
       if (error instanceof WhatsAppPhoneAlreadyInUseError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof WhatsAppBusinessNotConnected) {
         return reply.status(400).send({ message: error.message });
       }
 

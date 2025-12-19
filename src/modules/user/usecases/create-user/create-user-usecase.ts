@@ -29,7 +29,9 @@ import { AppError } from "@/shared/errors/AppError";
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-match-business-error";
 
+import { UserOnlyMasterBeAbleSetPasswordError } from "../errors/user-only-master-be-able-set-password-error";
 import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+
 import { env } from "@/env";
 
 @injectable()
@@ -99,10 +101,7 @@ class CreateUserUseCase {
 
     // Only MASTER users can provide custom passwords
     if (password && findUser.role !== "MASTER") {
-      throw new AppError(
-        "Apenas usuários com nível de acesso Master podem definir senhas personalizadas. A senha será gerada automaticamente.",
-        403,
-      );
+      throw new UserOnlyMasterBeAbleSetPasswordError();
     }
 
     // Generate automatic password for non-MASTER users or when no password is provided

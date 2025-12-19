@@ -9,15 +9,6 @@ const isEmptyOrWhitespace = (value: string): boolean =>
   value.trim().length === 0;
 const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
 
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
-
 const isValidDateString = (value: string): boolean => {
   const date = new Date(value);
   return !isNaN(date.getTime());
@@ -83,43 +74,40 @@ const createFuelSchema = z
         .min(0.001, "O preço por litro deve ser maior que zero.")
         .max(99.999, "O preço por litro não pode exceder R$ 99,999."),
     ),
-    notes: z.preprocess(
-      emptyStringToNull,
-      z
-        .string()
-        .max(500, "As observações devem ter no máximo 500 caracteres.")
-        .optional()
-        .nullable()
-        .superRefine((value, ctx) => {
-          if (value && typeof value === "string") {
-            if (isEmptyOrWhitespace(value)) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                message: "As observações não podem conter apenas espaços.",
-              });
-              return;
-            }
+    notes: z
+      .string()
+      .max(500, "As observações devem ter no máximo 500 caracteres.")
+      .optional()
+      .superRefine((value, ctx) => {
+        if (value === undefined || value === "") {
+          return;
+        }
 
-            if (hasConsecutiveSpaces(value)) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                message:
-                  "As observações não devem conter espaços consecutivos.",
-              });
-              return;
-            }
+        if (isEmptyOrWhitespace(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "As observações não podem conter apenas espaços.",
+          });
+          return;
+        }
 
-            if (hasSpaceAtEdges(value)) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                message:
-                  "As observações não podem começar ou terminar com espaço em branco.",
-              });
-              return;
-            }
-          }
-        }),
-    ),
+        if (hasConsecutiveSpaces(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "As observações não devem conter espaços consecutivos.",
+          });
+          return;
+        }
+
+        if (hasSpaceAtEdges(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "As observações não podem começar ou terminar com espaço em branco.",
+          });
+          return;
+        }
+      }),
     refueling_date: z
       .string()
       .min(1, "A data do abastecimento é obrigatória.")

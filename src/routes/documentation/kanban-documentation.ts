@@ -117,7 +117,7 @@ const kanbanResponses = {
     issues: z.array(z.string()).describe("List of validation errors"),
   }),
   internalServerError: z.object({
-    message: z.string().default("Erro interno do servidor"),
+    message: z.string().default("Internal server error"),
   }),
 };
 

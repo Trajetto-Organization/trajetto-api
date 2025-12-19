@@ -18,7 +18,12 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 import { ServiceOrderNotBelongBusinessError } from "../errors/service-order-not-belong-business-error";
 import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
 
+import { UserResponsibleNotFoundError } from "@/modules/user/usecases/errors/user-responsible-not-found-error";
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
+
+import { ServiceOrderCompletionDateCannotBeEarlierOrderError } from "../errors/service-order-completion-date-cannot-be-earlier-order-date-error";
+import { ServiceOrderNewMileageRequireOrderFinalizedError } from "../errors/service-order-new-mileage-require-order-finalized-error";
+
 import { updateDeleteServiceOrderSchema } from "@/schemas/update-delete-service-order-schema";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
@@ -74,6 +79,20 @@ class UpdateServiceOrderController {
       }
 
       if (error instanceof SupplierNotFoundError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof UserResponsibleNotFoundError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (
+        error instanceof ServiceOrderCompletionDateCannotBeEarlierOrderError
+      ) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof ServiceOrderNewMileageRequireOrderFinalizedError) {
         return reply.status(400).send({ message: error.message });
       }
 

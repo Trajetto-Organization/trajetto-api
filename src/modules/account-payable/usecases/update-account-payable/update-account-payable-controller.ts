@@ -12,11 +12,19 @@ import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/erro
 import { AccountPayableNotFoundError } from "../errors/account-payable-not-found-error";
 import { AccountPayableInvalidAmountError } from "../errors/account-payable-invalid-amount-error";
 
+import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
+import { RegisterUserNotFoundError } from "@/modules/user/usecases/errors/register-user-not-found-error";
+
+import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
+import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
+
+import { AccountPayableNotAllowedTransferCompaniesError } from "../errors/account-payable-not-allowed-transfer-companies-error";
+import { AccountPayablePaymentRequiredError } from "../errors/account-payable-payment-required-error";
+
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDeleteAccountPayableSchema } from "@/schemas/update-delete-account-payable-schema";
 
 import { updateAccountPayableSchema } from "@/schemas/update-account-payable-schema";
-import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
 
 class UpdateAccountPayableController {
   async handle(
@@ -71,7 +79,27 @@ class UpdateAccountPayableController {
         return reply.status(400).send({ message: error.message });
       }
 
+      if (error instanceof RegisterUserNotFoundError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof AccountPayablePaymentRequiredError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
       if (error instanceof UserNotBelongBusinessError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof BranchNotBelongBusinessError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof ServiceOrderNotBelongBusinessError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof AccountPayableNotAllowedTransferCompaniesError) {
         return reply.status(403).send({ message: error.message });
       }
 

@@ -160,6 +160,9 @@ class UserRepository implements IUserRepository {
           select: { name: true },
         },
       },
+      orderBy: {
+        created_at: "desc", // Sort by created_at
+      },
     });
 
     const total = await this.prisma.user.count({
@@ -668,7 +671,10 @@ class UserRepository implements IUserRepository {
     return user;
   }
 
-  async updateAvatar(userId: string, avatarPath: string | null): Promise<User | null> {
+  async updateAvatar(
+    userId: string,
+    avatarPath: string | null,
+  ): Promise<User | null> {
     const updatedUser = await this.prisma.user.update({
       where: { id: userId },
       data: { avatar: avatarPath },

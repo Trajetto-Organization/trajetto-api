@@ -6,6 +6,8 @@ import { CreateKanbanColumnUseCase } from "./create-column-usecase";
 import { createKanbanColumnSchema } from "@/schemas/create-kanban-column-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
+import { KanbanNotAllowedCreateColumnBusinessError } from "../errors/kanban-not-allowed-create-column-business-error";
+
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
@@ -37,6 +39,10 @@ class CreateKanbanColumnController {
 
       if (error instanceof BusinessNotFoundError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof KanbanNotAllowedCreateColumnBusinessError) {
+        return reply.status(403).send({ message: error.message });
       }
 
       throw error;

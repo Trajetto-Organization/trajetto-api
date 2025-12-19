@@ -26,6 +26,10 @@ import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
 import { NotificationService } from "@/shared/services/notification-service";
 
+import { ServiceOrderCompletionDateCannotBeEarlierOrderError } from "../errors/service-order-completion-date-cannot-be-earlier-order-date-error";
+import { UserResponsibleNotFoundError } from "@/modules/user/usecases/errors/user-responsible-not-found-error";
+
+import { ServiceOrderNewMileageRequireOrderFinalizedError } from "../errors/service-order-new-mileage-require-order-finalized-error";
 import { ServiceOrderNotFoundError } from "../errors/service-order-not-found-error";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -254,7 +258,7 @@ class UpdateServiceOrderUseCase {
       );
 
       if (!findResponsibleUser) {
-        throw new AppError("Usuário responsável não encontrado!", 400);
+        throw new UserResponsibleNotFoundError();
       }
 
       if (findResponsibleUser.businessId !== businessId) {
@@ -271,10 +275,7 @@ class UpdateServiceOrderUseCase {
       const completionDate = new Date(serviceOrderData.completion_date);
 
       if (completionDate < orderDate) {
-        throw new AppError(
-          "A data de conclusão não pode ser anterior à data da ordem de serviço",
-          400,
-        );
+        throw new ServiceOrderCompletionDateCannotBeEarlierOrderError();
       }
     }
 
@@ -284,10 +285,7 @@ class UpdateServiceOrderUseCase {
       !!serviceOrderData.completion_date && !wasCompleted;
 
     if (isBeingCompleted && !serviceOrderData.new_mileage_after_service) {
-      throw new AppError(
-        "A nova quilometragem é obrigatória quando a ordem de serviço é finalizada",
-        400,
-      );
+      throw new ServiceOrderNewMileageRequireOrderFinalizedError();
     }
 
     // 🔧 VALIDATION: New mileage must be > current vehicle mileage (strictly greater)

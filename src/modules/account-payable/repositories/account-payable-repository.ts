@@ -163,7 +163,7 @@ class AccountPayableRepository implements IAccountPayableRepository {
         },
       },
       orderBy: {
-        due_date: "asc", // Sort by due date, closest first
+        created_at: "desc", // Sort by created_at, closest first
       },
     });
 
@@ -339,7 +339,7 @@ class AccountPayableRepository implements IAccountPayableRepository {
           },
         },
       },
-      orderBy: { issue_date: "desc" },
+      orderBy: { created_at: "desc" },
     });
 
     return accountPayables;
@@ -394,7 +394,7 @@ class AccountPayableRepository implements IAccountPayableRepository {
         },
       },
       orderBy: {
-        issue_date: "desc",
+        created_at: "desc",
       },
     });
 

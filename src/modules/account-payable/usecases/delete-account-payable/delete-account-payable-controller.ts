@@ -6,6 +6,9 @@ import { DeleteAccountPayableUseCase } from "./delete-account-payable-usecase";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
+import { AccountPayableNotNotBelongBusinessError } from "../errors/account-payable-not-belong-business-error";
+import { AccountPayableNotDeleteHasAlreadyPaidError } from "../errors/account-payable-not-delete-has-already-paid-error";
+
 import { AccountPayableNotFoundError } from "../errors/account-payable-not-found-error";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
@@ -48,6 +51,14 @@ class DeleteAccountPayableController {
 
       if (error instanceof AccountPayableNotFoundError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof AccountPayableNotDeleteHasAlreadyPaidError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof AccountPayableNotNotBelongBusinessError) {
+        return reply.status(403).send({ message: error.message });
       }
 
       throw error;

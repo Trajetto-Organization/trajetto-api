@@ -83,7 +83,10 @@ interface IUserRepository {
     excludeUserId?: string,
   ) => Promise<User[]>;
   findUserByDriverId: (driverId: string) => Promise<User | null>;
-  updateAvatar: (userId: string, avatarPath: string | null) => Promise<User | null>;
+  updateAvatar: (
+    userId: string,
+    avatarPath: string | null,
+  ) => Promise<User | null>;
 }
 
 export { IUserRepository };

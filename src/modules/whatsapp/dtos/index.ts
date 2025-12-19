@@ -1,19 +1,19 @@
-export interface WhatsAppSettings {
+interface WhatsAppSettings {
   enabled: boolean;
   phoneNumber?: string;
   instanceConnected: boolean;
   instanceName: string;
 }
 
-export interface UpdateWhatsAppSettingsProps {
+interface UpdateWhatsAppSettingsProps {
   userId: string;
   enabled: boolean;
   phoneNumber?: string;
 }
 
-// ================ CONEXÃO ================
+// ================ CONNECTION ================
 
-export interface ConnectionInfo {
+interface ConnectionInfo {
   instanceName: string;
   status: "connected" | "disconnected" | "connecting" | "not_exists";
   phoneNumber?: string;
@@ -21,36 +21,36 @@ export interface ConnectionInfo {
   pairingCodeAvailable: boolean;
 }
 
-export interface QRCodeData {
+interface QRCodeData {
   code: string;
   expiresIn?: number;
 }
 
-export interface PairingCodeData {
+interface PairingCodeData {
   code: string;
   expiresIn: number;
   instructions: string;
 }
 
-export interface ConnectViaPairingCodeProps {
+interface ConnectViaPairingCodeProps {
   instanceName: string;
   pairingCode: string;
 }
 
-// ================ MENSAGENS ================
+// ================ MESSAGES ================
 
-export interface SendWhatsAppMessageProps {
+interface SendWhatsAppMessageProps {
   instanceName: string;
   phoneNumber: string;
   message: string;
 }
 
-export interface MessageTemplate {
+interface MessageTemplate {
   template: "fine_notification" | "user_created" | "custom";
   data: Record<string, any>;
 }
 
-export interface WhatsAppNotificationData {
+interface WhatsAppNotificationData {
   recipientPhone: string;
   message: string;
   instanceName: string;
@@ -58,65 +58,87 @@ export interface WhatsAppNotificationData {
 
 // ================ WEBHOOK ================
 
-export interface WebhookEventData {
+interface WebhookEventData {
   event: string;
   instance: string;
   data?: any;
   timestamp: string;
 }
 
-export interface ConnectionUpdateEvent {
+interface ConnectionUpdateEvent {
   instanceName: string;
   status: string;
   phoneNumber?: string;
 }
 
-export interface QRCodeUpdateEvent {
+interface QRCodeUpdateEvent {
   instanceName: string;
   qrCode?: string;
   base64?: string;
 }
 
-export interface PairingCodeUpdateEvent {
+interface PairingCodeUpdateEvent {
   instanceName: string;
   pairingCode: string;
 }
 
-export interface InstanceDeletedEvent {
+interface InstanceDeletedEvent {
   instanceName: string;
   reason: string;
 }
 
-// ================ RESPOSTAS ================
+// ================ ANSWERS ================
 
-export interface WhatsAppOperationResult {
+interface WhatsAppOperationResult {
   success: boolean;
   message: string;
   data?: any;
 }
 
-export interface ConnectionResult extends WhatsAppOperationResult {
+interface ConnectionResult extends WhatsAppOperationResult {
   connectionInfo?: ConnectionInfo;
 }
 
-export interface MessageResult extends WhatsAppOperationResult {
+interface MessageResult extends WhatsAppOperationResult {
   messageId?: string;
   timestamp?: string;
 }
 
-// ================ ERROS ================
+// ================ ERRORS ================
 
-export interface WhatsAppError {
+interface WhatsAppError {
   code: string;
   message: string;
   details?: any;
 }
 
-// ================ USUÁRIO PERMISSIONS ================
+// ================ USER PERMISSIONS ================
 
-export interface UserWhatsAppPermissions {
+interface UserWhatsAppPermissions {
   canManageSettings: boolean;
   canViewQRCode: boolean;
   canSendMessages: boolean;
   canViewWebhook: boolean;
 }
+
+export {
+  UserWhatsAppPermissions,
+  WhatsAppError,
+  MessageResult,
+  ConnectionResult,
+  WhatsAppOperationResult,
+  InstanceDeletedEvent,
+  PairingCodeUpdateEvent,
+  QRCodeUpdateEvent,
+  ConnectionUpdateEvent,
+  WebhookEventData,
+  WhatsAppNotificationData,
+  MessageTemplate,
+  SendWhatsAppMessageProps,
+  ConnectViaPairingCodeProps,
+  PairingCodeData,
+  QRCodeData,
+  ConnectionInfo,
+  UpdateWhatsAppSettingsProps,
+  WhatsAppSettings,
+};

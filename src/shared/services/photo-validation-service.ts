@@ -283,6 +283,7 @@ class PhotoValidationService {
   ): { isValid: boolean; missingPhotos: string[]; errors: string[] } {
     const validation = this.validatePhotosRequired(checklistData);
     const missingPhotos: string[] = [];
+
     const errors: string[] = [];
 
     validation.requiredPhotos.forEach((requiredField) => {
@@ -306,6 +307,7 @@ class PhotoValidationService {
       if (!hasValidPhotos) {
         missingPhotos.push(requiredField);
         const reason = this.getPhotoRequirementReason(requiredField);
+
         errors.push(
           `Foto obrigatória para '${requiredField}': ${reason}. ` +
             `Campo requer foto e não há fotos existentes nem novas fotos fornecidas.`,

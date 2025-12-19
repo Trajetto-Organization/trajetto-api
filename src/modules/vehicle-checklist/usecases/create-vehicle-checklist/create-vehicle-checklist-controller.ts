@@ -22,7 +22,7 @@ import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/erro
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
 
-import { PhotoValidationService } from "../../services/photo-validation-service";
+import { PhotoValidationService } from "@/shared/services/photo-validation-service";
 
 class CreateVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {

@@ -8,9 +8,12 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
-import { ReorderKanbanColumnsProps } from "../../dtos/kanban-dto";
+import { KanbanNotAllowedReorderColumnBusinessError } from "../errors/kanban-not-allowed-reorder-column-business-error";
+import { KanbanOneOrMoreColumnNotBelongBusinessError } from "../errors/kanban-one-or-more-column-not-belong-business-error";
 
 import { KanbanInvalidPositionError } from "../errors/kanban-invalid-position-error";
+
+import { ReorderKanbanColumnsProps } from "../../dtos/kanban-dto";
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
@@ -43,10 +46,7 @@ class ReorderKanbanColumnsUseCase {
     // Verify user permissions
     if (findUser.role !== "MASTER") {
       if (findUser.businessId !== data.businessId) {
-        throw new AppError(
-          "Você não tem permissão para reordenar colunas nesta empresa.",
-          403,
-        );
+        throw new KanbanNotAllowedReorderColumnBusinessError();
       }
     }
 
@@ -62,10 +62,7 @@ class ReorderKanbanColumnsUseCase {
     for (const column of data.columns) {
       const col = await this.kanban.findColumnById(column.id);
       if (!col || col.businessId !== data.businessId) {
-        throw new AppError(
-          "Uma ou mais colunas não pertencem a esta empresa.",
-          400,
-        );
+        throw new KanbanOneOrMoreColumnNotBelongBusinessError();
       }
     }
 

@@ -30,6 +30,9 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
 import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
 
+import { FuelLocationNotProvidedAdjustmentValidationError } from "../errors/fuel-location-not-provided-adjustment-validation-error";
+import { FuelRegistrationsMobileLocationRequiredError } from "../errors/fuel-registrations-mobile-location-required-error";
+
 import { VehicleInvalidStatusForFuelError } from "../errors/vehicle-invalid-status-for-fuel-error";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -168,20 +171,14 @@ class CreateFuelUseCase {
     if (fuelData.created_from === "MOBILE_APP") {
       // Mobile: Location is REQUIRED
       if (!fuelData.latitude || !fuelData.longitude) {
-        throw new AppError(
-          "Para registros via aplicativo mobile, a localização é obrigatória.",
-          400,
-        );
+        throw new FuelRegistrationsMobileLocationRequiredError();
       }
 
       // 🆕 VALIDATE DISTANCE IF GPS_MANUAL (manual adjustment)
       if (fuelData.location_source === "GPS_MANUAL") {
         // Verifica se temos a localização original
         if (!fuelData.latitude_original || !fuelData.longitude_original) {
-          throw new AppError(
-            "Localização original não fornecida para validação de ajuste.",
-            400,
-          );
+          throw new FuelLocationNotProvidedAdjustmentValidationError();
         }
 
         // Calcula e valida a distância

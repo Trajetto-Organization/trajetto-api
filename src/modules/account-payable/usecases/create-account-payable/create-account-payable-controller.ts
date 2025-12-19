@@ -7,7 +7,10 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
+import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
+
 import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
+import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
 
 import { AccountPayableInvalidAmountError } from "../errors/account-payable-invalid-amount-error";
 
@@ -58,6 +61,14 @@ class CreateAccountPayableController {
 
       if (error instanceof AccountPayableInvalidAmountError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof BranchNotBelongBusinessError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof ServiceOrderNotBelongBusinessError) {
+        return reply.status(403).send({ message: error.message });
       }
 
       throw error;

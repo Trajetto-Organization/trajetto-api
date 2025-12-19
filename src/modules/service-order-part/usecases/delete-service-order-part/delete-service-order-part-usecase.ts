@@ -13,7 +13,11 @@ import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/erro
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { formatCurrency } from "@/config/format-values";
+
 import { ServiceOrderPartNotFoundError } from "../errors/service-order-part-not-found-error";
+import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
+
+import { PartNotBelongServiceOrderError } from "@/modules/part/usecases/errors/part-not-belong-service-order-error";
 
 import { ServiceOrderPart } from "../../dtos/service-order-part-dto";
 import { AppError } from "@/shared/errors/AppError";
@@ -60,10 +64,7 @@ class DeleteServiceOrderPartUseCase {
     }
 
     if (findServiceOrder.businessId !== businessId) {
-      throw new AppError(
-        "Esta ordem de serviço não pertence a esta empresa!",
-        403,
-      );
+      throw new ServiceOrderNotBelongBusinessError();
     }
 
     // Check if the work order part exists
@@ -76,10 +77,7 @@ class DeleteServiceOrderPartUseCase {
 
     // Check if the work order part belongs to the work order
     if (findServiceOrderPart.serviceOrderId !== serviceOrderId) {
-      throw new AppError(
-        "Esta peça não pertence a esta ordem de serviço!",
-        403,
-      );
+      throw new PartNotBelongServiceOrderError();
     }
 
     try {

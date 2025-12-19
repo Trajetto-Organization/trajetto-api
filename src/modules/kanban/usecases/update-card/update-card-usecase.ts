@@ -6,13 +6,20 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { KanbanCard, UpdateKanbanCardProps } from "../../dtos/kanban-dto";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { AppError } from "@/shared/errors/AppError";
+import { UserAssignedUserNotFoundError } from "@/modules/user/usecases/errors/user-assigned-user-not-found-error";
+import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
+
+import { KanbanNotAllowedUpdateCardBusinessError } from "../errors/kanban-not-allowed-update-card-business-error";
+import { KanbanCardColumnNotFoundError } from "../errors/kanban-card-column-not-found-error";
+
 import { KanbanCardNotFoundError } from "../errors/kanban-card-not-found-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { redirectPage } from "@/shared/utils/link-redirect-page";
 
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
+import { AppError } from "@/shared/errors/AppError";
+
 import { env } from "@/env";
 
 interface KanbanCardNotificationTextProps {
@@ -172,16 +179,13 @@ class UpdateKanbanCardUseCase {
     const findColumn = await this.kanban.findColumnById(findCard.columnId);
 
     if (!findColumn) {
-      throw new AppError("Coluna do card não encontrada.", 404);
+      throw new KanbanCardColumnNotFoundError();
     }
 
     // Verify user permissions
     if (findUser.role !== "MASTER") {
       if (findUser.businessId !== findColumn.businessId) {
-        throw new AppError(
-          "Você não tem permissão para editar cards nesta empresa.",
-          403,
-        );
+        throw new KanbanNotAllowedUpdateCardBusinessError();
       }
     }
 
@@ -195,17 +199,14 @@ class UpdateKanbanCardUseCase {
       );
 
       if (!assignedUser) {
-        throw new AppError("Usuário atribuído não encontrado.", 400);
+        throw new UserAssignedUserNotFoundError();
       }
 
       if (
         findUser.role !== "MASTER" &&
         assignedUser.businessId !== findColumn.businessId
       ) {
-        throw new AppError(
-          "O usuário atribuído não pertence a esta empresa.",
-          400,
-        );
+        throw new UserNotBelongBusinessError();
       }
     }
 

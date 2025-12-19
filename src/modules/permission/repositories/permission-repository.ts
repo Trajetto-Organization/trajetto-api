@@ -102,6 +102,9 @@ class PermissionRepository implements IPermissionRepository {
         business: { select: { corporate_reason: true } },
         profileAccess: { select: { name: true } },
       },
+      orderBy: {
+        created_at: "desc", // Sort by created_at
+      },
     });
 
     const total = await this.prisma.permission.count({

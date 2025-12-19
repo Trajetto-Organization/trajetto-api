@@ -6,6 +6,8 @@ import { UpdateKanbanColumnUseCase } from "./update-column-usecase";
 import { updateKanbanColumnSchema } from "@/schemas/update-kanban-column-schema";
 import { updateDeleteKanbanColumnSchema } from "@/schemas/update-delete-kanban-column-schema";
 
+import { KanbanNotAllowedUpdateColumnBusinessError } from "../errors/kanban-not-allowed-update-column-business-error";
+
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
@@ -52,6 +54,10 @@ class UpdateKanbanColumnController {
       }
 
       if (error instanceof KanbanColumnNotBelongBusinessError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof KanbanNotAllowedUpdateColumnBusinessError) {
         return reply.status(403).send({ message: error.message });
       }
 

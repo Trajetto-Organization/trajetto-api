@@ -6,7 +6,12 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { KanbanCard, CreateKanbanCardProps } from "../../dtos/kanban-dto";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
+import { KanbanNotAllowedCreateCardBusinessError } from "../errors/kanban-not-allowed-create-card-business-error";
+import { UserAssignedUserNotFoundError } from "@/modules/user/usecases/errors/user-assigned-user-not-found-error";
+
+import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
 import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
+
 import { AppError } from "@/shared/errors/AppError";
 
 import { NotificationService } from "@/shared/services/notification-service";
@@ -159,10 +164,7 @@ class CreateKanbanCardUseCase {
     // Verify user permissions
     if (findUser.role !== "MASTER") {
       if (findUser.businessId !== findColumn.businessId) {
-        throw new AppError(
-          "Você não tem permissão para criar cards nesta empresa.",
-          403,
-        );
+        throw new KanbanNotAllowedCreateCardBusinessError();
       }
     }
 
@@ -173,17 +175,14 @@ class CreateKanbanCardUseCase {
       );
 
       if (!assignedUser) {
-        throw new AppError("Usuário atribuído não encontrado.", 400);
+        throw new UserAssignedUserNotFoundError();
       }
 
       if (
         findUser.role !== "MASTER" &&
         assignedUser.businessId !== findColumn.businessId
       ) {
-        throw new AppError(
-          "O usuário atribuído não pertence a esta empresa.",
-          400,
-        );
+        throw new UserNotBelongBusinessError();
       }
     }
 

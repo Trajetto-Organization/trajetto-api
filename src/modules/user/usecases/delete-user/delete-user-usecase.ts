@@ -6,7 +6,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { NotificationService } from "@/shared/services/notification-service";
 import { User, UserRole } from "../../dtos/user-dto";
 
-import { UserCannotBeDeletedByHimselfError } from "../errors/user-cannot-be-deleted-vy-himself-error";
+import { UserCannotBeDeletedByHimselfError } from "../errors/user-cannot-be-deleted-by-himself-error";
 import { IServiceOrderRepository } from "@/modules/service-order/repositories/IService-order-repository";
 
 import { UserHasAssociatedServiceOrdersError } from "../errors/user-has-associated-service-orders-error";

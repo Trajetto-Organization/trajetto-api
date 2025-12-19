@@ -2,6 +2,7 @@ import { inject, injectable } from "tsyringe";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { UserNotHaveAvatarToBeDeleted } from "../errors/user-not-have-avatar-to-be-deleted-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import { User } from "../../dtos/user-dto";
@@ -26,7 +27,7 @@ class DeleteAvatarUseCase {
 
     // If user has no avatar, return error
     if (!findUser.avatar) {
-      throw new AppError("Usuário não possui avatar para ser deletado.", 400);
+      throw new UserNotHaveAvatarToBeDeleted();
     }
 
     try {

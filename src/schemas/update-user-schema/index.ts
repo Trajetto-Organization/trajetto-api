@@ -73,6 +73,9 @@ const updateUserSchema = z
       .string()
       .min(7, "A senha deve ter pelo menos 7 caracteres.")
       .max(100, "A senha deve ter no máximo 100 caracteres.")
+      .refine((value) => !/\s/.test(value), {
+        message: "A senha não deve conter espaços.",
+      })
       .optional()
       .or(z.literal("")),
     role: roleEnum.optional().nullable(),

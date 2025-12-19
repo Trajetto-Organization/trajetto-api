@@ -20,9 +20,18 @@ import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
+import { FineNotFoundError } from "../errors/fine-not-found-error";
+
 import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
 import { TrafficViolationCodeNotFoundError } from "../errors/traffic-violation-code-not-found-error";
 
+import { FineDueDateMustBeAfterInfractionError } from "../errors/fine-due-date-must-be-after-infraction-error";
+import { FinePaymentDateCannotBeEarlierInfractionError } from "../errors/fine-payment-date-cannot-be-earlier-infraction-error";
+
+import { FineDueDateInfractionCannotBeLaterError } from "../errors/fine-due-date-infraction-cannot-be-later-error";
+import { FineUserNotAllowedChangeError } from "../errors/fine-user-not-allowed-change-error";
+
+import { FineDueDateMustBeLaterInfractionError } from "../errors/fine-due-date-must-be-later-infraction-error";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -61,24 +70,23 @@ class UpdateFineUseCase {
     const existingFine = await this.fine.findFineById(fineId);
 
     if (!existingFine) {
-      throw new AppError("Multa não encontrada!", 404);
+      throw new FineNotFoundError();
     }
 
     if (
       findUser.role !== "MASTER" &&
       existingFine.businessId !== findUser.businessId
     ) {
-      throw new AppError(
-        "Você não tem permissão para alterar esta multa!",
-        403,
-      );
+      throw new FineUserNotAllowedChangeError();
     }
 
     if (fineData.branchId) {
       const findBranch = await this.branch.findBranchById(fineData.branchId);
+
       if (!findBranch) {
         throw new BranchNotFoundError();
       }
+
       if (findBranch.businessId !== existingFine.businessId) {
         throw new BranchNotBelongBusinessError();
       }
@@ -86,9 +94,11 @@ class UpdateFineUseCase {
 
     if (fineData.driverId) {
       const findDriver = await this.driver.findDriverById(fineData.driverId);
+
       if (!findDriver) {
         throw new DriverNotFoundError();
       }
+
       if (findDriver.businessId !== existingFine.businessId) {
         throw new DriverNotBelongBusinessError();
       }
@@ -134,30 +144,21 @@ class UpdateFineUseCase {
       const dueDate = new Date(fineData.due_date);
 
       if (dueDate <= violationDate) {
-        throw new AppError(
-          "A data de vencimento deve ser posterior à data da infração!",
-          400,
-        );
+        throw new FineDueDateMustBeAfterInfractionError();
       }
     } else if (fineData.violation_date) {
       const violationDate = new Date(fineData.violation_date);
       const existingDueDate = new Date(existingFine.due_date);
 
       if (existingDueDate <= violationDate) {
-        throw new AppError(
-          "A nova data da infração não pode ser posterior à data de vencimento existente!",
-          400,
-        );
+        throw new FineDueDateInfractionCannotBeLaterError();
       }
     } else if (fineData.due_date) {
       const dueDate = new Date(fineData.due_date);
       const existingViolationDate = new Date(existingFine.violation_date);
 
       if (dueDate <= existingViolationDate) {
-        throw new AppError(
-          "A nova data de vencimento deve ser posterior à data da infração existente!",
-          400,
-        );
+        throw new FineDueDateMustBeLaterInfractionError();
       }
     }
 
@@ -168,10 +169,7 @@ class UpdateFineUseCase {
       );
 
       if (paymentDate < violationDate) {
-        throw new AppError(
-          "A data de pagamento não pode ser anterior à data da infração!",
-          400,
-        );
+        throw new FinePaymentDateCannotBeEarlierInfractionError();
       }
     }
 

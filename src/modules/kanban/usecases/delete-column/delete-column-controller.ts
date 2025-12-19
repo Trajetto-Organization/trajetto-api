@@ -7,8 +7,10 @@ import { updateDeleteKanbanColumnSchema } from "@/schemas/update-delete-kanban-c
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
-import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
+import { KanbanNotAllowedDeleteColumnBusinessError } from "../errors/kanban-not-allowed-delete-column-business-error";
 import { KanbanColumnNotBelongBusinessError } from "../errors/kanban-column-not-belong-business-error";
+
+import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
 
 class DeleteKanbanColumnController {
   async handle(
@@ -44,6 +46,10 @@ class DeleteKanbanColumnController {
       }
 
       if (error instanceof KanbanColumnNotBelongBusinessError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof KanbanNotAllowedDeleteColumnBusinessError) {
         return reply.status(403).send({ message: error.message });
       }
 

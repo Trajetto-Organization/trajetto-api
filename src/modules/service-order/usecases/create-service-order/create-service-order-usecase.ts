@@ -26,6 +26,14 @@ import { SupplierNotBelongBusinessError } from "@/modules/supplier/usecases/erro
 
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
 
+import { ServiceOrderNewMileageRequireOrderFinalizedError } from "../errors/service-order-new-mileage-require-order-finalized-error";
+import { ServiceOrderCompletionDateCannotBeEarlierOrderError } from "../errors/service-order-completion-date-cannot-be-earlier-order-date-error";
+
+import { ServiceOrderLocationNotProvidedAdjustmentValidationError } from "../errors/service-order-location-not-provided-adjustment-validation-error";
+import { ServiceOrderRegistrationsMobileLocationRequiredError } from "../errors/service-order-registrations-mobile-location-required-error";
+
+import { UserResponsibleNotFoundError } from "@/modules/user/usecases/errors/user-responsible-not-found-error";
+
 import {
   ServiceOrder,
   CreateServiceOrderProps,
@@ -234,7 +242,7 @@ class CreateServiceOrderUseCase {
       );
 
       if (!findResponsibleUser) {
-        throw new AppError("Usuário responsável não encontrado!", 400);
+        throw new UserResponsibleNotFoundError();
       }
 
       // Check if the responsible user belongs to the same company
@@ -248,10 +256,7 @@ class CreateServiceOrderUseCase {
       const completionDate = new Date(serviceOrderData.completion_date);
 
       if (completionDate < orderDate) {
-        throw new AppError(
-          "A data de conclusão não pode ser anterior à data da ordem de serviço",
-          400,
-        );
+        throw new ServiceOrderCompletionDateCannotBeEarlierOrderError();
       }
     }
 
@@ -260,10 +265,7 @@ class CreateServiceOrderUseCase {
       serviceOrderData.completion_date &&
       !serviceOrderData.new_mileage_after_service
     ) {
-      throw new AppError(
-        "A nova quilometragem é obrigatória quando a ordem de serviço é finalizada",
-        400,
-      );
+      throw new ServiceOrderNewMileageRequireOrderFinalizedError();
     }
 
     // 🔧 VALIDATION: New mileage must be > current vehicle mileage (strictly greater)
@@ -341,10 +343,7 @@ class CreateServiceOrderUseCase {
     if (serviceOrderData.created_from === "MOBILE_APP") {
       // Mobile: Location is REQUIRED
       if (!serviceOrderData.latitude || !serviceOrderData.longitude) {
-        throw new AppError(
-          "Para registros via aplicativo mobile, a localização é obrigatória.",
-          400,
-        );
+        throw new ServiceOrderRegistrationsMobileLocationRequiredError();
       }
 
       // 🆕 VALIDATE DISTANCE IF GPS_MANUAL (manual adjustment)
@@ -354,10 +353,7 @@ class CreateServiceOrderUseCase {
           !serviceOrderData.latitude_original ||
           !serviceOrderData.longitude_original
         ) {
-          throw new AppError(
-            "Localização original não fornecida para validação de ajuste.",
-            400,
-          );
+          throw new ServiceOrderLocationNotProvidedAdjustmentValidationError();
         }
 
         // Calcula e valida a distância

@@ -42,9 +42,7 @@ async function dashboardRoutes(app: FastifyInstance) {
     "/trends",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [
-        verifyUserRole(["MASTER", "BUSINESS_ADMIN", "BUSINESS_USER"]),
-      ],
+      preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["dashboard"],

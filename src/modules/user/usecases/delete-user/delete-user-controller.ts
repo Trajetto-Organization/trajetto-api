@@ -6,7 +6,7 @@ import { DeleteUserUseCase } from "./delete-user-usecase";
 import { updateDeleteUserSchema } from "@/schemas/update-delete-user-schema";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { UserCannotBeDeletedByHimselfError } from "../errors/user-cannot-be-deleted-vy-himself-error";
+import { UserCannotBeDeletedByHimselfError } from "../errors/user-cannot-be-deleted-by-himself-error";
 import { UserHasAssociatedServiceOrdersError } from "../errors/user-has-associated-service-orders-error";
 
 import { UserHasAssociatedAccountPayablesError } from "../errors/user-has-associated-account-payables-error";

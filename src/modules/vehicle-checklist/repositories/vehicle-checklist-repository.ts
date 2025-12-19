@@ -170,7 +170,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
         },
       },
       orderBy: {
-        checklist_date: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 
@@ -255,7 +255,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
         skip,
         take: pageSize,
         orderBy: {
-          checklist_date: "desc",
+          created_at: "desc", // Sort by created_at
         },
       }),
       this.prisma.vehicleChecklist.count({
@@ -532,7 +532,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
         vehicleId,
       },
       orderBy: {
-        checklist_date: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 
@@ -547,7 +547,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
         driverId,
       },
       orderBy: {
-        checklist_date: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 
@@ -629,7 +629,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
         },
       },
       orderBy: {
-        checklist_date: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 

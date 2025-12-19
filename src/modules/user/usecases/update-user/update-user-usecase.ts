@@ -28,6 +28,8 @@ import { AppError } from "@/shared/errors/AppError";
 import { UserCannotBeUpdatedByHimselfError } from "../errors/user-cannot-be-updated-by-himself-error";
 import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-match-business-error";
 
+import { UserMasterOnlyCanBeUpdatePasswordError } from "../errors/user-master-only-can-be-update-password-error";
+
 import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
 import { env } from "@/env";
 
@@ -142,10 +144,7 @@ class UpdateUserUseCase {
 
     // Only MASTER users can update passwords
     if (userData.password && findUser.role !== "MASTER") {
-      throw new AppError(
-        "Apenas usuários com nível de acesso Master podem alterar senhas de outros usuários.",
-        403,
-      );
+      throw new UserMasterOnlyCanBeUpdatePasswordError();
     }
 
     let hashedPassword: string | undefined;

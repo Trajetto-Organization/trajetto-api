@@ -41,10 +41,10 @@ const activityResponses = {
     total: z.number(),
   }),
   internalServerError: z.object({
-    message: z.string().default("Erro interno do servidor"),
+    message: z.string().default("Internal server error"),
   }),
   resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado"),
+    message: z.string().default("Recurso não encontrado!"),
   }),
   unauthorized: z.object({
     message: z.string().default("Não autorizado"),

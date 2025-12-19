@@ -181,7 +181,7 @@ class ServiceOrderRepository implements IServiceOrderRepository {
         },
       },
       orderBy: {
-        date: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 
@@ -363,7 +363,9 @@ class ServiceOrderRepository implements IServiceOrderRepository {
         vehicle: { select: { license_plate: true, description: true } },
         business: { select: { corporate_reason: true } },
       },
-      orderBy: { date: "desc" },
+      orderBy: {
+        created_at: "desc", // Sort by created_at
+      },
     });
 
     return serviceOrders;
@@ -428,7 +430,7 @@ class ServiceOrderRepository implements IServiceOrderRepository {
         },
       },
       orderBy: {
-        date: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 

@@ -5,7 +5,9 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ReorderKanbanCardsProps } from "../../dtos/kanban-dto";
 
+import { KanbanNotAllowedReorderCardBusinessError } from "../errors/kanban-not-allowed-reorder-card-business-error";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
@@ -51,10 +53,7 @@ class ReorderKanbanCardsUseCase {
       // Verify user permissions
       if (findUser.role !== "MASTER") {
         if (findUser.businessId !== column.businessId) {
-          throw new AppError(
-            "Você não tem permissão para reordenar cards nesta empresa.",
-            403,
-          );
+          throw new KanbanNotAllowedReorderCardBusinessError();
         }
       }
     }

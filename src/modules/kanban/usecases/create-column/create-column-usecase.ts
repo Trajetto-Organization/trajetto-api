@@ -9,6 +9,7 @@ import { KanbanColumn, CreateKanbanColumnProps } from "../../dtos/kanban-dto";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
+import { KanbanNotAllowedCreateColumnBusinessError } from "../errors/kanban-not-allowed-create-column-business-error";
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
@@ -43,10 +44,7 @@ class CreateKanbanColumnUseCase {
     // Verify user permissions
     if (findUser.role !== "MASTER") {
       if (findUser.businessId !== columnData.businessId) {
-        throw new AppError(
-          "Você não tem permissão para criar colunas nesta empresa.",
-          403,
-        );
+        throw new KanbanNotAllowedCreateColumnBusinessError();
       }
     }
 

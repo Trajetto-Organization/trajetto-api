@@ -5,15 +5,6 @@ const isEmptyOrWhitespace = (value: string): boolean =>
   value.trim().length === 0;
 const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
 
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
-
 const createBusinessSchema = z.object({
   cep: z.preprocess(
     (val) => {
@@ -330,46 +321,42 @@ const createBusinessSchema = z.object({
         "O telefone deve conter 10 ou 11 dígitos numéricos incluindo o DDD.",
       ),
   ),
-  erp_code: z.preprocess(
-    emptyStringToNull,
-    z
-      .string()
-      .max(50, "O código ERP deve ter no máximo 50 caracteres.")
-      .superRefine((value, ctx) => {
-        if (hasConsecutiveSpaces(value)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "O código ERP não deve conter espaços consecutivos.",
-          });
+  erp_code: z
+    .string()
+    .max(50, "O código ERP deve ter no máximo 50 caracteres.")
+    .optional()
+    .superRefine((value, ctx) => {
+      if (value === undefined || value === "") {
+        return;
+      }
 
-          return;
-        }
+      if (hasConsecutiveSpaces(value)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "O código ERP não deve conter espaços consecutivos.",
+        });
 
-        if (hasSpaceAtEdges(value)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "O código ERP não pode começar ou terminar com espaço em branco.",
-          });
+        return;
+      }
 
-          return;
-        }
+      if (hasSpaceAtEdges(value)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "O código ERP não pode começar ou terminar com espaço em branco.",
+        });
 
-        if (
-          !/^[a-zA-Z0-9]+(?:[-_][a-zA-Z0-9]+)*$/.test(value) &&
-          value !== ""
-        ) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "O código ERP deve conter apenas letras, números, traços ou underscores, e não pode começar com um símbolo ou ter um símbolo seguido de número.",
-          });
-        }
-      })
-      .nullable()
-      .optional()
-      .or(z.literal("")),
-  ),
+        return;
+      }
+
+      if (!/^[a-zA-Z0-9]+(?:[-_][a-zA-Z0-9]+)*$/.test(value) && value !== "") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "O código ERP deve conter apenas letras, números, traços ou underscores, e não pode começar com um símbolo ou ter um símbolo seguido de número.",
+        });
+      }
+    }),
   fantasy_name: z
     .string()
     .max(100, "O nome fantasia deve ter no máximo 100 caracteres.")

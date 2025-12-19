@@ -9,7 +9,6 @@ import { DeleteBusinessController } from "@/modules/business/usecases/delete-bus
 import { UpdateBusinessController } from "@/modules/business/usecases/update-business/update-business-controller";
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 
-import { verifyPermission } from "@/modules/middlewares/verify-permission";
 import {
   businessResponses,
   businessSchemas,
@@ -48,7 +47,7 @@ async function businessRoutes(app: FastifyInstance) {
     "/list-business",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("profile_access_manage", "read")],
+      preHandler: [verifyUserRole(["MASTER"])],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],

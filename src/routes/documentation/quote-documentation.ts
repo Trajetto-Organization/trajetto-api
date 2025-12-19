@@ -71,7 +71,7 @@ const quoteResponses = {
     error: z.string().default("Too Many Requests"),
   }),
   internalServerError: z.object({
-    message: z.string().default("Erro interno do servidor"),
+    message: z.string().default("Internal server error"),
   }),
 };
 

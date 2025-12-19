@@ -110,7 +110,7 @@ class CreateVehicleChecklistUseCase {
     }
 
     // Validate mileage (cannot be less than current vehicle mileage)
-    if (checklistData.current_mileage < findVehicle.current_mileage) {
+    if (checklistData.current_mileage <= findVehicle.current_mileage) {
       throw new VehicleMileageInvalidError();
     }
 
@@ -134,6 +134,7 @@ class CreateVehicleChecklistUseCase {
       const findBranch = await this.branch.findBranchById(
         checklistData.branchId,
       );
+
       if (!findBranch) {
         throw new BranchNotFoundError();
       }

@@ -7,8 +7,11 @@ import { KanbanCard } from "../../dtos/kanban-dto";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
 import { KanbanCardNotFoundError } from "../errors/kanban-card-not-found-error";
-import { AppError } from "@/shared/errors/AppError";
+import { KanbanCardColumnNotFoundError } from "../errors/kanban-card-column-not-found-error";
 
+import { KanbanNotAllowedDeleteCardBusinessError } from "../errors/kanban-not-allowed-delete-card-business-error";
+
+import { AppError } from "@/shared/errors/AppError";
 import { NotificationService } from "@/shared/services/notification-service";
 
 @injectable()
@@ -38,16 +41,13 @@ class DeleteKanbanCardUseCase {
     const findColumn = await this.kanban.findColumnById(findCard.columnId);
 
     if (!findColumn) {
-      throw new AppError("Coluna do card não encontrada.", 404);
+      throw new KanbanCardColumnNotFoundError();
     }
 
     // Verify user permissions
     if (findUser.role !== "MASTER") {
       if (findUser.businessId !== findColumn.businessId) {
-        throw new AppError(
-          "Você não tem permissão para deletar cards nesta empresa.",
-          403,
-        );
+        throw new KanbanNotAllowedDeleteCardBusinessError();
       }
     }
 

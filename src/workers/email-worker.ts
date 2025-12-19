@@ -12,15 +12,22 @@ interface EmailQueueWithClose extends EmailQueueProvider {
 }
 
 // Necessary since we are in another thread and will not have access to the tsyringe container
-const mailProviderMap: Record<EmailWorkerData["environment"], any> = {
-  development: new EtherealMailProvider(),
-  production: new ResendMailProvider(),
-  test: new EtherealMailProvider(),
-};
+// Factory function to create mail provider only when needed (lazy loading)
+function createMailProvider(environment: EmailWorkerData["environment"]): any {
+  switch (environment) {
+    case "production":
+      return new ResendMailProvider();
+    case "test":
+      return new EtherealMailProvider();
+    case "development":
+    default:
+      return new EtherealMailProvider();
+  }
+}
 
 // Initialize worker with received data
 const { queueName, environment } = workerData as EmailWorkerData;
-const mailProvider = mailProviderMap[environment || "development"];
+const mailProvider = createMailProvider(environment || "development");
 
 let emailQueue: EmailQueueWithClose;
 

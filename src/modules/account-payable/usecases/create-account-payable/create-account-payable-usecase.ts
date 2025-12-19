@@ -11,6 +11,9 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
+import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
+
+import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
 
 import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
 import { AccountPayableInvalidAmountError } from "../errors/account-payable-invalid-amount-error";
@@ -164,7 +167,7 @@ class CreateAccountPayableUseCase {
     }
 
     if (findBranch.businessId !== accountPayableData.businessId) {
-      throw new AppError("Esta filial não pertence a esta empresa!", 403);
+      throw new BranchNotBelongBusinessError();
     }
 
     // Check the work order if provided
@@ -178,10 +181,7 @@ class CreateAccountPayableUseCase {
       }
 
       if (findServiceOrder.businessId !== accountPayableData.businessId) {
-        throw new AppError(
-          "Esta ordem de serviço não pertence a esta empresa!",
-          403,
-        );
+        throw new ServiceOrderNotBelongBusinessError();
       }
     }
 

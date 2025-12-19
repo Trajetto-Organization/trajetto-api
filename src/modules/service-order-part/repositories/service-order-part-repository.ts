@@ -118,7 +118,7 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
         },
       },
       orderBy: {
-        created_at: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 

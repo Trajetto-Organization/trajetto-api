@@ -150,7 +150,7 @@ class FuelRepository implements IFuelRepository {
         },
       },
       orderBy: {
-        refueling_date: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 
@@ -526,7 +526,7 @@ class FuelRepository implements IFuelRepository {
         },
       },
       orderBy: {
-        refueling_date: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 

@@ -10,10 +10,18 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
+import { RegisterUserNotFoundError } from "@/modules/user/usecases/errors/register-user-not-found-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
+
 import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
+import { AccountPayablePaymentRequiredError } from "../errors/account-payable-payment-required-error";
+
+import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
+import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
 
 import { AccountPayableNotFoundError } from "../errors/account-payable-not-found-error";
+import { AccountPayableNotAllowedTransferCompaniesError } from "../errors/account-payable-not-allowed-transfer-companies-error";
+
 import { AccountPayableInvalidAmountError } from "../errors/account-payable-invalid-amount-error";
 
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
@@ -182,10 +190,7 @@ class UpdateAccountPayableUseCase {
       findAccountPayable.businessId !== businessId &&
       findUser.role !== "MASTER"
     ) {
-      throw new AppError(
-        "Você não tem permissão para transferir contas entre empresas!",
-        403,
-      );
+      throw new AccountPayableNotAllowedTransferCompaniesError();
     }
 
     if (accountPayableData.branchId) {
@@ -198,7 +203,7 @@ class UpdateAccountPayableUseCase {
       }
 
       if (findBranch.businessId !== businessId) {
-        throw new AppError("Esta filial não pertence a esta empresa!", 403);
+        throw new BranchNotBelongBusinessError();
       }
     }
 
@@ -213,10 +218,7 @@ class UpdateAccountPayableUseCase {
       }
 
       if (findServiceOrder.businessId !== businessId) {
-        throw new AppError(
-          "Esta ordem de serviço não pertence a esta empresa!",
-          403,
-        );
+        throw new ServiceOrderNotBelongBusinessError();
       }
     }
 
@@ -251,10 +253,7 @@ class UpdateAccountPayableUseCase {
 
     // If you are adding a payment date, we need to ensure there is a paid amount
     if (accountPayableData.payment_date && !finalAmountPaid) {
-      throw new AppError(
-        "É necessário informar um valor pago ao registrar uma data de pagamento!",
-        400,
-      );
+      throw new AccountPayablePaymentRequiredError();
     }
 
     if (!accountPayableData.registrationUserId) {
@@ -265,7 +264,7 @@ class UpdateAccountPayableUseCase {
       );
 
       if (!findRegistrationUser) {
-        throw new AppError("Usuário de registro não encontrado!", 400);
+        throw new RegisterUserNotFoundError();
       }
 
       if (findRegistrationUser.businessId !== businessId) {

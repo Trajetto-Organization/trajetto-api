@@ -9,6 +9,7 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
+import { KanbanNotAllowedPermissionViewBusinessBoardError } from "../errors/kanban-not-allowed-permission-view-business-board-error";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListKanbanController {
@@ -54,6 +55,10 @@ class ListKanbanController {
 
       if (error instanceof BusinessNotFoundError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof KanbanNotAllowedPermissionViewBusinessBoardError) {
+        return reply.status(403).send({ message: error.message });
       }
 
       throw error;

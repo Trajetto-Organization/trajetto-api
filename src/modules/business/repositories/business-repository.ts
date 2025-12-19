@@ -89,6 +89,9 @@ class BusinessRepository implements IBusinessRepository {
       skip,
       take: pageSize,
       where: whereCondition,
+      orderBy: {
+        created_at: "desc", // Sort by created_at
+      },
     });
 
     const total = await this.prisma.business.count({

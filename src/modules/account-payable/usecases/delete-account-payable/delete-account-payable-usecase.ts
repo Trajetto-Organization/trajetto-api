@@ -8,8 +8,11 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
-import { NotificationService } from "@/shared/services/notification-service";
+import { AccountPayableNotNotBelongBusinessError } from "../errors/account-payable-not-belong-business-error";
 import { AccountPayableNotFoundError } from "../errors/account-payable-not-found-error";
+
+import { AccountPayableNotDeleteHasAlreadyPaidError } from "../errors/account-payable-not-delete-has-already-paid-error";
+import { NotificationService } from "@/shared/services/notification-service";
 
 import { AccountPayable } from "../../dtos/account-payable-dto";
 import { formatCurrency } from "@/config/format-values";
@@ -56,18 +59,12 @@ class DeleteAccountPayableUseCase {
 
     // Check if the account payable belongs to the company
     if (findAccountPayable.businessId !== businessId) {
-      throw new AppError(
-        "Esta conta a pagar não pertence a esta empresa!",
-        403,
-      );
+      throw new AccountPayableNotNotBelongBusinessError();
     }
 
     // Check if the bill has already been paid
     if (findAccountPayable.payment_date) {
-      throw new AppError(
-        "Não é possível excluir uma conta que já foi paga!",
-        400,
-      );
+      throw new AccountPayableNotDeleteHasAlreadyPaidError();
     }
 
     try {

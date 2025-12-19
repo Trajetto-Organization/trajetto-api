@@ -12,6 +12,7 @@ import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-n
 import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
 import { KanbanColumnNotBelongBusinessError } from "../errors/kanban-column-not-belong-business-error";
 
+import { KanbanNotAllowedDeleteColumnBusinessError } from "../errors/kanban-not-allowed-delete-column-business-error";
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
@@ -58,10 +59,7 @@ class DeleteKanbanColumnUseCase {
       findUser.role === "BUSINESS_USER"
     ) {
       if (findUser.businessId !== businessId) {
-        throw new AppError(
-          "Você não tem permissão para deletar colunas nesta empresa.",
-          403,
-        );
+        throw new KanbanNotAllowedDeleteColumnBusinessError();
       }
     }
 

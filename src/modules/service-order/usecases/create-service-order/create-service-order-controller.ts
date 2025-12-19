@@ -17,6 +17,14 @@ import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors
 
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
 
+import { ServiceOrderNewMileageRequireOrderFinalizedError } from "../errors/service-order-new-mileage-require-order-finalized-error";
+import { ServiceOrderCompletionDateCannotBeEarlierOrderError } from "../errors/service-order-completion-date-cannot-be-earlier-order-date-error";
+
+import { ServiceOrderLocationNotProvidedAdjustmentValidationError } from "../errors/service-order-location-not-provided-adjustment-validation-error";
+import { ServiceOrderRegistrationsMobileLocationRequiredError } from "../errors/service-order-registrations-mobile-location-required-error";
+
+import { UserResponsibleNotFoundError } from "@/modules/user/usecases/errors/user-responsible-not-found-error";
+
 import { createServiceOrderSchema } from "@/schemas/create-service-order-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
@@ -63,6 +71,33 @@ class CreateServiceOrderController {
       }
 
       if (error instanceof SupplierNotFoundError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (
+        error instanceof ServiceOrderCompletionDateCannotBeEarlierOrderError
+      ) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof ServiceOrderNewMileageRequireOrderFinalizedError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof UserResponsibleNotFoundError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (
+        error instanceof ServiceOrderRegistrationsMobileLocationRequiredError
+      ) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (
+        error instanceof
+        ServiceOrderLocationNotProvidedAdjustmentValidationError
+      ) {
         return reply.status(400).send({ message: error.message });
       }
 

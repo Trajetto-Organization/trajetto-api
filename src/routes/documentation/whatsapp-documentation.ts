@@ -139,7 +139,7 @@ const whatsappResponses = {
   }),
 
   internalServerError: z.object({
-    message: z.string().default("Erro interno do servidor"),
+    message: z.string().default("Internal server error"),
   }),
 
   // Grouped error responses

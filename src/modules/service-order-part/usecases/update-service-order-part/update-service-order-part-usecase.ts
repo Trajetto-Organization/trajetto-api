@@ -20,11 +20,13 @@ import { formatCurrency } from "@/config/format-values";
 import { ServiceOrderPartNotFoundError } from "../errors/service-order-part-not-found-error";
 import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
 
+import { ServiceOrderPartAlreadyExistsError } from "../errors/service-order-part-already-exists-error";
+import { PartNotBelongError } from "@/modules/part/usecases/errors/part-not-belong-error";
+
 import {
   ServiceOrderPart,
   UpdateServiceOrderPartProps,
 } from "../../dtos/service-order-part-dto";
-
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
@@ -94,7 +96,7 @@ class UpdateServiceOrderPartUseCase {
       }
 
       if (findPart.businessId !== businessId) {
-        throw new AppError("Esta peça não pertence a esta empresa!", 403);
+        throw new PartNotBelongError();
       }
 
       // Check if the new part has already been added to the work order (except the current one)
@@ -105,10 +107,7 @@ class UpdateServiceOrderPartUseCase {
         );
 
       if (partAlreadyAdded && partAlreadyAdded.id !== serviceOrderPartId) {
-        throw new AppError(
-          "Esta peça já foi adicionada à ordem de serviço!",
-          400,
-        );
+        throw new ServiceOrderPartAlreadyExistsError();
       }
     }
 

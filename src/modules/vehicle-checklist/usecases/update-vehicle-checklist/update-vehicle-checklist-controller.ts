@@ -23,7 +23,9 @@ import { updateDeleteVehicleChecklistSchema } from "@/schemas/update-delete-vehi
 import { updateVehicleChecklistSchema } from "@/schemas/update-vehicle-checklist-schema";
 
 import { RequiredPhotosMissingError } from "../errors/required-photos-missing-error";
-import { PhotoValidationService } from "../../services/photo-validation-service";
+import { ChecklistNotFoundError } from "../errors/checklist-not-found-error";
+
+import { PhotoValidationService } from "@/shared/services/photo-validation-service";
 
 class UpdateVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -221,6 +223,10 @@ class UpdateVehicleChecklistController {
           existingPhotos: error.existingPhotos,
           photosToRemove: error.photosToRemove,
         });
+      }
+
+      if (error instanceof ChecklistNotFoundError) {
+        return reply.status(404).send({ message: error.message });
       }
 
       throw error;

@@ -33,14 +33,21 @@ import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 
-import { AppError } from "@/shared/errors/AppError";
-import { formatCurrency, formatDate } from "@/config/format-values";
+import { FineDateInfractionCannotBeFutureError } from "../errors/fine-date-infraction-cannot-be-future-error";
+import { FineDueDateMustBeAfterInfractionError } from "../errors/fine-due-date-must-be-after-infraction-error";
 
+import { formatCurrency, formatDate } from "@/config/format-values";
 import { TrafficViolationCodeNotFoundError } from "../errors/traffic-violation-code-not-found-error";
+
+import { FinePaymentDateCannotBeEarlierInfractionError } from "../errors/fine-payment-date-cannot-be-earlier-infraction-error";
+import { FineRegistrationsMobileLocationRequiredError } from "../errors/fine-registrations-mobile-location-required-error";
+
+import { FineLocationNotProvidedAdjustmentValidationError } from "../errors/fine-location-not-provided-adjustment-validation-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 
+import { AppError } from "@/shared/errors/AppError";
 import { env } from "@/env";
 
 interface FineNotificationsTextProps {
@@ -279,24 +286,18 @@ class CreateFineUseCase {
     const today = new Date();
 
     if (violationDate > today) {
-      throw new AppError("A data da infração não pode ser futura!", 400);
+      throw new FineDateInfractionCannotBeFutureError();
     }
 
     if (dueDate <= violationDate) {
-      throw new AppError(
-        "A data de vencimento deve ser posterior à data da infração!",
-        400,
-      );
+      throw new FineDueDateMustBeAfterInfractionError();
     }
 
     if (fineData.payment_date) {
       const paymentDate = new Date(fineData.payment_date);
 
       if (paymentDate < violationDate) {
-        throw new AppError(
-          "A data de pagamento não pode ser anterior à data da infração!",
-          400,
-        );
+        throw new FinePaymentDateCannotBeEarlierInfractionError();
       }
     }
 
@@ -308,20 +309,14 @@ class CreateFineUseCase {
     if (fineData.created_from === "MOBILE_APP") {
       // Mobile: Location is REQUIRED
       if (!fineData.latitude || !fineData.longitude) {
-        throw new AppError(
-          "Para registros via aplicativo mobile, a localização é obrigatória.",
-          400,
-        );
+        throw new FineRegistrationsMobileLocationRequiredError();
       }
 
       // 🆕 VALIDATE DISTANCE IF GPS_MANUAL (manual adjustment)
       if (fineData.location_source === "GPS_MANUAL") {
         // Verifica se temos a localização original
         if (!fineData.latitude_original || !fineData.longitude_original) {
-          throw new AppError(
-            "Localização original não fornecida para validação de ajuste.",
-            400,
-          );
+          throw new FineLocationNotProvidedAdjustmentValidationError();
         }
 
         // A validação de distância já é feita pelo schema com isWithinAllowedDistance

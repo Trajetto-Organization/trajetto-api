@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { UserCannotBeDeletedByHimselfError } from "@/modules/user/usecases/errors/user-cannot-be-deleted-vy-himself-error";
+import { UserCannotBeDeletedByHimselfError } from "@/modules/user/usecases/errors/user-cannot-be-deleted-by-himself-error";
 
 import { DeleteUserUseCase } from "@/modules/user/usecases/delete-user/delete-user-usecase";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";

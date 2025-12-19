@@ -80,7 +80,7 @@ const notificationResponses = {
     count: z.number().describe("Número de notificações não lidas"),
   }),
   internalServerError: z.object({
-    message: z.string().default("Erro interno do servidor"),
+    message: z.string().default("Internal server error"),
   }),
 };
 

@@ -142,7 +142,7 @@ class FineRepository implements IFineRepository {
         },
       },
       orderBy: {
-        violation_date: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 
@@ -158,8 +158,8 @@ class FineRepository implements IFineRepository {
         payment_date: fine.payment_date ? fine.payment_date : null,
         amount: formatCurrency(Number(fine.amount)) ?? "N/A",
         points: fine.points ?? 0,
-        location: fine.location ?? null,
-        observation: fine.observation ?? null,
+        location: fine.location ? fine.location : "N/A",
+        observation: fine.observation ? fine.observation : "N/A",
         businessId: fine.businessId ?? "N/A",
         ...(currentUserRole === "MASTER"
           ? { businessName: fine.business.corporate_reason ?? "N/A" }
@@ -284,7 +284,7 @@ class FineRepository implements IFineRepository {
         },
       },
       orderBy: {
-        violation_date: "desc",
+        created_at: "desc", // Sort by created_at
       },
     });
 
@@ -394,7 +394,9 @@ class FineRepository implements IFineRepository {
         trafficViolationCode: { select: { code: true, description: true } },
         vehicle: { select: { license_plate: true } },
       },
-      orderBy: { violation_date: "desc" },
+      orderBy: {
+        created_at: "desc", // Sort by created_at
+      },
     });
 
     return fines;
@@ -407,7 +409,9 @@ class FineRepository implements IFineRepository {
         driver: { select: { name: true } },
         trafficViolationCode: { select: { code: true, description: true } },
       },
-      orderBy: { violation_date: "desc" },
+      orderBy: {
+        created_at: "desc", // Sort by created_at
+      },
     });
 
     return fines;
@@ -431,7 +435,9 @@ class FineRepository implements IFineRepository {
         vehicle: { select: { license_plate: true } },
         trafficViolationCode: { select: { code: true, description: true } },
       },
-      orderBy: { violation_date: "desc" },
+      orderBy: {
+        created_at: "desc", // Sort by created_at
+      },
     });
 
     return fines;

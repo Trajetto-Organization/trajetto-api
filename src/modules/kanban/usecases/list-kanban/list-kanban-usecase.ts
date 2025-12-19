@@ -8,7 +8,9 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
+import { KanbanNotAllowedPermissionViewBusinessBoardError } from "../errors/kanban-not-allowed-permission-view-business-board-error";
 import { ListKanbanColumnProps } from "../../dtos/kanban-dto";
+
 import { AppError } from "@/shared/errors/AppError";
 
 interface ListKanbanParams {
@@ -73,10 +75,7 @@ class ListKanbanUseCase {
     // Check if the user belongs to the company (maintain the original logic)
     if (findUser.role !== "MASTER") {
       if (findUser.businessId !== businessId) {
-        throw new AppError(
-          "Você não tem permissão para visualizar o kanban desta empresa.",
-          403,
-        );
+        throw new KanbanNotAllowedPermissionViewBusinessBoardError();
       }
     }
 

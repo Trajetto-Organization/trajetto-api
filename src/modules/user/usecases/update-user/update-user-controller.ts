@@ -19,6 +19,8 @@ import { UserCannotHaveBothDriverAndProfileError } from "../errors/user-cannot-h
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
+import { UserMasterOnlyCanBeUpdatePasswordError } from "../errors/user-master-only-can-be-update-password-error";
+
 import { updateDeleteUserSchema } from "@/schemas/update-delete-user-schema";
 
 class UpdateUserController {
@@ -54,6 +56,10 @@ class UpdateUserController {
       }
 
       if (error instanceof UserProfileNotMatchBusinessError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof UserMasterOnlyCanBeUpdatePasswordError) {
         return reply.status(403).send({ message: error.message });
       }
 

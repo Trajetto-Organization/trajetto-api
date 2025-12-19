@@ -9,6 +9,9 @@ import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-n
 import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
 import { ServiceOrderPartNotFoundError } from "../errors/service-order-part-not-found-error";
 
+import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
+import { PartNotBelongServiceOrderError } from "@/modules/part/usecases/errors/part-not-belong-service-order-error";
+
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDeleteServiceOrderSchema } from "@/schemas/update-delete-service-order-schema";
 
@@ -60,6 +63,14 @@ class DeleteServiceOrderPartController {
 
       if (error instanceof ServiceOrderPartNotFoundError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof ServiceOrderNotBelongBusinessError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof PartNotBelongServiceOrderError) {
+        return reply.status(403).send({ message: error.message });
       }
 
       throw error;

@@ -5,6 +5,7 @@ import { ReorderKanbanCardsUseCase } from "./reorder-cards-usecase";
 import { reorderKanbanCardsSchema } from "@/schemas/reorder-kanban-cards-schema";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { KanbanNotAllowedReorderCardBusinessError } from "../errors/kanban-not-allowed-reorder-card-business-error";
 
 class ReorderKanbanCardsController {
   async handle(
@@ -20,13 +21,16 @@ class ReorderKanbanCardsController {
       );
 
       await reorderKanbanCardsUseCase.execute(data, id);
-
       return reply
         .status(200)
         .send({ message: "Cards reordenados com sucesso!" });
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof KanbanNotAllowedReorderCardBusinessError) {
+        return reply.status(403).send({ message: error.message });
       }
 
       throw error;

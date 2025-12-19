@@ -41,7 +41,7 @@ interface CreateAccountPayableProps {
 
 interface UpdateAccountPayableProps {
   issue_date?: Date | string;
-  due_date?: Date;
+  due_date?: Date | string;
   payment_date?: Date | string | null;
   amount?: number;
   amount_paid?: number | null;

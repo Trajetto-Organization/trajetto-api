@@ -25,6 +25,7 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 import { VehicleMileageInvalidError } from "@/modules/fuel/usecases/errors/vehicle-mileage-invalid-error";
 
 import { DriverCannotUpdateChecklistError } from "../errors/driver-cannot-update-checklist-error";
+import { ChecklistNotFoundError } from "../errors/checklist-not-found-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import {
@@ -35,7 +36,7 @@ import {
 import { UploadService } from "@/shared/services/upload-service";
 import { MultipartFile } from "@fastify/multipart";
 
-import { PhotoValidationService } from "../../services/photo-validation-service";
+import { PhotoValidationService } from "@/shared/services/photo-validation-service";
 import { RequiredPhotosMissingError } from "../errors/required-photos-missing-error";
 
 @injectable()
@@ -89,10 +90,7 @@ class UpdateVehicleChecklistUseCase {
       });
 
     if (!findChecklist) {
-      throw new AppError(
-        "Checklist não encontrado ou não pertence a esta empresa.",
-        404,
-      );
+      throw new ChecklistNotFoundError();
     }
 
     // Validate photo requirements for any field changes
@@ -136,12 +134,16 @@ class UpdateVehicleChecklistUseCase {
       throw new DriverCannotUpdateChecklistError();
     }
 
-    // If updating mileage, validate it's not less than current vehicle mileage
+    // Validate mileage only if it was changed
+    // If mileage is being updated and is different from the original checklist mileage
     if (
       checklistData.current_mileage !== undefined &&
-      checklistData.current_mileage < findVehicle.current_mileage
+      checklistData.current_mileage !== findChecklist.current_mileage
     ) {
-      throw new VehicleMileageInvalidError();
+      // New mileage must be strictly greater than current vehicle mileage
+      if (checklistData.current_mileage <= findVehicle.current_mileage) {
+        throw new VehicleMileageInvalidError();
+      }
     }
 
     // Auto-populate branchId for driver users

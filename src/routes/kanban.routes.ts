@@ -7,7 +7,7 @@ import { UpdateKanbanColumnController } from "@/modules/kanban/usecases/update-c
 import { DeleteKanbanColumnController } from "@/modules/kanban/usecases/delete-column/delete-column-controller";
 
 import { ListKanbanController } from "@/modules/kanban/usecases/list-kanban/list-kanban-controller";
-import { ReorderKanbanColumnsController } from "@/modules/kanban/usecases/reorder-columns/reorder--columns-controller";
+import { ReorderKanbanColumnsController } from "@/modules/kanban/usecases/reorder-columns/reorder-columns-controller";
 
 import { CreateKanbanCardController } from "@/modules/kanban/usecases/create-card/create-card-controller";
 import { UpdateKanbanCardController } from "@/modules/kanban/usecases/update-card/update-card-controller";

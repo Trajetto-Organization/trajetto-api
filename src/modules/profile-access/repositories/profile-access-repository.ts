@@ -89,6 +89,9 @@ class ProfileAccessRepository implements IProfileAccessRepository {
           },
         },
       },
+      orderBy: {
+        created_at: "desc", // Sort by created_at
+      },
     });
 
     const total = await this.prisma.profileAccess.count({
