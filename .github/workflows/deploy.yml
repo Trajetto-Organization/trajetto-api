@@ -80,9 +80,6 @@ jobs:
       - name: Run unit tests
         run: yarn test --run --reporter=basic
 
-      - name: Setup E2E test environment
-        # run: yarn prisma:generate
-
       - name: Run E2E tests
         run: yarn test:e2e --run --reporter=basic
 
