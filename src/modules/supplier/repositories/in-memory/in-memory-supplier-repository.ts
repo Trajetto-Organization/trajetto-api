@@ -73,8 +73,8 @@ class InMemorySupplierRepository implements ISupplierRepository {
 
     const skip = (page - 1) * pageSize;
     const data = filteredSuppliers.slice(skip, skip + pageSize);
-    const total = filteredSuppliers.length;
 
+    const total = filteredSuppliers.length;
     return { data, total };
   }
 

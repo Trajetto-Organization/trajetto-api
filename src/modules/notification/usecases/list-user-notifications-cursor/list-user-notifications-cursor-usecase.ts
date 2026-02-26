@@ -4,10 +4,19 @@ import { INotificationRepository } from "../../repositories/INotification-reposi
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { CursorPaginatedNotifications } from "../../dtos/notification-dto";
+
 import { AppError } from "@/shared/errors/AppError";
 
+interface ListUserNotificationsWithCursorRequest {
+  userId: string;
+  limit?: number;
+  includeRead?: boolean;
+  cursor?: string;
+}
+
 @injectable()
-class MarkAllNotificationsAsReadUseCase {
+class ListUserNotificationsCursorUseCase {
   constructor(
     @inject("UserRepository")
     private userRepository: IUserRepository,
@@ -15,7 +24,12 @@ class MarkAllNotificationsAsReadUseCase {
     private notificationRepository: INotificationRepository,
   ) {}
 
-  async execute(userId: string): Promise<void> {
+  async execute({
+    userId,
+    limit = 20,
+    includeRead = true,
+    cursor,
+  }: ListUserNotificationsWithCursorRequest): Promise<CursorPaginatedNotifications> {
     const user = await this.userRepository.findUserById(userId);
 
     if (!user) {
@@ -23,14 +37,22 @@ class MarkAllNotificationsAsReadUseCase {
     }
 
     try {
-      await this.notificationRepository.markAllAsRead(userId);
+      const result =
+        await this.notificationRepository.listUserNotificationsWithCursor({
+          userId,
+          limit,
+          includeRead,
+          cursor,
+        });
+
+      return result;
     } catch (error) {
       throw new AppError(
-        "Houve um erro ao marcar todas as notificações como lidas! Por favor, tente novamente.",
+        "Houve um erro ao tentar listar as notificações! Por favor, tente novamente.",
         500,
       );
     }
   }
 }
 
-export { MarkAllNotificationsAsReadUseCase };
+export { ListUserNotificationsCursorUseCase };

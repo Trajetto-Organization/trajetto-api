@@ -1,6 +1,8 @@
 class SupplierCnpjAlreadyExistsError extends Error {
   constructor() {
-    super("Já existe um fornecedor com este CNPJ.");
+    super(
+      "Este CNPJ não está disponível para cadastro. Já existe um fornecedor com este CNPJ.",
+    );
   }
 }
 

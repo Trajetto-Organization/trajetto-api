@@ -59,7 +59,10 @@ class ExcelExportService {
       worksheet["!cols"] = columnWidths;
 
       // Add worksheet to workbook
-      XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+      // Excel sheet names cannot exceed 31 characters - truncate if necessary
+      const truncatedSheetName =
+        sheetName.length > 31 ? sheetName.substring(0, 31) : sheetName;
+      XLSX.utils.book_append_sheet(workbook, worksheet, truncatedSheetName);
 
       // Generate Excel file buffer
       const excelBuffer = XLSX.write(workbook, {
@@ -81,6 +84,7 @@ class ExcelExportService {
         throw error;
       }
 
+      console.error("🔴 Error in ExcelExportService:", error);
       throw new AppError(
         "Houve um erro ao tentar gerar o relatório Excel! Por favor, tente novamente.",
         500,
@@ -129,6 +133,25 @@ class ExcelExportService {
       return new Date(value).toLocaleString("pt-BR");
     },
 
+    notificationDateTime: (value: any): string => {
+      if (!value) return "N/A";
+      try {
+        const dateObject = typeof value === "string" ? new Date(value) : value;
+
+        return new Intl.DateTimeFormat("pt-BR", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+          .format(dateObject)
+          .replace(",", " às");
+      } catch (error) {
+        return String(value);
+      }
+    },
+
     boolean: (value: any): string => {
       if (value === null || value === undefined) return "N/A";
       return value ? "Sim" : "Não";
@@ -152,11 +175,13 @@ class ExcelExportService {
     phone: (value: any): string => {
       if (!value) return "N/A";
       const phone = String(value).replace(/\D/g, "");
+
       if (phone.length === 11) {
         return phone.replace(/(\d{2})(\d{5})(\d{4})/, "($1) $2-$3");
       } else if (phone.length === 10) {
         return phone.replace(/(\d{2})(\d{4})(\d{4})/, "($1) $2-$3");
       }
+
       return value;
     },
   };

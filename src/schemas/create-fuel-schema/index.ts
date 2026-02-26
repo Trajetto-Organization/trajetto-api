@@ -4,15 +4,12 @@ import { MultipartFile } from "@fastify/multipart";
 import { LocationSource, RecordOrigin } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const isEmptyOrWhitespace = (value: string): boolean =>
-  value.trim().length === 0;
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
-
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
+import {
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+  isEmptyOrWhitespace,
+  isValidDateString,
+} from "@/shared/utils/zod-schema-helpers";
 
 const createFuelSchema = z
   .object({
@@ -24,6 +21,7 @@ const createFuelSchema = z
           const cleanedValue = val.replace(/\./g, "").replace(",", ".");
           return parseFloat(cleanedValue);
         }
+
         return val;
       },
       z
@@ -42,6 +40,7 @@ const createFuelSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -63,6 +62,7 @@ const createFuelSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -71,8 +71,8 @@ const createFuelSchema = z
           invalid_type_error: "O preço por litro deve ser um número válido.",
         })
         .positive("O preço por litro deve ser um valor positivo.")
-        .min(0.001, "O preço por litro deve ser maior que zero.")
-        .max(99.999, "O preço por litro não pode exceder R$ 99,999."),
+        .min(0.01, "O preço por litro deve ser no mínimo R$ 0,01")
+        .max(999.99, "O preço por litro não pode exceder R$ 999,99."),
     ),
     notes: z
       .string()
@@ -88,6 +88,7 @@ const createFuelSchema = z
             code: z.ZodIssueCode.custom,
             message: "As observações não podem conter apenas espaços.",
           });
+
           return;
         }
 
@@ -96,6 +97,7 @@ const createFuelSchema = z
             code: z.ZodIssueCode.custom,
             message: "As observações não devem conter espaços consecutivos.",
           });
+
           return;
         }
 
@@ -105,6 +107,7 @@ const createFuelSchema = z
             message:
               "As observações não podem começar ou terminar com espaço em branco.",
           });
+
           return;
         }
       }),
@@ -117,6 +120,7 @@ const createFuelSchema = z
             code: z.ZodIssueCode.custom,
             message: "Data do abastecimento inválida.",
           });
+
           return;
         }
 
@@ -131,6 +135,7 @@ const createFuelSchema = z
             code: z.ZodIssueCode.custom,
             message: "A data do abastecimento não pode ser no futuro.",
           });
+
           return;
         }
       }),
@@ -152,6 +157,7 @@ const createFuelSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
@@ -171,6 +177,7 @@ const createFuelSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
@@ -190,6 +197,7 @@ const createFuelSchema = z
     latitude_original: z.preprocess((val) => {
       if (typeof val === "string") {
         if (val.trim() === "") return null;
+
         const parsed = parseFloat(val);
         return isNaN(parsed) ? undefined : parsed;
       }
@@ -199,6 +207,7 @@ const createFuelSchema = z
     longitude_original: z.preprocess((val) => {
       if (typeof val === "string") {
         if (val.trim() === "") return null;
+
         const parsed = parseFloat(val);
         return isNaN(parsed) ? undefined : parsed;
       }

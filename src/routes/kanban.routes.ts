@@ -1,5 +1,4 @@
 import { FastifyInstance } from "fastify";
-import { z } from "zod";
 
 import { CreateKanbanColumnController } from "@/modules/kanban/usecases/create-column/create-column-controller";
 import { UpdateKanbanColumnController } from "@/modules/kanban/usecases/update-column/update-column-controller";
@@ -53,11 +52,8 @@ async function kanbanRoutes(app: FastifyInstance) {
         body: kanbanSchemas.createColumn,
         response: {
           201: kanbanResponses.columnCreated,
-          400: z.union([
-            kanbanResponses.resourceNotFound,
-            kanbanResponses.businessNotFound,
-            kanbanResponses.validationError,
-          ]),
+          400: kanbanResponses.createColumnErrors,
+          403: kanbanResponses.kanbanNotAllowedCreateColumn,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -80,12 +76,9 @@ async function kanbanRoutes(app: FastifyInstance) {
         body: kanbanSchemas.updateColumn,
         response: {
           200: kanbanResponses.columnUpdated,
-          400: z.union([
-            kanbanResponses.resourceNotFound,
-            kanbanResponses.businessNotFound,
-            kanbanResponses.kanbanColumnNotFound,
-            kanbanResponses.validationError,
-          ]),
+          400: kanbanResponses.updateColumnErrors,
+          403: kanbanResponses.updateColumnForbiddenErrors,
+          404: kanbanResponses.kanbanColumnNotFound,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -107,11 +100,9 @@ async function kanbanRoutes(app: FastifyInstance) {
         params: kanbanSchemas.updateDeleteColumn,
         response: {
           200: kanbanResponses.columnDeleted,
-          400: z.union([
-            kanbanResponses.resourceNotFound,
-            kanbanResponses.businessNotFound,
-            kanbanResponses.kanbanColumnNotFound,
-          ]),
+          400: kanbanResponses.deleteColumnErrors,
+          403: kanbanResponses.deleteColumnForbiddenErrors,
+          404: kanbanResponses.kanbanColumnNotFound,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -133,10 +124,8 @@ async function kanbanRoutes(app: FastifyInstance) {
         body: kanbanSchemas.reorderColumns,
         response: {
           200: kanbanResponses.columnsReordered,
-          400: z.union([
-            kanbanResponses.resourceNotFound,
-            kanbanResponses.validationError,
-          ]),
+          400: kanbanResponses.reorderColumnsErrors,
+          403: kanbanResponses.kanbanNotAllowedReorderColumn,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -158,10 +147,8 @@ async function kanbanRoutes(app: FastifyInstance) {
         querystring: kanbanSchemas.listKanban,
         response: {
           200: kanbanResponses.kanbanList,
-          400: z.union([
-            kanbanResponses.resourceNotFound,
-            kanbanResponses.businessNotFound,
-          ]),
+          400: kanbanResponses.listKanbanErrors,
+          403: kanbanResponses.kanbanNotAllowedViewBoard,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -183,10 +170,8 @@ async function kanbanRoutes(app: FastifyInstance) {
         body: kanbanSchemas.createCard,
         response: {
           201: kanbanResponses.cardCreated,
-          400: z.union([
-            kanbanResponses.resourceNotFound,
-            kanbanResponses.validationError,
-          ]),
+          400: kanbanResponses.createCardErrors,
+          403: kanbanResponses.kanbanNotAllowedCreateCard,
           404: kanbanResponses.kanbanColumnNotFound,
           500: kanbanResponses.internalServerError,
         },
@@ -210,11 +195,9 @@ async function kanbanRoutes(app: FastifyInstance) {
         body: kanbanSchemas.updateCard,
         response: {
           200: kanbanResponses.cardUpdated,
-          400: z.union([
-            kanbanResponses.resourceNotFound,
-            kanbanResponses.kanbanCardNotFound,
-            kanbanResponses.validationError,
-          ]),
+          400: kanbanResponses.updateCardErrors,
+          403: kanbanResponses.kanbanNotAllowedUpdateCard,
+          404: kanbanResponses.updateCardNotFoundErrors,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -235,10 +218,9 @@ async function kanbanRoutes(app: FastifyInstance) {
         params: kanbanSchemas.updateDeleteCard,
         response: {
           200: kanbanResponses.cardDeleted,
-          400: z.union([
-            kanbanResponses.resourceNotFound,
-            kanbanResponses.kanbanCardNotFound,
-          ]),
+          400: kanbanResponses.resourceNotFound,
+          403: kanbanResponses.kanbanNotAllowedDeleteCard,
+          404: kanbanResponses.deleteCardNotFoundErrors,
           500: kanbanResponses.internalServerError,
         },
       },
@@ -260,10 +242,8 @@ async function kanbanRoutes(app: FastifyInstance) {
         body: kanbanSchemas.reorderCards,
         response: {
           200: kanbanResponses.cardsReordered,
-          400: z.union([
-            kanbanResponses.resourceNotFound,
-            kanbanResponses.validationError,
-          ]),
+          400: kanbanResponses.reorderCardsErrors,
+          403: kanbanResponses.kanbanNotAllowedReorderCard,
           500: kanbanResponses.internalServerError,
         },
       },

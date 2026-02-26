@@ -1,11 +1,14 @@
 import database from "@/../infra/database";
-
 import {
   Notification,
   CreateNotificationProps,
-  ListNotificationsProps,
+  CursorPaginatedNotifications,
 } from "../dtos/notification-dto";
-import { INotificationRepository } from "./INotification-repository";
+
+import {
+  INotificationRepository,
+  ListNotificationsParams,
+} from "./INotification-repository";
 
 class NotificationRepository implements INotificationRepository {
   constructor(private prisma = database) {}
@@ -20,49 +23,49 @@ class NotificationRepository implements INotificationRepository {
     return notification;
   }
 
-  async listUserNotifications(
-    userId: string,
-    limit: number = 20,
-    includeRead: boolean = true,
-  ): Promise<ListNotificationsProps> {
+  async listUserNotificationsWithCursor({
+    userId,
+    limit = 20,
+    includeRead = true,
+    cursor,
+  }: ListNotificationsParams): Promise<CursorPaginatedNotifications> {
     const whereClause: any = { userId };
 
     if (!includeRead) {
       whereClause.read = false;
     }
 
+    // Cursor-based pagination: fetch limit + 1 to check if there are more
     const notifications = await this.prisma.notification.findMany({
       where: whereClause,
+      take: limit + 1,
+      ...(cursor && {
+        cursor: { id: cursor },
+        skip: 1, // Skip the cursor item itself
+      }),
       orderBy: {
         created_at: "desc",
       },
-      take: limit,
     });
 
-    const total = await this.prisma.notification.count({
-      where: whereClause,
-    });
+    // Check if there are more items
+    const hasMore = notifications.length > limit;
+    const data = hasMore ? notifications.slice(0, limit) : notifications;
 
-    const unread = await this.countUnreadNotifications(userId);
+    const nextCursor = hasMore ? data[data.length - 1]?.id : null;
 
-    const transformedNotifications = notifications.map((notification) => ({
-      id: notification.id,
-      userId: notification.userId,
-      type: notification.type,
-      title: notification.title,
-      message: notification.message,
-      link: notification.link || undefined,
-      read: notification.read,
-      entityId: notification.entityId || undefined,
-      businessId: notification.businessId || null,
-      created_at: notification.created_at.toISOString(),
-      updated_at: notification.updated_at.toISOString(),
-    }));
+    // Get total count and unread count in parallel
+    const [total, unread] = await Promise.all([
+      this.prisma.notification.count({ where: whereClause }),
+      this.countUnreadNotifications(userId),
+    ]);
 
     return {
-      data: transformedNotifications,
+      data,
       total,
       unread,
+      nextCursor,
+      hasMore,
     };
   }
 
@@ -73,16 +76,6 @@ class NotificationRepository implements INotificationRepository {
     });
 
     return notification;
-  }
-
-  async markAllAsRead(userId: string): Promise<void> {
-    await this.prisma.notification.updateMany({
-      where: {
-        userId,
-        read: false,
-      },
-      data: { read: true },
-    });
   }
 
   async deleteNotification(notificationId: string): Promise<void> {

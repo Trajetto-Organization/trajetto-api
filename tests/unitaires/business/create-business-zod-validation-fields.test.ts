@@ -29,7 +29,7 @@ describe("Create Business Zod Validation Fields", () => {
     expect(parsed).toEqual(validData);
   });
 
-  it("should accept empty strings for optional fields", () => {
+  it("should convert empty strings to null for optional fields", () => {
     const data = {
       cep: "12345678",
       city: "São Paulo",
@@ -49,7 +49,9 @@ describe("Create Business Zod Validation Fields", () => {
 
     const expectedData = {
       ...data,
+      complement: null, // Schema converts empty string to null
       erp_code: null, // Schema converts empty string to null
+      fantasy_name: null, // Schema converts empty string to null
     };
 
     const parsed = createBusinessSchema.parse(data);

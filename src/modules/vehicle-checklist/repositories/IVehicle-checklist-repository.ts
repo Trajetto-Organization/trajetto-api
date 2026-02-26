@@ -2,12 +2,11 @@ import {
   VehicleChecklist,
   CreateVehicleChecklistProps,
   ListVehicleChecklistProps,
-  ListVehicleChecklistFormattedProps,
   ListVehicleChecklistByBusinessIdProps,
   UpdateVehicleChecklist,
   ListVehicleChecklistBusinessProps,
   GetVehicleChecklistByIdAndBusinessProps,
-  VehicleChecklistWithRelationsFormatted,
+  VehicleChecklistWithRelations,
 } from "../dtos/vehicle-checklist-dto";
 
 interface IVehicleChecklistRepository {
@@ -16,7 +15,7 @@ interface IVehicleChecklistRepository {
   ) => Promise<VehicleChecklist>;
   listVehicleChecklists: (
     listChecklistProps: ListVehicleChecklistByBusinessIdProps,
-  ) => Promise<ListVehicleChecklistFormattedProps>;
+  ) => Promise<ListVehicleChecklistProps>;
   listVehicleChecklistBusiness: ({
     page,
     pageSize,
@@ -32,7 +31,7 @@ interface IVehicleChecklistRepository {
   ) => Promise<VehicleChecklist | null>;
   findVehicleChecklistByIdWithRelations: (
     checklistId: string,
-  ) => Promise<VehicleChecklistWithRelationsFormatted | null>;
+  ) => Promise<VehicleChecklistWithRelations | null>;
   getVehicleChecklistByIdAndBusiness({
     businessId,
     checklistId,
@@ -40,7 +39,7 @@ interface IVehicleChecklistRepository {
   getVehicleChecklistByIdAndBusinessWithRelations({
     businessId,
     checklistId,
-  }: GetVehicleChecklistByIdAndBusinessProps): Promise<VehicleChecklistWithRelationsFormatted | null>;
+  }: GetVehicleChecklistByIdAndBusinessProps): Promise<VehicleChecklistWithRelations | null>;
   findVehicleChecklistsByVehicleId: (
     vehicleId: string,
   ) => Promise<VehicleChecklist[]>;

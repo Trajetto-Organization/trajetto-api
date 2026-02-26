@@ -8,6 +8,12 @@ interface Part {
   supplierId?: string | null;
   created_at: Date | string;
   updated_at: Date | string;
+  supplier?: {
+    name: string;
+  } | null;
+  business?: {
+    corporate_reason: string;
+  } | null;
 }
 
 interface CreatePartProps {

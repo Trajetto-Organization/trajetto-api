@@ -289,11 +289,6 @@ describe("Update User UseCase", () => {
 
     userToUpdate.businessId = "business-1";
 
-    const validProfileAccess = await profileAccessInMemory.createProfileAccess({
-      businessId: "business-1",
-      name: "Valid Profile",
-    });
-
     await expect(
       updateUserUseCase.execute(
         {
@@ -303,7 +298,6 @@ describe("Update User UseCase", () => {
             name: "New User",
             role: "BUSINESS_USER",
             businessId: "non-existent-business",
-            profileAccessId: validProfileAccess.id,
           },
         },
         adminUser.id,

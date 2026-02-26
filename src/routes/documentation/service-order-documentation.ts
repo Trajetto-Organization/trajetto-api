@@ -33,28 +33,77 @@ const serviceOrderResponses = {
   serviceOrderCreated: z.object({
     message: z.string().default("Ordem de serviço criada com sucesso!"),
   }),
-
   serviceOrderList: z.object({
     data: z.array(
       z.object({
         id: z.string(),
-        date: z.string(),
-        completion_date: z.string().nullable(),
+        date: z.union([z.string(), z.date()]),
+        completion_date: z.union([z.string(), z.date()]).nullable(),
         maintenance_type: z.enum(["INTERNAL", "EXTERNAL"]),
-        total_amount: z.string(),
+        total_amount: z.number(),
+        current_mileage_at_service: z.number().nullable(),
+        maintenance_interval_km_at_service: z.number().nullable(),
+        last_maintenance_mileage_at_service: z.number().nullable(),
+        new_mileage_after_service: z.number().nullable(),
         businessId: z.string(),
         vehicleId: z.string(),
-        vehicleLicensePlate: z.string(),
-        vehicleDescription: z.string(),
         responsibleUserId: z.string(),
-        responsibleUserName: z.string(),
         branchId: z.string(),
-        branchName: z.string(),
         supplierId: z.string().nullable(),
-        supplierName: z.string(),
-        partsCount: z.number(),
-        created_at: z.string(),
-        updated_at: z.string(),
+        latitude: z.number().nullable(),
+        longitude: z.number().nullable(),
+        latitude_original: z.number().nullable(),
+        longitude_original: z.number().nullable(),
+        location_source: z.string().nullable(),
+        location_edited_by: z.string().nullable(),
+        location_edited_at: z.union([z.string(), z.date()]).nullable(),
+        created_from: z.enum(["WEB", "MOBILE", "WEB_DASHBOARD"]),
+        created_at: z.union([z.string(), z.date()]),
+        updated_at: z.union([z.string(), z.date()]),
+        business: z
+          .object({
+            corporate_reason: z.string(),
+          })
+          .optional(), // Only for MASTER role
+        vehicle: z
+          .object({
+            license_plate: z.string(),
+            description: z.string(),
+          })
+          .optional(),
+        responsibleUser: z
+          .object({
+            name: z.string(),
+            email: z.string(),
+          })
+          .optional(),
+        branch: z
+          .object({
+            corporate_reason: z.string(),
+            fantasy_name: z.string(),
+          })
+          .optional(),
+        supplier: z
+          .object({
+            name: z.string(),
+          })
+          .nullable()
+          .optional(),
+        parts: z
+          .array(
+            z.object({
+              id: z.string(),
+              quantity: z.number(),
+              unit_price: z.number(),
+              serviceOrderId: z.string(),
+              partId: z.string(),
+              part: z.object({
+                id: z.string(),
+                description: z.string(),
+              }),
+            }),
+          )
+          .optional(),
       }),
     ),
     total: z.number(),
@@ -151,6 +200,12 @@ const serviceOrderResponses = {
       message: z.string().default("Fornecedor não encontrado."),
     }),
     z.object({
+      message: z.string().default("Usuário responsável não encontrado!"),
+    }),
+  ]),
+
+  createServiceOrderForbiddenErrors: z.union([
+    z.object({
       message: z.string().default("Este veículo não pertence a esta empresa!"),
     }),
     z.object({
@@ -160,9 +215,6 @@ const serviceOrderResponses = {
       message: z
         .string()
         .default("Este fornecedor não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z.string().default("Usuário responsável não encontrado!"),
     }),
     z.object({
       message: z.string().default("Este usuário não pertence a esta empresa!"),
@@ -194,10 +246,11 @@ const serviceOrderResponses = {
         .string()
         .default("Empresa não encontrada! Por favor, tente novamente."),
     }),
-    z.object({
-      message: z.string().default("Este veículo não pertence a esta empresa!"),
-    }),
   ]),
+
+  listServiceOrderByVehicleForbiddenErrors: z.object({
+    message: z.string().default("Este veículo não pertence a esta empresa!"),
+  }),
 
   vehicleNotBelongBusiness: z.object({
     message: z.string().default("Este veículo não pertence a esta empresa!"),
@@ -229,6 +282,12 @@ const serviceOrderResponses = {
       message: z.string().default("Fornecedor não encontrado."),
     }),
     z.object({
+      message: z.string().default("Usuário responsável não encontrado!"),
+    }),
+  ]),
+
+  updateServiceOrderForbiddenErrors: z.union([
+    z.object({
       message: z
         .string()
         .default("Esta ordem de serviço não pertence a esta empresa!"),
@@ -243,9 +302,6 @@ const serviceOrderResponses = {
       message: z
         .string()
         .default("Este fornecedor não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z.string().default("Usuário responsável não encontrado!"),
     }),
     z.object({
       message: z.string().default("Este usuário não pertence a esta empresa!"),
@@ -265,16 +321,17 @@ const serviceOrderResponses = {
     z.object({
       message: z
         .string()
-        .default("Esta ordem de serviço não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
         .default(
           "Não é possível excluir esta ordem de serviço pois ela está sendo usada em contas a pagar.",
         ),
     }),
   ]),
+
+  deleteServiceOrderForbiddenErrors: z.object({
+    message: z
+      .string()
+      .default("Esta ordem de serviço não pertence a esta empresa!"),
+  }),
 };
 
 export { serviceOrderSchemas, serviceOrderResponses };

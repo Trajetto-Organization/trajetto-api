@@ -177,6 +177,7 @@ describe("Get Vehicle UseCase", () => {
       driverId: "driver-id",
       branchId: "branch-id",
       fuelTypeId: "fuel-type-id",
+      created_from: "WEB_DASHBOARD" as const,
     };
 
     await fuelInMemory.createFuel(fuelData);

@@ -9,6 +9,7 @@ import { Quote, QuoteStatus } from "../../dtos/quote-dto";
 import { QuoteNotFoundError } from "../errors/quote-not-found-error";
 import { QuoteAccessDeniedError } from "../errors/quote-access denied-error";
 
+import { QuoteAlreadyFinalizedError } from "../errors/quote-already-finalized-error";
 import { AppError } from "@/shared/errors/AppError";
 
 interface UpdateQuoteStatusRequest {
@@ -49,13 +50,22 @@ class UpdateQuoteStatusUseCase {
       throw new QuoteNotFoundError();
     }
 
+    // Validate if quote is already finalized (CLOSED or CONVERTED)
+    if (quote.status === "CLOSED" || quote.status === "CONVERTED") {
+      throw new QuoteAlreadyFinalizedError();
+    }
+
     const updateData: any = {
       status,
       notes,
       updated_at: new Date(),
     };
 
-    if (status === "CONTACTED" || status === "CLOSED") {
+    // Only update contacted_at when status changes to CONTACTED or CLOSED
+    if (
+      (status === "CONTACTED" || status === "CLOSED") &&
+      quote.status !== status
+    ) {
       updateData.contacted_at = new Date();
     }
 

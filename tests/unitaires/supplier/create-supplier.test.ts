@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-
 import { CreateSupplierUseCase } from "@/modules/supplier/usecases/create-supplier/create-supplier-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";

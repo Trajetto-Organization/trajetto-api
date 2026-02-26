@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 import { createServiceOrderPartSchema } from "@/schemas/create-service-order-part-schema";
-
 import { updateServiceOrderPartSchema } from "@/schemas/update-service-order-part-schema";
+
 import { listPagesSchema } from "@/schemas/list-pages-schema";
 
 const serviceOrderPartParams = z.object({
@@ -36,18 +36,39 @@ const serviceOrderPartResponses = {
     data: z.array(
       z.object({
         id: z.string(),
-        unit_price: z.string(),
+        unit_price: z.union([z.string(), z.number()]),
         quantity: z.number(),
-        discount_percentage: z.string(),
+        discount_percentage: z
+          .union([z.string(), z.number()])
+          .nullable()
+          .optional(),
         businessId: z.string(),
         serviceOrderId: z.string(),
         partId: z.string(),
-        partDescription: z.string(),
-        partUnitPrice: z.string(),
-        totalPrice: z.string(),
-        totalWithDiscount: z.string(),
-        created_at: z.string(),
-        updated_at: z.string(),
+        created_at: z.union([z.string(), z.date()]),
+        updated_at: z.union([z.string(), z.date()]),
+        part: z.object({
+          id: z.string(),
+          description: z.string(),
+          unit_price: z.union([z.string(), z.number()]),
+          businessId: z.string(),
+          supplierId: z.string().nullable(),
+          created_at: z.union([z.string(), z.date()]),
+          updated_at: z.union([z.string(), z.date()]),
+        }),
+        business: z
+          .object({
+            corporate_reason: z.string(),
+          })
+          .optional(), // Only for MASTER role
+        serviceOrder: z.object({
+          id: z.string(),
+          date: z.union([z.string(), z.date()]),
+          vehicle: z.object({
+            license_plate: z.string(),
+            description: z.string(),
+          }),
+        }),
       }),
     ),
     total: z.number(),
@@ -134,7 +155,22 @@ const serviceOrderPartResponses = {
         .default("Esta ordem de serviço não pertence a esta empresa!"),
     }),
     z.object({
-      message: z.string().default("Esta peça não pertence a esta empresa!"),
+      message: z
+        .string()
+        .default("Esta peça não pertence a esta ordem de serviço!"),
+    }),
+  ]),
+
+  createServiceOrderPartForbiddenErrors: z.union([
+    z.object({
+      message: z
+        .string()
+        .default("Esta ordem de serviço não pertence a esta empresa!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Esta peça não pertence a esta ordem de serviço!"),
     }),
   ]),
 
@@ -145,17 +181,6 @@ const serviceOrderPartResponses = {
     }),
     z.object({
       message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Ordem de serviço não encontrada!"),
-    }),
-    z.object({
-      message: z.string().default("Usuário não possui empresa associada!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Esta ordem de serviço não pertence a esta empresa!"),
     }),
   ]),
 
@@ -184,20 +209,18 @@ const serviceOrderPartResponses = {
     z.object({
       message: z
         .string()
+        .default("Esta peça já foi adicionada à ordem de serviço!"),
+    }),
+  ]),
+
+  updateServiceOrderPartForbiddenErrors: z.union([
+    z.object({
+      message: z
+        .string()
         .default("Esta ordem de serviço não pertence a esta empresa!"),
     }),
     z.object({
-      message: z
-        .string()
-        .default("Esta peça não pertence a esta ordem de serviço!"),
-    }),
-    z.object({
       message: z.string().default("Esta peça não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Esta peça já foi adicionada à ordem de serviço!"),
     }),
   ]),
 
@@ -216,6 +239,9 @@ const serviceOrderPartResponses = {
     z.object({
       message: z.string().default("Peça da ordem de serviço não encontrada!"),
     }),
+  ]),
+
+  deleteServiceOrderPartForbiddenErrors: z.union([
     z.object({
       message: z
         .string()

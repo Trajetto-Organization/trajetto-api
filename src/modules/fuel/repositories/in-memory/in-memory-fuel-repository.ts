@@ -7,14 +7,11 @@ import {
   Fuel,
   CreateFuelProps,
   ListFuelProps,
-  ListFuelFormattedProps,
   ListFuelByBusinessIdProps,
   UpdateFuel,
   ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
   ListFuelByVehicleIdProps,
-  FuelWithRelationsFormatted,
-  FuelFormatted,
 } from "../../dtos/fuel-dto";
 
 class InMemoryFuelRepository implements IFuelRepository {
@@ -46,7 +43,7 @@ class InMemoryFuelRepository implements IFuelRepository {
       latitude_original: fuelData.latitude_original || null,
       longitude_original: fuelData.longitude_original || null,
       location_source: fuelData.location_source || null,
-      created_from: fuelData.created_from || "WEB",
+      created_from: fuelData.created_from,
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -66,10 +63,11 @@ class InMemoryFuelRepository implements IFuelRepository {
     fuelTypeId,
     startDate,
     endDate,
-  }: ListFuelByBusinessIdProps): Promise<ListFuelFormattedProps> {
-    let filteredFuels = this.fuels.filter(
-      (fuel) => fuel.businessId === businessId,
-    );
+  }: ListFuelByBusinessIdProps): Promise<ListFuelProps> {
+    let filteredFuels =
+      currentUserRole === "MASTER"
+        ? [...this.fuels]
+        : this.fuels.filter((fuel) => fuel.businessId === businessId);
 
     if (vehicleId) {
       filteredFuels = filteredFuels.filter(
@@ -92,6 +90,7 @@ class InMemoryFuelRepository implements IFuelRepository {
     if (startDate && endDate) {
       const start = new Date(startDate);
       const end = new Date(endDate);
+
       filteredFuels = filteredFuels.filter((fuel) => {
         const fuelDate = new Date(fuel.refueling_date);
         return fuelDate >= start && fuelDate <= end;
@@ -109,6 +108,7 @@ class InMemoryFuelRepository implements IFuelRepository {
     }
 
     const skip = (page - 1) * pageSize;
+
     const data = filteredFuels.slice(skip, skip + pageSize) as any[];
     const total = filteredFuels.length;
 
@@ -188,33 +188,16 @@ class InMemoryFuelRepository implements IFuelRepository {
     return found || null;
   }
 
-  async findFuelByIdWithRelations(
-    fuelId: string,
-  ): Promise<FuelWithRelationsFormatted | null> {
+  async findFuelByIdWithRelations(fuelId: string): Promise<any | null> {
     const fuel = this.fuels.find((fuel) => fuel.id === fuelId);
 
     if (!fuel) {
       return null;
     }
 
-    // Mock relations data for testing
+    // Mock relations data for testing (raw data, same as Prisma includes)
     return {
-      id: fuel.id,
-      current_mileage: fuel.current_mileage,
-      liters_amount: fuel.liters_amount.toString(),
-      price_per_liter: fuel.price_per_liter.toString(),
-      total_amount: fuel.total_amount.toString(),
-      odometer_photo: fuel.odometer_photo,
-      odometer_verified: fuel.odometer_verified,
-      notes: fuel.notes,
-      refueling_date: new Date(fuel.refueling_date).toISOString(),
-      businessId: fuel.businessId,
-      branchId: fuel.branchId,
-      vehicleId: fuel.vehicleId,
-      driverId: fuel.driverId,
-      fuelTypeId: fuel.fuelTypeId,
-      created_at: new Date(fuel.created_at).toISOString(),
-      updated_at: new Date(fuel.updated_at).toISOString(),
+      ...fuel,
       business: {
         id: fuel.businessId,
         corporate_reason: `Business ${fuel.businessId}`,
@@ -258,7 +241,7 @@ class InMemoryFuelRepository implements IFuelRepository {
   async getFuelByIdAndBusinessWithRelations({
     businessId,
     fuelId,
-  }: GetFuelByIdAndBusinessProps): Promise<FuelWithRelationsFormatted | null> {
+  }: GetFuelByIdAndBusinessProps): Promise<any | null> {
     const fuel = this.fuels.find(
       (fuel) => fuel.id === fuelId && fuel.businessId === businessId,
     );
@@ -287,9 +270,10 @@ class InMemoryFuelRepository implements IFuelRepository {
     userRole: string,
     search?: string,
   ): Promise<any[]> {
-    let filteredFuels = this.fuels.filter(
-      (fuel) => fuel.businessId === businessId,
-    );
+    let filteredFuels =
+      userRole === "MASTER"
+        ? [...this.fuels]
+        : this.fuels.filter((fuel) => fuel.businessId === businessId);
 
     if (search) {
       const searchTerm = search.toLowerCase();
@@ -347,7 +331,7 @@ class InMemoryFuelRepository implements IFuelRepository {
     businessId,
     page,
     pageSize,
-  }: ListFuelByVehicleIdProps): Promise<ListFuelFormattedProps> {
+  }: ListFuelByVehicleIdProps): Promise<ListFuelProps> {
     const skip = (page - 1) * pageSize;
 
     // Filter fuels by vehicleId and businessId
@@ -355,46 +339,18 @@ class InMemoryFuelRepository implements IFuelRepository {
       (fuel) => fuel.vehicleId === vehicleId && fuel.businessId === businessId,
     );
 
-    // Sort by refueling_date descending (most recent first)
+    // Sort by created_at descending (most recent first)
     const sortedFuels = filteredFuels.sort((a, b) => {
-      const dateA = new Date(a.refueling_date).getTime();
-      const dateB = new Date(b.refueling_date).getTime();
+      const dateA = new Date(a.created_at).getTime();
+      const dateB = new Date(b.created_at).getTime();
       return dateB - dateA;
     });
 
     // Paginate
     const paginatedFuels = sortedFuels.slice(skip, skip + pageSize);
 
-    // Transform to FuelFormatted
-    const transformedFuels: FuelFormatted[] = paginatedFuels.map((fuel) => ({
-      id: fuel.id,
-      current_mileage: fuel.current_mileage,
-      liters_amount: fuel.liters_amount,
-      price_per_liter: fuel.price_per_liter.toString(),
-      total_amount: fuel.total_amount.toString(),
-      odometer_photo: fuel.odometer_photo,
-      odometer_verified: fuel.odometer_verified,
-      notes: fuel.notes ?? "N/A",
-      refueling_date: new Date(fuel.refueling_date),
-      businessId: fuel.businessId,
-      branchId: fuel.branchId,
-      vehicleId: fuel.vehicleId,
-      driverId: fuel.driverId,
-      fuelTypeId: fuel.fuelTypeId,
-      branch_name: `Branch ${fuel.branchId}`,
-      vehicle_description: `Vehicle ${fuel.vehicleId}`,
-      vehicle_license_plate: `ABC-${fuel.vehicleId.substring(0, 4)}`,
-      vehicle_brand: "Test Brand",
-      vehicle_model: "Test Model",
-      driver_name: `Driver ${fuel.driverId}`,
-      driver_cnh: `CNH-${fuel.driverId.substring(0, 8)}`,
-      fuel_type_description: `Fuel Type ${fuel.fuelTypeId}`,
-      created_at: new Date(fuel.created_at).toISOString(),
-      updated_at: new Date(fuel.updated_at).toISOString(),
-    }));
-
     return {
-      data: transformedFuels,
+      data: paginatedFuels,
       total: sortedFuels.length,
     };
   }

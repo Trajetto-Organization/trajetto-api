@@ -11,8 +11,9 @@ import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-n
 import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
 
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { UploadService } from "@/shared/services/upload-service";
 
-import { ListFuelFormattedProps } from "../../dtos/fuel-dto";
+import { ListFuelProps } from "../../dtos/fuel-dto";
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
@@ -26,6 +27,8 @@ class ListFuelByVehicleUseCase {
     private user: IUserRepository,
     @inject("BusinessRepository")
     private business: IBusinessRepository,
+    @inject("UploadService")
+    private uploadService: UploadService,
   ) {}
 
   async execute(
@@ -33,7 +36,7 @@ class ListFuelByVehicleUseCase {
     vehicleId: string,
     page: number,
     pageSize: number,
-  ): Promise<ListFuelFormattedProps> {
+  ): Promise<ListFuelProps> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -67,7 +70,15 @@ class ListFuelByVehicleUseCase {
         pageSize,
       });
 
-      return fuels;
+      return {
+        ...fuels,
+        data: fuels.data.map((fuel) => ({
+          ...fuel,
+          odometer_photo: fuel.odometer_photo
+            ? this.uploadService.getFileUrl(fuel.odometer_photo)
+            : null,
+        })),
+      };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar listar os abastecimentos do veículo! Por favor, tente novamente.",

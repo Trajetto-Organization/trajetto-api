@@ -1,6 +1,8 @@
 class DriverCpfAlreadyExistsError extends Error {
   constructor() {
-    super("Já existe um motorista cadastrado com este CPF!");
+    super(
+      "Este CPF não está disponível para cadastro. Os CPFs de motoristas devem ser únicos em todo o sistema.",
+    );
   }
 }
 

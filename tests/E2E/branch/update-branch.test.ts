@@ -211,7 +211,7 @@ describe("Update Branch E2E", () => {
 
     expect(response.statusCode).toEqual(400);
     expect(response.body.message).toBe(
-      "Já existe uma filial cadastrada com esta razão social.",
+      "Esta razão social não está disponível para cadastro. As razões sociais de filiais devem ser únicas em todo o sistema.",
     );
   });
 
@@ -275,7 +275,9 @@ describe("Update Branch E2E", () => {
       .send(updatePayload);
 
     expect(response.statusCode).toEqual(400);
-    expect(response.body.message).toBe("Já existe uma filial com este CNPJ.");
+    expect(response.body.message).toBe(
+      "Este CNPJ não está disponível para cadastro. Os CNPJs de filiais devem ser únicos em todo o sistema.",
+    );
   });
 
   it("should throw BranchErpCodeAlreadyExistsError if a branch with the same ERP code exists", async () => {
@@ -339,7 +341,7 @@ describe("Update Branch E2E", () => {
 
     expect(response.statusCode).toEqual(400);
     expect(response.body.message).toBe(
-      "Já existe uma filial com este código ERP.",
+      "Este código ERP não está disponível para cadastro. Os códigos ERP de filiais devem ser únicos em todo o sistema.",
     );
   });
 
@@ -404,7 +406,7 @@ describe("Update Branch E2E", () => {
 
     expect(response.statusCode).toEqual(400);
     expect(response.body.message).toBe(
-      "Este e-mail já foi cadastrado em uma filial!",
+      "Este e-mail não está disponível para cadastro. Os e-mails de filiais devem ser únicos em todo o sistema.",
     );
   });
 

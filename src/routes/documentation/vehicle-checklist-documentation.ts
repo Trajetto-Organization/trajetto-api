@@ -19,6 +19,12 @@ const vehicleChecklistSchemas = {
   }),
   updateDeleteBusiness: updateDeleteBusinessSchema,
   businessIdParam: updateDeleteBusinessSchema,
+  exportVehicleChecklistsQuery: z.object({
+    search: z
+      .string()
+      .optional()
+      .describe("Search term to filter vehicle checklists"),
+  }),
 };
 
 const vehicleChecklistResponses = {
@@ -36,7 +42,9 @@ const vehicleChecklistResponses = {
       z.object({
         id: z.string().describe("Vehicle checklist record ID"),
         current_mileage: z.number().describe("Current vehicle mileage"),
-        checklist_date: z.string().describe("Date of checklist inspection"),
+        checklist_date: z
+          .union([z.date(), z.string()])
+          .describe("Date of checklist inspection (RAW: Date or ISO string)"),
         tires_condition: z
           .enum(["good", "fair", "poor"])
           .describe("Condition of tires"),
@@ -108,22 +116,40 @@ const vehicleChecklistResponses = {
         branchId: z.string().describe("Branch ID"),
         vehicleId: z.string().describe("Vehicle ID"),
         driverId: z.string().describe("Driver ID"),
-        business_name: z.string().optional().describe("Business name"),
-        branch_name: z.string().describe("Branch name"),
-        vehicle_description: z
-          .string()
-          .nullable()
-          .describe("Vehicle description"),
-        vehicle_license_plate: z
-          .string()
-          .nullable()
-          .describe("Vehicle license plate"),
-        vehicle_brand: z.string().nullable().describe("Vehicle brand"),
-        vehicle_model: z.string().nullable().describe("Vehicle model"),
-        driver_name: z.string().nullable().describe("Driver name"),
-        driver_cnh: z.string().nullable().describe("Driver CNH"),
-        created_at: z.string().describe("Creation date"),
-        updated_at: z.string().describe("Last update date"),
+        business: z
+          .object({
+            corporate_reason: z.string(),
+            fantasy_name: z.string().nullable(),
+          })
+          .optional()
+          .describe("Business nested object (only for MASTER role)"),
+        branch: z
+          .object({
+            corporate_reason: z.string(),
+            fantasy_name: z.string().nullable(),
+          })
+          .describe("Branch nested object"),
+        vehicle: z
+          .object({
+            description: z.string(),
+            license_plate: z.string(),
+            brand: z.string(),
+            model: z.string(),
+            current_mileage: z.number(),
+          })
+          .describe("Vehicle nested object"),
+        driver: z
+          .object({
+            name: z.string(),
+            cnh: z.string(),
+          })
+          .describe("Driver nested object"),
+        created_at: z
+          .union([z.date(), z.string()])
+          .describe("Creation date (RAW: Date or ISO string)"),
+        updated_at: z
+          .union([z.date(), z.string()])
+          .describe("Last update date (RAW: Date or ISO string)"),
       }),
     ),
     total: z.number().describe("Total number of records"),
@@ -191,6 +217,23 @@ const vehicleChecklistResponses = {
     message: z.string().default("Erro de validação nos dados fornecidos."),
     details: z.string().optional(),
   }),
+  vehicleNotAssignedToDriver: z.object({
+    message: z.string().default("Veículo não atribuído ao motorista."),
+  }),
+  driverCannotUpdateChecklist: z.object({
+    message: z
+      .string()
+      .default(
+        "Motoristas não possuem permissão para editar registros de checklist veicular. Apenas criar novos.",
+      ),
+  }),
+  driverCannotDeleteChecklist: z.object({
+    message: z
+      .string()
+      .default(
+        "Motoristas não possuem permissão para deletar registros de checklist veicular.",
+      ),
+  }),
   listVehicleChecklistErrors: z.union([
     z.object({
       message: z.string().default("Erro de validação nos dados fornecidos."),
@@ -252,6 +295,9 @@ const vehicleChecklistResponses = {
           "O tamanho total dos arquivos excede o limite permitido de 5MB.",
         ),
     }),
+    z.object({
+      message: z.string().default("Veículo não atribuído ao motorista."),
+    }),
   ]),
   updateVehicleChecklistErrors: z.union([
     z.object({
@@ -309,7 +355,35 @@ const vehicleChecklistResponses = {
           "O tamanho total dos arquivos excede o limite permitido de 5MB.",
         ),
     }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Motoristas não possuem permissão para editar registros de checklist veicular. Apenas criar novos.",
+        ),
+    }),
   ]),
+
+  deleteVehicleChecklistErrors: z.union([
+    z.object({ message: z.string().default("Recurso não encontrado.") }),
+    z.object({ message: z.string().default("Empresa não encontrada.") }),
+    z.object({
+      message: z.string().default("Checklist veicular não encontrado."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Este checklist veicular não pertence a esta empresa."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Motoristas não possuem permissão para deletar registros de checklist veicular.",
+        ),
+    }),
+  ]),
+
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
   }),

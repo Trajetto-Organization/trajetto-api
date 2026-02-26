@@ -1,6 +1,8 @@
 class PartAlreadyExistsError extends Error {
   constructor() {
-    super("Esta peça já foi cadastrada para esta empresa!");
+    super(
+      "Esta peça não está disponível para cadastro. Já existe uma peça com este nome.",
+    );
   }
 }
 

@@ -505,7 +505,6 @@ describe("Create Part UseCase", () => {
     };
 
     const part = await createPartUseCase.execute(partData, user.id);
-
     expect(notificationService.createActivityIfEnabled).toHaveBeenCalledWith({
       type: "Peça",
       action: "create",

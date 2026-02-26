@@ -65,7 +65,7 @@ class ExportFuelExcelUseCase {
         formatter: ExcelExportService.formatters.currency,
       },
       { header: "Quilometragem Atual", key: "currentMileage", width: 18 },
-      { header: "Hodômetro Verificado", key: "odometerVerified", width: 20 },
+      { header: "Odômetro Verificado", key: "odometerVerified", width: 20 },
       { header: "Observações", key: "notes", width: 30 },
       { header: "Latitude", key: "latitude", width: 30 },
       { header: "Longitude", key: "longitude", width: 30 },
@@ -82,14 +82,14 @@ class ExportFuelExcelUseCase {
       {
         header: "Criado em",
         key: "created_at",
-        width: 15,
-        formatter: ExcelExportService.formatters.date,
+        width: 20,
+        formatter: ExcelExportService.formatters.notificationDateTime,
       },
       {
         header: "Atualizado em",
         key: "updated_at",
-        width: 15,
-        formatter: ExcelExportService.formatters.date,
+        width: 20,
+        formatter: ExcelExportService.formatters.notificationDateTime,
       },
     ];
 

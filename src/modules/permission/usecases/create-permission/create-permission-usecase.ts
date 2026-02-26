@@ -20,6 +20,8 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { PermissionBusinessError } from "../errors/permission-business-error";
 import { AppError } from "@/shared/errors/AppError";
 
+import { sendSecurityEventToBusiness } from "@/websocket";
+
 @injectable()
 class CreatePermissionUseCase {
   constructor(
@@ -110,6 +112,10 @@ class CreatePermissionUseCase {
         status: "Completo",
         performedBy: userId,
         businessId: businessId,
+      });
+
+      sendSecurityEventToBusiness(businessId, {
+        reason: "permissions_changed",
       });
 
       return permissionCreated;

@@ -2,20 +2,18 @@ import {
   Fuel,
   CreateFuelProps,
   ListFuelProps,
-  ListFuelFormattedProps,
   ListFuelByBusinessIdProps,
   UpdateFuel,
   ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
   ListFuelByVehicleIdProps,
-  FuelWithRelationsFormatted,
 } from "../dtos/fuel-dto";
 
 interface IFuelRepository {
   createFuel: (fuelData: CreateFuelProps) => Promise<Fuel>;
   listFuels: (
     listFuelProps: ListFuelByBusinessIdProps,
-  ) => Promise<ListFuelFormattedProps>;
+  ) => Promise<ListFuelProps>;
   listFuelBusiness: ({
     page,
     pageSize,
@@ -24,9 +22,7 @@ interface IFuelRepository {
   updateFuel: ({ fuelData, fuelId }: UpdateFuel) => Promise<Fuel>;
   deleteFuel: (fuelId: string) => Promise<Fuel>;
   findFuelById: (fuelId: string) => Promise<Fuel | null>;
-  findFuelByIdWithRelations: (
-    fuelId: string,
-  ) => Promise<FuelWithRelationsFormatted | null>;
+  findFuelByIdWithRelations: (fuelId: string) => Promise<any | null>;
   getFuelByIdAndBusiness({
     businessId,
     fuelId,
@@ -34,7 +30,7 @@ interface IFuelRepository {
   getFuelByIdAndBusinessWithRelations({
     businessId,
     fuelId,
-  }: GetFuelByIdAndBusinessProps): Promise<FuelWithRelationsFormatted | null>;
+  }: GetFuelByIdAndBusinessProps): Promise<any | null>;
   findFuelsByVehicleId: (vehicleId: string) => Promise<Fuel[]>;
   findFuelsByDriverId: (driverId: string) => Promise<Fuel[]>;
   findFuelsByFuelTypeId: (fuelTypeId: string) => Promise<Fuel[]>;
@@ -49,7 +45,7 @@ interface IFuelRepository {
   ) => Promise<Fuel | null>;
   listFuelsByVehicleId: (
     listFuelProps: ListFuelByVehicleIdProps,
-  ) => Promise<ListFuelFormattedProps>;
+  ) => Promise<ListFuelProps>;
 }
 
 export { IFuelRepository };

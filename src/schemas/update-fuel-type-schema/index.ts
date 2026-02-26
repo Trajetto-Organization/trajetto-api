@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { emptyStringToNull } from "@/shared/utils/zod-schema-helpers";
 
 const allowedFuelTypes = [
   "Gasolina",
@@ -12,14 +13,17 @@ const allowedFuelTypes = [
 ] as const;
 
 const updateFuelTypeSchema = z.object({
-  description: z
-    .enum(allowedFuelTypes, {
-      errorMap: () => ({
-        message: "Combustível inválido. Selecione uma opção válida.",
-      }),
-    })
-    .optional()
-    .or(z.literal("")),
+  description: z.preprocess(
+    emptyStringToNull,
+    z
+      .enum(allowedFuelTypes, {
+        errorMap: () => ({
+          message: "Combustível inválido. Selecione uma opção válida.",
+        }),
+      })
+      .optional()
+      .nullable(),
+  ),
 });
 
 export { updateFuelTypeSchema };

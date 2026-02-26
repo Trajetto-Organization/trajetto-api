@@ -179,7 +179,6 @@ describe("Create User UseCase", () => {
       createUserUseCase.execute(
         {
           email: "newuser@example.com",
-          password: "newuserpass",
           name: "New User",
           role: "BUSINESS_ADMIN",
           businessId: business.id as string,

@@ -1,18 +1,10 @@
 import { z } from "zod";
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const isEmptyOrWhitespace = (value: string): boolean =>
-  value.trim().length === 0;
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
-
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
+import {
+  emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+  isEmptyOrWhitespace,
+} from "@/shared/utils/zod-schema-helpers";
 
 const updateSupplierSchema = z.object({
   name: z
@@ -25,6 +17,7 @@ const updateSupplierSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O nome do fornecedor não deve exceder 100 caracteres.",
         });
+
         return;
       }
 
@@ -33,6 +26,7 @@ const updateSupplierSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O nome do fornecedor não deve conter espaços consecutivos.",
         });
+
         return;
       }
 
@@ -42,6 +36,7 @@ const updateSupplierSchema = z.object({
           message:
             "O nome do fornecedor não pode começar ou terminar com espaço em branco.",
         });
+
         return;
       }
 
@@ -50,6 +45,7 @@ const updateSupplierSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "Por favor, insira o nome do fornecedor completo.",
         });
+
         return;
       }
 
@@ -67,6 +63,7 @@ const updateSupplierSchema = z.object({
       if (typeof val === "string") {
         return val.replace(/\D/g, "");
       }
+
       return val;
     },
     z
@@ -79,6 +76,7 @@ const updateSupplierSchema = z.object({
       if (typeof val === "string") {
         val = val.replace(/\D/g, "");
       }
+
       return emptyStringToNull(val);
     },
     z
@@ -236,6 +234,7 @@ const updateSupplierSchema = z.object({
             message:
               "O número do endereço não pode ser vazio ou conter apenas espaços.",
           });
+
           return;
         }
 
@@ -245,6 +244,7 @@ const updateSupplierSchema = z.object({
             message:
               "O número do endereço não deve conter espaços consecutivos.",
           });
+
           return;
         }
       })
@@ -267,6 +267,7 @@ const updateSupplierSchema = z.object({
             message:
               "O nome do complemento não deve conter espaços consecutivos.",
           });
+
           return;
         }
 
@@ -276,6 +277,7 @@ const updateSupplierSchema = z.object({
             message:
               "O nome do complemento não pode começar ou terminar com espaço em branco.",
           });
+
           return;
         }
 
@@ -295,6 +297,7 @@ const updateSupplierSchema = z.object({
       if (typeof val === "string") {
         val = val.replace(/\D/g, "");
       }
+
       return emptyStringToNull(val);
     },
     z

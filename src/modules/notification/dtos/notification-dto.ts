@@ -23,10 +23,12 @@ interface Notification {
   updated_at: Date | string;
 }
 
-interface ListNotificationsProps {
+interface CursorPaginatedNotifications {
   data: Notification[];
   total: number;
   unread: number;
+  nextCursor: string | null; // ID of last notification, null if no more pages
+  hasMore: boolean;
 }
 
-export { Notification, CreateNotificationProps, ListNotificationsProps };
+export { Notification, CreateNotificationProps, CursorPaginatedNotifications };

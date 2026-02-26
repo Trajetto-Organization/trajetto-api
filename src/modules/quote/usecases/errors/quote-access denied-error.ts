@@ -1,6 +1,6 @@
 class QuoteAccessDeniedError extends Error {
   constructor() {
-    super("Acesso negado");
+    super("Acesso negado.");
   }
 }
 

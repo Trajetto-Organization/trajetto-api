@@ -23,16 +23,16 @@ describe("Update Profile Access Zod Validation Fields", () => {
     );
   });
 
-  it("should fail when the name is empty or contains only spaces", () => {
+  it("should convert whitespace-only name to null", () => {
     const result = updateProfileAccessSchema.safeParse({
       name: "   ",
       businessId: "1",
     });
 
-    expect(result.success).toBe(false);
-    expect(result.error?.format().name?._errors).toContain(
-      "O nome do perfil de acesso não pode ser vazio ou conter apenas espaços.",
-    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.name).toBeNull();
+    }
   });
 
   it("should fail when the name exceeds 100 characters", () => {

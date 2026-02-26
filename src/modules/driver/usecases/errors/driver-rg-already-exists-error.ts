@@ -1,6 +1,8 @@
 class DriverRgAlreadyExistsError extends Error {
   constructor() {
-    super("Já existe um motorista cadastrado com este RG!");
+    super(
+      "Este RG não está disponível para cadastro. Os RGs de motoristas devem ser únicos em todo o sistema.",
+    );
   }
 }
 

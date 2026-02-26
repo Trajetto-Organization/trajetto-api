@@ -3,19 +3,10 @@ import { z } from "zod";
 import { LocationSource } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
-
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
+import {
+  emptyStringToNull,
+  isValidDateString,
+} from "@/shared/utils/zod-schema-helpers";
 
 const updateServiceOrderSchema = z
   .object({
@@ -66,6 +57,7 @@ const updateServiceOrderSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -86,6 +78,7 @@ const updateServiceOrderSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -109,6 +102,7 @@ const updateServiceOrderSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -134,6 +128,7 @@ const updateServiceOrderSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -172,9 +167,11 @@ const updateServiceOrderSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "" || val === "null") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z
@@ -191,9 +188,11 @@ const updateServiceOrderSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "" || val === "null") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z

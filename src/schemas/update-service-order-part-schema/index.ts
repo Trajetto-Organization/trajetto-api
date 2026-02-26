@@ -1,13 +1,5 @@
 import { z } from "zod";
-
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
+import { emptyStringToNull } from "@/shared/utils/zod-schema-helpers";
 
 const updateServiceOrderPartSchema = z.object({
   unit_price: z

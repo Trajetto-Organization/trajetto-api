@@ -45,6 +45,13 @@ class InMemoryProfileAccessRepository implements IProfileAccessRepository {
       );
     }
 
+    // BUSINESS_USER should not see their own profile access
+    if (currentUserRole === "BUSINESS_USER" && profileAccessId) {
+      filteredProfiles = filteredProfiles.filter(
+        (profile) => profile.id !== profileAccessId,
+      );
+    }
+
     // Apply search filter
     if (search) {
       const searchLower = search.toLowerCase();

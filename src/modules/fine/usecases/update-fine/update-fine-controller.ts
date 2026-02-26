@@ -19,14 +19,14 @@ import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors
 import { TrafficViolationCodeNotFoundError } from "../errors/traffic-violation-code-not-found-error";
 
 import { FineNotFoundError } from "../errors/fine-not-found-error";
-import { FineNumberAlreadyExistsError } from "../errors/fine-number-already-exists-error";
 
 import { FineDueDateMustBeAfterInfractionError } from "../errors/fine-due-date-must-be-after-infraction-error";
 import { FinePaymentDateCannotBeEarlierInfractionError } from "../errors/fine-payment-date-cannot-be-earlier-infraction-error";
 
-import { FineUserNotAllowedChangeError } from "../errors/fine-user-not-allowed-change-error";
+import { FineNotBelongBusinessError } from "../errors/fine-not-belong-business-error";
 import { FineDueDateInfractionCannotBeLaterError } from "../errors/fine-due-date-infraction-cannot-be-later-error";
 
+import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { FineDueDateMustBeLaterInfractionError } from "../errors/fine-due-date-must-be-later-infraction-error";
 
 class UpdateFineController {
@@ -36,13 +36,14 @@ class UpdateFineController {
   ): Promise<Response> {
     const { id } = request.user;
 
+    const { businessId } = updateDeleteBusinessSchema.parse(request.params);
     const { fineId } = updateDeleteFineSchema.parse(request.params);
-    const fineData = updateFineSchema.parse(request.body);
 
+    const fineData = updateFineSchema.parse(request.body);
     const updateFineUseCase = container.resolve(UpdateFineUseCase);
 
     try {
-      await updateFineUseCase.execute(fineData, fineId, id);
+      await updateFineUseCase.execute(fineData, fineId, id, businessId);
 
       return reply.status(200).send({
         message: "Multa atualizada com sucesso!",
@@ -68,10 +69,6 @@ class UpdateFineController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof FineNumberAlreadyExistsError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
       if (error instanceof FineDueDateMustBeAfterInfractionError) {
         return reply.status(400).send({ message: error.message });
       }
@@ -88,7 +85,7 @@ class UpdateFineController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof FineUserNotAllowedChangeError) {
+      if (error instanceof FineNotBelongBusinessError) {
         return reply.status(403).send({ message: error.message });
       }
 

@@ -134,6 +134,7 @@ describe("List Branch Business UseCase", () => {
 
     await branchInMemory.createBranch(branch1Data);
     await branchInMemory.createBranch(branch2Data);
+
     await branchInMemory.createBranch(branch3Data);
 
     const result = await listBranchBusiness.execute(
@@ -145,8 +146,10 @@ describe("List Branch Business UseCase", () => {
 
     expect(result.data).toHaveLength(2); // Only branches from business1
     expect(result.total).toBe(2);
+
     expect(result.data[0].corporate_reason).toBe("Branch 1 - Business 1");
     expect(result.data[1].corporate_reason).toBe("Branch 2 - Business 1");
+
     expect(
       result.data.every((branch) => branch.businessId === business1.id),
     ).toBe(true);
@@ -210,8 +213,10 @@ describe("List Branch Business UseCase", () => {
       2,
       business.id as string,
     );
+
     expect(firstPage.data).toHaveLength(2);
     expect(firstPage.total).toBe(5);
+
     expect(firstPage.data[0].corporate_reason).toBe("Branch 1");
     expect(firstPage.data[1].corporate_reason).toBe("Branch 2");
 
@@ -224,6 +229,7 @@ describe("List Branch Business UseCase", () => {
     );
     expect(secondPage.data).toHaveLength(2);
     expect(secondPage.total).toBe(5);
+
     expect(secondPage.data[0].corporate_reason).toBe("Branch 3");
     expect(secondPage.data[1].corporate_reason).toBe("Branch 4");
 
@@ -234,8 +240,10 @@ describe("List Branch Business UseCase", () => {
       2,
       business.id as string,
     );
+
     expect(thirdPage.data).toHaveLength(1);
     expect(thirdPage.total).toBe(5);
+
     expect(thirdPage.data[0].corporate_reason).toBe("Branch 5");
   });
 

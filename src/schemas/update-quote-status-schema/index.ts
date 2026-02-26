@@ -1,7 +1,8 @@
 import { z } from "zod";
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
+import {
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+} from "@/shared/utils/zod-schema-helpers";
 
 const updateQuoteStatusSchema = z.object({
   status: z.enum(["PENDING", "CONTACTED", "CLOSED", "CONVERTED"]),

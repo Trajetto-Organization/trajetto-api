@@ -1,6 +1,8 @@
 class SupplierNameAlreadyExistsError extends Error {
   constructor() {
-    super("Já existe um fornecedor com este nome para esta empresa.");
+    super(
+      "Este nome não está disponível para cadastro. Já existe um fornecedor com este nome.",
+    );
   }
 }
 

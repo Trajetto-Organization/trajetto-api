@@ -1,5 +1,4 @@
 import { FastifyInstance } from "fastify";
-import { z } from "zod";
 
 import { CreateFineController } from "@/modules/fine/usecases/create-fine/create-fine-controller";
 import { ListFineController } from "@/modules/fine/usecases/list-fine/list-fine-controller";
@@ -38,21 +37,8 @@ async function fineRoutes(app: FastifyInstance) {
         body: fineSchemas.createFine,
         response: {
           201: fineResponses.fineCreated,
-          400: z.union([
-            fineResponses.resourceNotFound,
-            fineResponses.businessNotFound,
-            fineResponses.branchNotFound,
-            fineResponses.driverNotFound,
-            fineResponses.vehicleNotFound,
-            fineResponses.trafficViolationCodeNotFound,
-            fineResponses.fineNumberAlreadyExists,
-            fineResponses.validationError,
-          ]),
-          403: z.union([
-            fineResponses.branchNotBelongBusiness,
-            fineResponses.driverNotBelongBusiness,
-            fineResponses.vehicleNotBelongBusiness,
-          ]),
+          400: fineResponses.createFineErrors,
+          403: fineResponses.createFineForbiddenErrors,
           500: fineResponses.internalServerError,
         },
       },
@@ -97,13 +83,17 @@ async function fineRoutes(app: FastifyInstance) {
         produces: [
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ],
+        response: {
+          400: fineResponses.resourceNotFound,
+          500: fineResponses.internalServerError,
+        },
       },
     },
     exportFineExcelController.handle,
   );
 
   app.patch(
-    "/update-fine/:fineId",
+    "/update-fine/:fineId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("fine_manage", "write")],
@@ -113,24 +103,13 @@ async function fineRoutes(app: FastifyInstance) {
         summary: "Update a fine",
         description:
           "Update information about an existing traffic violation fine",
-        params: fineSchemas.updateDeleteFine,
+        params: fineSchemas.fineBusinessParams,
         body: fineSchemas.updateFine,
         response: {
           200: fineResponses.fineUpdated,
-          400: z.union([
-            fineResponses.resourceNotFound,
-            fineResponses.branchNotFound,
-            fineResponses.driverNotFound,
-            fineResponses.vehicleNotFound,
-            fineResponses.trafficViolationCodeNotFound,
-            fineResponses.fineNumberAlreadyExists,
-            fineResponses.validationError,
-          ]),
-          403: z.union([
-            fineResponses.branchNotBelongBusiness,
-            fineResponses.driverNotBelongBusiness,
-            fineResponses.vehicleNotBelongBusiness,
-          ]),
+          400: fineResponses.updateFineErrors,
+          403: fineResponses.updateFineForbiddenErrors,
+          404: fineResponses.fineNotFound,
           500: fineResponses.internalServerError,
         },
       },
@@ -152,6 +131,7 @@ async function fineRoutes(app: FastifyInstance) {
         response: {
           200: fineResponses.fineDeleted,
           400: fineResponses.resourceNotFound,
+          404: fineResponses.fineNotFound,
           500: fineResponses.internalServerError,
         },
       },

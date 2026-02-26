@@ -95,8 +95,10 @@ describe("List Branch UseCase", () => {
 
     expect(result.data).toHaveLength(3); // MASTER sees all branches
     expect(result.total).toBe(3);
+
     expect(result.data[0].corporate_reason).toBe("Branch 1");
     expect(result.data[1].corporate_reason).toBe("Branch 2");
+
     expect(result.data[2].corporate_reason).toBe("Branch 3");
   });
 
@@ -166,14 +168,17 @@ describe("List Branch UseCase", () => {
 
     await branchInMemory.createBranch(branch1Data);
     await branchInMemory.createBranch(branch2Data);
+
     await branchInMemory.createBranch(branch3Data);
 
     const result = await listBranch.execute(user.id, 1, 10);
 
     expect(result.data).toHaveLength(2); // Non-MASTER sees only branches from their business
     expect(result.total).toBe(2);
+
     expect(result.data[0].corporate_reason).toBe("Branch 1");
     expect(result.data[1].corporate_reason).toBe("Branch 3");
+
     expect(
       result.data.every((branch) => branch.businessId === "business-1"),
     ).toBe(true);
@@ -232,6 +237,7 @@ describe("List Branch UseCase", () => {
 
     expect(result.data).toHaveLength(1);
     expect(result.total).toBe(1);
+
     expect(result.data[0].corporate_reason).toBe("Technology Branch");
   });
 
@@ -288,6 +294,7 @@ describe("List Branch UseCase", () => {
 
     expect(result.data).toHaveLength(1);
     expect(result.total).toBe(1);
+
     expect(result.data[0].cnpj).toBe("11111111000111");
   });
 
@@ -344,6 +351,7 @@ describe("List Branch UseCase", () => {
 
     expect(result.data).toHaveLength(1);
     expect(result.total).toBe(1);
+
     expect(result.data[0].email).toBe("special@example.com");
   });
 
@@ -400,6 +408,7 @@ describe("List Branch UseCase", () => {
 
     expect(result.data).toHaveLength(1);
     expect(result.total).toBe(1);
+
     expect(result.data[0].fantasy_name).toBe("Unique Fantasy Name");
   });
 
@@ -438,22 +447,28 @@ describe("List Branch UseCase", () => {
 
     // Test first page (2 items per page)
     const firstPage = await listBranch.execute(user.id, 1, 2);
+
     expect(firstPage.data).toHaveLength(2);
     expect(firstPage.total).toBe(5);
+
     expect(firstPage.data[0].corporate_reason).toBe("Branch 1");
     expect(firstPage.data[1].corporate_reason).toBe("Branch 2");
 
     // Test second page
     const secondPage = await listBranch.execute(user.id, 2, 2);
+
     expect(secondPage.data).toHaveLength(2);
     expect(secondPage.total).toBe(5);
+
     expect(secondPage.data[0].corporate_reason).toBe("Branch 3");
     expect(secondPage.data[1].corporate_reason).toBe("Branch 4");
 
     // Test third page (only 1 item)
     const thirdPage = await listBranch.execute(user.id, 3, 2);
+
     expect(thirdPage.data).toHaveLength(1);
     expect(thirdPage.total).toBe(5);
+
     expect(thirdPage.data[0].corporate_reason).toBe("Branch 5");
   });
 
@@ -487,7 +502,6 @@ describe("List Branch UseCase", () => {
     };
 
     await branchInMemory.createBranch(branchData);
-
     const result = await listBranch.execute(user.id, 1, 10, "nonexistent");
 
     expect(result.data).toHaveLength(0);

@@ -10,11 +10,6 @@ import {
 } from "../dtos/service-order-dto";
 
 import database from "@/../infra/database";
-import {
-  formatDate,
-  formatCurrency,
-  formatNotificationDate,
-} from "@/config/format-values";
 
 class ServiceOrderRepository implements IServiceOrderRepository {
   constructor(private prisma = database) {}
@@ -86,54 +81,86 @@ class ServiceOrderRepository implements IServiceOrderRepository {
 
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
+        { branchId: { contains: normalizedSearch, mode: "insensitive" } },
+        { vehicleId: { contains: normalizedSearch, mode: "insensitive" } },
+        {
+          responsibleUserId: {
+            contains: normalizedSearch,
+            mode: "insensitive",
+          },
+        },
+        {
+          supplierId: {
+            contains: normalizedSearch,
+            mode: "insensitive",
+          },
+        },
+        {
+          vehicle: {
+            OR: [
+              {
+                license_plate: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              {
+                description: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+            ],
+          },
+        },
+        {
+          responsibleUser: {
+            name: { contains: normalizedSearch, mode: "insensitive" },
+          },
+        },
+        {
+          branch: {
+            OR: [
+              {
+                corporate_reason: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              {
+                fantasy_name: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+            ],
+          },
+        },
+        {
+          supplier: {
+            name: { contains: normalizedSearch, mode: "insensitive" },
+          },
+        },
+        // Business ID and name (MASTER only)
+        ...(currentUserRole === "MASTER"
+          ? [
+              {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              },
+              {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              },
+            ]
+          : []),
         ...(numericSearch
           ? [{ total_amount: parseFloat(normalizedSearch) }]
           : []),
       );
-
-      orConditions.push({
-        vehicle: {
-          OR: [
-            {
-              license_plate: {
-                contains: normalizedSearch,
-                mode: "insensitive",
-              },
-            },
-            {
-              description: { contains: normalizedSearch, mode: "insensitive" },
-            },
-          ],
-        },
-      });
-
-      orConditions.push({
-        responsibleUser: {
-          name: { contains: normalizedSearch, mode: "insensitive" },
-        },
-      });
-
-      orConditions.push({
-        branch: {
-          OR: [
-            {
-              corporate_reason: {
-                contains: normalizedSearch,
-                mode: "insensitive",
-              },
-            },
-            {
-              fantasy_name: { contains: normalizedSearch, mode: "insensitive" },
-            },
-          ],
-        },
-      });
-
-      orConditions.push({
-        supplier: {
-          name: { contains: normalizedSearch, mode: "insensitive" },
-        },
-      });
     }
 
     const whereCondition = {
@@ -189,63 +216,8 @@ class ServiceOrderRepository implements IServiceOrderRepository {
       where: whereCondition,
     });
 
-    const transformedServiceOrderData = serviceOrderData.map(
-      (serviceOrder) => ({
-        id: serviceOrder.id ?? "N/A",
-        date: serviceOrder.date ?? "N/A",
-        completion_date: serviceOrder.completion_date ?? "N/A",
-        maintenance_type: serviceOrder.maintenance_type ?? "N/A",
-        total_amount:
-          formatCurrency(Number(serviceOrder.total_amount)) ?? "N/A",
-        current_mileage_at_service:
-          serviceOrder.current_mileage_at_service ?? null,
-        maintenance_interval_km_at_service:
-          serviceOrder.maintenance_interval_km_at_service ?? null,
-        last_maintenance_mileage_at_service:
-          serviceOrder.last_maintenance_mileage_at_service ?? null,
-        new_mileage_after_service:
-          serviceOrder.new_mileage_after_service ?? null,
-        businessId: serviceOrder.businessId ?? "N/A",
-        vehicleId: serviceOrder.vehicleId ?? "N/A",
-        vehicleLicensePlate: serviceOrder.vehicle?.license_plate ?? "N/A",
-        vehicleDescription: serviceOrder.vehicle?.description ?? "N/A",
-        responsibleUserId: serviceOrder.responsibleUserId ?? "N/A",
-        responsibleUserName: serviceOrder.responsibleUser?.name ?? "N/A",
-        responsibleUserEmail: serviceOrder.responsibleUser?.email ?? "N/A",
-        branchId: serviceOrder.branchId ?? "N/A",
-        branchName: serviceOrder.branch?.corporate_reason ?? "N/A",
-        ...(currentUserRole === "MASTER"
-          ? { business_name: serviceOrder.business.corporate_reason ?? "N/A" }
-          : {}),
-        supplierId: serviceOrder.supplierId ?? null,
-        supplierName: serviceOrder.supplier?.name ?? "N/A",
-        partsCount: serviceOrder.parts.length ?? 0,
-        // 📍 GEOLOCATION: Proper null handling to avoid Number(null) = 0 issue
-        latitude:
-          serviceOrder.latitude !== null ? Number(serviceOrder.latitude) : null,
-        longitude:
-          serviceOrder.longitude !== null
-            ? Number(serviceOrder.longitude)
-            : null,
-        latitude_original:
-          serviceOrder.latitude_original !== null
-            ? Number(serviceOrder.latitude_original)
-            : null,
-        longitude_original:
-          serviceOrder.longitude_original !== null
-            ? Number(serviceOrder.longitude_original)
-            : null,
-        location_source: serviceOrder.location_source ?? null,
-        location_edited_by: serviceOrder.location_edited_by ?? null,
-        location_edited_at: serviceOrder.location_edited_at ?? null,
-        created_from: serviceOrder.created_from,
-        created_at: formatDate(serviceOrder.created_at, "pt-BR") ?? "N/A",
-        updated_at: formatDate(serviceOrder.updated_at, "pt-BR") ?? "N/A",
-      }),
-    );
-
     return {
-      data: transformedServiceOrderData,
+      data: serviceOrderData,
       total,
     };
   }
@@ -438,63 +410,8 @@ class ServiceOrderRepository implements IServiceOrderRepository {
       where: whereCondition,
     });
 
-    const transformedServiceOrderData: ServiceOrder[] = serviceOrderData.map(
-      (serviceOrder) => ({
-        id: serviceOrder.id,
-        date: formatDate(serviceOrder.date, "pt-BR"),
-        completion_date: serviceOrder.completion_date
-          ? formatDate(serviceOrder.completion_date, "pt-BR")
-          : null,
-        maintenance_type: serviceOrder.maintenance_type,
-        total_amount: formatCurrency(
-          serviceOrder.total_amount?.toNumber() ?? 0,
-        ),
-        businessId: serviceOrder.businessId,
-        vehicleId: serviceOrder.vehicleId,
-        responsibleUserId: serviceOrder.responsibleUserId,
-        branchId: serviceOrder.branchId,
-        supplierId: serviceOrder.supplierId ?? null,
-        current_mileage_at_service:
-          serviceOrder.current_mileage_at_service ?? null,
-        maintenance_interval_km_at_service:
-          serviceOrder.maintenance_interval_km_at_service ?? null,
-        last_maintenance_mileage_at_service:
-          serviceOrder.last_maintenance_mileage_at_service ?? null,
-        new_mileage_after_service:
-          serviceOrder.new_mileage_after_service ?? null,
-        latitude:
-          serviceOrder.latitude !== null ? Number(serviceOrder.latitude) : null,
-        longitude:
-          serviceOrder.longitude !== null
-            ? Number(serviceOrder.longitude)
-            : null,
-        latitude_original:
-          serviceOrder.latitude_original !== null
-            ? Number(serviceOrder.latitude_original)
-            : null,
-        longitude_original:
-          serviceOrder.longitude_original !== null
-            ? Number(serviceOrder.longitude_original)
-            : null,
-        location_source: serviceOrder.location_source ?? null,
-        location_edited_by: serviceOrder.location_edited_by ?? null,
-        location_edited_at: serviceOrder.location_edited_at
-          ? formatDate(serviceOrder.location_edited_at, "pt-BR")
-          : null,
-        created_from: serviceOrder.created_from,
-        created_at: formatNotificationDate(serviceOrder.created_at, "pt-BR"),
-        updated_at: formatDate(serviceOrder.updated_at, "pt-BR"),
-        vehicleLicensePlate: serviceOrder.vehicle?.license_plate ?? "N/A",
-        vehicleDescription: serviceOrder.vehicle?.description ?? "N/A",
-        responsibleUserName: serviceOrder.responsibleUser?.name ?? "N/A",
-        branchName: serviceOrder.branch?.corporate_reason ?? "N/A",
-        supplierName: serviceOrder.supplier?.name ?? "N/A",
-        partsCount: serviceOrder.parts?.length ?? 0,
-      }),
-    );
-
     return {
-      data: transformedServiceOrderData,
+      data: serviceOrderData,
       total,
     };
   }

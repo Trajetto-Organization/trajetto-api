@@ -1,5 +1,4 @@
 import { FastifyInstance } from "fastify";
-import { z } from "zod";
 
 import { CreateQuoteController } from "@/modules/quote/usecases/create-quote/create-quote-controller";
 import { ListQuotesController } from "@/modules/quote/usecases/list-quotes/list-quotes-controller";
@@ -61,7 +60,8 @@ async function quoteRoutes(app: FastifyInstance) {
         querystring: quoteSchemas.listQuotes,
         response: {
           200: quoteResponses.quotesList,
-          400: quoteResponses.resourceNotFound,
+          400: quoteResponses.listQuoteErrors,
+          403: quoteResponses.listQuoteForbiddenErrors,
           500: quoteResponses.internalServerError,
         },
       },
@@ -84,10 +84,9 @@ async function quoteRoutes(app: FastifyInstance) {
         body: quoteSchemas.updateQuoteStatus,
         response: {
           200: quoteResponses.quoteStatusUpdated,
-          400: z.union([
-            quoteResponses.quoteNotFound,
-            quoteResponses.validationError,
-          ]),
+          400: quoteResponses.updateQuoteStatusErrors,
+          403: quoteResponses.updateQuoteStatusForbiddenErrors,
+          404: quoteResponses.updateQuoteStatusNotFoundErrors,
           500: quoteResponses.internalServerError,
         },
       },
@@ -109,7 +108,9 @@ async function quoteRoutes(app: FastifyInstance) {
         params: quoteSchemas.quoteIdParam,
         response: {
           200: quoteResponses.quoteDeleted,
-          400: quoteResponses.quoteNotFound,
+          400: quoteResponses.deleteQuoteErrors,
+          403: quoteResponses.deleteQuoteForbiddenErrors,
+          404: quoteResponses.deleteQuoteNotFoundErrors,
           500: quoteResponses.internalServerError,
         },
       },

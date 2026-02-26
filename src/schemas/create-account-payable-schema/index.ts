@@ -1,18 +1,8 @@
 import { z } from "zod";
-
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
-
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
+import {
+  emptyStringToNull,
+  isValidDateString,
+} from "@/shared/utils/zod-schema-helpers";
 
 const createAccountPayableSchema = z
   .object({

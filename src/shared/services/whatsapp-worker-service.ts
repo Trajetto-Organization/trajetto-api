@@ -13,6 +13,7 @@ class WhatsAppWorkerService {
     if (!WhatsAppWorkerService.instance) {
       WhatsAppWorkerService.instance = new WhatsAppWorkerService();
     }
+
     return WhatsAppWorkerService.instance;
   }
 
@@ -31,6 +32,7 @@ class WhatsAppWorkerService {
         `[WhatsAppWorkerService] Erro ao enfileirar WhatsApp para ${queueName}:`,
         error,
       );
+
       throw error;
     }
   }

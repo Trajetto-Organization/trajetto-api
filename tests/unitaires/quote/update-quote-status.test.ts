@@ -9,6 +9,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { QuoteAccessDeniedError } from "@/modules/quote/usecases/errors/quote-access denied-error";
 import { QuoteNotFoundError } from "@/modules/quote/usecases/errors/quote-not-found-error";
 
+import { QuoteAlreadyFinalizedError } from "@/modules/quote/usecases/errors/quote-already-finalized-error";
 import { AppError } from "@/shared/errors/AppError";
 
 type UserRole = "MASTER" | "BUSINESS_ADMIN" | "BUSINESS_USER";
@@ -326,9 +327,10 @@ describe("Update Quote Status UseCase", () => {
       fleet_size: "1-5",
     });
 
-    const statuses = ["PENDING", "CONTACTED", "CLOSED", "CONVERTED"] as const;
+    // Non-finalized statuses can be updated sequentially
+    const nonFinalizedStatuses = ["PENDING", "CONTACTED"] as const;
 
-    for (const status of statuses) {
+    for (const status of nonFinalizedStatuses) {
       const updatedQuote = await updateQuoteStatus.execute({
         quoteId: quote.id,
         status,
@@ -339,6 +341,27 @@ describe("Update Quote Status UseCase", () => {
       expect(updatedQuote.status).toBe(status);
       expect(updatedQuote.notes).toBe(`Updated to ${status}`);
     }
+
+    // Update to CLOSED (finalized status)
+    const closedQuote = await updateQuoteStatus.execute({
+      quoteId: quote.id,
+      status: "CLOSED",
+      notes: "Updated to CLOSED",
+      userId: user.id,
+    });
+
+    expect(closedQuote.status).toBe("CLOSED");
+    expect(closedQuote.notes).toBe("Updated to CLOSED");
+
+    // After CLOSED, attempting to update to CONVERTED should throw QuoteAlreadyFinalizedError
+    await expect(
+      updateQuoteStatus.execute({
+        quoteId: quote.id,
+        status: "CONVERTED",
+        notes: "Updated to CONVERTED",
+        userId: user.id,
+      }),
+    ).rejects.toBeInstanceOf(QuoteAlreadyFinalizedError);
   });
 
   it("should throw ResourceNotFoundError if user does not exist", async () => {

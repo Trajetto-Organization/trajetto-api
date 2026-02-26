@@ -1,5 +1,4 @@
 import { FastifyInstance } from "fastify";
-import { z } from "zod";
 
 import { CreateUserController } from "@/modules/user/usecases/create-user/create-user-controller";
 import { AuthenticateUserController } from "@/modules/user/usecases/authenticate-user/authenticate-user-controller";
@@ -98,13 +97,9 @@ async function userRoutes(app: FastifyInstance) {
         body: userSchemas.createUser,
         response: {
           201: userResponses.userCreated,
-          400: z.union([
-            userResponses.resourceNotFound,
-            userResponses.profileNotFromSameCompany,
-            userResponses.companyNotFound,
-            userResponses.profileAccessNotFound,
-          ]),
-          409: userResponses.userAlreadyExists,
+          400: userResponses.createUserErrors,
+          403: userResponses.createUserForbiddenErrors,
+          409: userResponses.createUserConflictErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -126,7 +121,7 @@ async function userRoutes(app: FastifyInstance) {
         querystring: userSchemas.listUsers,
         response: {
           200: userResponses.usersList,
-          400: userResponses.resourceNotFound,
+          400: userResponses.listUsersErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -169,15 +164,9 @@ async function userRoutes(app: FastifyInstance) {
           "Authenticate user credentials and establish a new session with access tokens",
         body: userSchemas.authenticateUser,
         response: {
-          200: z.union([
-            userResponses.emailVerificationSent,
-            userResponses.twoFactorVerificationSent,
-            userResponses.userAuthenticated,
-          ]),
-          400: z.union([
-            userResponses.invalidCredentials,
-            userResponses.userWithoutProfile,
-          ]),
+          200: userResponses.authenticateUserSuccess,
+          400: userResponses.authenticateUserErrors,
+          403: userResponses.authenticateUserForbiddenErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -196,11 +185,7 @@ async function userRoutes(app: FastifyInstance) {
         querystring: userSchemas.forgotPasswordVerification,
         response: {
           200: userResponses.forgotPasswordVerificationSuccess,
-          400: z.union([
-            userResponses.resourceNotFound,
-            userResponses.invalidToken,
-            userResponses.expiredToken,
-          ]),
+          400: userResponses.forgotVerificationErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -223,11 +208,7 @@ async function userRoutes(app: FastifyInstance) {
         body: userSchemas.forgotPassword,
         response: {
           200: userResponses.passwordResetSuccess,
-          400: z.union([
-            userResponses.invalidToken,
-            userResponses.expiredToken,
-            userResponses.resourceNotFound,
-          ]),
+          400: userResponses.resetPasswordErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -268,12 +249,9 @@ async function userRoutes(app: FastifyInstance) {
         body: userSchemas.refreshToken,
         response: {
           201: userResponses.tokenRefreshed,
-          400: z.union([
-            userResponses.invalidCredentials,
-            userResponses.refreshTokenNotExists,
-          ]),
-          403: userResponses.userWithoutProfile,
-          401: userResponses.invalidTokenSignature,
+          400: userResponses.refreshTokenErrors,
+          401: userResponses.refreshTokenUnauthorizedErrors,
+          403: userResponses.refreshTokenForbiddenErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -295,13 +273,8 @@ async function userRoutes(app: FastifyInstance) {
         body: userSchemas.twoFactorUser,
         response: {
           200: userResponses.twoFactorSuccess,
-          403: userResponses.userWithoutProfile,
-          400: z.union([
-            userResponses.invalidCode,
-            userResponses.expiredCode,
-            userResponses.resourceNotFound,
-            userResponses.invalidUserCode,
-          ]),
+          400: userResponses.twoFactorVerificationErrors,
+          403: userResponses.twoFactorVerificationForbiddenErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -336,10 +309,7 @@ async function userRoutes(app: FastifyInstance) {
         body: userSchemas.resendTwoFactorCode,
         response: {
           200: userResponses.genericMessage,
-          400: z.union([
-            userResponses.resourceNotFound,
-            userResponses.noActiveTwoFactor,
-          ]),
+          400: userResponses.resendTwoFactorCodeErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -381,8 +351,8 @@ async function userRoutes(app: FastifyInstance) {
         params: userSchemas.updateDeleteUser,
         response: {
           200: userResponses.userDeleted,
-          400: userResponses.resourceNotFound,
-          403: userResponses.cannotDeleteSelf,
+          400: userResponses.deleteUserErrors,
+          403: userResponses.deleteUserForbiddenErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -405,16 +375,9 @@ async function userRoutes(app: FastifyInstance) {
         body: userSchemas.updateUser,
         response: {
           200: userResponses.userUpdated,
-          400: z.union([
-            userResponses.resourceNotFound,
-            userResponses.companyNotFound,
-            userResponses.profileAccessNotFound,
-          ]),
-          403: z.union([
-            userResponses.cannotUpdateSelf,
-            userResponses.profileNotFromSameCompany,
-          ]),
-          409: userResponses.userAlreadyExists,
+          400: userResponses.updateUserErrors,
+          403: userResponses.updateUserForbiddenErrors,
+          409: userResponses.updateUserConflictErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -435,11 +398,7 @@ async function userRoutes(app: FastifyInstance) {
         body: userSchemas.updateUserPassword,
         response: {
           200: userResponses.passwordUpdated,
-          400: z.union([
-            userResponses.resourceNotFound,
-            userResponses.incorrectCurrentPassword,
-            userResponses.newPasswordSameAsOld,
-          ]),
+          400: userResponses.updatePasswordErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -460,10 +419,7 @@ async function userRoutes(app: FastifyInstance) {
         body: userSchemas.updateUserName,
         response: {
           200: userResponses.usernameUpdated,
-          400: z.union([
-            userResponses.resourceNotFound,
-            userResponses.newNameMustBeDifferent,
-          ]),
+          400: userResponses.updateUsernameErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -483,7 +439,7 @@ async function userRoutes(app: FastifyInstance) {
           "Enable or disable two-factor authentication for the authenticated user's account security",
         response: {
           200: userResponses.twoFactorUpdated,
-          400: userResponses.resourceNotFound,
+          400: userResponses.twoFactorUpdateErrors,
           500: userResponses.internalServerError,
         },
       },
@@ -544,8 +500,8 @@ async function userRoutes(app: FastifyInstance) {
         params: userSchemas.revokeUserAccess,
         response: {
           200: userResponses.userAccessRevoked,
-          400: userResponses.resourceNotFound,
-          403: userResponses.cannotRevokeOwnAccess,
+          400: userResponses.revokeUserAccessErrors,
+          403: userResponses.revokeUserAccessForbiddenErrors,
           500: userResponses.internalServerError,
         },
       },

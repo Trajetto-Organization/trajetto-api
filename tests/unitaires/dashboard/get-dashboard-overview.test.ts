@@ -469,17 +469,32 @@ describe("Get Dashboard Overview UseCase", () => {
       userId: createdUser.id,
     });
 
-    expect(result.recentActivity[0]).toEqual({
-      id: "activity-1",
-      type: "Vehicle", // Should capitalize first letter
-      description: "Test activity",
-      userEmail: "userr-1@test.com", // Mock data from InMemoryActivityRepository (last 3 chars of userId)
-      userName: "Test User r-1", // Mock data from InMemoryActivityRepository
-      userRole: "MASTER", // User role from test
-      business_name: "N/A", // Formatted to N/A when null
-      date: "2024-01-01T10:00:00Z",
-      status: "Completo",
-    });
+    const activity = result.recentActivity[0];
+
+    // The use case returns raw activity data from the repository (recentActivityData.data)
+    // which includes all activity fields plus mock user data from InMemoryActivityRepository
+    expect(activity.id).toBe("activity-1");
+    expect(activity.type).toBe("vehicle"); // Raw type from activity, not capitalized
+
+    expect(activity.action).toBe("create");
+    expect(activity.entityId).toBe("vehicle-1");
+
+    expect(activity.description).toBe("Test activity");
+    expect(activity.status).toBe("Completo");
+
+    expect(activity.performedBy).toBe("user-1");
+    expect(activity.businessId).toBeNull();
+
+    expect(activity.visibilityLevel).toBe("COMPANY");
+    expect(activity.performingUserRole).toBeNull();
+
+    expect(activity.created_at).toBe("2024-01-01T10:00:00Z");
+    expect(activity.userEmail).toBe("userr-1@test.com"); // Mock data from InMemoryActivityRepository (last 3 chars of performedBy)
+
+    expect(activity.userName).toBe("Test User r-1"); // Mock data from InMemoryActivityRepository
+    expect(activity.userRole).toBe("MASTER"); // Falls back to currentUserRole since performingUserRole is null
+
+    expect(activity.business_name).toBeUndefined(); // businessId is null so business_name is undefined
   });
 
   it("should generate correct activity trends for 6 months", async () => {

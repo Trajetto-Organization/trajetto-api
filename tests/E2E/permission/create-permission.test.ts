@@ -7,7 +7,6 @@ import {
   it,
   vi,
 } from "vitest";
-
 import { createAuthenticateUser } from "utils/tests/create-authenticate-user";
 
 import request from "supertest";

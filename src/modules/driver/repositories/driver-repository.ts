@@ -9,12 +9,6 @@ import {
 } from "../dtos/driver-dto";
 
 import database from "@/../infra/database";
-import {
-  formatDate,
-  formatCpf,
-  formatCep,
-  formatRg,
-} from "@/config/format-values";
 
 class DriverRepository implements IDriverRepository {
   constructor(private prisma = database) {}
@@ -50,6 +44,23 @@ class DriverRepository implements IDriverRepository {
         { uf: { contains: normalizedSearch, mode: "insensitive" } },
         { street: { contains: normalizedSearch, mode: "insensitive" } },
         { address_number: { contains: normalizedSearch, mode: "insensitive" } },
+        // Business ID and name (MASTER only)
+        ...(currentUserRole === "MASTER"
+          ? [
+              {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              },
+              {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              },
+            ]
+          : []),
+        { branchId: { contains: normalizedSearch, mode: "insensitive" } },
         ...(digitSearch
           ? [
               { cpf: { contains: digitSearch, mode: "insensitive" } },
@@ -90,33 +101,8 @@ class DriverRepository implements IDriverRepository {
       where: whereCondition,
     });
 
-    const transformedDriverData = driverData.map((driver) => ({
-      id: driver.id ?? "N/A",
-      name: driver.name ?? "N/A",
-      birth_date: driver.birth_date ?? "N/A",
-      cnh: driver.cnh ?? "N/A",
-      cpf: formatCpf(driver.cpf) ?? "N/A",
-      rg: formatRg(driver.rg) ?? "N/A",
-      cep: formatCep(driver.cep) ?? "N/A",
-      city: driver.city ?? "N/A",
-      uf: driver.uf ?? "N/A",
-      street: driver.street ?? "N/A",
-      address_number: driver.address_number ?? "N/A",
-      complement: driver.complement ?? "N/A",
-      status: driver.status ?? "N/A",
-      contract_type: driver.contract_type ?? "N/A",
-      businessId: driver.businessId ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { business_name: driver.business?.corporate_reason ?? "N/A" }
-        : {}),
-      branchId: driver.branchId ?? null,
-      branchName: driver.branch?.corporate_reason ?? "N/A",
-      created_at: formatDate(driver.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(driver.updated_at, "pt-BR") ?? "N/A",
-    }));
-
     return {
-      data: transformedDriverData,
+      data: driverData,
       total,
     };
   }

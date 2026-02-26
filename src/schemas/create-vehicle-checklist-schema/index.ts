@@ -1,24 +1,13 @@
 import { z } from "zod";
+
 import { MultipartFile } from "@fastify/multipart";
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const isEmptyOrWhitespace = (value: string): boolean =>
-  value.trim().length === 0;
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
-
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
-
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
+import {
+  emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+  isEmptyOrWhitespace,
+  isValidDateString,
+} from "@/shared/utils/zod-schema-helpers";
 
 const createVehicleChecklistSchema = z.object({
   current_mileage: z.preprocess(
@@ -29,6 +18,7 @@ const createVehicleChecklistSchema = z.object({
         const cleanedValue = val.replace(/\./g, "").replace(",", ".");
         return parseFloat(cleanedValue);
       }
+
       return val;
     },
     z
@@ -50,6 +40,7 @@ const createVehicleChecklistSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "Data do checklist inválida.",
         });
+
         return;
       }
 
@@ -65,6 +56,7 @@ const createVehicleChecklistSchema = z.object({
             code: z.ZodIssueCode.custom,
             message: "A data do checklist não pode ser no futuro.",
           });
+
           return;
         }
       }
@@ -250,6 +242,7 @@ const photoFileSchema = z
         "image/png",
         "image/webp",
       ];
+
       return allowedTypes.includes(file?.mimetype);
     },
     {

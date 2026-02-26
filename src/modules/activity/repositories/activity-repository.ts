@@ -1,12 +1,11 @@
 import database from "@/../infra/database";
-import { formatNotificationDate } from "@/config/format-values";
-
 import {
   Activity,
   CreateActivityProps,
   ListActivityProps,
   ListRecentActivitiesProps,
 } from "../dtos/activity-dto";
+
 import { IActivityRepository } from "./IActivity-repository";
 
 class ActivityRepository implements IActivityRepository {
@@ -61,12 +60,16 @@ class ActivityRepository implements IActivityRepository {
           },
         },
         {
-          business: {
-            corporate_reason: {
-              contains: normalizedSearch,
-              mode: "insensitive",
-            },
-          },
+          ...(currentUserRole === "MASTER"
+            ? {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              }
+            : {}),
         },
       );
     }
@@ -116,9 +119,6 @@ class ActivityRepository implements IActivityRepository {
       skip,
       take: pageSize,
       where: whereCondition,
-      orderBy: {
-        created_at: "desc",
-      },
       include: {
         user: {
           select: {
@@ -127,11 +127,16 @@ class ActivityRepository implements IActivityRepository {
             name: true,
           },
         },
-        business: {
-          select: {
-            corporate_reason: true,
+        ...(currentUserRole === "MASTER" && {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
           },
-        },
+        }),
+      },
+      orderBy: {
+        created_at: "desc",
       },
     });
 
@@ -139,26 +144,7 @@ class ActivityRepository implements IActivityRepository {
       where: whereCondition,
     });
 
-    const transformedActivities = activities.map((activity) => ({
-      id: activity.id,
-      type: activity.type,
-      action: activity.action,
-      entityId: activity.entityId,
-      description: activity.description,
-      status: activity.status,
-      performedBy: activity.performedBy,
-      businessId: activity.businessId,
-      userEmail: activity.user?.email ?? "N/A",
-      userName: activity.user?.name ?? "N/A",
-      userRole: activity.user?.role ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { business_name: activity.business?.corporate_reason ?? "N/A" }
-        : {}),
-      created_at: formatNotificationDate(activity.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatNotificationDate(activity.updated_at, "pt-BR") ?? "N/A",
-    }));
-
-    return { data: transformedActivities, total };
+    return { data: activities, total };
   }
 
   async listAllActivities({
@@ -202,12 +188,16 @@ class ActivityRepository implements IActivityRepository {
           },
         },
         {
-          business: {
-            corporate_reason: {
-              contains: normalizedSearch,
-              mode: "insensitive",
-            },
-          },
+          ...(currentUserRole === "MASTER"
+            ? {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              }
+            : {}),
         },
       );
     }
@@ -257,9 +247,6 @@ class ActivityRepository implements IActivityRepository {
       skip,
       take: pageSize,
       where: whereCondition,
-      orderBy: {
-        created_at: "desc",
-      },
       include: {
         user: {
           select: {
@@ -268,11 +255,16 @@ class ActivityRepository implements IActivityRepository {
             name: true,
           },
         },
-        business: {
-          select: {
-            corporate_reason: true,
+        ...(currentUserRole === "MASTER" && {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
           },
-        },
+        }),
+      },
+      orderBy: {
+        created_at: "desc",
       },
     });
 
@@ -280,26 +272,7 @@ class ActivityRepository implements IActivityRepository {
       where: whereCondition,
     });
 
-    const transformedActivities = activities.map((activity) => ({
-      id: activity.id,
-      type: activity.type,
-      action: activity.action,
-      entityId: activity.entityId,
-      description: activity.description,
-      status: activity.status,
-      performedBy: activity.performedBy,
-      businessId: activity.businessId,
-      userEmail: activity.user?.email ?? "N/A",
-      userName: activity.user?.name ?? "N/A",
-      userRole: activity.user?.role ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { business_name: activity.business?.corporate_reason ?? "N/A" }
-        : {}),
-      created_at: formatNotificationDate(activity.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatNotificationDate(activity.updated_at, "pt-BR") ?? "N/A",
-    }));
-
-    return { data: transformedActivities, total };
+    return { data: activities, total };
   }
 }
 

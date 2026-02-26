@@ -59,6 +59,16 @@ const quoteResponses = {
   quoteNotFound: z.object({
     message: z.string().default("Orçamento não encontrado!"),
   }),
+  quoteAlreadyFinalized: z.object({
+    message: z
+      .string()
+      .default(
+        "Não é possível atualizar orçamentos que já foram fechados ou convertidos.",
+      ),
+  }),
+  quoteAccessDenied: z.object({
+    message: z.string().default("Acesso negado."),
+  }),
   validationError: z.object({
     message: z.string().default("Erro de validação"),
     issues: z.array(z.string()).describe("List of validation errors"),
@@ -72,6 +82,52 @@ const quoteResponses = {
   }),
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
+  }),
+
+  // Grouped errors by route
+  listQuoteErrors: z.object({
+    message: z.string().default("Recurso não encontrado!"),
+  }),
+
+  listQuoteForbiddenErrors: z.object({
+    message: z.string().default("Acesso negado."),
+  }),
+
+  updateQuoteStatusErrors: z.union([
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Erro de validação"),
+      issues: z.array(z.string()).describe("List of validation errors"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Não é possível atualizar orçamentos que já foram fechados ou convertidos.",
+        ),
+    }),
+  ]),
+
+  updateQuoteStatusForbiddenErrors: z.object({
+    message: z.string().default("Acesso negado."),
+  }),
+
+  updateQuoteStatusNotFoundErrors: z.object({
+    message: z.string().default("Orçamento não encontrado!"),
+  }),
+
+  deleteQuoteErrors: z.object({
+    message: z.string().default("Recurso não encontrado!"),
+  }),
+
+  deleteQuoteForbiddenErrors: z.object({
+    message: z.string().default("Acesso negado."),
+  }),
+
+  deleteQuoteNotFoundErrors: z.object({
+    message: z.string().default("Orçamento não encontrado!"),
   }),
 };
 

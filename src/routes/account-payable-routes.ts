@@ -42,6 +42,7 @@ async function accountPayableRoutes(app: FastifyInstance) {
         response: {
           201: accountPayableResponses.accountPayableCreated,
           400: accountPayableResponses.createAccountPayableErrors,
+          403: accountPayableResponses.createAccountPayableForbiddenErrors,
           500: accountPayableResponses.internalServerError,
         },
       },
@@ -108,6 +109,7 @@ async function accountPayableRoutes(app: FastifyInstance) {
         response: {
           200: accountPayableResponses.accountPayableUpdated,
           400: accountPayableResponses.updateAccountPayableErrors,
+          403: accountPayableResponses.updateAccountPayableForbiddenErrors,
           500: accountPayableResponses.internalServerError,
         },
       },
@@ -130,6 +132,7 @@ async function accountPayableRoutes(app: FastifyInstance) {
         response: {
           200: accountPayableResponses.accountPayableDeleted,
           400: accountPayableResponses.deleteAccountPayableErrors,
+          403: accountPayableResponses.deleteAccountPayableForbiddenErrors,
           500: accountPayableResponses.internalServerError,
         },
       },

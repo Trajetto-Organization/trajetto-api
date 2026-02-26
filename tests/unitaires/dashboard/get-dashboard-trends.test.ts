@@ -35,7 +35,11 @@ describe("Get Dashboard Trends UseCase", () => {
     });
 
     // Setup test data for 7 days
-    const today = new Date();
+    // Use the same date construction approach as the use case (getCurrentDateLocal + formatDateToLocal)
+    // to avoid timezone mismatches between test data and use case queries
+    const now = new Date();
+    const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
     const entities = [
       "vehicle",
       "driver",
@@ -49,9 +53,9 @@ describe("Get Dashboard Trends UseCase", () => {
     ];
 
     for (let i = 0; i < 7; i++) {
-      const date = new Date(today);
+      const date = new Date(todayLocal);
 
-      date.setDate(today.getDate() - i);
+      date.setDate(todayLocal.getDate() - i);
       const dateStr = date.toISOString().split("T")[0];
 
       entities.forEach((entity) => {

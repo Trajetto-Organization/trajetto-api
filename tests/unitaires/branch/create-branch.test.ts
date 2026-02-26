@@ -38,6 +38,7 @@ describe("Create Branch UseCase", () => {
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
     businessInMemory = new InMemoryBusinessRepository();
+
     branchInMemory = new InMemoryBranchRepository();
 
     notificationService = {

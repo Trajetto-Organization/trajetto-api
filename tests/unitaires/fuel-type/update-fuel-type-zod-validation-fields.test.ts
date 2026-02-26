@@ -119,15 +119,17 @@ describe("Update Fuel Type Zod Validation Fields", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should fail if the description is null", () => {
+  it("should accept null description via nullable", () => {
     const payload = {
       description: null,
     };
 
     const result = updateFuelTypeSchema.safeParse(payload);
 
-    expect(result.success).toBe(false);
-    expect(result.error?.format().description?._errors).toBeDefined();
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.description).toBeNull();
+    }
   });
 
   it("should fail if the description is invalid fuel type", () => {
@@ -385,43 +387,43 @@ describe("Update Fuel Type Zod Validation Fields", () => {
     });
   });
 
-  it("should fail for only whitespace description", () => {
+  it("should convert whitespace-only description to null", () => {
     const payload = {
       description: "   ",
     };
 
     const result = updateFuelTypeSchema.safeParse(payload);
 
-    expect(result.success).toBe(false);
-    expect(result.error?.format().description?._errors).toContain(
-      "Combustível inválido. Selecione uma opção válida.",
-    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.description).toBeNull();
+    }
   });
 
-  it("should fail for tab character description", () => {
+  it("should convert tab character description to null", () => {
     const payload = {
       description: "\t",
     };
 
     const result = updateFuelTypeSchema.safeParse(payload);
 
-    expect(result.success).toBe(false);
-    expect(result.error?.format().description?._errors).toContain(
-      "Combustível inválido. Selecione uma opção válida.",
-    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.description).toBeNull();
+    }
   });
 
-  it("should fail for newline character description", () => {
+  it("should convert newline character description to null", () => {
     const payload = {
       description: "\n",
     };
 
     const result = updateFuelTypeSchema.safeParse(payload);
 
-    expect(result.success).toBe(false);
-    expect(result.error?.format().description?._errors).toContain(
-      "Combustível inválido. Selecione uma opção válida.",
-    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.description).toBeNull();
+    }
   });
 
   // Optional field handling tests
@@ -474,7 +476,7 @@ describe("Update Fuel Type Zod Validation Fields", () => {
     });
   });
 
-  it("should handle empty string as valid optional value", () => {
+  it("should convert empty string to null for optional description", () => {
     const payload = {
       description: "",
     };
@@ -483,7 +485,7 @@ describe("Update Fuel Type Zod Validation Fields", () => {
     expect(result.success).toBe(true);
 
     if (result.success) {
-      expect(result.data.description).toBe("");
+      expect(result.data.description).toBeNull();
     }
   });
 

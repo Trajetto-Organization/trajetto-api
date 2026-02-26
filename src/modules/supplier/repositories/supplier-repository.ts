@@ -10,13 +10,6 @@ import {
 import { ISupplierRepository } from "./ISupplier-repository";
 import database from "@/../infra/database";
 
-import {
-  formatCep,
-  formatCnpj,
-  formatDate,
-  formatTelephone,
-} from "@/config/format-values";
-
 class SupplierRepository implements ISupplierRepository {
   constructor(private prisma = database) {}
 
@@ -67,6 +60,13 @@ class SupplierRepository implements ISupplierRepository {
               { cnpj: { contains: digitSearch, mode: "insensitive" } },
             ]
           : []),
+        {
+          ...(currentUserRole === "MASTER"
+            ? {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              }
+            : {}),
+        },
       );
     }
 
@@ -79,15 +79,17 @@ class SupplierRepository implements ISupplierRepository {
       skip,
       take: pageSize,
       where: whereCondition,
+      include: {
+        ...(currentUserRole === "MASTER" && {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
+          },
+        }),
+      },
       orderBy: {
         created_at: "desc",
-      },
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
-          },
-        },
       },
     });
 
@@ -95,29 +97,7 @@ class SupplierRepository implements ISupplierRepository {
       where: whereCondition,
     });
 
-    const transformedSupplierData = supplierData.map((supplier) => ({
-      id: supplier.id ?? "N/A",
-      name: supplier.name ?? "N/A",
-      cnpj: supplier.cnpj ? formatCnpj(supplier.cnpj) : "N/A",
-      cep: supplier.cep ? formatCep(supplier.cep) : "N/A",
-      city: supplier.city ?? "N/A",
-      uf: supplier.uf ?? "N/A",
-      street: supplier.street ?? "N/A",
-      address_number: supplier.address_number ?? "N/A",
-      complement: supplier.complement ?? "N/A",
-      telephone: supplier.telephone
-        ? formatTelephone(supplier.telephone)
-        : "N/A",
-      email: supplier.email ?? "N/A",
-      businessId: supplier.businessId ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { business_name: supplier.business?.corporate_reason ?? "N/A" }
-        : {}),
-      created_at: formatDate(supplier.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(supplier.updated_at, "pt-BR") ?? "N/A",
-    }));
-
-    return { data: transformedSupplierData, total };
+    return { data: supplierData, total };
   }
 
   async listSupplierBusiness({

@@ -28,7 +28,6 @@ async function activityRoutes(app: FastifyInstance) {
         response: {
           200: activityResponses.activityList,
           400: activityResponses.resourceNotFound,
-          401: activityResponses.unauthorized,
           500: activityResponses.internalServerError,
         },
       },

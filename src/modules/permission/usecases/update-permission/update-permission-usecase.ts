@@ -7,8 +7,12 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { IPermissionRepository } from "../../repositories/IPermission-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
+import { PermissionKey } from "@/config/permissions";
+
 import { Permission, UpdatePermission } from "../../dtos/permission-dto";
 import { ProfileAccessNotFoundError } from "@/modules/profile-access/usecases/errors/profile-access-not-found-error";
+
+import { PermissionAlreadyAssignedError } from "../errors/permission-already-assigned-error";
 
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 import { PermissionNotFoundError } from "../errors/permission-not-found-error";
@@ -20,6 +24,8 @@ import { PermissionAlreadyExistsError } from "../errors/permission-already-exist
 
 import { PermissionCannotBeUpdatedByHimselfError } from "../errors/permission-cannot-be-updated-by-himself-error";
 import { PermissionBusinessError } from "../errors/permission-business-error";
+
+import { sendSecurityEventToBusiness } from "@/websocket";
 
 @injectable()
 class UpdatePermissionUseCase {
@@ -98,6 +104,21 @@ class UpdatePermissionUseCase {
       throw new BusinessNotFoundError();
     }
 
+    const existingPermissionKey =
+      await this.permission.findPermissionKeyByProfile({
+        permissionKey: permissionData.permissionKey as PermissionKey,
+        profileAccessId: permissionData.profileAccessId,
+        businessId: permissionData.businessId,
+      });
+
+    // Only throw error if the found permission is different from the one being updated
+    if (
+      existingPermissionKey &&
+      existingPermissionKey.id !== permissionData.permissionId
+    ) {
+      throw new PermissionAlreadyAssignedError();
+    }
+
     try {
       const permissionUpdated =
         await this.permission.updatePermission(permissionData);
@@ -111,6 +132,10 @@ class UpdatePermissionUseCase {
         status: "Atualizado",
         performedBy: userId,
         businessId: permissionData.businessId,
+      });
+
+      sendSecurityEventToBusiness(permissionData.businessId, {
+        reason: "permissions_changed",
       });
 
       return permissionUpdated;

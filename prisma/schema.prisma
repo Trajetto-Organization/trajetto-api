@@ -116,7 +116,7 @@ model Business {
 }
 
 model User {
-  id             String    @id @default(uuid())
+  id             String    @id @default(uuid(7))
   name           String
   email          String    @unique
   email_verified DateTime? @map("email_verified")
@@ -201,7 +201,7 @@ model Permission {
 }
 
 model RefreshToken {
-  id            String   @id @default(uuid())
+  id            String   @id @default(uuid(7))
   refresh_token String
   expires_in    DateTime
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -213,7 +213,7 @@ model RefreshToken {
 }
 
 model ForgotPasswordVerificationToken {
-  id      String   @id @default(uuid())
+  id      String   @id @default(uuid(7))
   email   String   @unique
   token   String   @unique
   expires DateTime
@@ -223,7 +223,7 @@ model ForgotPasswordVerificationToken {
 }
 
 model EmailVerificationToken {
-  id      String   @id @default(uuid())
+  id      String   @id @default(uuid(7))
   email   String   @unique
   token   String   @unique
   expires DateTime
@@ -233,7 +233,7 @@ model EmailVerificationToken {
 }
 
 model TwoFactorConfirmation {
-  id     String @id @default(uuid())
+  id     String @id @default(uuid(7))
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
 
@@ -242,7 +242,7 @@ model TwoFactorConfirmation {
 }
 
 model TwoFactorToken {
-  id      String   @id @default(uuid())
+  id      String   @id @default(uuid(7))
   email   String   @unique
   token   String   @unique
   expires DateTime

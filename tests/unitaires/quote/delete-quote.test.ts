@@ -16,11 +16,13 @@ type UserRole = "MASTER" | "BUSINESS_ADMIN" | "BUSINESS_USER";
 describe("Delete Quote UseCase", () => {
   let userInMemory: InMemoryUserRepository;
   let quoteInMemory: InMemoryQuoteRepository;
+
   let deleteQuote: DeleteQuoteUseCase;
 
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
     quoteInMemory = new InMemoryQuoteRepository();
+
     deleteQuote = new DeleteQuoteUseCase(userInMemory, quoteInMemory);
   });
 

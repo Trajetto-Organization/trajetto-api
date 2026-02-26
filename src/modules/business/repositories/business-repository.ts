@@ -8,12 +8,6 @@ import {
 } from "../dtos/business-dto";
 
 import database from "@/../infra/database";
-import {
-  formatCep,
-  formatCnpj,
-  formatDate,
-  formatTelephone,
-} from "@/config/format-values";
 
 class BusinessRepository implements IBusinessRepository {
   constructor(private prisma = database) {}
@@ -98,29 +92,7 @@ class BusinessRepository implements IBusinessRepository {
       where: whereCondition,
     });
 
-    const transformedBusinessData = businessData.map((business) => ({
-      id: business.id ?? "N/A",
-      corporate_reason: business.corporate_reason ?? "N/A",
-      fantasy_name: business.fantasy_name ? business.fantasy_name : "N/A",
-      cep: business.cep ? formatCep(business.cep) : "N/A",
-      city: business.city ?? "N/A",
-      uf: business.uf ?? "N/A",
-      street: business.street ?? "N/A",
-      address_number: business.address_number ?? "N/A",
-      complement: business.complement ? business.complement : "N/A",
-      cnae: business.cnae ?? "N/A",
-      erp_code: business.erp_code ? business.erp_code : "N/A",
-      responsible_name: business.responsible_name ?? "N/A",
-      email: business.email ?? "N/A",
-      created_at: formatDate(business.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(business.updated_at, "pt-BR") ?? "N/A",
-      telephone: business.telephone
-        ? formatTelephone(business.telephone)
-        : "N/A",
-      cnpj: business.cnpj ? formatCnpj(business.cnpj) : "N/A",
-    }));
-
-    return { data: transformedBusinessData, total };
+    return { data: businessData, total };
   }
 
   async updateBusiness({

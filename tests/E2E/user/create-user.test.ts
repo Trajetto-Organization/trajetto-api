@@ -286,7 +286,9 @@ describe("Create User E2E", () => {
       });
 
     expect(response.statusCode).toEqual(409);
-    expect(response.body.message).toBe("Este usuário já foi cadastrado!");
+    expect(response.body.message).toBe(
+      "Este usuário não está disponível para cadastro. Os usuários devem ser únicos em todo o sistema.",
+    );
   });
 
   it("should throw Internal server error if an unknown error occurs", async () => {

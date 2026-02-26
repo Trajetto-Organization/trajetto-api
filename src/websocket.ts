@@ -135,8 +135,27 @@ const sendNotificationToBusiness = (businessId: string, notification: any) => {
   }
 };
 
+// Function to send security event to a specific user
+const sendSecurityEventToUser = (userId: string, event: { reason: string }) => {
+  if (io) {
+    io.to(`user:${userId}`).emit("securityAction", event);
+  }
+};
+
+// Function to send security event to all users of a company
+const sendSecurityEventToBusiness = (
+  businessId: string,
+  event: { reason: string },
+) => {
+  if (io) {
+    io.to(`business:${businessId}`).emit("securityAction", event);
+  }
+};
+
 export {
   initializeSocketIO,
   sendNotificationToUser,
   sendNotificationToBusiness,
+  sendSecurityEventToUser,
+  sendSecurityEventToBusiness,
 };

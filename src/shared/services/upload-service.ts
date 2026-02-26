@@ -111,7 +111,7 @@ class UploadService {
       .replace(/-+/g, "-") // Replace multiple dashes with single dash
       .replace(/^-|-$/g, "") // Remove leading/trailing dashes
       .toLowerCase()
-      .substring(0, 20); // Limit to 20 characters
+      .substring(0, 35); // Limit to 35 characters (increased to accommodate vehicle checklist field names)
 
     // Always save as .webp for processed images
     const processedExtension = ".webp";

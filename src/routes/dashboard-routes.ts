@@ -30,7 +30,7 @@ async function dashboardRoutes(app: FastifyInstance) {
           "Retrieve comprehensive dashboard overview including vehicles, drivers, service orders, maintenance and costs statistics",
         response: {
           200: dashboardResponses.dashboardOverview,
-          400: dashboardResponses.resourceNotFound,
+          404: dashboardResponses.resourceNotFound,
           500: dashboardResponses.internalServerError,
         },
       },
@@ -52,7 +52,7 @@ async function dashboardRoutes(app: FastifyInstance) {
         querystring: dashboardSchemas.trendsQuery,
         response: {
           200: dashboardResponses.dashboardTrends,
-          400: dashboardResponses.resourceNotFound,
+          404: dashboardResponses.resourceNotFound,
           500: dashboardResponses.internalServerError,
         },
       },

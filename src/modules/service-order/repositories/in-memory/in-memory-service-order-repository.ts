@@ -42,7 +42,7 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
       location_source: serviceOrderData.location_source || null,
       location_edited_by: null,
       location_edited_at: null,
-      created_from: serviceOrderData.created_from || "WEB",
+      created_from: serviceOrderData.created_from,
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -54,10 +54,14 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
   async listServiceOrders(
     listServiceOrderProps: ListServiceOrderByBusinessIdProps,
   ): Promise<ListServiceOrderProps> {
-    const { page, pageSize, businessId } = listServiceOrderProps;
-    const filteredOrders = this.serviceOrders.filter(
-      (order) => order.businessId === businessId,
-    );
+    const { page, pageSize, businessId, currentUserRole } =
+      listServiceOrderProps;
+    const filteredOrders =
+      currentUserRole === "MASTER"
+        ? [...this.serviceOrders]
+        : this.serviceOrders.filter(
+            (order) => order.businessId === businessId,
+          );
 
     const skip = (page - 1) * pageSize;
     const slicedOrders = filteredOrders.slice(skip, skip + pageSize);

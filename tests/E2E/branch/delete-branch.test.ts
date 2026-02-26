@@ -62,7 +62,7 @@ describe("Delete Branch E2E", () => {
       .set("Authorization", `Bearer ${userAuthenticated}`);
 
     expect(response.statusCode).toEqual(200);
-    expect(response.body.message).toBe("Filial excluída com sucesso!");
+    expect(response.body.message).toBe("Filial deletada com sucesso!");
   });
 
   it("should throw BranchNotFoundError if branch does not found", async () => {

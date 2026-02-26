@@ -1,6 +1,8 @@
 class FuelTypeAlreadyExistsError extends Error {
   constructor() {
-    super("Este tipo de combustível já foi cadastrado para esta empresa!");
+    super(
+      "Este tipo de combustível não está disponível para cadastro. Já existe um tipo de combustível com este nome.",
+    );
   }
 }
 

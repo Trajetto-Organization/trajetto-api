@@ -26,7 +26,7 @@ describe("Create Business Zod Validation Fields", () => {
     expect(parsed).toEqual(validData);
   });
 
-  it("should accept empty strings for optional fields", () => {
+  it("should convert empty strings to null for optional fields", () => {
     const data = {
       cep: "12345678",
       city: "São Paulo",
@@ -46,7 +46,9 @@ describe("Create Business Zod Validation Fields", () => {
 
     const expectedData = {
       ...data,
+      complement: null, // Schema converts empty string to null
       erp_code: null, // Schema converts empty string to null
+      fantasy_name: null, // Schema converts empty string to null
     };
 
     const parsed = updateBusinessSchema.parse(data);
@@ -100,12 +102,6 @@ describe("Create Business Zod Validation Fields", () => {
       },
       {
         field: "city",
-        value: "  ", // Empty or whitespace
-        errorMessage:
-          "O nome da cidade não pode ser vazio ou conter apenas espaços.",
-      },
-      {
-        field: "city",
         value: "São  Paulo", // Consecutive spaces
         errorMessage: "O nome da cidade não deve conter espaços consecutivos.",
       },
@@ -140,6 +136,11 @@ describe("Create Business Zod Validation Fields", () => {
         }
       }
     });
+  });
+
+  it("should convert whitespace-only city to null", () => {
+    const parsed = updateBusinessSchema.parse({ city: "  " });
+    expect(parsed.city).toBeNull();
   });
 
   describe("should validate UF field", () => {
@@ -179,23 +180,11 @@ describe("Create Business Zod Validation Fields", () => {
           }
         }
       });
+    });
 
-      try {
-        updateBusinessSchema.parse({ uf: "  " });
-        expect.fail(
-          "Expected validation to fail for consecutive spaces but it succeeded.",
-        );
-      } catch (error) {
-        if (error instanceof ZodError) {
-          expect(error.errors.length).toBeGreaterThan(0);
-          const consecutiveSpacesError = error.errors.some((e) =>
-            e.message.includes("consecutivos"),
-          );
-          expect(consecutiveSpacesError).toBeTruthy();
-        } else {
-          expect.fail("Unexpected error type");
-        }
-      }
+    it("should convert whitespace-only uf to null", () => {
+      const parsed = updateBusinessSchema.parse({ uf: "  " });
+      expect(parsed.uf).toBeNull();
     });
   });
 
@@ -210,12 +199,6 @@ describe("Create Business Zod Validation Fields", () => {
         field: "street",
         value: "A".repeat(101), // Too long
         errorMessage: "O nome da rua deve ter no máximo 100 caracteres.",
-      },
-      {
-        field: "street",
-        value: "   ", // Whitespace only
-        errorMessage:
-          "O nome da rua não pode ser vazio ou conter apenas espaços.",
       },
       {
         field: "street",
@@ -255,18 +238,17 @@ describe("Create Business Zod Validation Fields", () => {
     });
   });
 
+  it("should convert whitespace-only street to null", () => {
+    const parsed = updateBusinessSchema.parse({ street: "   " });
+    expect(parsed.street).toBeNull();
+  });
+
   it("should validate address_number field", () => {
     const testCases = [
       {
         field: "address_number",
         value: "12345678901", // Too long
         errorMessage: "O número do endereço deve ter no máximo 10 caracteres.",
-      },
-      {
-        field: "address_number",
-        value: "  ", // Whitespace only
-        errorMessage:
-          "O número do endereço não pode ser vazio ou conter apenas espaços.",
       },
       {
         field: "address_number",
@@ -299,6 +281,11 @@ describe("Create Business Zod Validation Fields", () => {
         }
       }
     });
+  });
+
+  it("should convert whitespace-only address_number to null", () => {
+    const parsed = updateBusinessSchema.parse({ address_number: "  " });
+    expect(parsed.address_number).toBeNull();
   });
 
   it("should validate CNPJ field", () => {
@@ -432,12 +419,6 @@ describe("Create Business Zod Validation Fields", () => {
       },
       {
         field: "corporate_reason",
-        value: "  ", // Whitespace only
-        errorMessage:
-          "O nome da razão social não pode ser vazio ou conter apenas espaços.",
-      },
-      {
-        field: "corporate_reason",
         value: "Empresa  Exemplo", // Consecutive spaces
         errorMessage:
           "O nome da razão social não deve conter espaços consecutivos.",
@@ -473,6 +454,11 @@ describe("Create Business Zod Validation Fields", () => {
         }
       }
     });
+  });
+
+  it("should convert whitespace-only corporate_reason to null", () => {
+    const parsed = updateBusinessSchema.parse({ corporate_reason: "  " });
+    expect(parsed.corporate_reason).toBeNull();
   });
 
   it("should validate email field", () => {

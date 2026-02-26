@@ -3,8 +3,10 @@ import { inject, injectable } from "tsyringe";
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
+import { UploadService } from "@/shared/services/upload-service";
+
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { ListFuelFormattedProps } from "../../dtos/fuel-dto";
+import { ListFuelProps } from "../../dtos/fuel-dto";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -15,6 +17,8 @@ class ListFuelUseCase {
     private fuel: IFuelRepository,
     @inject("UserRepository")
     private user: IUserRepository,
+    @inject("UploadService")
+    private uploadService: UploadService,
   ) {}
 
   async execute(
@@ -22,7 +26,7 @@ class ListFuelUseCase {
     page: number,
     pageSize: number,
     search?: string,
-  ): Promise<ListFuelFormattedProps> {
+  ): Promise<ListFuelProps> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -38,7 +42,15 @@ class ListFuelUseCase {
         search,
       });
 
-      return fuels;
+      return {
+        ...fuels,
+        data: fuels.data.map((fuel) => ({
+          ...fuel,
+          odometer_photo: fuel.odometer_photo
+            ? this.uploadService.getFileUrl(fuel.odometer_photo)
+            : null,
+        })),
+      };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar listar o abastecimento! Por favor, tente novamente.",

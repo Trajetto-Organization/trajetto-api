@@ -1,5 +1,4 @@
 import { FastifyInstance } from "fastify";
-import { z } from "zod";
 
 import { CreateFuelController } from "@/modules/fuel/usecases/create-fuel/create-fuel-controller";
 import { ListFuelController } from "@/modules/fuel/usecases/list-fuel/list-fuel-controller";
@@ -48,20 +47,7 @@ async function fuelRoutes(app: FastifyInstance) {
         consumes: ["multipart/form-data"],
         response: {
           201: fuelResponses.fuelCreated,
-          400: z.union([
-            fuelResponses.resourceNotFound,
-            fuelResponses.businessNotFound,
-            fuelResponses.vehicleNotFound,
-            fuelResponses.driverNotFound,
-            fuelResponses.fuelTypeNotFound,
-            fuelResponses.branchNotFound,
-            fuelResponses.vehicleNotBelongBusiness,
-            fuelResponses.driverNotBelongBusiness,
-            fuelResponses.fuelTypeNotBelongBusiness,
-            fuelResponses.branchNotBelongBusiness,
-            fuelResponses.vehicleMileageInvalid,
-            fuelResponses.validationError,
-          ]),
+          400: fuelResponses.createFuelErrors,
           500: fuelResponses.internalServerError,
         },
       },
@@ -128,22 +114,7 @@ async function fuelRoutes(app: FastifyInstance) {
         consumes: ["multipart/form-data"],
         response: {
           200: fuelResponses.fuelUpdated,
-          400: z.union([
-            fuelResponses.resourceNotFound,
-            fuelResponses.businessNotFound,
-            fuelResponses.fuelNotFound,
-            fuelResponses.vehicleNotFound,
-            fuelResponses.driverNotFound,
-            fuelResponses.fuelTypeNotFound,
-            fuelResponses.branchNotFound,
-            fuelResponses.fuelNotBelongBusiness,
-            fuelResponses.vehicleNotBelongBusiness,
-            fuelResponses.driverNotBelongBusiness,
-            fuelResponses.fuelTypeNotBelongBusiness,
-            fuelResponses.branchNotBelongBusiness,
-            fuelResponses.vehicleMileageInvalid,
-            fuelResponses.validationError,
-          ]),
+          400: fuelResponses.updateFuelErrors,
           500: fuelResponses.internalServerError,
         },
       },
@@ -165,17 +136,9 @@ async function fuelRoutes(app: FastifyInstance) {
         params: fuelSchemas.updateDeleteFuel,
         response: {
           200: fuelResponses.fuelDeleted,
-          400: z.union([
-            fuelResponses.resourceNotFound,
-            fuelResponses.businessNotFound,
-            fuelResponses.fuelNotFound,
-          ]),
+          400: fuelResponses.driverCannotDeleteFuel,
           403: fuelResponses.fuelNotBelongBusiness,
-          404: z.union([
-            fuelResponses.resourceNotFound,
-            fuelResponses.businessNotFound,
-            fuelResponses.fuelNotFound,
-          ]),
+          404: fuelResponses.deleteFuelNotFoundErrors,
           500: fuelResponses.internalServerError,
         },
       },
@@ -214,29 +177,12 @@ async function fuelRoutes(app: FastifyInstance) {
         summary: "Get previous fuel record for a vehicle",
         description:
           "Retrieve the previous fuel refueling record for a specific vehicle before a given date",
-        params: z.object({
-          vehicleId: z.string().uuid("O ID do veículo é obrigatório!"),
-        }),
-        querystring: z.object({
-          date: z.string({
-            required_error: "A data do abastecimento atual é obrigatória!",
-          }),
-          businessId: z
-            .string({ required_error: "O ID da empresa é obrigatório!" })
-            .uuid("O ID da empresa deve ser um UUID válido!"),
-        }),
+        params: fuelSchemas.getPreviousFuelParams,
+        querystring: fuelSchemas.getPreviousFuelQuery,
         response: {
           200: fuelResponses.fuelReturned,
-          400: z.union([
-            fuelResponses.resourceNotFound,
-            fuelResponses.businessNotFound,
-            fuelResponses.vehicleNotFound,
-          ]),
-          404: z.object({
-            message: z
-              .string()
-              .default("Nenhum abastecimento anterior encontrado."),
-          }),
+          400: fuelResponses.getPreviousFuelErrors,
+          404: fuelResponses.getPreviousFuelNotFound,
           500: fuelResponses.internalServerError,
         },
       },

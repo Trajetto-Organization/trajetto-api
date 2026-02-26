@@ -145,7 +145,6 @@ app.register(multipart, {
 });
 
 app.register(routes);
-
 app.setErrorHandler((error, _, reply) => {
   if (error instanceof ZodError || hasZodFastifySchemaValidationErrors(error)) {
     const issues =

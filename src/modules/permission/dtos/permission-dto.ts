@@ -49,6 +49,7 @@ interface UpdatePermission {
   action?: string | null;
   canRead?: boolean | null;
   canWrite?: boolean | null;
+  permissionKey?: PermissionKey;
 }
 
 interface FindPermissionKeyByProfile {

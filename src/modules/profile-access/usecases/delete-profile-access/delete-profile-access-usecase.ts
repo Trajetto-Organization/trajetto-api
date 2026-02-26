@@ -12,6 +12,8 @@ import { AppError } from "@/shared/errors/AppError";
 import { ProfileAccessNotFoundError } from "../errors/profile-access-not-found-error";
 import { ProfileAccessCannotBeDeletedByHimselfError } from "../errors/profile-access-cannot-be-deleted-by-himself-error";
 
+import { sendSecurityEventToBusiness } from "@/websocket";
+
 @injectable()
 class DeleteProfileAccessUseCase {
   constructor(
@@ -57,6 +59,10 @@ class DeleteProfileAccessUseCase {
         status: "Deletado",
         performedBy: userId,
         businessId: profileAccessDeleted.businessId as string,
+      });
+
+      sendSecurityEventToBusiness(profileAccessDeleted.businessId as string, {
+        reason: "permissions_changed",
       });
 
       return profileAccessDeleted;

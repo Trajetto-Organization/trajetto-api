@@ -85,8 +85,8 @@ class UpdateVehicleChecklistUseCase {
     // Validate checklist exists and belongs to business
     const findChecklist =
       await this.vehicleChecklist.getVehicleChecklistByIdAndBusiness({
-        checklistId,
         businessId,
+        checklistId,
       });
 
     if (!findChecklist) {

@@ -83,7 +83,7 @@ describe("Create Profile Access E2E", () => {
 
     expect(response.statusCode).toEqual(400);
     expect(response.body.message).toBe(
-      "Este perfil de acesso já existe para esta empresa!",
+      "Este perfil não está disponível para cadastro. Já existe um perfil com este nome.",
     );
   });
 

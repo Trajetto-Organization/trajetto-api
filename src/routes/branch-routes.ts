@@ -107,6 +107,8 @@ async function branchRoutes(app: FastifyInstance) {
         response: {
           200: branchResponses.branchUpdated,
           400: branchResponses.updateBranchErrors,
+          403: branchResponses.updateBranchForbidden,
+          404: branchResponses.updateBranchNotFound,
           500: branchResponses.internalServerError,
         },
       },
@@ -129,6 +131,8 @@ async function branchRoutes(app: FastifyInstance) {
         response: {
           200: branchResponses.branchDeleted,
           400: branchResponses.deleteBranchErrors,
+          403: branchResponses.deleteBranchForbidden,
+          404: branchResponses.deleteBranchNotFound,
           500: branchResponses.internalServerError,
         },
       },

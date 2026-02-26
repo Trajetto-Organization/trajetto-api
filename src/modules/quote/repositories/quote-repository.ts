@@ -4,12 +4,10 @@ import {
   Quote,
   ListQuotesProps,
   ListQuotesResult,
-  QuoteStatus,
   UpdateQuoteProps,
 } from "../dtos/quote-dto";
 
 import database from "@/../infra/database";
-import { formatDate, formatTelephone } from "@/config/format-values";
 
 class QuoteRepository implements IQuoteRepository {
   constructor(private prisma = database) {}
@@ -103,24 +101,7 @@ class QuoteRepository implements IQuoteRepository {
       where: whereCondition,
     });
 
-    const transformedQuotes = quotes.map((quote) => ({
-      id: quote.id,
-      name: quote.name,
-      company: quote.company,
-      email: quote.email,
-      telephone: formatTelephone(quote.telephone),
-      fleet_size: quote.fleet_size,
-      message: quote.message,
-      status: quote.status as QuoteStatus,
-      contacted_at: quote.contacted_at
-        ? formatDate(quote.contacted_at, "pt-BR")
-        : null,
-      notes: quote.notes,
-      created_at: formatDate(quote.created_at, "pt-BR"),
-      updated_at: formatDate(quote.updated_at, "pt-BR"),
-    }));
-
-    return { data: transformedQuotes, total };
+    return { data: quotes, total };
   }
 
   async updateQuoteStatus({

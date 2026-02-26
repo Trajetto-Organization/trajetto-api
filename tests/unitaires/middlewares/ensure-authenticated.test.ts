@@ -37,7 +37,7 @@ describe("Ensure Authenticated Middleware", () => {
     });
   });
 
-  it("should throw an AppError with status 401 if user is not found", async () => {
+  it("should throw AppError with status 404 if user is not found", async () => {
     vi.spyOn(require("jsonwebtoken"), "verify").mockReturnValue({ sub: "123" });
     vi.spyOn(UserRepository.prototype, "findUserById").mockResolvedValue(null);
 
@@ -48,7 +48,7 @@ describe("Ensure Authenticated Middleware", () => {
 
     await expect(ensureAuthenticated(request, reply)).rejects.toMatchObject({
       message: expect.stringContaining("Este usuário não existe!"),
-      statusCode: 401,
+      statusCode: 404,
     });
   });
 
@@ -87,7 +87,7 @@ describe("Ensure Authenticated Middleware", () => {
 
     await expect(ensureAuthenticated(request, reply)).rejects.toMatchObject({
       message: expect.stringContaining("Seu acesso foi revogado!"),
-      statusCode: 401, // Because it's wrapped in the catch block
+      statusCode: 403, // AppError is re-thrown as-is from the catch block
     });
   });
 

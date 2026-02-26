@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-
 import { ListPartBusinessUseCase } from "@/modules/part/usecases/list-part-business/list-part-business-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";

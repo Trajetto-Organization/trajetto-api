@@ -701,7 +701,7 @@ describe("Create Quote Zod Validation Fields", () => {
       }
     });
 
-    it("should accept empty message", () => {
+    it("should convert empty message to null", () => {
       const data = {
         name: "João Silva Santos",
         company: "Test Company",
@@ -715,7 +715,7 @@ describe("Create Quote Zod Validation Fields", () => {
       expect(result.success).toBe(true);
 
       if (result.success) {
-        expect(result.data.message).toBe("");
+        expect(result.data.message).toBeNull();
       }
     });
 

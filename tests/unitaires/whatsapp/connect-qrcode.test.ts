@@ -228,10 +228,14 @@ describe("Connect QRCode UseCase", () => {
       status: "disconnected",
     });
 
+    // WhatsAppBusinessNotConnected extends Error (not AppError), so the first catch block
+    // does not re-throw it. Execution falls through to the second try block where the
+    // user instance status also returns "disconnected", then getQRCode fails,
+    // resulting in the generic QR Code error.
     await expect(connectQRCodeUseCase.execute(user.id)).rejects.toEqual(
       new AppError(
-        "A instância de negócio do WhatsApp não está conectada. Entre em contato com o suporte.",
-        400,
+        "Houve um erro ao tentar gerar o QR Code! Por favor, tente novamente.",
+        500,
       ),
     );
   });

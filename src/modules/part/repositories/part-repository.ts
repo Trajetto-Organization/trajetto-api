@@ -9,7 +9,6 @@ import {
 } from "../dtos/part-dto";
 
 import database from "@/../infra/database";
-import { formatDate, formatCurrency } from "@/config/format-values";
 
 class PartRepository implements IPartRepository {
   constructor(private prisma = database) {}
@@ -52,7 +51,15 @@ class PartRepository implements IPartRepository {
     if (normalizedSearch) {
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
+        { supplierId: { contains: normalizedSearch, mode: "insensitive" } },
         { description: { contains: normalizedSearch, mode: "insensitive" } },
+        {
+          ...(currentUserRole === "MASTER"
+            ? {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              }
+            : {}),
+        },
       );
     }
 
@@ -71,11 +78,13 @@ class PartRepository implements IPartRepository {
             name: true,
           },
         },
-        business: {
-          select: {
-            corporate_reason: true,
+        ...(currentUserRole === "MASTER" && {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
           },
-        },
+        }),
       },
       orderBy: {
         created_at: "desc",
@@ -86,24 +95,8 @@ class PartRepository implements IPartRepository {
       where: whereCondition,
     });
 
-    const transformedPartData = partData.map((part) => ({
-      id: part.id ?? "N/A",
-      description: part.description ?? "N/A",
-      unit_price: formatCurrency(Number(part.unit_price)) ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { businessId: part.businessId ?? "N/A" }
-        : {}),
-      ...(currentUserRole === "MASTER"
-        ? { business_name: part.business?.corporate_reason ?? "N/A" }
-        : {}),
-      supplierId: part.supplierId ?? null,
-      supplierName: part.supplier?.name ?? "N/A",
-      created_at: formatDate(part.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(part.updated_at, "pt-BR") ?? "N/A",
-    }));
-
     return {
-      data: transformedPartData,
+      data: partData,
       total,
     };
   }

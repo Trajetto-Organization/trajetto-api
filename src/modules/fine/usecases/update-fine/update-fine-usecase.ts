@@ -29,7 +29,7 @@ import { FineDueDateMustBeAfterInfractionError } from "../errors/fine-due-date-m
 import { FinePaymentDateCannotBeEarlierInfractionError } from "../errors/fine-payment-date-cannot-be-earlier-infraction-error";
 
 import { FineDueDateInfractionCannotBeLaterError } from "../errors/fine-due-date-infraction-cannot-be-later-error";
-import { FineUserNotAllowedChangeError } from "../errors/fine-user-not-allowed-change-error";
+import { FineNotBelongBusinessError } from "../errors/fine-not-belong-business-error";
 
 import { FineDueDateMustBeLaterInfractionError } from "../errors/fine-due-date-must-be-later-infraction-error";
 import { NotificationService } from "@/shared/services/notification-service";
@@ -60,6 +60,7 @@ class UpdateFineUseCase {
     fineData: UpdateFineProps,
     fineId: string,
     userId: string,
+    businessId: string,
   ): Promise<Fine> {
     const findUser = await this.user.findUserById(userId);
 
@@ -73,11 +74,8 @@ class UpdateFineUseCase {
       throw new FineNotFoundError();
     }
 
-    if (
-      findUser.role !== "MASTER" &&
-      existingFine.businessId !== findUser.businessId
-    ) {
-      throw new FineUserNotAllowedChangeError();
+    if (existingFine.businessId !== businessId) {
+      throw new FineNotBelongBusinessError();
     }
 
     if (fineData.branchId) {
@@ -87,7 +85,7 @@ class UpdateFineUseCase {
         throw new BranchNotFoundError();
       }
 
-      if (findBranch.businessId !== existingFine.businessId) {
+      if (findBranch.businessId !== businessId) {
         throw new BranchNotBelongBusinessError();
       }
     }
@@ -99,7 +97,7 @@ class UpdateFineUseCase {
         throw new DriverNotFoundError();
       }
 
-      if (findDriver.businessId !== existingFine.businessId) {
+      if (findDriver.businessId !== businessId) {
         throw new DriverNotBelongBusinessError();
       }
     }
@@ -113,7 +111,7 @@ class UpdateFineUseCase {
         throw new VehicleNotFoundError();
       }
 
-      if (findVehicle.businessId !== existingFine.businessId) {
+      if (findVehicle.businessId !== businessId) {
         throw new VehicleNotBelongBusinessError();
       }
     }
@@ -214,7 +212,7 @@ class UpdateFineUseCase {
         description: `Multa atualizada | Valor: ${formatCurrency(Number(updatedFine.amount))} | ID: ${updatedFine.id}`,
         status: "Atualizado",
         performedBy: userId,
-        businessId: existingFine.businessId,
+        businessId: businessId,
       });
 
       return updatedFine;

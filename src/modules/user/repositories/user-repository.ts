@@ -19,8 +19,6 @@ import {
   UpdateActivityNotifications,
 } from "../dtos/user-dto";
 
-import { formatDate } from "@/config/format-values";
-
 class UserRepository implements IUserRepository {
   constructor(private prisma = database) {}
 
@@ -108,6 +106,9 @@ class UserRepository implements IUserRepository {
           profileAccessId: { contains: normalizedSearch, mode: "insensitive" },
         },
         {
+          driverId: { contains: normalizedSearch, mode: "insensitive" },
+        },
+        {
           ...(currentUserRole === "MASTER"
             ? {
                 businessId: { contains: normalizedSearch, mode: "insensitive" },
@@ -150,9 +151,13 @@ class UserRepository implements IUserRepository {
       take: pageSize,
       where: whereCondition,
       include: {
-        business: {
-          select: { corporate_reason: true },
-        },
+        ...(currentUserRole === "MASTER" && {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
+          },
+        }),
         profileAccess: {
           select: { name: true },
         },
@@ -169,29 +174,7 @@ class UserRepository implements IUserRepository {
       where: whereCondition,
     });
 
-    const transformeUserAccessData = usersAccessData.map((user) => ({
-      id: user.id ?? "N/A",
-      name: user.name ?? "N/A",
-      email: user.email ?? "N/A",
-      avatar: user.avatar ?? "N/A",
-      role: user.role ?? "N/A",
-      two_factor_enabled: user.two_factor_enabled ?? "N/A",
-      access_revoked: user.access_revoked ?? "N/A",
-      email_verified: user.email_verified ? true : false,
-      whatsapp_phone: user.whatsapp_phone ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { corporate_reason: user.business?.corporate_reason ?? "N/A" }
-        : {}),
-      businessId: user.businessId ?? "N/A",
-      profileAccess: user.profileAccess?.name ?? "N/A",
-      profileAccessId: user.profileAccessId ?? "N/A",
-      driverId: user.driverId ?? "N/A",
-      driverName: user.driver?.name ?? "N/A",
-      created_at: formatDate(user.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(user.updated_at, "pt-BR") ?? "N/A",
-    }));
-
-    return { data: transformeUserAccessData, total };
+    return { data: usersAccessData, total };
   }
 
   async listUserBusiness({
@@ -236,8 +219,14 @@ class UserRepository implements IUserRepository {
 
   async updateUser({ userId, userData }: UpdateUser): Promise<User> {
     // Extract fields that need special handling
-    const { businessId, profileAccessId, driverId, userType, ...restData } =
-      userData;
+    const {
+      businessId,
+      profileAccessId,
+      driverId,
+      userType,
+      password,
+      ...restData
+    } = userData;
 
     // Build base update data (fields that can be updated directly)
     const updateData: any = {};
@@ -248,6 +237,11 @@ class UserRepository implements IUserRepository {
         updateData[key] = value;
       }
     });
+
+    // Only add password if it exists and is not empty (already hashed in use case)
+    if (password && password.trim() !== "") {
+      updateData.password = password;
+    }
 
     // Handle business relation
     if (businessId) {

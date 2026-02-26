@@ -1,70 +1,74 @@
 import { inject, injectable } from "tsyringe";
 
 import { IVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/IVehicle-checklist-repository";
-import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
-
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { UploadService } from "@/shared/services/upload-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
 import {
-  ListVehicleChecklistByBusinessIdProps,
-  ListVehicleChecklistFormattedProps,
+  ListVehicleChecklistProps,
+  ListVehicleChecklistBusinessProps,
 } from "../../dtos/vehicle-checklist-dto";
+import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
 class ListVehicleChecklistBusinessUseCase {
   constructor(
+    @inject("VehicleChecklistRepository")
+    private vehicleChecklist: IVehicleChecklistRepository,
     @inject("UserRepository")
     private user: IUserRepository,
     @inject("BusinessRepository")
     private business: IBusinessRepository,
-    @inject("VehicleChecklistRepository")
-    private vehicleChecklist: IVehicleChecklistRepository,
+    @inject("UploadService")
+    private uploadService: UploadService,
   ) {}
 
-  async execute({
-    page,
-    pageSize,
-    businessId,
-    currentUserRole,
-    search,
-    vehicleId,
-    driverId,
-    overall_condition,
-    startDate,
-    endDate,
-    userId,
-  }: ListVehicleChecklistByBusinessIdProps & {
-    userId: string;
-  }): Promise<ListVehicleChecklistFormattedProps> {
+  async execute(
+    listVehicleChecklistBusinessProps: ListVehicleChecklistBusinessProps,
+    userId: string,
+  ): Promise<ListVehicleChecklistProps> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
 
-    const findBusiness = await this.business.findBusinessById(businessId);
+    const findBusiness = await this.business.findBusinessById(
+      listVehicleChecklistBusinessProps.businessId,
+    );
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
     }
 
-    const checklists = await this.vehicleChecklist.listVehicleChecklists({
-      page,
-      pageSize,
-      businessId,
-      currentUserRole,
-      search,
-      vehicleId,
-      driverId,
-      overall_condition,
-      startDate,
-      endDate,
-    });
+    try {
+      const checklists =
+        await this.vehicleChecklist.listVehicleChecklistBusiness(
+          listVehicleChecklistBusinessProps,
+        );
 
-    return checklists;
+      return {
+        ...checklists,
+        data: checklists.data.map((checklist) => ({
+          ...checklist,
+          photos: checklist.photos
+            ? checklist.photos.map((photoPath: string) =>
+                this.uploadService.getFileUrl(photoPath),
+              )
+            : [],
+        })),
+      };
+    } catch (error) {
+      throw new AppError(
+        "Não foi possível recuperar a lista de checklists veiculares por empresa!",
+        500,
+      );
+    }
   }
 }
 

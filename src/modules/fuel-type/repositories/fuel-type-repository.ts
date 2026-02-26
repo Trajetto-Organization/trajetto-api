@@ -9,7 +9,6 @@ import {
 } from "../dtos/fuel-type-dto";
 
 import database from "@/../infra/database";
-import { formatDate } from "@/config/format-values";
 
 class FuelTypeRepository implements IFuelTypeRepository {
   constructor(private prisma = database) {}
@@ -45,6 +44,22 @@ class FuelTypeRepository implements IFuelTypeRepository {
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
         { description: { contains: normalizedSearch, mode: "insensitive" } },
+        // Business ID and name (MASTER only)
+        ...(currentUserRole === "MASTER"
+          ? [
+              {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              },
+              {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              },
+            ]
+          : []),
       );
     }
 
@@ -57,9 +72,6 @@ class FuelTypeRepository implements IFuelTypeRepository {
       skip,
       take: pageSize,
       where: whereCondition,
-      orderBy: {
-        created_at: "desc",
-      },
       include: {
         business: {
           select: {
@@ -67,27 +79,17 @@ class FuelTypeRepository implements IFuelTypeRepository {
           },
         },
       },
+      orderBy: {
+        created_at: "desc",
+      },
     });
 
     const total = await this.prisma.fuelType.count({
       where: whereCondition,
     });
 
-    const transformedFuelTypeData = fuelTypeData.map((fuelType) => ({
-      id: fuelType.id ?? "N/A",
-      description: fuelType.description ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { businessId: fuelType.businessId ?? "N/A" }
-        : {}),
-      ...(currentUserRole === "MASTER"
-        ? { business_name: fuelType.business?.corporate_reason ?? "N/A" }
-        : {}),
-      created_at: formatDate(fuelType.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(fuelType.updated_at, "pt-BR") ?? "N/A",
-    }));
-
     return {
-      data: transformedFuelTypeData,
+      data: fuelTypeData,
       total,
     };
   }

@@ -1,7 +1,8 @@
 import { z } from "zod";
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
+import {
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+} from "@/shared/utils/zod-schema-helpers";
 
 const createPartSchema = z.object({
   description: z
@@ -14,6 +15,7 @@ const createPartSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O nome não deve exceder 100 caracteres.",
         });
+
         return;
       }
 
@@ -22,6 +24,7 @@ const createPartSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O nome não deve conter espaços consecutivos.",
         });
+
         return;
       }
 
@@ -30,6 +33,7 @@ const createPartSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O nome não pode começar ou terminar com espaço em branco.",
         });
+
         return;
       }
 

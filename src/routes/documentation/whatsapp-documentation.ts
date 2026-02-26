@@ -83,16 +83,14 @@ const whatsappResponses = {
   whatsappNumberRequired: z.object({
     message: z
       .string()
-      .default(
-        "Número de telefone é obrigatório para habilitar as notificações WhatsApp",
-      ),
+      .default("O número de telefone é obrigatório para habilitar WhatsApp"),
   }),
 
   whatsappPhoneUpdateNotAllowed: z.object({
     message: z
       .string()
       .default(
-        "Não é possível alterar o número do WhatsApp enquanto a instância estiver conectada",
+        "Para alterar o número, primeiro desabilite as notificações WhatsApp",
       ),
   }),
 
@@ -100,7 +98,7 @@ const whatsappResponses = {
     message: z
       .string()
       .default(
-        "Este número de WhatsApp já está sendo utilizado por outro usuário",
+        "Este número já está sendo utilizado por outro usuário conectado",
       ),
   }),
 
@@ -150,32 +148,27 @@ const whatsappResponses = {
     z.object({
       message: z
         .string()
+        .default("O número de telefone é obrigatório para habilitar WhatsApp"),
+    }),
+    z.object({
+      message: z
+        .string()
         .default(
-          "Número de telefone é obrigatório para habilitar as notificações WhatsApp",
+          "Para alterar o número, primeiro desabilite as notificações WhatsApp",
         ),
     }),
     z.object({
       message: z
         .string()
         .default(
-          "Não é possível alterar o número do WhatsApp enquanto a instância estiver conectada",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este número de WhatsApp já está sendo utilizado por outro usuário",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Apenas administradores de empresa podem gerenciar configurações WhatsApp",
+          "Este número já está sendo utilizado por outro usuário conectado",
         ),
     }),
   ]),
+
+  settingsNotFoundErrors: z.object({
+    message: z.string().default("Instância WhatsApp não encontrada."),
+  }),
 
   statusErrors: z.union([
     z.object({
@@ -213,10 +206,14 @@ const whatsappResponses = {
       message: z
         .string()
         .default(
-          "Este número de WhatsApp já está sendo utilizado por outro usuário",
+          "Este número já está sendo utilizado por outro usuário conectado",
         ),
     }),
   ]),
+
+  qrCodeNotFoundErrors: z.object({
+    message: z.string().default("Instância WhatsApp não encontrada."),
+  }),
 };
 
 export { whatsappSchemas, whatsappResponses };

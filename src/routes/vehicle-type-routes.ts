@@ -109,6 +109,7 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
         response: {
           200: vehicleTypeResponses.vehicleTypeUpdated,
           400: vehicleTypeResponses.updateVehicleTypeErrors,
+          403: vehicleTypeResponses.vehicleTypeNotBelongBusinessError,
           500: vehicleTypeResponses.internalServerError,
         },
       },

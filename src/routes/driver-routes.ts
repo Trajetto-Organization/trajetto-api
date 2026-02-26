@@ -41,6 +41,7 @@ async function driverRoutes(app: FastifyInstance) {
         response: {
           201: driverResponses.driverCreated,
           400: driverResponses.createDriverErrors,
+          403: driverResponses.createDriverForbiddenErrors,
           500: driverResponses.internalServerError,
         },
       },
@@ -108,6 +109,7 @@ async function driverRoutes(app: FastifyInstance) {
         response: {
           200: driverResponses.driverUpdated,
           400: driverResponses.updateDriverErrors,
+          403: driverResponses.updateDriverForbiddenErrors,
           500: driverResponses.internalServerError,
         },
       },
@@ -130,6 +132,7 @@ async function driverRoutes(app: FastifyInstance) {
         response: {
           200: driverResponses.driverDeleted,
           400: driverResponses.deleteDriverErrors,
+          403: driverResponses.deleteDriverForbiddenErrors,
           500: driverResponses.internalServerError,
         },
       },

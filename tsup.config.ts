@@ -103,6 +103,7 @@ export default defineConfig({
           for (const entry of entries) {
             const srcPath = path.join(src, entry);
             const destPath = path.join(dest, entry);
+
             await copyRecursive(srcPath, destPath);
           }
         } else {
@@ -147,6 +148,7 @@ export default defineConfig({
       try {
         await fs.access(excelSourcePath); // Check if file exists
         await fs.copyFile(excelSourcePath, excelTargetPath);
+
         console.log(
           `✅ Arquivo Excel copiado: ${excelSourcePath} -> ${excelTargetPath}`,
         );

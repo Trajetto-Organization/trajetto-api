@@ -11,7 +11,7 @@ import {
 } from "../dtos/permission-dto";
 
 import { IPermissionRepository } from "./IPermission-repository";
-import { formatDate } from "@/config/format-values";
+import { permissionLabels, PermissionKey } from "@/config/permissions";
 
 class PermissionRepository implements IPermissionRepository {
   constructor(private prisma = database) {}
@@ -52,10 +52,18 @@ class PermissionRepository implements IPermissionRepository {
     const orConditions: any[] = [];
 
     if (normalizedSearch) {
+      // Find permission keys that match the search by label
+      const matchingPermissionKeys: PermissionKey[] = [];
+
+      Object.entries(permissionLabels).forEach(([key, label]) => {
+        if (label.toLowerCase().includes(normalizedSearch)) {
+          matchingPermissionKeys.push(key as PermissionKey);
+        }
+      });
+
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
         { action: { contains: normalizedSearch, mode: "insensitive" } },
-        { permissionKey: { contains: normalizedSearch, mode: "insensitive" } },
         {
           profileAccessId: { contains: normalizedSearch, mode: "insensitive" },
         },
@@ -84,6 +92,13 @@ class PermissionRepository implements IPermissionRepository {
           },
         },
       );
+
+      // Add conditions for matching permission keys by label
+      if (matchingPermissionKeys.length > 0) {
+        orConditions.push({
+          permissionKey: { in: matchingPermissionKeys },
+        });
+      }
     }
 
     const whereCondition = {
@@ -99,7 +114,14 @@ class PermissionRepository implements IPermissionRepository {
       take: pageSize,
       where: whereCondition,
       include: {
-        business: { select: { corporate_reason: true } },
+        ...(currentUserRole === "MASTER" && {
+          business: {
+            select: {
+              id: true,
+              corporate_reason: true,
+            },
+          },
+        }),
         profileAccess: { select: { name: true } },
       },
       orderBy: {
@@ -111,23 +133,7 @@ class PermissionRepository implements IPermissionRepository {
       where: whereCondition,
     });
 
-    const transformedPermissionData = permissionData.map((permission) => ({
-      id: permission.id ?? "N/A",
-      action: permission.action ?? "N/A",
-      permission: permission.permissionKey ?? "N/A",
-      canRead: permission.canRead ?? "N/A",
-      canWrite: permission.canWrite ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { corporate_reason: permission.business?.corporate_reason ?? "N/A" }
-        : {}),
-      profile_name: permission.profileAccess?.name ?? "N/A",
-      businessId: permission.businessId ?? "N/A",
-      profileAccessId: permission.profileAccessId ?? "N/A",
-      created_at: formatDate(permission.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(permission.updated_at, "pt-BR") ?? "N/A",
-    }));
-
-    return { data: transformedPermissionData, total };
+    return { data: permissionData, total };
   }
 
   async updatePermission(

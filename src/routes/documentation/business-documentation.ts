@@ -15,9 +15,8 @@ const businessSchemas = {
 
 const businessResponses = {
   businessCreated: z.object({
-    message: z.string().default("Empresa criada com sucesso!"),
+    message: z.string().default("Empresa e filial matriz criadas com sucesso!"),
   }),
-
   businessList: z.object({
     data: z.array(
       z.object({
@@ -45,55 +44,76 @@ const businessResponses = {
     pageSize: z.number(),
     totalPages: z.number(),
   }),
-
   businessUpdated: z.object({
     message: z.string().default("Empresa atualizada com sucesso!"),
   }),
-
   businessDeleted: z.object({
     message: z.string().default("Empresa deletada com sucesso!"),
   }),
 
-  // Respostas de erro comum
+  // Common error responses
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
   }),
-
   resourceNotFound: z.object({
     message: z.string().default("Recurso não encontrado!"),
   }),
-
   validationError: z.object({
     message: z.string().default("Validation Error"),
     issues: z.array(z.string()),
   }),
-
   businessNotFound: z.object({
     message: z
       .string()
       .default("Empresa não encontrada! Por favor, tente novamente."),
   }),
-
   cnpjAlreadyExists: z.object({
     message: z.string().default("Este cnpj já foi cadastrado em uma empresa!"),
   }),
-
   corporateReasonAlreadyExists: z.object({
     message: z
       .string()
       .default("Esta razão social já foi cadastrada em uma empresa!"),
   }),
-
   erpCodeAlreadyExists: z.object({
     message: z
       .string()
       .default("Este código erp já foi cadastrado em uma empresa!"),
   }),
-
   emailAlreadyExists: z.object({
     message: z
       .string()
       .default("Este e-mail já foi cadastrado em uma empresa!"),
+  }),
+
+  // Branch errors (used in create/update business)
+  branchNameAlreadyExists: z.object({
+    message: z
+      .string()
+      .default(
+        "Esta razão social não está disponível para cadastro. As razões sociais de filiais devem ser únicas em todo o sistema.",
+      ),
+  }),
+  branchCnpjAlreadyExists: z.object({
+    message: z
+      .string()
+      .default(
+        "Este CNPJ não está disponível para cadastro. Os CNPJs de filiais devem ser únicos em todo o sistema.",
+      ),
+  }),
+  branchErpCodeAlreadyExists: z.object({
+    message: z
+      .string()
+      .default(
+        "Este código ERP não está disponível para cadastro. Os códigos ERP de filiais devem ser únicos em todo o sistema.",
+      ),
+  }),
+  branchEmailAlreadyExists: z.object({
+    message: z
+      .string()
+      .default(
+        "Este e-mail não está disponível para cadastro. Os e-mails de filiais devem ser únicos em todo o sistema.",
+      ),
   }),
 
   // Grouping errors by route
@@ -125,8 +145,36 @@ const businessResponses = {
         .string()
         .default("Este e-mail já foi cadastrado em uma empresa!"),
     }),
+    // Branch errors
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Esta razão social não está disponível para cadastro. As razões sociais de filiais devem ser únicas em todo o sistema.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Este CNPJ não está disponível para cadastro. Os CNPJs de filiais devem ser únicos em todo o sistema.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Este código ERP não está disponível para cadastro. Os códigos ERP de filiais devem ser únicos em todo o sistema.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Este e-mail não está disponível para cadastro. Os e-mails de filiais devem ser únicos em todo o sistema.",
+        ),
+    }),
   ]),
-
   listBusinessErrors: z.union([
     z.object({
       message: z.string().default("Validation Error"),
@@ -136,7 +184,6 @@ const businessResponses = {
       message: z.string().default("Recurso não encontrado!"),
     }),
   ]),
-
   updateBusinessErrors: z.union([
     z.object({
       message: z.string().default("Recurso não encontrado!"),
@@ -166,14 +213,44 @@ const businessResponses = {
         .string()
         .default("Este e-mail já foi cadastrado em uma empresa!"),
     }),
+    // Branch errors
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Esta razão social não está disponível para cadastro. As razões sociais de filiais devem ser únicas em todo o sistema.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Este CNPJ não está disponível para cadastro. Os CNPJs de filiais devem ser únicos em todo o sistema.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Este código ERP não está disponível para cadastro. Os códigos ERP de filiais devem ser únicos em todo o sistema.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Este e-mail não está disponível para cadastro. Os e-mails de filiais devem ser únicos em todo o sistema.",
+        ),
+    }),
   ]),
-
   deleteBusinessErrors: z.union([
     z.object({
       message: z.string().default("Recurso não encontrado!"),
     }),
     z.object({
-      message: z.string().default("Empresa não encontrada!"),
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
     }),
   ]),
 };

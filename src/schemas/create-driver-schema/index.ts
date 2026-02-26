@@ -1,18 +1,11 @@
 import { z } from "zod";
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const isEmptyOrWhitespace = (value: string): boolean =>
-  value.trim().length === 0;
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
-
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
+import {
+  emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+  isEmptyOrWhitespace,
+  isValidDateString,
+} from "@/shared/utils/zod-schema-helpers";
 
 const isAdult = (date: Date) => {
   const today = new Date();
@@ -32,11 +25,6 @@ const isAdult = (date: Date) => {
   return age >= 18;
 };
 
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
-
 const createDriverSchema = z.object({
   name: z
     .string()
@@ -48,6 +36,7 @@ const createDriverSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O nome não deve exceder 100 caracteres.",
         });
+
         return;
       }
 
@@ -56,6 +45,7 @@ const createDriverSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O nome não deve conter espaços consecutivos.",
         });
+
         return;
       }
 
@@ -64,6 +54,7 @@ const createDriverSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O nome não pode começar ou terminar com espaço em branco.",
         });
+
         return;
       }
 
@@ -72,6 +63,7 @@ const createDriverSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "Por favor, insira o nome completo.",
         });
+
         return;
       }
 
@@ -115,6 +107,7 @@ const createDriverSchema = z.object({
       if (typeof val === "string") {
         return val.replace(/\D/g, "");
       }
+
       return val;
     },
     z
@@ -132,6 +125,7 @@ const createDriverSchema = z.object({
         // Remove all non-numeric characters
         return val.replace(/\D/g, "");
       }
+
       return val;
     },
     z
@@ -210,6 +204,7 @@ const createDriverSchema = z.object({
           message:
             "O UF deve conter apenas letras sem números, símbolos ou traços.",
         });
+
         return;
       }
     }),
@@ -278,6 +273,7 @@ const createDriverSchema = z.object({
             message:
               "O nome do complemento não deve conter espaços consecutivos.",
           });
+
           return;
         }
 
@@ -287,6 +283,7 @@ const createDriverSchema = z.object({
             message:
               "O nome do complemento não pode começar ou terminar com espaço em branco.",
           });
+
           return;
         }
 

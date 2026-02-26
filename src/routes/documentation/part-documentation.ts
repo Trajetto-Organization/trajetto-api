@@ -32,14 +32,23 @@ const partResponses = {
       z.object({
         id: z.string(),
         description: z.string(),
-        unit_price: z.any(),
-        registration_date: z.string(),
-        businessId: z.string(),
-        business_name: z.string(),
-        supplierId: z.string().nullable(),
-        supplierName: z.string().optional(),
-        created_at: z.string(),
-        updated_at: z.string(),
+        unit_price: z.union([z.string(), z.number()]),
+        businessId: z.string().optional(),
+        supplierId: z.string().nullable().optional(),
+        created_at: z.union([z.string(), z.date()]),
+        updated_at: z.union([z.string(), z.date()]),
+        supplier: z
+          .object({
+            name: z.string(),
+          })
+          .nullable()
+          .optional(),
+        business: z
+          .object({
+            corporate_reason: z.string(),
+          })
+          .nullable()
+          .optional(),
       }),
     ),
     total: z.number(),
@@ -99,18 +108,12 @@ const partResponses = {
   partAlreadyExists: z.object({
     message: z
       .string()
-      .default("Esta peça já foi cadastrada para esta empresa!"),
-  }),
-
-  partInUse: z.object({
-    message: z
-      .string()
       .default(
-        "Não é possível excluir esta peça pois ela está sendo usada em ordens de serviço.",
+        "Esta peça não está disponível para cadastro. Já existe uma peça com este nome.",
       ),
   }),
 
-  // Grouping errors by route
+  // Grouping errors by route - CREATE (POST) - status 400
   createPartErrors: z.union([
     z.object({
       message: z.string().default("Validation Error"),
@@ -130,15 +133,18 @@ const partResponses = {
     z.object({
       message: z
         .string()
-        .default("Esta peça já foi cadastrada para esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este fornecedor não pertence a esta empresa!"),
+        .default(
+          "Esta peça não está disponível para cadastro. Já existe uma peça com este nome.",
+        ),
     }),
   ]),
 
+  // Forbidden errors for CREATE (status 403)
+  createPartForbiddenErrors: z.object({
+    message: z.string().default("Este fornecedor não pertence a esta empresa!"),
+  }),
+
+  // LIST errors (GET) - status 400
   listPartErrors: z.union([
     z.object({
       message: z.string().default("Validation Error"),
@@ -149,6 +155,7 @@ const partResponses = {
     }),
   ]),
 
+  // UPDATE errors (PATCH) - status 400
   updatePartErrors: z.union([
     z.object({
       message: z.string().default("Validation Error"),
@@ -171,8 +178,14 @@ const partResponses = {
     z.object({
       message: z
         .string()
-        .default("Esta peça já foi cadastrada para esta empresa!"),
+        .default(
+          "Esta peça não está disponível para cadastro. Já existe uma peça com este nome.",
+        ),
     }),
+  ]),
+
+  // Forbidden errors for UPDATE (status 403)
+  updatePartForbiddenErrors: z.union([
     z.object({
       message: z.string().default("Esta peça não pertence a esta empresa!"),
     }),
@@ -183,18 +196,34 @@ const partResponses = {
     }),
   ]),
 
+  // DELETE errors (DELETE) - status 400
   deletePartErrors: z.union([
     z.object({
       message: z.string().default("Recurso não encontrado!"),
     }),
     z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
       message: z.string().default("Peça não encontrada!"),
     }),
+  ]),
+
+  // Forbidden errors for DELETE (status 403)
+  deletePartForbiddenErrors: z.union([
     z.object({
-      message: z.string().default("Empresa não encontrada!"),
+      message: z
+        .string()
+        .default("Esta peça não pertence a esta ordem de serviço!"),
     }),
     z.object({
-      message: z.string().default("Esta peça não pertence a esta empresa!"),
+      message: z
+        .string()
+        .default(
+          "Não é possível deletar esta peça pois ela está sendo utilizada em ordem(ns) de serviço.",
+        ),
     }),
   ]),
 };

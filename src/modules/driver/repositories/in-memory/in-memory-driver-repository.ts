@@ -31,7 +31,6 @@ class InMemoryDriverRepository implements IDriverRepository {
     page,
     pageSize,
     businessId,
-    currentUserRole,
     search,
   }: ListDriverByBusinessIdProps): Promise<ListDriverProps> {
     let filteredDrivers = this.drivers.filter(

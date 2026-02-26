@@ -27,7 +27,7 @@ class GetDashboardTrendsController {
       return reply.status(200).send(result);
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
+        return reply.status(404).send({ message: error.message });
       }
 
       throw error;

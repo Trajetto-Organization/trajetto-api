@@ -108,6 +108,7 @@ async function fuelTypeRoutes(app: FastifyInstance) {
         response: {
           200: fuelTypeResponses.fuelTypeUpdated,
           400: fuelTypeResponses.updateFuelTypeErrors,
+          403: fuelTypeResponses.updateFuelTypeForbiddenErrors,
           500: fuelTypeResponses.internalServerError,
         },
       },
@@ -130,6 +131,7 @@ async function fuelTypeRoutes(app: FastifyInstance) {
         response: {
           200: fuelTypeResponses.fuelTypeDeleted,
           400: fuelTypeResponses.deleteFuelTypeErrors,
+          403: fuelTypeResponses.deleteFuelTypeForbiddenErrors,
           500: fuelTypeResponses.internalServerError,
         },
       },

@@ -1,29 +1,11 @@
 import { z } from "zod";
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
-
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
-
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
-
-// Helper function to convert string to boolean
-const stringToBoolean = (value: any) => {
-  if (typeof value === "string") {
-    return value.toLowerCase() === "true";
-  }
-  return Boolean(value);
-};
+import {
+  emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+  isValidDateString,
+  stringToBoolean,
+} from "@/shared/utils/zod-schema-helpers";
 
 const updateKanbanCardSchema = z.object({
   title: z
@@ -36,6 +18,7 @@ const updateKanbanCardSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O título não deve conter espaços consecutivos.",
         });
+
         return;
       }
 
@@ -45,6 +28,7 @@ const updateKanbanCardSchema = z.object({
           message:
             "O título não pode começar ou terminar com espaço em branco.",
         });
+
         return;
       }
     })
@@ -53,6 +37,26 @@ const updateKanbanCardSchema = z.object({
     .string()
     .min(1, "A descrição é obrigatória.")
     .max(500, "A descrição deve ter no máximo 500 caracteres.")
+    .superRefine((value, ctx) => {
+      if (/ {2,}/.test(value)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "A descrição não deve conter espaços consecutivos.",
+        });
+
+        return;
+      }
+
+      if (hasSpaceAtEdges(value)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "A descrição não pode começar ou terminar com espaço em branco.",
+        });
+
+        return;
+      }
+    })
     .optional(),
   priority: z
     .enum(["low", "medium", "high", "urgent"], {
@@ -70,6 +74,7 @@ const updateKanbanCardSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "Data de vencimento inválida.",
         });
+
         return;
       }
     })

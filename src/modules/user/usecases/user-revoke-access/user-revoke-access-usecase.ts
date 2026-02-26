@@ -7,6 +7,8 @@ import { AppError } from "@/shared/errors/AppError";
 import { UserRole } from "../../dtos/user-dto";
 import { UserCannotBeRevokeByHimselfError } from "../errors/user-cannot-be-revoke-access-by-himself-error";
 
+import { sendSecurityEventToUser } from "@/websocket";
+
 interface UserRevokeAccessProps {
   userId: string;
   id: string;
@@ -66,6 +68,7 @@ class UserRevokeAccessUseCase {
           isAccessRevoke: false,
         });
 
+        sendSecurityEventToUser(userId, { reason: "access_restored" });
         return;
       }
 
@@ -73,6 +76,8 @@ class UserRevokeAccessUseCase {
         userId,
         isAccessRevoke: true,
       });
+
+      sendSecurityEventToUser(userId, { reason: "access_revoked" });
     } catch (error) {
       throw new AppError(
         "Não foi possível revogar o acesso deste usuário! Por favor, Tente novamente.",

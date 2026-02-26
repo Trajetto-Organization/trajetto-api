@@ -133,7 +133,7 @@ describe("Update Quote Status E2E", () => {
       .send(updateData);
 
     expect(response.statusCode).toEqual(404);
-    expect(response.body.message).toBe("Orçamento não encontrado");
+    expect(response.body.message).toBe("Orçamento não encontrado!");
   });
 
   it("should throw ResourceNotFoundError if user does not exist", async () => {

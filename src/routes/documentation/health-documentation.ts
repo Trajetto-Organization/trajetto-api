@@ -1,9 +1,5 @@
 import { z } from "zod";
 
-const healthSchemas = {
-  // Health routes don't need input schemas as they don't accept parameters
-};
-
 const healthResponses = {
   healthCheck: z.object({
     status: z
@@ -34,7 +30,7 @@ const healthResponses = {
     message: z
       .string()
       .optional()
-      .describe("Additional message if system is unhealthy"),
+      .describe("Error message when one or more services are unhealthy"),
   }),
   livenessCheck: z.object({
     status: z.literal("alive").describe("Application liveness status"),
@@ -47,4 +43,4 @@ const healthResponses = {
   }),
 };
 
-export { healthSchemas, healthResponses };
+export { healthResponses };

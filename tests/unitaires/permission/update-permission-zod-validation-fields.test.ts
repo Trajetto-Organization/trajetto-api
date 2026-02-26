@@ -18,8 +18,8 @@ describe("Update Permission Zod Validation Fields", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should fail when action is empty or contains only spaces", () => {
-    const invalidData = {
+  it("should convert whitespace-only action to null", () => {
+    const data = {
       action: "   ",
       canRead: true,
       canWrite: false,
@@ -28,12 +28,12 @@ describe("Update Permission Zod Validation Fields", () => {
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
-    const result = updatePermissionSchema.safeParse(invalidData);
+    const result = updatePermissionSchema.safeParse(data);
 
-    expect(result.success).toBe(false);
-    expect(result.error?.format().action?._errors).toContain(
-      "O nome da permissão não pode ser vazio ou conter apenas espaços.",
-    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.action).toBeNull();
+    }
   });
 
   it("should fail when action exceeds 100 characters", () => {

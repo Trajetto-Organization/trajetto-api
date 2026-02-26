@@ -3,21 +3,12 @@ import { z } from "zod";
 import { LocationSource } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
-
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-  return value;
-};
-
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
+import {
+  emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+  isValidDateString,
+} from "@/shared/utils/zod-schema-helpers";
 
 const updateFineSchema = z
   .object({
@@ -73,16 +64,18 @@ const updateFineSchema = z
     ),
     amount: z.preprocess(
       (val) => {
-        // Converter string para number
+        // Convert string to number
         if (typeof val === "string") {
           const cleaned = val.replace(/[^\d,.]/g, "");
           if (cleaned === "" || cleaned === "," || cleaned === ".") {
             return undefined;
           }
-          // Converter formato brasileiro para americano
+
+          // Convert Brazilian format to American format.
           const normalized = cleaned.replace(/\./g, "").replace(",", ".");
           return parseFloat(normalized);
         }
+
         return val;
       },
       z
@@ -94,92 +87,100 @@ const updateFineSchema = z
     ),
     points: z.preprocess(
       (val) => {
-        // Converter string para number, incluindo strings vazias
+        // Convert string to number, including empty strings.
         if (typeof val === "string") {
           if (val.trim() === "") {
             return undefined;
           }
+
           const parsed = parseInt(val, 10);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z
         .number({
           invalid_type_error: "A pontuação deve ser um número válido",
         })
-        .min(0, "A pontuação não pode ser negativa")
+        .min(1, "A pontuação não pode ser negativa")
         .max(20, "A pontuação não pode exceder 20 pontos")
         .optional(),
     ),
-    location: z
-      .string()
-      .max(200, "Local da infração deve ter no máximo 200 caracteres")
-      .superRefine((value, ctx) => {
-        if (hasConsecutiveSpaces(value)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "O nome do local da infração não deve conter espaços consecutivos.",
-          });
-          return;
-        }
+    location: z.preprocess(
+      emptyStringToNull,
+      z
+        .string()
+        .max(200, "Local da infração deve ter no máximo 200 caracteres")
+        .superRefine((value, ctx) => {
+          if (hasConsecutiveSpaces(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "O nome do local da infração não deve conter espaços consecutivos.",
+            });
 
-        if (hasSpaceAtEdges(value)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "O nome do local da infração não pode começar ou terminar com espaço em branco.",
-          });
-          return;
-        }
+            return;
+          }
 
-        if (!/^[\p{L}0-9]+(?:[ \-][\p{L}0-9]+)*$/u.test(value)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "O nome do local da infração deve conter apenas letras (inclusive acentos), números, espaços e traços, sem outros caracteres.",
-          });
-        }
-      })
-      .optional()
-      .or(z.literal("")),
-    observation: z
-      .string()
-      .max(500, "Observações devem ter no máximo 500 caracteres")
-      .superRefine((value, ctx) => {
-        if (value === undefined || value === "") {
-          return;
-        }
+          if (hasSpaceAtEdges(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "O nome do local da infração não pode começar ou terminar com espaço em branco.",
+            });
 
-        if (hasConsecutiveSpaces(value)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "O nome da observação não deve conter espaços consecutivos.",
-          });
-          return;
-        }
+            return;
+          }
 
-        if (hasSpaceAtEdges(value)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "O nome da observação não pode começar ou terminar com espaço em branco.",
-          });
-          return;
-        }
+          if (!/^[\p{L}0-9]+(?:[ \-][\p{L}0-9]+)*$/u.test(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "O nome do local da infração deve conter apenas letras (inclusive acentos), números, espaços e traços, sem outros caracteres.",
+            });
+          }
+        })
+        .optional()
+        .nullable(),
+    ),
+    observation: z.preprocess(
+      emptyStringToNull,
+      z
+        .string()
+        .max(500, "Observações devem ter no máximo 500 caracteres")
+        .superRefine((value, ctx) => {
+          if (hasConsecutiveSpaces(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "O nome da observação não deve conter espaços consecutivos.",
+            });
 
-        if (!/^[\p{L}0-9]+(?:[ \-][\p{L}0-9]+)*$/u.test(value)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message:
-              "O nome da observação deve conter apenas letras (inclusive acentos), números, espaços e traços, sem outros caracteres.",
-          });
-        }
-      })
-      .optional()
-      .or(z.literal("")),
+            return;
+          }
+
+          if (hasSpaceAtEdges(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "O nome da observação não pode começar ou terminar com espaço em branco.",
+            });
+
+            return;
+          }
+
+          if (!/^[\p{L}0-9]+(?:[ \-][\p{L}0-9]+)*$/u.test(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "O nome da observação deve conter apenas letras (inclusive acentos), números, espaços e traços, sem outros caracteres.",
+            });
+          }
+        })
+        .optional()
+        .nullable(),
+    ),
     branchId: z
       .string()
       .uuid("ID da filial deve ser um UUID válido")
@@ -202,9 +203,11 @@ const updateFineSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "" || val === "null") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z
@@ -221,9 +224,11 @@ const updateFineSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "" || val === "null") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z

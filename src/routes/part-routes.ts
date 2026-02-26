@@ -38,6 +38,7 @@ async function partRoutes(app: FastifyInstance) {
         response: {
           201: partResponses.partCreated,
           400: partResponses.createPartErrors,
+          403: partResponses.createPartForbiddenErrors,
           500: partResponses.internalServerError,
         },
       },
@@ -105,6 +106,7 @@ async function partRoutes(app: FastifyInstance) {
         response: {
           200: partResponses.partUpdated,
           400: partResponses.updatePartErrors,
+          403: partResponses.updatePartForbiddenErrors,
           500: partResponses.internalServerError,
         },
       },
@@ -127,6 +129,7 @@ async function partRoutes(app: FastifyInstance) {
         response: {
           200: partResponses.partDeleted,
           400: partResponses.deletePartErrors,
+          403: partResponses.deletePartForbiddenErrors,
           500: partResponses.internalServerError,
         },
       },

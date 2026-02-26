@@ -6,17 +6,9 @@ import {
   ListAccountPayableByBusinessIdProps,
   ListAccountPayableByResponsibleUserIdProps,
   UpdateAccountPayable,
-  AccountPayableStatus,
 } from "../dtos/account-payable-dto";
 
 import database from "@/../infra/database";
-import {
-  formatDate,
-  formatCurrency,
-  formatNotificationDate,
-  translateAccountPayableStatus,
-  formatServiceOrderDisplay,
-} from "@/config/format-values";
 
 class AccountPayableRepository implements IAccountPayableRepository {
   constructor(private prisma = database) {}
@@ -49,7 +41,7 @@ class AccountPayableRepository implements IAccountPayableRepository {
         }),
         registrationUser: {
           connect: {
-            id: accountPayableData.registrationUserId || "",
+            id: accountPayableData.registrationUserId,
           },
         },
       },
@@ -88,6 +80,63 @@ class AccountPayableRepository implements IAccountPayableRepository {
 
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
+        {
+          registrationUser: {
+            OR: [
+              {
+                id: { contains: normalizedSearch, mode: "insensitive" },
+              },
+              {
+                name: { contains: normalizedSearch, mode: "insensitive" },
+              },
+            ],
+          },
+        },
+        {
+          branch: {
+            OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              {
+                corporate_reason: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              {
+                fantasy_name: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+            ],
+          },
+        },
+        {
+          serviceOrder: {
+            id: { contains: normalizedSearch, mode: "insensitive" },
+          },
+        },
+        // Business ID and name (MASTER only)
+        ...(currentUserRole === "MASTER"
+          ? [
+              {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              },
+              {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              },
+            ]
+          : []),
         ...(numericSearch
           ? [
               { amount: parseFloat(normalizedSearch) },
@@ -95,31 +144,6 @@ class AccountPayableRepository implements IAccountPayableRepository {
             ]
           : []),
       );
-      orConditions.push({
-        branch: {
-          OR: [
-            {
-              corporate_reason: {
-                contains: normalizedSearch,
-                mode: "insensitive",
-              },
-            },
-            {
-              fantasy_name: { contains: normalizedSearch, mode: "insensitive" },
-            },
-          ],
-        },
-      });
-      orConditions.push({
-        registrationUser: {
-          name: { contains: normalizedSearch, mode: "insensitive" },
-        },
-      });
-      orConditions.push({
-        serviceOrder: {
-          id: { contains: normalizedSearch, mode: "insensitive" },
-        },
-      });
     }
 
     const whereCondition = {
@@ -171,89 +195,7 @@ class AccountPayableRepository implements IAccountPayableRepository {
       where: whereCondition,
     });
 
-    const transformedAccountPayableData = accountPayableData.map(
-      (accountPayable) => {
-        // Determine account status based on existing fields
-        let status: AccountPayableStatus = "PENDING";
-        let remainingAmount = Number(accountPayable.amount);
-
-        const currentDate = new Date();
-        const dueDate = new Date(accountPayable.due_date);
-
-        const isOverdue = currentDate > dueDate;
-
-        if (accountPayable.payment_date) {
-          const amountPaid = Number(accountPayable.amount_paid || 0);
-          remainingAmount = Number(accountPayable.amount) - amountPaid;
-
-          // Convert dates for comparison
-          const paymentDate = new Date(accountPayable.payment_date);
-
-          // Checks if payment was made after the due date
-          const isPaidLate = paymentDate > dueDate;
-
-          if (amountPaid >= Number(accountPayable.amount)) {
-            // Full payment
-            if (isPaidLate) {
-              status = "LATE"; // Pay late
-            } else {
-              status = "PAID"; // Paid on time
-            }
-            remainingAmount = 0;
-          } else if (amountPaid > 0) {
-            // Partial payment
-            if (isPaidLate) {
-              status = "PARTIAL_LATE"; // Partially paid late
-            } else if (isOverdue) {
-              // Paid before the due date, but not yet paid in full and the due date is past
-              status = "PARTIAL_LATE"; // Partial and expired
-            } else {
-              status = "PARTIAL"; // Partial on time
-            }
-          }
-        } else {
-          // No payment date - check if it is overdue
-          if (isOverdue) {
-            status = "OVERDUE"; // Overdue and unpaid
-          } else {
-            status = "PENDING"; // Pending deadline
-          }
-        }
-
-        return {
-          id: accountPayable.id ?? "N/A",
-          issue_date:
-            formatNotificationDate(accountPayable.issue_date, "pt-BR") ?? "N/A",
-          due_date: accountPayable.due_date ?? "N/A",
-          payment_date: accountPayable.payment_date ?? null,
-          amount: formatCurrency(Number(accountPayable.amount)) ?? "N/A",
-          amount_paid: accountPayable.amount_paid
-            ? formatCurrency(Number(accountPayable.amount_paid))
-            : null,
-          businessId: accountPayable.businessId ?? "N/A",
-          branchId: accountPayable.branchId ?? "N/A",
-          ...(currentUserRole === "MASTER"
-            ? {
-                business_name:
-                  accountPayable.business.corporate_reason ?? "N/A",
-              }
-            : {}),
-          branchName: accountPayable.branch?.corporate_reason || "N/A",
-          serviceOrderId: accountPayable.serviceOrderId ?? null,
-          serviceOrderDescription: accountPayable.serviceOrder
-            ? formatServiceOrderDisplay(accountPayable.serviceOrder)
-            : "N/A",
-          registrationUserId: accountPayable.registrationUserId ?? "N/A",
-          registrationUserName: accountPayable.registrationUser?.name ?? "N/A",
-          status: translateAccountPayableStatus(status),
-          remainingAmount: formatCurrency(remainingAmount) ?? "N/A",
-          created_at: formatDate(accountPayable.created_at, "pt-BR") ?? "N/A",
-          updated_at: formatDate(accountPayable.updated_at, "pt-BR") ?? "N/A",
-        };
-      },
-    );
-
-    return { data: transformedAccountPayableData, total };
+    return { data: accountPayableData, total };
   }
 
   async updateAccountPayable({
@@ -402,88 +344,8 @@ class AccountPayableRepository implements IAccountPayableRepository {
       where: whereCondition,
     });
 
-    const transformedAccountPayableData: AccountPayable[] =
-      accountPayableData.map((accountPayable) => {
-        // Determine account status based on existing fields
-        let status: AccountPayableStatus = "PENDING";
-        let remainingAmount = Number(accountPayable.amount);
-
-        const currentDate = new Date();
-        const dueDate = new Date(accountPayable.due_date);
-
-        const isOverdue = currentDate > dueDate;
-
-        if (accountPayable.payment_date) {
-          const amountPaid = Number(accountPayable.amount_paid || 0);
-          remainingAmount = Number(accountPayable.amount) - amountPaid;
-
-          const paymentDate = new Date(accountPayable.payment_date);
-          const isPaidLate = paymentDate > dueDate;
-
-          if (amountPaid >= Number(accountPayable.amount)) {
-            // Full payment
-            if (isPaidLate) {
-              status = "LATE"; // Pay late
-            } else {
-              status = "PAID"; // Paid on time
-            }
-
-            remainingAmount = 0;
-          } else if (amountPaid > 0) {
-            // Partial payment
-            if (isPaidLate) {
-              status = "PARTIAL_LATE"; // Partially paid late
-            } else if (isOverdue) {
-              // Paid before the due date, but not yet paid in full and the due date is past
-              status = "PARTIAL_LATE"; // Partial and expired
-            } else {
-              status = "PARTIAL"; // Partial on time
-            }
-          }
-        } else {
-          // No payment date - check if it is overdue
-          if (isOverdue) {
-            status = "OVERDUE"; // Overdue and unpaid
-          } else {
-            status = "PENDING"; // Pending deadline
-          }
-        }
-
-        return {
-          id: accountPayable.id,
-          issue_date: formatNotificationDate(
-            accountPayable.issue_date,
-            "pt-BR",
-          ),
-          due_date: formatDate(accountPayable.due_date, "pt-BR"),
-          payment_date: accountPayable.payment_date
-            ? formatDate(accountPayable.payment_date, "pt-BR")
-            : null,
-          amount: formatCurrency(Number(accountPayable.amount)),
-          amount_paid: accountPayable.amount_paid
-            ? formatCurrency(Number(accountPayable.amount_paid))
-            : null,
-          businessId: accountPayable.businessId,
-          branchId: accountPayable.branchId,
-          serviceOrderId: accountPayable.serviceOrderId ?? null,
-          registrationUserId: accountPayable.registrationUserId,
-          created_at: formatNotificationDate(
-            accountPayable.created_at,
-            "pt-BR",
-          ),
-          updated_at: formatDate(accountPayable.updated_at, "pt-BR"),
-          branchName: accountPayable.branch?.corporate_reason ?? "N/A",
-          serviceOrderDescription: accountPayable.serviceOrder
-            ? formatServiceOrderDisplay(accountPayable.serviceOrder)
-            : "N/A",
-          registrationUserName: accountPayable.registrationUser?.name ?? "N/A",
-          status: translateAccountPayableStatus(status),
-          remainingAmount: formatCurrency(remainingAmount),
-        };
-      });
-
     return {
-      data: transformedAccountPayableData,
+      data: accountPayableData,
       total,
     };
   }

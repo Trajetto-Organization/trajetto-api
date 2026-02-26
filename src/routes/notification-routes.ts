@@ -1,47 +1,49 @@
 import { FastifyInstance } from "fastify";
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 
-import { ListUserNotificationsController } from "@/modules/notification/usecases/list-user-notifications/list-user-notifications-controller";
+import { ListUserNotificationsCursorController } from "@/modules/notification/usecases/list-user-notifications-cursor/list-user-notifications-cursor-controller";
 import { MarkNotificationAsReadController } from "@/modules/notification/usecases/mark-notification-as-read/mark-notification-as-read-controller";
 
-import { MarkAllNotificationsAsReadController } from "@/modules/notification/usecases/mark-all-notifications-as-read/mark-all-notifications-as-read-controller";
 import { DeleteNotificationController } from "@/modules/notification/usecases/delete-notification/delete-notification-controller";
-
 import { CountUnreadNotificationsController } from "@/modules/notification/usecases/count-unread-notifications/count-unread-notifications-controller";
+
 import {
   notificationResponses,
   notificationSchemas,
 } from "./documentation/notification-documentation";
 
-const listUserNotificationsController = new ListUserNotificationsController();
+const listUserNotificationsCursorController =
+  new ListUserNotificationsCursorController();
 
 const markNotificationAsReadController = new MarkNotificationAsReadController();
-const markAllNotificationsAsReadController =
-  new MarkAllNotificationsAsReadController();
-
 const deleteNotificationController = new DeleteNotificationController();
+
 const countUnreadNotificationsController =
   new CountUnreadNotificationsController();
 
 async function notificationRoutes(app: FastifyInstance) {
   app.get(
-    "/list",
+    "/stream",
     {
       onRequest: [ensureAuthenticated],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        summary: "List user notifications",
+        summary: "Stream user notifications (NDJSON)",
         description:
-          "Retrieve a paginated list of notifications for the authenticated user with optional filtering",
-        querystring: notificationSchemas.listNotificationsQuery,
+          "Retrieve notifications as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {total, unread, nextCursor, hasMore}}. " +
+          "Subsequent lines are individual notification objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: notificationSchemas.listNotificationsCursorQuery,
         response: {
-          200: notificationResponses.notificationsList,
+          200: notificationResponses.notificationsStreamDescription,
+          400: notificationResponses.listNotificationsErrors,
           500: notificationResponses.internalServerError,
         },
       },
     },
-    listUserNotificationsController.handle,
+    listUserNotificationsCursorController.handle,
   );
 
   app.get(
@@ -56,6 +58,7 @@ async function notificationRoutes(app: FastifyInstance) {
           "Get the total count of unread notifications for the authenticated user",
         response: {
           200: notificationResponses.unreadCount,
+          400: notificationResponses.listNotificationsErrors,
           500: notificationResponses.internalServerError,
         },
       },
@@ -75,30 +78,14 @@ async function notificationRoutes(app: FastifyInstance) {
         params: notificationSchemas.notificationIdParam,
         response: {
           200: notificationResponses.notificationMarkedAsRead,
+          400: notificationResponses.markAsReadErrors,
+          403: notificationResponses.markAsReadForbiddenError,
+          404: notificationResponses.markAsReadNotFoundError,
           500: notificationResponses.internalServerError,
         },
       },
     },
     markNotificationAsReadController.handle,
-  );
-
-  app.patch(
-    "/read-all",
-    {
-      onRequest: [ensureAuthenticated],
-      schema: {
-        security: [{ bearerAuth: [] }],
-        tags: ["notification"],
-        summary: "Mark all notifications as read",
-        description:
-          "Mark all notifications as read for the authenticated user",
-        response: {
-          200: notificationResponses.allNotificationsMarkedAsRead,
-          500: notificationResponses.internalServerError,
-        },
-      },
-    },
-    markAllNotificationsAsReadController.handle,
   );
 
   app.delete(
@@ -113,6 +100,9 @@ async function notificationRoutes(app: FastifyInstance) {
         params: notificationSchemas.notificationIdParam,
         response: {
           200: notificationResponses.notificationDeleted,
+          400: notificationResponses.deleteNotificationErrors,
+          403: notificationResponses.deleteNotificationForbiddenError,
+          404: notificationResponses.deleteNotificationNotFoundError,
           500: notificationResponses.internalServerError,
         },
       },

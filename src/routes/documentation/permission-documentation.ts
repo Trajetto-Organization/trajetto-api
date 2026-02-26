@@ -54,7 +54,7 @@ const permissionResponses = {
     message: z.string().default("Permissão deletada com sucesso!"),
   }),
 
-  // Respostas de erro comum
+  // Common error responses
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
   }),
@@ -95,7 +95,9 @@ const permissionResponses = {
   permissionCannotBeUpdatedByHimself: z.object({
     message: z
       .string()
-      .default("Você não pode atualizar sua própria permissão!"),
+      .default(
+        "Usuário não tem permissão para atualizar a sua própria permissão",
+      ),
   }),
 
   permissionCannotBeDeletedByHimself: z.object({
@@ -165,13 +167,6 @@ const permissionResponses = {
     z.object({
       message: z
         .string()
-        .default(
-          "Usuário não tem permissão para atualizar a sua própria permissão",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
         .default("O perfil de acesso não pertence a essa empresa."),
     }),
     z.object({
@@ -192,7 +187,20 @@ const permissionResponses = {
         .string()
         .default("Empresa não encontrada! Por favor, tente novamente."),
     }),
+    z.object({
+      message: z
+        .string()
+        .default("Esta permissão já está atribuída com este perfil."),
+    }),
   ]),
+
+  updatePermissionForbiddenErrors: z.object({
+    message: z
+      .string()
+      .default(
+        "Usuário não tem permissão para atualizar a sua própria permissão",
+      ),
+  }),
 
   deletePermissionErrors: z.union([
     z.object({

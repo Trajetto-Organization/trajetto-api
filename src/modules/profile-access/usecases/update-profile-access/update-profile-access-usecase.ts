@@ -60,14 +60,18 @@ class UpdateProfileAccessUseCase {
       throw new BusinessNotFoundError();
     }
 
-    const isSameName = name === existingProfile.name;
+    // Always check for duplicates when name or businessId changes
+    const targetName = name || existingProfile.name;
+    const targetBusinessId = businessId || existingProfile.businessId;
 
-    if (name && !isSameName) {
-      const targetBusinessId = businessId || existingProfile.businessId;
+    const isSameName = targetName === existingProfile.name;
+    const isSameBusiness = targetBusinessId === existingProfile.businessId;
 
+    // Only check for duplicates if name or businessId is changing
+    if (!isSameName || !isSameBusiness) {
       const exists =
         await this.profileAccess.findProfileAccessByNameAndBusiness({
-          name,
+          name: targetName,
           businessId: targetBusinessId as string,
         });
 

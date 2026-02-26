@@ -1,36 +1,21 @@
 import database from "@/../infra/database";
-import {
-  formatDate,
-  formatCurrency,
-  formatNotificationDate,
-} from "@/config/format-values";
 
 import { Decimal } from "@prisma/client/runtime/library";
-import { container } from "tsyringe";
-
-import { UploadService } from "@/shared/services/upload-service";
 import { IFuelRepository } from "./IFuel-repository";
 
 import {
   Fuel,
   CreateFuelProps,
   ListFuelProps,
-  ListFuelFormattedProps,
   ListFuelByBusinessIdProps,
   UpdateFuel,
   ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
-  FuelFormatted,
-  FuelWithRelationsFormatted,
   ListFuelByVehicleIdProps,
 } from "../dtos/fuel-dto";
 
 class FuelRepository implements IFuelRepository {
-  private uploadService: UploadService;
-
-  constructor(private prisma = database) {
-    this.uploadService = container.resolve(UploadService);
-  }
+  constructor(private prisma = database) {}
 
   async createFuel(fuelData: CreateFuelProps): Promise<Fuel> {
     // Calculate total amount if not provided
@@ -63,7 +48,7 @@ class FuelRepository implements IFuelRepository {
     businessId,
     currentUserRole,
     search,
-  }: ListFuelByBusinessIdProps): Promise<ListFuelFormattedProps> {
+  }: ListFuelByBusinessIdProps): Promise<ListFuelProps> {
     const skip = (page - 1) * pageSize;
     const normalizedSearch = search ? search.trim().toLowerCase() : "";
 
@@ -73,9 +58,34 @@ class FuelRepository implements IFuelRepository {
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
         { notes: { contains: normalizedSearch, mode: "insensitive" } },
+        // Business ID and name (MASTER only)
+        ...(currentUserRole === "MASTER"
+          ? [
+              {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              },
+              {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              },
+            ]
+          : []),
+        {
+          branchId: { contains: normalizedSearch, mode: "insensitive" },
+        },
         {
           vehicle: {
             OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
               {
                 description: {
                   contains: normalizedSearch,
@@ -96,6 +106,12 @@ class FuelRepository implements IFuelRepository {
         {
           driver: {
             OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
               { name: { contains: normalizedSearch, mode: "insensitive" } },
               { cnh: { contains: normalizedSearch, mode: "insensitive" } },
             ],
@@ -103,7 +119,20 @@ class FuelRepository implements IFuelRepository {
         },
         {
           fuelType: {
-            description: { contains: normalizedSearch, mode: "insensitive" },
+            OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              {
+                description: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+            ],
           },
         },
       );
@@ -158,42 +187,8 @@ class FuelRepository implements IFuelRepository {
       where: whereCondition,
     });
 
-    const transformedFuelData: FuelFormatted[] = fuelData.map((fuel) => ({
-      id: fuel.id ?? "N/A",
-      current_mileage: fuel.current_mileage ?? 0,
-      liters_amount: fuel.liters_amount ?? "0,000",
-      price_per_liter: formatCurrency(fuel.price_per_liter?.toNumber() ?? 0),
-      total_amount: formatCurrency(fuel.total_amount?.toNumber() ?? 0),
-      odometer_photo: fuel.odometer_photo
-        ? this.uploadService.getFileUrl(fuel.odometer_photo)
-        : null,
-      odometer_verified: fuel.odometer_verified ?? false,
-      notes: fuel.notes ?? "N/A",
-      refueling_date: fuel.refueling_date ?? "N/A",
-      businessId: fuel.businessId ?? "N/A",
-      branchId: fuel.branchId ?? "N/A",
-      vehicleId: fuel.vehicleId ?? "N/A",
-      driverId: fuel.driverId ?? "N/A",
-      fuelTypeId: fuel.fuelTypeId ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { business_name: fuel.business?.corporate_reason ?? "N/A" }
-        : {}),
-      branch_name: fuel.branch?.corporate_reason ?? "N/A",
-      vehicle_description: fuel.vehicle?.description ?? "N/A",
-      vehicle_license_plate: fuel.vehicle?.license_plate ?? "N/A",
-      vehicle_brand: fuel.vehicle?.brand ?? "N/A",
-      vehicle_model: fuel.vehicle?.model ?? "N/A",
-      driver_name: fuel.driver?.name ?? "N/A",
-      driver_cnh: fuel.driver?.cnh ?? "N/A",
-      fuel_type_description: fuel.fuelType?.description ?? "N/A",
-      latitude: fuel.latitude !== null ? Number(fuel.latitude) : null,
-      longitude: fuel.longitude !== null ? Number(fuel.longitude) : null,
-      created_at: formatDate(fuel.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(fuel.updated_at, "pt-BR") ?? "N/A",
-    }));
-
     return {
-      data: transformedFuelData,
+      data: fuelData,
       total,
     };
   }
@@ -276,9 +271,7 @@ class FuelRepository implements IFuelRepository {
     return fuel;
   }
 
-  async findFuelByIdWithRelations(
-    fuelId: string,
-  ): Promise<FuelWithRelationsFormatted | null> {
+  async findFuelByIdWithRelations(fuelId: string): Promise<any | null> {
     const fuel = await this.prisma.fuel.findUnique({
       where: { id: fuelId },
       include: {
@@ -322,18 +315,7 @@ class FuelRepository implements IFuelRepository {
       },
     });
 
-    if (!fuel) return null;
-
-    return {
-      ...fuel,
-      liters_amount:
-        fuel.liters_amount?.toFixed(3).replace(".", ",") ?? "0,000",
-      price_per_liter: formatCurrency(fuel.price_per_liter?.toNumber() ?? 0),
-      total_amount: formatCurrency(fuel.total_amount?.toNumber() ?? 0),
-      refueling_date: formatDate(fuel.refueling_date, "pt-BR"),
-      created_at: formatDate(fuel.created_at, "pt-BR"),
-      updated_at: formatDate(fuel.updated_at, "pt-BR"),
-    } as FuelWithRelationsFormatted;
+    return fuel;
   }
 
   async getFuelByIdAndBusiness({
@@ -353,7 +335,7 @@ class FuelRepository implements IFuelRepository {
   async getFuelByIdAndBusinessWithRelations({
     businessId,
     fuelId,
-  }: GetFuelByIdAndBusinessProps): Promise<FuelWithRelationsFormatted | null> {
+  }: GetFuelByIdAndBusinessProps): Promise<any | null> {
     const fuel = await this.prisma.fuel.findFirst({
       where: {
         id: fuelId,
@@ -400,18 +382,7 @@ class FuelRepository implements IFuelRepository {
       },
     });
 
-    if (!fuel) return null;
-
-    return {
-      ...fuel,
-      liters_amount:
-        fuel.liters_amount?.toFixed(3).replace(".", ",") ?? "0,000",
-      price_per_liter: formatCurrency(fuel.price_per_liter?.toNumber() ?? 0),
-      total_amount: formatCurrency(fuel.total_amount?.toNumber() ?? 0),
-      refueling_date: formatDate(fuel.refueling_date, "pt-BR"),
-      created_at: formatDate(fuel.created_at, "pt-BR"),
-      updated_at: formatDate(fuel.updated_at, "pt-BR"),
-    } as FuelWithRelationsFormatted;
+    return fuel;
   }
 
   async findFuelsByVehicleId(vehicleId: string): Promise<Fuel[]> {
@@ -444,16 +415,40 @@ class FuelRepository implements IFuelRepository {
     search?: string,
   ): Promise<any[]> {
     const normalizedSearch = search ? search.trim().toLowerCase() : "";
-
     const orConditions: any[] = [];
 
     if (normalizedSearch) {
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
         { notes: { contains: normalizedSearch, mode: "insensitive" } },
+        // Business ID and name (MASTER only)
+        ...(userRole === "MASTER"
+          ? [
+              {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              },
+              {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              },
+            ]
+          : []),
+        {
+          branchId: { contains: normalizedSearch, mode: "insensitive" },
+        },
         {
           vehicle: {
             OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
               {
                 description: {
                   contains: normalizedSearch,
@@ -474,6 +469,12 @@ class FuelRepository implements IFuelRepository {
         {
           driver: {
             OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
               { name: { contains: normalizedSearch, mode: "insensitive" } },
               { cnh: { contains: normalizedSearch, mode: "insensitive" } },
             ],
@@ -481,7 +482,20 @@ class FuelRepository implements IFuelRepository {
         },
         {
           fuelType: {
-            description: { contains: normalizedSearch, mode: "insensitive" },
+            OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+              {
+                description: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+            ],
           },
         },
       );
@@ -581,7 +595,7 @@ class FuelRepository implements IFuelRepository {
     businessId,
     page,
     pageSize,
-  }: ListFuelByVehicleIdProps): Promise<ListFuelFormattedProps> {
+  }: ListFuelByVehicleIdProps): Promise<ListFuelProps> {
     const skip = (page - 1) * pageSize;
 
     const whereCondition = {
@@ -633,37 +647,8 @@ class FuelRepository implements IFuelRepository {
       where: whereCondition,
     });
 
-    const transformedFuelData: FuelFormatted[] = fuelData.map((fuel) => ({
-      id: fuel.id ?? "N/A",
-      current_mileage: fuel.current_mileage ?? 0,
-      liters_amount: fuel.liters_amount ?? "0,000",
-      price_per_liter: formatCurrency(fuel.price_per_liter?.toNumber() ?? 0),
-      total_amount: formatCurrency(fuel.total_amount?.toNumber() ?? 0),
-      odometer_photo: fuel.odometer_photo
-        ? this.uploadService.getFileUrl(fuel.odometer_photo)
-        : null,
-      odometer_verified: fuel.odometer_verified ?? false,
-      notes: fuel.notes ?? "N/A",
-      refueling_date: formatDate(fuel.refueling_date, "pt-BR") ?? "N/A",
-      businessId: fuel.businessId ?? "N/A",
-      branchId: fuel.branchId ?? "N/A",
-      vehicleId: fuel.vehicleId ?? "N/A",
-      driverId: fuel.driverId ?? "N/A",
-      fuelTypeId: fuel.fuelTypeId ?? "N/A",
-      branch_name: fuel.branch?.corporate_reason ?? "N/A",
-      vehicle_description: fuel.vehicle?.description ?? "N/A",
-      vehicle_license_plate: fuel.vehicle?.license_plate ?? "N/A",
-      vehicle_brand: fuel.vehicle?.brand ?? "N/A",
-      vehicle_model: fuel.vehicle?.model ?? "N/A",
-      driver_name: fuel.driver?.name ?? "N/A",
-      driver_cnh: fuel.driver?.cnh ?? "N/A",
-      fuel_type_description: fuel.fuelType?.description ?? "N/A",
-      created_at: formatNotificationDate(fuel.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(fuel.updated_at, "pt-BR") ?? "N/A",
-    }));
-
     return {
-      data: transformedFuelData,
+      data: fuelData,
       total,
     };
   }

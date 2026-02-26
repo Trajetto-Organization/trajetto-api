@@ -1,20 +1,24 @@
 import {
   Notification,
   CreateNotificationProps,
-  ListNotificationsProps,
+  CursorPaginatedNotifications,
 } from "../dtos/notification-dto";
+
+interface ListNotificationsParams {
+  userId: string;
+  limit?: number;
+  includeRead?: boolean;
+  cursor?: string; // ID of the last notification from previous page
+}
 
 interface INotificationRepository {
   createNotification: (
     notificationData: CreateNotificationProps,
   ) => Promise<Notification>;
-  listUserNotifications: (
-    userId: string,
-    limit?: number,
-    includeRead?: boolean,
-  ) => Promise<ListNotificationsProps>;
+  listUserNotificationsWithCursor: (
+    params: ListNotificationsParams,
+  ) => Promise<CursorPaginatedNotifications>;
   markAsRead: (notificationId: string) => Promise<Notification>;
-  markAllAsRead: (userId: string) => Promise<void>;
   deleteNotification: (notificationId: string) => Promise<void>;
   findNotificationById: (
     notificationId: string,
@@ -22,4 +26,4 @@ interface INotificationRepository {
   countUnreadNotifications: (userId: string) => Promise<number>;
 }
 
-export { INotificationRepository };
+export { INotificationRepository, ListNotificationsParams };

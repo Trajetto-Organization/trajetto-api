@@ -1,6 +1,6 @@
 import { v4 as uuidV4 } from "uuid";
-
 import { IPartRepository } from "../IPart-repository";
+
 import {
   Part,
   CreatePartProps,
@@ -10,8 +10,28 @@ import {
   ListPartBusinessProps,
 } from "../../dtos/part-dto";
 
+interface ServiceOrderPartEntry {
+  id: string;
+  partId: string;
+  serviceOrderId: string;
+  quantity: number;
+  unit_price: string;
+}
+
 class InMemoryPartRepository implements IPartRepository {
   public parts: Part[] = [];
+  public serviceOrderParts: ServiceOrderPartEntry[] = [];
+
+  addServiceOrderPart(
+    entry: Omit<ServiceOrderPartEntry, "id">,
+  ): ServiceOrderPartEntry {
+    const serviceOrderPart: ServiceOrderPartEntry = {
+      id: uuidV4(),
+      ...entry,
+    };
+    this.serviceOrderParts.push(serviceOrderPart);
+    return serviceOrderPart;
+  }
 
   async createPart(partData: CreatePartProps): Promise<Part> {
     const newPart: Part = {
@@ -46,6 +66,7 @@ class InMemoryPartRepository implements IPartRepository {
     }
 
     const skip = (page - 1) * pageSize;
+
     const data = filteredParts.slice(skip, skip + pageSize);
     const total = filteredParts.length;
 
@@ -63,8 +84,8 @@ class InMemoryPartRepository implements IPartRepository {
 
     const skip = (page - 1) * pageSize;
     const data = filteredParts.slice(skip, skip + pageSize);
-    const total = filteredParts.length;
 
+    const total = filteredParts.length;
     return { data, total };
   }
 
@@ -126,9 +147,11 @@ class InMemoryPartRepository implements IPartRepository {
   }
 
   async findServiceOrderPartsByPartId(partId: string): Promise<Part[]> {
-    // For in-memory implementation, we'll simulate that parts can be used in service orders
-    // This would normally query a service_order_parts table
-    return [];
+    const associatedParts = this.serviceOrderParts.filter(
+      (sop) => sop.partId === partId,
+    );
+
+    return associatedParts as any[];
   }
 }
 

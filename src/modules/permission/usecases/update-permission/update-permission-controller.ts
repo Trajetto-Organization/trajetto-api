@@ -7,6 +7,8 @@ import { updatePermissionSchema } from "@/schemas/update-permission-schema";
 import { updateDeletePermissionSchema } from "@/schemas/update-delete-permission-schema";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
+import { PermissionAlreadyAssignedError } from "../errors/permission-already-assigned-error";
+
 import { PermissionNotFoundError } from "../errors/permission-not-found-error";
 import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
 
@@ -53,6 +55,10 @@ class UpdatePermissionController {
       }
 
       if (error instanceof PermissionAlreadyExistsError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof PermissionAlreadyAssignedError) {
         return reply.status(400).send({ message: error.message });
       }
 

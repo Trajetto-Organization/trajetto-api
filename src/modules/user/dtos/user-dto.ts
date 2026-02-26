@@ -118,16 +118,27 @@ interface ListUsersProps {
   id: string;
   role: UserRole;
   email: string;
+  email_verified?: Date | null;
   two_factor_enabled?: boolean;
+  access_revoked: boolean;
   name: string;
   avatar?: string | null;
-  corporate_reason?: string | null;
+  business?: {
+    corporate_reason: string;
+  } | null;
   businessId?: string | null;
   profileAccessId?: string | null;
   driverId?: string | null;
-  profileAccess?: string | null;
+  profileAccess?: {
+    name: string;
+  } | null;
+  driver?: {
+    name: string;
+  } | null;
   whatsapp_notifications_enabled?: boolean;
   whatsapp_phone?: string | null;
+  created_at: Date;
+  updated_at: Date;
 }
 
 interface ListUsers {

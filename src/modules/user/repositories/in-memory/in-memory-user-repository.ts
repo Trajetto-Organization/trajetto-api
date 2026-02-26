@@ -33,7 +33,8 @@ class InMemoryUserRepository implements IUserRepository {
     whatsapp_phone,
     whatsapp_instance_connected,
   }: CreateUserProps): Promise<User> {
-    const user: User = {
+    const now = new Date();
+    const user: User & { created_at: Date; updated_at: Date } = {
       id: uuidV4(),
       role: role || "BUSINESS_USER",
       email,
@@ -51,6 +52,8 @@ class InMemoryUserRepository implements IUserRepository {
       activity_notifications_enabled: true,
       whatsapp_phone: whatsapp_phone ?? null,
       whatsapp_instance_connected: whatsapp_instance_connected ?? false,
+      created_at: now,
+      updated_at: now,
     };
 
     this.user.push(user);
@@ -60,18 +63,38 @@ class InMemoryUserRepository implements IUserRepository {
   async listUsers({
     page,
     pageSize,
+    currentUserRole,
+    businessId,
+    search,
   }: ListUsersByRoleAndBusinessProps): Promise<ListUsers> {
+    let filteredUsers =
+      currentUserRole === "MASTER"
+        ? [...this.user]
+        : this.user.filter((user) => user.businessId === businessId);
+
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filteredUsers = filteredUsers.filter(
+        (user) =>
+          user.name.toLowerCase().includes(searchLower) ||
+          user.email.toLowerCase().includes(searchLower),
+      );
+    }
+
     const skip = (page - 1) * pageSize;
-    const slicedUsers = this.user.slice(skip, skip + pageSize);
+    const slicedUsers = filteredUsers.slice(skip, skip + pageSize);
 
     const data = slicedUsers.map((user) => ({
       ...user,
-      // If profileAccess exists, get the name, otherwise set to null or another default value
-      profileAccess: user.profileAccess ? user.profileAccess.name : null,
+      profileAccess: user.profileAccess
+        ? { name: user.profileAccess.name }
+        : null,
+      created_at: (user as any).created_at || new Date(),
+      updated_at: (user as any).updated_at || new Date(),
     }));
 
-    const total = this.user.length;
-    return { data, total };
+    const total = filteredUsers.length;
+    return { data: data as any, total };
   }
 
   async updateUser({ userId, userData }: UpdateUser): Promise<User> {
@@ -179,11 +202,15 @@ class InMemoryUserRepository implements IUserRepository {
 
     const users = slicedUsers.map((user) => ({
       ...user,
-      profileAccess: user.profileAccess ? user.profileAccess.name : null,
+      profileAccess: user.profileAccess
+        ? { name: user.profileAccess.name }
+        : null,
+      created_at: (user as any).created_at || new Date(),
+      updated_at: (user as any).updated_at || new Date(),
     }));
 
     const totalCount = filteredUsers.length;
-    return { data: users, total: totalCount };
+    return { data: users as any, total: totalCount };
   }
 
   async updateEmailVerification({

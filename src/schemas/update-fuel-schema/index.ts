@@ -4,24 +4,13 @@ import { MultipartFile } from "@fastify/multipart";
 import { LocationSource } from "@prisma/client";
 
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const isEmptyOrWhitespace = (value: string): boolean =>
-  value.trim().length === 0;
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
-
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
-
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-  return value;
-};
+import {
+  emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+  isEmptyOrWhitespace,
+  isValidDateString,
+} from "@/shared/utils/zod-schema-helpers";
 
 const updateFuelSchema = z
   .object({
@@ -33,6 +22,7 @@ const updateFuelSchema = z
           const cleanedValue = val.replace(/\./g, "").replace(",", ".");
           return parseFloat(cleanedValue);
         }
+
         return val;
       },
       z
@@ -51,6 +41,7 @@ const updateFuelSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -69,6 +60,7 @@ const updateFuelSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -76,8 +68,8 @@ const updateFuelSchema = z
           invalid_type_error: "O preço por litro deve ser um número válido.",
         })
         .positive("O preço por litro deve ser um valor positivo.")
-        .min(0.001, "O preço por litro deve ser maior que zero.")
-        .max(99.999, "O preço por litro não pode exceder R$ 99,999.")
+        .min(0.01, "O preço por litro deve ser no mínimo R$ 0,01")
+        .max(999.99, "O preço por litro não pode exceder R$ 999,99.")
         .optional(),
     ),
     odometer_photo: z
@@ -100,6 +92,7 @@ const updateFuelSchema = z
               code: z.ZodIssueCode.custom,
               message: "As observações não podem conter apenas espaços.",
             });
+
             return;
           }
 
@@ -108,6 +101,7 @@ const updateFuelSchema = z
               code: z.ZodIssueCode.custom,
               message: "As observações não devem conter espaços consecutivos.",
             });
+
             return;
           }
 
@@ -117,6 +111,7 @@ const updateFuelSchema = z
               message:
                 "As observações não podem começar ou terminar com espaço em branco.",
             });
+
             return;
           }
         })
@@ -132,6 +127,7 @@ const updateFuelSchema = z
             code: z.ZodIssueCode.custom,
             message: "Data do abastecimento inválida.",
           });
+
           return;
         }
 
@@ -146,6 +142,7 @@ const updateFuelSchema = z
             code: z.ZodIssueCode.custom,
             message: "A data do abastecimento não pode ser no futuro.",
           });
+
           return;
         }
       })
@@ -172,9 +169,11 @@ const updateFuelSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "" || val === "null") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z
@@ -191,9 +190,11 @@ const updateFuelSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "" || val === "null") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z
@@ -274,13 +275,13 @@ const odometerPhotoUpdateSchema = z
   .refine(
     (file) => {
       if (!file) return true; // Optional file
-
       const allowedTypes = [
         "image/jpeg",
         "image/jpg",
         "image/png",
         "image/webp",
       ];
+
       return allowedTypes.includes(file?.mimetype);
     },
     {

@@ -33,6 +33,8 @@ import { UserMasterOnlyCanBeUpdatePasswordError } from "../errors/user-master-on
 import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
 import { env } from "@/env";
 
+import { sendSecurityEventToUser } from "@/websocket";
+
 @injectable()
 class UpdateUserUseCase {
   private emailQueue: EmailWorkerAdapter;
@@ -89,6 +91,9 @@ class UpdateUserUseCase {
       throw new UserCannotHaveBothDriverAndProfileError();
     }
 
+    // Determine the target business ID (new business if changing, otherwise current)
+    const targetBusinessId = userData.businessId || userToUpdate.businessId;
+
     // If driverId is provided, validate driver
     if (userData.driverId) {
       const existingDriver = await this.driver.findDriverById(
@@ -99,8 +104,8 @@ class UpdateUserUseCase {
         throw new DriverNotFoundError();
       }
 
-      // Check if driver belongs to the same business as the user
-      if (existingDriver.businessId !== userToUpdate.businessId) {
+      // Check if driver belongs to the same business as the user (current or new)
+      if (existingDriver.businessId !== targetBusinessId) {
         throw new DriverNotBelongBusinessError();
       }
 
@@ -108,6 +113,7 @@ class UpdateUserUseCase {
       const driverLinkedUser = await this.user.findUserByDriverId(
         userData.driverId,
       );
+
       if (driverLinkedUser && driverLinkedUser.id !== userId) {
         throw new DriverAlreadyLinkedToUserError();
       }
@@ -126,7 +132,8 @@ class UpdateUserUseCase {
           throw new ProfileAccessNotFoundError();
         }
 
-        if (existingProfileAccess.businessId !== userToUpdate.businessId) {
+        // Validate against target business (new business if changing, otherwise current)
+        if (existingProfileAccess.businessId !== targetBusinessId) {
           throw new UserProfileNotMatchBusinessError();
         }
       }
@@ -193,6 +200,20 @@ class UpdateUserUseCase {
             logo: this.cloudinaryLogo,
           },
         });
+
+        if (userData.password && userData.password !== findUser.password) {
+          await this.emailQueue.enqueueEmail({
+            email: userData.email,
+            name: userData.name,
+            subject: "Senha alterada com sucesso",
+            templateName: "admin-user-updated-password.hbs",
+            moduleName: "user",
+            additionalVariablesProperties: {
+              password: userData.password,
+              logo: this.cloudinaryLogo,
+            },
+          });
+        }
       }
 
       // Process activity asynchronously without blocking the main flow
@@ -206,9 +227,18 @@ class UpdateUserUseCase {
         businessId: userData.businessId,
       });
 
+      // Notify user if security-relevant fields changed (role, profile, driver)
+      const securityFieldsChanged =
+        userData.role !== undefined ||
+        userData.profileAccessId !== undefined ||
+        userData.driverId !== undefined;
+
+      if (securityFieldsChanged) {
+        sendSecurityEventToUser(userId, { reason: "user_updated" });
+      }
+
       return userUpdated;
     } catch (error) {
-      console.log("erro ao atualizar o usuário", error);
       throw new AppError(
         "Houve um erro ao tentar atualizar o usuário! Por favor, tente novamente.",
         500,

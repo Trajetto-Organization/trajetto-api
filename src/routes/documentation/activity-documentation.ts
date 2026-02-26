@@ -46,9 +46,6 @@ const activityResponses = {
   resourceNotFound: z.object({
     message: z.string().default("Recurso não encontrado!"),
   }),
-  unauthorized: z.object({
-    message: z.string().default("Não autorizado"),
-  }),
 };
 
 export { activitySchemas, activityResponses };

@@ -40,7 +40,7 @@ class InMemoryFineRepository implements IFineRepository {
       location_source: fineData.location_source || null,
       location_edited_by: null,
       location_edited_at: null,
-      created_from: fineData.created_from || "WEB",
+      created_from: fineData.created_from,
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -56,9 +56,10 @@ class InMemoryFineRepository implements IFineRepository {
     currentUserRole,
     search,
   }: ListFineByBusinessIdProps): Promise<ListFineProps> {
-    let filteredFines = this.fines.filter(
-      (fine) => fine.businessId === businessId,
-    );
+    let filteredFines =
+      currentUserRole === "MASTER"
+        ? [...this.fines]
+        : this.fines.filter((fine) => fine.businessId === businessId);
 
     if (search) {
       const searchTerm = search.toLowerCase();

@@ -1,8 +1,10 @@
-import { EnumPermissionKey } from "@/config/permissions";
 import { z } from "zod";
 
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
+import { EnumPermissionKey } from "@/config/permissions";
+import {
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+} from "@/shared/utils/zod-schema-helpers";
 
 const permissionKeyEnum = z.nativeEnum(EnumPermissionKey, {
   errorMap: (issue, ctx) => {
@@ -34,6 +36,7 @@ const createPermissionSchema = z
             code: z.ZodIssueCode.custom,
             message: "O nome da permissão não deve exceder 100 caracteres.",
           });
+
           return;
         }
 
@@ -43,6 +46,7 @@ const createPermissionSchema = z
             message:
               "O nome da permissão não deve conter espaços consecutivos.",
           });
+
           return;
         }
 
@@ -52,6 +56,7 @@ const createPermissionSchema = z
             message:
               "O nome da permissão não pode começar ou terminar com espaço em branco.",
           });
+
           return;
         }
 

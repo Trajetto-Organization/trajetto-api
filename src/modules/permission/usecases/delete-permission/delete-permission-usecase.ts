@@ -12,6 +12,8 @@ import { IPermissionRepository } from "../../repositories/IPermission-repository
 import { PermissionCannotBeDeletedByHimselfError } from "../errors/permission-cannot-be-deleted-by-himself-error";
 import { PermissionNotFoundError } from "../errors/permission-not-found-error";
 
+import { sendSecurityEventToBusiness } from "@/websocket";
+
 @injectable()
 class DeletePermissionUseCase {
   constructor(
@@ -58,6 +60,10 @@ class DeletePermissionUseCase {
         status: "Deletado",
         performedBy: userId,
         businessId: permissionDeleted.businessId,
+      });
+
+      sendSecurityEventToBusiness(permissionDeleted.businessId, {
+        reason: "permissions_changed",
       });
 
       return permissionDeleted;

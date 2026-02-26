@@ -1,6 +1,4 @@
 import database from "@/../infra/database";
-import { formatDate } from "@/config/format-values";
-
 import { IProfileAccessRepository } from "./IProfile-access-repository";
 
 import {
@@ -81,14 +79,16 @@ class ProfileAccessRepository implements IProfileAccessRepository {
       skip,
       take: pageSize,
       where: whereCondition,
-      include: {
-        business: {
-          select: {
-            id: true,
-            corporate_reason: true,
+      ...(currentUserRole === "MASTER" && {
+        include: {
+          business: {
+            select: {
+              id: true,
+              corporate_reason: true,
+            },
           },
         },
-      },
+      }),
       orderBy: {
         created_at: "desc", // Sort by created_at
       },
@@ -98,23 +98,7 @@ class ProfileAccessRepository implements IProfileAccessRepository {
       where: whereCondition,
     });
 
-    const transformedProfileAccessData = profileAccessData.map(
-      (profileAccess) => ({
-        id: profileAccess.id ?? "N/A",
-        name: profileAccess.name ?? "N/A",
-        ...(currentUserRole === "MASTER"
-          ? {
-              corporate_reason:
-                profileAccess.business.corporate_reason ?? "N/A",
-            }
-          : {}),
-        businessId: profileAccess.business.id ?? "N/A",
-        created_at: formatDate(profileAccess.created_at, "pt-BR") ?? "N/A",
-        updated_at: formatDate(profileAccess.updated_at, "pt-BR") ?? "N/A",
-      }),
-    );
-
-    return { data: transformedProfileAccessData, total };
+    return { data: profileAccessData, total };
   }
 
   async listProfileBusiness({

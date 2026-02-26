@@ -8,7 +8,7 @@ import {
 } from "../dtos/fine-dto";
 
 import { IFineRepository } from "./IFine-repository";
-import { formatDate, formatCurrency, formatCpf } from "@/config/format-values";
+import { formatCurrency } from "@/config/format-values";
 
 class FineRepository implements IFineRepository {
   constructor(private prisma = database) {}
@@ -71,13 +71,18 @@ class FineRepository implements IFineRepository {
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
         { location: { contains: normalizedSearch, mode: "insensitive" } },
-        ...(numericSearch ? [{ amount: parseFloat(normalizedSearch) }] : []),
-      );
-
-      orConditions.push(
+        {
+          branchId: { contains: normalizedSearch, mode: "insensitive" },
+        },
         {
           driver: {
             OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
               { name: { contains: normalizedSearch, mode: "insensitive" } },
               { cpf: { contains: normalizedSearch, mode: "insensitive" } },
             ],
@@ -86,6 +91,12 @@ class FineRepository implements IFineRepository {
         {
           vehicle: {
             OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
               {
                 license_plate: {
                   contains: normalizedSearch,
@@ -114,6 +125,14 @@ class FineRepository implements IFineRepository {
             ],
           },
         },
+        {
+          ...(currentUserRole === "MASTER"
+            ? {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              }
+            : {}),
+        },
+        ...(numericSearch ? [{ amount: parseFloat(normalizedSearch) }] : []),
       );
     }
 
@@ -131,6 +150,13 @@ class FineRepository implements IFineRepository {
         branch: { select: { corporate_reason: true } },
         driver: { select: { name: true, cpf: true } },
         vehicle: { select: { license_plate: true, description: true } },
+        ...(currentUserRole === "MASTER" && {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
+          },
+        }),
         trafficViolationCode: {
           select: {
             code: true,
@@ -150,53 +176,8 @@ class FineRepository implements IFineRepository {
       where: whereCondition,
     });
 
-    const transformedFineData = fineData.map((fine) => {
-      return {
-        id: fine.id ?? "N/A",
-        violation_date: fine.violation_date ?? "N/A",
-        due_date: fine.due_date ?? "N/A",
-        payment_date: fine.payment_date ? fine.payment_date : null,
-        amount: formatCurrency(Number(fine.amount)) ?? "N/A",
-        points: fine.points ?? 0,
-        location: fine.location ? fine.location : "N/A",
-        observation: fine.observation ? fine.observation : "N/A",
-        businessId: fine.businessId ?? "N/A",
-        ...(currentUserRole === "MASTER"
-          ? { businessName: fine.business.corporate_reason ?? "N/A" }
-          : {}),
-        branchId: fine.branchId ?? "N/A",
-        branchName: fine.branch.corporate_reason ?? "N/A",
-        driverId: fine.driverId ?? "N/A",
-        driverName: fine.driver.name ?? "N/A",
-        driverCpf: formatCpf(fine.driver.cpf) ?? "N/A",
-        vehicleId: fine.vehicleId ?? "N/A",
-        vehicleLicensePlate: fine.vehicle.license_plate ?? "N/A",
-        vehicleDescription: fine.vehicle.description ?? "N/A",
-        trafficViolationCodeId: fine.trafficViolationCodeId ?? "N/A",
-        violationCode: `${fine.trafficViolationCode.code}-${fine.trafficViolationCode.sub_code}`,
-        violationDescription: fine.trafficViolationCode.description ?? "N/A",
-        // 📍 GEOLOCATION: Proper null handling to avoid Number(null) = 0 issue
-        latitude: fine.latitude !== null ? Number(fine.latitude) : null,
-        longitude: fine.longitude !== null ? Number(fine.longitude) : null,
-        latitude_original:
-          fine.latitude_original !== null
-            ? Number(fine.latitude_original)
-            : null,
-        longitude_original:
-          fine.longitude_original !== null
-            ? Number(fine.longitude_original)
-            : null,
-        location_source: fine.location_source ?? null,
-        location_edited_by: fine.location_edited_by ?? null,
-        location_edited_at: fine.location_edited_at ?? null,
-        created_from: fine.created_from,
-        created_at: formatDate(fine.created_at, "pt-BR") ?? "N/A",
-        updated_at: formatDate(fine.updated_at, "pt-BR") ?? "N/A",
-      };
-    });
-
     return {
-      data: transformedFineData,
+      data: fineData,
       total,
     };
   }
@@ -215,13 +196,18 @@ class FineRepository implements IFineRepository {
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
         { location: { contains: normalizedSearch, mode: "insensitive" } },
-        ...(numericSearch ? [{ amount: parseFloat(normalizedSearch) }] : []),
-      );
-
-      orConditions.push(
+        {
+          branchId: { contains: normalizedSearch, mode: "insensitive" },
+        },
         {
           driver: {
             OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
               { name: { contains: normalizedSearch, mode: "insensitive" } },
               { cpf: { contains: normalizedSearch, mode: "insensitive" } },
             ],
@@ -230,6 +216,12 @@ class FineRepository implements IFineRepository {
         {
           vehicle: {
             OR: [
+              {
+                id: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
               {
                 license_plate: {
                   contains: normalizedSearch,
@@ -258,6 +250,14 @@ class FineRepository implements IFineRepository {
             ],
           },
         },
+        {
+          ...(currentUserRole === "MASTER"
+            ? {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              }
+            : {}),
+        },
+        ...(numericSearch ? [{ amount: parseFloat(normalizedSearch) }] : []),
       );
     }
 
@@ -296,8 +296,8 @@ class FineRepository implements IFineRepository {
         payment_date: fine.payment_date ? fine.payment_date : null,
         amount: formatCurrency(Number(fine.amount)) ?? 0,
         points: fine.points ?? 0,
-        location: fine.location ?? null,
-        observation: fine.observation ?? null,
+        location: fine.location || "N/A",
+        observation: fine.observation || "N/A",
         businessId: fine.businessId ?? "N/A",
         ...(currentUserRole === "MASTER"
           ? { businessName: fine.business.corporate_reason ?? "N/A" }

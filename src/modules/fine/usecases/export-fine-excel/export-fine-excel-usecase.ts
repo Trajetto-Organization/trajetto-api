@@ -81,14 +81,14 @@ class ExportFineExcelUseCase {
       {
         header: "Criado em",
         key: "created_at",
-        width: 15,
-        formatter: ExcelExportService.formatters.date,
+        width: 20,
+        formatter: ExcelExportService.formatters.notificationDateTime,
       },
       {
         header: "Atualizado em",
         key: "updated_at",
-        width: 15,
-        formatter: ExcelExportService.formatters.date,
+        width: 20,
+        formatter: ExcelExportService.formatters.notificationDateTime,
       },
     ];
 

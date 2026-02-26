@@ -1,10 +1,10 @@
 import { z } from "zod";
-
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
-const isEmptyOrWhitespace = (value: string): boolean =>
-  value.trim().length === 0;
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
+import {
+  emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+  isEmptyOrWhitespace,
+} from "@/shared/utils/zod-schema-helpers";
 
 const createQuoteSchema = z.object({
   name: z.string().superRefine((value, ctx) => {
@@ -13,6 +13,7 @@ const createQuoteSchema = z.object({
         code: z.ZodIssueCode.custom,
         message: "O nome não deve exceder 100 caracteres.",
       });
+
       return;
     }
 
@@ -21,6 +22,7 @@ const createQuoteSchema = z.object({
         code: z.ZodIssueCode.custom,
         message: "O nome não deve conter espaços consecutivos.",
       });
+
       return;
     }
 
@@ -29,6 +31,7 @@ const createQuoteSchema = z.object({
         code: z.ZodIssueCode.custom,
         message: "O nome não pode começar ou terminar com espaço em branco.",
       });
+
       return;
     }
 
@@ -37,6 +40,7 @@ const createQuoteSchema = z.object({
         code: z.ZodIssueCode.custom,
         message: "Por favor, insira o nome completo.",
       });
+
       return;
     }
 
@@ -60,6 +64,7 @@ const createQuoteSchema = z.object({
           message:
             "O nome da empresa não pode ser vazio ou conter apenas espaços.",
         });
+
         return;
       }
 
@@ -115,10 +120,43 @@ const createQuoteSchema = z.object({
       message: "Por favor, selecione o tamanho da sua frota",
     }),
   }),
-  message: z
-    .string()
-    .max(230, "A mensagem deve ter no máximo 230 caracteres")
-    .optional(),
+  message: z.preprocess(
+    emptyStringToNull,
+    z
+      .string()
+      .max(230, "A mensagem deve ter no máximo 230 caracteres")
+      .superRefine((value, ctx) => {
+        if (isEmptyOrWhitespace(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "A mensagem não pode ser vazia ou conter apenas espaços.",
+          });
+
+          return;
+        }
+
+        if (hasConsecutiveSpaces(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "A mensagem não deve conter espaços consecutivos.",
+          });
+
+          return;
+        }
+
+        if (hasSpaceAtEdges(value)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "A mensagem não pode começar ou terminar com espaço em branco.",
+          });
+
+          return;
+        }
+      })
+      .nullable()
+      .optional(),
+  ),
 });
 
 export { createQuoteSchema };

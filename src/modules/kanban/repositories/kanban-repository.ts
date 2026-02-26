@@ -1,5 +1,4 @@
 import database from "@/../infra/database";
-import { formatDate } from "@/config/format-values";
 
 import { IKanbanRepository } from "./IKanban-repository";
 import {
@@ -56,10 +55,10 @@ class KanbanRepository implements IKanbanRepository {
   private mapCard = (card: any): KanbanCard => {
     return {
       ...card,
-      dueDate: formatDate(card.dueDate, "pt-BR"),
+      dueDate: card.dueDate,
       completed: card.completed || false,
-      created_at: formatDate(card.created_at, "pt-BR"),
-      updated_at: formatDate(card.updated_at, "pt-BR"),
+      created_at: card.created_at,
+      updated_at: card.updated_at,
       assignedUser: card.assignedUser
         ? {
             ...card.assignedUser, // Keeps id, name, email
@@ -426,18 +425,12 @@ class KanbanRepository implements IKanbanRepository {
       }),
     );
 
-    const kanbanColumnData = columnsWithCards.map((column) => ({
-      ...column,
-      created_at: formatDate(column.created_at, "pt-BR"),
-      updated_at: formatDate(column.updated_at, "pt-BR"),
-    }));
-
     const total = await this.prisma.kanbanColumn.count({
       where: whereCondition,
     });
 
     return {
-      data: kanbanColumnData,
+      data: columnsWithCards,
       total,
     };
   }

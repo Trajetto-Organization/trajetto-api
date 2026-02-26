@@ -7,6 +7,7 @@ import { updateQuoteStatusSchema } from "@/schemas/update-quote-status-schema";
 import { QuoteNotFoundError } from "../errors/quote-not-found-error";
 import { QuoteAccessDeniedError } from "../errors/quote-access denied-error";
 
+import { QuoteAlreadyFinalizedError } from "../errors/quote-already-finalized-error";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
 class UpdateQuoteStatusController {
@@ -42,6 +43,10 @@ class UpdateQuoteStatusController {
 
       if (error instanceof QuoteAccessDeniedError) {
         return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof QuoteAlreadyFinalizedError) {
+        return reply.status(400).send({ message: error.message });
       }
 
       throw error;

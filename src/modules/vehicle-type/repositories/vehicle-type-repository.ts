@@ -1,7 +1,6 @@
 import database from "@/../infra/database";
-import { formatDate } from "@/config/format-values";
-
 import { IVehicleTypeRepository } from "./IVehicle-type-repository";
+
 import {
   VehicleType,
   CreateVehicleTypeProps,
@@ -40,6 +39,22 @@ class VehicleTypeRepository implements IVehicleTypeRepository {
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
         { description: { contains: normalizedSearch, mode: "insensitive" } },
+        // Business ID and name (MASTER only)
+        ...(currentUserRole === "MASTER"
+          ? [
+              {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              },
+              {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              },
+            ]
+          : []),
         ...(normalizedSearch.match(/^\d+$/)
           ? [{ number_of_axles: parseInt(normalizedSearch, 10) }]
           : []),
@@ -55,9 +70,6 @@ class VehicleTypeRepository implements IVehicleTypeRepository {
       skip,
       take: pageSize,
       where: whereCondition,
-      orderBy: {
-        created_at: "desc",
-      },
       include: {
         business: {
           select: {
@@ -65,26 +77,17 @@ class VehicleTypeRepository implements IVehicleTypeRepository {
           },
         },
       },
+      orderBy: {
+        created_at: "desc",
+      },
     });
 
     const total = await this.prisma.vehicleType.count({
       where: whereCondition,
     });
 
-    const transformedVehicleTypeData = vehicleTypeData.map((vehicleType) => ({
-      id: vehicleType.id ?? "N/A",
-      description: vehicleType.description ?? "N/A",
-      number_of_axles: vehicleType.number_of_axles ?? 0,
-      businessId: vehicleType.businessId ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { business_name: vehicleType.business?.corporate_reason ?? "N/A" }
-        : {}),
-      created_at: formatDate(vehicleType.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(vehicleType.updated_at, "pt-BR") ?? "N/A",
-    }));
-
     return {
-      data: transformedVehicleTypeData,
+      data: vehicleTypeData,
       total,
     };
   }

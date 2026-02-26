@@ -28,7 +28,7 @@ class DeleteBranchController {
 
       return reply
         .status(200)
-        .send({ message: "Filial excluída com sucesso!" });
+        .send({ message: "Filial deletada com sucesso!" });
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {
         return reply.status(400).send({ message: error.message });

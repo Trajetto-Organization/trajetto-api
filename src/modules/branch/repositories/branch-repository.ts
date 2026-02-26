@@ -9,12 +9,6 @@ import {
 } from "../dtos/branch-dto";
 
 import database from "@/../infra/database";
-import {
-  formatCep,
-  formatCnpj,
-  formatDate,
-  formatTelephone,
-} from "@/config/format-values";
 
 class BranchRepository implements IBranchRepository {
   constructor(private prisma = database) {}
@@ -42,7 +36,6 @@ class BranchRepository implements IBranchRepository {
     const normalizedSearch = search ? search.trim().toLowerCase() : "";
 
     const digitSearch = normalizedSearch.replace(/\D/g, "");
-
     let digitSearchPhone = digitSearch;
 
     if (digitSearchPhone.startsWith("55") && digitSearchPhone.length > 10) {
@@ -78,6 +71,25 @@ class BranchRepository implements IBranchRepository {
               { cnpj: { contains: digitSearch, mode: "insensitive" } },
             ]
           : []),
+        {
+          ...(currentUserRole === "MASTER"
+            ? {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              }
+            : {}),
+        },
+        {
+          ...(currentUserRole === "MASTER"
+            ? {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              }
+            : {}),
+        },
       );
     }
 
@@ -87,19 +99,22 @@ class BranchRepository implements IBranchRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
+    // Include business data only if user is MASTER
     const branchData = await this.prisma.branch.findMany({
       skip,
       take: pageSize,
       where: whereCondition,
-      orderBy: {
-        created_at: "desc",
-      },
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
+      ...(currentUserRole === "MASTER" && {
+        include: {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
           },
         },
+      }),
+      orderBy: {
+        created_at: "desc",
       },
     });
 
@@ -107,31 +122,7 @@ class BranchRepository implements IBranchRepository {
       where: whereCondition,
     });
 
-    const transformedBranchData = branchData.map((branch) => ({
-      id: branch.id ?? "N/A",
-      corporate_reason: branch.corporate_reason ?? "N/A",
-      fantasy_name: branch.fantasy_name ? branch.fantasy_name : "N/A",
-      cep: branch.cep ? formatCep(branch.cep) : "N/A",
-      city: branch.city ?? "N/A",
-      uf: branch.uf ?? "N/A",
-      street: branch.street ?? "N/A",
-      address_number: branch.address_number ?? "N/A",
-      cnpj: branch.cnpj ? formatCnpj(branch.cnpj) : "N/A",
-      complement: branch.complement ? branch.complement : "N/A",
-      cnae: branch.cnae ?? "N/A",
-      erp_code: branch.erp_code ? branch.erp_code : "N/A",
-      responsible_name: branch.responsible_name ?? "N/A",
-      telephone: branch.telephone ? formatTelephone(branch.telephone) : "N/A",
-      email: branch.email ?? "N/A",
-      businessId: branch.businessId ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { business_name: branch.business?.corporate_reason ?? "N/A" }
-        : {}),
-      created_at: formatDate(branch.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(branch.updated_at, "pt-BR") ?? "N/A",
-    }));
-
-    return { data: transformedBranchData, total };
+    return { data: branchData, total };
   }
 
   async listBranchBusiness({

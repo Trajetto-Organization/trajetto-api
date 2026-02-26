@@ -17,7 +17,6 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
 
 import { TrafficViolationCodeNotFoundError } from "../errors/traffic-violation-code-not-found-error";
-import { FineNumberAlreadyExistsError } from "../errors/fine-number-already-exists-error";
 
 import { FineDateInfractionCannotBeFutureError } from "../errors/fine-date-infraction-cannot-be-future-error";
 import { FineDueDateMustBeAfterInfractionError } from "../errors/fine-due-date-must-be-after-infraction-error";
@@ -74,10 +73,6 @@ class CreateFineController {
       }
 
       if (error instanceof TrafficViolationCodeNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FineNumberAlreadyExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 

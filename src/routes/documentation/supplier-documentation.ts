@@ -31,18 +31,22 @@ const supplierResponses = {
         id: z.string(),
         name: z.string(),
         cnpj: z.string(),
-        cep: z.string(),
-        city: z.string(),
-        uf: z.string(),
-        street: z.string(),
-        address_number: z.string(),
-        complement: z.string(),
-        telephone: z.string(),
-        email: z.string(),
+        cep: z.string().nullable(),
+        city: z.string().nullable(),
+        uf: z.string().nullable(),
+        street: z.string().nullable(),
+        address_number: z.string().nullable(),
+        complement: z.string().nullable(),
+        telephone: z.string().nullable(),
+        email: z.string().nullable(),
         businessId: z.string(),
-        business_name: z.string(),
-        created_at: z.string(),
-        updated_at: z.string(),
+        created_at: z.union([z.string(), z.date()]),
+        updated_at: z.union([z.string(), z.date()]),
+        business: z
+          .object({
+            corporate_reason: z.string(),
+          })
+          .optional(),
       }),
     ),
     total: z.number(),
@@ -54,18 +58,17 @@ const supplierResponses = {
         id: z.string(),
         name: z.string(),
         cnpj: z.string(),
-        cep: z.string(),
-        city: z.string(),
-        uf: z.string(),
-        street: z.string(),
-        address_number: z.string(),
-        complement: z.string(),
-        telephone: z.string(),
-        email: z.string(),
+        cep: z.string().nullable(),
+        city: z.string().nullable(),
+        uf: z.string().nullable(),
+        street: z.string().nullable(),
+        address_number: z.string().nullable(),
+        complement: z.string().nullable(),
+        telephone: z.string().nullable(),
+        email: z.string().nullable(),
         businessId: z.string(),
-        business_name: z.string(),
-        created_at: z.string(),
-        updated_at: z.string(),
+        created_at: z.union([z.string(), z.date()]),
+        updated_at: z.union([z.string(), z.date()]),
       }),
     ),
     total: z.number(),
@@ -194,12 +197,11 @@ const supplierResponses = {
     z.object({
       message: z.string().default("Já existe um fornecedor com este e-mail."),
     }),
-    z.object({
-      message: z
-        .string()
-        .default("Este fornecedor não pertence a esta empresa!"),
-    }),
   ]),
+
+  updateSupplierForbiddenErrors: z.object({
+    message: z.string().default("Este fornecedor não pertence a esta empresa!"),
+  }),
 
   deleteSupplierErrors: z.union([
     z.object({
@@ -218,16 +220,15 @@ const supplierResponses = {
     z.object({
       message: z
         .string()
-        .default("Este fornecedor não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
         .default(
           "Não é possível excluir este fornecedor pois ele está sendo utilizado em outros registros.",
         ),
     }),
   ]),
+
+  deleteSupplierForbiddenErrors: z.object({
+    message: z.string().default("Este fornecedor não pertence a esta empresa!"),
+  }),
 };
 
 export { supplierSchemas, supplierResponses };

@@ -33,7 +33,7 @@ describe("Update Branch Zod Validation Fields", () => {
     expect(parsed).toEqual({});
   });
 
-  it("should accept empty strings for optional fields", () => {
+  it("should convert empty strings to null for optional fields", () => {
     const data = {
       cep: "",
       city: "",
@@ -52,7 +52,22 @@ describe("Update Branch Zod Validation Fields", () => {
     };
 
     const parsed = updateBranchSchema.parse(data);
-    expect(parsed).toEqual(data);
+    expect(parsed).toEqual({
+      cep: null,
+      city: null,
+      uf: null,
+      street: null,
+      address_number: null,
+      cnpj: null,
+      complement: null,
+      cnae: null,
+      corporate_reason: null,
+      email: null,
+      responsible_name: null,
+      telephone: null,
+      erp_code: null,
+      fantasy_name: null,
+    });
   });
 
   it("should accept partial data", () => {
@@ -109,15 +124,13 @@ describe("Update Branch Zod Validation Fields", () => {
     );
   });
 
-  it("should reject city with whitespace only", () => {
-    const invalidData = {
+  it("should convert whitespace-only city to null", () => {
+    const data = {
       city: "   ",
     };
 
-    expect(() => updateBranchSchema.parse(invalidData)).toThrow(ZodError);
-    expect(() => updateBranchSchema.parse(invalidData)).toThrow(
-      "O nome da cidade não pode ser vazio ou conter apenas espaços.",
-    );
+    const parsed = updateBranchSchema.parse(data);
+    expect(parsed.city).toBeNull();
   });
 
   it("should reject city with consecutive spaces", () => {
@@ -197,15 +210,13 @@ describe("Update Branch Zod Validation Fields", () => {
     );
   });
 
-  it("should reject street with whitespace only", () => {
-    const invalidData = {
+  it("should convert whitespace-only street to null", () => {
+    const data = {
       street: "   ",
     };
 
-    expect(() => updateBranchSchema.parse(invalidData)).toThrow(ZodError);
-    expect(() => updateBranchSchema.parse(invalidData)).toThrow(
-      "O nome da rua não pode ser vazio ou conter apenas espaços.",
-    );
+    const parsed = updateBranchSchema.parse(data);
+    expect(parsed.street).toBeNull();
   });
 
   // CNPJ validations
@@ -253,15 +264,13 @@ describe("Update Branch Zod Validation Fields", () => {
   });
 
   // Corporate reason validations
-  it("should reject corporate reason with whitespace only", () => {
-    const invalidData = {
+  it("should convert whitespace-only corporate_reason to null", () => {
+    const data = {
       corporate_reason: "   ",
     };
 
-    expect(() => updateBranchSchema.parse(invalidData)).toThrow(ZodError);
-    expect(() => updateBranchSchema.parse(invalidData)).toThrow(
-      "O nome da razão social não pode ser vazio ou conter apenas espaços.",
-    );
+    const parsed = updateBranchSchema.parse(data);
+    expect(parsed.corporate_reason).toBeNull();
   });
 
   it("should reject corporate reason with more than 150 characters", () => {
@@ -298,15 +307,13 @@ describe("Update Branch Zod Validation Fields", () => {
     );
   });
 
-  it("should reject email with whitespace only", () => {
-    const invalidData = {
+  it("should convert whitespace-only email to null", () => {
+    const data = {
       email: "   ",
     };
 
-    expect(() => updateBranchSchema.parse(invalidData)).toThrow(ZodError);
-    expect(() => updateBranchSchema.parse(invalidData)).toThrow(
-      "O e-mail informado não é válido.",
-    );
+    const parsed = updateBranchSchema.parse(data);
+    expect(parsed.email).toBeNull();
   });
 
   it("should reject email longer than 100 characters", () => {
@@ -394,15 +401,13 @@ describe("Update Branch Zod Validation Fields", () => {
   });
 
   // Address number validations
-  it("should reject address number with whitespace only", () => {
-    const invalidData = {
+  it("should convert whitespace-only address_number to null", () => {
+    const data = {
       address_number: "   ",
     };
 
-    expect(() => updateBranchSchema.parse(invalidData)).toThrow(ZodError);
-    expect(() => updateBranchSchema.parse(invalidData)).toThrow(
-      "O número do endereço não pode ser vazio ou conter apenas espaços.",
-    );
+    const parsed = updateBranchSchema.parse(data);
+    expect(parsed.address_number).toBeNull();
   });
 
   it("should accept address number with letter", () => {

@@ -91,6 +91,7 @@ CMD osrm-routed  # Apenas serve rotas
 ```
 
 **Benefícios:**
+
 - Estágio builder é descartado após o build
 - Imagem final contém apenas dados processados
 - Container runtime usa RAM mínima
@@ -106,23 +107,27 @@ CMD osrm-routed  # Apenas serve rotas
 **Região:** Centro-Oeste (DF, GO, MT, MS)
 
 **Cobertura:**
+
 - ✅ Brasília (DF)
 - ✅ Goiânia (GO)
 - ✅ Cuiabá (MT)
 - ✅ Campo Grande (MS)
 
 **Dados:**
+
 - Fonte: http://download.geofabrik.de/south-america/brazil/centro-oeste-latest.osm.pbf
 - Tamanho do download: **134MB**
 - Tamanho processado: **~1GB**
 
 **Processo de Build:**
+
 ```bash
 # Build localmente (se necessário)
 docker build -f Dockerfile.local -t trajetto-osrm:local .
 ```
 
 **O que faz:**
+
 1. Baixa dados OSM do Centro-Oeste (134MB)
 2. Extrai grafo roteável (~2min)
 3. Particiona em células (~1min)
@@ -141,22 +146,26 @@ docker build -f Dockerfile.local -t trajetto-osrm:local .
 **Região:** Brasil (Todos os estados)
 
 **Cobertura:**
+
 - ✅ Todos os 26 estados + Distrito Federal
 - ✅ ~8.5M km² de cobertura
 - ✅ Roteamento interestadual (ex: São Paulo → Manaus)
 
 **Dados:**
+
 - Fonte: http://download.geofabrik.de/south-america/brazil-latest.osm.pbf
 - Tamanho do download: **~1.8GB**
 - Tamanho processado: **~15-20GB**
 
 **Processo de Build:**
+
 ```bash
 # ⚠️ NÃO RECOMENDADO LOCALMENTE - Use GitHub Actions
 docker build -f Dockerfile.production -t trajetto-osrm:production .
 ```
 
 **O que faz:**
+
 1. Baixa dados OSM completos do Brasil (~1.8GB, ~10min)
 2. Extrai grafo roteável (~15min, 3-4GB RAM)
 3. Particiona em células (~20min, **8-10GB RAM** ⚠️)
@@ -172,14 +181,14 @@ docker build -f Dockerfile.production -t trajetto-osrm:production .
 
 ### Dockerfile.local (Centro-Oeste)
 
-| Fase | CPU Cores | RAM | Tempo | Disco |
-|------|-----------|-----|-------|-------|
-| **Download** | 1 | 100MB | ~30seg | 134MB |
-| **Extract** | 4-8 | 1-1.5GB | ~2min | +800MB |
-| **Partition** | 4-8 | 1-1.5GB | ~1min | +200MB |
-| **Customize** | 4-8 | 500MB | ~30seg | +100MB |
-| **BUILD TOTAL** | **4-8** | **~1.5GB** | **~3-5min** | **~1.2GB** |
-| **Runtime** | 2 | **~200MB** | - | 1.2GB |
+| Fase            | CPU Cores | RAM        | Tempo       | Disco      |
+| --------------- | --------- | ---------- | ----------- | ---------- |
+| **Download**    | 1         | 100MB      | ~30seg      | 134MB      |
+| **Extract**     | 4-8       | 1-1.5GB    | ~2min       | +800MB     |
+| **Partition**   | 4-8       | 1-1.5GB    | ~1min       | +200MB     |
+| **Customize**   | 4-8       | 500MB      | ~30seg      | +100MB     |
+| **BUILD TOTAL** | **4-8**   | **~1.5GB** | **~3-5min** | **~1.2GB** |
+| **Runtime**     | 2         | **~200MB** | -           | 1.2GB      |
 
 ✅ **Funciona em QUALQUER máquina de dev** (até laptops com 8GB RAM)
 
@@ -187,14 +196,14 @@ docker build -f Dockerfile.production -t trajetto-osrm:production .
 
 ### Dockerfile.production (Brasil)
 
-| Fase | CPU Cores | RAM | Tempo | Disco |
-|------|-----------|-----|-------|-------|
-| **Download** | 1 | 200MB | ~5-10min | 1.8GB |
-| **Extract** | 8-16 | 3-4GB | ~10-15min | +12GB |
-| **Partition** | 8-16 | **8-10GB** ⚠️ | ~15-20min | +3GB |
-| **Customize** | 8-16 | 2-3GB | ~10-15min | +2GB |
-| **BUILD TOTAL** | **8-16** | **~10GB pico** | **~35-50min** | **~18-20GB** |
-| **Runtime** | 4 | **~500MB** | - | 18-20GB |
+| Fase            | CPU Cores | RAM            | Tempo         | Disco        |
+| --------------- | --------- | -------------- | ------------- | ------------ |
+| **Download**    | 1         | 200MB          | ~5-10min      | 1.8GB        |
+| **Extract**     | 8-16      | 3-4GB          | ~10-15min     | +12GB        |
+| **Partition**   | 8-16      | **8-10GB** ⚠️  | ~15-20min     | +3GB         |
+| **Customize**   | 8-16      | 2-3GB          | ~10-15min     | +2GB         |
+| **BUILD TOTAL** | **8-16**  | **~10GB pico** | **~35-50min** | **~18-20GB** |
+| **Runtime**     | 4         | **~500MB**     | -             | 18-20GB      |
 
 ⚠️ **NÃO recomendado para builds locais** - Use GitHub Actions ou VPS de produção
 
@@ -223,6 +232,7 @@ localhostForwarding=true
 ```
 
 **Aplicar mudanças:**
+
 ```powershell
 # Execute como Administrador
 wsl --shutdown
@@ -230,6 +240,7 @@ wsl --shutdown
 ```
 
 **Verificar:**
+
 ```bash
 wsl -e free -h
 # Deve mostrar ~9.7GB disponível
@@ -253,6 +264,7 @@ curl "http://localhost:5000/route/v1/driving/-47.9292,-15.7801;-49.2646,-16.6869
 ```
 
 **Vantagens:**
+
 - Rápido (~2min download)
 - Não requer build local
 - Baixo uso de RAM (~500MB)
@@ -290,6 +302,7 @@ docker compose -f compose.osrm-local.yaml logs -f
 - **Rede:** 100Mbps+
 
 **Plano Hetzner Recomendado:** CPX31 ou CCX23
+
 - 4 vCPU
 - 8GB RAM
 - 160GB SSD
@@ -314,7 +327,13 @@ services:
     ports:
       - "5000:5000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/route/v1/driving/-46.6333,-23.5505;-60.0217,-3.1190"]
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:5000/route/v1/driving/-46.6333,-23.5505;-60.0217,-3.1190",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -327,6 +346,7 @@ networks:
 ```
 
 **Deploy com Portainer:**
+
 1. Crie stack "trajetto-osrm"
 2. Cole o arquivo compose
 3. Deploy
@@ -359,11 +379,13 @@ docker run -d \
 ```
 
 **Requisitos de Build na VPS:**
+
 - 10GB RAM (temporário, apenas durante build)
 - 35-50 minutos tempo de build
 - 25GB espaço em disco
 
 **Após build completar:**
+
 - RAM runtime: ~500MB
 - Pode reduzir VPS para plano de 4GB RAM
 
@@ -379,13 +401,13 @@ A imagem de produção é construída automaticamente via GitHub Actions e envia
 
 ### Requisitos de Build (GitHub Runners)
 
-| Recurso | Valor |
-|---------|-------|
-| **Runner** | ubuntu-latest |
-| **CPU Cores** | 2-4 (fornecido pelo GitHub) |
-| **RAM** | 7GB (tier gratuito GitHub) |
-| **Disco** | 14GB disponível |
-| **Tempo de Build** | ~25-35min para produção |
+| Recurso            | Valor                       |
+| ------------------ | --------------------------- |
+| **Runner**         | ubuntu-latest               |
+| **CPU Cores**      | 2-4 (fornecido pelo GitHub) |
+| **RAM**            | 7GB (tier gratuito GitHub)  |
+| **Disco**          | 14GB disponível             |
+| **Tempo de Build** | ~25-35min para produção     |
 
 ⚠️ **Importante:** Build de produção do Brasil pode falhar nos runners gratuitos do GitHub devido a limites de RAM (precisa 8-10GB durante fase de partition). Soluções:
 
@@ -410,6 +432,7 @@ gh workflow run build-osrm.yml
 #### Trigger Automático
 
 Builds automáticos em push para `main` quando arquivos mudarem:
+
 - `osrm/**`
 - `.github/workflows/build-osrm.yml`
 
@@ -428,6 +451,7 @@ docker run -d -p 5000:5000 ghcr.io/dongarcia/trajetto-osrm:production
 ```
 
 **Tags Disponíveis:**
+
 - `latest` - Aponta para local (versão de teste)
 - `local` - Versão de teste Centro-Oeste
 - `production` - Versão Brasil completo
@@ -441,6 +465,7 @@ docker run -d -p 5000:5000 ghcr.io/dongarcia/trajetto-osrm:production
 ### Container é "Killed" (Exit Code 137)
 
 **Sintoma:**
+
 ```
 failed to solve: exit code: 137
 ```
@@ -450,6 +475,7 @@ failed to solve: exit code: 137
 **Soluções:**
 
 1. **Verifique RAM disponível:**
+
 ```bash
 # Linux/macOS
 free -h
@@ -459,11 +485,13 @@ wsl -e free -h
 ```
 
 2. **Configure WSL2 (Windows):**
+
    - Veja [Configuração WSL2 Windows](#configuração-wsl2-windows)
    - Aumente `memory=10GB` no `.wslconfig`
    - Execute `wsl --shutdown` e reinicie Docker
 
 3. **Use versão local ao invés:**
+
    - `Dockerfile.local` precisa apenas 1.5GB RAM
    - Troque de production → local para testes
 
@@ -478,6 +506,7 @@ wsl -e free -h
 **Sintoma:** Build travado em "Partitioning..." por 30+ minutos
 
 **Causas:**
+
 - RAM insuficiente → swapping para disco
 - Baixa alocação de CPU
 - Gargalo de I/O de disco
@@ -485,6 +514,7 @@ wsl -e free -h
 **Soluções:**
 
 1. **Aumente memória WSL2:**
+
 ```ini
 [wsl2]
 memory=10GB
@@ -492,6 +522,7 @@ processors=12
 ```
 
 2. **Verifique limites de recursos Docker:**
+
    - Docker Desktop → Settings → Resources
    - Aumente CPU cores para 8+
    - Aumente RAM para 8GB+
@@ -507,11 +538,12 @@ processors=12
 **Sintoma:** Rotas funcionam mas coordenadas fazem snap muito longe (100km+)
 
 **Exemplo:**
+
 ```json
 {
   "waypoints": [
     {
-      "distance": 572953.5011  // 572km snap = RUIM!
+      "distance": 572953.5011 // 572km snap = RUIM!
     }
   ]
 }
@@ -521,10 +553,10 @@ processors=12
 
 **Solução:** Verifique se coordenadas estão dentro da região
 
-| Região | Cobertura | Coordenadas de Teste |
-|--------|-----------|---------------------|
-| **Centro-Oeste** | DF, GO, MT, MS | Brasília → Goiânia |
-| **Brasil** | Todos estados | São Paulo → Manaus |
+| Região           | Cobertura      | Coordenadas de Teste |
+| ---------------- | -------------- | -------------------- |
+| **Centro-Oeste** | DF, GO, MT, MS | Brasília → Goiânia   |
+| **Brasil**       | Todos estados  | São Paulo → Manaus   |
 
 **Distância de snap válida:** < 1km (idealmente < 100m)
 
@@ -535,6 +567,7 @@ processors=12
 **Sintoma:** Container mostra "unhealthy" no Docker
 
 **Verificar healthcheck:**
+
 ```bash
 # Ver logs do healthcheck
 docker inspect trajetto-osrm | jq '.[0].State.Health'
@@ -544,6 +577,7 @@ curl "http://localhost:5000/route/v1/driving/-47.9292,-15.7801;-49.2646,-16.6869
 ```
 
 **Causas comuns:**
+
 1. OSRM ainda iniciando (aguarde 10-30seg)
 2. Porta não exposta corretamente
 3. Coordenadas fora da região do mapa
@@ -593,22 +627,25 @@ curl "http://localhost:5000/route/v1/driving/-46.6333,-23.5505;-60.0217,-3.1190"
 ### Validação de Resposta
 
 **Rota Válida:**
+
 ```json
 {
   "code": "Ok",
-  "routes": [{
-    "distance": 205496.9,    // metros
-    "duration": 10589.3,     // segundos (~3h)
-    "geometry": "..."
-  }],
+  "routes": [
+    {
+      "distance": 205496.9, // metros
+      "duration": 10589.3, // segundos (~3h)
+      "geometry": "..."
+    }
+  ],
   "waypoints": [
     {
-      "distance": 0.21,      // ✅ Snap < 1m = BOM!
+      "distance": 0.21, // ✅ Snap < 1m = BOM!
       "location": [-47.929198, -15.7801],
       "name": "Estrada Parque Contorno do Bosque"
     },
     {
-      "distance": 2.11,      // ✅ Snap < 10m = BOM!
+      "distance": 2.11, // ✅ Snap < 10m = BOM!
       "location": [-49.264618, -16.686892],
       "name": "Avenida República do Líbano"
     }
@@ -617,12 +654,13 @@ curl "http://localhost:5000/route/v1/driving/-46.6333,-23.5505;-60.0217,-3.1190"
 ```
 
 **Rota Inválida (Coordenadas Fora do Mapa):**
+
 ```json
 {
   "code": "Ok",
   "waypoints": [
     {
-      "distance": 572953.50  // ❌ 572km snap = RUIM!
+      "distance": 572953.5 // ❌ 572km snap = RUIM!
     }
   ]
 }
@@ -642,12 +680,13 @@ curl "http://localhost:5000/route/v1/driving/-46.6333,-23.5505;-60.0217,-3.1190"
 
 ## 🎯 Resumo
 
-| Versão | Caso de Uso | RAM | Tempo Build | Tamanho Imagem |
-|--------|-------------|-----|-------------|----------------|
-| **Local** | Desenvolvimento/Testes | 1.5GB | 3-5min | 1.2GB |
-| **Production** | Cobertura Brasil Completo | 10GB | 35-50min | 18-20GB |
+| Versão         | Caso de Uso               | RAM   | Tempo Build | Tamanho Imagem |
+| -------------- | ------------------------- | ----- | ----------- | -------------- |
+| **Local**      | Desenvolvimento/Testes    | 1.5GB | 3-5min      | 1.2GB          |
+| **Production** | Cobertura Brasil Completo | 10GB  | 35-50min    | 18-20GB        |
 
 **Workflow Recomendado:**
+
 1. Desenvolvedores usam **versão local** (Centro-Oeste) para testes
 2. Pull do GHCR (sem builds locais)
 3. Produção usa **versão production** (Brasil completo)

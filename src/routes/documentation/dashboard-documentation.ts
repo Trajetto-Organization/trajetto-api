@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import { trendsPeriodSchema } from "@/schemas/trends-period-schema";
 
 const dashboardSchemas = {
@@ -126,13 +125,42 @@ const dashboardResponses = {
       z.object({
         id: z.string().describe("Activity ID"),
         type: z.string().describe("Activity type"),
+        action: z.string().describe("Activity action"),
+        entityId: z.string().describe("Entity ID related to activity"),
         description: z.string().describe("Activity description"),
-        userEmail: z.string().describe("User email"),
-        userName: z.string().describe("User name"),
-        userRole: z.string().describe("User role"),
-        business_name: z.string().optional().describe("Business name"),
-        date: z.string().describe("Activity creation date"),
         status: z.string().describe("Activity status"),
+        performedBy: z.string().describe("User who performed the activity"),
+        businessId: z.string().nullable().describe("Business ID"),
+        visibilityLevel: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("Visibility level"),
+        performingUserRole: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("Performing user role"),
+        user: z
+          .object({
+            email: z.string().describe("User email"),
+            role: z.string().describe("User role"),
+            name: z.string().describe("User name"),
+          })
+          .optional()
+          .describe("User information"),
+        business: z
+          .object({
+            corporate_reason: z.string().describe("Business corporate reason"),
+          })
+          .optional()
+          .describe("Business information"),
+        created_at: z
+          .union([z.string(), z.date()])
+          .describe("Activity creation date"),
+        updated_at: z
+          .union([z.string(), z.date()])
+          .describe("Activity last update date"),
       }),
     ),
     vehiclesByType: z.array(

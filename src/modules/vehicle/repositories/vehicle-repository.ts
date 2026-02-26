@@ -1,7 +1,6 @@
 import database from "@/../infra/database";
-import { formatDate } from "@/config/format-values";
-
 import { IVehicleRepository } from "./IVehicle-repository";
+
 import {
   Vehicle,
   CreateVehicleProps,
@@ -43,6 +42,26 @@ class VehicleRepository implements IVehicleRepository {
         { brand: { contains: normalizedSearch, mode: "insensitive" } },
         { model: { contains: normalizedSearch, mode: "insensitive" } },
         { renavam: { contains: normalizedSearch, mode: "insensitive" } },
+        { branchId: { contains: normalizedSearch, mode: "insensitive" } },
+        { driverId: { contains: normalizedSearch, mode: "insensitive" } },
+        { vehicleTypeId: { contains: normalizedSearch, mode: "insensitive" } },
+        { fuelTypeId: { contains: normalizedSearch, mode: "insensitive" } },
+        // Business ID and name (MASTER only)
+        ...(currentUserRole === "MASTER"
+          ? [
+              {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              },
+              {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              },
+            ]
+          : []),
       );
     }
 
@@ -92,46 +111,8 @@ class VehicleRepository implements IVehicleRepository {
       where: whereCondition,
     });
 
-    const transformedVehicleData = vehicleData.map((vehicle) => ({
-      id: vehicle.id ?? "N/A",
-      description: vehicle.description ?? "N/A",
-      license_plate: vehicle.license_plate ?? "N/A",
-      brand: vehicle.brand ?? "N/A",
-      model: vehicle.model ?? "N/A",
-      acquisition_date: vehicle.acquisition_date ?? "N/A",
-      fleet_type: vehicle.fleet_type ?? "N/A",
-      fleet_id: vehicle.fleet_id ?? "N/A",
-      last_maintenance_date: vehicle.last_maintenance_date ?? "N/A",
-      current_mileage: vehicle.current_mileage ?? "N/A",
-      last_maintenance_mileage:
-        Number(vehicle.last_maintenance_mileage) ?? "N/A",
-      maintenance_interval_km: vehicle.maintenance_interval_km ?? "N/A",
-      maintenance_interval_months: vehicle.maintenance_interval_months ?? "N/A",
-      renavam: vehicle.renavam ?? "N/A",
-      manufacturing_year: vehicle.manufacturing_year ?? "N/A",
-      model_year: vehicle.model_year ?? "N/A",
-      km_per_liter: vehicle.km_per_liter ?? "N/A",
-      number_of_axles: vehicle.number_of_axles ?? "N/A",
-      status: vehicle.status ?? "N/A",
-      vehicleTypeId: vehicle.vehicleTypeId ?? "N/A",
-      vehicleTypeDescription: vehicle.vehicleType?.description ?? "N/A",
-      fuelTypeId: vehicle.fuelTypeId ?? "N/A",
-      fuelTypeDescription: vehicle.fuelType?.description ?? "N/A",
-      driverId: vehicle.driverId ?? "N/A",
-      driverName: vehicle.driver?.name ?? "N/A",
-      driverCnh: vehicle.driver?.cnh ?? "N/A",
-      branchId: vehicle.branchId ?? "N/A",
-      branchName: vehicle.branch?.corporate_reason ?? "N/A",
-      businessId: vehicle.businessId ?? "N/A",
-      ...(currentUserRole === "MASTER"
-        ? { business_name: vehicle.business.corporate_reason ?? "N/A" }
-        : {}),
-      created_at: formatDate(vehicle.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(vehicle.updated_at, "pt-BR") ?? "N/A",
-    }));
-
     return {
-      data: transformedVehicleData,
+      data: vehicleData,
       total,
     };
   }
@@ -197,43 +178,7 @@ class VehicleRepository implements IVehicleRepository {
       where: whereCondition,
     });
 
-    // Transform data to match Vehicle interface (same as listVehicles)
-    const transformedVehicleData = vehicleBusinessData.map((vehicle) => ({
-      id: vehicle.id,
-      description: vehicle.description ?? "N/A",
-      license_plate: vehicle.license_plate ?? "N/A",
-      brand: vehicle.brand ?? "N/A",
-      model: vehicle.model ?? "N/A",
-      acquisition_date: vehicle.acquisition_date ?? "N/A",
-      fleet_type: vehicle.fleet_type ?? "N/A",
-      fleet_id: vehicle.fleet_id ?? "N/A",
-      last_maintenance_date: vehicle.last_maintenance_date ?? "N/A",
-      current_mileage: vehicle.current_mileage ?? "N/A",
-      last_maintenance_mileage:
-        Number(vehicle.last_maintenance_mileage) ?? "N/A",
-      maintenance_interval_km: vehicle.maintenance_interval_km ?? "N/A",
-      maintenance_interval_months: vehicle.maintenance_interval_months ?? "N/A",
-      renavam: vehicle.renavam ?? "N/A",
-      manufacturing_year: vehicle.manufacturing_year ?? "N/A",
-      model_year: vehicle.model_year ?? "N/A",
-      km_per_liter: vehicle.km_per_liter ?? "N/A",
-      number_of_axles: vehicle.number_of_axles ?? "N/A",
-      status: vehicle.status ?? "N/A",
-      vehicleTypeId: vehicle.vehicleTypeId ?? "N/A",
-      vehicleTypeDescription: vehicle.vehicleType?.description ?? "N/A",
-      fuelTypeId: vehicle.fuelTypeId ?? "N/A",
-      fuelTypeDescription: vehicle.fuelType?.description ?? "N/A",
-      driverId: vehicle.driverId ?? "N/A",
-      driverName: vehicle.driver?.name ?? "N/A",
-      driverCnh: vehicle.driver?.cnh ?? "N/A",
-      branchId: vehicle.branchId ?? "N/A",
-      branchName: vehicle.branch?.corporate_reason ?? "N/A",
-      businessId: vehicle.businessId ?? "N/A",
-      created_at: formatDate(vehicle.created_at, "pt-BR") ?? "N/A",
-      updated_at: formatDate(vehicle.updated_at, "pt-BR") ?? "N/A",
-    }));
-
-    return { data: transformedVehicleData, total };
+    return { data: vehicleBusinessData, total };
   }
 
   async updateVehicle({

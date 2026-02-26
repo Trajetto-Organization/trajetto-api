@@ -5,13 +5,11 @@ import {
   VehicleChecklist,
   CreateVehicleChecklistProps,
   ListVehicleChecklistProps,
-  ListVehicleChecklistFormattedProps,
   ListVehicleChecklistByBusinessIdProps,
   UpdateVehicleChecklist,
   ListVehicleChecklistBusinessProps,
   GetVehicleChecklistByIdAndBusinessProps,
-  VehicleChecklistWithRelationsFormatted,
-  VehicleChecklistFormatted,
+  VehicleChecklistWithRelations,
 } from "../../dtos/vehicle-checklist-dto";
 
 class InMemoryVehicleChecklistRepository
@@ -76,10 +74,13 @@ class InMemoryVehicleChecklistRepository
     overall_condition,
     startDate,
     endDate,
-  }: ListVehicleChecklistByBusinessIdProps): Promise<ListVehicleChecklistFormattedProps> {
-    let filteredChecklists = this.checklists.filter(
-      (checklist) => checklist.businessId === businessId,
-    );
+  }: ListVehicleChecklistByBusinessIdProps): Promise<ListVehicleChecklistProps> {
+    let filteredChecklists =
+      currentUserRole === "MASTER"
+        ? [...this.checklists]
+        : this.checklists.filter(
+            (checklist) => checklist.businessId === businessId,
+          );
 
     if (search) {
       const searchLower = search.toLowerCase();
@@ -126,26 +127,8 @@ class InMemoryVehicleChecklistRepository
 
     const paginatedChecklists = filteredChecklists.slice(skip, skip + pageSize);
 
-    // Mock formatted data for testing
-    const formattedChecklists: VehicleChecklistFormatted[] =
-      paginatedChecklists.map((checklist) => ({
-        ...checklist,
-        checklist_date: new Date(checklist.checklist_date),
-        business_name:
-          currentUserRole === "MASTER" ? "Test Business" : undefined,
-        branch_name: "Test Branch",
-        vehicle_description: "Test Vehicle",
-        vehicle_license_plate: "ABC-1234",
-        vehicle_brand: "Test Brand",
-        vehicle_model: "Test Model",
-        driver_name: "Test Driver",
-        driver_cnh: "12345678901",
-        created_at: new Date(checklist.created_at).toISOString(),
-        updated_at: new Date(checklist.updated_at).toISOString(),
-      }));
-
     return {
-      data: formattedChecklists,
+      data: paginatedChecklists,
       total,
     };
   }
@@ -218,7 +201,7 @@ class InMemoryVehicleChecklistRepository
 
   async findVehicleChecklistByIdWithRelations(
     checklistId: string,
-  ): Promise<VehicleChecklistWithRelationsFormatted | null> {
+  ): Promise<VehicleChecklistWithRelations | null> {
     const found = this.checklists.find(
       (checklist) => checklist.id === checklistId,
     );
@@ -273,7 +256,7 @@ class InMemoryVehicleChecklistRepository
   async getVehicleChecklistByIdAndBusinessWithRelations({
     businessId,
     checklistId,
-  }: GetVehicleChecklistByIdAndBusinessProps): Promise<VehicleChecklistWithRelationsFormatted | null> {
+  }: GetVehicleChecklistByIdAndBusinessProps): Promise<VehicleChecklistWithRelations | null> {
     const found = this.checklists.find(
       (checklist) =>
         checklist.id === checklistId && checklist.businessId === businessId,

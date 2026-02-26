@@ -4,75 +4,13 @@ import { IDashboardRepository } from "../../repositories/IDashboard-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { IActivityRepository } from "@/modules/activity/repositories/IActivity-repository";
+import {
+  DashboardOverviewRequest,
+  DashboardOverviewResponse,
+} from "./dtos/get-dashboard-overview-dto";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
-
-interface DashboardOverviewRequest {
-  userId: string;
-}
-
-interface EntityCount {
-  currentMonth: number;
-  lastMonth: number;
-}
-
-interface DashboardOverviewResponse {
-  counts: {
-    vehicles: EntityCount;
-    drivers: EntityCount;
-    businesses: EntityCount;
-    branches: EntityCount;
-    parts: EntityCount;
-    suppliers: EntityCount;
-    serviceOrders: EntityCount;
-    users: EntityCount;
-    fines: EntityCount;
-  };
-  vehicleStatus: {
-    ACTIVE: number;
-    INACTIVE: number;
-    BLOCKED: number;
-    IN_ROUTE: number;
-  };
-  activityTrends: Array<{
-    month: string;
-    vehicles: number;
-    drivers: number;
-    businesses: number;
-    branches: number;
-    parts: number;
-    suppliers: number;
-    serviceOrders: number;
-    users: number;
-    fines: number;
-  }>;
-  maintenanceStats: {
-    pending: number;
-    recent: number;
-    overdue: number;
-  };
-  recentActivity: Array<{
-    id: string;
-    type: string;
-    description: string;
-    userEmail: string;
-    userName: string;
-    userRole: string;
-    business_name?: string;
-    date: string;
-    status: string;
-  }>;
-  vehiclesByType: Array<{
-    name: string;
-    count: number;
-  }>;
-  maintenanceCosts: Array<{
-    month: string;
-    preventive: number;
-    corrective: number;
-  }>;
-}
 
 const pluralizeFieldName = (key: string): string => {
   const pluralMap: Record<string, string> = {
@@ -317,18 +255,6 @@ class GetDashboardOverviewUseCase {
           userId: user.id,
         });
 
-      const recentActivity = recentActivityData.data.map((activity: any) => ({
-        id: activity.id,
-        type: activity.type.charAt(0).toUpperCase() + activity.type.slice(1),
-        description: activity.description,
-        userEmail: activity.userEmail || "N/A",
-        userName: activity.userName || "N/A",
-        userRole: activity.userRole || "N/A",
-        business_name: activity.business_name || "N/A",
-        date: activity.created_at,
-        status: activity.status,
-      }));
-
       // Format the final response
       return {
         counts: {
@@ -345,7 +271,7 @@ class GetDashboardOverviewUseCase {
         vehicleStatus,
         activityTrends,
         maintenanceStats,
-        recentActivity,
+        recentActivity: recentActivityData.data,
         vehiclesByType: vehiclesByType.data || [],
         maintenanceCosts,
       };

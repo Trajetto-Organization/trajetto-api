@@ -8,11 +8,6 @@ import {
 } from "../dtos/service-order-part-dto";
 
 import database from "@/../infra/database";
-import {
-  formatDate,
-  formatCurrency,
-  formatServiceOrderDisplay,
-} from "@/config/format-values";
 
 class ServiceOrderPartRepository implements IServiceOrderPartRepository {
   constructor(private prisma = database) {}
@@ -24,7 +19,7 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
       data: {
         unit_price: serviceOrderPartData.unit_price,
         quantity: serviceOrderPartData.quantity,
-        discount_percentage: serviceOrderPartData.discount_percentage || 0,
+        discount_percentage: serviceOrderPartData.discount_percentage,
         business: {
           connect: {
             id: serviceOrderPartData.businessId,
@@ -65,7 +60,40 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
       const numericSearch = !isNaN(parseFloat(normalizedSearch));
 
       orConditions.push(
+        // Service order part ID
         { id: { contains: normalizedSearch, mode: "insensitive" } },
+
+        // Part ID
+        { partId: { contains: normalizedSearch, mode: "insensitive" } },
+
+        // Part description
+        {
+          part: {
+            description: { contains: normalizedSearch, mode: "insensitive" },
+          },
+        },
+
+        // Service order ID
+        { serviceOrderId: { contains: normalizedSearch, mode: "insensitive" } },
+
+        // Business ID and name (MASTER only)
+        ...(currentUserRole === "MASTER"
+          ? [
+              {
+                businessId: { contains: normalizedSearch, mode: "insensitive" },
+              },
+              {
+                business: {
+                  corporate_reason: {
+                    contains: normalizedSearch,
+                    mode: "insensitive",
+                  },
+                },
+              },
+            ]
+          : []),
+
+        // Numeric fields
         ...(numericSearch
           ? [
               { unit_price: parseFloat(normalizedSearch) },
@@ -74,18 +102,6 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
             ]
           : []),
       );
-
-      orConditions.push({
-        part: {
-          description: { contains: normalizedSearch, mode: "insensitive" },
-        },
-      });
-
-      orConditions.push({
-        serviceOrder: {
-          id: { contains: normalizedSearch, mode: "insensitive" },
-        },
-      });
     }
 
     const whereCondition = {
@@ -126,54 +142,8 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
       where: whereCondition,
     });
 
-    const transformedServiceOrderPartData = serviceOrderPartData.map(
-      (serviceOrderPart) => {
-        // Calculate total and discounted price
-        const totalPrice =
-          Number(serviceOrderPart.unit_price) * serviceOrderPart.quantity;
-        const discountAmount =
-          totalPrice * (Number(serviceOrderPart.discount_percentage) / 100);
-
-        const totalWithDiscount = totalPrice - discountAmount;
-
-        return {
-          id: serviceOrderPart.id ?? "N/A",
-          unit_price:
-            formatCurrency(Number(serviceOrderPart.unit_price)) ?? "N/A",
-          quantity: serviceOrderPart.quantity ?? 0,
-          discount_percentage: serviceOrderPart.discount_percentage
-            ? `${Number(serviceOrderPart.discount_percentage)}%`
-            : "0%",
-          businessId: serviceOrderPart.businessId ?? "N/A",
-          ...(currentUserRole === "MASTER"
-            ? {
-                business_name:
-                  serviceOrderPart.business.corporate_reason ?? "N/A",
-              }
-            : {}),
-          serviceOrderId: serviceOrderPart.serviceOrderId ?? "N/A",
-          serviceOrderDescription: serviceOrderPart.serviceOrder
-            ? formatServiceOrderDisplay(serviceOrderPart.serviceOrder)
-            : "N/A",
-          vehicleLicensePlate:
-            serviceOrderPart.serviceOrder.vehicle.license_plate ?? "N/A",
-          vehicleDescription:
-            serviceOrderPart.serviceOrder.vehicle.description ?? "N/A",
-          serviceOrderDate: serviceOrderPart.serviceOrder.date ?? "N/A",
-          partId: serviceOrderPart.partId ?? "N/A",
-          partDescription: serviceOrderPart.part?.description ?? "N/A",
-          partUnitPrice:
-            formatCurrency(Number(serviceOrderPart.part?.unit_price)) ?? "N/A",
-          totalPrice: formatCurrency(totalPrice) ?? "N/A",
-          totalWithDiscount: formatCurrency(totalWithDiscount) ?? "N/A",
-          created_at: formatDate(serviceOrderPart.created_at, "pt-BR") ?? "N/A",
-          updated_at: formatDate(serviceOrderPart.updated_at, "pt-BR") ?? "N/A",
-        };
-      },
-    );
-
     return {
-      data: transformedServiceOrderPartData,
+      data: serviceOrderPartData,
       total,
     };
   }

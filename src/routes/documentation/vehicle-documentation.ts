@@ -41,36 +41,58 @@ const vehicleResponses = {
         license_plate: z.string(),
         brand: z.string(),
         model: z.string(),
-        acquisition_date: z.string(),
+        acquisition_date: z.union([z.string(), z.date()]),
         fleet_type: z.enum(["OWNED", "THIRD_PARTY"]),
         fleet_id: z.string().nullable(),
-        last_maintenance_date: z.string().nullable(),
-        current_mileage: z.number().or(z.string()),
-        last_maintenance_mileage: z
-          .number()
-          .nullable()
-          .or(z.string().nullable()),
-        maintenance_interval_km: z.number().or(z.string()),
-        maintenance_interval_months: z.number().or(z.string()),
+        last_maintenance_date: z.union([z.string(), z.date()]).nullable(),
+        current_mileage: z.number(),
+        last_maintenance_mileage: z.number().nullable(),
+        maintenance_interval_km: z.number(),
+        maintenance_interval_months: z.number(),
         renavam: z.string(),
-        manufacturing_year: z.number().or(z.string()),
-        model_year: z.number().or(z.string()),
-        km_per_liter: z.number().or(z.string()),
-        number_of_axles: z.number().or(z.string()),
+        manufacturing_year: z.number(),
+        model_year: z.number(),
+        km_per_liter: z.number(),
+        number_of_axles: z.number(),
         status: z.enum(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"]),
         vehicleTypeId: z.string().nullable(),
-        vehicleTypeDescription: z.string().optional(),
         fuelTypeId: z.string(),
-        fuelTypeDescription: z.string().optional(),
         driverId: z.string().nullable(),
-        driverName: z.string().optional(),
         branchId: z.string().nullable(),
-        branchName: z.string().optional(),
         businessId: z.string(),
         last_fuel_mileage: z.number().nullable().optional(),
-        last_fuel_date: z.string().nullable().optional(),
-        created_at: z.string(),
-        updated_at: z.string(),
+        last_fuel_date: z.union([z.string(), z.date()]).nullable().optional(),
+        created_at: z.union([z.string(), z.date()]),
+        updated_at: z.union([z.string(), z.date()]),
+        vehicleType: z
+          .object({
+            description: z.string(),
+          })
+          .nullable()
+          .optional(),
+        fuelType: z
+          .object({
+            description: z.string(),
+          })
+          .optional(),
+        driver: z
+          .object({
+            name: z.string(),
+            cnh: z.string(),
+          })
+          .nullable()
+          .optional(),
+        branch: z
+          .object({
+            corporate_reason: z.string(),
+          })
+          .nullable()
+          .optional(),
+        business: z
+          .object({
+            corporate_reason: z.string(),
+          })
+          .optional(), // Only for MASTER role
       }),
     ),
     total: z.number(),
@@ -260,6 +282,9 @@ const vehicleResponses = {
         .string()
         .default("Um veículo com este RENAVAM já foi cadastrado!"),
     }),
+  ]),
+
+  createVehicleForbiddenErrors: z.union([
     z.object({
       message: z
         .string()
@@ -277,11 +302,6 @@ const vehicleResponses = {
     }),
     z.object({
       message: z.string().default("Esta filial não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Um veículo com este RENAVAM já foi cadastrado!"),
     }),
   ]),
 
@@ -323,6 +343,9 @@ const vehicleResponses = {
     z.object({
       message: z.string().default("Filial não encontrada."),
     }),
+  ]),
+
+  updateVehicleForbiddenErrors: z.union([
     z.object({
       message: z.string().default("Este veículo não pertence a esta empresa!"),
     }),
@@ -357,9 +380,6 @@ const vehicleResponses = {
       message: z.string().default("Empresa não encontrada!"),
     }),
     z.object({
-      message: z.string().default("Este veículo não pertence a esta empresa!"),
-    }),
-    z.object({
       message: z
         .string()
         .default(
@@ -367,6 +387,10 @@ const vehicleResponses = {
         ),
     }),
   ]),
+
+  deleteVehicleForbiddenErrors: z.object({
+    message: z.string().default("Este veículo não pertence a esta empresa!"),
+  }),
 
   getVehicleErrors: z.union([
     z.object({

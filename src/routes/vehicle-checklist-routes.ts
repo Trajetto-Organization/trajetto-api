@@ -8,6 +8,8 @@ import { ListVehicleChecklistBusinessController } from "@/modules/vehicle-checkl
 import { DeleteVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/delete-vehicle-checklist/delete-vehicle-checklist-controller";
 import { UpdateVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/update-vehicle-checklist/update-vehicle-checklist-controller";
 
+import { ExportVehicleChecklistExcelController } from "@/modules/vehicle-checklist/usecases/export-vehicle-checklist-excel/export-vehicle-checklist-excel-controller";
+
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
@@ -24,6 +26,9 @@ const listVehicleChecklistBusinessController =
 
 const deleteVehicleChecklistController = new DeleteVehicleChecklistController();
 const updateVehicleChecklistController = new UpdateVehicleChecklistController();
+
+const exportVehicleChecklistExcelController =
+  new ExportVehicleChecklistExcelController();
 
 async function vehicleChecklistRoutes(app: FastifyInstance) {
   app.post(
@@ -72,7 +77,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-vehicle-checklist-business/:businessId",
+    "/list-vehicle-checklist-business",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("vehicle_checklist_manage", "read")],
@@ -81,8 +86,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
         tags: ["vehicle-checklist"],
         summary: "List vehicle checklists by business",
         description:
-          "Retrieve a paginated list of vehicle checklists filtered by business with optional search and filters",
-        params: vehicleChecklistSchemas.updateDeleteBusiness,
+          "Retrieve a paginated list of vehicle checklists filtered by business",
         querystring: vehicleChecklistSchemas.listVehicleChecklistBusiness,
         response: {
           200: vehicleChecklistResponses.vehicleChecklistList,
@@ -140,6 +144,26 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
       },
     },
     deleteVehicleChecklistController.handle,
+  );
+
+  app.get(
+    "/export-vehicle-checklist-excel",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("vehicle_checklist_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["vehicle-checklist"],
+        summary: "Export vehicle checklists to Excel",
+        description:
+          "Export all vehicle inspection checklists to an Excel file with optional search filters",
+        querystring: vehicleChecklistSchemas.exportVehicleChecklistsQuery,
+        produces: [
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ],
+      },
+    },
+    exportVehicleChecklistExcelController.handle,
   );
 }
 

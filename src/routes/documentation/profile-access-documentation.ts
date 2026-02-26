@@ -83,7 +83,11 @@ const profileAccessResponses = {
   }),
 
   profileAccessAlreadyExists: z.object({
-    message: z.string().default("Este perfil de acesso já existe!"),
+    message: z
+      .string()
+      .default(
+        "Este perfil não está disponível para cadastro. Já existe um perfil com este nome.",
+      ),
   }),
 
   profileAccessCannotBeUpdatedByHimself: z.object({
@@ -114,7 +118,9 @@ const profileAccessResponses = {
     z.object({
       message: z
         .string()
-        .default("Este perfil de acesso já existe para esta empresa!"),
+        .default(
+          "Este perfil não está disponível para cadastro. Já existe um perfil com este nome.",
+        ),
     }),
     z.object({
       message: z
@@ -152,7 +158,6 @@ const profileAccessResponses = {
     z.object({
       message: z.string().default("Recurso não encontrado!"),
     }),
-
     z.object({
       message: z
         .string()
@@ -164,7 +169,9 @@ const profileAccessResponses = {
     z.object({
       message: z
         .string()
-        .default("Este perfil de acesso já existe para esta empresa!"),
+        .default(
+          "Este perfil não está disponível para cadastro. Já existe um perfil com este nome.",
+        ),
     }),
   ]),
 

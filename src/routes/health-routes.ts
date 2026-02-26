@@ -26,6 +26,7 @@ async function healthRoutes(app: FastifyInstance) {
         // Check database
         const dbStart = Date.now();
         await database.$queryRaw`SELECT 1`;
+
         services.database = {
           status: "healthy",
           latency: Date.now() - dbStart,
@@ -41,6 +42,7 @@ async function healthRoutes(app: FastifyInstance) {
         // Check RabbitMQ
         const rabbitmq = RabbitMQConnection.getInstance();
         const connection = await rabbitmq.getConnection();
+
         services.rabbitmq = {
           status: connection ? "healthy" : "unhealthy",
         };

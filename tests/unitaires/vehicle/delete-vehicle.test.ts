@@ -455,6 +455,7 @@ describe("Delete Vehicle UseCase", () => {
       driverId: "some-driver-id",
       vehicleId: createdVehicle.id,
       trafficViolationCodeId: "some-traffic-violation-code-id",
+      created_from: "WEB_DASHBOARD" as const,
     };
 
     await fineInMemory.createFine(fineData);
@@ -535,6 +536,7 @@ describe("Delete Vehicle UseCase", () => {
       responsibleUserId: user.id,
       branchId: "some-branch-id",
       businessId: business.id as string,
+      created_from: "WEB_DASHBOARD" as const,
     };
 
     await serviceOrderInMemory.createServiceOrder(serviceOrderData);
@@ -614,6 +616,7 @@ describe("Delete Vehicle UseCase", () => {
       vehicleId: createdVehicle.id,
       driverId: "some-driver-id",
       fuelTypeId: fuelType.id,
+      created_from: "WEB_DASHBOARD" as const,
     };
 
     await fuelInMemory.createFuel(fuelData);

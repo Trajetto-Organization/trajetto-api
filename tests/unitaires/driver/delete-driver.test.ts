@@ -295,6 +295,7 @@ describe("Delete Driver UseCase", () => {
       points: 5,
       due_date: new Date(),
       observation: "Test fine",
+      created_from: "WEB_DASHBOARD" as const,
     });
 
     await expect(
@@ -361,6 +362,7 @@ describe("Delete Driver UseCase", () => {
       total_amount: 275.0,
       refueling_date: new Date(),
       notes: "Test fuel",
+      created_from: "WEB_DASHBOARD" as const,
     });
 
     await expect(
@@ -426,6 +428,7 @@ describe("Delete Driver UseCase", () => {
       points: 5,
       due_date: new Date(),
       observation: "Test fine 1",
+      created_from: "WEB_DASHBOARD" as const,
     });
 
     await fineInMemory.createFine({
@@ -439,6 +442,7 @@ describe("Delete Driver UseCase", () => {
       points: 7,
       due_date: new Date(),
       observation: "Test fine 2",
+      created_from: "WEB_DASHBOARD" as const,
     });
 
     try {
@@ -511,6 +515,7 @@ describe("Delete Driver UseCase", () => {
       total_amount: 275.0,
       refueling_date: new Date(),
       notes: "Test fuel 1",
+      created_from: "WEB_DASHBOARD" as const,
     });
 
     await fuelInMemory.createFuel({
@@ -525,6 +530,7 @@ describe("Delete Driver UseCase", () => {
       total_amount: 224.0,
       refueling_date: new Date(),
       notes: "Test fuel 2",
+      created_from: "WEB_DASHBOARD" as const,
     });
 
     await fuelInMemory.createFuel({
@@ -539,6 +545,7 @@ describe("Delete Driver UseCase", () => {
       total_amount: 256.5,
       refueling_date: new Date(),
       notes: "Test fuel 3",
+      created_from: "WEB_DASHBOARD" as const,
     });
 
     try {

@@ -3,22 +3,12 @@ import { z } from "zod";
 import { LocationSource, RecordOrigin } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
-
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
+import {
+  emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+  isValidDateString,
+} from "@/shared/utils/zod-schema-helpers";
 
 const createFineSchema = z
   .object({
@@ -31,6 +21,7 @@ const createFineSchema = z
             code: z.ZodIssueCode.custom,
             message: "Data da infração inválida",
           });
+
           return;
         }
 
@@ -84,6 +75,7 @@ const createFineSchema = z
           const normalized = cleaned.replace(/\./g, "").replace(",", ".");
           return parseFloat(normalized);
         }
+
         return val;
       },
       z
@@ -99,9 +91,11 @@ const createFineSchema = z
           if (val.trim() === "") {
             return undefined;
           }
+
           const parsed = parseInt(val, 10);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z
@@ -109,7 +103,7 @@ const createFineSchema = z
           required_error: "A pontuação é obrigatória",
           invalid_type_error: "A pontuação deve ser um número válido",
         })
-        .min(0, "A pontuação não pode ser negativa")
+        .min(1, "A pontuação não pode ser negativa")
         .max(20, "A pontuação não pode exceder 20 pontos"),
     ),
     location: z
@@ -127,6 +121,7 @@ const createFineSchema = z
             message:
               "O nome do local da infração não deve conter espaços consecutivos.",
           });
+
           return;
         }
 
@@ -136,6 +131,7 @@ const createFineSchema = z
             message:
               "O nome do local da infração não pode começar ou terminar com espaço em branco.",
           });
+
           return;
         }
 
@@ -162,6 +158,7 @@ const createFineSchema = z
             message:
               "O nome da observação não deve conter espaços consecutivos.",
           });
+
           return;
         }
 
@@ -171,6 +168,7 @@ const createFineSchema = z
             message:
               "O nome da observação não pode começar ou terminar com espaço em branco.",
           });
+
           return;
         }
 
@@ -194,9 +192,11 @@ const createFineSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z
@@ -213,6 +213,7 @@ const createFineSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
@@ -232,18 +233,22 @@ const createFineSchema = z
     latitude_original: z.preprocess((val) => {
       if (typeof val === "string") {
         if (val.trim() === "") return null;
+
         const parsed = parseFloat(val);
         return isNaN(parsed) ? undefined : parsed;
       }
+
       return val;
     }, z.number().min(-90, "A latitude original deve estar entre -90 e 90.").max(90, "A latitude original deve estar entre -90 e 90.").optional().nullable()),
 
     longitude_original: z.preprocess((val) => {
       if (typeof val === "string") {
         if (val.trim() === "") return null;
+
         const parsed = parseFloat(val);
         return isNaN(parsed) ? undefined : parsed;
       }
+
       return val;
     }, z.number().min(-180, "A longitude original deve estar entre -180 e 180.").max(180, "A longitude original deve estar entre -180 e 180.").optional().nullable()),
 

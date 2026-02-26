@@ -18,10 +18,8 @@ class InMemoryDashboardRepository implements IDashboardRepository {
         businessId?: string;
       }[];
     };
-
     vehicleStatus: VehicleStatusCountResult;
     maintenanceStats: MaintenanceStatsResult;
-
     vehicleTypes: { name: string; count: number; businessId?: string }[];
     monthlyCosts: {
       preventive: number;
@@ -67,15 +65,11 @@ class InMemoryDashboardRepository implements IDashboardRepository {
     return { count: totalCount };
   }
 
-  async countVehiclesByStatus(
-    businessId?: string,
-  ): Promise<VehicleStatusCountResult> {
+  async countVehiclesByStatus(): Promise<VehicleStatusCountResult> {
     return this.data.vehicleStatus;
   }
 
-  async getMaintenanceStats(
-    businessId?: string,
-  ): Promise<MaintenanceStatsResult> {
+  async getMaintenanceStats(): Promise<MaintenanceStatsResult> {
     return this.data.maintenanceStats;
   }
 

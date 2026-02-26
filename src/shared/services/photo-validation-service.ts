@@ -186,6 +186,7 @@ class PhotoValidationService {
   ): ChecklistPhotoValidationResult {
     const requiredPhotos: string[] = [];
     const optionalPhotos: string[] = [];
+
     const errors: string[] = [];
 
     this.PHOTO_RULES.forEach((rule) => {

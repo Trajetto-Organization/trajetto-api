@@ -3,19 +3,10 @@ import { z } from "zod";
 import { LocationSource, RecordOrigin } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
-
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
+import {
+  emptyStringToNull,
+  isValidDateString,
+} from "@/shared/utils/zod-schema-helpers";
 
 const createServiceOrderSchema = z
   .object({
@@ -60,6 +51,7 @@ const createServiceOrderSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -78,6 +70,7 @@ const createServiceOrderSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -99,6 +92,7 @@ const createServiceOrderSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -122,6 +116,7 @@ const createServiceOrderSchema = z
           if (val.trim() === "") return undefined;
           return parseFloat(val.replace(",", "."));
         }
+
         return val;
       },
       z
@@ -153,9 +148,11 @@ const createServiceOrderSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z
@@ -172,9 +169,11 @@ const createServiceOrderSchema = z
       (val) => {
         if (typeof val === "string") {
           if (val.trim() === "") return null;
+
           const parsed = parseFloat(val);
           return isNaN(parsed) ? undefined : parsed;
         }
+
         return val;
       },
       z
@@ -191,18 +190,22 @@ const createServiceOrderSchema = z
     latitude_original: z.preprocess((val) => {
       if (typeof val === "string") {
         if (val.trim() === "") return null;
+
         const parsed = parseFloat(val);
         return isNaN(parsed) ? undefined : parsed;
       }
+
       return val;
     }, z.number().min(-90, "A latitude original deve estar entre -90 e 90.").max(90, "A latitude original deve estar entre -90 e 90.").optional().nullable()),
 
     longitude_original: z.preprocess((val) => {
       if (typeof val === "string") {
         if (val.trim() === "") return null;
+
         const parsed = parseFloat(val);
         return isNaN(parsed) ? undefined : parsed;
       }
+
       return val;
     }, z.number().min(-180, "A longitude original deve estar entre -180 e 180.").max(180, "A longitude original deve estar entre -180 e 180.").optional().nullable()),
 

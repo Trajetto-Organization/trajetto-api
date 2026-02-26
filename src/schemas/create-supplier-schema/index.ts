@@ -1,18 +1,10 @@
 import { z } from "zod";
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const isEmptyOrWhitespace = (value: string): boolean =>
-  value.trim().length === 0;
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
-
-// Helper function to convert empty strings to null
-const emptyStringToNull = (value: any) => {
-  if (typeof value === "string" && value.trim() === "") {
-    return null;
-  }
-
-  return value;
-};
+import {
+  emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+  isEmptyOrWhitespace,
+} from "@/shared/utils/zod-schema-helpers";
 
 const createSupplierSchema = z.object({
   name: z
@@ -25,6 +17,7 @@ const createSupplierSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O nome do fornecedor não deve exceder 100 caracteres.",
         });
+
         return;
       }
 
@@ -33,6 +26,7 @@ const createSupplierSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O nome do fornecedor não deve conter espaços consecutivos.",
         });
+
         return;
       }
 
@@ -42,6 +36,7 @@ const createSupplierSchema = z.object({
           message:
             "O nome do fornecedor não pode começar ou terminar com espaço em branco.",
         });
+
         return;
       }
 
@@ -50,6 +45,7 @@ const createSupplierSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "Por favor, insira o nome do fornecedor completo.",
         });
+
         return;
       }
 
@@ -67,6 +63,7 @@ const createSupplierSchema = z.object({
       if (typeof val === "string") {
         return val.replace(/\D/g, "");
       }
+
       return val;
     },
     z
@@ -76,18 +73,19 @@ const createSupplierSchema = z.object({
   ),
   cep: z.preprocess(
     (val) => {
-      if (typeof val === "string") {
-        val = val.replace(/\D/g, "");
-      }
-      return emptyStringToNull(val);
+      const cleaned = emptyStringToNull(val);
+
+      if (cleaned === null) return null;
+      if (typeof cleaned === "string") return cleaned.replace(/\D/g, "");
+
+      return cleaned;
     },
     z
       .string()
       .length(8, "O CEP deve ter exatamente 8 dígitos.")
       .regex(/^\d{8}$/, "O CEP deve conter apenas números.")
-      .nullable()
       .optional()
-      .or(z.literal("")),
+      .nullable(),
   ),
   city: z.preprocess(
     emptyStringToNull,
@@ -133,9 +131,8 @@ const createSupplierSchema = z.object({
           });
         }
       })
-      .nullable()
       .optional()
-      .or(z.literal("")),
+      .nullable(),
   ),
   uf: z.preprocess(
     emptyStringToNull,
@@ -171,9 +168,8 @@ const createSupplierSchema = z.object({
           return;
         }
       })
-      .nullable()
       .optional()
-      .or(z.literal("")),
+      .nullable(),
   ),
   street: z.preprocess(
     emptyStringToNull,
@@ -219,9 +215,8 @@ const createSupplierSchema = z.object({
           });
         }
       })
-      .nullable()
       .optional()
-      .or(z.literal("")),
+      .nullable(),
   ),
   address_number: z.preprocess(
     emptyStringToNull,
@@ -240,6 +235,7 @@ const createSupplierSchema = z.object({
             message:
               "O número do endereço não pode ser vazio ou conter apenas espaços.",
           });
+
           return;
         }
 
@@ -249,12 +245,12 @@ const createSupplierSchema = z.object({
             message:
               "O número do endereço não deve conter espaços consecutivos.",
           });
+
           return;
         }
       })
-      .nullable()
       .optional()
-      .or(z.literal("")),
+      .nullable(),
   ),
   complement: z.preprocess(
     emptyStringToNull,
@@ -262,16 +258,13 @@ const createSupplierSchema = z.object({
       .string()
       .max(50, "O complemento deve ter no máximo 50 caracteres.")
       .superRefine((value, ctx) => {
-        if (value === undefined || value === "") {
-          return;
-        }
-
         if (hasConsecutiveSpaces(value)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message:
               "O nome do complemento não deve conter espaços consecutivos.",
           });
+
           return;
         }
 
@@ -281,6 +274,7 @@ const createSupplierSchema = z.object({
             message:
               "O nome do complemento não pode começar ou terminar com espaço em branco.",
           });
+
           return;
         }
 
@@ -292,16 +286,17 @@ const createSupplierSchema = z.object({
           });
         }
       })
-      .nullable()
       .optional()
-      .or(z.literal("")),
+      .nullable(),
   ),
   telephone: z.preprocess(
     (val) => {
-      if (typeof val === "string") {
-        val = val.replace(/\D/g, "");
-      }
-      return emptyStringToNull(val);
+      const cleaned = emptyStringToNull(val);
+
+      if (cleaned === null) return null;
+      if (typeof cleaned === "string") return cleaned.replace(/\D/g, "");
+
+      return cleaned;
     },
     z
       .string()
@@ -309,9 +304,8 @@ const createSupplierSchema = z.object({
         /^\d{10,11}$/,
         "O telefone deve conter 10 ou 11 dígitos numéricos incluindo o DDD.",
       )
-      .nullable()
       .optional()
-      .or(z.literal("")),
+      .nullable(),
   ),
   email: z.preprocess(
     emptyStringToNull,
@@ -319,9 +313,8 @@ const createSupplierSchema = z.object({
       .string()
       .email("O e-mail informado não é válido.")
       .max(100, "O e-mail deve ter no máximo 100 caracteres.")
-      .nullable()
       .optional()
-      .or(z.literal("")),
+      .nullable(),
   ),
 });
 

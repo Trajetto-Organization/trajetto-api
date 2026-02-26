@@ -1,8 +1,10 @@
 import { z } from "zod";
-import { UserBusinessRole } from "@/modules/user/dtos/user-dto";
 
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
+import {
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+} from "@/shared/utils/zod-schema-helpers";
+import { UserBusinessRole } from "@/modules/user/dtos/user-dto";
 
 const roleEnum = z.nativeEnum(UserBusinessRole, {
   errorMap: (issue, ctx) => {
@@ -26,6 +28,7 @@ const createUserSchema = z
           code: z.ZodIssueCode.custom,
           message: "O nome de usuário não deve exceder 100 caracteres.",
         });
+
         return;
       }
 
@@ -34,6 +37,7 @@ const createUserSchema = z
           code: z.ZodIssueCode.custom,
           message: "O nome de usuário não deve conter espaços consecutivos.",
         });
+
         return;
       }
 
@@ -43,6 +47,7 @@ const createUserSchema = z
           message:
             "O nome de usuário não pode começar ou terminar com espaço em branco.",
         });
+
         return;
       }
 
@@ -51,6 +56,7 @@ const createUserSchema = z
           code: z.ZodIssueCode.custom,
           message: "Por favor, insira o nome de usuário completo.",
         });
+
         return;
       }
 
@@ -96,6 +102,7 @@ const createUserSchema = z
           path: ["role"],
         });
       }
+
       return;
     }
 
@@ -121,6 +128,7 @@ const createUserSchema = z
             path: ["profileAccessId"],
           });
         }
+
         return;
       }
 
@@ -132,6 +140,7 @@ const createUserSchema = z
             "Usuário não pode ter tanto um perfil de acesso quanto um motorista vinculado. Escolha apenas um.",
           path: ["driverId"],
         });
+
         return;
       }
     }

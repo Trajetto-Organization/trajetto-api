@@ -1,7 +1,8 @@
 import { z } from "zod";
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
+import {
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+} from "@/shared/utils/zod-schema-helpers";
 
 const createKanbanColumnSchema = z.object({
   title: z
@@ -14,6 +15,7 @@ const createKanbanColumnSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: "O título não deve conter espaços consecutivos.",
         });
+
         return;
       }
 
@@ -23,6 +25,7 @@ const createKanbanColumnSchema = z.object({
           message:
             "O título não pode começar ou terminar com espaço em branco.",
         });
+
         return;
       }
     }),

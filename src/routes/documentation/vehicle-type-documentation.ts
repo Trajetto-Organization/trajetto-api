@@ -33,10 +33,14 @@ const vehicleTypeResponses = {
         id: z.string(),
         description: z.string(),
         number_of_axles: z.number(),
-        registration_date: z.string(),
         businessId: z.string(),
-        created_at: z.string(),
-        updated_at: z.string(),
+        created_at: z.union([z.string(), z.date()]),
+        updated_at: z.union([z.string(), z.date()]),
+        business: z
+          .object({
+            corporate_reason: z.string(),
+          })
+          .optional(), // Only for MASTER role
       }),
     ),
     total: z.number(),
@@ -146,11 +150,6 @@ const vehicleTypeResponses = {
       message: z
         .string()
         .default("Este tipo de veículo já foi cadastrado para esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este tipo de veículo não pertence a esta empresa!"),
     }),
   ]),
 

@@ -94,7 +94,6 @@ describe("Delete Branch UseCase", () => {
     };
 
     const createdBranch = await branchInMemory.createBranch(branchData);
-
     const deletedBranch = await deleteBranch.execute(
       createdBranch.id,
       business.id as string,
@@ -103,10 +102,12 @@ describe("Delete Branch UseCase", () => {
 
     expect(deletedBranch).toHaveProperty("id");
     expect(deletedBranch.corporate_reason).toBe(branchData.corporate_reason);
+
     expect(deletedBranch.cnpj).toBe(branchData.cnpj);
     expect(deletedBranch.email).toBe(branchData.email);
 
     const branchExists = await branchInMemory.findBranchById(createdBranch.id);
+
     expect(branchExists).toBeNull();
     expect(notificationService.createActivityIfEnabled).toHaveBeenCalledTimes(
       1,

@@ -1,7 +1,8 @@
 import { z } from "zod";
-
-const hasSpaceAtEdges = (value: string) => /^\s|\s$/.test(value);
-const hasConsecutiveSpaces = (value: string): boolean => /\s{2,}/.test(value);
+import {
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
+} from "@/shared/utils/zod-schema-helpers";
 
 const createProfileAccessSchema = z.object({
   name: z
@@ -24,6 +25,7 @@ const createProfileAccessSchema = z.object({
           message:
             "O nome do perfil de acesso não deve exceder 100 caracteres.",
         });
+
         return;
       }
 
@@ -33,6 +35,7 @@ const createProfileAccessSchema = z.object({
           message:
             "O nome do perfil de acesso não deve conter espaços consecutivos.",
         });
+
         return;
       }
 
@@ -42,6 +45,7 @@ const createProfileAccessSchema = z.object({
           message:
             "O nome do perfil de acesso não pode começar ou terminar com espaço em branco.",
         });
+
         return;
       }
 

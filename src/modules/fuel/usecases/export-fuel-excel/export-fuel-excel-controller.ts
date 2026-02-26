@@ -14,7 +14,6 @@ class ExportFuelExcelController {
     const { id } = request.user;
 
     const exportFuelExcelUseCase = container.resolve(ExportFuelExcelUseCase);
-
     const result = await exportFuelExcelUseCase.execute(id, search);
 
     reply

@@ -32,10 +32,14 @@ const fuelTypeResponses = {
       z.object({
         id: z.string(),
         description: z.string(),
-        registration_date: z.string(),
         businessId: z.string(),
-        created_at: z.string(),
-        updated_at: z.string(),
+        created_at: z.union([z.string(), z.date()]),
+        updated_at: z.union([z.string(), z.date()]),
+        business: z
+          .object({
+            corporate_reason: z.string(),
+          })
+          .optional(), // Only for MASTER role
       }),
     ),
     total: z.number(),
@@ -76,7 +80,9 @@ const fuelTypeResponses = {
   fuelTypeAlreadyExists: z.object({
     message: z
       .string()
-      .default("Este tipo de combustível já foi cadastrado para esta empresa!"),
+      .default(
+        "Este tipo de combustível não está disponível para cadastro. Já existe um tipo de combustível com este nome.",
+      ),
   }),
 
   // Grouping errors by route
@@ -97,7 +103,7 @@ const fuelTypeResponses = {
       message: z
         .string()
         .default(
-          "Este tipo de combustível já foi cadastrado para esta empresa!",
+          "Este tipo de combustível não está disponível para cadastro. Já existe um tipo de combustível com este nome.",
         ),
     }),
   ]),
@@ -147,15 +153,16 @@ const fuelTypeResponses = {
       message: z
         .string()
         .default(
-          "Este tipo de combustível já foi cadastrado para esta empresa!",
+          "Este tipo de combustível não está disponível para cadastro. Já existe um tipo de combustível com este nome.",
         ),
     }),
-    z.object({
-      message: z
-        .string()
-        .default("Este tipo de combustível não pertence a esta empresa!"),
-    }),
   ]),
+
+  updateFuelTypeForbiddenErrors: z.object({
+    message: z
+      .string()
+      .default("Este tipo de combustível não pertence a esta empresa!"),
+  }),
 
   deleteFuelTypeErrors: z.union([
     z.object({
@@ -171,6 +178,23 @@ const fuelTypeResponses = {
       message: z
         .string()
         .default("Este tipo de combustível não pertence a esta empresa!"),
+    }),
+  ]),
+
+  deleteFuelTypeForbiddenErrors: z.union([
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Não é possível deletar este tipo de combustível pois existem veículo(s) associado(s).",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Não é possível deletar este tipo de combustível pois existem registro(s) de abastecimento associado(s).",
+        ),
     }),
   ]),
 };

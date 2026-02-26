@@ -71,18 +71,6 @@ services:
         condition: service_healthy
     env_file:
       - .env # Loads ALL base variables from .env
-    environment:
-      # CONSTRUCTS URLs dynamically using .env variables
-      # DATABASE_URL is constructed here with the correct host for Docker
-      - DATABASE_URL=postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@trajetto-database:5432/${POSTGRES_DATABASE}?schema=public
-
-      # RABBITMQ_URL is constructed here with the correct host for Docker
-      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@trajetto-rabbitmq:5672
-
-      # Override only what needs to be different in production
-      - NODE_ENV=production
-      - PORT=3333
-      - HOSTNAME=0.0.0.0
     networks:
       - trajetto-network
     healthcheck:
