@@ -11,10 +11,10 @@ env:
   NODE_ENV: test
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
   RABBITMQ_URL: amqp://guest:guest@localhost:5672
-  JWT_SECRET: test-jwt-secret-key-for-github-actions-only
-  JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
   HTTP_REQUEST: http://localhost:3000
   API_HTTP_REQUEST: http://localhost:3333
+  JWT_SECRET: test-jwt-secret-key-for-github-actions-only
+  JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
   EVOLUTION_API_URL: http://localhost:8080/test
   EVOLUTION_API_KEY: test-evolution-api-key
   EVOLUTION_HTTP_REQUEST: http://localhost:3333
@@ -81,9 +81,7 @@ jobs:
         run: yarn test --run --reporter=basic
 
       - name: Setup E2E test environment
-        run: |
-          yarn test:create-prisma-environment
-          yarn test:install-prisma-environment
+        # run: yarn prisma:generate
 
       - name: Run E2E tests
         run: yarn test:e2e --run --reporter=basic

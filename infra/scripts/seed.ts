@@ -1,4 +1,6 @@
+import { env } from "@/env";
 import { hash } from "bcrypt";
+
 import database from "@/../infra/database";
 
 async function checkDatabaseConnection(retries = 5, interval = 1000) {
@@ -9,12 +11,14 @@ async function checkDatabaseConnection(retries = 5, interval = 1000) {
       console.log(
         "\n🟢 Conexão com o banco de dados estabelecida com sucesso!",
       );
+
       return true;
     } catch (error) {
       if (i === retries - 1) {
         console.error(
           "\n❌ Falha ao conectar ao banco de dados após várias tentativas",
         );
+
         throw error;
       }
 
@@ -37,13 +41,14 @@ async function seed() {
     }
 
     // Check if environment variables are set
-    const masterEmail = process.env.MASTER_USER_EMAIL;
-    const masterPassword = process.env.MASTER_USER_INITIAL_PASSWORD;
+    const masterEmail = env.MASTER_USER_EMAIL;
+    const masterPassword = env.MASTER_USER_INITIAL_PASSWORD;
 
     if (!masterEmail || !masterPassword) {
       console.error(
         "❌ Variáveis MASTER_USER_EMAIL e MASTER_USER_INITIAL_PASSWORD devem estar definidas",
       );
+
       process.exit(1);
     }
 
@@ -73,6 +78,7 @@ async function seed() {
 
     console.log("🎉 Usuário master criado com sucesso!");
     console.log(`📧 Email: ${masterUser.email}`);
+
     console.log("🔒 Senha: [DEFINIDA VIA VARIÁVEL DE AMBIENTE]");
     console.log("\n⚠️  IMPORTANTE: Altere a senha após o primeiro login!");
   } catch (error) {

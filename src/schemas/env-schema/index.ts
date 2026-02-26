@@ -19,6 +19,8 @@ const envSchema = z.object({
   TRAJETTO_WHATSAPP_INSTANCE_NAME: z.string(),
   RESEND_SECRET_KEY: z.string().optional(),
   RESEND_FROM_EMAIL: z.string().optional(),
+  MASTER_USER_EMAIL: z.string(),
+  MASTER_USER_INITIAL_PASSWORD: z.string(),
 
   // File Upload Configuration
   UPLOAD_STORAGE_TYPE: z.enum(["local", "r2"]).default("local"),
