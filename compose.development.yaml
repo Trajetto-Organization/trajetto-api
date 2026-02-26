@@ -55,37 +55,6 @@ services:
       retries: 5
       start_period: 30s
 
-  trajetto-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runner
-    container_name: trajetto-api
-    restart: unless-stopped
-    ports:
-      - "3333:3333"
-    depends_on:
-      trajetto-database:
-        condition: service_healthy
-      trajetto-rabbitmq:
-        condition: service_healthy
-    env_file:
-      - .env # Loads ALL base variables from .env
-    networks:
-      - trajetto-network
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "require('http').get('http://localhost:3333/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s # More time for complete initialization
-
 volumes:
   postgres_data:
     driver: local

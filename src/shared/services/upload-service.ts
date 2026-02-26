@@ -254,6 +254,7 @@ class UploadService {
       if (uploadConfig.r2.publicDomain) {
         return `https://${uploadConfig.r2.publicDomain}/${filePath}`;
       }
+
       return `https://${uploadConfig.r2.bucket}.${uploadConfig.r2.accountId}.r2.cloudflarestorage.com/${filePath}`;
     } else {
       // For local development, construct full URL to API server

@@ -9,7 +9,12 @@ import { env } from "../env";
 class EmailWorkerManager {
   private static instance: EmailWorkerManager;
 
+  private static readonly MAX_RESTART_ATTEMPTS = 5;
+  private static readonly BASE_RESTART_DELAY = 5000;
+
   private workers: Map<string, Worker> = new Map();
+  private restartAttempts: Map<string, number> = new Map();
+
   private pendingResponses: Map<
     string,
     { resolve: Function; reject: Function; timeout: NodeJS.Timeout }
@@ -55,6 +60,8 @@ class EmailWorkerManager {
         worker.on("message", (message) => {
           if (message.type === "ready") {
             this.workers.set(queueName, worker);
+            this.restartAttempts.set(queueName, 0);
+
             console.log(
               `[Manager] Worker para fila ${queueName} iniciado com sucesso`,
             );
@@ -70,6 +77,7 @@ class EmailWorkerManager {
             const { resolve, reject, timeout } = this.pendingResponses.get(
               message.id,
             )!;
+
             clearTimeout(timeout);
             this.pendingResponses.delete(message.id);
 
@@ -93,18 +101,7 @@ class EmailWorkerManager {
             reject(err);
           }
 
-          // Try restarting the worker after a delay
-          setTimeout(() => {
-            console.log(
-              `[Manager] Tentando reiniciar worker para fila ${queueName}...`,
-            );
-            this.startWorker(queueName).catch((err) => {
-              console.error(
-                `[Manager] Falha ao reiniciar worker para fila ${queueName}:`,
-                err,
-              );
-            });
-          }, 5000);
+          this.scheduleRestart(queueName);
         });
 
         worker.on("exit", (code) => {
@@ -115,17 +112,7 @@ class EmailWorkerManager {
 
           // Try restarting only if it is not a deliberate shutdown (code 0)
           if (code !== 0) {
-            setTimeout(() => {
-              console.log(
-                `[Manager] Tentando reiniciar worker para fila ${queueName} após saída...`,
-              );
-              this.startWorker(queueName).catch((err) => {
-                console.error(
-                  `[Manager] Falha ao reiniciar worker para fila ${queueName}:`,
-                  err,
-                );
-              });
-            }, 5000);
+            this.scheduleRestart(queueName);
           }
         });
 
@@ -147,6 +134,33 @@ class EmailWorkerManager {
         reject(error);
       }
     });
+  }
+
+  private scheduleRestart(queueName: string): void {
+    const attempts = (this.restartAttempts.get(queueName) || 0) + 1;
+    this.restartAttempts.set(queueName, attempts);
+
+    if (attempts > EmailWorkerManager.MAX_RESTART_ATTEMPTS) {
+      console.error(
+        `[Manager] Worker para fila ${queueName} excedeu o limite de ${EmailWorkerManager.MAX_RESTART_ATTEMPTS} tentativas de reinício. Desistindo.`,
+      );
+      return;
+    }
+
+    const delay =
+      EmailWorkerManager.BASE_RESTART_DELAY * Math.pow(2, attempts - 1);
+    console.log(
+      `[Manager] Tentando reiniciar worker para fila ${queueName} (tentativa ${attempts}/${EmailWorkerManager.MAX_RESTART_ATTEMPTS}) em ${delay / 1000}s...`,
+    );
+
+    setTimeout(() => {
+      this.startWorker(queueName).catch((err) => {
+        console.error(
+          `[Manager] Falha ao reiniciar worker para fila ${queueName}:`,
+          err,
+        );
+      });
+    }, delay);
   }
 
   public async enqueueEmail(

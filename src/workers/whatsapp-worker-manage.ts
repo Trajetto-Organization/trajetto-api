@@ -9,7 +9,12 @@ import { env } from "../env";
 class WhatsAppWorkerManager {
   private static instance: WhatsAppWorkerManager;
 
+  private static readonly MAX_RESTART_ATTEMPTS = 5;
+  private static readonly BASE_RESTART_DELAY = 10000;
+
   private workers: Map<string, Worker> = new Map();
+  private restartAttempts: Map<string, number> = new Map();
+
   private pendingResponses: Map<
     string,
     { resolve: Function; reject: Function; timeout: NodeJS.Timeout }
@@ -67,6 +72,8 @@ class WhatsAppWorkerManager {
         worker.on("message", (message) => {
           if (message.type === "ready") {
             this.workers.set(queueName, worker);
+            this.restartAttempts.set(queueName, 0);
+
             console.log(
               `[WhatsAppManager] Worker para fila ${queueName} iniciado com sucesso`,
             );
@@ -105,18 +112,7 @@ class WhatsAppWorkerManager {
             reject(err);
           }
 
-          // Try restarting the worker after a delay
-          setTimeout(() => {
-            console.log(
-              `[WhatsAppManager] Tentando reiniciar worker para fila ${queueName}...`,
-            );
-            this.startWorker(queueName).catch((err) => {
-              console.error(
-                `[WhatsAppManager] Falha ao reiniciar worker para fila ${queueName}:`,
-                err,
-              );
-            });
-          }, 10000); // Longer delay for WhatsApp worker restart
+          this.scheduleRestart(queueName);
         });
 
         worker.on("exit", (code) => {
@@ -127,17 +123,7 @@ class WhatsAppWorkerManager {
 
           // Try restarting only if it is not a deliberate shutdown (code 0)
           if (code !== 0) {
-            setTimeout(() => {
-              console.log(
-                `[WhatsAppManager] Tentando reiniciar worker para fila ${queueName} após saída...`,
-              );
-              this.startWorker(queueName).catch((err) => {
-                console.error(
-                  `[WhatsAppManager] Falha ao reiniciar worker para fila ${queueName}:`,
-                  err,
-                );
-              });
-            }, 10000); // Longer delay for WhatsApp worker restart
+            this.scheduleRestart(queueName);
           }
         });
 
@@ -159,6 +145,33 @@ class WhatsAppWorkerManager {
         reject(error);
       }
     });
+  }
+
+  private scheduleRestart(queueName: string): void {
+    const attempts = (this.restartAttempts.get(queueName) || 0) + 1;
+    this.restartAttempts.set(queueName, attempts);
+
+    if (attempts > WhatsAppWorkerManager.MAX_RESTART_ATTEMPTS) {
+      console.error(
+        `[WhatsAppManager] Worker para fila ${queueName} excedeu o limite de ${WhatsAppWorkerManager.MAX_RESTART_ATTEMPTS} tentativas de reinício. Desistindo.`,
+      );
+      return;
+    }
+
+    const delay =
+      WhatsAppWorkerManager.BASE_RESTART_DELAY * Math.pow(2, attempts - 1);
+    console.log(
+      `[WhatsAppManager] Tentando reiniciar worker para fila ${queueName} (tentativa ${attempts}/${WhatsAppWorkerManager.MAX_RESTART_ATTEMPTS}) em ${delay / 1000}s...`,
+    );
+
+    setTimeout(() => {
+      this.startWorker(queueName).catch((err) => {
+        console.error(
+          `[WhatsAppManager] Falha ao reiniciar worker para fila ${queueName}:`,
+          err,
+        );
+      });
+    }, delay);
   }
 
   public async enqueueWhatsApp(

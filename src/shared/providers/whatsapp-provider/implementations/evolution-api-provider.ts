@@ -307,6 +307,7 @@ class EvolutionApiProvider implements IWhatsAppProvider {
       env.NODE_ENV === "development"
         ? env.EVOLUTION_HTTP_REQUEST
         : env.API_HTTP_REQUEST;
+
     return `${backendUrl}/whatsapp/webhook/${instanceName}`;
   }
 }
