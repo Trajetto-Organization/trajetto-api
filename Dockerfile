@@ -22,7 +22,10 @@ WORKDIR /app
 # Copy dependency files
 COPY package.json yarn.lock* ./
 
-# Install only production dependencies
+# Copy local package referenced in package.json (file: dependency)
+COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
+
+# Install all dependencies (dev included for build step)
 RUN yarn install --frozen-lockfile --production=false \
     && yarn cache clean
 
@@ -70,10 +73,7 @@ COPY --from=builder --chown=nodejs:nodejs /app/prisma ./prisma
 # Copy email templates and other assets
 COPY --from=builder --chown=nodejs:nodejs /app/build/src/modules ./src/modules
 
-# Copy infra directory
-COPY --from=builder --chown=nodejs:nodejs /app/infra ./infra
-
-# COPY EXCEL FILE FOR VIOLATIONS IMPORT
+# Copy Excel file (needed for violation codes import at startup)
 COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-xlsx.xlsx ./tabela-codigo-infracoes-renainf-xlsx.xlsx
 
 # Create yarn cache and config directories with correct permissions
@@ -89,9 +89,6 @@ USER nodejs
 
 # Expose port
 EXPOSE 3333
-
-ENV PORT=3333
-ENV HOSTNAME="0.0.0.0"
 
 # Use dumb-init as PID 1
 ENTRYPOINT ["dumb-init", "--"]

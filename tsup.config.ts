@@ -5,33 +5,28 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 export default defineConfig({
-  // Main entry points
   entry: {
     server: "./src/server.ts",
     seed: "./infra/scripts/seed.ts",
-    // Workers need to be built separately
     "workers/email-worker": "./src/workers/email-worker.ts",
     "workers/whatsapp-worker": "./src/workers/whatsapp-worker.ts",
     "import-violation-codes": "./infra/scripts/import-violation-codes.ts",
     "seed-whatsapp-instance": "./infra/scripts/seed-whatsapp-instance.ts",
   },
 
-  // Output Formats
   format: ["cjs"],
   target: "es2020",
 
-  // Output directory
   outDir: "./build",
+  sourcemap: false,
 
-  // Build Settings
-  sourcemap: false, // Disable in production to reduce size
   clean: true,
-  minify: false, // Keep it readable for debugging in production
+  minify: false,
 
-  // Splitting for optimization
   splitting: false,
 
-  // External dependencies (do not bundle)
+  // Packages that must NOT be bundled (native bindings, DI, or complex runtime)
+  // Node built-in modules (fs, path, crypto, etc.) are automatically external
   external: [
     "@prisma/client",
     "prisma",
@@ -42,195 +37,75 @@ export default defineConfig({
     "amqplib",
     "socket.io",
     "fastify",
+    "sharp",
     "tsyringe",
-    "reflect-metadata", // Keep external to preserve original import order
-    // Other native Node.js modules
-    "crypto",
-    "fs",
-    "path",
-    "http",
-    "https",
-    "url",
-    "querystring",
-    "stream",
-    "util",
-    "events",
-    "buffer",
-    "os",
-    "child_process",
-    "worker_threads",
-    "cluster",
-    "net",
-    "tls",
-    "dgram",
-    "dns",
-    "readline",
-    "repl",
-    "vm",
-    "zlib",
+    "reflect-metadata",
   ],
 
-  // Settings for different file types
   loader: {
-    ".hbs": "copy", // Handlebars Templates
-    ".html": "copy", // HTML Templates
-    ".json": "copy", // JSON files
-    ".xlsx": "copy", // Excel Files
+    ".hbs": "copy",
+    ".html": "copy",
+    ".json": "copy",
+    ".xlsx": "copy",
   },
 
-  // Hook to copy additional assets - CROSS-PLATFORM VERSION
   async onSuccess() {
     try {
-      // Helper function to create directories recursively
-      async function ensureDir(dirPath: string) {
-        try {
-          await fs.mkdir(dirPath, { recursive: true });
-        } catch (error: any) {
-          if (error.code !== "EEXIST") {
-            throw error;
-          }
-        }
-      }
-
-      // Helper function to copy files/directories recursively
       async function copyRecursive(src: string, dest: string) {
         const stat = await fs.stat(src);
 
         if (stat.isDirectory()) {
-          await ensureDir(dest);
+          await fs.mkdir(dest, { recursive: true });
           const entries = await fs.readdir(src);
 
           for (const entry of entries) {
-            const srcPath = path.join(src, entry);
-            const destPath = path.join(dest, entry);
-
-            await copyRecursive(srcPath, destPath);
+            await copyRecursive(path.join(src, entry), path.join(dest, entry));
           }
         } else {
-          await ensureDir(path.dirname(dest));
+          await fs.mkdir(path.dirname(dest), { recursive: true });
           await fs.copyFile(src, dest);
         }
       }
 
-      // Copy email templates
-      console.log("📁 Copiando templates de email...");
-
-      // Create target directory
-      await ensureDir("build/src/modules");
-
-      // Find all views directories
+      // Copy email templates (handlebars views used at runtime)
+      console.log("Copiando templates de email...");
       const viewDirs = globSync("src/modules/*/views", { cwd: process.cwd() });
 
       for (const viewDir of viewDirs) {
         const targetDir = path.join("build", viewDir);
-
-        // Ensure parent directory exists
-        await ensureDir(path.dirname(targetDir));
-
-        // Copy the views directory
         await copyRecursive(viewDir, targetDir);
-
-        console.log(`✅ Copiado: ${viewDir} -> ${targetDir}`);
       }
 
-      // Copy Prisma schema
-      console.log("📁 Copiando schema do Prisma...");
+      // Fix DI order: ensure reflect-metadata loads before tsyringe in all entry points
+      const entryFiles = globSync("build/**/*.js");
+      for (const file of entryFiles) {
+        let content = await fs.readFile(file, "utf8");
 
-      await ensureDir("build/prisma");
-      await fs.copyFile("prisma/schema.prisma", "build/prisma/schema.prisma");
-
-      // ✅ COPY EXCEL FILE FOR VIOLATIONS IMPORT
-      console.log("📁 Copiando arquivo Excel de infrações...");
-
-      const excelSourcePath = "tabela-codigo-infracoes-renainf-xlsx.xlsx";
-      const excelTargetPath = "build/tabela-codigo-infracoes-renainf-xlsx.xlsx";
-
-      try {
-        await fs.access(excelSourcePath); // Check if file exists
-        await fs.copyFile(excelSourcePath, excelTargetPath);
-
-        console.log(
-          `✅ Arquivo Excel copiado: ${excelSourcePath} -> ${excelTargetPath}`,
-        );
-      } catch (error) {
-        console.warn(`⚠️  Arquivo Excel não encontrado: ${excelSourcePath}`);
-        console.warn(
-          "   O seed de infrações pode falhar se o arquivo não estiver presente.",
-        );
-      }
-
-      // Intelligent dependency injection order enforcement
-      console.log("🔧 Garantindo ordem correta de DI...");
-
-      const serverPath = "build/server.js";
-      let content = await fs.readFile(serverPath, "utf8");
-
-      // Smart detection: find the FIRST occurrence of tsyringe in the file
-      const firstTsyringeMatch = content.match(
-        /(?:var|const|let).*?require\(['"]tsyringe['"]\)/,
-      );
-      const firstReflectMatch = content.match(
-        /require\(['"]reflect-metadata['"]\)/,
-      );
-
-      if (
-        firstTsyringeMatch &&
-        (!firstReflectMatch ||
-          content.indexOf(firstTsyringeMatch[0]) <
-            content.indexOf(firstReflectMatch[0]))
-      ) {
-        // Clean approach: remove ALL reflect-metadata requires
         content = content.replace(
           /require\(['"]reflect-metadata['"]\);?\s*\n?/g,
           "",
         );
+        content = content.replace(
+          /(['"])use strict\1;\s*\n/,
+          `$&require('reflect-metadata');\n`,
+        );
 
-        // Insert reflect-metadata right at the beginning, respecting the original code structure
-        const strictMatch = content.match(/(['"])use strict\1;\s*/);
-        if (strictMatch && strictMatch.index !== undefined) {
-          const insertPoint = strictMatch.index + strictMatch[0].length;
-
-          const before = content.substring(0, insertPoint);
-          const after = content.substring(insertPoint);
-
-          content =
-            before +
-            "\n// Polyfill for dependency injection\nrequire('reflect-metadata');\n" +
-            after;
-        } else {
-          // Fallback: add at the very top
-          content =
-            "// Polyfill for dependency injection\nrequire('reflect-metadata');\n" +
-            content;
-        }
-
-        await fs.writeFile(serverPath, content, "utf8");
-        console.log("✅ Ordem de DI otimizada seguindo estrutura original");
-      } else {
-        console.log("✅ Ordem de DI já respeitada");
+        await fs.writeFile(file, content, "utf8");
       }
 
-      console.log("✅ Build completed successfully!");
+      console.log("Build completed successfully!");
     } catch (error) {
-      console.error("❌ Erro ao copiar assets:", error);
+      console.error("Erro ao copiar assets:", error);
       process.exit(1);
     }
   },
-
-  // Specific configurations for development/production
   define: {
     "process.env.NODE_ENV": JSON.stringify(
       process.env.NODE_ENV || "production",
     ),
   },
-
-  // Tree-shaking enabled but controlled
   treeshake: true,
-
-  // Output Settings
   outExtension({ format }) {
-    return {
-      js: `.js`,
-    };
+    return { js: `.js` };
   },
 });
