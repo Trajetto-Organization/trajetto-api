@@ -21,14 +21,14 @@ import { authenticateUserSchema } from "@/schemas/authenticate-user-schema";
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 
-import { InvalidCredentialsError } from "../errors/invalid-credentials-error";
+import { UserInvalidCredentialsError } from "../errors/user-invalid-credentials-error";
 import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
 
 import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
 import { AppError } from "@/shared/errors/AppError";
 
 import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
-import { DriverInactiveError } from "../errors/driver-inactive-error";
+import { UserDriverInactiveError } from "../errors/user-driver-inactive-error";
 
 import { env } from "@/env";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
@@ -149,7 +149,7 @@ class AuthenticateUserUseCase {
     }
 
     if (!findUser) {
-      throw new InvalidCredentialsError();
+      throw new UserInvalidCredentialsError();
     }
 
     // Check if user is a driver and if driver is inactive
@@ -157,14 +157,14 @@ class AuthenticateUserUseCase {
       const findDriver = await this.driver.findDriverById(findUser.driverId);
 
       if (findDriver && findDriver.status === "INACTIVE") {
-        throw new DriverInactiveError();
+        throw new UserDriverInactiveError();
       }
     }
 
     const doesPasswordMatches = await compare(password, findUser.password);
 
     if (!doesPasswordMatches) {
-      throw new InvalidCredentialsError();
+      throw new UserInvalidCredentialsError();
     }
 
     const findExistingToken =

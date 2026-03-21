@@ -8,11 +8,11 @@ import { InMemoryBranchRepository } from "@/modules/branch/repositories/in-memor
 import { CreateBusinessUseCase } from "@/modules/business/usecases/create-business/create-business-usecase";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { CnpjAlreadyExistsError } from "@/modules/business/usecases/errors/cnpj-already-exists-error";
-import { CorporateReasonAlreadyExistsError } from "@/modules/business/usecases/errors/corporate-reason-already-exists-error";
+import { BusinessCnpjAlreadyExistsError } from "@/modules/business/usecases/errors/business-cnpj-already-exists-error";
+import { BusinessCorporateReasonAlreadyExistsError } from "@/modules/business/usecases/errors/business-corporate-reason-already-exists-error";
 
-import { ErpCodeAlreadyExistsError } from "@/modules/business/usecases/errors/erp-code-already-exists-error";
-import { EmailAlreadyExistsError } from "@/modules/business/usecases/errors/email-already-exists-error";
+import { BusinessErpCodeAlreadyExistsError } from "@/modules/business/usecases/errors/business-erp-code-already-exists-error";
+import { BusinessEmailAlreadyExistsError } from "@/modules/business/usecases/errors/business-email-already-exists-error";
 
 import { BranchNameAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-name-already-exists-error";
 import { BranchCnpjAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-cnpj-already-exists-error";
@@ -132,7 +132,7 @@ describe("Create Business UseCase", () => {
     await createBusiness.execute(businessData, createdUser.id);
     await expect(
       createBusiness.execute(businessData, createdUser.id),
-    ).rejects.toBeInstanceOf(CnpjAlreadyExistsError);
+    ).rejects.toBeInstanceOf(BusinessCnpjAlreadyExistsError);
   });
 
   it("should throw CorporateReasonAlreadyExistsError if business with same corporate reason exists", async () => {
@@ -180,7 +180,7 @@ describe("Create Business UseCase", () => {
     await createBusiness.execute(businessData1, createdUser.id);
     await expect(
       createBusiness.execute(businessData2, createdUser.id),
-    ).rejects.toBeInstanceOf(CorporateReasonAlreadyExistsError);
+    ).rejects.toBeInstanceOf(BusinessCorporateReasonAlreadyExistsError);
   });
 
   it("should throw ErpCodeAlreadyExistsError if business with same erp code exists", async () => {
@@ -228,7 +228,7 @@ describe("Create Business UseCase", () => {
     await createBusiness.execute(businessData1, createdUser.id);
     await expect(
       createBusiness.execute(businessData2, createdUser.id),
-    ).rejects.toBeInstanceOf(ErpCodeAlreadyExistsError);
+    ).rejects.toBeInstanceOf(BusinessErpCodeAlreadyExistsError);
   });
 
   it("should throw EmailAlreadyExistsError if business with same email exists", async () => {
@@ -274,10 +274,9 @@ describe("Create Business UseCase", () => {
     };
 
     await createBusiness.execute(businessData1, createdUser.id);
-
     await expect(
       createBusiness.execute(businessData2, createdUser.id),
-    ).rejects.toBeInstanceOf(EmailAlreadyExistsError);
+    ).rejects.toBeInstanceOf(BusinessEmailAlreadyExistsError);
   });
 
   it("should throw BranchCnpjAlreadyExistsError if branch with same cnpj exists", async () => {

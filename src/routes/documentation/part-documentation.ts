@@ -20,6 +20,17 @@ const partSchemas = {
   updatePart: updatePartSchema,
   businessIdParam: updateDeleteBusinessSchema,
   partBusinessParams: partBusinessParams,
+  searchPartCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de peças a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID da última peça da página anterior para paginação"),
+    businessId: z.string().describe("ID da empresa"),
+  }),
 };
 
 const partResponses = {
@@ -75,6 +86,14 @@ const partResponses = {
 
   partDeleted: z.object({
     message: z.string().default("Peça deletada com sucesso!"),
+  }),
+
+  searchPartStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are part objects.",
+      ),
   }),
 
   // Common Error Responses

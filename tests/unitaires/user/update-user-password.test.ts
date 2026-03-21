@@ -6,8 +6,8 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { UpdateUserPasswordUseCase } from "@/modules/user/usecases/update-user-password/update-user-password-usecase";
 
-import { UpdateUserPasswordNotMatchError } from "@/modules/user/usecases/errors/update-user-password-not-match-error";
-import { UserUpdateIsSamePasswordError } from "@/modules/user/usecases/errors/update-user-is-same-password-error";
+import { UserUpdateUserPasswordNotMatchError } from "@/modules/user/usecases/errors/user-update-user-password-not-match-error";
+import { UserUpdateUserIsSamePasswordError } from "@/modules/user/usecases/errors/user-update-user-is-same-password-error";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -90,7 +90,7 @@ describe("Update User Password UseCase", () => {
         newPassword: "newpassword@123",
         userId: user.id,
       }),
-    ).rejects.toBeInstanceOf(UpdateUserPasswordNotMatchError);
+    ).rejects.toBeInstanceOf(UserUpdateUserPasswordNotMatchError);
   });
 
   it("should throw UserUpdateIsSamePasswordError if new password is the same as current password", async () => {
@@ -112,7 +112,7 @@ describe("Update User Password UseCase", () => {
         newPassword: "password123",
         userId: user.id,
       }),
-    ).rejects.toBeInstanceOf(UserUpdateIsSamePasswordError);
+    ).rejects.toBeInstanceOf(UserUpdateUserIsSamePasswordError);
   });
 
   it("should throw an AppError if an error occurs while updating the password", async () => {

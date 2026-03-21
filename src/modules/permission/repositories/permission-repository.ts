@@ -1,6 +1,7 @@
 import database from "@/../infra/database";
 
 import {
+  BulkConfigurePermissionsProps,
   CreatePermissionProps,
   FindPermissionKeyByProfile,
   FindPermissionNameByProfile,
@@ -109,29 +110,30 @@ class PermissionRepository implements IPermissionRepository {
       ...(orConditions.length > 0 ? { OR: orConditions } : {}),
     };
 
-    const permissionData = await this.prisma.permission.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        ...(currentUserRole === "MASTER" && {
-          business: {
-            select: {
-              id: true,
-              corporate_reason: true,
+    const [permissionData, total] = await Promise.all([
+      this.prisma.permission.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          ...(currentUserRole === "MASTER" && {
+            business: {
+              select: {
+                id: true,
+                corporate_reason: true,
+              },
             },
-          },
-        }),
-        profileAccess: { select: { name: true } },
-      },
-      orderBy: {
-        created_at: "desc", // Sort by created_at
-      },
-    });
-
-    const total = await this.prisma.permission.count({
-      where: whereCondition,
-    });
+          }),
+          profileAccess: { select: { name: true } },
+        },
+        orderBy: {
+          created_at: "desc", // Sort by created_at
+        },
+      }),
+      this.prisma.permission.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return { data: permissionData, total };
   }
@@ -201,6 +203,39 @@ class PermissionRepository implements IPermissionRepository {
     });
 
     return findPermissionById;
+  }
+
+  async bulkConfigurePermissions({
+    businessId,
+    profileAccessId,
+    permissions,
+  }: BulkConfigurePermissionsProps): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.permission.deleteMany({ where: { profileAccessId, businessId } });
+
+      if (permissions.length > 0) {
+        await tx.permission.createMany({
+          data: permissions.map(({ permissionKey, canRead, canWrite }) => ({
+            action: permissionLabels[permissionKey as PermissionKey],
+            permissionKey,
+            canRead,
+            canWrite,
+            businessId,
+            profileAccessId,
+          })),
+        });
+      }
+    });
+  }
+
+  async findPermissionsByProfile(
+    profileAccessId: string,
+    businessId: string,
+  ): Promise<Permission[]> {
+    return await this.prisma.permission.findMany({
+      where: { profileAccessId, businessId },
+      orderBy: { permissionKey: "asc" },
+    });
   }
 }
 

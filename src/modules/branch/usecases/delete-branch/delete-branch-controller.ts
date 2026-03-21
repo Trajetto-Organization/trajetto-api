@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { DeleteBranchUseCase } from "./delete-branch-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "../errors/branch-not-found-error";
 import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";

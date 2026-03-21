@@ -7,7 +7,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { Branch } from "../../dtos/branch-dto";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "../errors/branch-not-found-error";
 import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";

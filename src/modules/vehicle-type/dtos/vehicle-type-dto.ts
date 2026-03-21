@@ -14,7 +14,7 @@ interface CreateVehicleTypeProps {
 }
 
 interface UpdateVehicleTypeProps {
-  description?: string;
+  description?: string | null;
   number_of_axles?: number;
   businessId?: string;
 }
@@ -29,12 +29,6 @@ interface ListVehicleTypeProps {
   total: number;
 }
 
-interface ListVehicleTypeBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
-}
-
 interface ListVehicleTypeByBusinessIdProps {
   page: number;
   pageSize: number;
@@ -43,12 +37,25 @@ interface ListVehicleTypeByBusinessIdProps {
   search?: string;
 }
 
+interface SearchVehicleTypeWithCursorProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+}
+
+interface CursorPaginatedVehicleType {
+  data: VehicleType[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export {
   VehicleType,
   CreateVehicleTypeProps,
   UpdateVehicleType,
   ListVehicleTypeProps,
   ListVehicleTypeByBusinessIdProps,
-  ListVehicleTypeBusinessProps,
   UpdateVehicleTypeProps,
+  SearchVehicleTypeWithCursorProps,
+  CursorPaginatedVehicleType,
 };

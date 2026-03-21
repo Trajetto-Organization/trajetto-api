@@ -109,38 +109,39 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const serviceOrderPartData = await this.prisma.serviceOrderPart.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        part: true,
-        business: {
-          select: {
-            corporate_reason: true,
+    const [serviceOrderPartData, total] = await Promise.all([
+      this.prisma.serviceOrderPart.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          part: true,
+          business: {
+            select: {
+              corporate_reason: true,
+            },
           },
-        },
-        serviceOrder: {
-          select: {
-            id: true,
-            date: true,
-            vehicle: {
-              select: {
-                license_plate: true,
-                description: true,
+          serviceOrder: {
+            select: {
+              id: true,
+              date: true,
+              vehicle: {
+                select: {
+                  license_plate: true,
+                  description: true,
+                },
               },
             },
           },
         },
-      },
-      orderBy: {
-        created_at: "desc", // Sort by created_at
-      },
-    });
-
-    const total = await this.prisma.serviceOrderPart.count({
-      where: whereCondition,
-    });
+        orderBy: {
+          created_at: "desc", // Sort by created_at
+        },
+      }),
+      this.prisma.serviceOrderPart.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return {
       data: serviceOrderPartData,

@@ -4,12 +4,12 @@ import { container } from "tsyringe";
 import { DeleteVehicleChecklistUseCase } from "./delete-vehicle-checklist-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleChecklistNotFoundError } from "../errors/vehicle-checklist-not-found-error";
 import { VehicleChecklistNotBelongBusinessError } from "../errors/vehicle-checklist-not-belong-business-error";
 
-import { DriverCannotDeleteChecklistError } from "../errors/driver-cannot-delete-checklist-error";
+import { VehicleChecklistDriverCannotDeleteChecklistError } from "../errors/vehicle-checklist-driver-cannot-delete-checklist-error";
 import { updateDeleteVehicleChecklistSchema } from "@/schemas/update-delete-vehicle-checklist-schema";
 
 class DeleteVehicleChecklistController {
@@ -50,7 +50,7 @@ class DeleteVehicleChecklistController {
         return reply.status(403).send({ message: error.message });
       }
 
-      if (error instanceof DriverCannotDeleteChecklistError) {
+      if (error instanceof VehicleChecklistDriverCannotDeleteChecklistError) {
         return reply.status(400).send({ message: error.message });
       }
 

@@ -8,6 +8,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
     };
 
     const result = updateDeletePartSchema.safeParse(payload);
+
     expect(result.success).toBe(true);
     expect(result.data?.partId).toBe("550e8400-e29b-41d4-a716-446655440000");
   });
@@ -18,6 +19,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
     };
 
     const result = updateDeletePartSchema.safeParse(payload);
+
     expect(result.success).toBe(true);
     expect(result.data?.partId).toBe("123e4567-e89b-12d3-a456-426614174000");
   });
@@ -33,7 +35,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
   it("should fail if partId is missing", () => {
     const payload = {};
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -44,7 +45,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: "",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -57,7 +57,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: null,
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -68,7 +67,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: undefined,
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -79,7 +77,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: "invalid-uuid-format",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -92,7 +89,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: "550e8400-e29b-41d4-a716-44665544000",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -105,7 +101,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: "550e8400-e29b-41d4-a716-4466554400000",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -118,7 +113,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: "550e8400_e29b_41d4_a716_446655440000",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -131,8 +125,8 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: "550E8400-E29B-41D4-A716-446655440000",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
+
     expect(result.success).toBe(true);
     expect(result.data?.partId).toBe("550E8400-E29B-41D4-A716-446655440000");
   });
@@ -141,7 +135,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: "550e8400-e29g-41d4-a716-446655440000",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -154,7 +147,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: "550e8400e29b41d4a716446655440000",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -167,7 +159,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: "not-a-uuid-at-all",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -180,7 +171,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: "123456789",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -193,7 +183,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: 123456789,
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -204,7 +193,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: true,
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -215,7 +203,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: ["550e8400-e29b-41d4-a716-446655440000"],
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -226,7 +213,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: { id: "550e8400-e29b-41d4-a716-446655440000" },
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -238,7 +224,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
       partId: "550e8400-e29b-41d4-a716-446655440000",
       extraField: "should not be here",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     // This should still pass because the schema only validates the partId field
@@ -250,7 +235,6 @@ describe("Update Delete Part Zod Validation Fields", () => {
     const payload = {
       partId: " 550e8400-e29b-41d4-a716-446655440000 ",
     };
-
     const result = updateDeletePartSchema.safeParse(payload);
 
     expect(result.success).toBe(false);

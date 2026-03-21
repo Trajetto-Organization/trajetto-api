@@ -4,15 +4,15 @@ import { container } from "tsyringe";
 import { CreateUserUseCase } from "./create-user-usecase";
 import { UserAlreadyExistsError } from "../errors/user-already-exists.error";
 
-import { BusinessNotFoundError } from "../errors/business-not-found-error";
-import { ProfileAccessNotFoundError } from "../errors/profile-access-not-found-error";
+import { BusinessNotFoundError } from "../../../business/usecases/errors/business-not-found-error";
+import { UserProfileAccessNotFoundError } from "../errors/user-profile-access-not-found-error";
 
 import { createUserSchema } from "@/schemas/create-user-schema";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-match-business-error";
 
-import { DriverAlreadyLinkedToUserError } from "../errors/driver-already-linked-to-user-error";
+import { UserDriverAlreadyLinkedToUserError } from "../errors/user-driver-already-linked-to-user-error";
 import { UserCannotHaveBothDriverAndProfileError } from "../errors/user-cannot-have-both-driver-and-profile-error";
 
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -46,7 +46,7 @@ class CreateUserController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof ProfileAccessNotFoundError) {
+      if (error instanceof UserProfileAccessNotFoundError) {
         return reply.status(400).send({ message: error.message });
       }
 
@@ -66,7 +66,7 @@ class CreateUserController {
         return reply.status(403).send({ message: error.message });
       }
 
-      if (error instanceof DriverAlreadyLinkedToUserError) {
+      if (error instanceof UserDriverAlreadyLinkedToUserError) {
         return reply.status(409).send({ message: error.message });
       }
 

@@ -5,7 +5,7 @@ import { ResendTwoFactorCodeUseCase } from "./resend-two-factor-code-usecase";
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 
 import { resendTwoFactorCodeSchema } from "@/schemas/resend-two-factor-code-schema";
-import { ResendTwoFactorError } from "../errors/resend-two-factor-error";
+import { UserResendTwoFactorError } from "../errors/user-resend-two-factor-error";
 
 class ResendTwoFactorCodeController {
   async handle(
@@ -29,7 +29,7 @@ class ResendTwoFactorCodeController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof ResendTwoFactorError) {
+      if (error instanceof UserResendTwoFactorError) {
         return reply.status(400).send({ message: error.message });
       }
 

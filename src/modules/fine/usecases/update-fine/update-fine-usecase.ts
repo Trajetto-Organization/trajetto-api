@@ -35,7 +35,7 @@ import { FineDueDateMustBeLaterInfractionError } from "../errors/fine-due-date-m
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { AppError } from "@/shared/errors/AppError";
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 
 @injectable()
 class UpdateFineUseCase {

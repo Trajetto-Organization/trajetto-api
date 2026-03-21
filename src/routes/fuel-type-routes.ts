@@ -6,7 +6,7 @@ import { ListFuelTypeController } from "@/modules/fuel-type/usecases/list-fuel-t
 import { UpdateFuelTypeController } from "@/modules/fuel-type/usecases/update-fuel-type/update-fuel-type-controller";
 import { DeleteFuelTypeController } from "@/modules/fuel-type/usecases/delete-fuel-type/delete-fuel-type-controller";
 
-import { ListFuelTypeBusinessController } from "@/modules/fuel-type/usecases/list-fuel-type-business/fuel-type-business-controller";
+import { SearchFuelTypeCursorController } from "@/modules/fuel-type/usecases/search-fuel-type-cursor/search-fuel-type-cursor-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -19,7 +19,7 @@ import {
 const createFuelTypeController = new CreateFuelTypeController();
 const listFuelTypeController = new ListFuelTypeController();
 
-const listFuelTypeBusinessController = new ListFuelTypeBusinessController();
+const searchFuelTypeCursorController = new SearchFuelTypeCursorController();
 
 const updateFuelTypeController = new UpdateFuelTypeController();
 const deleteFuelTypeController = new DeleteFuelTypeController();
@@ -71,25 +71,28 @@ async function fuelTypeRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-fuel-type-business",
+    "/search-fuel-type-business",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("fuel_type_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuelType"],
-        summary: "List fuel types by business",
+        summary: "Search fuel types by business (cursor-based)",
         description:
-          "Retrieve a paginated list of fuel type categories filtered by specific business with optional search functionality",
-        querystring: fuelTypeSchemas.listFuelTypeBusiness,
+          "Retrieve fuel types as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual fuel type objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: fuelTypeSchemas.searchFuelTypeCursor,
         response: {
-          200: fuelTypeResponses.fuelTypeList,
+          200: fuelTypeResponses.searchFuelTypeStreamDescription,
           400: fuelTypeResponses.listFuelTypeBusinessErrors,
           500: fuelTypeResponses.internalServerError,
         },
       },
     },
-    listFuelTypeBusinessController.handle,
+    searchFuelTypeCursorController.handle,
   );
 
   app.patch(

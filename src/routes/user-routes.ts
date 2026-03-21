@@ -24,7 +24,6 @@ import { ListUsersController } from "@/modules/user/usecases/list-users/list-use
 import { UpdateUserController } from "@/modules/user/usecases/update-user/update-user-controller";
 import { DeleteUserController } from "@/modules/user/usecases/delete-user/delete-user-controller";
 
-import { ListUserBusinessController } from "@/modules/user/usecases/list-user-business/list-user-business-controller";
 import { EmailVerificationController } from "@/modules/user/usecases/e-mail-verification/e-mail-verification-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
@@ -38,13 +37,20 @@ import { UserRevokeAccessController } from "@/modules/user/usecases/user-revoke-
 import { UploadAvatarController } from "@/modules/user/usecases/upload-avatar/upload-avatar-controller";
 import { DeleteAvatarController } from "@/modules/user/usecases/delete-avatar/delete-avatar-controller";
 
+import { CreateMasterUserController } from "@/modules/user/usecases/create-master-user/create-master-user-controller";
+import { ListMasterUsersController } from "@/modules/user/usecases/list-master-users/list-master-users-controller";
+
+import { UpdateMasterUserController } from "@/modules/user/usecases/update-master-user/update-master-user-controller";
+import { DeleteMasterUserController } from "@/modules/user/usecases/delete-master-user/delete-master-user-controller";
+
+import { SearchUserCursorController } from "@/modules/user/usecases/search-user-cursor/search-user-cursor-controller";
+
 import { userResponses, userSchemas } from "./documentation/user-documentation";
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 
 const createUserController = new CreateUserController();
 const listUsersController = new ListUsersController();
 
-const listUserBusinessController = new ListUserBusinessController();
 const authenticateUserController = new AuthenticateUserController();
 
 const forgotPasswordVerificationController =
@@ -78,6 +84,14 @@ const userRevokeAccessController = new UserRevokeAccessController();
 
 const uploadAvatarController = new UploadAvatarController();
 const deleteAvatarController = new DeleteAvatarController();
+
+const createMasterUserController = new CreateMasterUserController();
+const listMasterUsersController = new ListMasterUsersController();
+
+const updateMasterUserController = new UpdateMasterUserController();
+const deleteMasterUserController = new DeleteMasterUserController();
+
+const searchUserCursorController = new SearchUserCursorController();
 
 async function userRoutes(app: FastifyInstance) {
   app.post(
@@ -130,25 +144,28 @@ async function userRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-user-business",
+    "/search-user-business",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("user_registration_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
-        summary: "List business users",
+        summary: "Search users by business (cursor-based)",
         description:
-          "Retrieve a paginated list of users filtered by specific business with search functionality",
-        querystring: userSchemas.listUserBusiness,
+          "Retrieve users as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual user objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: userSchemas.searchUserCursor,
         response: {
-          200: userResponses.usersList,
+          200: userResponses.searchUserStreamDescription,
           400: userResponses.listUserBusinessErrors,
           500: userResponses.internalServerError,
         },
       },
     },
-    listUserBusinessController.handle,
+    searchUserCursorController.handle,
   );
 
   app.post(
@@ -547,6 +564,102 @@ async function userRoutes(app: FastifyInstance) {
       },
     },
     deleteAvatarController.handle,
+  );
+
+  // Master User Routes
+  app.post(
+    "/create-master-user",
+    {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Create a new master user",
+        description:
+          "Register a new master user account with full system access privileges. Only existing master users can perform this action.",
+        body: userSchemas.createMasterUser,
+        response: {
+          201: userResponses.masterUserCreated,
+          400: userResponses.createMasterUserErrors,
+          409: userResponses.createMasterUserConflictErrors,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    createMasterUserController.handle,
+  );
+
+  app.get(
+    "/list-master-users",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "List master users",
+        description:
+          "Retrieve a paginated list of all master users in the system with optional search functionality",
+        querystring: userSchemas.listUsers,
+        response: {
+          200: userResponses.masterUsersList,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    listMasterUsersController.handle,
+  );
+
+  app.patch(
+    "/update-master-user/:masterUserId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Update a master user",
+        description:
+          "Update an existing master user's name, email, or password. Only master users can perform this action.",
+        params: userSchemas.updateMasterUserParams,
+        body: userSchemas.updateMasterUser,
+        response: {
+          200: userResponses.masterUserUpdated,
+          400: userResponses.updateMasterUserErrors,
+          403: userResponses.updateMasterUserForbiddenErrors,
+          409: userResponses.updateMasterUserConflictErrors,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    updateMasterUserController.handle,
+  );
+
+  app.delete(
+    "/delete-master-user/:masterUserId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Delete a master user",
+        description:
+          "Permanently remove a master user account. Cannot delete yourself or the last remaining master user in the system.",
+        params: userSchemas.updateMasterUserParams,
+        response: {
+          200: userResponses.masterUserDeleted,
+          400: userResponses.deleteMasterUserErrors,
+          403: userResponses.deleteMasterUserForbiddenErrors,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    deleteMasterUserController.handle,
   );
 }
 

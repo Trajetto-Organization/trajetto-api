@@ -8,10 +8,8 @@ import { updateServiceOrderSchema } from "@/schemas/update-service-order-schema"
 import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 
-import {
-  listServiceOrderByVehicleParamsSchema,
-  listServiceOrderByVehicleQuerySchema,
-} from "@/schemas/list-service-order-by-vehicle-schema";
+import { exportReports } from "@/schemas/export-reports-schema";
+import { updateDeleteVehicleSchema } from "@/schemas/update-delete-vehicle-schema";
 
 const serviceOrderBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
@@ -22,14 +20,46 @@ const serviceOrderSchemas = {
   createServiceOrder: createServiceOrderSchema,
   listServiceOrder: listPagesSchema,
   listServiceOrderBusinessSchema: listPagesByBusinessSchema,
-  listServiceOrderByVehicleParams: listServiceOrderByVehicleParamsSchema,
-  listServiceOrderByVehicleQuery: listServiceOrderByVehicleQuerySchema,
   updateServiceOrder: updateServiceOrderSchema,
+  searchServiceOrderByVehicleParams: updateDeleteVehicleSchema,
   businessIdParam: updateDeleteBusinessSchema,
   serviceOrderBusinessParams: serviceOrderBusinessParams,
+  exportServiceOrderQuery: exportReports,
+  searchServiceOrderBusinessCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de ordens de serviço a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe(
+        "ID da última ordem de serviço da página anterior para paginação",
+      ),
+    businessId: z.string().describe("ID da empresa"),
+  }),
+  searchServiceOrderByVehicleCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de ordens de serviço a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe(
+        "ID da última ordem de serviço da página anterior para paginação",
+      ),
+  }),
 };
 
 const serviceOrderResponses = {
+  searchServiceOrderStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are service order objects.",
+      ),
+  }),
   serviceOrderCreated: z.object({
     message: z.string().default("Ordem de serviço criada com sucesso!"),
   }),

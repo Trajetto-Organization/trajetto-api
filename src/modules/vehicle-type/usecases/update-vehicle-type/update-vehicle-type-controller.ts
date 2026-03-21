@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { UpdateVehicleTypeUseCase } from "./update-vehicle-type-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleTypeNotFoundError } from "../errors/vehicle-type-not-found-error";
 import { VehicleTypeAlreadyExistsError } from "../errors/vehicle-type-already-exists-error";

@@ -6,7 +6,7 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { DeleteBusinessUseCase } from "@/modules/business/usecases/delete-business/delete-business-usecase";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
 
 let userInMemory: InMemoryUserRepository;

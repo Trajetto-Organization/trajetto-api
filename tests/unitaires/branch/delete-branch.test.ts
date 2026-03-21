@@ -7,7 +7,7 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { DeleteBranchUseCase } from "@/modules/branch/usecases/delete-branch/delete-branch-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";

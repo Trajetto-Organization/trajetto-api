@@ -6,10 +6,9 @@ import { v4 as uuidV4 } from "uuid";
 import { SendForgotPasswordMailUseCase } from "@/modules/user/usecases/send-forgot-password-mail/send-forgot-password-mail-usecase";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
-import { EmailNotFoundError } from "@/modules/user/usecases/errors/email-not-found-error";
+import { UserEmailNotFoundError } from "@/modules/user/usecases/errors/user-email-not-found-error";
 
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
-
 import { AppError } from "@/shared/errors/AppError";
 
 let userInMemory: InMemoryUserRepository;
@@ -84,7 +83,7 @@ describe("Send Forgot Password Mail UseCase", () => {
   it("should not be able to send an e-mail if user does not exists", async () => {
     await expect(
       sendForgotPasswordMailUseCase.execute("non-existing-e-mail"),
-    ).rejects.toBeInstanceOf(EmailNotFoundError);
+    ).rejects.toBeInstanceOf(UserEmailNotFoundError);
   });
 
   it("should be able to create an users token", async () => {

@@ -13,7 +13,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleTypeNotFoundError } from "@/modules/vehicle-type/usecases/errors/vehicle-type-not-found-error";
 import { FuelTypeNotFoundError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-found-error";
@@ -36,7 +36,7 @@ import { VehicleModelYearError } from "../errors/vehicle-model-year-error";
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 import { VehicleCurrentMileageCanNotBeUpdatedError } from "../errors/vehicle-current-mileage-can-not-be-updated";
 
-import { translateVehicleStatus } from "@/config/format-values";
+import { translateVehicleStatus } from "@/shared/utils/format-values";
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()

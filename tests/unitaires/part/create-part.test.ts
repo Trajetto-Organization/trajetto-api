@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { CreatePartUseCase } from "@/modules/part/usecases/create-part/create-part-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { SupplierNotFoundError } from "@/modules/supplier/usecases/errors/supplier-not-found-error";
 import { SupplierNotBelongBusinessError } from "@/modules/supplier/usecases/errors/supplier-not-belong-business-error";

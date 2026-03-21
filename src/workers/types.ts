@@ -8,4 +8,9 @@ interface WhatsAppWorkerData {
   environment: "development" | "production" | "test";
 }
 
-export { EmailWorkerData, WhatsAppWorkerData };
+interface AIVerificationWorkerData {
+  queueName: string;
+  environment: "development" | "production" | "test";
+}
+
+export { EmailWorkerData, WhatsAppWorkerData, AIVerificationWorkerData };

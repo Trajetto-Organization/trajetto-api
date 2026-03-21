@@ -5,7 +5,7 @@ interface CreateActivityProps {
   description: string; // Readable description of the action
   status: string; // Action-related status
   performedBy: string; // ID of the user who performed the action
-  businessId: string; // Company ID
+  businessId: string | null; // Company ID
   visibilityLevel?: string; // "SYSTEM", "COMPANY", "USER" - controls who can see this activity
   performingUserRole?: string; // Role of the user who performed the action
 }

@@ -1,14 +1,15 @@
-import { v4 as uuidV4 } from "uuid";
-
+import { v7 as uuidV7 } from "uuid";
 import { IProfileAccessRepository } from "../IProfile-access-repository";
+
 import {
   CreateProfileAccessProps,
   ProfileAccess,
   ListProfileAccess,
-  ListProfileBusinessProps,
   UpdateProfileAccess,
   findProfileAccessByNameAndBusiness,
   ListProfileAccessProps,
+  SearchProfileAccessWithCursorProps,
+  CursorPaginatedProfileAccess,
 } from "../../dtos/profile-access-dto";
 
 class InMemoryProfileAccessRepository implements IProfileAccessRepository {
@@ -19,7 +20,7 @@ class InMemoryProfileAccessRepository implements IProfileAccessRepository {
     businessId,
   }: CreateProfileAccessProps): Promise<ProfileAccess> {
     const newProfileAccess: ProfileAccess = {
-      id: uuidV4(),
+      id: uuidV7(),
       name,
       businessId,
     };
@@ -66,21 +67,6 @@ class InMemoryProfileAccessRepository implements IProfileAccessRepository {
     const total = filteredProfiles.length;
 
     return { data, total };
-  }
-
-  async listProfileBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListProfileBusinessProps): Promise<ListProfileAccess> {
-    const skip = (page - 1) * pageSize;
-
-    const filteredProfiles = this.profileAccess.filter(
-      (profile) => profile.businessId === businessId,
-    );
-
-    const data = filteredProfiles.slice(skip, skip + pageSize);
-    return { data, total: filteredProfiles.length };
   }
 
   async updateProfileAccess({
@@ -139,6 +125,30 @@ class InMemoryProfileAccessRepository implements IProfileAccessRepository {
     }
 
     return found;
+  }
+
+  async searchProfileAccessWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchProfileAccessWithCursorProps): Promise<CursorPaginatedProfileAccess> {
+    let filtered = this.profileAccess.filter(
+      (profile) => profile.businessId === businessId,
+    );
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((p) => p.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

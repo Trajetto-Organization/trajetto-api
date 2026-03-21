@@ -1,11 +1,4 @@
-interface CreateQuoteProps {
-  name: string;
-  company: string;
-  email: string;
-  telephone: string;
-  fleet_size: string;
-  message?: string;
-}
+type QuoteStatus = "PENDING" | "CONTACTED" | "CLOSED" | "CONVERTED";
 
 interface Quote {
   id: string;
@@ -22,8 +15,6 @@ interface Quote {
   updated_at: Date | string;
 }
 
-type QuoteStatus = "PENDING" | "CONTACTED" | "CLOSED" | "CONVERTED";
-
 interface ListQuotesProps {
   page: number;
   pageSize: number;
@@ -34,6 +25,15 @@ interface ListQuotesProps {
 interface ListQuotesResult {
   data: Quote[];
   total: number;
+}
+
+interface CreateQuoteProps {
+  name: string;
+  company: string;
+  email: string;
+  telephone: string;
+  fleet_size: string;
+  message?: string | null;
 }
 
 interface UpdateQuoteProps {

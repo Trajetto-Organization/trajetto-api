@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { DeleteFuelTypeUseCase } from "@/modules/fuel-type/usecases/delete-fuel-type/delete-fuel-type-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { FuelTypeNotFoundError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-found-error";
 import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-belong-business-error";
@@ -429,6 +429,7 @@ describe("Delete Fuel Type UseCase", () => {
         total_amount: new Decimal(275),
         odometer_photo: null,
         odometer_verified: false,
+        odometer_ai_status: "",
         notes: null,
         refueling_date: new Date("2024-01-01"),
         businessId: business.id as string,
@@ -448,6 +449,7 @@ describe("Delete Fuel Type UseCase", () => {
         total_amount: new Decimal(412.5),
         odometer_photo: null,
         odometer_verified: false,
+        odometer_ai_status: "",
         notes: null,
         refueling_date: new Date("2024-01-02"),
         businessId: business.id as string,
@@ -467,6 +469,7 @@ describe("Delete Fuel Type UseCase", () => {
         total_amount: new Decimal(330),
         odometer_photo: null,
         odometer_verified: false,
+        odometer_ai_status: "",
         notes: null,
         refueling_date: new Date("2024-01-03"),
         businessId: business.id as string,
@@ -624,6 +627,7 @@ describe("Delete Fuel Type UseCase", () => {
       total_amount: new Decimal((50 + i * 10) * 5.5),
       odometer_photo: null,
       odometer_verified: false,
+      odometer_ai_status: "",
       notes: null,
       refueling_date: new Date(`2024-01-${String(i + 1).padStart(2, "0")}`),
       businessId: business.id as string,
@@ -732,6 +736,7 @@ describe("Delete Fuel Type UseCase", () => {
         total_amount: new Decimal(275),
         odometer_photo: null,
         odometer_verified: false,
+        odometer_ai_status: "",
         notes: null,
         refueling_date: new Date("2024-01-01"),
         businessId: business.id as string,

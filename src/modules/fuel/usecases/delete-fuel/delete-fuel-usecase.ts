@@ -7,12 +7,12 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { FuelNotFoundError } from "../errors/fuel-not-found-error";
 import { FuelNotBelongBusinessError } from "../errors/fuel-not-belong-business-error";
 
-import { DriverCannotDeleteFuelError } from "../errors/driver-cannot-delete-fuel-error";
+import { FuelDriverCannotDeleteFuelError } from "../errors/fuel-driver-cannot-delete-fuel-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import { Fuel } from "../../dtos/fuel-dto";
@@ -52,7 +52,7 @@ class DeleteFuelUseCase {
 
     // Security: Drivers cannot delete fuel records
     if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
-      throw new DriverCannotDeleteFuelError();
+      throw new FuelDriverCannotDeleteFuelError();
     }
 
     // Validate business exists

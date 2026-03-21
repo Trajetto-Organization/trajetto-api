@@ -11,7 +11,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -22,7 +22,7 @@ import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
-import { VehicleMileageInvalidError } from "@/modules/fuel/usecases/errors/vehicle-mileage-invalid-error";
+import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 
 import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
 import { AppError } from "@/shared/errors/AppError";
@@ -34,6 +34,8 @@ import {
 
 import { UploadService } from "@/shared/services/upload-service";
 import { MultipartFile } from "@fastify/multipart";
+
+import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
 
 @injectable()
 class CreateVehicleChecklistUseCase {
@@ -60,6 +62,7 @@ class CreateVehicleChecklistUseCase {
     checklistData: CreateVehicleChecklistProps,
     userId: string,
     checklistPhotoFiles?: MultipartFile[],
+    photoFieldMapping?: Record<string, string[]>,
   ): Promise<VehicleChecklist> {
     const findUser = await this.user.findUserById(userId);
 
@@ -147,6 +150,7 @@ class CreateVehicleChecklistUseCase {
     try {
       // Upload checklist photos if provided
       let photoPaths: string[] = [];
+      const photoPathsByField: Record<string, string[]> = {};
 
       if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
         for (const photoFile of checklistPhotoFiles) {
@@ -157,7 +161,27 @@ class CreateVehicleChecklistUseCase {
             mimetype: photoFile.mimetype,
             uploadType: "checklistPhotos",
           });
+
           photoPaths.push(uploadResult.path);
+
+          // Build field-to-path mapping from the original field name
+          if (photoFieldMapping) {
+            for (const [fieldName, originalFilenames] of Object.entries(
+              photoFieldMapping,
+            )) {
+              if (
+                originalFilenames.includes(
+                  photoFile.filename || "checklist-photo",
+                )
+              ) {
+                if (!photoPathsByField[fieldName]) {
+                  photoPathsByField[fieldName] = [];
+                }
+
+                photoPathsByField[fieldName].push(uploadResult.path);
+              }
+            }
+          }
         }
       }
 
@@ -165,6 +189,10 @@ class CreateVehicleChecklistUseCase {
       const checklistDataWithPhotos = {
         ...checklistData,
         photos: photoPaths,
+        photos_by_field:
+          Object.keys(photoPathsByField).length > 0
+            ? photoPathsByField
+            : undefined,
       };
 
       // Create checklist record
@@ -191,6 +219,29 @@ class CreateVehicleChecklistUseCase {
         performedBy: userId,
         businessId: checklistData.businessId,
       });
+
+      // Enqueue AI verification for checklist photos (fire-and-forget)
+      // Skip if business has AI disabled (limit === 0)
+      if (
+        (findBusiness.ai_analysis_limit ?? 0) > 0 &&
+        Object.keys(photoPathsByField).length > 0
+      ) {
+        AIVerificationWorkerService.getInstance()
+          .enqueueVerification({
+            type: "checklist",
+            recordId: checklistCreated.id,
+            businessId: checklistData.businessId,
+            userId,
+            photosByField: photoPathsByField,
+            checklistData: checklistData as Record<string, any>,
+          })
+          .catch((err) =>
+            console.error(
+              "[AI] Failed to enqueue checklist verification:",
+              err,
+            ),
+          );
+      }
 
       return checklistCreated;
     } catch (error) {

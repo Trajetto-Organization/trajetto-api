@@ -3,7 +3,7 @@ import { FastifyInstance } from "fastify";
 import { CreateAccountPayableController } from "@/modules/account-payable/usecases/create-account-payable/create-account-payable-controller";
 import { ListAccountPayableController } from "@/modules/account-payable/usecases/list-account-payable/list-account-payable-controller";
 
-import { ListAccountPayableByResponsibleUserController } from "@/modules/account-payable/usecases/list-account-payable-by-responsible-user/list-account-payable-by-responsible-user-controller";
+import { SearchAccountPayableCursorController } from "@/modules/account-payable/usecases/search-account-payable-cursor/search-account-payable-cursor-controller";
 
 import { UpdateAccountPayableController } from "@/modules/account-payable/usecases/update-account-payable/update-account-payable-controller";
 import { DeleteAccountPayableController } from "@/modules/account-payable/usecases/delete-account-payable/delete-account-payable-controller";
@@ -19,8 +19,8 @@ import {
 const createAccountPayableController = new CreateAccountPayableController();
 const listAccountPayableController = new ListAccountPayableController();
 
-const listAccountPayableByResponsibleUserController =
-  new ListAccountPayableByResponsibleUserController();
+const searchAccountPayableCursorController =
+  new SearchAccountPayableCursorController();
 
 const updateAccountPayableController = new UpdateAccountPayableController();
 const deleteAccountPayableController = new DeleteAccountPayableController();
@@ -73,24 +73,27 @@ async function accountPayableRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-account-payable-by-responsible-user",
+    "/search-account-payable-by-responsible-user",
     {
       onRequest: [ensureAuthenticated],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["account-payable"],
-        summary: "List accounts payable by responsible user",
+        summary: "Search accounts payable by responsible user (cursor-based)",
         description:
-          "Retrieve a paginated list of accounts payable where the authenticated user is the responsible party (typically for drivers/employees)",
-        querystring: accountPayableSchemas.listAccountPayable,
+          "Retrieve accounts payable as NDJSON stream with cursor-based pagination where the authenticated user is the responsible party. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual account payable objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: accountPayableSchemas.searchAccountPayableCursor,
         response: {
-          200: accountPayableResponses.accountPayableList,
+          200: accountPayableResponses.searchAccountPayableStreamDescription,
           400: accountPayableResponses.listAccountPayableErrors,
           500: accountPayableResponses.internalServerError,
         },
       },
     },
-    listAccountPayableByResponsibleUserController.handle,
+    searchAccountPayableCursorController.handle,
   );
 
   app.patch(

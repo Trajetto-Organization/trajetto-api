@@ -7,7 +7,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { Business } from "../../dtos/business-dto";
 import { AppError } from "@/shared/errors/AppError";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 @injectable()
 class DeleteBusinessUseCase {

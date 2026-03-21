@@ -4,7 +4,8 @@ import {
   ListPartProps,
   ListPartByBusinessIdProps,
   UpdatePart,
-  ListPartBusinessProps,
+  SearchPartWithCursorProps,
+  CursorPaginatedPart,
 } from "../dtos/part-dto";
 
 interface IPartRepository {
@@ -12,11 +13,9 @@ interface IPartRepository {
   listParts: (
     listPartProps: ListPartByBusinessIdProps,
   ) => Promise<ListPartProps>;
-  listPartBusiness: ({
-    page,
-    pageSize,
-    businessId,
-  }: ListPartBusinessProps) => Promise<ListPartProps>;
+  searchPartWithCursor: (
+    props: SearchPartWithCursorProps,
+  ) => Promise<CursorPaginatedPart>;
   updatePart: ({ partData, partId }: UpdatePart) => Promise<Part>;
   deletePart: (partId: string) => Promise<Part>;
   findPartById: (partId: string) => Promise<Part | null>;

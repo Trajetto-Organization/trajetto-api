@@ -2,9 +2,9 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
 import { ResetUserPasswordUseCase } from "./reset-user-password-usecase";
-import { InvalidTokenError } from "../errors/invalid-token-error";
+import { UserInvalidTokenError } from "../errors/user-invalid-token-error";
 
-import { ExpiredTokenError } from "../errors/expired-token-error";
+import { UserExpiredTokenError } from "../errors/user-expired-token-error";
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 
 import { forgotPasswordSchema } from "@/schemas/forgot-password-schema";
@@ -32,11 +32,11 @@ class ResetUserPasswordController {
         .status(200)
         .send({ message: "Senha redefinida com sucesso!" });
     } catch (error) {
-      if (error instanceof InvalidTokenError) {
+      if (error instanceof UserInvalidTokenError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof ExpiredTokenError) {
+      if (error instanceof UserExpiredTokenError) {
         return reply.status(400).send({ message: error.message });
       }
 

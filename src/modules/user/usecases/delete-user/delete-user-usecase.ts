@@ -4,16 +4,18 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
-import { User, UserRole } from "../../dtos/user-dto";
+import { sendSecurityEventToUser } from "@/websocket";
 
 import { UserCannotBeDeletedByHimselfError } from "../errors/user-cannot-be-deleted-by-himself-error";
 import { IServiceOrderRepository } from "@/modules/service-order/repositories/IService-order-repository";
 
 import { UserHasAssociatedServiceOrdersError } from "../errors/user-has-associated-service-orders-error";
-import { AppError } from "@/shared/errors/AppError";
+import { UserHasAssociatedAccountPayablesError } from "../errors/user-has-associated-account-payables-error";
 
 import { IAccountPayableRepository } from "@/modules/account-payable/repositories/IAccount-payable-repository";
-import { UserHasAssociatedAccountPayablesError } from "../errors/user-has-associated-account-payables-error";
+
+import { AppError } from "@/shared/errors/AppError";
+import { User, UserRole } from "../../dtos/user-dto";
 
 interface DeleteUserProps {
   userId: string;
@@ -93,6 +95,7 @@ class DeleteUserUseCase {
 
     try {
       const userDeleted = await this.user.deleteUser(userId);
+      sendSecurityEventToUser(userId, { reason: "access_denied" });
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

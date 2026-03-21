@@ -4,10 +4,10 @@ import { hash } from "bcrypt";
 import { CreateUserUseCase } from "@/modules/user/usecases/create-user/create-user-usecase";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { ProfileAccessNotFoundError } from "@/modules/user/usecases/errors/profile-access-not-found-error";
+import { UserProfileAccessNotFoundError } from "@/modules/user/usecases/errors/user-profile-access-not-found-error";
 import { UserProfileNotMatchBusinessError } from "@/modules/user/usecases/errors/user-profile-not-match-business-error";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 import { UserAlreadyExistsError } from "@/modules/user/usecases/errors/user-already-exists.error";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
@@ -227,7 +227,7 @@ describe("Create User UseCase", () => {
         },
         adminUser.id,
       ),
-    ).rejects.toBeInstanceOf(ProfileAccessNotFoundError);
+    ).rejects.toBeInstanceOf(UserProfileAccessNotFoundError);
   });
 
   it("should throw UserProfileNotMatchBusinessError if profile access business does not match", async () => {

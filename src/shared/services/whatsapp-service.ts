@@ -20,6 +20,7 @@ class WhatsAppService {
     if (!WhatsAppService.instance) {
       WhatsAppService.instance = new WhatsAppService();
     }
+
     return WhatsAppService.instance;
   }
 

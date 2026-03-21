@@ -5,7 +5,7 @@ import { ReorderKanbanColumnsUseCase } from "./reorder-columns-usecase";
 import { reorderKanbanColumnsSchema } from "@/schemas/reorder-kanban-columns-schema";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { KanbanNotAllowedReorderColumnBusinessError } from "../errors/kanban-not-allowed-reorder-column-business-error";
 import { KanbanOneOrMoreColumnNotBelongBusinessError } from "../errors/kanban-one-or-more-column-not-belong-business-error";

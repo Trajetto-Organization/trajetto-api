@@ -9,13 +9,13 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { UpdateBusinessUseCase } from "@/modules/business/usecases/update-business/update-business-usecase";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
-import { CnpjAlreadyExistsError } from "@/modules/business/usecases/errors/cnpj-already-exists-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+import { BusinessCnpjAlreadyExistsError } from "@/modules/business/usecases/errors/business-cnpj-already-exists-error";
 
-import { CorporateReasonAlreadyExistsError } from "@/modules/business/usecases/errors/corporate-reason-already-exists-error";
-import { ErpCodeAlreadyExistsError } from "@/modules/business/usecases/errors/erp-code-already-exists-error";
+import { BusinessCorporateReasonAlreadyExistsError } from "@/modules/business/usecases/errors/business-corporate-reason-already-exists-error";
+import { BusinessErpCodeAlreadyExistsError } from "@/modules/business/usecases/errors/business-erp-code-already-exists-error";
 
-import { EmailAlreadyExistsError } from "@/modules/business/usecases/errors/email-already-exists-error";
+import { BusinessEmailAlreadyExistsError } from "@/modules/business/usecases/errors/business-email-already-exists-error";
 import { BranchNameAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-name-already-exists-error";
 
 import { BranchCnpjAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-cnpj-already-exists-error";
@@ -245,7 +245,7 @@ describe("Update Business UseCase", () => {
         businessId: business2.id as string,
         userId: user.id,
       }),
-    ).rejects.toBeInstanceOf(CnpjAlreadyExistsError);
+    ).rejects.toBeInstanceOf(BusinessCnpjAlreadyExistsError);
   });
 
   it("should throw CorporateReasonAlreadyExistsError if updated corporate_reason already exists on another business", async () => {
@@ -297,7 +297,7 @@ describe("Update Business UseCase", () => {
         businessId: business2.id as string,
         userId: user.id,
       }),
-    ).rejects.toBeInstanceOf(CorporateReasonAlreadyExistsError);
+    ).rejects.toBeInstanceOf(BusinessCorporateReasonAlreadyExistsError);
   });
 
   it("should throw ErpCodeAlreadyExistsError if updated erp_code already exists on another business", async () => {
@@ -349,7 +349,7 @@ describe("Update Business UseCase", () => {
         businessId: business2.id as string,
         userId: user.id,
       }),
-    ).rejects.toBeInstanceOf(ErpCodeAlreadyExistsError);
+    ).rejects.toBeInstanceOf(BusinessErpCodeAlreadyExistsError);
   });
 
   it("should throw EmailAlreadyExistsError if updated email already exists on another business", async () => {
@@ -401,7 +401,7 @@ describe("Update Business UseCase", () => {
         businessId: business2.id as string,
         userId: user.id,
       }),
-    ).rejects.toBeInstanceOf(EmailAlreadyExistsError);
+    ).rejects.toBeInstanceOf(BusinessEmailAlreadyExistsError);
   });
 
   it("should throw BranchCnpjAlreadyExistsError if branch with same cnpj exists (but not matrix branch)", async () => {

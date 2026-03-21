@@ -7,12 +7,15 @@ import {
   ListUsers,
   UpdateUser,
   ListUsersByRoleAndBusinessProps,
-  ListUserBusinessProps,
   UpdateUserEmailVerification,
   UpdateUserAccessRevocation,
   UpdateUserWhatsAppSettings,
   UpdateEmailNotifications,
   UpdateActivityNotifications,
+  CreateMasterUserProps,
+  ListMasterUsersProps,
+  SearchUserWithCursorProps,
+  CursorPaginatedUser,
 } from "../dtos/user-dto";
 
 interface IUserRepository {
@@ -20,11 +23,6 @@ interface IUserRepository {
   listUsers: (
     listUsersProps: ListUsersByRoleAndBusinessProps,
   ) => Promise<ListUsers>;
-  listUserBusiness: ({
-    page,
-    pageSize,
-    businessId,
-  }: ListUserBusinessProps) => Promise<ListUsers>;
   updateEmailVerification: ({
     email,
     email_verified,
@@ -87,6 +85,11 @@ interface IUserRepository {
     userId: string,
     avatarPath: string | null,
   ) => Promise<User | null>;
+  createMasterUser: (data: CreateMasterUserProps) => Promise<User>;
+  listMasterUsers: (props: ListMasterUsersProps) => Promise<ListUsers>;
+  searchUserWithCursor: (
+    props: SearchUserWithCursorProps,
+  ) => Promise<CursorPaginatedUser>;
 }
 
 export { IUserRepository };

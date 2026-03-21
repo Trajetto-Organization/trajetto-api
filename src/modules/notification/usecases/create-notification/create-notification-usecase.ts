@@ -4,7 +4,6 @@ import { INotificationRepository } from "../../repositories/INotification-reposi
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-
 import {
   Notification,
   CreateNotificationProps,

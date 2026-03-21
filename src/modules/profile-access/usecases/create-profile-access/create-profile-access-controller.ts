@@ -5,7 +5,7 @@ import { createProfileAccessSchema } from "@/schemas/create-profile-access";
 import { CreateProfileAccessUseCase } from "./create-profile-access-usecase";
 
 import { ProfileAccessAlreadyExistsError } from "../errors/profile-access-already-exists-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 

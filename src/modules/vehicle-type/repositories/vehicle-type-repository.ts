@@ -7,7 +7,8 @@ import {
   ListVehicleTypeByBusinessIdProps,
   ListVehicleTypeProps,
   UpdateVehicleType,
-  ListVehicleTypeBusinessProps,
+  SearchVehicleTypeWithCursorProps,
+  CursorPaginatedVehicleType,
 } from "../dtos/vehicle-type-dto";
 
 class VehicleTypeRepository implements IVehicleTypeRepository {
@@ -66,54 +67,31 @@ class VehicleTypeRepository implements IVehicleTypeRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const vehicleTypeData = await this.prisma.vehicleType.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
+    const [vehicleTypeData, total] = await Promise.all([
+      this.prisma.vehicleType.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
           },
         },
-      },
-      orderBy: {
-        created_at: "desc",
-      },
-    });
-
-    const total = await this.prisma.vehicleType.count({
-      where: whereCondition,
-    });
+        orderBy: {
+          created_at: "desc",
+        },
+      }),
+      this.prisma.vehicleType.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return {
       data: vehicleTypeData,
       total,
     };
-  }
-
-  async listVehicleTypeBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListVehicleTypeBusinessProps): Promise<ListVehicleTypeProps> {
-    const skip = (page - 1) * pageSize;
-
-    const vehicleTypeBusinessData = await this.prisma.vehicleType.findMany({
-      skip,
-      take: pageSize,
-      where: {
-        businessId,
-      },
-    });
-
-    const total = await this.prisma.vehicleType.count({
-      where: {
-        businessId,
-      },
-    });
-
-    return { data: vehicleTypeBusinessData, total };
   }
 
   async updateVehicleType({
@@ -188,6 +166,26 @@ class VehicleTypeRepository implements IVehicleTypeRepository {
       });
 
     return findVehicleTypeByDescription;
+  }
+
+  async searchVehicleTypeWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchVehicleTypeWithCursorProps): Promise<CursorPaginatedVehicleType> {
+    const items = await this.prisma.vehicleType.findMany({
+      where: { businessId },
+      take: limit + 1,
+      ...(cursor && { cursor: { id: cursor }, skip: 1 }),
+      orderBy: { created_at: "desc" },
+    });
+
+    const hasMore = items.length > limit;
+
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

@@ -3,9 +3,10 @@ import {
   findProfileAccessByNameAndBusiness,
   ListProfileAccess,
   ListProfileAccessProps,
-  ListProfileBusinessProps,
   ProfileAccess,
   UpdateProfileAccess,
+  SearchProfileAccessWithCursorProps,
+  CursorPaginatedProfileAccess,
 } from "../dtos/profile-access-dto";
 
 interface IProfileAccessRepository {
@@ -16,11 +17,9 @@ interface IProfileAccessRepository {
   listProfileAccess: (
     profileAccess: ListProfileAccessProps,
   ) => Promise<ListProfileAccess>;
-  listProfileBusiness: ({
-    page,
-    pageSize,
-    businessId,
-  }: ListProfileBusinessProps) => Promise<ListProfileAccess>;
+  searchProfileAccessWithCursor: (
+    props: SearchProfileAccessWithCursorProps,
+  ) => Promise<CursorPaginatedProfileAccess>;
   updateProfileAccess: (
     profileAccessData: UpdateProfileAccess,
   ) => Promise<ProfileAccess>;

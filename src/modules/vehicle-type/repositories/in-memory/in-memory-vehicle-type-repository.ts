@@ -1,13 +1,14 @@
-import { v4 as uuidV4 } from "uuid";
-
+import { v7 as uuidV7 } from "uuid";
 import { IVehicleTypeRepository } from "../IVehicle-type-repository";
+
 import {
   VehicleType,
   CreateVehicleTypeProps,
   ListVehicleTypeProps,
   ListVehicleTypeByBusinessIdProps,
   UpdateVehicleType,
-  ListVehicleTypeBusinessProps,
+  SearchVehicleTypeWithCursorProps,
+  CursorPaginatedVehicleType,
 } from "../../dtos/vehicle-type-dto";
 
 class InMemoryVehicleTypeRepository implements IVehicleTypeRepository {
@@ -17,7 +18,7 @@ class InMemoryVehicleTypeRepository implements IVehicleTypeRepository {
     vehicleTypeData: CreateVehicleTypeProps,
   ): Promise<VehicleType> {
     const newVehicleType: VehicleType = {
-      id: uuidV4(),
+      id: uuidV7(),
       description: vehicleTypeData.description,
       number_of_axles: vehicleTypeData.number_of_axles,
       businessId: vehicleTypeData.businessId,
@@ -45,22 +46,6 @@ class InMemoryVehicleTypeRepository implements IVehicleTypeRepository {
         vehicleType.description.toLowerCase().includes(searchTerm),
       );
     }
-
-    const skip = (page - 1) * pageSize;
-    const data = filteredVehicleTypes.slice(skip, skip + pageSize);
-
-    const total = filteredVehicleTypes.length;
-    return { data, total };
-  }
-
-  async listVehicleTypeBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListVehicleTypeBusinessProps): Promise<ListVehicleTypeProps> {
-    const filteredVehicleTypes = this.vehicleTypes.filter(
-      (vehicleType) => vehicleType.businessId === businessId,
-    );
 
     const skip = (page - 1) * pageSize;
     const data = filteredVehicleTypes.slice(skip, skip + pageSize);
@@ -144,6 +129,29 @@ class InMemoryVehicleTypeRepository implements IVehicleTypeRepository {
     );
 
     return vehicleType || null;
+  }
+  async searchVehicleTypeWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchVehicleTypeWithCursorProps): Promise<CursorPaginatedVehicleType> {
+    let filtered = this.vehicleTypes.filter(
+      (vt) => vt.businessId === businessId,
+    );
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((vt) => vt.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

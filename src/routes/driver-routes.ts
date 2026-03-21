@@ -6,7 +6,8 @@ import { ListDriverController } from "@/modules/driver/usecases/list-driver/list
 import { UpdateDriverController } from "@/modules/driver/usecases/update-driver/update-driver-controller";
 import { DeleteDriverController } from "@/modules/driver/usecases/delete-driver/delete-driver-controller";
 
-import { ListDriverBusinessController } from "@/modules/driver/usecases/list-driver-business/list-driver-business-controller";
+import { ExportDriverController } from "@/modules/driver/usecases/export-driver/export-driver-controller";
+import { SearchDriverCursorController } from "@/modules/driver/usecases/search-driver-cursor/search-driver-cursor-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -19,7 +20,8 @@ import {
 const createDriverController = new CreateDriverController();
 const listDriverController = new ListDriverController();
 
-const listDriverBusinessController = new ListDriverBusinessController();
+const exportDriverController = new ExportDriverController();
+const searchDriverCursorController = new SearchDriverCursorController();
 
 const updateDriverController = new UpdateDriverController();
 const deleteDriverController = new DeleteDriverController();
@@ -72,25 +74,45 @@ async function driverRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-driver-business",
+    "/export-driver",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("driver_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        summary: "List drivers by business",
+        summary: "Export driver records (CSV or Excel)",
         description:
-          "Retrieve a paginated list of drivers filtered by specific business with optional search and pagination controls",
-        querystring: driverSchemas.listDriverBusiness,
+          "Export driver records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
+        querystring: driverSchemas.exportDriverQuery,
+      },
+    },
+    exportDriverController.handle,
+  );
+
+  app.get(
+    "/search-driver-business",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("driver_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["driver"],
+        summary: "Search drivers by business (cursor-based)",
+        description:
+          "Retrieve drivers as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual driver objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: driverSchemas.searchDriverCursor,
         response: {
-          200: driverResponses.driverList,
+          200: driverResponses.searchDriverStreamDescription,
           400: driverResponses.listDriverBusinessErrors,
           500: driverResponses.internalServerError,
         },
       },
     },
-    listDriverBusinessController.handle,
+    searchDriverCursorController.handle,
   );
 
   app.patch(

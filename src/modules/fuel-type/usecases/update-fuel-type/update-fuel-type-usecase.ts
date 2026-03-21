@@ -7,7 +7,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { FuelTypeAlreadyExistsError } from "../errors/fuel-type-already-exists-error";

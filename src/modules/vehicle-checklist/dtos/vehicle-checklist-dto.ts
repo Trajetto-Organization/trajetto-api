@@ -1,3 +1,5 @@
+import { JsonValue } from "@prisma/client/runtime/library";
+
 interface VehicleChecklist {
   id: string;
   current_mileage: number;
@@ -28,6 +30,10 @@ interface VehicleChecklist {
   spare_tire_condition: string;
   notes?: string | null;
   photos: string[];
+  photos_by_field?: JsonValue;
+  ai_verification_status: string;
+  ai_verification_details?: any;
+  ai_verified_at?: Date | string | null;
   overall_condition: string;
   businessId: string;
   branchId: string;
@@ -66,6 +72,7 @@ interface CreateVehicleChecklistProps {
   spare_tire_condition: string;
   notes?: string | null;
   photos?: string[];
+  photos_by_field?: Record<string, string[]>;
   overall_condition: string;
   businessId: string;
   branchId?: string; // Optional for driver users (auto-populated)
@@ -116,12 +123,6 @@ interface UpdateVehicleChecklist {
 interface ListVehicleChecklistProps {
   data: VehicleChecklist[];
   total: number;
-}
-
-interface ListVehicleChecklistBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
 }
 
 interface ListVehicleChecklistByBusinessIdProps {
@@ -211,7 +212,6 @@ export {
   UpdateVehicleChecklist,
   ListVehicleChecklistProps,
   ListVehicleChecklistByBusinessIdProps,
-  ListVehicleChecklistBusinessProps,
   GetVehicleChecklistByIdAndBusinessProps,
   VehicleChecklistWithRelations,
 };

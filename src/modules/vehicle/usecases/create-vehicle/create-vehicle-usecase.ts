@@ -16,7 +16,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { VehicleAlreadyExistsError } from "../errors/vehicle-already-exists-error";
 
 import { VehicleTypeNotFoundError } from "@/modules/vehicle-type/usecases/errors/vehicle-type-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { FuelTypeNotFoundError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-found-error";
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -30,7 +30,7 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 
 import { AppError } from "@/shared/errors/AppError";
-import { translateVehicleStatus } from "@/config/format-values";
+import { translateVehicleStatus } from "@/shared/utils/format-values";
 
 import { Vehicle, CreateVehicleProps } from "../../dtos/vehicle-dto";
 import { VehicleModelYearError } from "../errors/vehicle-model-year-error";

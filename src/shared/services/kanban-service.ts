@@ -4,7 +4,7 @@ import { IKanbanRepository } from "@/modules/kanban/repositories/IKanban-reposit
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { NotificationService } from "@/shared/services/notification-service";
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 
 import { redirectPage } from "@/shared/utils/link-redirect-page";
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";

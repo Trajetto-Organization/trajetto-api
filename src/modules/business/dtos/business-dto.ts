@@ -33,6 +33,9 @@ interface Business {
   responsible_name: string;
   telephone: string;
   email: string;
+  ai_analysis_limit?: number;
+  ai_analysis_used?: number;
+  ai_analysis_reset_at?: Date;
 }
 
 interface UpdateBusinessProps {
@@ -66,6 +69,19 @@ interface ListBusinessByBusinessIdProps {
   search?: string;
 }
 
+interface SearchBusinessWithCursorProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+  currentUserRole: UserRole;
+}
+
+interface CursorPaginatedBusiness {
+  data: Business[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 interface UpdateBusiness {
   businessData: UpdateBusinessProps;
   businessId: string;
@@ -78,4 +94,6 @@ export {
   UpdateBusiness,
   UpdateBusinessProps,
   ListBusinessByBusinessIdProps,
+  SearchBusinessWithCursorProps,
+  CursorPaginatedBusiness,
 };

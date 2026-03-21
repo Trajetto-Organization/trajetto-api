@@ -27,7 +27,7 @@ import { TrafficViolationCode } from "../../dtos/traffic-violation-code-dto";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
 
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -36,7 +36,7 @@ import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-
 import { FineDateInfractionCannotBeFutureError } from "../errors/fine-date-infraction-cannot-be-future-error";
 import { FineDueDateMustBeAfterInfractionError } from "../errors/fine-due-date-must-be-after-infraction-error";
 
-import { formatCurrency, formatDate } from "@/config/format-values";
+import { formatCurrency, formatDate } from "@/shared/utils/format-values";
 import { TrafficViolationCodeNotFoundError } from "../errors/traffic-violation-code-not-found-error";
 
 import { FinePaymentDateCannotBeEarlierInfractionError } from "../errors/fine-payment-date-cannot-be-earlier-infraction-error";

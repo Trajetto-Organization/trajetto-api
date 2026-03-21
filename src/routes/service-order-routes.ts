@@ -6,8 +6,10 @@ import { ListServiceOrderController } from "@/modules/service-order//usecases/li
 import { UpdateServiceOrderController } from "@/modules/service-order//usecases/update-service-order/update-service-order-controller";
 import { DeleteServiceOrderController } from "@/modules/service-order//usecases/delete-service-order/delete-service-order-controller";
 
-import { ListServiceOrderBusinessController } from "@/modules/service-order/usecases/list-service-order-business/list-service-order-business-controller";
-import { ListServiceOrderByVehicleController } from "@/modules/service-order/usecases/list-service-order-by-vehicle/list-service-order-by-vehicle-controller";
+import { SearchServiceOrderCursorController } from "@/modules/service-order/usecases/search-service-order-cursor/search-service-order-cursor-controller";
+import { SearchServiceOrderByVehicleCursorController } from "@/modules/service-order/usecases/search-service-order-by-vehicle-cursor/search-service-order-by-vehicle-cursor-controller";
+
+import { ExportServiceOrderController } from "@/modules/service-order/usecases/export-service-order/export-service-order-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -20,11 +22,12 @@ import {
 const createServiceOrderController = new CreateServiceOrderController();
 const listServiceOrderController = new ListServiceOrderController();
 
-const listServiceOrderBusinessController =
-  new ListServiceOrderBusinessController();
+const searchServiceOrderCursorController =
+  new SearchServiceOrderCursorController();
+const searchServiceOrderByVehicleCursorController =
+  new SearchServiceOrderByVehicleCursorController();
 
-const listServiceOrderByVehicleController =
-  new ListServiceOrderByVehicleController();
+const exportServiceOrderController = new ExportServiceOrderController();
 
 const updateServiceOrderController = new UpdateServiceOrderController();
 const deleteServiceOrderController = new DeleteServiceOrderController();
@@ -76,25 +79,72 @@ async function serviceOrderRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-service-order-business",
+    "/export-service-order",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("service_order_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
-        summary: "List service orders by business",
+        summary: "Export service order records (CSV or Excel)",
         description:
-          "Retrieve a paginated list of service orders filtered by specific business with search capabilities",
-        querystring: serviceOrderSchemas.listServiceOrderBusinessSchema,
+          "Export service order records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
+        querystring: serviceOrderSchemas.exportServiceOrderQuery,
+      },
+    },
+    exportServiceOrderController.handle,
+  );
+
+  app.get(
+    "/search-service-order-business",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("service_order_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["service-order"],
+        summary: "Search service orders by business (cursor-based)",
+        description:
+          "Retrieve service orders as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual service order objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: serviceOrderSchemas.searchServiceOrderBusinessCursor,
         response: {
-          200: serviceOrderResponses.serviceOrderList,
+          200: serviceOrderResponses.searchServiceOrderStreamDescription,
           400: serviceOrderResponses.listServiceOrderBusinessErrors,
           500: serviceOrderResponses.internalServerError,
         },
       },
     },
-    listServiceOrderBusinessController.handle,
+    searchServiceOrderCursorController.handle,
+  );
+
+  app.get(
+    "/search-service-order-by-vehicle/:vehicleId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("service_order_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["service-order"],
+        summary: "Search service orders by vehicle (cursor-based)",
+        description:
+          "Retrieve service orders for a specific vehicle as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual service order objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        params: serviceOrderSchemas.searchServiceOrderByVehicleParams,
+        querystring: serviceOrderSchemas.searchServiceOrderByVehicleCursor,
+        response: {
+          200: serviceOrderResponses.searchServiceOrderStreamDescription,
+          400: serviceOrderResponses.listServiceOrderByVehicleErrors,
+          403: serviceOrderResponses.vehicleNotBelongBusiness,
+          500: serviceOrderResponses.internalServerError,
+        },
+      },
+    },
+    searchServiceOrderByVehicleCursorController.handle,
   );
 
   app.patch(
@@ -118,30 +168,6 @@ async function serviceOrderRoutes(app: FastifyInstance) {
       },
     },
     updateServiceOrderController.handle,
-  );
-
-  app.get(
-    "/list-service-order-by-vehicle/:vehicleId",
-    {
-      onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("service_order_manage", "read")],
-      schema: {
-        security: [{ bearerAuth: [] }],
-        tags: ["service-order"],
-        summary: "List service orders by vehicle",
-        description:
-          "Retrieve a paginated list of vehicle service orders for a specific vehicle",
-        params: serviceOrderSchemas.listServiceOrderByVehicleParams,
-        querystring: serviceOrderSchemas.listServiceOrderByVehicleQuery,
-        response: {
-          200: serviceOrderResponses.serviceOrderList,
-          400: serviceOrderResponses.listServiceOrderByVehicleErrors,
-          403: serviceOrderResponses.vehicleNotBelongBusiness,
-          500: serviceOrderResponses.internalServerError,
-        },
-      },
-    },
-    listServiceOrderByVehicleController.handle,
   );
 
   app.delete(

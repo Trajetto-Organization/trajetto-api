@@ -20,9 +20,27 @@ const vehicleTypeSchemas = {
   updateVehicleType: updateVehicleTypeSchema,
   businessIdParam: updateDeleteBusinessSchema,
   vehicleTypeBusinessParams: vehicleTypeBusinessParams,
+  searchVehicleTypeCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de empresas a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID da última empresa da página anterior para paginação"),
+    businessId: z.string().describe("ID da empresa"),
+  }),
 };
 
 const vehicleTypeResponses = {
+  searchVehicleTypeStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are vehicle type objects.",
+      ),
+  }),
   vehicleTypeCreated: z.object({
     message: z.string().default("Tipo de veículo criado com sucesso!"),
   }),

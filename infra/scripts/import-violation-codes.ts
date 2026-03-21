@@ -1,7 +1,7 @@
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs"; // If you get an error, try: import * as ExcelJS from "exceljs";
 import { ViolationGravity } from "@prisma/client";
 
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 import database from "../database";
@@ -16,10 +16,7 @@ interface ViolationData {
   competentAgency: string;
 }
 
-class ImportViolationCodesService {
-  /**
-   * Maps file severity to database enum
-   */
+class ImportViolationCodes {
   private mapGravityToEnum(gravity: string): ViolationGravity {
     const normalizedGravity = gravity.trim().toLowerCase();
 
@@ -43,9 +40,6 @@ class ImportViolationCodesService {
     return ViolationGravity.NO_POINTS;
   }
 
-  /**
-   * Maps severity to points on the driver's license
-   */
   private mapGravityToPoints(gravity: string): number {
     const normalizedGravity = gravity.trim().toLowerCase();
 
@@ -70,59 +64,85 @@ class ImportViolationCodesService {
   }
 
   /**
-   * Reads and processes the Excel file
+   * Helper to safely extract text from an ExcelJS cell
    */
-  private readExcelFile(filePath: string): ViolationData[] {
+  private getCellText(cell: ExcelJS.Cell | undefined): string {
+    if (!cell) return "";
+    const v = cell.value;
+    if (v == null) return "";
+    // if it's a rich object (e.g. {text: 'x'}), date, or formula result, try to convert
+    if (typeof v === "object") {
+      // ExcelJS richer types: { text: '...' } or Date objects
+      if ("text" in v && typeof (v as any).text === "string")
+        return (v as any).text.trim();
+
+      if (v instanceof Date) return v.toISOString();
+      if ("richText" in v)
+        return (v as any).richText
+          .map((r: any) => r.text)
+          .join("")
+          .trim();
+
+      // fallback: JSON stringify then toString
+      return String(v).trim();
+    }
+    return String(v).trim();
+  }
+
+  /**
+   * Reads and processes the Excel file using exceljs (async)
+   */
+  private async readExcelFile(filePath: string): Promise<ViolationData[]> {
     try {
-      console.log(`📖 Lendo arquivo Excel: ${filePath}`);
+      console.log(`📖 Lendo arquivo Excel (exceljs): ${filePath}`);
 
       if (!existsSync(filePath)) {
         throw new Error(`Arquivo Excel não encontrado: ${filePath}`);
       }
 
-      const fileBuffer = readFileSync(filePath);
-      const workbook = XLSX.read(fileBuffer, {
-        cellStyles: true,
-        cellFormula: true,
-        cellDates: true,
-        cellNF: true,
-        sheetStubs: true,
-      });
+      const workbook = new ExcelJS.Workbook();
+      // leitura assíncrona do arquivo
+      await workbook.xlsx.readFile(filePath);
 
-      const firstSheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[firstSheetName];
-
-      // Convert to JSON, ignoring the first line (header)
-      const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-      const dataRows = rawData.slice(1) as any[];
-
-      console.log(`📊 Total de linhas encontradas: ${dataRows.length}`);
+      const worksheet = workbook.worksheets[0];
+      if (!worksheet) {
+        console.warn("⚠️  Nenhuma planilha encontrada no arquivo.");
+        return [];
+      }
 
       const violationData: ViolationData[] = [];
+      let rowIndex = 0;
 
-      dataRows.forEach((row, index) => {
+      worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+        rowIndex = rowNumber;
+        // pula cabeçalho (assumindo que cabeçalho é a primeira linha)
+        if (rowNumber === 1) return;
+
         try {
-          // Validate if the line has essential data
-          if (!row[0] || !row[2]) {
+          const codeText = this.getCellText(row.getCell(1));
+          const descriptionText = this.getCellText(row.getCell(3));
+
+          // valida campos essenciais
+          if (!codeText || !descriptionText) {
             console.warn(
-              `⚠️  Linha ${index + 2} ignorada - dados insuficientes`,
+              `⚠️  Linha ${rowNumber} ignorada - dados insuficientes`,
             );
             return;
           }
 
           const violation: ViolationData = {
-            code: String(row[0]).trim(),
-            subCode: Number(row[1]) || 0,
-            description: String(row[2]).trim(),
-            legalBasis: String(row[3] || "").trim(),
-            violatorType: String(row[4] || "").trim(),
-            gravity: String(row[5] || "---").trim(),
-            competentAgency: String(row[6] || "").trim(),
+            code: codeText,
+            subCode: Number(this.getCellText(row.getCell(2))) || 0,
+            description: descriptionText,
+            legalBasis: this.getCellText(row.getCell(4)) || "",
+            violatorType: this.getCellText(row.getCell(5)) || "",
+            gravity: this.getCellText(row.getCell(6)) || "---",
+            competentAgency: this.getCellText(row.getCell(7)) || "",
           };
 
           violationData.push(violation);
         } catch (error) {
-          console.error(`❌ Erro ao processar linha ${index + 2}:`, error);
+          console.error(`❌ Erro ao processar linha ${rowNumber}:`, error);
         }
       });
 
@@ -134,14 +154,10 @@ class ImportViolationCodesService {
     }
   }
 
-  /**
-   * Imports data into the database
-   */
   async importToDatatabase(violationData: ViolationData[]): Promise<void> {
     console.log("💾 Iniciando importação para o banco de dados...");
 
     try {
-      // ✅ CHECK EQUAL TO SEED.TS - Checks if data already exists
       const existingCount = await database.trafficViolationCode.count();
       if (existingCount > 0) {
         console.log(
@@ -150,7 +166,6 @@ class ImportViolationCodesService {
         return;
       }
 
-      // Prepare data for batch insertion
       const dataToInsert = violationData.map((violation) => ({
         code: violation.code,
         sub_code: violation.subCode,
@@ -163,7 +178,6 @@ class ImportViolationCodesService {
         competent_agency: violation.competentAgency,
       }));
 
-      // Insert in batches for better performance
       const batchSize = 50;
       let insertedCount = 0;
 
@@ -192,8 +206,8 @@ class ImportViolationCodesService {
         `🎉 Importação concluída! ${insertedCount} códigos de infração importados`,
       );
 
-      // Statistics
       const stats = await this.getImportStats();
+
       console.log("\n📊 Estatísticas da importação:");
       console.log(`Total de códigos: ${stats.total}`);
       console.log(`Infrações leves: ${stats.light}`);
@@ -207,9 +221,6 @@ class ImportViolationCodesService {
     }
   }
 
-  /**
-   * Get statistics from imported data
-   */
   private async getImportStats() {
     const [total, light, medium, serious, verySerious, noPoints] =
       await Promise.all([
@@ -241,11 +252,9 @@ class ImportViolationCodesService {
     console.log("🚀 Iniciando importação dos códigos de infrações...\n");
 
     try {
-      // Check connection to the bank
       await database.$queryRaw`SELECT 1`;
       console.log("✅ Conexão com banco de dados estabelecida\n");
 
-      // ✅ MORE ROBUST FILE VERIFICATION
       if (!existsSync(excelFilePath)) {
         console.log("⚠️  Arquivo Excel de infrações não encontrado.");
         console.log("   A importação de códigos de infração será pulada.");
@@ -256,7 +265,6 @@ class ImportViolationCodesService {
         return;
       }
 
-      // ✅ CHECKING IF DATA ALREADY EXISTS BEFORE READING THE FILE
       const existingCount = await database.trafficViolationCode.count();
       if (existingCount > 0) {
         console.log(
@@ -265,10 +273,9 @@ class ImportViolationCodesService {
         return;
       }
 
-      // Read Excel file
-      const violationData = this.readExcelFile(excelFilePath);
+      // note o await aqui (readExcelFile agora é async)
+      const violationData = await this.readExcelFile(excelFilePath);
 
-      // Import to the bank
       await this.importToDatatabase(violationData);
       console.log("\n🎯 Importação finalizada com sucesso!");
     } catch (error) {
@@ -280,11 +287,9 @@ class ImportViolationCodesService {
   }
 }
 
-// Main script
 async function main() {
-  const importer = new ImportViolationCodesService();
+  const importer = new ImportViolationCodes();
 
-  // Path to Excel file (adjust as needed)
   const excelFilePath = resolve(
     process.cwd(),
     "tabela-codigo-infracoes-renainf-xlsx.xlsx",
@@ -293,7 +298,6 @@ async function main() {
   await importer.execute(excelFilePath);
 }
 
-// Run only if called directly
 if (require.main === module) {
   main().catch((error) => {
     console.error("💥 Erro fatal:", error);
@@ -301,4 +305,4 @@ if (require.main === module) {
   });
 }
 
-export { ImportViolationCodesService };
+export { ImportViolationCodes };

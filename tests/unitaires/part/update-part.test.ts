@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { UpdatePartUseCase } from "@/modules/part/usecases/update-part/update-part-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { PartNotFoundError } from "@/modules/part/usecases/errors/part-not-found-error";
 import { PartAlreadyExistsError } from "@/modules/part/usecases/errors/part-already-exists-error";

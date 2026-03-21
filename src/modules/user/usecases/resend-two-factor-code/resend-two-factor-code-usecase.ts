@@ -7,7 +7,7 @@ import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-reposit
 import { IUserRepository } from "../../repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
-import { ResendTwoFactorError } from "../errors/resend-two-factor-error";
+import { UserResendTwoFactorError } from "../errors/user-resend-two-factor-error";
 
 import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
 import { AppError } from "@/shared/errors/AppError";
@@ -41,7 +41,7 @@ class ResendTwoFactorCodeUseCase {
     }
 
     if (!findUser.two_factor_enabled) {
-      throw new ResendTwoFactorError();
+      throw new UserResendTwoFactorError();
     }
 
     const existingTwoFactorTokenByEmail =

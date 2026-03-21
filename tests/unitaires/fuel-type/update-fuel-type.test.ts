@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { UpdateFuelTypeUseCase } from "@/modules/fuel-type/usecases/update-fuel-type/update-fuel-type-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { FuelTypeAlreadyExistsError } from "@/modules/fuel-type/usecases/errors/fuel-type-already-exists-error";
 import { FuelTypeNotFoundError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-found-error";

@@ -10,7 +10,7 @@ import { InMemoryNotificationService } from "@/shared/services/in-memory/in-memo
 import { UpdateDriverUseCase } from "@/modules/driver/usecases/update-driver/update-driver-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";

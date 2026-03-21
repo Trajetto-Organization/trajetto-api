@@ -1,5 +1,5 @@
+import { v7 as uuidV7 } from "uuid";
 import { IUsersTokensRepository } from "../IUsers-tokens-repository";
-import { v4 as uuidV4 } from "uuid";
 
 import {
   CreateUserRefreshTokenProps,
@@ -27,7 +27,7 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     userId,
   }: CreateUserRefreshTokenProps): Promise<UserRefreshTokenProps> {
     const createRefreshToken: UserRefreshTokenProps = {
-      id: uuidV4(),
+      id: uuidV7(),
       refresh_token,
       expires_in,
       userId,
@@ -64,7 +64,7 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     token,
   }: CreateTwoFactorToken): Promise<TwoFactor> {
     const twoFactorToken: TwoFactor = {
-      id: uuidV4(),
+      id: uuidV7(),
       email,
       token,
       expires,
@@ -96,7 +96,7 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     userId: string,
   ): Promise<TwoFactorConfirmation> {
     const twoFactorConfirmation: TwoFactorConfirmation = {
-      id: uuidV4(),
+      id: uuidV7(),
       userId,
     };
 
@@ -131,7 +131,7 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     expires,
   }: CreateVerificationToken): Promise<VerificationToken> {
     const verificationToken: VerificationToken = {
-      id: uuidV4(),
+      id: uuidV7(),
       email,
       token,
       expires,
@@ -182,7 +182,7 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     expires,
   }: CreateVerificationToken): Promise<VerificationToken> {
     const verificationToken: VerificationToken = {
-      id: uuidV4(),
+      id: uuidV7(),
       email,
       token,
       expires,

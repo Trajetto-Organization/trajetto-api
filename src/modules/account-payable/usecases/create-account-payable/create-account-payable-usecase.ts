@@ -8,7 +8,7 @@ import { IServiceOrderRepository } from "@/modules/service-order/repositories/IS
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
@@ -24,7 +24,7 @@ import {
   CreateAccountPayableProps,
 } from "../../dtos/account-payable-dto";
 
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { buildAccountPayableLink } from "@/shared/utils/link-redirect-page";

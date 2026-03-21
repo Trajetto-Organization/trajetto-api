@@ -13,7 +13,7 @@ import { InMemoryBranchRepository } from "@/modules/branch/repositories/in-memor
 import { CreateVehicleUseCase } from "@/modules/vehicle/usecases/create-vehicle/create-vehicle-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleAlreadyExistsError } from "@/modules/vehicle/usecases/errors/vehicle-already-exists-error";
 import { VehicleRenavamExistsError } from "@/modules/vehicle/usecases/errors/vehicle-renavam-exists-error";

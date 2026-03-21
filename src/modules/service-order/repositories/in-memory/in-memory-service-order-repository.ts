@@ -1,4 +1,4 @@
-import { v4 as uuidV4 } from "uuid";
+import { v7 as uuidV7 } from "uuid";
 import { IServiceOrderRepository } from "../IService-order-repository";
 
 import {
@@ -7,8 +7,9 @@ import {
   ListServiceOrderProps,
   ListServiceOrderByBusinessIdProps,
   UpdateServiceOrder,
-  ListServiceOrderBusinessProps,
-  ListServiceOrderByVehicleIdProps,
+  SearchServiceOrderWithCursorProps,
+  SearchServiceOrderByVehicleWithCursorProps,
+  CursorPaginatedServiceOrder,
 } from "../../dtos/service-order-dto";
 
 class InMemoryServiceOrderRepository implements IServiceOrderRepository {
@@ -18,7 +19,7 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
     serviceOrderData: CreateServiceOrderProps,
   ): Promise<ServiceOrder> {
     const serviceOrder: ServiceOrder = {
-      id: uuidV4(),
+      id: uuidV7(),
       date: serviceOrderData.date,
       completion_date: serviceOrderData.completion_date,
       maintenance_type: serviceOrderData.maintenance_type,
@@ -59,27 +60,7 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
     const filteredOrders =
       currentUserRole === "MASTER"
         ? [...this.serviceOrders]
-        : this.serviceOrders.filter(
-            (order) => order.businessId === businessId,
-          );
-
-    const skip = (page - 1) * pageSize;
-    const slicedOrders = filteredOrders.slice(skip, skip + pageSize);
-
-    return {
-      data: slicedOrders,
-      total: filteredOrders.length,
-    };
-  }
-
-  async listServiceOrderBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListServiceOrderBusinessProps): Promise<ListServiceOrderProps> {
-    const filteredOrders = this.serviceOrders.filter(
-      (order) => order.businessId === businessId,
-    );
+        : this.serviceOrders.filter((order) => order.businessId === businessId);
 
     const skip = (page - 1) * pageSize;
     const slicedOrders = filteredOrders.slice(skip, skip + pageSize);
@@ -160,6 +141,7 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
 
     const deletedOrder = this.serviceOrders[index];
     this.serviceOrders.splice(index, 1);
+
     return deletedOrder;
   }
 
@@ -169,6 +151,7 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
     const serviceOrder = this.serviceOrders.find(
       (order) => order.id === serviceOrderId,
     );
+
     return serviceOrder || null;
   }
 
@@ -178,6 +161,7 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
     const orders = this.serviceOrders.filter(
       (order) => order.vehicleId === vehicleId,
     );
+
     return orders.length > 0 ? orders : null;
   }
 
@@ -189,24 +173,113 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
     );
   }
 
-  async listServiceOrdersByVehicleId({
+  async *streamServiceOrdersForExport(
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ): AsyncGenerator<any> {
+    let filtered =
+      userRole === "MASTER"
+        ? [...this.serviceOrders]
+        : this.serviceOrders.filter((order) => order.businessId === businessId);
+
+    if (search) {
+      const searchTerm = search.toLowerCase();
+      filtered = filtered.filter(
+        (order) =>
+          order.id.toLowerCase().includes(searchTerm) ||
+          order.maintenance_type.toLowerCase().includes(searchTerm) ||
+          order.total_amount.toString().includes(searchTerm),
+      );
+    }
+
+    for (const order of filtered) {
+      yield {
+        id: order.id,
+        date: order.date,
+        completion_date: order.completion_date,
+        maintenance_type: order.maintenance_type,
+        total_amount: Number(order.total_amount),
+        current_mileage_at_service: order.current_mileage_at_service,
+        maintenance_interval_km_at_service:
+          order.maintenance_interval_km_at_service,
+        last_maintenance_mileage_at_service:
+          order.last_maintenance_mileage_at_service,
+        new_mileage_after_service: order.new_mileage_after_service,
+        businessId: order.businessId,
+        ...(userRole === "MASTER" ? { businessName: null } : {}),
+        vehicleId: order.vehicleId,
+        vehicleLicensePlate: null,
+        vehicleDescription: null,
+        responsibleUserId: order.responsibleUserId,
+        responsibleUserName: null,
+        responsibleUserEmail: null,
+        branchId: order.branchId,
+        branchName: null,
+        supplierId: order.supplierId,
+        supplierName: null,
+        latitude: order.latitude ?? null,
+        longitude: order.longitude ?? null,
+        latitude_original: order.latitude_original ?? null,
+        longitude_original: order.longitude_original ?? null,
+        location_source: order.location_source ?? null,
+        location_edited_by: order.location_edited_by ?? null,
+        location_edited_at: order.location_edited_at ?? null,
+        created_from: order.created_from,
+        created_at: order.created_at,
+        updated_at: order.updated_at,
+      };
+    }
+  }
+
+  async searchServiceOrderWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchServiceOrderWithCursorProps): Promise<CursorPaginatedServiceOrder> {
+    let filtered = this.serviceOrders.filter(
+      (order) => order.businessId === businessId,
+    );
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((o) => o.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
+  }
+
+  async searchServiceOrderByVehicleWithCursor({
+    limit = 10,
+    cursor,
     vehicleId,
     businessId,
-    page,
-    pageSize,
-  }: ListServiceOrderByVehicleIdProps): Promise<ListServiceOrderProps> {
-    const filteredOrders = this.serviceOrders.filter(
+  }: SearchServiceOrderByVehicleWithCursorProps): Promise<CursorPaginatedServiceOrder> {
+    let filtered = this.serviceOrders.filter(
       (order) =>
         order.vehicleId === vehicleId && order.businessId === businessId,
     );
 
-    const skip = (page - 1) * pageSize;
-    const paginatedOrders = filteredOrders.slice(skip, skip + pageSize);
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((o) => o.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
 
-    return {
-      data: paginatedOrders,
-      total: filteredOrders.length,
-    };
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

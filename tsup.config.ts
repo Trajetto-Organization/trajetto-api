@@ -10,6 +10,7 @@ export default defineConfig({
     seed: "./infra/scripts/seed.ts",
     "workers/email-worker": "./src/workers/email-worker.ts",
     "workers/whatsapp-worker": "./src/workers/whatsapp-worker.ts",
+    "workers/ai-verification-worker": "./src/workers/ai-verification-worker.ts",
     "import-violation-codes": "./infra/scripts/import-violation-codes.ts",
     "seed-whatsapp-instance": "./infra/scripts/seed-whatsapp-instance.ts",
   },
@@ -40,6 +41,8 @@ export default defineConfig({
     "sharp",
     "tsyringe",
     "reflect-metadata",
+    "@anthropic-ai/sdk",
+    "node-cron",
   ],
 
   loader: {

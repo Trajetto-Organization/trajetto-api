@@ -11,7 +11,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -22,10 +22,10 @@ import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
-import { VehicleMileageInvalidError } from "@/modules/fuel/usecases/errors/vehicle-mileage-invalid-error";
+import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 
-import { DriverCannotUpdateChecklistError } from "../errors/driver-cannot-update-checklist-error";
-import { ChecklistNotFoundError } from "../errors/checklist-not-found-error";
+import { VehicleChecklistDriverCannotUpdateChecklistError } from "../errors/vehicle-checklist-driver-cannot-update-checklist-error";
+import { VehicleChecklistBusinessNotFoundError } from "../errors/vehicle-checklist-business-not-found-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import {
@@ -37,7 +37,9 @@ import { UploadService } from "@/shared/services/upload-service";
 import { MultipartFile } from "@fastify/multipart";
 
 import { PhotoValidationService } from "@/shared/services/photo-validation-service";
-import { RequiredPhotosMissingError } from "../errors/required-photos-missing-error";
+import { VehicleChecklistRequiredPhotosMissingError } from "../errors/vehicle-checklist-required-photos-missing-error";
+
+import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
 
 @injectable()
 class UpdateVehicleChecklistUseCase {
@@ -90,7 +92,7 @@ class UpdateVehicleChecklistUseCase {
       });
 
     if (!findChecklist) {
-      throw new ChecklistNotFoundError();
+      throw new VehicleChecklistBusinessNotFoundError();
     }
 
     // Validate photo requirements for any field changes
@@ -105,7 +107,7 @@ class UpdateVehicleChecklistUseCase {
         );
 
       if (!photoValidation.isValid) {
-        throw new RequiredPhotosMissingError(
+        throw new VehicleChecklistRequiredPhotosMissingError(
           photoValidation.missingPhotos,
           photoValidation.errors,
           Object.keys(checklistData),
@@ -131,7 +133,7 @@ class UpdateVehicleChecklistUseCase {
 
     // Security: Drivers cannot update checklist records
     if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
-      throw new DriverCannotUpdateChecklistError();
+      throw new VehicleChecklistDriverCannotUpdateChecklistError();
     }
 
     // Validate mileage only if it was changed
@@ -190,8 +192,20 @@ class UpdateVehicleChecklistUseCase {
     try {
       // Upload checklist photos if provided
       let newPhotoPaths: string[] = [];
+      const newPhotoPathsByField: Record<string, string[]> = {};
 
       if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
+        // Build filename → fieldName mapping for direct field-to-path resolution
+        const filenameToField: Record<string, string> = {};
+        if (photosByField) {
+          for (const [fieldName, photos] of Object.entries(photosByField)) {
+            for (const photo of photos as any[]) {
+              const fn = photo.filename || "checklist-photo-update";
+              filenameToField[fn] = fieldName;
+            }
+          }
+        }
+
         for (const photoFile of checklistPhotoFiles) {
           const buffer = await photoFile.toBuffer();
           const uploadResult = await this.uploadService.uploadFile({
@@ -201,6 +215,16 @@ class UpdateVehicleChecklistUseCase {
             uploadType: "checklistPhotos",
           });
           newPhotoPaths.push(uploadResult.path);
+
+          // Map uploaded path to field name directly (no fragile filename matching)
+          const fieldName =
+            filenameToField[photoFile.filename || "checklist-photo-update"];
+          if (fieldName) {
+            if (!newPhotoPathsByField[fieldName]) {
+              newPhotoPathsByField[fieldName] = [];
+            }
+            newPhotoPathsByField[fieldName].push(uploadResult.path);
+          }
         }
       }
 
@@ -295,6 +319,29 @@ class UpdateVehicleChecklistUseCase {
         performedBy: userId,
         businessId: businessId,
       });
+
+      // Re-verify AI when new photos were added (fire-and-forget)
+      // Skip if business has AI disabled (limit === 0)
+      if (
+        (findBusiness.ai_analysis_limit ?? 0) > 0 &&
+        Object.keys(newPhotoPathsByField).length > 0
+      ) {
+        AIVerificationWorkerService.getInstance()
+          .enqueueVerification({
+            type: "checklist",
+            recordId: updatedChecklist.id,
+            businessId,
+            userId,
+            photosByField: newPhotoPathsByField,
+            checklistData: checklistData as Record<string, any>,
+          })
+          .catch((err) =>
+            console.error(
+              "[AI] Failed to enqueue checklist re-verification:",
+              err,
+            ),
+          );
+      }
 
       return updatedChecklist;
     } catch (error) {

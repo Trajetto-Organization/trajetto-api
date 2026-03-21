@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { CreateVehicleChecklistUseCase } from "./create-vehicle-checklist-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -15,7 +15,7 @@ import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
-import { VehicleMileageInvalidError } from "@/modules/fuel/usecases/errors/vehicle-mileage-invalid-error";
+import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 
 import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
 
@@ -153,7 +153,12 @@ class CreateVehicleChecklistController {
 
     try {
       const allPhotos: any[] = [];
-      Object.values(photosByField).forEach((photos) => {
+      const photoFieldMapping: Record<string, string[]> = {};
+
+      Object.entries(photosByField).forEach(([fieldName, photos]) => {
+        photoFieldMapping[fieldName] = (photos as any[]).map(
+          (p) => p.filename || "checklist-photo",
+        );
         allPhotos.push(...photos);
       });
 
@@ -164,6 +169,9 @@ class CreateVehicleChecklistController {
         },
         id,
         allPhotos.length > 0 ? allPhotos : undefined,
+        Object.keys(photoFieldMapping).length > 0
+          ? photoFieldMapping
+          : undefined,
       );
 
       return reply

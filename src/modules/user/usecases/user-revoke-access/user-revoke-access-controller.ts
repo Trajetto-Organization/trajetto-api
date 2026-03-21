@@ -19,7 +19,6 @@ class UserRevokeAccessController {
 
     try {
       await userRevokeAccessUseCase.execute({ userId, id });
-
       return reply.status(200).send({
         message: "Revogação de acesso atualizada com sucesso!",
       });

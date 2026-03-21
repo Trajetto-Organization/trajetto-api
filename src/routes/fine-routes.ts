@@ -3,7 +3,7 @@ import { FastifyInstance } from "fastify";
 import { CreateFineController } from "@/modules/fine/usecases/create-fine/create-fine-controller";
 import { ListFineController } from "@/modules/fine/usecases/list-fine/list-fine-controller";
 
-import { ExportFineExcelController } from "@/modules/fine/usecases/export-fine-excel/export-fine-excel-controller";
+import { ExportFineController } from "@/modules/fine/usecases/export-fine/export-fine-controller";
 
 import { UpdateFineController } from "@/modules/fine/usecases/update-fine/update-fine-controller";
 import { DeleteFineController } from "@/modules/fine/usecases/delete-fine/delete-fine-controller";
@@ -16,7 +16,7 @@ import { fineSchemas, fineResponses } from "./documentation/fine-documentation";
 const createFineController = new CreateFineController();
 const listFineController = new ListFineController();
 
-const exportFineExcelController = new ExportFineExcelController();
+const exportFineController = new ExportFineController();
 
 const updateFineController = new UpdateFineController();
 const deleteFineController = new DeleteFineController();
@@ -69,27 +69,20 @@ async function fineRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/export-fine-excel",
+    "/export-fine",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("fine_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fine"],
-        summary: "Export fines to Excel",
+        summary: "Export fine records (CSV or Excel)",
         description:
-          "Export a comprehensive fines report to Excel format with optional search filters",
+          "Export fine records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
         querystring: fineSchemas.exportFinesQuery,
-        produces: [
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ],
-        response: {
-          400: fineResponses.resourceNotFound,
-          500: fineResponses.internalServerError,
-        },
       },
     },
-    exportFineExcelController.handle,
+    exportFineController.handle,
   );
 
   app.patch(

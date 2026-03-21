@@ -12,9 +12,9 @@ import { CreatePermissionUseCase } from "@/modules/permission/usecases/create-pe
 import { AppError } from "@/shared/errors/AppError";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
-import { ProfileAccessNotFoundError } from "@/modules/user/usecases/errors/profile-access-not-found-error";
+import { UserProfileAccessNotFoundError } from "@/modules/user/usecases/errors/user-profile-access-not-found-error";
 import { PermissionBusinessError } from "@/modules/permission/usecases/errors/permission-business-error";
 
 import { PermissionAlreadyExistsError } from "@/modules/permission/usecases/errors/permission-already-exists-error";
@@ -217,7 +217,7 @@ describe("Create Permission UseCase", () => {
         },
         createdUser.id,
       ),
-    ).rejects.toBeInstanceOf(ProfileAccessNotFoundError);
+    ).rejects.toBeInstanceOf(UserProfileAccessNotFoundError);
   });
 
   it("should throw PermissionBusinessError if profile access does not belong to business", async () => {

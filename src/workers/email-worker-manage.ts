@@ -29,6 +29,7 @@ class EmailWorkerManager {
     if (!EmailWorkerManager.instance) {
       EmailWorkerManager.instance = new EmailWorkerManager();
     }
+
     return EmailWorkerManager.instance;
   }
 

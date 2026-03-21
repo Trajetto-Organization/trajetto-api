@@ -2,7 +2,7 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { DeleteSupplierUseCase } from "./delete-supplier-usecase";
 import { SupplierNotFoundError } from "../errors/supplier-not-found-error";
@@ -24,7 +24,6 @@ class DeleteSupplierController {
 
     try {
       await deleteSupplierUseCase.execute(supplierId, businessId, id);
-
       return reply
         .status(200)
         .send({ message: "Fornecedor excluído com sucesso!" });

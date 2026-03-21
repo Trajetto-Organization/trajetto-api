@@ -11,11 +11,11 @@ interface IFineRepository {
   listFines: (
     listFineProps: ListFineByBusinessIdProps,
   ) => Promise<ListFineProps>;
-  getAllFinesForExport: (
+  streamFinesForExport(
     businessId: string,
-    currentUserRole: string,
+    userRole: string,
     search?: string,
-  ) => Promise<Fine[]>;
+  ): AsyncGenerator<any>;
   updateFine: ({ fineData, fineId }: UpdateFine) => Promise<Fine>;
   deleteFine: (fineId: string) => Promise<Fine>;
   findFineById: (fineId: string) => Promise<Fine | null>;

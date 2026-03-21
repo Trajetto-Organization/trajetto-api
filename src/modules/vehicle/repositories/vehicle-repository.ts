@@ -7,8 +7,9 @@ import {
   ListVehicleProps,
   ListVehicleByBusinessIdProps,
   UpdateVehicle,
-  ListVehicleBusinessProps,
   GetVehicleByIdAndBusinessProps,
+  SearchVehicleWithCursorProps,
+  CursorPaginatedVehicle,
 } from "../dtos/vehicle-dto";
 
 class VehicleRepository implements IVehicleRepository {
@@ -70,115 +71,52 @@ class VehicleRepository implements IVehicleRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const vehicleData = await this.prisma.vehicle.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        vehicleType: {
-          select: {
-            description: true,
+    const [vehicleData, total] = await Promise.all([
+      this.prisma.vehicle.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          vehicleType: {
+            select: {
+              description: true,
+            },
+          },
+          fuelType: {
+            select: {
+              description: true,
+            },
+          },
+          driver: {
+            select: {
+              name: true,
+              cnh: true,
+            },
+          },
+          branch: {
+            select: {
+              corporate_reason: true,
+            },
+          },
+          business: {
+            select: {
+              corporate_reason: true,
+            },
           },
         },
-        fuelType: {
-          select: {
-            description: true,
-          },
+        orderBy: {
+          created_at: "desc",
         },
-        driver: {
-          select: {
-            name: true,
-            cnh: true,
-          },
-        },
-        branch: {
-          select: {
-            corporate_reason: true,
-          },
-        },
-        business: {
-          select: {
-            corporate_reason: true,
-          },
-        },
-      },
-      orderBy: {
-        created_at: "desc",
-      },
-    });
-
-    const total = await this.prisma.vehicle.count({
-      where: whereCondition,
-    });
+      }),
+      this.prisma.vehicle.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return {
       data: vehicleData,
       total,
     };
-  }
-
-  async listVehicleBusiness({
-    page,
-    pageSize,
-    businessId,
-    search,
-    driverId,
-  }: ListVehicleBusinessProps): Promise<ListVehicleProps> {
-    const skip = (page - 1) * pageSize;
-
-    // Build search conditions (same logic as listVehicles)
-    const orConditions = [];
-    if (search) {
-      orConditions.push(
-        { license_plate: { contains: search, mode: "insensitive" as const } },
-        { model: { contains: search, mode: "insensitive" as const } },
-        { brand: { contains: search, mode: "insensitive" as const } },
-      );
-    }
-
-    const whereCondition = {
-      businessId,
-      ...(driverId && { driverId: driverId }), // Filter by driver if provided
-      ...(orConditions.length > 0 && { OR: orConditions }),
-    };
-
-    const vehicleBusinessData = await this.prisma.vehicle.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        fuelType: {
-          select: {
-            description: true,
-          },
-        },
-        branch: {
-          select: {
-            corporate_reason: true,
-          },
-        },
-        driver: {
-          select: {
-            name: true,
-            cnh: true,
-          },
-        },
-        vehicleType: {
-          select: {
-            description: true,
-          },
-        },
-      },
-      orderBy: {
-        created_at: "desc",
-      },
-    });
-
-    const total = await this.prisma.vehicle.count({
-      where: whereCondition,
-    });
-
-    return { data: vehicleBusinessData, total };
   }
 
   async updateVehicle({
@@ -277,6 +215,123 @@ class VehicleRepository implements IVehicleRepository {
     });
 
     return vehicles;
+  }
+
+  async *streamVehiclesForExport(
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ): AsyncGenerator<any> {
+    const normalizedSearch = search ? search.trim().toLowerCase() : "";
+    const orConditions: any[] = [];
+
+    if (normalizedSearch) {
+      orConditions.push(
+        { id: { contains: normalizedSearch, mode: "insensitive" } },
+        { description: { contains: normalizedSearch, mode: "insensitive" } },
+        { license_plate: { contains: normalizedSearch, mode: "insensitive" } },
+        { brand: { contains: normalizedSearch, mode: "insensitive" } },
+        { model: { contains: normalizedSearch, mode: "insensitive" } },
+        { renavam: { contains: normalizedSearch, mode: "insensitive" } },
+        { branchId: { contains: normalizedSearch, mode: "insensitive" } },
+        { driverId: { contains: normalizedSearch, mode: "insensitive" } },
+        ...(userRole === "MASTER"
+          ? [
+              {
+                businessId: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
+              },
+            ]
+          : []),
+      );
+    }
+
+    const whereCondition: any = {
+      ...(userRole !== "MASTER" && { businessId }),
+      ...(orConditions.length > 0 && { OR: orConditions }),
+    };
+
+    const batchSize = 1000;
+    let cursor: string | undefined = undefined;
+
+    while (true) {
+      const vehicles: any = await this.prisma.vehicle.findMany({
+        where: whereCondition,
+        include: {
+          vehicleType: { select: { description: true } },
+          fuelType: { select: { description: true } },
+          driver: { select: { name: true, cpf: true } },
+          branch: { select: { corporate_reason: true } },
+          business: { select: { corporate_reason: true } },
+        },
+        orderBy: { id: "asc" },
+        take: batchSize,
+        ...(cursor && {
+          skip: 1,
+          cursor: { id: cursor },
+        }),
+      });
+
+      if (vehicles.length === 0) break;
+      for (const v of vehicles) {
+        yield {
+          id: v.id,
+          description: v.description,
+          license_plate: v.license_plate,
+          brand: v.brand,
+          model: v.model,
+          acquisition_date: v.acquisition_date,
+          fleet_type: v.fleet_type,
+          fleet_id: v.fleet_id,
+          current_mileage: v.current_mileage,
+          last_maintenance_mileage: v.last_maintenance_mileage,
+          last_maintenance_date: v.last_maintenance_date,
+          maintenance_interval_km: v.maintenance_interval_km,
+          maintenance_interval_months: v.maintenance_interval_months,
+          renavam: v.renavam,
+          manufacturing_year: v.manufacturing_year,
+          model_year: v.model_year,
+          km_per_liter: v.km_per_liter,
+          number_of_axles: v.number_of_axles,
+          status: v.status,
+          vehicleTypeName: v.vehicleType?.description || null,
+          fuelTypeName: v.fuelType?.description || null,
+          driverName: v.driver?.name || null,
+          driverCpf: v.driver?.cpf || null,
+          branchName: v.branch?.corporate_reason || null,
+          businessId: v.businessId,
+          ...(userRole === "MASTER"
+            ? { businessName: v.business.corporate_reason }
+            : {}),
+          created_at: v.created_at,
+          updated_at: v.updated_at,
+        };
+      }
+
+      cursor = vehicles[vehicles.length - 1].id;
+    }
+  }
+
+  async searchVehicleWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchVehicleWithCursorProps): Promise<CursorPaginatedVehicle> {
+    const items = await this.prisma.vehicle.findMany({
+      where: { businessId },
+      take: limit + 1,
+      ...(cursor && { cursor: { id: cursor }, skip: 1 }),
+      orderBy: { created_at: "desc" },
+    });
+
+    const hasMore = items.length > limit;
+
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

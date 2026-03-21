@@ -7,31 +7,12 @@ import {
   ListVehicleChecklistProps,
   ListVehicleChecklistByBusinessIdProps,
   UpdateVehicleChecklist,
-  ListVehicleChecklistBusinessProps,
   GetVehicleChecklistByIdAndBusinessProps,
   VehicleChecklistWithRelations,
 } from "../dtos/vehicle-checklist-dto";
 
 class VehicleChecklistRepository implements IVehicleChecklistRepository {
   constructor(private prisma = database) {}
-
-  // Helper function to format condition values for export
-  private formatCondition(condition: string | null | undefined): string {
-    if (!condition) return "N/A";
-
-    const conditionMap: Record<string, string> = {
-      approved: "Aprovado",
-      approved_with_restrictions: "Aprovado com Restrições",
-      rejected: "Rejeitado",
-      good: "Boa",
-      fair: "Regular",
-      poor: "Ruim",
-      bad: "Ruim",
-      needs_attention: "Precisa de Atenção",
-    };
-
-    return conditionMap[condition] || condition;
-  }
 
   async createVehicleChecklist(
     checklistData: CreateVehicleChecklistProps,
@@ -172,81 +153,51 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
       };
     }
 
-    const checklistsData = await this.prisma.vehicleChecklist.findMany({
-      skip,
-      take: pageSize,
-      where: whereConditions,
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
-            fantasy_name: true,
-          },
-        },
-        branch: {
-          select: {
-            corporate_reason: true,
-            fantasy_name: true,
-          },
-        },
-        vehicle: {
-          select: {
-            description: true,
-            license_plate: true,
-            brand: true,
-            model: true,
-            current_mileage: true,
-          },
-        },
-        driver: {
-          select: {
-            name: true,
-            cnh: true,
-          },
-        },
-      },
-      orderBy: {
-        created_at: "desc", // Sort by created_at
-      },
-    });
-
-    const total = await this.prisma.vehicleChecklist.count({
-      where: whereConditions,
-    });
-
-    return {
-      data: checklistsData,
-      total,
-    };
-  }
-
-  async listVehicleChecklistBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListVehicleChecklistBusinessProps): Promise<ListVehicleChecklistProps> {
-    const skip = (page - 1) * pageSize;
-
-    const [checklists, total] = await Promise.all([
+    const [checklistsData, total] = await Promise.all([
       this.prisma.vehicleChecklist.findMany({
-        where: {
-          businessId,
-        },
         skip,
         take: pageSize,
+        where: whereConditions,
+        include: {
+          business: {
+            select: {
+              corporate_reason: true,
+              fantasy_name: true,
+            },
+          },
+          branch: {
+            select: {
+              corporate_reason: true,
+              fantasy_name: true,
+            },
+          },
+          vehicle: {
+            select: {
+              description: true,
+              license_plate: true,
+              brand: true,
+              model: true,
+              current_mileage: true,
+            },
+          },
+          driver: {
+            select: {
+              name: true,
+              cnh: true,
+            },
+          },
+        },
         orderBy: {
           created_at: "desc", // Sort by created_at
         },
       }),
       this.prisma.vehicleChecklist.count({
-        where: {
-          businessId,
-        },
+        where: whereConditions,
       }),
     ]);
 
     return {
-      data: checklists,
+      data: checklistsData,
       total,
     };
   }
@@ -436,11 +387,11 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     return checklists;
   }
 
-  async getAllVehicleChecklistsForExport(
+  async *streamChecklistsForExport(
     businessId: string,
     userRole: string,
     search?: string,
-  ): Promise<any[]> {
+  ): AsyncGenerator<any> {
     const normalizedSearch = search ? search.trim().toLowerCase() : "";
     const orConditions: any[] = [];
 
@@ -531,92 +482,99 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const checklists = await this.prisma.vehicleChecklist.findMany({
-      where: whereCondition,
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
-          },
-        },
-        branch: {
-          select: {
-            corporate_reason: true,
-          },
-        },
-        vehicle: {
-          select: {
-            description: true,
-            license_plate: true,
-            brand: true,
-            model: true,
-            current_mileage: true,
-          },
-        },
-        driver: {
-          select: {
-            name: true,
-            cnh: true,
-          },
-        },
-      },
-      orderBy: {
-        created_at: "desc",
-      },
-    });
+    const batchSize = 1000;
+    let cursor: string | undefined = undefined;
 
-    return checklists.map((checklist) => ({
-      id: checklist.id,
-      vehicleLicensePlate: checklist.vehicle?.license_plate || "N/A",
-      vehicleDescription: checklist.vehicle?.description || "N/A",
-      vehicleBrand: checklist.vehicle?.brand || "N/A",
-      vehicleModel: checklist.vehicle?.model || "N/A",
-      vehicleCurrentMileage: checklist.vehicle?.current_mileage || 0,
-      driverName: checklist.driver?.name || "N/A",
-      driverCnh: checklist.driver?.cnh || "N/A",
-      checklist_date: checklist.checklist_date,
-      current_mileage: checklist.current_mileage || 0,
-      tires_condition: this.formatCondition(checklist.tires_condition),
-      headlights_working: checklist.headlights_working ? "OK" : "NOK",
-      taillights_working: checklist.taillights_working ? "OK" : "NOK",
-      turn_signals_working: checklist.turn_signals_working ? "OK" : "NOK",
-      bumpers_condition: this.formatCondition(checklist.bumpers_condition),
-      windshield_condition: this.formatCondition(
-        checklist.windshield_condition,
-      ),
-      mirrors_condition: this.formatCondition(checklist.mirrors_condition),
-      seatbelts_working: checklist.seatbelts_working ? "OK" : "NOK",
-      dashboard_working: checklist.dashboard_working ? "OK" : "NOK",
-      steering_wheel_condition: this.formatCondition(
-        checklist.steering_wheel_condition,
-      ),
-      brakes_working: checklist.brakes_working ? "OK" : "NOK",
-      clutch_working: checklist.clutch_working ? "OK" : "NOK",
-      fuel_level_adequate: checklist.fuel_level_adequate ? "OK" : "NOK",
-      oil_level_adequate: checklist.oil_level_adequate ? "OK" : "NOK",
-      radiator_water_adequate: checklist.radiator_water_adequate ? "OK" : "NOK",
-      brake_fluid_adequate: checklist.brake_fluid_adequate ? "OK" : "NOK",
-      battery_condition: this.formatCondition(checklist.battery_condition),
-      driver_license_valid: checklist.driver_license_valid ? "OK" : "NOK",
-      vehicle_documents_valid: checklist.vehicle_documents_valid ? "OK" : "NOK",
-      insurance_valid: checklist.insurance_valid ? "OK" : "NOK",
-      fire_extinguisher_valid: checklist.fire_extinguisher_valid ? "OK" : "NOK",
-      warning_triangle_present: checklist.warning_triangle_present
-        ? "OK"
-        : "NOK",
-      jack_present: checklist.jack_present ? "OK" : "NOK",
-      spare_tire_condition: this.formatCondition(
-        checklist.spare_tire_condition,
-      ),
-      overall_condition: this.formatCondition(checklist.overall_condition),
-      notes: checklist.notes || "N/A",
-      branchName: checklist.branch?.corporate_reason || "N/A",
-      ...(userRole === "MASTER" && {
-        businessName: checklist.business?.corporate_reason || "N/A",
-      }),
-      created_at: checklist.created_at,
-      updated_at: checklist.updated_at,
-    }));
+    while (true) {
+      const checklists: any = await this.prisma.vehicleChecklist.findMany({
+        where: whereCondition,
+        include: {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
+          },
+          branch: {
+            select: {
+              corporate_reason: true,
+            },
+          },
+          vehicle: {
+            select: {
+              description: true,
+              license_plate: true,
+              brand: true,
+              model: true,
+              current_mileage: true,
+            },
+          },
+          driver: {
+            select: {
+              name: true,
+              cnh: true,
+            },
+          },
+        },
+        orderBy: {
+          id: "asc",
+        },
+        take: batchSize,
+        ...(cursor && {
+          skip: 1,
+          cursor: { id: cursor },
+        }),
+      });
+
+      if (checklists.length === 0) break;
+      for (const checklist of checklists) {
+        yield {
+          id: checklist.id,
+          vehicleLicensePlate: checklist.vehicle?.license_plate,
+          vehicleDescription: checklist.vehicle?.description,
+          vehicleBrand: checklist.vehicle?.brand,
+          vehicleModel: checklist.vehicle?.model,
+          vehicleCurrentMileage: checklist.vehicle?.current_mileage,
+          driverName: checklist.driver?.name,
+          driverCnh: checklist.driver?.cnh,
+          checklist_date: checklist.checklist_date,
+          current_mileage: checklist.current_mileage,
+          tires_condition: checklist.tires_condition,
+          headlights_working: checklist.headlights_working,
+          taillights_working: checklist.taillights_working,
+          turn_signals_working: checklist.turn_signals_working,
+          bumpers_condition: checklist.bumpers_condition,
+          windshield_condition: checklist.windshield_condition,
+          mirrors_condition: checklist.mirrors_condition,
+          seatbelts_working: checklist.seatbelts_working,
+          dashboard_working: checklist.dashboard_working,
+          steering_wheel_condition: checklist.steering_wheel_condition,
+          brakes_working: checklist.brakes_working,
+          clutch_working: checklist.clutch_working,
+          fuel_level_adequate: checklist.fuel_level_adequate,
+          oil_level_adequate: checklist.oil_level_adequate,
+          radiator_water_adequate: checklist.radiator_water_adequate,
+          brake_fluid_adequate: checklist.brake_fluid_adequate,
+          battery_condition: checklist.battery_condition,
+          driver_license_valid: checklist.driver_license_valid,
+          vehicle_documents_valid: checklist.vehicle_documents_valid,
+          insurance_valid: checklist.insurance_valid,
+          fire_extinguisher_valid: checklist.fire_extinguisher_valid,
+          warning_triangle_present: checklist.warning_triangle_present,
+          jack_present: checklist.jack_present,
+          spare_tire_condition: checklist.spare_tire_condition,
+          overall_condition: checklist.overall_condition,
+          notes: checklist.notes,
+          branchName: checklist.branch?.corporate_reason,
+          ...(userRole === "MASTER" && {
+            businessName: checklist.business?.corporate_reason,
+          }),
+          created_at: checklist.created_at,
+          updated_at: checklist.updated_at,
+        };
+      }
+
+      cursor = checklists[checklists.length - 1].id;
+    }
   }
 }
 

@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { UpdateDriverUseCase } from "./update-driver-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { DriverNotFoundError } from "../errors/driver-not-found-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";

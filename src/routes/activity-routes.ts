@@ -1,5 +1,4 @@
 import { FastifyInstance } from "fastify";
-
 import { ListAllActivitiesController } from "@/modules/activity/usecases/list-all-activities/list-all-activities-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";

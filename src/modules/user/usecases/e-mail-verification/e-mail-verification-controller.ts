@@ -1,14 +1,14 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
-import { InvalidTokenError } from "../errors/invalid-token-error";
-import { ExpiredTokenError } from "../errors/expired-token-error";
+import { UserInvalidTokenError } from "../errors/user-invalid-token-error";
+import { UserExpiredTokenError } from "../errors/user-expired-token-error";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { EmailVerificationUseCase } from "./e-mail-verification-usecase";
 
 import { emailVerificationVerificationSchema } from "@/schemas/email-verification-schema";
-import { MissingTokenError } from "../errors/missing-token-error";
+import { UserMissingTokenError } from "../errors/user-missing-token-error";
 
 class EmailVerificationController {
   async handle(
@@ -27,15 +27,15 @@ class EmailVerificationController {
         .status(200)
         .send({ message: "E-mail confirmado com sucesso!" });
     } catch (error) {
-      if (error instanceof MissingTokenError) {
+      if (error instanceof UserMissingTokenError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof InvalidTokenError) {
+      if (error instanceof UserInvalidTokenError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof ExpiredTokenError) {
+      if (error instanceof UserExpiredTokenError) {
         return reply.status(400).send({ message: error.message });
       }
 

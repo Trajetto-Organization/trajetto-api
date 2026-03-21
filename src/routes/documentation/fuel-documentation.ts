@@ -9,23 +9,18 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 
-import {
-  listFuelByVehicleParamsSchema,
-  listFuelByVehicleQuerySchema,
-} from "@/schemas/list-fuel-by-vehicle-schema";
+import { updateDeleteVehicleSchema } from "@/schemas/update-delete-vehicle-schema";
+import { exportReports } from "@/schemas/export-reports-schema";
 
 const fuelSchemas = {
   createFuel: createFuelSchema,
   updateFuel: updateFuelSchema,
   updateDeleteFuel: updateDeleteFuelSchema,
   updateDeleteBusiness: updateDeleteBusinessSchema,
+  searchFuelByVehicleParams: updateDeleteVehicleSchema,
   listFuel: listPagesSchema,
   listFuelBusiness: listPagesByBusinessSchema,
-  listFuelByVehicleParams: listFuelByVehicleParamsSchema,
-  listFuelByVehicleQuery: listFuelByVehicleQuerySchema,
-  exportFuelsQuery: z.object({
-    search: z.string().optional().describe("Search term to filter fuels"),
-  }),
+  exportFuelsQuery: exportReports,
   getPreviousFuelParams: z.object({
     vehicleId: z.string().uuid("O ID do veículo é obrigatório!"),
   }),
@@ -37,9 +32,26 @@ const fuelSchemas = {
       .string({ required_error: "O ID da empresa é obrigatório!" })
       .uuid("O ID da empresa deve ser um UUID válido!"),
   }),
+  searchFuelByVehicleCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de abastecimentos a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID do último abastecimento da página anterior para paginação"),
+  }),
 };
 
 const fuelResponses = {
+  searchFuelByVehicleStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are fuel objects.",
+      ),
+  }),
   fuelCreated: z.object({
     message: z.string().default("Abastecimento criado com sucesso!"),
   }),

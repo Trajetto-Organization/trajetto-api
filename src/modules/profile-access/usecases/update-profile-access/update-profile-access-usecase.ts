@@ -13,7 +13,7 @@ import { ProfileAccessNotFoundError } from "../errors/profile-access-not-found-e
 import { ProfileAccessAlreadyExistsError } from "../errors/profile-access-already-exists-error";
 
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 

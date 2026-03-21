@@ -1,13 +1,14 @@
-import { v4 as uuidV4 } from "uuid";
-
+import { v7 as uuidV7 } from "uuid";
 import { IFuelTypeRepository } from "../IFuel-type-repository";
+
 import {
   FuelType,
   CreateFuelTypeProps,
   ListFuelTypeProps,
   ListFuelTypeByBusinessIdProps,
   UpdateFuelType,
-  ListFuelTypeBusinessProps,
+  SearchFuelTypeWithCursorProps,
+  CursorPaginatedFuelType,
 } from "../../dtos/fuel-type-dto";
 
 class InMemoryFuelTypeRepository implements IFuelTypeRepository {
@@ -15,7 +16,7 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
 
   async createFuelType(fuelTypeData: CreateFuelTypeProps): Promise<FuelType> {
     const newFuelType: FuelType = {
-      id: uuidV4(),
+      id: uuidV7(),
       description: fuelTypeData.description,
       businessId: fuelTypeData.businessId,
       created_at: new Date(),
@@ -48,23 +49,6 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
         fuelType.description.toLowerCase().includes(searchTerm),
       );
     }
-
-    const skip = (page - 1) * pageSize;
-
-    const data = filteredFuelTypes.slice(skip, skip + pageSize);
-    const total = filteredFuelTypes.length;
-
-    return { data, total };
-  }
-
-  async listFuelTypeBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListFuelTypeBusinessProps): Promise<ListFuelTypeProps> {
-    const filteredFuelTypes = this.fuelTypes.filter(
-      (fuelType) => fuelType.businessId === businessId,
-    );
 
     const skip = (page - 1) * pageSize;
 
@@ -146,6 +130,28 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
     );
 
     return fuelType || null;
+  }
+
+  async searchFuelTypeWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchFuelTypeWithCursorProps): Promise<CursorPaginatedFuelType> {
+    let filtered = this.fuelTypes.filter((ft) => ft.businessId === businessId);
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((ft) => ft.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

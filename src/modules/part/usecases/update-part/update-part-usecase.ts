@@ -9,7 +9,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { PartNotFoundError } from "../errors/part-not-found-error";
 import { PartAlreadyExistsError } from "../errors/part-already-exists-error";
@@ -18,7 +18,7 @@ import { SupplierNotBelongBusinessError } from "@/modules/supplier/usecases/erro
 import { PartNotBelongError } from "../errors/part-not-belong-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 
 import { SupplierNotFoundError } from "@/modules/supplier/usecases/errors/supplier-not-found-error";
 import { Part, UpdatePartProps } from "../../dtos/part-dto";

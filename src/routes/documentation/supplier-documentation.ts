@@ -18,6 +18,17 @@ const supplierSchemas = {
     supplierId: z.string().uuid(),
     businessId: z.string().uuid(),
   }),
+  searchSupplierCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de fornecedores a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID do último fornecedor da página anterior para paginação"),
+    businessId: z.string().describe("ID da empresa"),
+  }),
 };
 
 const supplierResponses = {
@@ -80,6 +91,14 @@ const supplierResponses = {
 
   supplierDeleted: z.object({
     message: z.string().default("Fornecedor excluído com sucesso!"),
+  }),
+
+  searchSupplierStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are supplier objects.",
+      ),
   }),
 
   internalServerError: z.object({

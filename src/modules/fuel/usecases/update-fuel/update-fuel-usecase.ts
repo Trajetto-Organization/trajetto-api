@@ -13,7 +13,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -30,16 +30,18 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-belong-business-error";
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 
-import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
-import { VehicleInvalidStatusForFuelError } from "../errors/vehicle-invalid-status-for-fuel-error";
+import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 
-import { DriverCannotUpdateFuelError } from "../errors/driver-cannot-update-fuel-error";
+import { FuelVehicleInvalidStatusForFuelError } from "../errors/fuel-vehicle-invalid-status-for-fuel-error";
+import { FuelDriverCannotUpdateFuelError } from "../errors/fuel-driver-cannot-update-fuel-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import { Fuel, UpdateFuelProps } from "../../dtos/fuel-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
 import { MultipartFile } from "@fastify/multipart";
+
+import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
 
 interface UpdateFuelRequest {
   fuelId: string;
@@ -117,12 +119,12 @@ class UpdateFuelUseCase {
 
     // Security: Drivers cannot update fuel records
     if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
-      throw new DriverCannotUpdateFuelError();
+      throw new FuelDriverCannotUpdateFuelError();
     }
 
     // Validate vehicle status (only ACTIVE or IN_ROUTE vehicles can be fueled)
     if (findVehicle.status !== "ACTIVE" && findVehicle.status !== "IN_ROUTE") {
-      throw new VehicleInvalidStatusForFuelError();
+      throw new FuelVehicleInvalidStatusForFuelError();
     }
 
     // Validate mileage only if it was changed
@@ -281,6 +283,39 @@ class UpdateFuelUseCase {
         performedBy: userId,
         businessId: businessId,
       });
+
+      // Re-verify AI when photo or mileage changed (fire-and-forget)
+      // Skip if business has AI disabled (limit === 0)
+      if ((findBusiness.ai_analysis_limit ?? 0) > 0) {
+        const photoChanged = odometerPhotoFile !== undefined;
+        const mileageChanged =
+          fuelData.current_mileage &&
+          fuelData.current_mileage !== findFuel.current_mileage;
+
+        if (photoChanged || mileageChanged) {
+          const photoPath =
+            finalFuelData.odometer_photo || findFuel.odometer_photo;
+          const mileage = fuelData.current_mileage || findFuel.current_mileage;
+
+          if (photoPath) {
+            AIVerificationWorkerService.getInstance()
+              .enqueueVerification({
+                type: "fuel_odometer",
+                recordId: fuelId,
+                businessId,
+                userId,
+                odometerPhotoPath: photoPath,
+                reportedMileage: mileage,
+              })
+              .catch((err) =>
+                console.error(
+                  "[AI] Failed to enqueue fuel re-verification:",
+                  err,
+                ),
+              );
+          }
+        }
+      }
 
       return updatedFuel;
     } catch (error) {

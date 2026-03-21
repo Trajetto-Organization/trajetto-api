@@ -6,7 +6,7 @@ import { DeleteBusinessUseCase } from "./delete-business-usecase";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 class DeleteBusinessController {
   async handle(

@@ -5,7 +5,7 @@ import { container } from "tsyringe";
 import { GetPreviousFuelUseCase } from "./get-previous-fuel-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import {
@@ -20,7 +20,6 @@ class GetPreviousFuelController {
     const { vehicleId } = request.params as z.infer<
       typeof getPreviousFuelParamsSchema
     >;
-
     const { date, businessId } = request.query as z.infer<
       typeof getPreviousFuelQuerySchema
     >;

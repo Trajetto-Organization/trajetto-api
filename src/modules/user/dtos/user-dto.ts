@@ -146,12 +146,6 @@ interface ListUsers {
   total: number;
 }
 
-interface ListUserBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
-}
-
 interface ListUsersByRoleAndBusinessProps {
   page: number;
   pageSize: number;
@@ -164,6 +158,37 @@ interface ListUsersByRoleAndBusinessProps {
 interface UpdateUser {
   userData: UpdateUserProps;
   userId: string;
+}
+
+interface CreateMasterUserProps {
+  name: string;
+  email: string;
+  password: string;
+}
+
+interface UpdateMasterUserProps {
+  name?: string | null;
+  email?: string | null;
+  password?: string | null;
+}
+
+interface ListMasterUsersProps {
+  page: number;
+  pageSize: number;
+  search?: string;
+  currentUserId?: string;
+}
+
+interface SearchUserWithCursorProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+}
+
+interface CursorPaginatedUser {
+  data: User[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 export {
@@ -180,10 +205,14 @@ export {
   UserRole,
   UpdateUserProps,
   ListUsersByRoleAndBusinessProps,
-  ListUserBusinessProps,
   EnumUserRole,
   UpdateUserAccessRevocation,
   UpdateUserWhatsAppSettings,
   UpdateEmailNotifications,
   UpdateActivityNotifications,
+  CreateMasterUserProps,
+  UpdateMasterUserProps,
+  ListMasterUsersProps,
+  SearchUserWithCursorProps,
+  CursorPaginatedUser,
 };

@@ -1,4 +1,4 @@
-import { v4 as uuidV4 } from "uuid";
+import { v7 as uuidV7 } from "uuid";
 import { IActivityRepository } from "../IActivity-repository";
 
 import {
@@ -13,7 +13,7 @@ class InMemoryActivityRepository implements IActivityRepository {
 
   async createActivity(activityData: CreateActivityProps): Promise<Activity> {
     const activity: Activity = {
-      id: uuidV4(),
+      id: uuidV7(),
       type: activityData.type,
       action: activityData.action,
       entityId: activityData.entityId,
@@ -132,7 +132,7 @@ class InMemoryActivityRepository implements IActivityRepository {
 
   addActivity(activityData: Partial<Activity>): Activity {
     const activity: Activity = {
-      id: activityData.id || uuidV4(),
+      id: activityData.id || uuidV7(),
       type: activityData.type || "test",
       action: activityData.action || "create",
       entityId: activityData.entityId || "entity-id",

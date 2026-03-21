@@ -1,12 +1,12 @@
 import { FastifyInstance } from "fastify";
 
 import { CreateVehicleController } from "@/modules/vehicle/usecases/create-vehicle/create-vehicle-controller";
-
 import { ListVehicleController } from "@/modules/vehicle/usecases/list-vehicle/list-vehicle-controller";
-import { ListVehicleBusinessController } from "@/modules/vehicle/usecases/list-vehicle-business/list-vehicle-business-controller";
 
 import { UpdateVehicleController } from "@/modules/vehicle/usecases/update-vehicle/update-vehicle-controller";
 import { DeleteVehicleController } from "@/modules/vehicle/usecases/delete-vehicle/delete-vehicle-controller";
+
+import { ExportVehicleController } from "@/modules/vehicle/usecases/export-vehicle/export-vehicle-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -15,13 +15,17 @@ import {
   vehicleSchemas,
   vehicleResponses,
 } from "./documentation/vehicle-documentation";
+
 import { GetVehicleController } from "@/modules/vehicle/usecases/get-vehicle/get-vehicle-controller";
+import { SearchVehicleCursorController } from "@/modules/vehicle/usecases/search-vehicle-cursor/search-vehicle-cursor-controller";
 
 const createVehicleController = new CreateVehicleController();
 const listVehicleController = new ListVehicleController();
 
-const listVehicleBusinessController = new ListVehicleBusinessController();
+const exportVehicleController = new ExportVehicleController();
+
 const getVehicleController = new GetVehicleController();
+const searchVehicleCursorController = new SearchVehicleCursorController();
 
 const updateVehicleController = new UpdateVehicleController();
 const deleteVehicleController = new DeleteVehicleController();
@@ -73,25 +77,45 @@ async function vehicleRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-vehicle-business",
+    "/export-vehicle",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("vehicle_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle"],
-        summary: "List vehicles by business",
+        summary: "Export vehicle records (CSV or Excel)",
         description:
-          "Retrieve a paginated list of vehicles filtered by specific business with search functionality",
-        querystring: vehicleSchemas.listVehicleBusinessSchema,
+          "Export vehicle records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
+        querystring: vehicleSchemas.exportVehicleQuery,
+      },
+    },
+    exportVehicleController.handle,
+  );
+
+  app.get(
+    "/search-vehicle-business",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("vehicle_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["vehicle"],
+        summary: "Search vehicles by business (cursor-based)",
+        description:
+          "Retrieve vehicles as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual vehicle objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: vehicleSchemas.searchVehicleCursor,
         response: {
-          200: vehicleResponses.vehicleList,
+          200: vehicleResponses.searchVehicleStreamDescription,
           400: vehicleResponses.listVehicleBusinessErrors,
           500: vehicleResponses.internalServerError,
         },
       },
     },
-    listVehicleBusinessController.handle,
+    searchVehicleCursorController.handle,
   );
 
   app.get(

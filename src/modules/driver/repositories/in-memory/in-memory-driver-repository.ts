@@ -1,13 +1,14 @@
-import { v4 as uuidV4 } from "uuid";
-
+import { v7 as uuidV7 } from "uuid";
 import { IDriverRepository } from "../IDriver-repository";
+
 import {
   Driver,
   CreateDriverProps,
   ListDriverProps,
   ListDriverByBusinessIdProps,
   UpdateDriver,
-  ListDriverBusinessProps,
+  SearchDriverWithCursorProps,
+  CursorPaginatedDriver,
 } from "../../dtos/driver-dto";
 
 class InMemoryDriverRepository implements IDriverRepository {
@@ -15,7 +16,7 @@ class InMemoryDriverRepository implements IDriverRepository {
 
   async createDriver(driverData: CreateDriverProps): Promise<Driver> {
     const newDriver: Driver = {
-      id: uuidV4(),
+      id: uuidV7(),
       ...driverData,
       complement: driverData.complement || null,
       branchId: driverData.branchId || null,
@@ -47,22 +48,6 @@ class InMemoryDriverRepository implements IDriverRepository {
           driver.rg.toLowerCase().includes(searchLower),
       );
     }
-
-    const skip = (page - 1) * pageSize;
-    const data = filteredDrivers.slice(skip, skip + pageSize);
-
-    const total = filteredDrivers.length;
-    return { data, total };
-  }
-
-  async listDriverBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListDriverBusinessProps): Promise<ListDriverProps> {
-    const filteredDrivers = this.drivers.filter(
-      (driver) => driver.businessId === businessId,
-    );
 
     const skip = (page - 1) * pageSize;
     const data = filteredDrivers.slice(skip, skip + pageSize);
@@ -130,6 +115,81 @@ class InMemoryDriverRepository implements IDriverRepository {
     }
 
     return found || null;
+  }
+
+  async *streamDriversForExport(
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ): AsyncGenerator<any> {
+    let filtered =
+      userRole === "MASTER"
+        ? [...this.drivers]
+        : this.drivers.filter((driver) => driver.businessId === businessId);
+
+    if (search) {
+      const searchTerm = search.toLowerCase();
+      filtered = filtered.filter(
+        (driver) =>
+          driver.id.toLowerCase().includes(searchTerm) ||
+          driver.name.toLowerCase().includes(searchTerm) ||
+          driver.cnh.toLowerCase().includes(searchTerm) ||
+          driver.cpf.includes(searchTerm) ||
+          driver.rg.includes(searchTerm) ||
+          driver.city.toLowerCase().includes(searchTerm) ||
+          driver.uf.toLowerCase().includes(searchTerm) ||
+          driver.street.toLowerCase().includes(searchTerm),
+      );
+    }
+
+    for (const driver of filtered) {
+      yield {
+        id: driver.id,
+        name: driver.name,
+        birth_date: driver.birth_date,
+        cnh: driver.cnh,
+        cpf: driver.cpf,
+        rg: driver.rg,
+        cep: driver.cep,
+        city: driver.city,
+        uf: driver.uf,
+        street: driver.street,
+        address_number: driver.address_number,
+        complement: driver.complement,
+        status: driver.status,
+        contract_type: driver.contract_type,
+        branchId: driver.branchId,
+        branchName: null,
+        businessId: driver.businessId,
+        ...(userRole === "MASTER" ? { businessName: null } : {}),
+        created_at: driver.created_at,
+        updated_at: driver.updated_at,
+      };
+    }
+  }
+
+  async searchDriverWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchDriverWithCursorProps): Promise<CursorPaginatedDriver> {
+    let filtered = this.drivers.filter(
+      (driver) => driver.businessId === businessId,
+    );
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((d) => d.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

@@ -4,9 +4,9 @@ import {
   ListFuelProps,
   ListFuelByBusinessIdProps,
   UpdateFuel,
-  ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
-  ListFuelByVehicleIdProps,
+  SearchFuelByVehicleWithCursorProps,
+  CursorPaginatedFuel,
 } from "../dtos/fuel-dto";
 
 interface IFuelRepository {
@@ -14,11 +14,6 @@ interface IFuelRepository {
   listFuels: (
     listFuelProps: ListFuelByBusinessIdProps,
   ) => Promise<ListFuelProps>;
-  listFuelBusiness: ({
-    page,
-    pageSize,
-    businessId,
-  }: ListFuelBusinessProps) => Promise<ListFuelProps>;
   updateFuel: ({ fuelData, fuelId }: UpdateFuel) => Promise<Fuel>;
   deleteFuel: (fuelId: string) => Promise<Fuel>;
   findFuelById: (fuelId: string) => Promise<Fuel | null>;
@@ -34,18 +29,18 @@ interface IFuelRepository {
   findFuelsByVehicleId: (vehicleId: string) => Promise<Fuel[]>;
   findFuelsByDriverId: (driverId: string) => Promise<Fuel[]>;
   findFuelsByFuelTypeId: (fuelTypeId: string) => Promise<Fuel[]>;
-  getAllFuelsForExport: (
+  streamFuelsForExport(
     businessId: string,
     userRole: string,
     search?: string,
-  ) => Promise<any[]>;
+  ): AsyncGenerator<any>;
   getPreviousFuelByVehicleId: (
     vehicleId: string,
     currentFuelDate: Date | string,
   ) => Promise<Fuel | null>;
-  listFuelsByVehicleId: (
-    listFuelProps: ListFuelByVehicleIdProps,
-  ) => Promise<ListFuelProps>;
+  searchFuelByVehicleWithCursor: (
+    props: SearchFuelByVehicleWithCursorProps,
+  ) => Promise<CursorPaginatedFuel>;
 }
 
 export { IFuelRepository };

@@ -4,7 +4,8 @@ import {
   ListDriverProps,
   ListDriverByBusinessIdProps,
   UpdateDriver,
-  ListDriverBusinessProps,
+  SearchDriverWithCursorProps,
+  CursorPaginatedDriver,
 } from "../dtos/driver-dto";
 
 interface IDriverRepository {
@@ -12,11 +13,6 @@ interface IDriverRepository {
   listDrivers: (
     listDriverProps: ListDriverByBusinessIdProps,
   ) => Promise<ListDriverProps>;
-  listDriverBusiness: ({
-    page,
-    pageSize,
-    businessId,
-  }: ListDriverBusinessProps) => Promise<ListDriverProps>;
   updateDriver: ({ driverData, driverId }: UpdateDriver) => Promise<Driver>;
   deleteDriver: (driverId: string) => Promise<Driver>;
   findDriverById: (driverId: string) => Promise<Driver | null>;
@@ -29,6 +25,14 @@ interface IDriverRepository {
       })
     | null
   >;
+  streamDriversForExport: (
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ) => AsyncGenerator<any>;
+  searchDriverWithCursor: (
+    props: SearchDriverWithCursorProps,
+  ) => Promise<CursorPaginatedDriver>;
 }
 
 export { IDriverRepository };

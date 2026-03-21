@@ -14,6 +14,17 @@ const profileAccessSchemas = {
   listProfileBusiness: listPagesByBusinessSchema,
   updateDeleteProfileAccess: updateDeleteProfileAccessSchema,
   updateProfileAccess: updateProfileAccessSchema,
+  searchProfileCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de perfis a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID do último perfil da página anterior para paginação"),
+    businessId: z.string().describe("ID da empresa"),
+  }),
 };
 
 const profileAccessResponses = {
@@ -58,6 +69,14 @@ const profileAccessResponses = {
 
   profileAccessDeleted: z.object({
     message: z.string().default("Perfil de acesso deletado com sucesso!"),
+  }),
+
+  searchProfileStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are profile access objects.",
+      ),
   }),
 
   // Common error responses

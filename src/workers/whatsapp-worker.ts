@@ -17,7 +17,6 @@ const { queueName } = workerData as WhatsAppWorkerData;
 
 // Create WhatsApp provider instance (adjust based on your provider)
 const whatsAppProvider = new EvolutionApiProvider();
-
 let whatsAppQueue: WhatsAppQueueWithClose;
 
 // Initializes the WhatsApp queue when the worker is started
@@ -100,6 +99,7 @@ parentPort?.on("message", async (message) => {
           if (whatsAppQueue.close) {
             await whatsAppQueue.close();
           }
+
           parentPort?.postMessage({ type: "closed", id });
         } catch (shutdownError) {
           console.error(

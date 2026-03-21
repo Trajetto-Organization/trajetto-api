@@ -5,7 +5,8 @@ import {
   ListFuelTypeByBusinessIdProps,
   ListFuelTypeProps,
   UpdateFuelType,
-  ListFuelTypeBusinessProps,
+  SearchFuelTypeWithCursorProps,
+  CursorPaginatedFuelType,
 } from "../dtos/fuel-type-dto";
 
 import database from "@/../infra/database";
@@ -68,54 +69,31 @@ class FuelTypeRepository implements IFuelTypeRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const fuelTypeData = await this.prisma.fuelType.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
+    const [fuelTypeData, total] = await Promise.all([
+      this.prisma.fuelType.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
           },
         },
-      },
-      orderBy: {
-        created_at: "desc",
-      },
-    });
-
-    const total = await this.prisma.fuelType.count({
-      where: whereCondition,
-    });
+        orderBy: {
+          created_at: "desc",
+        },
+      }),
+      this.prisma.fuelType.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return {
       data: fuelTypeData,
       total,
     };
-  }
-
-  async listFuelTypeBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListFuelTypeBusinessProps): Promise<ListFuelTypeProps> {
-    const skip = (page - 1) * pageSize;
-
-    const fuelTypeBusinessData = await this.prisma.fuelType.findMany({
-      skip,
-      take: pageSize,
-      where: {
-        businessId,
-      },
-    });
-
-    const total = await this.prisma.fuelType.count({
-      where: {
-        businessId,
-      },
-    });
-
-    return { data: fuelTypeBusinessData, total };
   }
 
   async updateFuelType({
@@ -187,6 +165,31 @@ class FuelTypeRepository implements IFuelTypeRepository {
     });
 
     return findFuelTypeByDescription;
+  }
+
+  async searchFuelTypeWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchFuelTypeWithCursorProps): Promise<CursorPaginatedFuelType> {
+    const items = await this.prisma.fuelType.findMany({
+      where: { businessId },
+      take: limit + 1,
+      ...(cursor && {
+        cursor: { id: cursor },
+        skip: 1,
+      }),
+      orderBy: {
+        created_at: "desc",
+      },
+    });
+
+    const hasMore = items.length > limit;
+
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

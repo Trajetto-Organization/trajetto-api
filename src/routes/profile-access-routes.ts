@@ -6,7 +6,7 @@ import { ListProfileAccessController } from "@/modules/profile-access/usecases/l
 import { DeleteProfileAccessController } from "@/modules/profile-access/usecases/delete-profile-access/delete-profile-access-controller";
 import { UpdateProfileAccessController } from "@/modules/profile-access/usecases/update-profile-access/update-profile-access-controller";
 
-import { ListProfileBusinessController } from "@/modules/profile-access/usecases/list-profile-business/list-profile-business-controller";
+import { SearchProfileCursorController } from "@/modules/profile-access/usecases/search-profile-cursor/search-profile-cursor-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -19,7 +19,7 @@ import {
 const createProfileAccessController = new CreateProfileAccessController();
 const listProfileAccessController = new ListProfileAccessController();
 
-const listProfileBusinessController = new ListProfileBusinessController();
+const searchProfileCursorController = new SearchProfileCursorController();
 
 const updateProfileAccessController = new UpdateProfileAccessController();
 const deleteProfileAccessController = new DeleteProfileAccessController();
@@ -70,25 +70,28 @@ async function profileAccessRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-profile-business",
+    "/search-profile-business",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("profile_access_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
-        summary: "List profiles by business",
+        summary: "Search profiles by business (cursor-based)",
         description:
-          "Retrieve a paginated list of profile access templates filtered by specific business",
-        querystring: profileAccessSchemas.listProfileBusiness,
+          "Retrieve profile access templates as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual profile access objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: profileAccessSchemas.searchProfileCursor,
         response: {
-          200: profileAccessResponses.profileBusinessList,
+          200: profileAccessResponses.searchProfileStreamDescription,
           400: profileAccessResponses.listProfileBusinessErrors,
           500: profileAccessResponses.internalServerError,
         },
       },
     },
-    listProfileBusinessController.handle,
+    searchProfileCursorController.handle,
   );
 
   app.patch(

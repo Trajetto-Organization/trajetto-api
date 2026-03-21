@@ -4,7 +4,7 @@ import { CreateSupplierController } from "@/modules/supplier/usecases/create-sup
 import { DeleteSupplierController } from "@/modules/supplier/usecases/delete-supplier/delete-supplier-controller";
 
 import { ListSupplierController } from "@/modules/supplier/usecases/list-supplier/list-supplier-controller";
-import { ListSupplierBusinessController } from "@/modules/supplier/usecases/list-supplier-business/list-supplier-business-controller";
+import { SearchSupplierCursorController } from "@/modules/supplier/usecases/search-supplier-cursor/search-supplier-cursor-controller";
 
 import { UpdateSupplierController } from "@/modules/supplier/usecases/update-supplier/update-supplier-controller";
 
@@ -20,7 +20,7 @@ const createSupplierController = new CreateSupplierController();
 const deleteSupplierController = new DeleteSupplierController();
 
 const listSupplierController = new ListSupplierController();
-const listSupplierBusinessController = new ListSupplierBusinessController();
+const searchSupplierCursorController = new SearchSupplierCursorController();
 
 const updateSupplierController = new UpdateSupplierController();
 
@@ -71,25 +71,28 @@ async function supplierRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-supplier-business",
+    "/search-supplier-business",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("supplier_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
-        summary: "List suppliers by business",
+        summary: "Search suppliers by business (cursor-based)",
         description:
-          "Retrieve a paginated list of suppliers filtered by specific business with search functionality",
-        querystring: supplierSchemas.listSupplierBusiness,
+          "Retrieve suppliers as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual supplier objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: supplierSchemas.searchSupplierCursor,
         response: {
-          200: supplierResponses.supplierBusinessList,
+          200: supplierResponses.searchSupplierStreamDescription,
           400: supplierResponses.listSupplierBusinessErrors,
           500: supplierResponses.internalServerError,
         },
       },
     },
-    listSupplierBusinessController.handle,
+    searchSupplierCursorController.handle,
   );
 
   app.patch(

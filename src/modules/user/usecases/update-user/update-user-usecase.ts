@@ -9,9 +9,9 @@ import { IDriverRepository } from "@/modules/driver/repositories/IDriver-reposit
 import { IProfileAccessRepository } from "@/modules/profile-access/repositories/IProfile-access-repository";
 
 import { UserAlreadyExistsError } from "../errors/user-already-exists.error";
-import { BusinessNotFoundError } from "../errors/business-not-found-error";
+import { BusinessNotFoundError } from "../../../business/usecases/errors/business-not-found-error";
 
-import { DriverAlreadyLinkedToUserError } from "../errors/driver-already-linked-to-user-error";
+import { UserDriverAlreadyLinkedToUserError } from "../errors/user-driver-already-linked-to-user-error";
 import { UserCannotHaveBothDriverAndProfileError } from "../errors/user-cannot-have-both-driver-and-profile-error";
 
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -19,7 +19,7 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 
 import { NotificationService } from "@/shared/services/notification-service";
 
-import { ProfileAccessNotFoundError } from "../errors/profile-access-not-found-error";
+import { UserProfileAccessNotFoundError } from "../errors/user-profile-access-not-found-error";
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 
 import { UpdateUser, User, UserRole } from "../../dtos/user-dto";
@@ -31,9 +31,9 @@ import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-mat
 import { UserMasterOnlyCanBeUpdatePasswordError } from "../errors/user-master-only-can-be-update-password-error";
 
 import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
-import { env } from "@/env";
-
 import { sendSecurityEventToUser } from "@/websocket";
+
+import { env } from "@/env";
 
 @injectable()
 class UpdateUserUseCase {
@@ -115,7 +115,7 @@ class UpdateUserUseCase {
       );
 
       if (driverLinkedUser && driverLinkedUser.id !== userId) {
-        throw new DriverAlreadyLinkedToUserError();
+        throw new UserDriverAlreadyLinkedToUserError();
       }
     }
 
@@ -129,7 +129,7 @@ class UpdateUserUseCase {
           );
 
         if (!existingProfileAccess) {
-          throw new ProfileAccessNotFoundError();
+          throw new UserProfileAccessNotFoundError();
         }
 
         // Validate against target business (new business if changing, otherwise current)
@@ -180,12 +180,41 @@ class UpdateUserUseCase {
       }
     }
 
+    // Sanitize data before sending to repository
+    const cleanUserData = { ...userData };
+
+    // Password: only send if provided (already hashed above)
+    if (hashedPassword) {
+      cleanUserData.password = hashedPassword;
+    } else {
+      delete cleanUserData.password;
+    }
+
+    // BUSINESS_ADMIN: must not have profileAccess or driver
+    if (cleanUserData.role === "BUSINESS_ADMIN") {
+      cleanUserData.profileAccessId = null;
+      cleanUserData.driverId = null;
+    }
+
+    // Empty strings mean "disconnect" — normalize to null
+    if (
+      cleanUserData.profileAccessId !== undefined &&
+      (cleanUserData.profileAccessId === "" ||
+        cleanUserData.profileAccessId === null)
+    ) {
+      cleanUserData.profileAccessId = null;
+    }
+
+    if (
+      cleanUserData.driverId !== undefined &&
+      (cleanUserData.driverId === "" || cleanUserData.driverId === null)
+    ) {
+      cleanUserData.driverId = null;
+    }
+
     try {
       const userUpdated = await this.user.updateUser({
-        userData: {
-          ...userData,
-          ...(hashedPassword && { password: hashedPassword }),
-        },
+        userData: cleanUserData,
         userId,
       });
 
@@ -227,9 +256,11 @@ class UpdateUserUseCase {
         businessId: userData.businessId,
       });
 
-      // Notify user if security-relevant fields changed (role, profile, driver)
       const securityFieldsChanged =
+        !!hashedPassword ||
         userData.role !== undefined ||
+        userData.email !== undefined ||
+        userData.businessId !== undefined ||
         userData.profileAccessId !== undefined ||
         userData.driverId !== undefined;
 

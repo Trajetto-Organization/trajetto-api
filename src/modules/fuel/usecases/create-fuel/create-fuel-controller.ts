@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { CreateFuelUseCase } from "./create-fuel-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -18,8 +18,8 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-belong-business-error";
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 
-import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
-import { VehicleInvalidStatusForFuelError } from "../errors/vehicle-invalid-status-for-fuel-error";
+import { VehicleMileageInvalidError } from "../../../vehicle/usecases/errors/vehicle-mileage-invalid-error";
+import { FuelVehicleInvalidStatusForFuelError } from "../errors/fuel-vehicle-invalid-status-for-fuel-error";
 
 import { FuelLocationNotProvidedAdjustmentValidationError } from "../errors/fuel-location-not-provided-adjustment-validation-error";
 import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
@@ -120,7 +120,7 @@ class CreateFuelController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof VehicleInvalidStatusForFuelError) {
+      if (error instanceof FuelVehicleInvalidStatusForFuelError) {
         return reply.status(400).send({ message: error.message });
       }
 

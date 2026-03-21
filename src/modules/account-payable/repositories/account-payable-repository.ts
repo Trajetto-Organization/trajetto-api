@@ -4,7 +4,8 @@ import {
   CreateAccountPayableProps,
   ListAccountPayableProps,
   ListAccountPayableByBusinessIdProps,
-  ListAccountPayableByResponsibleUserIdProps,
+  SearchAccountPayableWithCursorProps,
+  CursorPaginatedAccountPayable,
   UpdateAccountPayable,
 } from "../dtos/account-payable-dto";
 
@@ -151,49 +152,50 @@ class AccountPayableRepository implements IAccountPayableRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const accountPayableData = await this.prisma.accountPayable.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
+    const [accountPayableData, total] = await Promise.all([
+      this.prisma.accountPayable.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
           },
-        },
-        branch: {
-          select: {
-            corporate_reason: true,
-            fantasy_name: true,
+          branch: {
+            select: {
+              corporate_reason: true,
+              fantasy_name: true,
+            },
           },
-        },
-        serviceOrder: {
-          select: {
-            id: true,
-            date: true,
-            maintenance_type: true,
-            vehicle: {
-              select: {
-                license_plate: true,
-                description: true,
+          serviceOrder: {
+            select: {
+              id: true,
+              date: true,
+              maintenance_type: true,
+              vehicle: {
+                select: {
+                  license_plate: true,
+                  description: true,
+                },
               },
             },
           },
-        },
-        registrationUser: {
-          select: {
-            name: true,
+          registrationUser: {
+            select: {
+              name: true,
+            },
           },
         },
-      },
-      orderBy: {
-        created_at: "desc", // Sort by created_at, closest first
-      },
-    });
-
-    const total = await this.prisma.accountPayable.count({
-      where: whereCondition,
-    });
+        orderBy: {
+          created_at: "desc", // Sort by created_at, closest first
+        },
+      }),
+      this.prisma.accountPayable.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return { data: accountPayableData, total };
   }
@@ -287,23 +289,19 @@ class AccountPayableRepository implements IAccountPayableRepository {
     return accountPayables;
   }
 
-  async listAccountPayablesByResponsibleUserId({
-    page,
-    pageSize,
-    responsibleUserId,
+  async searchAccountPayableByResponsibleUserWithCursor({
+    limit = 10,
+    cursor,
     businessId,
-  }: ListAccountPayableByResponsibleUserIdProps): Promise<ListAccountPayableProps> {
-    const skip = (page - 1) * pageSize;
-
-    const whereCondition = {
-      registrationUserId: responsibleUserId,
-      businessId,
-    };
-
-    const accountPayableData = await this.prisma.accountPayable.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
+    userId,
+  }: SearchAccountPayableWithCursorProps): Promise<CursorPaginatedAccountPayable> {
+    const items = await this.prisma.accountPayable.findMany({
+      where: {
+        registrationUserId: userId,
+        businessId,
+      },
+      take: limit + 1,
+      ...(cursor && { cursor: { id: cursor }, skip: 1 }),
       include: {
         business: {
           select: {
@@ -340,14 +338,12 @@ class AccountPayableRepository implements IAccountPayableRepository {
       },
     });
 
-    const total = await this.prisma.accountPayable.count({
-      where: whereCondition,
-    });
+    const hasMore = items.length > limit;
 
-    return {
-      data: accountPayableData,
-      total,
-    };
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

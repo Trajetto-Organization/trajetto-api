@@ -45,7 +45,7 @@ interface UpdateAccountPayableProps {
   payment_date?: Date | string | null;
   amount?: number;
   amount_paid?: number | null;
-  branchId?: string;
+  branchId?: string | null;
   serviceOrderId?: string | null;
   registrationUserId?: string | null;
 }
@@ -68,11 +68,17 @@ interface ListAccountPayableByBusinessIdProps {
   search?: string;
 }
 
-interface ListAccountPayableByResponsibleUserIdProps {
-  page: number;
-  pageSize: number;
-  responsibleUserId: string;
+interface SearchAccountPayableWithCursorProps {
+  limit: number;
+  cursor?: string;
   businessId: string;
+  userId: string;
+}
+
+interface CursorPaginatedAccountPayable {
+  data: AccountPayable[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 export {
@@ -82,6 +88,7 @@ export {
   UpdateAccountPayable,
   ListAccountPayableProps,
   ListAccountPayableByBusinessIdProps,
-  ListAccountPayableByResponsibleUserIdProps,
+  SearchAccountPayableWithCursorProps,
+  CursorPaginatedAccountPayable,
   AccountPayableStatus,
 };

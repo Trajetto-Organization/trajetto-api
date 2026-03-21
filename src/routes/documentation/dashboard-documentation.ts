@@ -147,13 +147,13 @@ const dashboardResponses = {
             role: z.string().describe("User role"),
             name: z.string().describe("User name"),
           })
-          .optional()
+          .nullish()
           .describe("User information"),
         business: z
           .object({
             corporate_reason: z.string().describe("Business corporate reason"),
           })
-          .optional()
+          .nullish()
           .describe("Business information"),
         created_at: z
           .union([z.string(), z.date()])

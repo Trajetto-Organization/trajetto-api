@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { hash } from "bcrypt";
 
 import { AuthenticateUserUseCase } from "@/modules/user/usecases/authenticate-user/authenticate-user-usecase";
-import { InvalidCredentialsError } from "@/modules/user/usecases/errors/invalid-credentials-error";
+import { UserInvalidCredentialsError } from "@/modules/user/usecases/errors/user-invalid-credentials-error";
 
 import { UserNotFoundPermissionOrProfileAccess } from "@/modules/user/usecases/errors/user-not-found-permission-profile-access-error";
 import { UserRevokedAccessError } from "@/modules/user/usecases/errors/user-revoked-access-error";
@@ -157,7 +157,7 @@ describe("Authenticate User UseCase", () => {
         email: "test@example.com.br",
         password: "streamlide@2025",
       }),
-    ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    ).rejects.toBeInstanceOf(UserInvalidCredentialsError);
   });
 
   it("should not be able to authenticate with wrong password", async () => {
@@ -178,7 +178,7 @@ describe("Authenticate User UseCase", () => {
         email: "test@example.com.br",
         password: "user2025",
       }),
-    ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    ).rejects.toBeInstanceOf(UserInvalidCredentialsError);
   });
 
   it("should throw UserNotFoundPermissionOrProfileAccess if BUSINESS_USER does not have profileAccess or permissions", async () => {

@@ -33,6 +33,12 @@ interface Fuel {
   // 🆕 RECORD ORIGIN: Track where the record was created
   created_from: RecordOrigin;
 
+  // AI Verification fields
+  odometer_ai_reading?: number | null;
+  odometer_ai_status: string;
+  odometer_ai_details?: any;
+  odometer_ai_analyzed_at?: Date | string | null;
+
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -105,12 +111,6 @@ interface ListFuelProps {
   total: number;
 }
 
-interface ListFuelBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
-}
-
 interface ListFuelByBusinessIdProps {
   page: number;
   pageSize: number;
@@ -127,13 +127,6 @@ interface ListFuelByBusinessIdProps {
 interface GetFuelByIdAndBusinessProps {
   businessId: string;
   fuelId: string;
-}
-
-interface ListFuelByVehicleIdProps {
-  vehicleId: string;
-  businessId: string;
-  page: number;
-  pageSize: number;
 }
 
 interface FuelWithRelations {
@@ -182,6 +175,19 @@ interface FuelWithRelations {
   };
 }
 
+interface SearchFuelByVehicleWithCursorProps {
+  limit: number;
+  cursor?: string;
+  vehicleId: string;
+  businessId: string;
+}
+
+interface CursorPaginatedFuel {
+  data: Fuel[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export {
   Fuel,
   CreateFuelProps,
@@ -189,8 +195,8 @@ export {
   UpdateFuel,
   ListFuelProps,
   ListFuelByBusinessIdProps,
-  ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
-  ListFuelByVehicleIdProps,
   FuelWithRelations,
+  SearchFuelByVehicleWithCursorProps,
+  CursorPaginatedFuel,
 };

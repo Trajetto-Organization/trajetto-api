@@ -5,7 +5,7 @@ import { hash } from "bcrypt";
 import auth from "@/config/auth";
 
 import { RefreshTokenUseCase } from "@/modules/user/usecases/refresh-token/refresh-token-usecase";
-import { RefreshTokenNotExistsError } from "@/modules/user/usecases/errors/refresh-token-not-exists-error";
+import { UserRefreshTokenNotExistsError } from "@/modules/user/usecases/errors/user-refresh-token-not-exists-error";
 
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
@@ -15,7 +15,7 @@ import { AuthenticateUserUseCase } from "@/modules/user/usecases/authenticate-us
 import { UserNotFoundPermissionOrProfileAccess } from "@/modules/user/usecases/errors/user-not-found-permission-profile-access-error";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
 
-import { InvalidCredentialsError } from "@/modules/user/usecases/errors/invalid-credentials-error";
+import { UserInvalidCredentialsError } from "@/modules/user/usecases/errors/user-invalid-credentials-error";
 
 import { UserRevokedAccessError } from "@/modules/user/usecases/errors/user-revoked-access-error";
 import { AppError } from "@/shared/errors/AppError";
@@ -85,7 +85,7 @@ describe("Refresh Token UseCase", () => {
     });
 
     await expect(refreshTokenUseCase.execute(token)).rejects.toBeInstanceOf(
-      InvalidCredentialsError,
+      UserInvalidCredentialsError,
     );
   });
 
@@ -140,7 +140,7 @@ describe("Refresh Token UseCase", () => {
     });
 
     await expect(refreshTokenUseCase.execute(token)).rejects.toBeInstanceOf(
-      RefreshTokenNotExistsError,
+      UserRefreshTokenNotExistsError,
     );
   });
 

@@ -4,11 +4,11 @@ import { container } from "tsyringe";
 import { DeleteFuelUseCase } from "./delete-fuel-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { updateDeleteFuelSchema } from "@/schemas/update-delete-fuel-schema";
 
-import { DriverCannotDeleteFuelError } from "../errors/driver-cannot-delete-fuel-error";
+import { FuelDriverCannotDeleteFuelError } from "../errors/fuel-driver-cannot-delete-fuel-error";
 import { FuelNotBelongBusinessError } from "../errors/fuel-not-belong-business-error";
 
 import { FuelNotFoundError } from "../errors/fuel-not-found-error";
@@ -57,7 +57,7 @@ class DeleteFuelController {
         });
       }
 
-      if (error instanceof DriverCannotDeleteFuelError) {
+      if (error instanceof FuelDriverCannotDeleteFuelError) {
         return reply.status(400).send({
           message: error.message,
         });

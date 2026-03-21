@@ -17,7 +17,6 @@ class DeleteQuoteController {
 
     try {
       await deleteQuoteUseCase.execute(quoteId, userId);
-
       return reply.status(200).send({
         message: "Orçamento deletado com sucesso!",
       });

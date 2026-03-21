@@ -4,7 +4,6 @@ import {
   ListVehicleChecklistProps,
   ListVehicleChecklistByBusinessIdProps,
   UpdateVehicleChecklist,
-  ListVehicleChecklistBusinessProps,
   GetVehicleChecklistByIdAndBusinessProps,
   VehicleChecklistWithRelations,
 } from "../dtos/vehicle-checklist-dto";
@@ -16,11 +15,6 @@ interface IVehicleChecklistRepository {
   listVehicleChecklists: (
     listChecklistProps: ListVehicleChecklistByBusinessIdProps,
   ) => Promise<ListVehicleChecklistProps>;
-  listVehicleChecklistBusiness: ({
-    page,
-    pageSize,
-    businessId,
-  }: ListVehicleChecklistBusinessProps) => Promise<ListVehicleChecklistProps>;
   updateVehicleChecklist: ({
     checklistData,
     checklistId,
@@ -46,11 +40,11 @@ interface IVehicleChecklistRepository {
   findVehicleChecklistsByDriverId: (
     driverId: string,
   ) => Promise<VehicleChecklist[]>;
-  getAllVehicleChecklistsForExport: (
+  streamChecklistsForExport(
     businessId: string,
     userRole: string,
     search?: string,
-  ) => Promise<any[]>;
+  ): AsyncGenerator<any>;
 }
 
 export { IVehicleChecklistRepository };

@@ -9,8 +9,8 @@ import { CreatePermissionProps, Permission } from "../../dtos/permission-dto";
 import { PermissionAlreadyExistsError } from "../errors/permission-already-exists-error";
 import { PermissionAlreadyAssignedError } from "../errors/permission-already-assigned-error";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
-import { ProfileAccessNotFoundError } from "@/modules/user/usecases/errors/profile-access-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+import { UserProfileAccessNotFoundError } from "@/modules/user/usecases/errors/user-profile-access-not-found-error";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
@@ -64,7 +64,7 @@ class CreatePermissionUseCase {
       await this.profileAccess.findProfileAccessById(profileAccessId);
 
     if (!findProfileAccessById) {
-      throw new ProfileAccessNotFoundError();
+      throw new UserProfileAccessNotFoundError();
     }
 
     if (findProfileAccessById.businessId !== businessId) {

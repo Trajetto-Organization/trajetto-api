@@ -7,7 +7,7 @@ import { updateDeleteSupplierSchema } from "@/schemas/update-delete-supplier-sch
 import { updateSupplierSchema } from "@/schemas/update-supplier-schema";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { SupplierNotFoundError } from "../errors/supplier-not-found-error";
 import { SupplierNameAlreadyExistsError } from "../errors/supplier-name-already-exists-error";

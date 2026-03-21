@@ -1,4 +1,4 @@
-import { v4 as uuidV4 } from "uuid";
+import { v7 as uuidV7 } from "uuid";
 
 import { Decimal } from "@prisma/client/runtime/library";
 import { IFuelRepository } from "../IFuel-repository";
@@ -9,9 +9,9 @@ import {
   ListFuelProps,
   ListFuelByBusinessIdProps,
   UpdateFuel,
-  ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
-  ListFuelByVehicleIdProps,
+  SearchFuelByVehicleWithCursorProps,
+  CursorPaginatedFuel,
 } from "../../dtos/fuel-dto";
 
 class InMemoryFuelRepository implements IFuelRepository {
@@ -19,7 +19,7 @@ class InMemoryFuelRepository implements IFuelRepository {
 
   async createFuel(fuelData: CreateFuelProps): Promise<Fuel> {
     const newFuel: Fuel = {
-      id: uuidV4(),
+      id: uuidV7(),
       current_mileage: fuelData.current_mileage,
       liters_amount: new Decimal(fuelData.liters_amount.toString()),
       price_per_liter: new Decimal(fuelData.price_per_liter.toString()),
@@ -43,6 +43,7 @@ class InMemoryFuelRepository implements IFuelRepository {
       latitude_original: fuelData.latitude_original || null,
       longitude_original: fuelData.longitude_original || null,
       location_source: fuelData.location_source || null,
+      odometer_ai_status: "",
       created_from: fuelData.created_from,
       created_at: new Date(),
       updated_at: new Date(),
@@ -110,22 +111,6 @@ class InMemoryFuelRepository implements IFuelRepository {
     const skip = (page - 1) * pageSize;
 
     const data = filteredFuels.slice(skip, skip + pageSize) as any[];
-    const total = filteredFuels.length;
-
-    return { data, total };
-  }
-
-  async listFuelBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListFuelBusinessProps): Promise<ListFuelProps> {
-    const filteredFuels = this.fuels.filter(
-      (fuel) => fuel.businessId === businessId,
-    );
-
-    const skip = (page - 1) * pageSize;
-    const data = filteredFuels.slice(skip, skip + pageSize);
     const total = filteredFuels.length;
 
     return { data, total };
@@ -265,29 +250,6 @@ class InMemoryFuelRepository implements IFuelRepository {
     return this.fuels.filter((fuel) => fuel.fuelTypeId === fuelTypeId);
   }
 
-  async getAllFuelsForExport(
-    businessId: string,
-    userRole: string,
-    search?: string,
-  ): Promise<any[]> {
-    let filteredFuels =
-      userRole === "MASTER"
-        ? [...this.fuels]
-        : this.fuels.filter((fuel) => fuel.businessId === businessId);
-
-    if (search) {
-      const searchTerm = search.toLowerCase();
-      filteredFuels = filteredFuels.filter(
-        (fuel) =>
-          fuel.id.toLowerCase().includes(searchTerm) ||
-          fuel.notes?.toLowerCase().includes(searchTerm) ||
-          fuel.current_mileage.toString().includes(searchTerm),
-      );
-    }
-
-    return filteredFuels;
-  }
-
   async findFuelsByBusinessId(businessId: string): Promise<Fuel[]> {
     return this.fuels.filter((fuel) => fuel.businessId === businessId);
   }
@@ -326,33 +288,80 @@ class InMemoryFuelRepository implements IFuelRepository {
     return previousFuels[0];
   }
 
-  async listFuelsByVehicleId({
+  async searchFuelByVehicleWithCursor({
+    limit = 10,
+    cursor,
     vehicleId,
     businessId,
-    page,
-    pageSize,
-  }: ListFuelByVehicleIdProps): Promise<ListFuelProps> {
-    const skip = (page - 1) * pageSize;
-
-    // Filter fuels by vehicleId and businessId
-    const filteredFuels = this.fuels.filter(
+  }: SearchFuelByVehicleWithCursorProps): Promise<CursorPaginatedFuel> {
+    let filtered = this.fuels.filter(
       (fuel) => fuel.vehicleId === vehicleId && fuel.businessId === businessId,
     );
 
-    // Sort by created_at descending (most recent first)
-    const sortedFuels = filteredFuels.sort((a, b) => {
-      const dateA = new Date(a.created_at).getTime();
-      const dateB = new Date(b.created_at).getTime();
-      return dateB - dateA;
-    });
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((f) => f.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
 
-    // Paginate
-    const paginatedFuels = sortedFuels.slice(skip, skip + pageSize);
+    const hasMore = filtered.length > limit;
 
-    return {
-      data: paginatedFuels,
-      total: sortedFuels.length,
-    };
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
+  }
+
+  async *streamFuelsForExport(
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ): AsyncGenerator<any> {
+    let filtered =
+      userRole === "MASTER"
+        ? [...this.fuels]
+        : this.fuels.filter((fuel) => fuel.businessId === businessId);
+
+    if (search) {
+      const searchTerm = search.toLowerCase();
+      filtered = filtered.filter(
+        (fuel) =>
+          fuel.id.toLowerCase().includes(searchTerm) ||
+          fuel.notes?.toLowerCase().includes(searchTerm) ||
+          fuel.current_mileage.toString().includes(searchTerm),
+      );
+    }
+
+    for (const fuel of filtered) {
+      yield {
+        id: fuel.id,
+        vehicleLicensePlate: null,
+        vehicleDescription: null,
+        vehicleBrand: null,
+        vehicleModel: null,
+        driverName: null,
+        driverCnh: null,
+        fuelTypeDescription: null,
+        litersAmount: Number(fuel.liters_amount),
+        pricePerLiter: Number(fuel.price_per_liter),
+        totalAmount: Number(fuel.total_amount),
+        currentMileage: fuel.current_mileage,
+        odometerVerified: fuel.odometer_verified,
+        notes: fuel.notes,
+        refueling_date: fuel.refueling_date,
+        branchName: null,
+        ...(userRole === "MASTER" ? { businessName: null } : {}),
+        latitude: fuel.latitude ?? null,
+        longitude: fuel.longitude ?? null,
+        latitude_original: fuel.latitude_original ?? null,
+        longitude_original: fuel.longitude_original ?? null,
+        location_source: fuel.location_source ?? null,
+        created_from: fuel.created_from,
+        created_at: fuel.created_at,
+        updated_at: fuel.updated_at,
+      };
+    }
   }
 }
 

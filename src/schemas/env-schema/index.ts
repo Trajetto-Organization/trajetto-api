@@ -32,6 +32,9 @@ const envSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_PUBLIC_DOMAIN: z.string().optional(),
+
+  // AI Verification (Claude Haiku Vision)
+  ANTHROPIC_API_KEY: z.string().optional(),
 });
 
 export { envSchema };

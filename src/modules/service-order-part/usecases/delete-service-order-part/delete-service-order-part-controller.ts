@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { DeleteServiceOrderPartUseCase } from "./delete-service-order-part-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
 import { ServiceOrderPartNotFoundError } from "../errors/service-order-part-not-found-error";

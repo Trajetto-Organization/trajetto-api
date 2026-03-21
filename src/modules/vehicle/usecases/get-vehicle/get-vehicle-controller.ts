@@ -6,7 +6,7 @@ import { container } from "tsyringe";
 import { GetVehicleUseCase } from "./get-vehicle-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";
 import { getVehicleSchema } from "@/schemas/get-vehicle-schema";

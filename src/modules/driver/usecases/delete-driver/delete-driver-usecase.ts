@@ -9,7 +9,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { DriverNotBelongBusinessError } from "../errors/driver-not-belong-business-error";
 import { DriverNotFoundError } from "../errors/driver-not-found-error";

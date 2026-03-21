@@ -11,12 +11,15 @@ import {
   UpdateUser,
   UserRole,
   ListUsersByRoleAndBusinessProps,
-  ListUserBusinessProps,
   UpdateUserEmailVerification,
   UpdateUserAccessRevocation,
   UpdateUserWhatsAppSettings,
   UpdateEmailNotifications,
   UpdateActivityNotifications,
+  CreateMasterUserProps,
+  ListMasterUsersProps,
+  SearchUserWithCursorProps,
+  CursorPaginatedUser,
 } from "../dtos/user-dto";
 
 class UserRepository implements IUserRepository {
@@ -31,12 +34,6 @@ class UserRepository implements IUserRepository {
     businessId,
     driverId,
   }: CreateUserProps): Promise<User> {
-    if (role === "MASTER") {
-      throw new Error(
-        "Cannot create MASTER users through this method. Use dedicated MASTER creation method instead.",
-      );
-    }
-
     const userCreated = await this.prisma.user.create({
       data: {
         email,
@@ -44,13 +41,8 @@ class UserRepository implements IUserRepository {
         name,
         role,
         businessId,
-        profileAccessId:
-          role === "BUSINESS_ADMIN" ||
-          !profileAccessId ||
-          profileAccessId.trim() === ""
-            ? null
-            : profileAccessId,
-        driverId: !driverId || driverId.trim() === "" ? null : driverId,
+        profileAccessId: profileAccessId || null,
+        driverId: driverId || null,
       },
     });
 
@@ -146,59 +138,36 @@ class UserRepository implements IUserRepository {
       ...(orConditions.length > 0 ? { OR: orConditions } : {}),
     };
 
-    const usersAccessData = await this.prisma.user.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        ...(currentUserRole === "MASTER" && {
-          business: {
-            select: {
-              corporate_reason: true,
+    const [usersAccessData, total] = await Promise.all([
+      this.prisma.user.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          ...(currentUserRole === "MASTER" && {
+            business: {
+              select: {
+                corporate_reason: true,
+              },
             },
+          }),
+          profileAccess: {
+            select: { name: true },
           },
-        }),
-        profileAccess: {
-          select: { name: true },
+          driver: {
+            select: { name: true },
+          },
         },
-        driver: {
-          select: { name: true },
+        orderBy: {
+          created_at: "desc", // Sort by created_at
         },
-      },
-      orderBy: {
-        created_at: "desc", // Sort by created_at
-      },
-    });
-
-    const total = await this.prisma.user.count({
-      where: whereCondition,
-    });
+      }),
+      this.prisma.user.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return { data: usersAccessData, total };
-  }
-
-  async listUserBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListUserBusinessProps): Promise<ListUsers> {
-    const skip = (page - 1) * pageSize;
-
-    const userBusinessData = await this.prisma.user.findMany({
-      skip,
-      take: pageSize,
-      where: {
-        businessId,
-      },
-    });
-
-    const total = await this.prisma.user.count({
-      where: {
-        businessId,
-      },
-    });
-
-    return { data: userBusinessData, total };
   }
 
   async updateEmailVerification({
@@ -218,7 +187,7 @@ class UserRepository implements IUserRepository {
   }
 
   async updateUser({ userId, userData }: UpdateUser): Promise<User> {
-    // Extract fields that need special handling
+    // Extract relation fields that need Prisma-specific translation
     const {
       businessId,
       profileAccessId,
@@ -228,62 +197,42 @@ class UserRepository implements IUserRepository {
       ...restData
     } = userData;
 
-    // Build base update data (fields that can be updated directly)
+    // Build Prisma update data from direct fields (excluding undefined values)
     const updateData: any = {};
 
-    // Add direct fields (excluding undefined values)
     Object.entries(restData).forEach(([key, value]) => {
       if (value !== undefined) {
         updateData[key] = value;
       }
     });
 
-    // Only add password if it exists and is not empty (already hashed in use case)
-    if (password && password.trim() !== "") {
+    // Password: only include if provided by use case
+    if (password) {
       updateData.password = password;
     }
 
-    // Handle business relation
+    // Translate flat IDs to Prisma relation syntax
+    // businessId: string → connect
     if (businessId) {
       updateData.business = {
         connect: { id: businessId },
       };
     }
 
-    // Handle profileAccess relation
+    // profileAccessId: null → disconnect, string → connect, undefined → skip
     if (profileAccessId !== undefined) {
-      if (profileAccessId === "" || profileAccessId === null) {
-        updateData.profileAccess = {
-          disconnect: true,
-        };
-      } else {
-        updateData.profileAccess = {
-          connect: { id: profileAccessId },
-        };
-      }
+      updateData.profileAccess =
+        profileAccessId === null
+          ? { disconnect: true }
+          : { connect: { id: profileAccessId } };
     }
 
-    // Handle driver relation
+    // driverId: null → disconnect, string → connect, undefined → skip
     if (driverId !== undefined) {
-      if (driverId === "" || driverId === null) {
-        updateData.driver = {
-          disconnect: true,
-        };
-      } else {
-        updateData.driver = {
-          connect: { id: driverId },
-        };
-      }
-    }
-
-    // Handle BUSINESS_ADMIN role (should not have profileAccess or driver)
-    if (updateData.role === "BUSINESS_ADMIN") {
-      updateData.profileAccess = {
-        disconnect: true,
-      };
-      updateData.driver = {
-        disconnect: true,
-      };
+      updateData.driver =
+        driverId === null
+          ? { disconnect: true }
+          : { connect: { id: driverId } };
     }
 
     const updatedUser = await this.prisma.user.update({
@@ -675,6 +624,79 @@ class UserRepository implements IUserRepository {
     });
 
     return updatedUser;
+  }
+
+  async createMasterUser({
+    name,
+    email,
+    password,
+  }: CreateMasterUserProps): Promise<User> {
+    const masterUser = await this.prisma.user.create({
+      data: {
+        name,
+        email,
+        password,
+        role: "MASTER",
+      },
+    });
+
+    return masterUser;
+  }
+
+  async listMasterUsers({
+    page,
+    pageSize,
+    search,
+    currentUserId,
+  }: ListMasterUsersProps): Promise<ListUsers> {
+    const skip = (page - 1) * pageSize;
+    const normalizedSearch = search ? search.trim().toLowerCase() : "";
+
+    const whereCondition: any = {
+      role: "MASTER",
+      ...(currentUserId ? { id: { not: currentUserId } } : {}),
+      ...(normalizedSearch
+        ? {
+            OR: [
+              { id: { contains: normalizedSearch, mode: "insensitive" } },
+              { name: { contains: normalizedSearch, mode: "insensitive" } },
+              { email: { contains: normalizedSearch, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const [data, total] = await Promise.all([
+      this.prisma.user.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        orderBy: { created_at: "desc" },
+      }),
+      this.prisma.user.count({ where: whereCondition }),
+    ]);
+
+    return { data, total };
+  }
+
+  async searchUserWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchUserWithCursorProps): Promise<CursorPaginatedUser> {
+    const items = await this.prisma.user.findMany({
+      where: { businessId },
+      take: limit + 1,
+      ...(cursor && { cursor: { id: cursor }, skip: 1 }),
+      orderBy: { created_at: "desc" },
+    });
+
+    const hasMore = items.length > limit;
+
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

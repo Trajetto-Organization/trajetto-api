@@ -20,6 +20,17 @@ const fuelTypeSchemas = {
   updateFuelType: updateFuelTypeSchema,
   businessIdParam: updateDeleteBusinessSchema,
   fuelTypeBusinessParams: fuelTypeBusinessParams,
+  searchFuelTypeCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de empresas a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID da última empresa da página anterior para paginação"),
+    businessId: z.string().describe("ID da empresa"),
+  }),
 };
 
 const fuelTypeResponses = {
@@ -51,6 +62,14 @@ const fuelTypeResponses = {
 
   fuelTypeDeleted: z.object({
     message: z.string().default("Tipo de combustível deletado com sucesso!"),
+  }),
+
+  searchFuelTypeStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are fuel type objects.",
+      ),
   }),
 
   // Common Error Responses

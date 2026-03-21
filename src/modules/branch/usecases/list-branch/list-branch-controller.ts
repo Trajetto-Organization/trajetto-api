@@ -6,7 +6,7 @@ import { z } from "zod";
 import { ListBranchUseCase } from "./list-branch-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";

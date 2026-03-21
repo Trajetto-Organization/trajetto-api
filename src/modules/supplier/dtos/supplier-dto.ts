@@ -50,15 +50,21 @@ interface ListSupplierProps {
   total: number;
 }
 
-interface ListSupplierBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
-}
-
 interface UpdateSupplier {
   supplierData: Partial<CreateSupplierProps>;
   supplierId: string;
+}
+
+interface SearchSupplierWithCursorProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+}
+
+interface CursorPaginatedSupplier {
+  data: Supplier[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 export {
@@ -68,5 +74,6 @@ export {
   ListSupplierProps,
   UpdateSupplier,
   ListAllSuppliersProps,
-  ListSupplierBusinessProps,
+  SearchSupplierWithCursorProps,
+  CursorPaginatedSupplier,
 };

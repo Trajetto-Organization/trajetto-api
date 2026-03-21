@@ -13,7 +13,7 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { KanbanService } from "@/shared/services/kanban-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
@@ -42,7 +42,7 @@ import {
 import { AppError } from "@/shared/errors/AppError";
 import { env } from "@/env";
 
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 import { buildServiceOrderLink } from "@/shared/utils/link-redirect-page";
 
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";

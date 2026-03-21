@@ -2,8 +2,10 @@ import { IBusinessRepository } from "./IBusiness-repository";
 import {
   Business,
   CreateBusinessProps,
+  CursorPaginatedBusiness,
   ListBusinessByBusinessIdProps,
   ListBusinessProps,
+  SearchBusinessWithCursorProps,
   UpdateBusiness,
 } from "../dtos/business-dto";
 
@@ -79,20 +81,51 @@ class BusinessRepository implements IBusinessRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const businessData = await this.prisma.business.findMany({
-      skip,
-      take: pageSize,
+    const [businessData, total] = await Promise.all([
+      this.prisma.business.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        orderBy: {
+          created_at: "desc", // Sort by created_at
+        },
+      }),
+      this.prisma.business.count({
+        where: whereCondition,
+      }),
+    ]);
+
+    return { data: businessData, total };
+  }
+
+  async searchBusinessWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+    currentUserRole,
+  }: SearchBusinessWithCursorProps): Promise<CursorPaginatedBusiness> {
+    const whereCondition = {
+      ...(currentUserRole !== "MASTER" && { id: businessId }),
+    };
+
+    const businesses = await this.prisma.business.findMany({
       where: whereCondition,
+      take: limit + 1,
+      ...(cursor && {
+        cursor: { id: cursor },
+        skip: 1,
+      }),
       orderBy: {
-        created_at: "desc", // Sort by created_at
+        created_at: "desc",
       },
     });
 
-    const total = await this.prisma.business.count({
-      where: whereCondition,
-    });
+    const hasMore = businesses.length > limit;
 
-    return { data: businessData, total };
+    const data = hasMore ? businesses.slice(0, limit) : businesses;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 
   async updateBusiness({
@@ -182,6 +215,45 @@ class BusinessRepository implements IBusinessRepository {
     });
 
     return findBusinessByEmail;
+  }
+
+  async updateAILimit(
+    businessId: string,
+    ai_analysis_limit: number,
+  ): Promise<Business> {
+    const current = await this.prisma.business.findUnique({
+      where: { id: businessId },
+      select: { ai_analysis_used: true },
+    });
+
+    const currentUsed = current?.ai_analysis_used ?? 0;
+    const updatedBusiness = await this.prisma.business.update({
+      where: { id: businessId },
+      data: {
+        ai_analysis_limit,
+        ...(currentUsed > ai_analysis_limit && {
+          ai_analysis_used: ai_analysis_limit,
+        }),
+      },
+    });
+
+    return updatedBusiness;
+  }
+
+  async findAIUsage(businessId: string) {
+    const business = await this.prisma.business.findUnique({
+      where: { id: businessId },
+      select: {
+        id: true,
+        corporate_reason: true,
+        fantasy_name: true,
+        ai_analysis_limit: true,
+        ai_analysis_used: true,
+        ai_analysis_reset_at: true,
+      },
+    });
+
+    return business;
   }
 }
 

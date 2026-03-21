@@ -88,14 +88,6 @@ interface ListVehicleProps {
   total: number;
 }
 
-interface ListVehicleBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
-  search?: string; // Optional search parameter
-  driverId?: string; // Filter by driver for driver users
-}
-
 interface ListVehicleByBusinessIdProps {
   page: number;
   pageSize: number;
@@ -114,6 +106,18 @@ interface VehicleWithLastFuel extends Vehicle {
   last_fuel_date?: Date | string | null;
 }
 
+interface SearchVehicleWithCursorProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+}
+
+interface CursorPaginatedVehicle {
+  data: Vehicle[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export {
   Vehicle,
   CreateVehicleProps,
@@ -121,7 +125,8 @@ export {
   UpdateVehicle,
   ListVehicleProps,
   ListVehicleByBusinessIdProps,
-  ListVehicleBusinessProps,
   GetVehicleByIdAndBusinessProps,
   VehicleWithLastFuel,
+  SearchVehicleWithCursorProps,
+  CursorPaginatedVehicle,
 };

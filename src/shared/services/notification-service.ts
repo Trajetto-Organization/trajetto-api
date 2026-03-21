@@ -11,7 +11,7 @@ interface CreateActivityProps {
   description: string;
   status: string;
   performedBy: string;
-  businessId: string;
+  businessId: string | null;
   visibilityLevel?: string;
   performingUserRole?: string;
 }
@@ -23,7 +23,7 @@ interface CreateNotificationProps {
   message: string;
   entityId: string;
   link: string;
-  businessId: string;
+  businessId: string | null;
   shouldSendEmail?: boolean;
   shouldSendWhatsApp?: boolean;
   whatsAppMessage?: string;
@@ -85,7 +85,6 @@ class NotificationService {
 
       // WhatsApp for BUSINESS_ADMIN and BUSINESS_USER
       const shouldSendWhatsApp =
-        (user.role === "BUSINESS_ADMIN" || user.role === "BUSINESS_USER") &&
         user.whatsapp_notifications_enabled &&
         notificationData.shouldSendWhatsApp &&
         notificationData.whatsAppMessage;

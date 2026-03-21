@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { UpdateAccountPayableUseCase } from "./update-account-payable-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
 import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
@@ -13,7 +13,7 @@ import { AccountPayableNotFoundError } from "../errors/account-payable-not-found
 import { AccountPayableInvalidAmountError } from "../errors/account-payable-invalid-amount-error";
 
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
-import { RegisterUserNotFoundError } from "@/modules/user/usecases/errors/register-user-not-found-error";
+import { UserRegisterUserNotFoundError } from "@/modules/user/usecases/errors/user-register-user-not-found-error";
 
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
@@ -79,7 +79,7 @@ class UpdateAccountPayableController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof RegisterUserNotFoundError) {
+      if (error instanceof UserRegisterUserNotFoundError) {
         return reply.status(400).send({ message: error.message });
       }
 

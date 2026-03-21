@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { CreateServiceOrderUseCase } from "./create-service-order-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";

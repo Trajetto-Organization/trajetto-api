@@ -4,7 +4,8 @@ import {
   ListAllSuppliersProps,
   ListSupplierProps,
   UpdateSupplier,
-  ListSupplierBusinessProps,
+  SearchSupplierWithCursorProps,
+  CursorPaginatedSupplier,
 } from "../dtos/supplier-dto";
 
 import { ISupplierRepository } from "./ISupplier-repository";
@@ -32,7 +33,6 @@ class SupplierRepository implements ISupplierRepository {
     const normalizedSearch = search ? search.trim().toLowerCase() : "";
 
     const digitSearch = normalizedSearch.replace(/\D/g, "");
-
     let digitSearchPhone = digitSearch;
 
     if (digitSearchPhone.startsWith("55") && digitSearchPhone.length > 10) {
@@ -75,53 +75,30 @@ class SupplierRepository implements ISupplierRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const supplierData = await this.prisma.supplier.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        ...(currentUserRole === "MASTER" && {
-          business: {
-            select: {
-              corporate_reason: true,
+    const [supplierData, total] = await Promise.all([
+      this.prisma.supplier.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          ...(currentUserRole === "MASTER" && {
+            business: {
+              select: {
+                corporate_reason: true,
+              },
             },
-          },
-        }),
-      },
-      orderBy: {
-        created_at: "desc",
-      },
-    });
-
-    const total = await this.prisma.supplier.count({
-      where: whereCondition,
-    });
+          }),
+        },
+        orderBy: {
+          created_at: "desc",
+        },
+      }),
+      this.prisma.supplier.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return { data: supplierData, total };
-  }
-
-  async listSupplierBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListSupplierBusinessProps): Promise<ListSupplierProps> {
-    const skip = (page - 1) * pageSize;
-
-    const supplierBusinessData = await this.prisma.supplier.findMany({
-      skip,
-      take: pageSize,
-      where: {
-        businessId,
-      },
-    });
-
-    const total = await this.prisma.supplier.count({
-      where: {
-        businessId,
-      },
-    });
-
-    return { data: supplierBusinessData, total };
   }
 
   async updateSupplier({
@@ -217,6 +194,31 @@ class SupplierRepository implements ISupplierRepository {
     });
 
     return supplier;
+  }
+
+  async searchSupplierWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchSupplierWithCursorProps): Promise<CursorPaginatedSupplier> {
+    const items = await this.prisma.supplier.findMany({
+      where: { businessId },
+      take: limit + 1,
+      ...(cursor && {
+        cursor: { id: cursor },
+        skip: 1,
+      }),
+      orderBy: {
+        created_at: "desc",
+      },
+    });
+
+    const hasMore = items.length > limit;
+
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 
   async deleteSupplier(supplierId: string): Promise<Supplier> {

@@ -1,4 +1,5 @@
 import {
+  BulkConfigurePermissionsProps,
   CreatePermissionProps,
   FindPermissionKeyByProfile,
   FindPermissionNameByProfile,
@@ -32,6 +33,13 @@ interface IPermissionRepository {
     profileAccessId,
     businessId,
   }: FindPermissionNameByProfile) => Promise<Permission | null>;
+  bulkConfigurePermissions: (
+    props: BulkConfigurePermissionsProps,
+  ) => Promise<void>;
+  findPermissionsByProfile: (
+    profileAccessId: string,
+    businessId: string,
+  ) => Promise<Permission[]>;
 }
 
 export { IPermissionRepository };

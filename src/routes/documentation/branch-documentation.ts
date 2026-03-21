@@ -16,6 +16,17 @@ const branchSchemas = {
   updateDeleteBranch: updateDeleteBranchSchema,
   updateBranch: updateBranchSchema,
   businessIdParam: updateDeleteBusinessSchema,
+  searchBranchCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de empresas a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID da última empresa da página anterior para paginação"),
+    businessId: z.string().describe("ID da empresa"),
+  }),
 };
 
 const branchResponses = {
@@ -75,6 +86,14 @@ const branchResponses = {
   }),
   branchDeleted: z.object({
     message: z.string().default("Filial deletada com sucesso!"),
+  }),
+
+  searchBranchStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are branch objects.",
+      ),
   }),
 
   // Common Error Responses

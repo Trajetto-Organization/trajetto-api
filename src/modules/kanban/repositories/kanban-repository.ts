@@ -1,6 +1,6 @@
 import database from "@/../infra/database";
-
 import { IKanbanRepository } from "./IKanban-repository";
+
 import {
   KanbanColumn,
   CreateKanbanColumnProps,

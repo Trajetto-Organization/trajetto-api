@@ -4,7 +4,7 @@ import { hash } from "bcrypt";
 import { ResendTwoFactorCodeUseCase } from "@/modules/user/usecases/resend-two-factor-code/resend-two-factor-code-usecase";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { ResendTwoFactorError } from "@/modules/user/usecases/errors/resend-two-factor-error";
+import { UserResendTwoFactorError } from "@/modules/user/usecases/errors/user-resend-two-factor-error";
 import { AppError } from "@/shared/errors/AppError";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
@@ -85,7 +85,7 @@ describe("Resend Two Factor Code UseCase", () => {
 
     await expect(
       resendTwoFactorCodeUseCase.execute(user.email),
-    ).rejects.toBeInstanceOf(ResendTwoFactorError);
+    ).rejects.toBeInstanceOf(UserResendTwoFactorError);
   });
 
   it("should throw AppError if an error occurs while sending the two factor code", async () => {

@@ -3,15 +3,13 @@ import { FastifyInstance } from "fastify";
 import { CreateFuelController } from "@/modules/fuel/usecases/create-fuel/create-fuel-controller";
 import { ListFuelController } from "@/modules/fuel/usecases/list-fuel/list-fuel-controller";
 
-import { ListFuelBusinessController } from "@/modules/fuel/usecases/list-fuel-business/list-fuel-business-controller";
-import { ListFuelByVehicleController } from "@/modules/fuel/usecases/list-fuel-by-vehicle/list-fuel-by-vehicle-controller";
-
 import { UpdateFuelController } from "@/modules/fuel/usecases/update-fuel/update-fuel-controller";
 
 import { DeleteFuelController } from "@/modules/fuel/usecases/delete-fuel/delete-fuel-controller";
-import { ExportFuelExcelController } from "@/modules/fuel/usecases/export-fuel-excel/export-fuel-excel-controller";
+import { ExportFuelController } from "@/modules/fuel/usecases/export-fuel/export-fuel-controller";
 
 import { GetPreviousFuelController } from "@/modules/fuel/usecases/get-previous-fuel/get-previous-fuel-controller";
+import { SearchFuelByVehicleCursorController } from "@/modules/fuel/usecases/search-fuel-by-vehicle-cursor/search-fuel-by-vehicle-cursor-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -21,15 +19,14 @@ import { fuelSchemas, fuelResponses } from "./documentation/fuel-documentation";
 const createFuelController = new CreateFuelController();
 const listFuelController = new ListFuelController();
 
-const listFuelBusinessController = new ListFuelBusinessController();
-const listFuelByVehicleController = new ListFuelByVehicleController();
-
 const updateFuelController = new UpdateFuelController();
 
 const deleteFuelController = new DeleteFuelController();
-const exportFuelExcelController = new ExportFuelExcelController();
+const exportFuelController = new ExportFuelController();
 
 const getPreviousFuelController = new GetPreviousFuelController();
+const searchFuelByVehicleCursorController =
+  new SearchFuelByVehicleCursorController();
 
 async function fuelRoutes(app: FastifyInstance) {
   app.post(
@@ -75,28 +72,6 @@ async function fuelRoutes(app: FastifyInstance) {
       },
     },
     listFuelController.handle,
-  );
-
-  app.get(
-    "/list-fuel-business",
-    {
-      onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fuel_manage", "read")],
-      schema: {
-        security: [{ bearerAuth: [] }],
-        tags: ["fuel"],
-        summary: "List fuel records by business",
-        description:
-          "Retrieve a paginated list of fuel refueling records filtered by business with optional search",
-        querystring: fuelSchemas.listFuelBusiness,
-        response: {
-          200: fuelResponses.fuelList,
-          400: fuelResponses.listFuelBusinessErrors,
-          500: fuelResponses.internalServerError,
-        },
-      },
-    },
-    listFuelBusinessController.handle,
   );
 
   app.patch(
@@ -147,23 +122,20 @@ async function fuelRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/export-fuel-excel",
+    "/export-fuel",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("fuel_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
-        summary: "Export fuel records to Excel",
+        summary: "Export fuel records (CSV or Excel)",
         description:
-          "Export all fuel refueling records to an Excel file with optional search filters",
+          "Export fuel refueling records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
         querystring: fuelSchemas.exportFuelsQuery,
-        produces: [
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ],
       },
     },
-    exportFuelExcelController.handle,
+    exportFuelController.handle,
   );
 
   app.get(
@@ -191,27 +163,30 @@ async function fuelRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-fuel-by-vehicle/:vehicleId",
+    "/search-fuel-by-vehicle/:vehicleId",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("fuel_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
-        summary: "List fuel records by vehicle",
+        summary: "Search fuel records by vehicle (cursor-based)",
         description:
-          "Retrieve a paginated list of fuel refueling records for a specific vehicle",
-        params: fuelSchemas.listFuelByVehicleParams,
-        querystring: fuelSchemas.listFuelByVehicleQuery,
+          "Retrieve fuel records for a specific vehicle as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual fuel objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        params: fuelSchemas.searchFuelByVehicleParams,
+        querystring: fuelSchemas.searchFuelByVehicleCursor,
         response: {
-          200: fuelResponses.fuelList,
+          200: fuelResponses.searchFuelByVehicleStreamDescription,
           400: fuelResponses.listFuelByVehicleErrors,
           403: fuelResponses.vehicleNotBelongBusiness,
           500: fuelResponses.internalServerError,
         },
       },
     },
-    listFuelByVehicleController.handle,
+    searchFuelByVehicleCursorController.handle,
   );
 }
 

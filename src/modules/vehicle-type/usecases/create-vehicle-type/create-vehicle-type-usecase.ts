@@ -10,7 +10,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { VehicleTypeAlreadyExistsError } from "../errors/vehicle-type-already-exists-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import {
   VehicleType,

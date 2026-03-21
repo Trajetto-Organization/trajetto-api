@@ -8,6 +8,8 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
 import { updateVehicleChecklistSchema } from "@/schemas/update-vehicle-checklist-schema";
 
+import { exportReports } from "@/schemas/export-reports-schema";
+
 const vehicleChecklistSchemas = {
   createVehicleChecklist: createVehicleChecklistSchema,
   updateVehicleChecklist: updateVehicleChecklistSchema,
@@ -19,12 +21,7 @@ const vehicleChecklistSchemas = {
   }),
   updateDeleteBusiness: updateDeleteBusinessSchema,
   businessIdParam: updateDeleteBusinessSchema,
-  exportVehicleChecklistsQuery: z.object({
-    search: z
-      .string()
-      .optional()
-      .describe("Search term to filter vehicle checklists"),
-  }),
+  exportVehicleChecklistsQuery: exportReports,
 };
 
 const vehicleChecklistResponses = {

@@ -6,11 +6,19 @@ import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { updatePermissionSchema } from "@/schemas/update-permission-schema";
 import { updateDeletePermissionSchema } from "@/schemas/update-delete-permission-schema";
 
+import { bulkConfigurePermissionsSchema } from "@/schemas/bulk-configure-permissions-schema";
+import { updateDeleteProfileAccessSchema } from "@/schemas/update-delete-profile-access-schema";
+
+import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
+
 const permissionSchemas = {
   createPermission: createPermissionSchema,
   listPermission: listPagesSchema,
   updatePermission: updatePermissionSchema,
   updateDeletePermission: updateDeletePermissionSchema,
+  bulkConfigurePermissions: bulkConfigurePermissionsSchema,
+  listByProfile: updateDeleteProfileAccessSchema,
+  listByProfileQuery: updateDeleteBusinessSchema,
 };
 
 const permissionResponses = {
@@ -212,6 +220,51 @@ const permissionResponses = {
     }),
     z.object({
       message: z.string().default("Permissão não encontrada!"),
+    }),
+  ]),
+
+  permissionsConfigured: z.object({
+    message: z.string().default("Permissões configuradas com sucesso!"),
+  }),
+
+  permissionsByProfile: z.object({
+    permissions: z.array(
+      z.object({
+        id: z.string(),
+        action: z.string(),
+        permissionKey: z.string(),
+        canRead: z.boolean(),
+        canWrite: z.boolean(),
+        businessId: z.string(),
+        profileAccessId: z.string(),
+        created_at: z.date(),
+        updated_at: z.date(),
+      }),
+    ),
+  }),
+
+  bulkConfigurePermissionsErrors: z.union([
+    z.object({
+      message: z.string().default("Validation Error"),
+      issues: z.array(z.string()),
+    }),
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Perfil de acesso não encontrado! Por favor tente novamente."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("O perfil de acesso não pertence a essa empresa."),
     }),
   ]),
 };

@@ -6,7 +6,7 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { AccountPayableNotNotBelongBusinessError } from "../errors/account-payable-not-belong-business-error";
 import { AccountPayableNotFoundError } from "../errors/account-payable-not-found-error";
@@ -15,7 +15,7 @@ import { AccountPayableNotDeleteHasAlreadyPaidError } from "../errors/account-pa
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { AccountPayable } from "../../dtos/account-payable-dto";
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 
 import { AppError } from "@/shared/errors/AppError";
 

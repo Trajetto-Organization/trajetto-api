@@ -18,7 +18,7 @@ import { PermissionAlreadyExistsError } from "@/modules/permission/usecases/erro
 import { ProfileAccessNotFoundError } from "@/modules/profile-access/usecases/errors/profile-access-not-found-error";
 import { PermissionBusinessError } from "@/modules/permission/usecases/errors/permission-business-error";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
 
 describe("Update Permission UseCase", () => {

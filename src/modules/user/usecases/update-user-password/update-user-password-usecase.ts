@@ -4,9 +4,9 @@ import { hash, compare } from "bcrypt";
 import { IUserRepository } from "../../repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
-import { UserUpdateIsSamePasswordError } from "../errors/update-user-is-same-password-error";
+import { UserUpdateUserIsSamePasswordError } from "../errors/user-update-user-is-same-password-error";
 
-import { UpdateUserPasswordNotMatchError } from "../errors/update-user-password-not-match-error";
+import { UserUpdateUserPasswordNotMatchError } from "../errors/user-update-user-password-not-match-error";
 import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -44,13 +44,13 @@ class UpdateUserPasswordUseCase {
     const comparePassword = await compare(currentPassword, findUser.password);
 
     if (!comparePassword) {
-      throw new UpdateUserPasswordNotMatchError();
+      throw new UserUpdateUserPasswordNotMatchError();
     }
 
     const isSamePassword = await compare(newPassword, findUser.password);
 
     if (isSamePassword) {
-      throw new UserUpdateIsSamePasswordError();
+      throw new UserUpdateUserIsSamePasswordError();
     }
 
     const hashedPassword = await hash(newPassword, 6);

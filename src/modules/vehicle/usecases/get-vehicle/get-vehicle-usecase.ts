@@ -7,7 +7,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { AppError } from "@/shared/errors/AppError";
 
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleWithLastFuel } from "../../dtos/vehicle-dto";
 import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";

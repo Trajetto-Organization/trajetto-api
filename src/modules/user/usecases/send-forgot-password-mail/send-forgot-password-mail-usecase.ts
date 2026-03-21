@@ -2,10 +2,9 @@ import { inject, injectable } from "tsyringe";
 import { v4 as uuidV4 } from "uuid";
 
 import { env } from "@/env";
-
 import { IUserRepository } from "../../repositories/IUser-repository";
 
-import { EmailNotFoundError } from "../errors/email-not-found-error";
+import { UserEmailNotFoundError } from "../errors/user-email-not-found-error";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -31,11 +30,11 @@ class SendForgotPasswordMailUseCase {
     const findUserByEmail = await this.user.findUserByEmail(email);
 
     if (!findUserByEmail) {
-      throw new EmailNotFoundError();
+      throw new UserEmailNotFoundError();
     }
 
     if (findUserByEmail.access_revoked) {
-      throw new EmailNotFoundError();
+      throw new UserEmailNotFoundError();
     }
 
     const findExistingToken =

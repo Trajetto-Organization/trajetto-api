@@ -7,7 +7,7 @@ import { ListKanbanUseCase } from "./list-kanban-usecase";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { KanbanNotAllowedPermissionViewBusinessBoardError } from "../errors/kanban-not-allowed-permission-view-business-board-error";
 import { sendAsNDJSON } from "@/config/stream-utils";

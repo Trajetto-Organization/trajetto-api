@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { CreateSupplierUseCase } from "@/modules/supplier/usecases/create-supplier/create-supplier-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { SupplierNameAlreadyExistsError } from "@/modules/supplier/usecases/errors/supplier-name-already-exists-error";
 import { SupplierCnpjAlreadyExistsError } from "@/modules/supplier/usecases/errors/supplier-cnpj-already-exists-error";

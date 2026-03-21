@@ -1,8 +1,8 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
-import { InvalidTokenError } from "../errors/invalid-token-error";
-import { ExpiredTokenError } from "../errors/expired-token-error";
+import { UserInvalidTokenError } from "../errors/user-invalid-token-error";
+import { UserExpiredTokenError } from "../errors/user-expired-token-error";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { ForgotPasswordVerificationUseCase } from "./forgot-password-verification-usecase";
@@ -26,11 +26,11 @@ class ForgotPasswordVerificationController {
         message: `Token "esqueci minha senha" confirmada com sucesso!`,
       });
     } catch (error) {
-      if (error instanceof InvalidTokenError) {
+      if (error instanceof UserInvalidTokenError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof ExpiredTokenError) {
+      if (error instanceof UserExpiredTokenError) {
         return reply.status(400).send({ message: error.message });
       }
 

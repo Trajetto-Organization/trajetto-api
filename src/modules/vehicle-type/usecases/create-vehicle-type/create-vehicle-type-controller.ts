@@ -8,7 +8,7 @@ import { createVehicleTypeSchema } from "@/schemas/create-vehicle-type-schema";
 import { VehicleTypeAlreadyExistsError } from "../errors/vehicle-type-already-exists-error";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 class CreateVehicleTypeController {
   async handle(

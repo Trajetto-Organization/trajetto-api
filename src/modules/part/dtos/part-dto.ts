@@ -40,12 +40,6 @@ interface ListPartProps {
   total: number;
 }
 
-interface ListPartBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
-}
-
 interface ListPartByBusinessIdProps {
   page: number;
   pageSize: number;
@@ -54,12 +48,25 @@ interface ListPartByBusinessIdProps {
   search?: string;
 }
 
+interface SearchPartWithCursorProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+}
+
+interface CursorPaginatedPart {
+  data: Part[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export {
   Part,
   CreatePartProps,
   UpdatePart,
   ListPartProps,
   ListPartByBusinessIdProps,
-  ListPartBusinessProps,
   UpdatePartProps,
+  SearchPartWithCursorProps,
+  CursorPaginatedPart,
 };

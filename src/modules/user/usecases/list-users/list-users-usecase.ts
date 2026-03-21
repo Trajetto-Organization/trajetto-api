@@ -34,6 +34,7 @@ class ListUsersUseCase {
         businessId: findUser.businessId as string,
         currentUserId: findUser.id,
       });
+
       return result;
     } catch (error) {
       throw new AppError(

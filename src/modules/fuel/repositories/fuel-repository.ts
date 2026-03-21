@@ -9,9 +9,9 @@ import {
   ListFuelProps,
   ListFuelByBusinessIdProps,
   UpdateFuel,
-  ListFuelBusinessProps,
   GetFuelByIdAndBusinessProps,
-  ListFuelByVehicleIdProps,
+  SearchFuelByVehicleWithCursorProps,
+  CursorPaginatedFuel,
 } from "../dtos/fuel-dto";
 
 class FuelRepository implements IFuelRepository {
@@ -143,78 +143,55 @@ class FuelRepository implements IFuelRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const fuelData = await this.prisma.fuel.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
+    const [fuelData, total] = await Promise.all([
+      this.prisma.fuel.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          business: {
+            select: {
+              corporate_reason: true,
+            },
+          },
+          branch: {
+            select: {
+              corporate_reason: true,
+            },
+          },
+          vehicle: {
+            select: {
+              description: true,
+              license_plate: true,
+              brand: true,
+              model: true,
+            },
+          },
+          driver: {
+            select: {
+              name: true,
+              cnh: true,
+            },
+          },
+          fuelType: {
+            select: {
+              description: true,
+            },
           },
         },
-        branch: {
-          select: {
-            corporate_reason: true,
-          },
+        orderBy: {
+          created_at: "desc", // Sort by created_at
         },
-        vehicle: {
-          select: {
-            description: true,
-            license_plate: true,
-            brand: true,
-            model: true,
-          },
-        },
-        driver: {
-          select: {
-            name: true,
-            cnh: true,
-          },
-        },
-        fuelType: {
-          select: {
-            description: true,
-          },
-        },
-      },
-      orderBy: {
-        created_at: "desc", // Sort by created_at
-      },
-    });
-
-    const total = await this.prisma.fuel.count({
-      where: whereCondition,
-    });
+      }),
+      this.prisma.fuel.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return {
       data: fuelData,
       total,
     };
-  }
-
-  async listFuelBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListFuelBusinessProps): Promise<ListFuelProps> {
-    const skip = (page - 1) * pageSize;
-
-    const fuelBusinessData = await this.prisma.fuel.findMany({
-      skip,
-      take: pageSize,
-      where: {
-        businessId,
-      },
-    });
-
-    const total = await this.prisma.fuel.count({
-      where: {
-        businessId,
-      },
-    });
-
-    return { data: fuelBusinessData, total };
   }
 
   async updateFuel({ fuelData, fuelId }: UpdateFuel): Promise<Fuel> {
@@ -241,6 +218,7 @@ class FuelRepository implements IFuelRepository {
         if (filteredData.liters_amount) {
           filteredData.liters_amount = litersAmount;
         }
+
         if (filteredData.price_per_liter) {
           filteredData.price_per_liter = pricePerLiter;
         }
@@ -409,11 +387,11 @@ class FuelRepository implements IFuelRepository {
     return fuels;
   }
 
-  async getAllFuelsForExport(
+  async *streamFuelsForExport(
     businessId: string,
     userRole: string,
     search?: string,
-  ): Promise<any[]> {
+  ): AsyncGenerator<any> {
     const normalizedSearch = search ? search.trim().toLowerCase() : "";
     const orConditions: any[] = [];
 
@@ -421,11 +399,13 @@ class FuelRepository implements IFuelRepository {
       orConditions.push(
         { id: { contains: normalizedSearch, mode: "insensitive" } },
         { notes: { contains: normalizedSearch, mode: "insensitive" } },
-        // Business ID and name (MASTER only)
         ...(userRole === "MASTER"
           ? [
               {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
+                businessId: {
+                  contains: normalizedSearch,
+                  mode: "insensitive",
+                },
               },
               {
                 business: {
@@ -443,12 +423,7 @@ class FuelRepository implements IFuelRepository {
         {
           vehicle: {
             OR: [
-              {
-                id: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
+              { id: { contains: normalizedSearch, mode: "insensitive" } },
               {
                 description: {
                   contains: normalizedSearch,
@@ -469,12 +444,7 @@ class FuelRepository implements IFuelRepository {
         {
           driver: {
             OR: [
-              {
-                id: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
+              { id: { contains: normalizedSearch, mode: "insensitive" } },
               { name: { contains: normalizedSearch, mode: "insensitive" } },
               { cnh: { contains: normalizedSearch, mode: "insensitive" } },
             ],
@@ -483,12 +453,7 @@ class FuelRepository implements IFuelRepository {
         {
           fuelType: {
             OR: [
-              {
-                id: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
+              { id: { contains: normalizedSearch, mode: "insensitive" } },
               {
                 description: {
                   contains: normalizedSearch,
@@ -502,73 +467,91 @@ class FuelRepository implements IFuelRepository {
     }
 
     const whereCondition = {
-      ...(userRole !== "MASTER" && { businessId: businessId }),
+      ...(userRole !== "MASTER" && { businessId }),
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const fuels = await this.prisma.fuel.findMany({
-      where: whereCondition,
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
-          },
-        },
-        branch: {
-          select: {
-            corporate_reason: true,
-          },
-        },
-        vehicle: {
-          select: {
-            description: true,
-            license_plate: true,
-            brand: true,
-            model: true,
-          },
-        },
-        driver: {
-          select: {
-            name: true,
-            cnh: true,
-          },
-        },
-        fuelType: {
-          select: {
-            description: true,
-          },
-        },
-      },
-      orderBy: {
-        created_at: "desc", // Sort by created_at
-      },
-    });
+    const batchSize = 1000;
+    let cursor: string | undefined = undefined;
 
-    return fuels.map((fuel) => ({
-      id: fuel.id,
-      vehicleLicensePlate: fuel.vehicle?.license_plate || "N/A",
-      vehicleDescription: fuel.vehicle?.description || "N/A",
-      vehicleBrand: fuel.vehicle?.brand || "N/A",
-      vehicleModel: fuel.vehicle?.model || "N/A",
-      driverName: fuel.driver?.name || "N/A",
-      driverCnh: fuel.driver?.cnh || "N/A",
-      fuelTypeDescription: fuel.fuelType?.description || "N/A",
-      litersAmount: fuel.liters_amount?.toFixed(3) || "0,000",
-      pricePerLiter: fuel.price_per_liter?.toNumber() || 0,
-      totalAmount: fuel.total_amount?.toNumber() || 0,
-      currentMileage: fuel.current_mileage || 0,
-      odometerVerified: fuel.odometer_verified ? "Sim" : "Não",
-      notes: fuel.notes || "N/A",
-      refueling_date: fuel.refueling_date,
-      branchName: fuel.branch?.corporate_reason || "N/A",
-      ...(userRole === "MASTER" && {
-        businessName: fuel.business?.corporate_reason || "N/A",
-      }),
-      latitude: fuel.latitude !== null ? Number(fuel.latitude) : "N/A",
-      longitude: fuel.longitude !== null ? Number(fuel.longitude) : "N/A",
-      created_at: fuel.created_at,
-      updated_at: fuel.updated_at,
-    }));
+    while (true) {
+      const fuels: any = await this.prisma.fuel.findMany({
+        where: whereCondition,
+        include: {
+          business: {
+            select: { corporate_reason: true },
+          },
+          branch: {
+            select: { corporate_reason: true },
+          },
+          vehicle: {
+            select: {
+              description: true,
+              license_plate: true,
+              brand: true,
+              model: true,
+            },
+          },
+          driver: {
+            select: {
+              name: true,
+              cnh: true,
+            },
+          },
+          fuelType: {
+            select: {
+              description: true,
+            },
+          },
+        },
+        orderBy: {
+          id: "asc",
+        },
+        take: batchSize,
+        ...(cursor && {
+          skip: 1,
+          cursor: { id: cursor },
+        }),
+      });
+
+      if (fuels.length === 0) break;
+      for (const fuel of fuels) {
+        yield {
+          id: fuel.id,
+          vehicleLicensePlate: fuel.vehicle?.license_plate,
+          vehicleDescription: fuel.vehicle?.description,
+          vehicleBrand: fuel.vehicle?.brand,
+          vehicleModel: fuel.vehicle?.model,
+          driverName: fuel.driver?.name,
+          driverCnh: fuel.driver?.cnh,
+          fuelTypeDescription: fuel.fuelType?.description,
+          litersAmount: fuel.liters_amount,
+          pricePerLiter: fuel.price_per_liter?.toNumber(),
+          totalAmount: fuel.total_amount?.toNumber(),
+          currentMileage: fuel.current_mileage,
+          odometerVerified: fuel.odometer_verified,
+          notes: fuel.notes,
+          refueling_date: fuel.refueling_date,
+          branchName: fuel.branch?.corporate_reason,
+          ...(userRole === "MASTER" && {
+            businessName: fuel.business?.corporate_reason,
+          }),
+          // 📍 GEOLOCATION: Proper null handling to avoid Number(null) = 0 issue
+          latitude: fuel.latitude,
+          longitude: fuel.longitude,
+          latitude_original: fuel.latitude_original,
+          longitude_original: fuel.longitude_original,
+          location_source: fuel.location_source,
+          location_edited_by: fuel.location_edited_by,
+          location_edited_at: fuel.location_edited_at,
+          created_from: fuel.created_from,
+          created_at: fuel.created_at,
+          updated_at: fuel.updated_at,
+        };
+      }
+
+      cursor = fuels[fuels.length - 1].id;
+    }
   }
 
   async getPreviousFuelByVehicleId(
@@ -590,23 +573,17 @@ class FuelRepository implements IFuelRepository {
     return previousFuel;
   }
 
-  async listFuelsByVehicleId({
+  async searchFuelByVehicleWithCursor({
+    limit = 10,
+    cursor,
     vehicleId,
     businessId,
-    page,
-    pageSize,
-  }: ListFuelByVehicleIdProps): Promise<ListFuelProps> {
-    const skip = (page - 1) * pageSize;
-
-    const whereCondition = {
-      vehicleId,
-      businessId,
-    };
-
-    const fuelData = await this.prisma.fuel.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
+  }: SearchFuelByVehicleWithCursorProps): Promise<CursorPaginatedFuel> {
+    const items = await this.prisma.fuel.findMany({
+      where: { vehicleId, businessId },
+      take: limit + 1,
+      ...(cursor && { cursor: { id: cursor }, skip: 1 }),
+      orderBy: { created_at: "desc" },
       include: {
         business: {
           select: {
@@ -638,19 +615,14 @@ class FuelRepository implements IFuelRepository {
           },
         },
       },
-      orderBy: {
-        created_at: "desc",
-      },
     });
 
-    const total = await this.prisma.fuel.count({
-      where: whereCondition,
-    });
+    const hasMore = items.length > limit;
 
-    return {
-      data: fuelData,
-      total,
-    };
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

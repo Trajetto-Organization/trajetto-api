@@ -4,8 +4,9 @@ import {
   ListVehicleProps,
   ListVehicleByBusinessIdProps,
   UpdateVehicle,
-  ListVehicleBusinessProps,
   GetVehicleByIdAndBusinessProps,
+  SearchVehicleWithCursorProps,
+  CursorPaginatedVehicle,
 } from "../dtos/vehicle-dto";
 
 interface IVehicleRepository {
@@ -13,11 +14,6 @@ interface IVehicleRepository {
   listVehicles: (
     listVehicleProps: ListVehicleByBusinessIdProps,
   ) => Promise<ListVehicleProps>;
-  listVehicleBusiness: ({
-    page,
-    pageSize,
-    businessId,
-  }: ListVehicleBusinessProps) => Promise<ListVehicleProps>;
   updateVehicle: ({
     vehicleData,
     vehicleId,
@@ -31,6 +27,14 @@ interface IVehicleRepository {
     vehicleId,
   }: GetVehicleByIdAndBusinessProps): Promise<Vehicle | null>;
   findVehiclesByFuelTypeId: (fuelTypeId: string) => Promise<Vehicle[]>;
+  streamVehiclesForExport: (
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ) => AsyncGenerator<any>;
+  searchVehicleWithCursor: (
+    props: SearchVehicleWithCursorProps,
+  ) => Promise<CursorPaginatedVehicle>;
 }
 
 export { IVehicleRepository };

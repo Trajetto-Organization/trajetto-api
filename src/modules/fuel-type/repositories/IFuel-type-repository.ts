@@ -4,7 +4,8 @@ import {
   ListFuelTypeProps,
   ListFuelTypeByBusinessIdProps,
   UpdateFuelType,
-  ListFuelTypeBusinessProps,
+  SearchFuelTypeWithCursorProps,
+  CursorPaginatedFuelType,
 } from "../dtos/fuel-type-dto";
 
 interface IFuelTypeRepository {
@@ -12,11 +13,6 @@ interface IFuelTypeRepository {
   listFuelTypes: (
     listFuelTypeProps: ListFuelTypeByBusinessIdProps,
   ) => Promise<ListFuelTypeProps>;
-  listFuelTypeBusiness: ({
-    page,
-    pageSize,
-    businessId,
-  }: ListFuelTypeBusinessProps) => Promise<ListFuelTypeProps>;
   updateFuelType: ({
     fuelTypeData,
     fuelTypeId,
@@ -31,6 +27,9 @@ interface IFuelTypeRepository {
     description: string,
     businessId: string,
   ) => Promise<FuelType | null>;
+  searchFuelTypeWithCursor: (
+    props: SearchFuelTypeWithCursorProps,
+  ) => Promise<CursorPaginatedFuelType>;
 }
 
 export { IFuelTypeRepository };

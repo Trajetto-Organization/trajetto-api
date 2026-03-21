@@ -29,6 +29,7 @@ class WhatsAppWorkerManager {
     if (!WhatsAppWorkerManager.instance) {
       WhatsAppWorkerManager.instance = new WhatsAppWorkerManager();
     }
+
     return WhatsAppWorkerManager.instance;
   }
 

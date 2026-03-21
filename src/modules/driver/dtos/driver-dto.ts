@@ -65,12 +65,6 @@ interface ListDriverProps {
   total: number;
 }
 
-interface ListDriverBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
-}
-
 interface ListDriverByBusinessIdProps {
   page: number;
   pageSize: number;
@@ -79,12 +73,25 @@ interface ListDriverByBusinessIdProps {
   search?: string;
 }
 
+interface SearchDriverWithCursorProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+}
+
+interface CursorPaginatedDriver {
+  data: Driver[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export {
   Driver,
   CreateDriverProps,
   UpdateDriver,
   ListDriverProps,
-  ListDriverBusinessProps,
   ListDriverByBusinessIdProps,
   UpdateDriverProps,
+  SearchDriverWithCursorProps,
+  CursorPaginatedDriver,
 };

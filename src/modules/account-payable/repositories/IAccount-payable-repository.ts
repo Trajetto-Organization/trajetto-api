@@ -3,7 +3,8 @@ import {
   CreateAccountPayableProps,
   ListAccountPayableProps,
   ListAccountPayableByBusinessIdProps,
-  ListAccountPayableByResponsibleUserIdProps,
+  SearchAccountPayableWithCursorProps,
+  CursorPaginatedAccountPayable,
   UpdateAccountPayable,
 } from "../dtos/account-payable-dto";
 
@@ -28,9 +29,9 @@ interface IAccountPayableRepository {
   findAccountPayablesByRegistrationUserId: (
     registrationUserId: string,
   ) => Promise<AccountPayable[]>;
-  listAccountPayablesByResponsibleUserId: (
-    listAccountPayableProps: ListAccountPayableByResponsibleUserIdProps,
-  ) => Promise<ListAccountPayableProps>;
+  searchAccountPayableByResponsibleUserWithCursor: (
+    props: SearchAccountPayableWithCursorProps,
+  ) => Promise<CursorPaginatedAccountPayable>;
 }
 
 export { IAccountPayableRepository };

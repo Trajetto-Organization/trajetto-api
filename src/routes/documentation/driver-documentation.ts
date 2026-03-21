@@ -7,6 +7,8 @@ import { updateDriverSchema } from "@/schemas/update-driver-schema";
 import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 import { listPagesSchema } from "@/schemas/list-pages-schema";
 
+import { exportReports } from "@/schemas/export-reports-schema";
+
 const driverBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
   driverId: z.string().uuid("O ID do motorista é obrigatório!"),
@@ -19,6 +21,18 @@ const driverSchemas = {
   updateDriver: updateDriverSchema,
   businessIdParam: updateDeleteBusinessSchema,
   driverBusinessParams: driverBusinessParams,
+  exportDriverQuery: exportReports,
+  searchDriverCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de empresas a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID da última empresa da página anterior para paginação"),
+    businessId: z.string().describe("ID da empresa"),
+  }),
 };
 
 const driverResponses = {
@@ -67,6 +81,14 @@ const driverResponses = {
 
   driverDeleted: z.object({
     message: z.string().default("Motorista deletado com sucesso!"),
+  }),
+
+  searchDriverStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are driver objects.",
+      ),
   }),
 
   // Common Error Responses

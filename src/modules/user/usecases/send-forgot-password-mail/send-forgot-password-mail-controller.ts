@@ -2,7 +2,7 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
 import { SendForgotPasswordMailUseCase } from "./send-forgot-password-mail-usecase";
-import { EmailNotFoundError } from "../errors/email-not-found-error";
+import { UserEmailNotFoundError } from "../errors/user-email-not-found-error";
 
 import { sendForgotPasswordSchema } from "@/schemas/send-forgot-password-schema";
 
@@ -24,7 +24,7 @@ class SendForgotPasswordMailController {
           "Se este e-mail corresponder a um endereço cadastrado, você receberá um e-mail com as instruções de redefinição da senha.",
       });
     } catch (error) {
-      if (error instanceof EmailNotFoundError) {
+      if (error instanceof UserEmailNotFoundError) {
         return reply.status(200).send({ message: error.message });
       }
 

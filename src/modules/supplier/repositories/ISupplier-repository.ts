@@ -4,7 +4,8 @@ import {
   ListAllSuppliersProps,
   ListSupplierProps,
   UpdateSupplier,
-  ListSupplierBusinessProps,
+  SearchSupplierWithCursorProps,
+  CursorPaginatedSupplier,
 } from "../dtos/supplier-dto";
 
 interface ISupplierRepository {
@@ -12,11 +13,9 @@ interface ISupplierRepository {
   listAllSuppliers: (
     listAllSuppliersProps: ListAllSuppliersProps,
   ) => Promise<ListSupplierProps>;
-  listSupplierBusiness: ({
-    page,
-    pageSize,
-    businessId,
-  }: ListSupplierBusinessProps) => Promise<ListSupplierProps>;
+  searchSupplierWithCursor: (
+    props: SearchSupplierWithCursorProps,
+  ) => Promise<CursorPaginatedSupplier>;
   updateSupplier: ({
     supplierData,
     supplierId,

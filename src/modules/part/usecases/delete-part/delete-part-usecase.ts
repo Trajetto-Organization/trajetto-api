@@ -7,13 +7,13 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { PartNotBelongServiceOrderError } from "../errors/part-not-belong-service-order-error";
 import { PartNotFoundError } from "../errors/part-not-found-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 
 import { Part } from "../../dtos/part-dto";
 import { PartHasAssociatedServiceOrderPartsError } from "../errors/part-has-associated-service-order-parts-error";

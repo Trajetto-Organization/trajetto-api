@@ -11,6 +11,7 @@ import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 
 import { getVehicleSchema } from "@/schemas/get-vehicle-schema";
+import { exportReports } from "@/schemas/export-reports-schema";
 
 const vehicleBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
@@ -26,9 +27,28 @@ const vehicleSchemas = {
   vehicleIdParam: updateDeleteVehicleSchema,
   vehicleBusinessParams: vehicleBusinessParams,
   getVehicle: getVehicleSchema,
+  exportVehicleQuery: exportReports,
+  searchVehicleCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de empresas a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID da última empresa da página anterior para paginação"),
+    businessId: z.string().describe("ID da empresa"),
+  }),
 };
 
 const vehicleResponses = {
+  searchVehicleStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are vehicle objects.",
+      ),
+  }),
   vehicleCreated: z.object({
     message: z.string().default("Veículo criado com sucesso!"),
   }),

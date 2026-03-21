@@ -4,7 +4,8 @@ import {
   ListVehicleTypeProps,
   ListVehicleTypeByBusinessIdProps,
   UpdateVehicleType,
-  ListVehicleTypeBusinessProps,
+  SearchVehicleTypeWithCursorProps,
+  CursorPaginatedVehicleType,
 } from "../dtos/vehicle-type-dto";
 
 interface IVehicleTypeRepository {
@@ -14,11 +15,6 @@ interface IVehicleTypeRepository {
   listVehicleTypes: (
     listVehicleTypeProps: ListVehicleTypeByBusinessIdProps,
   ) => Promise<ListVehicleTypeProps>;
-  listVehicleTypeBusiness: ({
-    page,
-    pageSize,
-    businessId,
-  }: ListVehicleTypeBusinessProps) => Promise<ListVehicleTypeProps>;
   updateVehicleType: ({
     vehicleTypeData,
     vehicleTypeId,
@@ -33,6 +29,9 @@ interface IVehicleTypeRepository {
     description: string,
     businessId: string,
   ) => Promise<VehicleType | null>;
+  searchVehicleTypeWithCursor: (
+    props: SearchVehicleTypeWithCursorProps,
+  ) => Promise<CursorPaginatedVehicleType>;
 }
 
 export { IVehicleTypeRepository };

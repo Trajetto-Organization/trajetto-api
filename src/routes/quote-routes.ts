@@ -10,7 +10,6 @@ import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated"
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 
 import { getRateLimiterConfig } from "@/modules/middlewares/rate-limiter";
-
 import {
   quoteSchemas,
   quoteResponses,

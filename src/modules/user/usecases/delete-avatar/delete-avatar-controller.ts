@@ -9,12 +9,10 @@ import { UserNotHaveAvatarToBeDeleted } from "../errors/user-not-have-avatar-to-
 class DeleteAvatarController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
-
     const deleteAvatarUseCase = container.resolve(DeleteAvatarUseCase);
 
     try {
       await deleteAvatarUseCase.execute(id);
-
       return reply
         .status(200)
         .send({ message: "Avatar deletado com sucesso!" });

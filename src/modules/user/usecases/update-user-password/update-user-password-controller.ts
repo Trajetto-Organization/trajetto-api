@@ -2,12 +2,12 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
 import { UpdateUserPasswordUseCase } from "./update-user-password-usecase";
-import { UserUpdateIsSamePasswordError } from "../errors/update-user-is-same-password-error";
+import { UserUpdateUserIsSamePasswordError } from "../errors/user-update-user-is-same-password-error";
 
 import { updateUserPasswordSchema } from "@/schemas/update-user-password-schema";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
-import { UpdateUserPasswordNotMatchError } from "../errors/update-user-password-not-match-error";
+import { UserUpdateUserPasswordNotMatchError } from "../errors/user-update-user-password-not-match-error";
 
 class UpdateUserPasswordController {
   async handle(
@@ -39,11 +39,11 @@ class UpdateUserPasswordController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof UpdateUserPasswordNotMatchError) {
+      if (error instanceof UserUpdateUserPasswordNotMatchError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof UserUpdateIsSamePasswordError) {
+      if (error instanceof UserUpdateUserIsSamePasswordError) {
         return reply.status(400).send({ message: error.message });
       }
 

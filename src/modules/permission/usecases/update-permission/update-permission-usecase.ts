@@ -14,7 +14,7 @@ import { ProfileAccessNotFoundError } from "@/modules/profile-access/usecases/er
 
 import { PermissionAlreadyAssignedError } from "../errors/permission-already-assigned-error";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 import { PermissionNotFoundError } from "../errors/permission-not-found-error";
 
 import { NotificationService } from "@/shared/services/notification-service";

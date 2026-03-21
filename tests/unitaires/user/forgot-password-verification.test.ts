@@ -7,9 +7,9 @@ import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-mem
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
 import { ForgotPasswordVerificationUseCase } from "@/modules/user/usecases/forgot-password-verification/forgot-password-verification-usecase";
-import { InvalidTokenError } from "@/modules/user/usecases/errors/invalid-token-error";
+import { UserInvalidTokenError } from "@/modules/user/usecases/errors/user-invalid-token-error";
 
-import { ExpiredTokenError } from "@/modules/user/usecases/errors/expired-token-error";
+import { UserExpiredTokenError } from "@/modules/user/usecases/errors/user-expired-token-error";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
 let userInMemory: InMemoryUserRepository;
@@ -58,7 +58,7 @@ describe("Forgot Password Verification UseCase", () => {
   it("should not be able to verify with an invalid token", async () => {
     await expect(
       forgotPasswordVerificationUseCase.execute(token),
-    ).rejects.toBeInstanceOf(InvalidTokenError);
+    ).rejects.toBeInstanceOf(UserInvalidTokenError);
   });
 
   it("should throw ExpiredTokenError if token has expired", async () => {
@@ -71,7 +71,7 @@ describe("Forgot Password Verification UseCase", () => {
 
     await expect(
       forgotPasswordVerificationUseCase.execute(expiredToken.token),
-    ).rejects.toBeInstanceOf(ExpiredTokenError);
+    ).rejects.toBeInstanceOf(UserExpiredTokenError);
   });
 
   it("should throw ResourceNotFoundError if user is not found", async () => {

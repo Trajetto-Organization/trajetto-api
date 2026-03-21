@@ -45,12 +45,6 @@ interface ListAllBranchesProps {
   search?: string;
 }
 
-interface ListBranchBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
-}
-
 interface ListBranchProps {
   data: Branch[];
   total: number;
@@ -61,11 +55,24 @@ interface UpdateBranch {
   branchId: string;
 }
 
+interface SearchBranchWithCursorProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+}
+
+interface CursorPaginatedBranch {
+  data: Branch[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export {
   Branch,
   CreateBranchProps,
   ListBranchProps,
   UpdateBranch,
   ListAllBranchesProps,
-  ListBranchBusinessProps,
+  SearchBranchWithCursorProps,
+  CursorPaginatedBranch,
 };

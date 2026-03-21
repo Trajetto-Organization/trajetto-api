@@ -13,7 +13,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -27,13 +27,13 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-belong-business-error";
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 
-import { VehicleMileageInvalidError } from "../errors/vehicle-mileage-invalid-error";
+import { VehicleMileageInvalidError } from "../../../vehicle/usecases/errors/vehicle-mileage-invalid-error";
 import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
 
 import { FuelLocationNotProvidedAdjustmentValidationError } from "../errors/fuel-location-not-provided-adjustment-validation-error";
 import { FuelRegistrationsMobileLocationRequiredError } from "../errors/fuel-registrations-mobile-location-required-error";
 
-import { VehicleInvalidStatusForFuelError } from "../errors/vehicle-invalid-status-for-fuel-error";
+import { FuelVehicleInvalidStatusForFuelError } from "../errors/fuel-vehicle-invalid-status-for-fuel-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import { Fuel, CreateFuelProps } from "../../dtos/fuel-dto";
@@ -42,6 +42,7 @@ import { UploadService } from "@/shared/services/upload-service";
 import { MultipartFile } from "@fastify/multipart";
 
 import { calculateDistance } from "@/shared/utils/geolocation";
+import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
 
 @injectable()
 class CreateFuelUseCase {
@@ -122,7 +123,7 @@ class CreateFuelUseCase {
 
     // Validate vehicle status (only ACTIVE or IN_ROUTE vehicles can be fueled)
     if (findVehicle.status !== "ACTIVE" && findVehicle.status !== "IN_ROUTE") {
-      throw new VehicleInvalidStatusForFuelError();
+      throw new FuelVehicleInvalidStatusForFuelError();
     }
 
     // Validate mileage (must be strictly greater than current vehicle mileage)
@@ -264,6 +265,23 @@ class CreateFuelUseCase {
         performedBy: userId,
         businessId: fuelData.businessId,
       });
+
+      // Enqueue AI verification for odometer photo (fire-and-forget)
+      // Skip if business has AI disabled (limit === 0)
+      if ((findBusiness.ai_analysis_limit ?? 0) > 0) {
+        AIVerificationWorkerService.getInstance()
+          .enqueueVerification({
+            type: "fuel_odometer",
+            recordId: fuelCreated.id,
+            businessId: fuelData.businessId,
+            userId,
+            odometerPhotoPath: uploadResult.path,
+            reportedMileage: fuelData.current_mileage,
+          })
+          .catch((err) =>
+            console.error("[AI] Failed to enqueue fuel verification:", err),
+          );
+      }
 
       return fuelCreated;
     } catch (error) {

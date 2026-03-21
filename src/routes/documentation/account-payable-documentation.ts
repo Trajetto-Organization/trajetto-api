@@ -17,6 +17,16 @@ const accountPayableSchemas = {
   updateAccountPayable: updateAccountPayableSchema,
   businessIdParam: updateDeleteBusinessSchema,
   accountPayableBusinessParams: accountPayableBusinessParams,
+  searchAccountPayableCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de contas a pagar a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID da última conta a pagar da página anterior para paginação"),
+  }),
 };
 
 const accountPayableResponses = {
@@ -75,6 +85,14 @@ const accountPayableResponses = {
   }),
   accountPayableDeleted: z.object({
     message: z.string().default("Conta a pagar deletada com sucesso!"),
+  }),
+
+  searchAccountPayableStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are account payable objects.",
+      ),
   }),
 
   // Common Error Responses

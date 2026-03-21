@@ -7,13 +7,13 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { updateBusinessSchema } from "@/schemas/update-business-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
-import { CnpjAlreadyExistsError } from "../errors/cnpj-already-exists-error";
-import { CorporateReasonAlreadyExistsError } from "../errors/corporate-reason-already-exists-error";
+import { BusinessCnpjAlreadyExistsError } from "../errors/business-cnpj-already-exists-error";
+import { BusinessCorporateReasonAlreadyExistsError } from "../errors/business-corporate-reason-already-exists-error";
 
-import { ErpCodeAlreadyExistsError } from "../errors/erp-code-already-exists-error";
-import { EmailAlreadyExistsError } from "../errors/email-already-exists-error";
+import { BusinessErpCodeAlreadyExistsError } from "../errors/business-erp-code-already-exists-error";
+import { BusinessEmailAlreadyExistsError } from "../errors/business-email-already-exists-error";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNameAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-name-already-exists-error";
 import { BranchCnpjAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-cnpj-already-exists-error";
@@ -51,19 +51,19 @@ class UpdateBusinessController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof CnpjAlreadyExistsError) {
+      if (error instanceof BusinessCnpjAlreadyExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof CorporateReasonAlreadyExistsError) {
+      if (error instanceof BusinessCorporateReasonAlreadyExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof ErpCodeAlreadyExistsError) {
+      if (error instanceof BusinessErpCodeAlreadyExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof EmailAlreadyExistsError) {
+      if (error instanceof BusinessEmailAlreadyExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 

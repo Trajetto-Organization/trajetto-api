@@ -1,13 +1,13 @@
 import { inject, injectable } from "tsyringe";
 import { verify, sign } from "jsonwebtoken";
 
+import auth from "@/config/auth";
+
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 import { IUserRepository } from "../../repositories/IUser-repository";
 
-import { RefreshTokenNotExistsError } from "../errors/refresh-token-not-exists-error";
-import auth from "@/config/auth";
-
-import { InvalidCredentialsError } from "../errors/invalid-credentials-error";
+import { UserRefreshTokenNotExistsError } from "../errors/user-refresh-token-not-exists-error";
+import { UserInvalidCredentialsError } from "../errors/user-invalid-credentials-error";
 
 import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
 import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
@@ -42,7 +42,7 @@ class RefreshTokenUseCase {
     const findUserByEmail = await this.user.findUserByEmail(email);
 
     if (!findUserByEmail) {
-      throw new InvalidCredentialsError();
+      throw new UserInvalidCredentialsError();
     }
 
     // Check if user access has been revoked
@@ -56,7 +56,7 @@ class RefreshTokenUseCase {
     });
 
     if (!userToken) {
-      throw new RefreshTokenNotExistsError();
+      throw new UserRefreshTokenNotExistsError();
     }
 
     await this.usersTokens.deleteUserRefreshTokenById(userToken.id);

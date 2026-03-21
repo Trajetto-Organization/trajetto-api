@@ -8,9 +8,9 @@ import { IServiceOrderRepository } from "@/modules/service-order/repositories/IS
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
-import { RegisterUserNotFoundError } from "@/modules/user/usecases/errors/register-user-not-found-error";
+import { UserRegisterUserNotFoundError } from "@/modules/user/usecases/errors/user-register-user-not-found-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
 
 import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
@@ -33,7 +33,7 @@ import {
   AccountPayable,
   UpdateAccountPayableProps,
 } from "../../dtos/account-payable-dto";
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 
 import { buildAccountPayableLink } from "@/shared/utils/link-redirect-page";
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
@@ -264,7 +264,7 @@ class UpdateAccountPayableUseCase {
       );
 
       if (!findRegistrationUser) {
-        throw new RegisterUserNotFoundError();
+        throw new UserRegisterUserNotFoundError();
       }
 
       if (findRegistrationUser.businessId !== businessId) {

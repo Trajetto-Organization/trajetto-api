@@ -1,14 +1,15 @@
-import { v4 as uuidV4 } from "uuid";
-
+import { v7 as uuidV7 } from "uuid";
 import { IVehicleRepository } from "../IVehicle-repository";
+
 import {
   Vehicle,
   CreateVehicleProps,
   ListVehicleProps,
   ListVehicleByBusinessIdProps,
   UpdateVehicle,
-  ListVehicleBusinessProps,
   GetVehicleByIdAndBusinessProps,
+  SearchVehicleWithCursorProps,
+  CursorPaginatedVehicle,
 } from "../../dtos/vehicle-dto";
 
 class InMemoryVehicleRepository implements IVehicleRepository {
@@ -16,7 +17,7 @@ class InMemoryVehicleRepository implements IVehicleRepository {
 
   async createVehicle(vehicleData: CreateVehicleProps): Promise<Vehicle> {
     const newVehicle: Vehicle = {
-      id: uuidV4(),
+      id: uuidV7(),
       ...vehicleData,
       fleet_id: vehicleData.fleet_id || null,
       last_maintenance_date: vehicleData.last_maintenance_date || null,
@@ -62,41 +63,6 @@ class InMemoryVehicleRepository implements IVehicleRepository {
           vehicle.brand.toLowerCase().includes(normalizedSearch) ||
           vehicle.model.toLowerCase().includes(normalizedSearch) ||
           vehicle.renavam.toLowerCase().includes(normalizedSearch),
-      );
-    }
-
-    const skip = (page - 1) * pageSize;
-    const data = filteredVehicles.slice(skip, skip + pageSize);
-
-    const total = filteredVehicles.length;
-    return { data, total };
-  }
-
-  async listVehicleBusiness({
-    page,
-    pageSize,
-    businessId,
-    search,
-    driverId,
-  }: ListVehicleBusinessProps): Promise<ListVehicleProps> {
-    let filteredVehicles = this.vehicles.filter(
-      (vehicle) => vehicle.businessId === businessId,
-    );
-
-    if (driverId) {
-      filteredVehicles = filteredVehicles.filter(
-        (vehicle) => vehicle.driverId === driverId,
-      );
-    }
-
-    if (search) {
-      const searchLower = search.toLowerCase();
-      filteredVehicles = filteredVehicles.filter(
-        (vehicle) =>
-          vehicle.description.toLowerCase().includes(searchLower) ||
-          vehicle.license_plate.toLowerCase().includes(searchLower) ||
-          vehicle.model.toLowerCase().includes(searchLower) ||
-          vehicle.brand.toLowerCase().includes(searchLower),
       );
     }
 
@@ -173,6 +139,7 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       (vehicle) =>
         vehicle.license_plate.toLowerCase() === licensePlate.toLowerCase(),
     );
+
     return found || null;
   }
 
@@ -180,6 +147,7 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     const found = this.vehicles.find(
       (vehicle) => vehicle.renavam.toLowerCase() === renavam.toLowerCase(),
     );
+
     return found || null;
   }
 
@@ -191,11 +159,93 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       (vehicle) =>
         vehicle.id === vehicleId && vehicle.businessId === businessId,
     );
+
     return found || null;
   }
 
   async findVehiclesByFuelTypeId(fuelTypeId: string): Promise<Vehicle[]> {
     return this.vehicles.filter((vehicle) => vehicle.fuelTypeId === fuelTypeId);
+  }
+
+  async *streamVehiclesForExport(
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ): AsyncGenerator<any> {
+    let filtered =
+      userRole === "MASTER"
+        ? [...this.vehicles]
+        : this.vehicles.filter((vehicle) => vehicle.businessId === businessId);
+
+    if (search) {
+      const searchTerm = search.toLowerCase();
+      filtered = filtered.filter(
+        (vehicle) =>
+          vehicle.id.toLowerCase().includes(searchTerm) ||
+          vehicle.description.toLowerCase().includes(searchTerm) ||
+          vehicle.license_plate.toLowerCase().includes(searchTerm) ||
+          vehicle.brand.toLowerCase().includes(searchTerm) ||
+          vehicle.model.toLowerCase().includes(searchTerm) ||
+          vehicle.renavam.toLowerCase().includes(searchTerm),
+      );
+    }
+
+    for (const vehicle of filtered) {
+      yield {
+        id: vehicle.id,
+        description: vehicle.description,
+        license_plate: vehicle.license_plate,
+        brand: vehicle.brand,
+        model: vehicle.model,
+        acquisition_date: vehicle.acquisition_date,
+        fleet_type: vehicle.fleet_type,
+        fleet_id: vehicle.fleet_id,
+        current_mileage: vehicle.current_mileage,
+        last_maintenance_mileage: vehicle.last_maintenance_mileage,
+        last_maintenance_date: vehicle.last_maintenance_date,
+        maintenance_interval_km: vehicle.maintenance_interval_km,
+        maintenance_interval_months: vehicle.maintenance_interval_months,
+        renavam: vehicle.renavam,
+        manufacturing_year: vehicle.manufacturing_year,
+        model_year: vehicle.model_year,
+        km_per_liter: vehicle.km_per_liter,
+        number_of_axles: vehicle.number_of_axles,
+        status: vehicle.status,
+        vehicleTypeName: null,
+        fuelTypeName: null,
+        driverName: null,
+        driverCpf: null,
+        branchName: null,
+        businessId: vehicle.businessId,
+        ...(userRole === "MASTER" ? { businessName: null } : {}),
+        created_at: vehicle.created_at,
+        updated_at: vehicle.updated_at,
+      };
+    }
+  }
+
+  async searchVehicleWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchVehicleWithCursorProps): Promise<CursorPaginatedVehicle> {
+    let filtered = this.vehicles.filter(
+      (vehicle) => vehicle.businessId === businessId,
+    );
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((v) => v.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

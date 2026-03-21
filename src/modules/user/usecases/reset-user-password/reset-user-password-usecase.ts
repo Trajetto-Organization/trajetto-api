@@ -2,9 +2,9 @@ import { inject, injectable } from "tsyringe";
 import { hash } from "bcrypt";
 
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
-import { InvalidTokenError } from "../errors/invalid-token-error";
+import { UserInvalidTokenError } from "../errors/user-invalid-token-error";
 
-import { ExpiredTokenError } from "../errors/expired-token-error";
+import { UserExpiredTokenError } from "../errors/user-expired-token-error";
 import { IUserRepository } from "../../repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
@@ -29,14 +29,14 @@ class ResetUserPasswordUseCase {
       await this.usersTokens.findForgotPasswordVerificationTokenByToken(token);
 
     if (!userToken) {
-      throw new InvalidTokenError();
+      throw new UserInvalidTokenError();
     }
 
     const now = new Date();
 
     // Checks if the token has expired
     if (now > userToken.expires) {
-      throw new ExpiredTokenError();
+      throw new UserExpiredTokenError();
     }
 
     const user = await this.user.findUserByEmail(userToken.email);

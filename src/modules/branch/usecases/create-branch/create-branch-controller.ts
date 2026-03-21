@@ -12,14 +12,14 @@ import { BranchCnpjAlreadyExistsError } from "../errors/branch-cnpj-already-exis
 import { BranchErpCodeAlreadyExistsError } from "../errors/branch-erp-code-already-exists-error";
 import { BranchEmailAlreadyExistsError } from "../errors/branch-email-already-exists-error";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
-import { CnpjAlreadyExistsError } from "@/modules/business/usecases/errors/cnpj-already-exists-error";
-import { CorporateReasonAlreadyExistsError } from "@/modules/business/usecases/errors/corporate-reason-already-exists-error";
+import { BusinessCnpjAlreadyExistsError } from "@/modules/business/usecases/errors/business-cnpj-already-exists-error";
+import { BusinessCorporateReasonAlreadyExistsError } from "@/modules/business/usecases/errors/business-corporate-reason-already-exists-error";
 
-import { ErpCodeAlreadyExistsError } from "@/modules/business/usecases/errors/erp-code-already-exists-error";
-import { EmailAlreadyExistsError } from "@/modules/business/usecases/errors/email-already-exists-error";
+import { BusinessErpCodeAlreadyExistsError } from "@/modules/business/usecases/errors/business-erp-code-already-exists-error";
+import { BusinessEmailAlreadyExistsError } from "@/modules/business/usecases/errors/business-email-already-exists-error";
 
 class CreateBranchController {
   async handle(
@@ -65,19 +65,19 @@ class CreateBranchController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof CnpjAlreadyExistsError) {
+      if (error instanceof BusinessCnpjAlreadyExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof CorporateReasonAlreadyExistsError) {
+      if (error instanceof BusinessCorporateReasonAlreadyExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof ErpCodeAlreadyExistsError) {
+      if (error instanceof BusinessErpCodeAlreadyExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof EmailAlreadyExistsError) {
+      if (error instanceof BusinessEmailAlreadyExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 

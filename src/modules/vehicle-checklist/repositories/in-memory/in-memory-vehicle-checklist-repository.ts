@@ -1,4 +1,4 @@
-import { v4 as uuidV4 } from "uuid";
+import { v7 as uuidV7 } from "uuid";
 import { IVehicleChecklistRepository } from "../IVehicle-checklist-repository";
 
 import {
@@ -7,7 +7,6 @@ import {
   ListVehicleChecklistProps,
   ListVehicleChecklistByBusinessIdProps,
   UpdateVehicleChecklist,
-  ListVehicleChecklistBusinessProps,
   GetVehicleChecklistByIdAndBusinessProps,
   VehicleChecklistWithRelations,
 } from "../../dtos/vehicle-checklist-dto";
@@ -21,7 +20,7 @@ class InMemoryVehicleChecklistRepository
     checklistData: CreateVehicleChecklistProps,
   ): Promise<VehicleChecklist> {
     const checklist: VehicleChecklist = {
-      id: uuidV4(),
+      id: uuidV7(),
       current_mileage: checklistData.current_mileage,
       checklist_date: checklistData.checklist_date || new Date(),
       tires_condition: checklistData.tires_condition,
@@ -55,6 +54,7 @@ class InMemoryVehicleChecklistRepository
       branchId: checklistData.branchId || "",
       vehicleId: checklistData.vehicleId,
       driverId: checklistData.driverId || "",
+      ai_verification_status: "",
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -133,22 +133,6 @@ class InMemoryVehicleChecklistRepository
     };
   }
 
-  async listVehicleChecklistBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListVehicleChecklistBusinessProps): Promise<ListVehicleChecklistProps> {
-    const filteredChecklists = this.checklists.filter(
-      (checklist) => checklist.businessId === businessId,
-    );
-
-    const total = filteredChecklists.length;
-    const skip = (page - 1) * pageSize;
-
-    const data = filteredChecklists.slice(skip, skip + pageSize);
-    return { data, total };
-  }
-
   async updateVehicleChecklist({
     checklistData,
     checklistId,
@@ -196,6 +180,7 @@ class InMemoryVehicleChecklistRepository
     const found = this.checklists.find(
       (checklist) => checklist.id === checklistId,
     );
+
     return found || null;
   }
 
@@ -250,6 +235,7 @@ class InMemoryVehicleChecklistRepository
       (checklist) =>
         checklist.id === checklistId && checklist.businessId === businessId,
     );
+
     return found || null;
   }
 
@@ -314,33 +300,72 @@ class InMemoryVehicleChecklistRepository
     );
   }
 
-  async getAllVehicleChecklistsForExport(
+  async *streamChecklistsForExport(
     businessId: string,
     userRole: string,
     search?: string,
-  ): Promise<any[]> {
-    let filteredChecklists = this.checklists.filter(
-      (checklist) => checklist.businessId === businessId,
-    );
+  ): AsyncGenerator<any> {
+    let filtered =
+      userRole === "MASTER"
+        ? [...this.checklists]
+        : this.checklists.filter(
+            (checklist) => checklist.businessId === businessId,
+          );
 
     if (search) {
-      const searchLower = search.toLowerCase();
-      filteredChecklists = filteredChecklists.filter(
+      const searchTerm = search.toLowerCase();
+      filtered = filtered.filter(
         (checklist) =>
-          checklist.notes?.toLowerCase().includes(searchLower) ||
-          checklist.overall_condition.toLowerCase().includes(searchLower),
+          checklist.id.toLowerCase().includes(searchTerm) ||
+          checklist.notes?.toLowerCase().includes(searchTerm) ||
+          checklist.overall_condition.toLowerCase().includes(searchTerm),
       );
     }
 
-    // Mock export data
-    return filteredChecklists.map((checklist) => ({
-      ...checklist,
-      business_name: userRole === "MASTER" ? "Test Business" : undefined,
-      branch_name: "Test Branch",
-      vehicle_description: "Test Vehicle",
-      vehicle_license_plate: "ABC-1234",
-      driver_name: "Test Driver",
-    }));
+    for (const checklist of filtered) {
+      yield {
+        id: checklist.id,
+        vehicleLicensePlate: null,
+        vehicleDescription: null,
+        vehicleBrand: null,
+        vehicleModel: null,
+        vehicleCurrentMileage: null,
+        driverName: null,
+        driverCnh: null,
+        checklist_date: checklist.checklist_date,
+        current_mileage: checklist.current_mileage,
+        tires_condition: checklist.tires_condition,
+        headlights_working: checklist.headlights_working,
+        taillights_working: checklist.taillights_working,
+        turn_signals_working: checklist.turn_signals_working,
+        bumpers_condition: checklist.bumpers_condition,
+        windshield_condition: checklist.windshield_condition,
+        mirrors_condition: checklist.mirrors_condition,
+        seatbelts_working: checklist.seatbelts_working,
+        dashboard_working: checklist.dashboard_working,
+        steering_wheel_condition: checklist.steering_wheel_condition,
+        brakes_working: checklist.brakes_working,
+        clutch_working: checklist.clutch_working,
+        fuel_level_adequate: checklist.fuel_level_adequate,
+        oil_level_adequate: checklist.oil_level_adequate,
+        radiator_water_adequate: checklist.radiator_water_adequate,
+        brake_fluid_adequate: checklist.brake_fluid_adequate,
+        battery_condition: checklist.battery_condition,
+        driver_license_valid: checklist.driver_license_valid,
+        vehicle_documents_valid: checklist.vehicle_documents_valid,
+        insurance_valid: checklist.insurance_valid,
+        fire_extinguisher_valid: checklist.fire_extinguisher_valid,
+        warning_triangle_present: checklist.warning_triangle_present,
+        jack_present: checklist.jack_present,
+        spare_tire_condition: checklist.spare_tire_condition,
+        overall_condition: checklist.overall_condition,
+        notes: checklist.notes,
+        branchName: null,
+        ...(userRole === "MASTER" ? { businessName: null } : {}),
+        created_at: checklist.created_at,
+        updated_at: checklist.updated_at,
+      };
+    }
   }
 }
 

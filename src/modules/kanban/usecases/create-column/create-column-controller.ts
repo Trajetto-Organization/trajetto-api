@@ -9,7 +9,7 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 import { KanbanNotAllowedCreateColumnBusinessError } from "../errors/kanban-not-allowed-create-column-business-error";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 class CreateKanbanColumnController {
   async handle(

@@ -104,6 +104,11 @@ model Business {
   Activity     Activity[]
   Notification Notification[]
 
+  // AI Analysis limits (per company, managed by master)
+  ai_analysis_limit    Int      @default(0) // Monthly limit (0 = disabled/unlimited for master)
+  ai_analysis_used     Int      @default(0) // Current month usage count
+  ai_analysis_reset_at DateTime @default(now()) // When to reset the counter
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -731,15 +736,21 @@ model Fine {
 }
 
 model Fuel {
-  id                String   @id @default(uuid(7))
+  id                String  @id @default(uuid(7))
   current_mileage   Float // Current vehicle mileage at the time of refueling
-  liters_amount     Decimal  @db.Decimal(10, 3) // Quantity of liters supplied
-  price_per_liter   Decimal  @db.Decimal(10, 3) // Value per liter
-  total_amount      Decimal  @db.Decimal(10, 2) // Total value (quantity * price per liter)
+  liters_amount     Decimal @db.Decimal(10, 3) // Quantity of liters supplied
+  price_per_liter   Decimal @db.Decimal(10, 3) // Value per liter
+  total_amount      Decimal @db.Decimal(10, 2) // Total value (quantity * price per liter)
   odometer_photo    String // Odometer Photo Path
-  odometer_verified Boolean  @default(false) // If the photo has been verified by AI
+  odometer_verified Boolean @default(false) // If the photo has been verified by AI
   notes             String? // Optional remarks
-  refueling_date    DateTime @default(now()) // Supply date
+
+  // AI Verification results
+  odometer_ai_reading     Float? // Value read by AI from odometer photo
+  odometer_ai_status      String    @default("pending") // pending, analyzing, verified, mismatch, fraud, unreadable, error, skipped
+  odometer_ai_details     Json? // Full AI response details (confidence, observations, etc.)
+  odometer_ai_analyzed_at DateTime? // When AI analysis was completed
+  refueling_date          DateTime  @default(now()) // Supply date
 
   // 📍 GEOLOCATION: Final location (edited or original)
   latitude  Float? @db.DoublePrecision // Latitude of gas station
@@ -825,7 +836,13 @@ model VehicleChecklist {
   // General observations
   notes             String? // Optional remarks
   photos            String[] // Array of photo paths
+  photos_by_field   Json? // Explicit field-to-photo mapping: { fieldName: [path1, path2] }
   overall_condition String // "approved", "approved_with_restrictions", "rejected"
+
+  // AI Verification results
+  ai_verification_status  String    @default("pending") // pending, analyzing, verified, issues_found, error, skipped
+  ai_verification_details Json? // Per-field AI analysis: { fieldName: { status, confidence, observation } }
+  ai_verified_at          DateTime? // When AI analysis was completed
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String

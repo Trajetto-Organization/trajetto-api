@@ -88,18 +88,19 @@ class QuoteRepository implements IQuoteRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const quotes = await this.prisma.quote.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      orderBy: {
-        created_at: "desc",
-      },
-    });
-
-    const total = await this.prisma.quote.count({
-      where: whereCondition,
-    });
+    const [quotes, total] = await Promise.all([
+      this.prisma.quote.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        orderBy: {
+          created_at: "desc",
+        },
+      }),
+      this.prisma.quote.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return { data: quotes, total };
   }

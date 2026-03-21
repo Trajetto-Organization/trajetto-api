@@ -6,9 +6,10 @@ import {
   findProfileAccessByNameAndBusiness,
   ListProfileAccess,
   ListProfileAccessProps,
-  ListProfileBusinessProps,
   ProfileAccess,
   UpdateProfileAccess,
+  SearchProfileAccessWithCursorProps,
+  CursorPaginatedProfileAccess,
 } from "../dtos/profile-access-dto";
 
 class ProfileAccessRepository implements IProfileAccessRepository {
@@ -75,54 +76,31 @@ class ProfileAccessRepository implements IProfileAccessRepository {
       ...(orConditions.length > 0 ? { OR: orConditions } : {}),
     };
 
-    const profileAccessData = await this.prisma.profileAccess.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      ...(currentUserRole === "MASTER" && {
-        include: {
-          business: {
-            select: {
-              id: true,
-              corporate_reason: true,
+    const [profileAccessData, total] = await Promise.all([
+      this.prisma.profileAccess.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        ...(currentUserRole === "MASTER" && {
+          include: {
+            business: {
+              select: {
+                id: true,
+                corporate_reason: true,
+              },
             },
           },
+        }),
+        orderBy: {
+          created_at: "desc", // Sort by created_at
         },
       }),
-      orderBy: {
-        created_at: "desc", // Sort by created_at
-      },
-    });
-
-    const total = await this.prisma.profileAccess.count({
-      where: whereCondition,
-    });
+      this.prisma.profileAccess.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return { data: profileAccessData, total };
-  }
-
-  async listProfileBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListProfileBusinessProps): Promise<ListProfileAccess> {
-    const skip = (page - 1) * pageSize;
-
-    const profileBusinessData = await this.prisma.profileAccess.findMany({
-      skip,
-      take: pageSize,
-      where: {
-        businessId,
-      },
-    });
-
-    const total = await this.prisma.profileAccess.count({
-      where: {
-        businessId,
-      },
-    });
-
-    return { data: profileBusinessData, total };
   }
 
   async updateProfileAccess(
@@ -184,6 +162,31 @@ class ProfileAccessRepository implements IProfileAccessRepository {
     });
 
     return findUserByEmail;
+  }
+
+  async searchProfileAccessWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchProfileAccessWithCursorProps): Promise<CursorPaginatedProfileAccess> {
+    const items = await this.prisma.profileAccess.findMany({
+      where: { businessId },
+      take: limit + 1,
+      ...(cursor && {
+        cursor: { id: cursor },
+        skip: 1,
+      }),
+      orderBy: {
+        created_at: "desc",
+      },
+    });
+
+    const hasMore = items.length > limit;
+
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 
   async findProfileAccessById(

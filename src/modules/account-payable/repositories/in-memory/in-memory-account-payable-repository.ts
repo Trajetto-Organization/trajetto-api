@@ -1,4 +1,4 @@
-import { v4 as uuidV4 } from "uuid";
+import { v7 as uuidV7 } from "uuid";
 import { IAccountPayableRepository } from "../IAccount-payable-repository";
 
 import {
@@ -6,8 +6,9 @@ import {
   CreateAccountPayableProps,
   ListAccountPayableProps,
   ListAccountPayableByBusinessIdProps,
-  ListAccountPayableByResponsibleUserIdProps,
   UpdateAccountPayable,
+  SearchAccountPayableWithCursorProps,
+  CursorPaginatedAccountPayable,
 } from "../../dtos/account-payable-dto";
 
 class InMemoryAccountPayableRepository implements IAccountPayableRepository {
@@ -17,7 +18,7 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
     accountPayableData: CreateAccountPayableProps,
   ): Promise<AccountPayable> {
     const accountPayable: AccountPayable = {
-      id: uuidV4(),
+      id: uuidV7(),
       issue_date: new Date(),
       due_date: accountPayableData.due_date,
       payment_date: accountPayableData.payment_date,
@@ -42,26 +43,7 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
     const filteredPayables = this.accountPayables.filter(
       (payable) => payable.businessId === businessId,
     );
-    const skip = (page - 1) * pageSize;
-    const slicedPayables = filteredPayables.slice(skip, skip + pageSize);
 
-    return {
-      data: slicedPayables,
-      total: filteredPayables.length,
-    };
-  }
-
-  async listAccountPayablesByResponsibleUserId({
-    page,
-    pageSize,
-    responsibleUserId,
-    businessId,
-  }: ListAccountPayableByResponsibleUserIdProps): Promise<ListAccountPayableProps> {
-    const filteredPayables = this.accountPayables.filter(
-      (payable) =>
-        payable.registrationUserId === responsibleUserId &&
-        payable.businessId === businessId,
-    );
     const skip = (page - 1) * pageSize;
     const slicedPayables = filteredPayables.slice(skip, skip + pageSize);
 
@@ -111,7 +93,7 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
     }
 
     if (accountPayableData.branchId !== undefined) {
-      updatedPayable.branchId = accountPayableData.branchId;
+      updatedPayable.branchId = accountPayableData.branchId as string;
     }
 
     if (accountPayableData.serviceOrderId !== undefined) {
@@ -152,6 +134,7 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
     const accountPayable = this.accountPayables.find(
       (payable) => payable.id === accountPayableId,
     );
+
     return accountPayable || null;
   }
 
@@ -161,6 +144,7 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
     const payables = this.accountPayables.filter(
       (payable) => payable.serviceOrderId === serviceOrderId,
     );
+
     return payables.length > 0 ? payables : null;
   }
 
@@ -170,6 +154,33 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
     return this.accountPayables.filter(
       (payable) => payable.registrationUserId === registrationUserId,
     );
+  }
+
+  async searchAccountPayableByResponsibleUserWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+    userId,
+  }: SearchAccountPayableWithCursorProps): Promise<CursorPaginatedAccountPayable> {
+    let filtered = this.accountPayables.filter(
+      (payable) =>
+        payable.registrationUserId === userId &&
+        payable.businessId === businessId,
+    );
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((p) => p.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

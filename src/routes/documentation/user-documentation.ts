@@ -3,6 +3,12 @@ import { z } from "zod";
 import { EnumUserRole } from "@/modules/user/dtos/user-dto";
 import { createUserSchema } from "@/schemas/create-user-schema";
 
+import { createMasterUserSchema } from "@/schemas/create-master-user-schema";
+import {
+  updateMasterUserSchema,
+  updateMasterUserParamsSchema,
+} from "@/schemas/update-master-user-schema";
+
 import { authenticateUserSchema } from "@/schemas/authenticate-user-schema";
 import { forgotPasswordVerificationSchema } from "@/schemas/forgot-password-verification-schema";
 
@@ -28,6 +34,9 @@ import { revokeUserAccessSchema } from "@/schemas/revoke-user-access-schema";
 
 const userSchemas = {
   createUser: createUserSchema,
+  createMasterUser: createMasterUserSchema,
+  updateMasterUser: updateMasterUserSchema,
+  updateMasterUserParams: updateMasterUserParamsSchema,
   authenticateUser: authenticateUserSchema,
   forgotPasswordVerification: forgotPasswordVerificationSchema,
   forgotPassword: forgotPasswordSchema,
@@ -42,9 +51,27 @@ const userSchemas = {
   listUsers: listPagesSchema,
   listUserBusiness: listPagesByBusinessSchema,
   revokeUserAccess: revokeUserAccessSchema,
+  searchUserCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de empresas a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID da última empresa da página anterior para paginação"),
+    businessId: z.string().describe("ID da empresa"),
+  }),
 };
 
 const userResponses = {
+  searchUserStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are user objects.",
+      ),
+  }),
   userCreated: z.object({
     message: z.string().default("Usuário criado com sucesso!"),
   }),
@@ -611,6 +638,97 @@ const userResponses = {
   twoFactorUpdateErrors: z.object({
     message: z.string().default("Recurso não encontrado!"),
   }),
+
+  // Master user responses
+  masterUserCreated: z.object({
+    message: z.string().default("Usuário Master criado com sucesso!"),
+  }),
+  masterUserUpdated: z.object({
+    message: z.string().default("Usuário Master atualizado com sucesso!"),
+  }),
+  masterUserDeleted: z.object({
+    message: z.string().default("Usuário Master removido com sucesso!"),
+  }),
+  masterUsersList: z.object({
+    data: z.array(
+      z.object({
+        id: z.string(),
+        role: z.nativeEnum(EnumUserRole),
+        email: z.string(),
+        email_verified: z.string().nullable().optional(),
+        two_factor_enabled: z.boolean().optional().nullable(),
+        access_revoked: z.boolean(),
+        name: z.string(),
+        avatar: z.string().optional().nullable(),
+        whatsapp_notifications_enabled: z.boolean().optional(),
+        whatsapp_phone: z.string().optional().nullable(),
+      }),
+    ),
+    total: z.number(),
+  }),
+
+  createMasterUserErrors: z.object({
+    message: z.string().default("Recurso não encontrado!"),
+  }),
+  createMasterUserConflictErrors: z.object({
+    message: z
+      .string()
+      .default(
+        "Este usuário não está disponível para cadastro. Os usuários devem ser únicos em todo o sistema.",
+      ),
+  }),
+
+  updateMasterUserErrors: z.object({
+    message: z.string().default("Recurso não encontrado!"),
+  }),
+  updateMasterUserConflictErrors: z.object({
+    message: z
+      .string()
+      .default(
+        "Este usuário não está disponível para cadastro. Os usuários devem ser únicos em todo o sistema.",
+      ),
+  }),
+  updateMasterUserForbiddenErrors: z.object({
+    message: z
+      .string()
+      .default(
+        "Usuário não tem permissão para atualizar o seu próprio usuário.",
+      ),
+  }),
+
+  deleteMasterUserErrors: z.object({
+    message: z.string().default("Recurso não encontrado!"),
+  }),
+  deleteMasterUserForbiddenErrors: z.union([
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Usuário não tem permissão para deletar o seu próprio usuário.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Não é possível remover o último usuário Master do sistema. Deve existir pelo menos um.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Não é possível excluir este usuário pois ele possui ordens de serviço associadas.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Não é possível excluir este usuário pois ele possui contas a pagar associadas.",
+        ),
+    }),
+  ]),
 };
 
 export { userSchemas, userResponses };

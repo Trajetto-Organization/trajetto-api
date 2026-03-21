@@ -9,7 +9,7 @@ import { updateDeleteKanbanColumnSchema } from "@/schemas/update-delete-kanban-c
 import { KanbanNotAllowedUpdateColumnBusinessError } from "../errors/kanban-not-allowed-update-column-business-error";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
 import { KanbanColumnNotBelongBusinessError } from "../errors/kanban-column-not-belong-business-error";

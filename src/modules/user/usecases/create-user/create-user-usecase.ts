@@ -11,20 +11,20 @@ import { IDriverRepository } from "@/modules/driver/repositories/IDriver-reposit
 import { IProfileAccessRepository } from "@/modules/profile-access/repositories/IProfile-access-repository";
 import { UserAlreadyExistsError } from "../errors/user-already-exists.error";
 
-import { DriverAlreadyLinkedToUserError } from "../errors/driver-already-linked-to-user-error";
+import { UserDriverAlreadyLinkedToUserError } from "../errors/user-driver-already-linked-to-user-error";
 import { UserCannotHaveBothDriverAndProfileError } from "../errors/user-cannot-have-both-driver-and-profile-error";
 
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 import { NotificationService } from "@/shared/services/notification-service";
+
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
+import { UserProfileAccessNotFoundError } from "../errors/user-profile-access-not-found-error";
 
-import { BusinessNotFoundError } from "../errors/business-not-found-error";
-import { ProfileAccessNotFoundError } from "../errors/profile-access-not-found-error";
-
-import { CreateUserProps, User, UserRole } from "../../dtos/user-dto";
 import { AppError } from "@/shared/errors/AppError";
+import { CreateUserProps, User, UserRole } from "../../dtos/user-dto";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-match-business-error";
@@ -149,7 +149,7 @@ class CreateUserUseCase {
       // Check if driver is already linked to another user
       const driverLinkedUser = await this.user.findUserByDriverId(driverId);
       if (driverLinkedUser) {
-        throw new DriverAlreadyLinkedToUserError();
+        throw new UserDriverAlreadyLinkedToUserError();
       }
     }
 
@@ -161,7 +161,7 @@ class CreateUserUseCase {
         );
 
       if (!existingProfileAccess) {
-        throw new ProfileAccessNotFoundError();
+        throw new UserProfileAccessNotFoundError();
       }
 
       // Checks if the access profile belongs to the same company as the user
@@ -180,6 +180,19 @@ class CreateUserUseCase {
     const token = uuidV4();
     const expires = new Date(new Date().getTime() + 3600 * 1000); // 1 hour in milliseconds
 
+    // Sanitize: BUSINESS_ADMIN has no profileAccess; empty strings become undefined/null
+    const cleanProfileAccessId =
+      role === "BUSINESS_ADMIN" ||
+      !profileAccessId ||
+      profileAccessId.trim() === ""
+        ? undefined
+        : profileAccessId;
+
+    const cleanDriverId =
+      !driverId || (typeof driverId === "string" && driverId.trim() === "")
+        ? null
+        : driverId;
+
     try {
       const userCreated = await this.user.createUser({
         email,
@@ -187,8 +200,8 @@ class CreateUserUseCase {
         name,
         role,
         businessId,
-        profileAccessId,
-        driverId,
+        profileAccessId: cleanProfileAccessId,
+        driverId: cleanDriverId,
       });
 
       const verificationToken =

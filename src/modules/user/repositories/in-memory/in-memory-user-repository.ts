@@ -1,11 +1,10 @@
-import { v4 as uuidV4 } from "uuid";
+import { v7 as uuidV7 } from "uuid";
 import { IUserRepository } from "../IUser-repository";
 
 import {
   CreateUserProps,
   ListUsers,
   ListUsersByRoleAndBusinessProps,
-  ListUserBusinessProps,
   UpdateTwoFactorAuthentication,
   UpdateUser,
   UpdateUserName,
@@ -15,7 +14,11 @@ import {
   UpdateUserWhatsAppSettings,
   UpdateEmailNotifications,
   UpdateActivityNotifications,
+  CreateMasterUserProps,
+  ListMasterUsersProps,
   User,
+  SearchUserWithCursorProps,
+  CursorPaginatedUser,
 } from "../../dtos/user-dto";
 
 class InMemoryUserRepository implements IUserRepository {
@@ -35,7 +38,7 @@ class InMemoryUserRepository implements IUserRepository {
   }: CreateUserProps): Promise<User> {
     const now = new Date();
     const user: User & { created_at: Date; updated_at: Date } = {
-      id: uuidV4(),
+      id: uuidV7(),
       role: role || "BUSINESS_USER",
       email,
       name,
@@ -104,10 +107,9 @@ class InMemoryUserRepository implements IUserRepository {
       throw new Error("User not found");
     }
 
+    // Only skip undefined values — null is a valid value (means "clear/disconnect")
     const filteredData = Object.fromEntries(
-      Object.entries(userData).filter(
-        ([, value]) => value !== undefined && value !== null && value !== "",
-      ),
+      Object.entries(userData).filter(([, value]) => value !== undefined),
     );
 
     const updatedUser = {
@@ -189,30 +191,6 @@ class InMemoryUserRepository implements IUserRepository {
     return user;
   }
 
-  async listUserBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListUserBusinessProps): Promise<ListUsers> {
-    const filteredUsers = this.user.filter(
-      (user) => user.businessId === businessId,
-    );
-    const skip = (page - 1) * pageSize;
-    const slicedUsers = filteredUsers.slice(skip, skip + pageSize);
-
-    const users = slicedUsers.map((user) => ({
-      ...user,
-      profileAccess: user.profileAccess
-        ? { name: user.profileAccess.name }
-        : null,
-      created_at: (user as any).created_at || new Date(),
-      updated_at: (user as any).updated_at || new Date(),
-    }));
-
-    const totalCount = filteredUsers.length;
-    return { data: users as any, total: totalCount };
-  }
-
   async updateEmailVerification({
     email,
     email_verified,
@@ -226,6 +204,7 @@ class InMemoryUserRepository implements IUserRepository {
 
     user.email = email;
     user.email_verified = email_verified;
+
     return user;
   }
 
@@ -270,9 +249,11 @@ class InMemoryUserRepository implements IUserRepository {
     }
 
     user.whatsapp_notifications_enabled = whatsapp_notifications_enabled;
+
     if (whatsapp_phone !== undefined) {
       user.whatsapp_phone = whatsapp_phone;
     }
+
     return user;
   }
 
@@ -392,6 +373,75 @@ class InMemoryUserRepository implements IUserRepository {
 
     user.avatar = avatarPath;
     return user;
+  }
+
+  async createMasterUser({
+    name,
+    email,
+    password,
+  }: CreateMasterUserProps): Promise<User> {
+    const now = new Date();
+    const masterUser: User = {
+      id: uuidV7(),
+      name,
+      email,
+      password,
+      role: "MASTER",
+      access_revoked: false,
+      email_verified: now,
+      created_at: now,
+      updated_at: now,
+    } as User;
+
+    this.user.push(masterUser);
+    return masterUser;
+  }
+
+  async listMasterUsers({
+    page,
+    pageSize,
+    search,
+    currentUserId,
+  }: ListMasterUsersProps): Promise<ListUsers> {
+    let masters = this.user.filter(
+      (u) => u.role === "MASTER" && (!currentUserId || u.id !== currentUserId),
+    );
+
+    if (search) {
+      const s = search.toLowerCase();
+      masters = masters.filter(
+        (u) =>
+          u.name.toLowerCase().includes(s) || u.email.toLowerCase().includes(s),
+      );
+    }
+
+    const total = masters.length;
+    const skip = (page - 1) * pageSize;
+
+    const data = masters.slice(skip, skip + pageSize);
+    return { data: data as any, total };
+  }
+
+  async searchUserWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchUserWithCursorProps): Promise<CursorPaginatedUser> {
+    let filtered = this.user.filter((u) => u.businessId === businessId);
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((u) => u.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data: data as any, nextCursor, hasMore };
   }
 }
 

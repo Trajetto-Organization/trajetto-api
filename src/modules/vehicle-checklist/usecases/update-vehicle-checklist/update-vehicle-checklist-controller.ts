@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { UpdateVehicleChecklistUseCase } from "./update-vehicle-checklist-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
@@ -15,15 +15,15 @@ import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
-import { VehicleMileageInvalidError } from "@/modules/fuel/usecases/errors/vehicle-mileage-invalid-error";
+import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 
-import { DriverCannotUpdateChecklistError } from "../errors/driver-cannot-update-checklist-error";
+import { VehicleChecklistDriverCannotUpdateChecklistError } from "../errors/vehicle-checklist-driver-cannot-update-checklist-error";
 
 import { updateDeleteVehicleChecklistSchema } from "@/schemas/update-delete-vehicle-checklist-schema";
 import { updateVehicleChecklistSchema } from "@/schemas/update-vehicle-checklist-schema";
 
-import { RequiredPhotosMissingError } from "../errors/required-photos-missing-error";
-import { ChecklistNotFoundError } from "../errors/checklist-not-found-error";
+import { VehicleChecklistRequiredPhotosMissingError } from "../errors/vehicle-checklist-required-photos-missing-error";
+import { VehicleChecklistBusinessNotFoundError } from "../errors/vehicle-checklist-business-not-found-error";
 
 import { PhotoValidationService } from "@/shared/services/photo-validation-service";
 
@@ -207,11 +207,11 @@ class UpdateVehicleChecklistController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof DriverCannotUpdateChecklistError) {
+      if (error instanceof VehicleChecklistDriverCannotUpdateChecklistError) {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof RequiredPhotosMissingError) {
+      if (error instanceof VehicleChecklistRequiredPhotosMissingError) {
         return reply.status(400).send({
           message: error.message,
           errors: error.errors,
@@ -225,7 +225,7 @@ class UpdateVehicleChecklistController {
         });
       }
 
-      if (error instanceof ChecklistNotFoundError) {
+      if (error instanceof VehicleChecklistBusinessNotFoundError) {
         return reply.status(404).send({ message: error.message });
       }
 

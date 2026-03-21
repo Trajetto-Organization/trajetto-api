@@ -9,13 +9,13 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
 import { PartNotFoundError } from "@/modules/part/usecases/errors/part-not-found-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 
 import { ServiceOrderPartNotFoundError } from "../errors/service-order-part-not-found-error";
 import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";

@@ -1,13 +1,14 @@
-import { v4 as uuidV4 } from "uuid";
-
+import { v7 as uuidV7 } from "uuid";
 import { ISupplierRepository } from "../ISupplier-repository";
+
 import {
   Supplier,
   CreateSupplierProps,
   ListAllSuppliersProps,
   ListSupplierProps,
   UpdateSupplier,
-  ListSupplierBusinessProps,
+  SearchSupplierWithCursorProps,
+  CursorPaginatedSupplier,
 } from "../../dtos/supplier-dto";
 
 class InMemorySupplierRepository implements ISupplierRepository {
@@ -15,7 +16,7 @@ class InMemorySupplierRepository implements ISupplierRepository {
 
   async createSupplier(supplierData: CreateSupplierProps): Promise<Supplier> {
     const newSupplier: Supplier = {
-      id: uuidV4(),
+      id: uuidV7(),
       name: supplierData.name,
       cnpj: supplierData.cnpj,
       cep: supplierData.cep || null,
@@ -54,22 +55,6 @@ class InMemorySupplierRepository implements ISupplierRepository {
           (supplier.email && supplier.email.toLowerCase().includes(searchTerm)),
       );
     }
-
-    const skip = (page - 1) * pageSize;
-    const data = filteredSuppliers.slice(skip, skip + pageSize);
-
-    const total = filteredSuppliers.length;
-    return { data, total };
-  }
-
-  async listSupplierBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListSupplierBusinessProps): Promise<ListSupplierProps> {
-    const filteredSuppliers = this.suppliers.filter(
-      (supplier) => supplier.businessId === businessId,
-    );
 
     const skip = (page - 1) * pageSize;
     const data = filteredSuppliers.slice(skip, skip + pageSize);
@@ -169,6 +154,28 @@ class InMemorySupplierRepository implements ISupplierRepository {
 
     const deletedSupplier = this.suppliers.splice(index, 1)[0];
     return deletedSupplier;
+  }
+
+  async searchSupplierWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchSupplierWithCursorProps): Promise<CursorPaginatedSupplier> {
+    let filtered = this.suppliers.filter((s) => s.businessId === businessId);
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((s) => s.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

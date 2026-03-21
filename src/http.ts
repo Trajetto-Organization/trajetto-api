@@ -66,8 +66,8 @@ app.register(fastifyCors, {
     env.EVOLUTION_API_URL,
     env.EVOLUTION_HTTP_REQUEST as string,
   ],
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
   credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
 });
 
 app.register(fastifyStatic, {
@@ -116,6 +116,7 @@ app.register(fastifyRateLimit, {
       request.headers["x-real-ip"] ||
       (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor) ||
       request.socket.remoteAddress;
+
     return (Array.isArray(clientIP) ? clientIP[0] : clientIP) || "";
   },
   errorResponseBuilder: (req, context) => {

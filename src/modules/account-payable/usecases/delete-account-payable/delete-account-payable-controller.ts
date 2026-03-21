@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { DeleteAccountPayableUseCase } from "./delete-account-payable-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { AccountPayableNotNotBelongBusinessError } from "../errors/account-payable-not-belong-business-error";
 import { AccountPayableNotDeleteHasAlreadyPaidError } from "../errors/account-payable-not-delete-has-already-paid-error";

@@ -1,4 +1,4 @@
-import { v4 as uuidV4 } from "uuid";
+import { v7 as uuidV7 } from "uuid";
 import { IPermissionRepository } from "../IPermission-repository";
 
 import {
@@ -9,7 +9,10 @@ import {
   FindPermissionNameByProfile,
   ListPermissionProps,
   FindPermissionKeyByProfile,
+  BulkConfigurePermissionsProps,
 } from "../../dtos/permission-dto";
+
+import { permissionLabels, PermissionKey } from "@/config/permissions";
 
 class InMemoryPermissionRepository implements IPermissionRepository {
   public permissions: Permission[] = [];
@@ -23,7 +26,7 @@ class InMemoryPermissionRepository implements IPermissionRepository {
     permissionKey,
   }: CreatePermissionProps): Promise<Permission> {
     const newPermission: Permission = {
-      id: uuidV4(),
+      id: uuidV7(),
       action,
       canRead,
       canWrite,
@@ -151,6 +154,47 @@ class InMemoryPermissionRepository implements IPermissionRepository {
     }
 
     return found;
+  }
+
+  async bulkConfigurePermissions({
+    businessId,
+    profileAccessId,
+    permissions,
+  }: BulkConfigurePermissionsProps): Promise<void> {
+    this.permissions = this.permissions.filter(
+      (perm) =>
+        !(
+          perm.profileAccessId === profileAccessId &&
+          perm.businessId === businessId
+        ),
+    );
+
+    for (const { permissionKey, canRead, canWrite } of permissions) {
+      this.permissions.push({
+        id: uuidV7(),
+        action: permissionLabels[permissionKey as PermissionKey],
+        permissionKey,
+        canRead,
+        canWrite,
+        businessId,
+        profileAccessId,
+      });
+    }
+  }
+
+  async findPermissionsByProfile(
+    profileAccessId: string,
+    businessId: string,
+  ): Promise<Permission[]> {
+    return this.permissions
+      .filter(
+        (perm) =>
+          perm.profileAccessId === profileAccessId &&
+          perm.businessId === businessId,
+      )
+      .sort((a, b) =>
+        (a.permissionKey || "").localeCompare(b.permissionKey || ""),
+      );
   }
 }
 

@@ -38,10 +38,16 @@ interface ListProfileAccessProps {
   search?: string;
 }
 
-interface ListProfileBusinessProps {
-  page: number;
-  pageSize: number;
+interface SearchProfileAccessWithCursorProps {
+  limit: number;
+  cursor?: string;
   businessId: string;
+}
+
+interface CursorPaginatedProfileAccess {
+  data: ProfileAccess[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 export {
@@ -49,7 +55,8 @@ export {
   CreateProfileAccessProps,
   findProfileAccessByNameAndBusiness,
   ListProfileAccess,
-  ListProfileBusinessProps,
   UpdateProfileAccess,
   ListProfileAccessProps,
+  SearchProfileAccessWithCursorProps,
+  CursorPaginatedProfileAccess,
 };

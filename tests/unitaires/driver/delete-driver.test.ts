@@ -8,12 +8,12 @@ import { InMemoryFineRepository } from "@/modules/fine/repositories/in-memory/in
 
 import { InMemoryFuelRepository } from "@/modules/fuel/repositories/in-memory/in-memory-fuel-repository";
 import { InMemoryVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/in-memory/in-memory-vehicle-checklist-repository";
-import { InMemoryNotificationService } from "@/shared/services/in-memory/in-memory-notification-service";
 
+import { InMemoryNotificationService } from "@/shared/services/in-memory/in-memory-notification-service";
 import { DeleteDriverUseCase } from "@/modules/driver/usecases/delete-driver/delete-driver-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";

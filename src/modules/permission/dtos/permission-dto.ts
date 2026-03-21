@@ -58,6 +58,18 @@ interface FindPermissionKeyByProfile {
   businessId: string;
 }
 
+interface BulkConfigurePermissionItem {
+  permissionKey: PermissionKey;
+  canRead: boolean;
+  canWrite: boolean;
+}
+
+interface BulkConfigurePermissionsProps {
+  businessId: string;
+  profileAccessId: string;
+  permissions: BulkConfigurePermissionItem[];
+}
+
 export {
   CreatePermissionProps,
   FindPermissionNameByProfile,
@@ -66,4 +78,6 @@ export {
   Permission,
   ListPermission,
   ListPermissionProps,
+  BulkConfigurePermissionItem,
+  BulkConfigurePermissionsProps,
 };

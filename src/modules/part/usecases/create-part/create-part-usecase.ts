@@ -9,14 +9,14 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { PartAlreadyExistsError } from "../errors/part-already-exists-error";
 
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 import { SupplierNotFoundError } from "@/modules/supplier/usecases/errors/supplier-not-found-error";
 
 import { SupplierNotBelongBusinessError } from "@/modules/supplier/usecases/errors/supplier-not-belong-business-error";
 import { Part, CreatePartProps } from "../../dtos/part-dto";
 
 import { NotificationService } from "@/shared/services/notification-service";
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 
 import { AppError } from "@/shared/errors/AppError";
 

@@ -10,7 +10,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { PermissionAlreadyAssignedError } from "../errors/permission-already-assigned-error";
 
 import { PermissionNotFoundError } from "../errors/permission-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { ProfileAccessNotFoundError } from "@/modules/profile-access/usecases/errors/profile-access-not-found-error";
 import { PermissionCannotBeUpdatedByHimselfError } from "../errors/permission-cannot-be-updated-by-himself-error";

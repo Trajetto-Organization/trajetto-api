@@ -9,11 +9,11 @@ import { IBranchRepository } from "@/modules/branch/repositories/IBranch-reposit
 import { Business, CreateBusinessProps } from "../../dtos/business-dto";
 import { AppError } from "@/shared/errors/AppError";
 
-import { EmailAlreadyExistsError } from "../errors/email-already-exists-error";
-import { ErpCodeAlreadyExistsError } from "../errors/erp-code-already-exists-error";
+import { BusinessEmailAlreadyExistsError } from "../errors/business-email-already-exists-error";
+import { BusinessErpCodeAlreadyExistsError } from "../errors/business-erp-code-already-exists-error";
 
-import { CorporateReasonAlreadyExistsError } from "../errors/corporate-reason-already-exists-error";
-import { CnpjAlreadyExistsError } from "../errors/cnpj-already-exists-error";
+import { BusinessCorporateReasonAlreadyExistsError } from "../errors/business-corporate-reason-already-exists-error";
+import { BusinessCnpjAlreadyExistsError } from "../errors/business-cnpj-already-exists-error";
 
 import { BranchNameAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-name-already-exists-error";
 import { BranchCnpjAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-cnpj-already-exists-error";
@@ -47,7 +47,7 @@ class CreateBusinessUseCase {
     );
 
     if (findBusinessByCnpj) {
-      throw new CnpjAlreadyExistsError();
+      throw new BusinessCnpjAlreadyExistsError();
     }
 
     const findBusinessByCorporateReason =
@@ -56,7 +56,7 @@ class CreateBusinessUseCase {
       );
 
     if (findBusinessByCorporateReason) {
-      throw new CorporateReasonAlreadyExistsError();
+      throw new BusinessCorporateReasonAlreadyExistsError();
     }
 
     if (businessData.erp_code) {
@@ -65,7 +65,7 @@ class CreateBusinessUseCase {
       );
 
       if (findBusinessByErpcode) {
-        throw new ErpCodeAlreadyExistsError();
+        throw new BusinessErpCodeAlreadyExistsError();
       }
     }
 
@@ -74,7 +74,7 @@ class CreateBusinessUseCase {
     );
 
     if (findBusinessByEmail) {
-      throw new EmailAlreadyExistsError();
+      throw new BusinessEmailAlreadyExistsError();
     }
 
     const findBranchByCnpj = await this.branch.findBranchByCnpj(
@@ -114,7 +114,6 @@ class CreateBusinessUseCase {
 
     try {
       const businessCreated = await this.business.createBusiness(businessData);
-
       const branchData = {
         ...businessData,
         businessId: businessCreated.id as string,

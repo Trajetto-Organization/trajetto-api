@@ -5,7 +5,7 @@ import { CreateSupplierUseCase } from "./create-supplier-usecase";
 import { createSupplierSchema } from "@/schemas/create-supplier-schema";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { SupplierNameAlreadyExistsError } from "../errors/supplier-name-already-exists-error";
 import { SupplierCnpjAlreadyExistsError } from "../errors/supplier-cnpj-already-exists-error";

@@ -22,6 +22,7 @@ class WhatsAppWorkerAdapter {
         "[WhatsAppWorkerAdapter] Error enqueueing WhatsApp:",
         error,
       );
+
       throw error;
     }
   }
@@ -37,6 +38,7 @@ class WhatsAppWorkerAdapter {
         `[WhatsAppWorkerAdapter] Error starting worker for queue ${queueName}:`,
         error,
       );
+
       throw error;
     }
   }

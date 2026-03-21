@@ -8,8 +8,8 @@ import { ResetUserPasswordUseCase } from "@/modules/user/usecases/reset-user-pas
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
-import { InvalidTokenError } from "@/modules/user/usecases/errors/invalid-token-error";
-import { ExpiredTokenError } from "@/modules/user/usecases/errors/expired-token-error";
+import { UserInvalidTokenError } from "@/modules/user/usecases/errors/user-invalid-token-error";
+import { UserExpiredTokenError } from "@/modules/user/usecases/errors/user-expired-token-error";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
@@ -75,7 +75,7 @@ describe("Reset User Password UseCase", () => {
         token: "invalid-token",
         password: "new-password",
       }),
-    ).rejects.toBeInstanceOf(InvalidTokenError);
+    ).rejects.toBeInstanceOf(UserInvalidTokenError);
   });
 
   it("should throw ExpiredResetPasswordToken if token has expired", async () => {
@@ -91,7 +91,7 @@ describe("Reset User Password UseCase", () => {
         token: expiredToken.token,
         password: "new-password",
       }),
-    ).rejects.toBeInstanceOf(ExpiredTokenError);
+    ).rejects.toBeInstanceOf(UserExpiredTokenError);
   });
 
   it("should throw ResourceNotFoundError if user is not found", async () => {

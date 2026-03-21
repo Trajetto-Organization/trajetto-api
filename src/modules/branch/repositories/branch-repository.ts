@@ -3,9 +3,10 @@ import {
   Branch,
   CreateBranchProps,
   ListAllBranchesProps,
-  ListBranchBusinessProps,
   ListBranchProps,
   UpdateBranch,
+  SearchBranchWithCursorProps,
+  CursorPaginatedBranch,
 } from "../dtos/branch-dto";
 
 import database from "@/../infra/database";
@@ -99,54 +100,31 @@ class BranchRepository implements IBranchRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    // Include business data only if user is MASTER
-    const branchData = await this.prisma.branch.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      ...(currentUserRole === "MASTER" && {
-        include: {
-          business: {
-            select: {
-              corporate_reason: true,
+    const [branchData, total] = await Promise.all([
+      // Include business data only if user is MASTER
+      this.prisma.branch.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        ...(currentUserRole === "MASTER" && {
+          include: {
+            business: {
+              select: {
+                corporate_reason: true,
+              },
             },
           },
+        }),
+        orderBy: {
+          created_at: "desc",
         },
       }),
-      orderBy: {
-        created_at: "desc",
-      },
-    });
-
-    const total = await this.prisma.branch.count({
-      where: whereCondition,
-    });
+      this.prisma.branch.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return { data: branchData, total };
-  }
-
-  async listBranchBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListBranchBusinessProps): Promise<ListBranchProps> {
-    const skip = (page - 1) * pageSize;
-
-    const branchBusinessData = await this.prisma.branch.findMany({
-      skip,
-      take: pageSize,
-      where: {
-        businessId,
-      },
-    });
-
-    const total = await this.prisma.branch.count({
-      where: {
-        businessId,
-      },
-    });
-
-    return { data: branchBusinessData, total };
   }
 
   async updateBranch({ branchData, branchId }: UpdateBranch): Promise<Branch> {
@@ -231,6 +209,31 @@ class BranchRepository implements IBranchRepository {
     });
 
     return deletedBranch;
+  }
+
+  async searchBranchWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchBranchWithCursorProps): Promise<CursorPaginatedBranch> {
+    const items = await this.prisma.branch.findMany({
+      where: { businessId },
+      take: limit + 1,
+      ...(cursor && {
+        cursor: { id: cursor },
+        skip: 1,
+      }),
+      orderBy: {
+        created_at: "desc",
+      },
+    });
+
+    const hasMore = items.length > limit;
+
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

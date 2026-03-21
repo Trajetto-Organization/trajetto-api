@@ -12,7 +12,7 @@ interface CreateFuelTypeProps {
 }
 
 interface UpdateFuelTypeProps {
-  description?: string;
+  description?: string | null;
   businessId?: string;
 }
 
@@ -26,12 +26,6 @@ interface ListFuelTypeProps {
   total: number;
 }
 
-interface ListFuelTypeBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
-}
-
 interface ListFuelTypeByBusinessIdProps {
   page: number;
   pageSize: number;
@@ -40,12 +34,25 @@ interface ListFuelTypeByBusinessIdProps {
   search?: string;
 }
 
+interface SearchFuelTypeWithCursorProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+}
+
+interface CursorPaginatedFuelType {
+  data: FuelType[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export {
   CreateFuelTypeProps,
   UpdateFuelType,
   ListFuelTypeProps,
   ListFuelTypeByBusinessIdProps,
-  ListFuelTypeBusinessProps,
   FuelType,
   UpdateFuelTypeProps,
+  SearchFuelTypeWithCursorProps,
+  CursorPaginatedFuelType,
 };

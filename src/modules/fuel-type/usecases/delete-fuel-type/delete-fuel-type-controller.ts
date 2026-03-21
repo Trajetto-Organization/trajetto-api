@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { DeleteFuelTypeUseCase } from "./delete-fuel-type-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDeleteFuelTypeSchema } from "@/schemas/update-delete-fuel-type-schema";

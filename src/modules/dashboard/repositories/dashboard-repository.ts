@@ -91,8 +91,11 @@ class DashboardRepository implements IDashboardRepository {
       whereClause.businessId = businessId;
     }
 
-    const count = await model.count({ where: whereClause });
+    if (params.entity === "user") {
+      whereClause.role = { not: "MASTER" };
+    }
 
+    const count = await model.count({ where: whereClause });
     return { count };
   }
 
@@ -299,7 +302,6 @@ class DashboardRepository implements IDashboardRepository {
     });
 
     const typeCounts: Record<string, number> = {};
-
     vehicles.forEach((vehicle) => {
       const typeDescription = vehicle.vehicleType?.description || "Outros";
       typeCounts[typeDescription] = (typeCounts[typeDescription] || 0) + 1;

@@ -7,6 +7,7 @@ import { updateDeleteFineSchema } from "@/schemas/update-delete-fine-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { exportReports } from "@/schemas/export-reports-schema";
 
 const fineBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
@@ -20,9 +21,7 @@ const fineSchemas = {
   updateDeleteBusiness: updateDeleteBusinessSchema,
   listFines: listPagesSchema,
   fineBusinessParams: fineBusinessParams,
-  exportFinesQuery: z.object({
-    search: z.string().optional().describe("Search term to filter fines"),
-  }),
+  exportFinesQuery: exportReports,
 };
 
 const fineResponses = {

@@ -9,14 +9,14 @@ import { Business, UpdateBusinessProps } from "../../dtos/business-dto";
 
 import { NotificationService } from "@/shared/services/notification-service";
 
-import { CnpjAlreadyExistsError } from "../errors/cnpj-already-exists-error";
-import { CorporateReasonAlreadyExistsError } from "../errors/corporate-reason-already-exists-error";
+import { BusinessCnpjAlreadyExistsError } from "../errors/business-cnpj-already-exists-error";
+import { BusinessCorporateReasonAlreadyExistsError } from "../errors/business-corporate-reason-already-exists-error";
 
-import { ErpCodeAlreadyExistsError } from "../errors/erp-code-already-exists-error";
-import { EmailAlreadyExistsError } from "../errors/email-already-exists-error";
+import { BusinessErpCodeAlreadyExistsError } from "../errors/business-erp-code-already-exists-error";
+import { BusinessEmailAlreadyExistsError } from "../errors/business-email-already-exists-error";
 
 import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNameAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-name-already-exists-error";
 import { BranchCnpjAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-cnpj-already-exists-error";
@@ -72,7 +72,7 @@ class UpdateBusinessUseCase {
       );
 
       if (findBusinessByCnpj && findBusinessByCnpj.id !== businessId) {
-        throw new CnpjAlreadyExistsError();
+        throw new BusinessCnpjAlreadyExistsError();
       }
     }
 
@@ -86,7 +86,7 @@ class UpdateBusinessUseCase {
         findBusinessByCorporateReason &&
         findBusinessByCorporateReason.id !== businessId
       ) {
-        throw new CorporateReasonAlreadyExistsError();
+        throw new BusinessCorporateReasonAlreadyExistsError();
       }
     }
 
@@ -96,7 +96,7 @@ class UpdateBusinessUseCase {
       );
 
       if (findBusinessByErpcode && findBusinessByErpcode.id !== businessId) {
-        throw new ErpCodeAlreadyExistsError();
+        throw new BusinessErpCodeAlreadyExistsError();
       }
     }
 
@@ -106,7 +106,7 @@ class UpdateBusinessUseCase {
       );
 
       if (findBusinessByEmail && findBusinessByEmail.id !== businessId) {
-        throw new EmailAlreadyExistsError();
+        throw new BusinessEmailAlreadyExistsError();
       }
     }
 

@@ -7,7 +7,7 @@ import { updateProfileAccessSchema } from "@/schemas/update-profile-access";
 import { updateDeleteProfileAccessSchema } from "@/schemas/update-delete-profile-access-schema";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { ProfileAccessNotFoundError } from "../errors/profile-access-not-found-error";
 import { ProfileAccessAlreadyExistsError } from "../errors/profile-access-already-exists-error";
@@ -24,7 +24,6 @@ class UpdateProfileAccessController {
     const { profileAccessId } = updateDeleteProfileAccessSchema.parse(
       request.params,
     );
-
     const { businessId, name } = updateProfileAccessSchema.parse(request.body);
 
     const updateProfileAccessUseCase = container.resolve(

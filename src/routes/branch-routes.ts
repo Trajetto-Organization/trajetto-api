@@ -9,7 +9,7 @@ import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated"
 import { ListBranchController } from "@/modules/branch/usecases/list-branch/list-branch-controller";
 import { UpdateBranchController } from "@/modules/branch/usecases/update-branch/update-branch-controller";
 
-import { ListBranchBusinessController } from "@/modules/branch/usecases/list-branch-business/list-branch-business-controller";
+import { SearchBranchCursorController } from "@/modules/branch/usecases/search-branch-cursor/search-branch-cursor-controller";
 import {
   branchResponses,
   branchSchemas,
@@ -21,7 +21,7 @@ const deleteBranchController = new DeleteBranchController();
 const updateBranchController = new UpdateBranchController();
 const listBranchController = new ListBranchController();
 
-const listBranchBusinessController = new ListBranchBusinessController();
+const searchBranchCursorController = new SearchBranchCursorController();
 
 async function branchRoutes(app: FastifyInstance) {
   app.post(
@@ -70,25 +70,28 @@ async function branchRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-branch-business",
+    "/search-branch-business",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("branch_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
-        summary: "List branches by business",
+        summary: "Search branches by business (cursor-based)",
         description:
-          "Retrieve a paginated list of branch locations filtered by specific business with optional search controls",
-        querystring: branchSchemas.listBranchBusiness,
+          "Retrieve branches as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual branch objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: branchSchemas.searchBranchCursor,
         response: {
-          200: branchResponses.branchBusinessList,
+          200: branchResponses.searchBranchStreamDescription,
           400: branchResponses.listBranchBusinessErrors,
           500: branchResponses.internalServerError,
         },
       },
     },
-    listBranchBusinessController.handle,
+    searchBranchCursorController.handle,
   );
 
   app.patch(

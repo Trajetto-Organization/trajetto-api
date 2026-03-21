@@ -8,7 +8,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { KanbanColumn, UpdateKanbanColumnProps } from "../../dtos/kanban-dto";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
 import { KanbanColumnNotBelongBusinessError } from "../errors/kanban-column-not-belong-business-error";

@@ -30,19 +30,21 @@ interface ListTrafficViolationCodeByBusinessIdProps {
   violatorType?: string;
 }
 
-interface TrafficViolationCodeStatistics {
-  total: number;
-  light: number;
-  medium: number;
-  serious: number;
-  verySerious: number;
-  noPoints: number;
-  byViolatorType: Record<string, number>;
+interface SearchTrafficViolationCodeWithCursorProps {
+  limit: number;
+  cursor?: string;
+}
+
+interface CursorPaginatedTrafficViolationCode {
+  data: TrafficViolationCode[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 export {
   TrafficViolationCode,
   ListTrafficViolationCodeProps,
   ListTrafficViolationCodeByBusinessIdProps,
-  TrafficViolationCodeStatistics,
+  SearchTrafficViolationCodeWithCursorProps,
+  CursorPaginatedTrafficViolationCode,
 };

@@ -10,7 +10,7 @@ import { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-r
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
@@ -33,13 +33,12 @@ import { ServiceOrderNewMileageRequireOrderFinalizedError } from "../errors/serv
 import { ServiceOrderNotFoundError } from "../errors/service-order-not-found-error";
 
 import { AppError } from "@/shared/errors/AppError";
-
 import {
   ServiceOrder,
   UpdateServiceOrderProps,
 } from "../../dtos/service-order-dto";
 
-import { formatCurrency } from "@/config/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 import { buildServiceOrderLink } from "@/shared/utils/link-redirect-page";
 
 import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";

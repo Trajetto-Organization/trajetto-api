@@ -1,4 +1,4 @@
-import { v4 as uuidV4 } from "uuid";
+import { v7 as uuidV7 } from "uuid";
 
 import { Decimal } from "@prisma/client/runtime/library";
 import { IFineRepository } from "../IFine-repository";
@@ -16,7 +16,7 @@ class InMemoryFineRepository implements IFineRepository {
 
   async createFine(fineData: CreateFineProps): Promise<Fine> {
     const newFine: Fine = {
-      id: uuidV4(),
+      id: uuidV7(),
       violation_date: fineData.violation_date,
       due_date: fineData.due_date,
       payment_date: fineData.payment_date || null,
@@ -78,30 +78,6 @@ class InMemoryFineRepository implements IFineRepository {
 
     const total = filteredFines.length;
     return { data, total };
-  }
-
-  async getAllFinesForExport(
-    businessId: string,
-    currentUserRole: string,
-    search?: string,
-  ): Promise<Fine[]> {
-    let filteredFines = this.fines.filter(
-      (fine) => fine.businessId === businessId,
-    );
-
-    if (search) {
-      const searchTerm = search.toLowerCase();
-      filteredFines = filteredFines.filter(
-        (fine) =>
-          fine.id.toLowerCase().includes(searchTerm) ||
-          fine.location?.toLowerCase().includes(searchTerm) ||
-          fine.observation?.toLowerCase().includes(searchTerm) ||
-          fine.points.toString().includes(searchTerm) ||
-          fine.amount.toString().includes(searchTerm),
-      );
-    }
-
-    return filteredFines;
   }
 
   async updateFine({ fineData, fineId }: UpdateFine): Promise<Fine> {
@@ -222,6 +198,64 @@ class InMemoryFineRepository implements IFineRepository {
         fine.payment_date === null &&
         new Date(fine.due_date) < today,
     );
+  }
+
+  async *streamFinesForExport(
+    businessId: string,
+    userRole: string,
+    search?: string,
+  ): AsyncGenerator<any> {
+    let filtered =
+      userRole === "MASTER"
+        ? [...this.fines]
+        : this.fines.filter((fine) => fine.businessId === businessId);
+
+    if (search) {
+      const searchTerm = search.toLowerCase();
+      filtered = filtered.filter(
+        (fine) =>
+          fine.id.toLowerCase().includes(searchTerm) ||
+          fine.location?.toLowerCase().includes(searchTerm) ||
+          fine.observation?.toLowerCase().includes(searchTerm) ||
+          fine.points.toString().includes(searchTerm),
+      );
+    }
+
+    for (const fine of filtered) {
+      yield {
+        id: fine.id,
+        violation_date: fine.violation_date,
+        due_date: fine.due_date,
+        payment_date: fine.payment_date,
+        amount: Number(fine.amount),
+        points: fine.points,
+        location: fine.location,
+        observation: fine.observation,
+        businessId: fine.businessId,
+        ...(userRole === "MASTER" ? { businessName: null } : {}),
+        branchId: fine.branchId,
+        branchName: null,
+        driverId: fine.driverId,
+        driverName: null,
+        driverCpf: null,
+        vehicleId: fine.vehicleId,
+        vehicleLicensePlate: null,
+        vehicleDescription: null,
+        trafficViolationCodeId: fine.trafficViolationCodeId,
+        violationCode: null,
+        violationDescription: null,
+        latitude: fine.latitude ?? null,
+        longitude: fine.longitude ?? null,
+        latitude_original: fine.latitude_original ?? null,
+        longitude_original: fine.longitude_original ?? null,
+        location_source: fine.location_source ?? null,
+        location_edited_by: fine.location_edited_by ?? null,
+        location_edited_at: fine.location_edited_at ?? null,
+        created_from: fine.created_from,
+        created_at: fine.created_at,
+        updated_at: fine.updated_at,
+      };
+    }
   }
 }
 

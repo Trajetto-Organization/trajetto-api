@@ -1,0 +1,167 @@
+<html>
+  <head>
+    <style>
+      body {
+        background-color: #efeef1;
+        font-family: HelveticaNeue, Helvetica, Arial, sans-serif;
+      }
+      .container {
+        max-width: 580px;
+        margin: 30px auto;
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.1);
+      }
+      .footer {
+        max-width: 580px;
+        margin: 0 auto;
+        text-align: center;
+        color: #706a7b;
+        font-size: 12px;
+      }
+      .content {
+        padding: 20px;
+      }
+      .logo {
+        text-align: center;
+        padding-bottom: 30px;
+      }
+      .logo img {
+        display: block;
+        margin: 0 auto;
+        max-width: 150px;
+        height: auto;
+      }
+      .sections-borders {
+        width: 100%;
+        display: flex;
+        margin-bottom: 20px;
+      }
+      .section-border {
+        border-bottom: 1px solid rgb(238, 238, 238);
+        width: 249px;
+      }
+      .section-center {
+        border-bottom: 1px solid #d50057;
+        width: 102px;
+      }
+      .paragraph {
+        line-height: 1.5;
+        font-size: 14px;
+        margin-bottom: 15px;
+      }
+      .changes-box {
+        background-color: #f9f9f9;
+        border: 1px solid #eeeeee;
+        border-radius: 6px;
+        padding: 14px 18px;
+        margin-bottom: 15px;
+        font-size: 14px;
+        line-height: 1.8;
+      }
+      .change-label {
+        color: #706a7b;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 2px;
+      }
+      .change-arrow {
+        color: #d50057;
+        font-weight: bold;
+        margin: 0 6px;
+      }
+      .new-value {
+        font-weight: bold;
+        color: #1a1a1a;
+      }
+      .old-value {
+        color: #706a7b;
+        text-decoration: line-through;
+      }
+      .password-box {
+        background-color: #fff5f8;
+        border: 1px solid #f5c6d8;
+        border-radius: 6px;
+        padding: 14px 18px;
+        margin-bottom: 15px;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="logo">
+        <img width="150" src="{{logo}}" alt="Trajetto Logo" />
+      </div>
+
+      <div class="sections-borders">
+        <div class="section-border"></div>
+        <div class="section-center"></div>
+        <div class="section-border"></div>
+      </div>
+
+      <div class="content">
+        <p class="paragraph">Olá {{name}},</p>
+        <p class="paragraph">
+          <strong>{{performingUserName}}</strong>
+          ({{performingUserEmail}}) atualizou sua conta Master no Trajetto.
+          Abaixo estão as alterações realizadas:
+        </p>
+
+        {{#if hasFieldChanges}}
+          <div class="changes-box">
+            {{#if oldName}}
+              <p style="margin: 0 0 8px 0;">
+                <span class="change-label">Nome</span><br />
+                <span class="old-value">{{oldName}}</span>
+                <span class="change-arrow">→</span>
+                <span class="new-value">{{newName}}</span>
+              </p>
+            {{/if}}
+
+            {{#if oldEmail}}
+              <p style="margin: 0;">
+                <span class="change-label">E-mail</span><br />
+                <span class="old-value">{{oldEmail}}</span>
+                <span class="change-arrow">→</span>
+                <span class="new-value">{{newEmail}}</span>
+              </p>
+            {{/if}}
+          </div>
+        {{/if}}
+
+        {{#if newPassword}}
+          <div class="password-box">
+            <p style="margin: 0 0 6px 0;">
+              <span class="change-label">Nova senha de acesso</span>
+            </p>
+            <p style="margin: 0; font-size: 16px;">
+              <strong>{{newPassword}}</strong>
+            </p>
+            <p style="margin: 6px 0 0 0; font-size: 12px; color: #706a7b;">
+              Por segurança, recomendamos que você altere esta senha após o
+              próximo acesso.
+            </p>
+          </div>
+        {{/if}}
+
+        <p class="paragraph">
+          Se você não reconhece esta alteração, entre em contato com nossa
+          equipe de suporte imediatamente para proteger sua conta.
+        </p>
+
+        <p class="paragraph">
+          Obrigado,<br />
+          Equipe |
+          <strong>Trajetto</strong>
+        </p>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>© {{year}} Trajetto, Todos os direitos reservados</p>
+    </div>
+  </body>
+</html>

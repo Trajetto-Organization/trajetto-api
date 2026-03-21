@@ -5,7 +5,7 @@ import { DeleteKanbanColumnUseCase } from "./delete-column-usecase";
 import { updateDeleteKanbanColumnSchema } from "@/schemas/update-delete-kanban-column-schema";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { KanbanNotAllowedDeleteColumnBusinessError } from "../errors/kanban-not-allowed-delete-column-business-error";
 import { KanbanColumnNotBelongBusinessError } from "../errors/kanban-column-not-belong-business-error";

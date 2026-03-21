@@ -115,34 +115,35 @@ class ActivityRepository implements IActivityRepository {
       };
     }
 
-    const activities = await this.prisma.activity.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        user: {
-          select: {
-            email: true,
-            role: true,
-            name: true,
-          },
-        },
-        ...(currentUserRole === "MASTER" && {
-          business: {
+    const [activities, total] = await Promise.all([
+      this.prisma.activity.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          user: {
             select: {
-              corporate_reason: true,
+              email: true,
+              role: true,
+              name: true,
             },
           },
-        }),
-      },
-      orderBy: {
-        created_at: "desc",
-      },
-    });
-
-    const total = await this.prisma.activity.count({
-      where: whereCondition,
-    });
+          ...(currentUserRole === "MASTER" && {
+            business: {
+              select: {
+                corporate_reason: true,
+              },
+            },
+          }),
+        },
+        orderBy: {
+          created_at: "desc",
+        },
+      }),
+      this.prisma.activity.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return { data: activities, total };
   }
@@ -243,34 +244,35 @@ class ActivityRepository implements IActivityRepository {
       };
     }
 
-    const activities = await this.prisma.activity.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        user: {
-          select: {
-            email: true,
-            role: true,
-            name: true,
-          },
-        },
-        ...(currentUserRole === "MASTER" && {
-          business: {
+    const [activities, total] = await Promise.all([
+      this.prisma.activity.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          user: {
             select: {
-              corporate_reason: true,
+              email: true,
+              role: true,
+              name: true,
             },
           },
-        }),
-      },
-      orderBy: {
-        created_at: "desc",
-      },
-    });
-
-    const total = await this.prisma.activity.count({
-      where: whereCondition,
-    });
+          ...(currentUserRole === "MASTER" && {
+            business: {
+              select: {
+                corporate_reason: true,
+              },
+            },
+          }),
+        },
+        orderBy: {
+          created_at: "desc",
+        },
+      }),
+      this.prisma.activity.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return { data: activities, total };
   }

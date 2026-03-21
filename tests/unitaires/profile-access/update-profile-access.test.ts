@@ -9,7 +9,7 @@ import { UpdateProfileAccessUseCase } from "@/modules/profile-access/usecases/up
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { ProfileAccessNotFoundError } from "@/modules/profile-access/usecases/errors/profile-access-not-found-error";
 import { ProfileAccessAlreadyExistsError } from "@/modules/profile-access/usecases/errors/profile-access-already-exists-error";

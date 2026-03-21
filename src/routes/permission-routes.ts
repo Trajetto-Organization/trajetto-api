@@ -9,6 +9,9 @@ import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated"
 import { UpdatePermissionController } from "@/modules/permission/usecases/update-permission/update-permission-controller";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import { BulkConfigurePermissionsController } from "@/modules/permission/usecases/bulk-configure-permissions/bulk-configure-permissions-controller";
+import { ListPermissionsByProfileController } from "@/modules/permission/usecases/list-permissions-by-profile/list-permissions-by-profile-controller";
+
 import {
   permissionResponses,
   permissionSchemas,
@@ -19,6 +22,11 @@ const listPermissionController = new ListPermissionController();
 
 const updatePermissionController = new UpdatePermissionController();
 const deletePermissionController = new DeletePermissionController();
+
+const bulkConfigurePermissionsController =
+  new BulkConfigurePermissionsController();
+const listPermissionsByProfileController =
+  new ListPermissionsByProfileController();
 
 async function permissionRoutes(app: FastifyInstance) {
   app.post(
@@ -110,6 +118,51 @@ async function permissionRoutes(app: FastifyInstance) {
       },
     },
     deletePermissionController.handle,
+  );
+
+  app.post(
+    "/bulk-configure-permissions",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_permission_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["permission"],
+        summary: "Bulk configure permissions for a profile",
+        description:
+          "Replace all permissions of a profile with the provided set in a single atomic operation",
+        body: permissionSchemas.bulkConfigurePermissions,
+        response: {
+          200: permissionResponses.permissionsConfigured,
+          400: permissionResponses.bulkConfigurePermissionsErrors,
+          500: permissionResponses.internalServerError,
+        },
+      },
+    },
+    bulkConfigurePermissionsController.handle,
+  );
+
+  app.get(
+    "/list-by-profile/:profileAccessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_permission_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["permission"],
+        summary: "List permissions by profile",
+        description:
+          "Retrieve all permissions assigned to a specific access profile",
+        params: permissionSchemas.listByProfile,
+        querystring: permissionSchemas.listByProfileQuery,
+        response: {
+          200: permissionResponses.permissionsByProfile,
+          400: permissionResponses.listPermissionErrors,
+          500: permissionResponses.internalServerError,
+        },
+      },
+    },
+    listPermissionsByProfileController.handle,
   );
 }
 

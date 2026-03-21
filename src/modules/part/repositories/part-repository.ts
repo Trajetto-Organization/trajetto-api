@@ -5,7 +5,8 @@ import {
   ListPartByBusinessIdProps,
   ListPartProps,
   UpdatePart,
-  ListPartBusinessProps,
+  SearchPartWithCursorProps,
+  CursorPaginatedPart,
 } from "../dtos/part-dto";
 
 import database from "@/../infra/database";
@@ -68,61 +69,38 @@ class PartRepository implements IPartRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const partData = await this.prisma.part.findMany({
-      skip,
-      take: pageSize,
-      where: whereCondition,
-      include: {
-        supplier: {
-          select: {
-            name: true,
-          },
-        },
-        ...(currentUserRole === "MASTER" && {
-          business: {
+    const [partData, total] = await Promise.all([
+      this.prisma.part.findMany({
+        skip,
+        take: pageSize,
+        where: whereCondition,
+        include: {
+          supplier: {
             select: {
-              corporate_reason: true,
+              name: true,
             },
           },
-        }),
-      },
-      orderBy: {
-        created_at: "desc",
-      },
-    });
-
-    const total = await this.prisma.part.count({
-      where: whereCondition,
-    });
+          ...(currentUserRole === "MASTER" && {
+            business: {
+              select: {
+                corporate_reason: true,
+              },
+            },
+          }),
+        },
+        orderBy: {
+          created_at: "desc",
+        },
+      }),
+      this.prisma.part.count({
+        where: whereCondition,
+      }),
+    ]);
 
     return {
       data: partData,
       total,
     };
-  }
-
-  async listPartBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListPartBusinessProps): Promise<ListPartProps> {
-    const skip = (page - 1) * pageSize;
-
-    const serviceOrderBusinessData = await this.prisma.part.findMany({
-      skip,
-      take: pageSize,
-      where: {
-        businessId,
-      },
-    });
-
-    const total = await this.prisma.part.count({
-      where: {
-        businessId,
-      },
-    });
-
-    return { data: serviceOrderBusinessData, total };
   }
 
   async updatePart({ partData, partId }: UpdatePart): Promise<Part> {
@@ -188,6 +166,31 @@ class PartRepository implements IPartRepository {
     });
 
     return findPartByDescription;
+  }
+
+  async searchPartWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchPartWithCursorProps): Promise<CursorPaginatedPart> {
+    const items = await this.prisma.part.findMany({
+      where: { businessId },
+      take: limit + 1,
+      ...(cursor && {
+        cursor: { id: cursor },
+        skip: 1,
+      }),
+      orderBy: {
+        created_at: "desc",
+      },
+    });
+
+    const hasMore = items.length > limit;
+
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 
   async findServiceOrderPartsByPartId(partId: string): Promise<any[]> {

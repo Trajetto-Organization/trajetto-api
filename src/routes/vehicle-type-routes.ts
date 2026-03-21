@@ -6,7 +6,7 @@ import { ListVehicleTypeController } from "@/modules/vehicle-type/usecases/list-
 import { UpdateVehicleTypeController } from "@/modules/vehicle-type/usecases/update-vehicle-type/update-vehicle-type-controller";
 import { DeleteVehicleTypeController } from "@/modules/vehicle-type/usecases/delete-vehicle-type/delete-vehicle-type-controller";
 
-import { ListVehicleTypeBusinessController } from "@/modules/vehicle-type/usecases/list-vehicle-type-business/list-vehicle-type-business-controller";
+import { SearchVehicleTypeCursorController } from "@/modules/vehicle-type/usecases/search-vehicle-type-cursor/search-vehicle-type-cursor-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -19,8 +19,8 @@ import {
 const createVehicleTypeController = new CreateVehicleTypeController();
 const listVehicleTypeController = new ListVehicleTypeController();
 
-const listVehicleTypeBusinessController =
-  new ListVehicleTypeBusinessController();
+const searchVehicleTypeCursorController =
+  new SearchVehicleTypeCursorController();
 
 const updateVehicleTypeController = new UpdateVehicleTypeController();
 const deleteVehicleTypeController = new DeleteVehicleTypeController();
@@ -72,25 +72,28 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-vehicle-type-business",
+    "/search-vehicle-type-business",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("vehicle_type_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicleType"],
-        summary: "List vehicle types by business",
+        summary: "Search vehicle types by business (cursor-based)",
         description:
-          "Retrieve a paginated list of vehicle types filtered by specific business with search capabilities",
-        querystring: vehicleTypeSchemas.listVehicleTypeBusiness,
+          "Retrieve vehicle types as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual vehicle type objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: vehicleTypeSchemas.searchVehicleTypeCursor,
         response: {
-          200: vehicleTypeResponses.vehicleTypeList,
+          200: vehicleTypeResponses.searchVehicleTypeStreamDescription,
           400: vehicleTypeResponses.listVehicleTypeBusinessErrors,
           500: vehicleTypeResponses.internalServerError,
         },
       },
     },
-    listVehicleTypeBusinessController.handle,
+    searchVehicleTypeCursorController.handle,
   );
 
   app.patch(

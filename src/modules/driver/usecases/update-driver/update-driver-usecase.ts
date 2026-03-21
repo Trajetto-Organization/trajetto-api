@@ -9,7 +9,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { DriverNotFoundError } from "../errors/driver-not-found-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
@@ -21,6 +21,8 @@ import { DriverLicenseAlreadyExistsError } from "../errors/driver-license-alread
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
+import { sendSecurityEventToUser } from "@/websocket";
+
 import { Driver, UpdateDriverProps } from "../../dtos/driver-dto";
 
 @injectable()
@@ -110,6 +112,17 @@ class UpdateDriverUseCase {
         driverData,
         driverId,
       });
+
+      // If the driver was just deactivated, notify the linked user in real-time
+      if (
+        driverData.status === "INACTIVE" &&
+        findDriverById.status !== "INACTIVE"
+      ) {
+        const driverUser = await this.user.findUserByDriverId(driverId);
+        if (driverUser) {
+          sendSecurityEventToUser(driverUser.id, { reason: "driver_inactive" });
+        }
+      }
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

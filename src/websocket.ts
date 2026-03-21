@@ -135,6 +135,15 @@ const sendNotificationToBusiness = (businessId: string, notification: any) => {
   }
 };
 
+// Function to send AI verification event to a specific user
+const sendAIVerificationEvent = (userId: string, event: any) => {
+  if (io) {
+    io.to(`user:${userId}`).emit("aiVerification", event);
+  } else {
+    console.error("Socket.IO não está inicializado ainda");
+  }
+};
+
 // Function to send security event to a specific user
 const sendSecurityEventToUser = (userId: string, event: { reason: string }) => {
   if (io) {
@@ -156,6 +165,7 @@ export {
   initializeSocketIO,
   sendNotificationToUser,
   sendNotificationToBusiness,
+  sendAIVerificationEvent,
   sendSecurityEventToUser,
   sendSecurityEventToBusiness,
 };

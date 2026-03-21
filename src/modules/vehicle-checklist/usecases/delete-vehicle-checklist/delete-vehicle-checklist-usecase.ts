@@ -6,12 +6,12 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleChecklistNotFoundError } from "../errors/vehicle-checklist-not-found-error";
 import { VehicleChecklistNotBelongBusinessError } from "../errors/vehicle-checklist-not-belong-business-error";
 
-import { DriverCannotDeleteChecklistError } from "../errors/driver-cannot-delete-checklist-error";
+import { VehicleChecklistDriverCannotDeleteChecklistError } from "../errors/vehicle-checklist-driver-cannot-delete-checklist-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { VehicleChecklist } from "../../dtos/vehicle-checklist-dto";
@@ -57,7 +57,7 @@ class DeleteVehicleChecklistUseCase {
 
     // Security: Drivers cannot delete checklist records
     if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
-      throw new DriverCannotDeleteChecklistError();
+      throw new VehicleChecklistDriverCannotDeleteChecklistError();
     }
 
     const findBusiness = await this.business.findBusinessById(businessId);

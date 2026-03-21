@@ -7,7 +7,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { KanbanColumn, CreateKanbanColumnProps } from "../../dtos/kanban-dto";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { KanbanNotAllowedCreateColumnBusinessError } from "../errors/kanban-not-allowed-create-column-business-error";
 import { AppError } from "@/shared/errors/AppError";

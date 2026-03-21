@@ -113,12 +113,6 @@ interface ListServiceOrderProps {
   total: number;
 }
 
-interface ListServiceOrderBusinessProps {
-  page: number;
-  pageSize: number;
-  businessId: string;
-}
-
 interface ListServiceOrderByBusinessIdProps {
   page: number;
   pageSize: number;
@@ -127,11 +121,23 @@ interface ListServiceOrderByBusinessIdProps {
   search?: string;
 }
 
-interface ListServiceOrderByVehicleIdProps {
+interface SearchServiceOrderWithCursorProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+}
+
+interface CursorPaginatedServiceOrder {
+  data: ServiceOrder[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+interface SearchServiceOrderByVehicleWithCursorProps {
+  limit: number;
+  cursor?: string;
   vehicleId: string;
   businessId: string;
-  page: number;
-  pageSize: number;
 }
 
 export {
@@ -141,6 +147,7 @@ export {
   UpdateServiceOrder,
   ListServiceOrderProps,
   ListServiceOrderByBusinessIdProps,
-  ListServiceOrderBusinessProps,
-  ListServiceOrderByVehicleIdProps,
+  SearchServiceOrderWithCursorProps,
+  CursorPaginatedServiceOrder,
+  SearchServiceOrderByVehicleWithCursorProps,
 };

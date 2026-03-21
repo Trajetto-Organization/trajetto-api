@@ -1,9 +1,9 @@
 import * as amqp from "amqplib";
-
 import {
   RabbitMQConnection,
   AmqpChannel,
 } from "infra/messaging/rabbitmq-connection";
+
 import { IWhatsAppProvider } from "@/shared/providers/whatsapp-provider/IWhatsApp-provider";
 
 interface SendWhatsAppProps {
@@ -253,7 +253,6 @@ class WhatsAppQueueProvider {
 
             // Notify via WebSocket
             const { sendNotificationToUser } = await import("@/websocket");
-
             const notification = {
               type: event.isConnected
                 ? "whatsapp_connected"
@@ -331,7 +330,6 @@ class WhatsAppQueueProvider {
 
       for (let i = 0; i < whatsappUsers.length; i += batchSize) {
         const batch = whatsappUsers.slice(i, i + batchSize);
-
         const promises = batch.map(async (user: any) => {
           try {
             // Check if you still have WhatsApp enabled
@@ -341,6 +339,7 @@ class WhatsAppQueueProvider {
               console.log(
                 `[WhatsAppQueue] User ${user.email} already has WhatsApp disabled`,
               );
+
               return;
             }
 
@@ -399,6 +398,7 @@ class WhatsAppQueueProvider {
         `[WhatsAppQueue] Error processing instance deletion:`,
         error,
       );
+
       throw error;
     }
   }
@@ -442,6 +442,7 @@ class WhatsAppQueueProvider {
         "[WhatsAppQueue] Error enqueueing WhatsApp message:",
         error,
       );
+
       throw error;
     }
   }

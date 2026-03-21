@@ -3,7 +3,7 @@ import { FastifyInstance } from "fastify";
 import { CreatePartController } from "@/modules/part/usecases/create-part/create-part-controller";
 import { ListPartController } from "@/modules/part/usecases/list-part/list-part-controller";
 
-import { ListPartBusinessController } from "@/modules/part/usecases/list-part-business/list-part-business-controller";
+import { SearchPartCursorController } from "@/modules/part/usecases/search-part-cursor/search-part-cursor-controller";
 
 import { UpdatePartController } from "@/modules/part/usecases/update-part/update-part-controller";
 import { DeletePartController } from "@/modules/part/usecases/delete-part/delete-part-controller";
@@ -16,7 +16,7 @@ import { partSchemas, partResponses } from "./documentation/part-documentation";
 const createPartController = new CreatePartController();
 const listPartController = new ListPartController();
 
-const listPartBusinessController = new ListPartBusinessController();
+const searchPartCursorController = new SearchPartCursorController();
 
 const updatePartController = new UpdatePartController();
 const deletePartController = new DeletePartController();
@@ -69,25 +69,28 @@ async function partRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/list-part-business",
+    "/search-part-business",
     {
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("part_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["part"],
-        summary: "List parts by business",
+        summary: "Search parts by business (cursor-based)",
         description:
-          "Retrieve a paginated list of vehicle parts filtered by specific business with search capabilities",
-        querystring: partSchemas.listPartBusinessSchema,
+          "Retrieve parts as NDJSON stream with cursor-based pagination. " +
+          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
+          "Subsequent lines are individual part objects. " +
+          "Use nextCursor value as cursor parameter for the next page.",
+        querystring: partSchemas.searchPartCursor,
         response: {
-          200: partResponses.partList,
+          200: partResponses.searchPartStreamDescription,
           400: partResponses.partBusinessErrors,
           500: partResponses.internalServerError,
         },
       },
     },
-    listPartBusinessController.handle,
+    searchPartCursorController.handle,
   );
 
   app.patch(

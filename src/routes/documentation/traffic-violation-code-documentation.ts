@@ -4,9 +4,26 @@ import { listTrafficViolationCodeSchema } from "@/schemas/list-traffic-violation
 
 const trafficViolationCodeSchemas = {
   listTrafficViolationCode: listTrafficViolationCodeSchema,
+  searchTrafficViolationCodeCursor: z.object({
+    limit: z
+      .string()
+      .optional()
+      .describe("Número máximo de empresas a retornar (padrão: 10)"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("ID da última empresa da página anterior para paginação"),
+  }),
 };
 
 const trafficViolationCodeResponses = {
+  searchTrafficViolationCodeStreamDescription: z.object({
+    description: z
+      .string()
+      .default(
+        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are traffic violation code objects.",
+      ),
+  }),
   trafficViolationCodeList: z.object({
     data: z.array(
       z.object({

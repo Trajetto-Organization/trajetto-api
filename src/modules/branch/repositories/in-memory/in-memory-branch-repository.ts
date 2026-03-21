@@ -1,13 +1,14 @@
-import { randomUUID } from "crypto";
+import { v7 as uuidV7 } from "uuid";
 import { IBranchRepository } from "../IBranch-repository";
 
 import {
   Branch,
   CreateBranchProps,
   ListAllBranchesProps,
-  ListBranchBusinessProps,
   ListBranchProps,
   UpdateBranch,
+  SearchBranchWithCursorProps,
+  CursorPaginatedBranch,
 } from "../../dtos/branch-dto";
 
 class InMemoryBranchRepository implements IBranchRepository {
@@ -15,7 +16,7 @@ class InMemoryBranchRepository implements IBranchRepository {
 
   async createBranch(branchData: CreateBranchProps): Promise<Branch> {
     const branch: Branch = {
-      id: randomUUID(),
+      id: uuidV7(),
       ...branchData,
       created_at: new Date(),
       updated_at: new Date(),
@@ -51,24 +52,6 @@ class InMemoryBranchRepository implements IBranchRepository {
             branch.fantasy_name.toLowerCase().includes(searchLower)),
       );
     }
-
-    const total = filteredBranches.length;
-    const startIndex = (page - 1) * pageSize;
-
-    const endIndex = startIndex + pageSize;
-    const data = filteredBranches.slice(startIndex, endIndex);
-
-    return { data, total };
-  }
-
-  async listBranchBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListBranchBusinessProps): Promise<ListBranchProps> {
-    const filteredBranches = this.branches.filter(
-      (branch) => branch.businessId === businessId,
-    );
 
     const total = filteredBranches.length;
     const startIndex = (page - 1) * pageSize;
@@ -136,6 +119,30 @@ class InMemoryBranchRepository implements IBranchRepository {
     this.branches.splice(branchIndex, 1);
 
     return deletedBranch;
+  }
+
+  async searchBranchWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchBranchWithCursorProps): Promise<CursorPaginatedBranch> {
+    let filtered = this.branches.filter(
+      (branch) => branch.businessId === businessId,
+    );
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((b) => b.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

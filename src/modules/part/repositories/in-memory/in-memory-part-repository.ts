@@ -1,4 +1,4 @@
-import { v4 as uuidV4 } from "uuid";
+import { v7 as uuidV7 } from "uuid";
 import { IPartRepository } from "../IPart-repository";
 
 import {
@@ -7,7 +7,8 @@ import {
   ListPartProps,
   ListPartByBusinessIdProps,
   UpdatePart,
-  ListPartBusinessProps,
+  SearchPartWithCursorProps,
+  CursorPaginatedPart,
 } from "../../dtos/part-dto";
 
 interface ServiceOrderPartEntry {
@@ -26,16 +27,17 @@ class InMemoryPartRepository implements IPartRepository {
     entry: Omit<ServiceOrderPartEntry, "id">,
   ): ServiceOrderPartEntry {
     const serviceOrderPart: ServiceOrderPartEntry = {
-      id: uuidV4(),
+      id: uuidV7(),
       ...entry,
     };
+
     this.serviceOrderParts.push(serviceOrderPart);
     return serviceOrderPart;
   }
 
   async createPart(partData: CreatePartProps): Promise<Part> {
     const newPart: Part = {
-      id: uuidV4(),
+      id: uuidV7(),
       description: partData.description,
       unit_price: partData.unit_price.toString(),
       businessId: partData.businessId,
@@ -70,22 +72,6 @@ class InMemoryPartRepository implements IPartRepository {
     const data = filteredParts.slice(skip, skip + pageSize);
     const total = filteredParts.length;
 
-    return { data, total };
-  }
-
-  async listPartBusiness({
-    page,
-    pageSize,
-    businessId,
-  }: ListPartBusinessProps): Promise<ListPartProps> {
-    const filteredParts = this.parts.filter(
-      (part) => part.businessId === businessId,
-    );
-
-    const skip = (page - 1) * pageSize;
-    const data = filteredParts.slice(skip, skip + pageSize);
-
-    const total = filteredParts.length;
     return { data, total };
   }
 
@@ -152,6 +138,28 @@ class InMemoryPartRepository implements IPartRepository {
     );
 
     return associatedParts as any[];
+  }
+
+  async searchPartWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+  }: SearchPartWithCursorProps): Promise<CursorPaginatedPart> {
+    let filtered = this.parts.filter((p) => p.businessId === businessId);
+
+    if (cursor) {
+      const cursorIndex = filtered.findIndex((p) => p.id === cursor);
+      if (cursorIndex !== -1) {
+        filtered = filtered.slice(cursorIndex + 1);
+      }
+    }
+
+    const hasMore = filtered.length > limit;
+
+    const data = filtered.slice(0, limit);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

@@ -5,11 +5,11 @@ import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-reposit
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 
-import { InvalidTokenError } from "../errors/invalid-token-error";
-import { ExpiredTokenError } from "../errors/expired-token-error";
+import { UserInvalidTokenError } from "../errors/user-invalid-token-error";
+import { UserExpiredTokenError } from "../errors/user-expired-token-error";
 
 import { AppError } from "@/shared/errors/AppError";
-import { MissingTokenError } from "../errors/missing-token-error";
+import { UserMissingTokenError } from "../errors/user-missing-token-error";
 
 @injectable()
 class EmailVerificationUseCase {
@@ -22,21 +22,21 @@ class EmailVerificationUseCase {
 
   async execute(token: string): Promise<void> {
     if (!token) {
-      throw new MissingTokenError();
+      throw new UserMissingTokenError();
     }
 
     const userEmailVerificationToken =
       await this.usersTokens.findEmailVerificationTokenByToken(token);
 
     if (!userEmailVerificationToken) {
-      throw new InvalidTokenError();
+      throw new UserInvalidTokenError();
     }
 
     const now = new Date();
 
     // Checks if the token has expired
     if (now > userEmailVerificationToken.expires) {
-      throw new ExpiredTokenError();
+      throw new UserExpiredTokenError();
     }
 
     const user = await this.user.findUserByEmail(

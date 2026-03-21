@@ -4,8 +4,8 @@ import { JsonWebTokenError } from "jsonwebtoken";
 import { container } from "tsyringe";
 import { refreshTokenSchema } from "@/schemas/refresh-token-schema";
 
-import { RefreshTokenNotExistsError } from "../errors/refresh-token-not-exists-error";
-import { InvalidCredentialsError } from "../errors/invalid-credentials-error";
+import { UserRefreshTokenNotExistsError } from "../errors/user-refresh-token-not-exists-error";
+import { UserInvalidCredentialsError } from "../errors/user-invalid-credentials-error";
 
 import { RefreshTokenUseCase } from "./refresh-token-usecase";
 
@@ -25,7 +25,7 @@ class RefreshTokenController {
         await refreshTokenUseCase.execute(token);
       return reply.status(201).send({ refresh_token, token: newToken });
     } catch (error) {
-      if (error instanceof InvalidCredentialsError) {
+      if (error instanceof UserInvalidCredentialsError) {
         return reply.status(400).send({ message: error.message });
       }
 
@@ -37,7 +37,7 @@ class RefreshTokenController {
         return reply.status(403).send({ message: error.message });
       }
 
-      if (error instanceof RefreshTokenNotExistsError) {
+      if (error instanceof UserRefreshTokenNotExistsError) {
         return reply.status(400).send({ message: error.message });
       }
 

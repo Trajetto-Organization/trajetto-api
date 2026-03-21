@@ -12,7 +12,7 @@ import { FuelTypeAlreadyExistsError } from "../errors/fuel-type-already-exists-e
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { FuelType, CreateFuelTypeProps } from "../../dtos/fuel-type-dto";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 @injectable()
 class CreateFuelTypeUseCase {

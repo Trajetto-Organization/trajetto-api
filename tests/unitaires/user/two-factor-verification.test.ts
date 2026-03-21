@@ -6,12 +6,12 @@ import bcrypt, { hash } from "bcrypt";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
 import { TwoFactorVerificationUseCase } from "@/modules/user/usecases/two-factor-verification/two-factor-verification-usecase";
-import { ExpiredCodeError } from "@/modules/user/usecases/errors/expired-code-error";
+import { UserExpiredCodeError } from "@/modules/user/usecases/errors/user-expired-code-error";
 
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { InvalidTwoFactorCodeError } from "@/modules/user/usecases/errors/invalid-two-factor-code-error";
+import { UserInvalidTwoFactorCodeError } from "@/modules/user/usecases/errors/user-invalid-two-factor-code-error";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -108,7 +108,7 @@ describe("Two factor Verification Vode UseCase", () => {
         twoFactorCode: twoFactorToken,
         email: "non-existent@example.com",
       }),
-    ).rejects.toBeInstanceOf(InvalidTwoFactorCodeError);
+    ).rejects.toBeInstanceOf(UserInvalidTwoFactorCodeError);
   });
 
   it("should throw InvalidTwoFactorCodeError if the provided two-factor code does not match the stored code", async () => {
@@ -143,7 +143,7 @@ describe("Two factor Verification Vode UseCase", () => {
         twoFactorCode: "123456",
         email: "existent@example.com",
       }),
-    ).rejects.toBeInstanceOf(InvalidTwoFactorCodeError);
+    ).rejects.toBeInstanceOf(UserInvalidTwoFactorCodeError);
   });
 
   it("should delete existing two-factor confirmation if it exists", async () => {
@@ -208,7 +208,7 @@ describe("Two factor Verification Vode UseCase", () => {
         twoFactorCode: twoFactorToken,
         email: expiredToken.email,
       }),
-    ).rejects.toBeInstanceOf(ExpiredCodeError);
+    ).rejects.toBeInstanceOf(UserExpiredCodeError);
   });
 
   it("should throw AppError if creating user refresh token fails", async () => {

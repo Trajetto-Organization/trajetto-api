@@ -8,11 +8,11 @@ import auth from "@/config/auth";
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 
-import { InvalidTwoFactorCodeError } from "../errors/invalid-two-factor-code-error";
-import { ExpiredCodeError } from "../errors/expired-code-error";
+import { UserInvalidTwoFactorCodeError } from "../errors/user-invalid-two-factor-code-error";
+import { UserExpiredCodeError } from "../errors/user-expired-code-error";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
-import { InvalidCodeForUserError } from "../errors/invalid-code-for-user-error";
+import { UserInvalidCodeForUserError } from "../errors/user-invalid-code-for-user-error";
 
 import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
 import { AppError } from "@/shared/errors/AppError";
@@ -47,22 +47,22 @@ class TwoFactorVerificationUseCase {
     const twoFactorToken =
       await this.usersTokens.findTwoFactorTokenByEmail(email);
 
-    if (!twoFactorToken) throw new InvalidTwoFactorCodeError();
+    if (!twoFactorToken) throw new UserInvalidTwoFactorCodeError();
 
     const user = await this.user.findUserByEmail(twoFactorToken.email);
     if (!user) throw new ResourceNotFoundError();
 
     /* c8 ignore next */
-    if (user.email !== email) throw new InvalidCodeForUserError();
+    if (user.email !== email) throw new UserInvalidCodeForUserError();
 
     // Checks if the provided code matches the stored code
     const isCodeValid = await compare(twoFactorCode, twoFactorToken.token);
-    if (!isCodeValid) throw new InvalidTwoFactorCodeError();
+    if (!isCodeValid) throw new UserInvalidTwoFactorCodeError();
 
     const now = new Date();
 
     // Checks if the token has expired
-    if (now > twoFactorToken.expires) throw new ExpiredCodeError();
+    if (now > twoFactorToken.expires) throw new UserExpiredCodeError();
 
     await this.usersTokens.deleteTwoFactorToken(twoFactorToken.id);
 

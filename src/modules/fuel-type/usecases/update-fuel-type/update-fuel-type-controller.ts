@@ -4,7 +4,7 @@ import { container } from "tsyringe";
 import { UpdateFuelTypeUseCase } from "./update-fuel-type-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/user/usecases/errors/business-not-found-error";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { FuelTypeNotFoundError } from "../errors/fuel-type-not-found-error";
 import { FuelTypeAlreadyExistsError } from "../errors/fuel-type-already-exists-error";
