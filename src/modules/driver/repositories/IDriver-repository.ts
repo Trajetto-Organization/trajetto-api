@@ -33,6 +33,10 @@ interface IDriverRepository {
   searchDriverWithCursor: (
     props: SearchDriverWithCursorProps,
   ) => Promise<CursorPaginatedDriver>;
+  countDriversForExport: (
+    businessId: string,
+    userRole: string,
+  ) => Promise<number>;
 }
 
 export { IDriverRepository };

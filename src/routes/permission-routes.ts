@@ -12,6 +12,7 @@ import { verifyPermission } from "@/modules/middlewares/verify-permission";
 import { BulkConfigurePermissionsController } from "@/modules/permission/usecases/bulk-configure-permissions/bulk-configure-permissions-controller";
 import { ListPermissionsByProfileController } from "@/modules/permission/usecases/list-permissions-by-profile/list-permissions-by-profile-controller";
 
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import {
   permissionResponses,
   permissionSchemas,
@@ -33,7 +34,10 @@ async function permissionRoutes(app: FastifyInstance) {
     "/create-permission",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("user_permission_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("user_permission_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
@@ -77,7 +81,10 @@ async function permissionRoutes(app: FastifyInstance) {
     "/update-permission/:permissionId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("user_permission_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("user_permission_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
@@ -124,7 +131,10 @@ async function permissionRoutes(app: FastifyInstance) {
     "/bulk-configure-permissions",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("user_permission_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("user_permission_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],

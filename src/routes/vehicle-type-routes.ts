@@ -11,6 +11,7 @@ import { SearchVehicleTypeCursorController } from "@/modules/vehicle-type/usecas
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import {
   vehicleTypeSchemas,
   vehicleTypeResponses,
@@ -30,7 +31,10 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
     "/create-vehicle-type/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_type_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("vehicle_type_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicleType"],
@@ -100,7 +104,10 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
     "/update-vehicle-type/:vehicleTypeId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_type_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("vehicle_type_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicleType"],

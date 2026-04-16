@@ -43,18 +43,20 @@ const createAccountPayableSchema = z
       .max(9999999.99, "O valor pago não pode exceder R$ 9.999.999,99.")
       .optional()
       .nullable(),
-    branchId: z.string().uuid("O ID da filial deve ser um UUID válido."),
+    branchId: z
+      .string({ required_error: "ID da filial é obrigatória!" })
+      .uuid("ID da filial é inválido."),
     serviceOrderId: z.preprocess(
       emptyStringToNull,
       z
         .string()
-        .uuid("O ID da ordem de serviço deve ser um UUID válido.")
+        .uuid("ID da ordem de serviço é inválido.")
         .optional()
         .nullable(),
     ),
     registrationUserId: z
-      .string()
-      .uuid("O ID do usuário responsável deve ser um UUID válido."),
+      .string({ required_error: "ID do usuário responsável é obrigatório!" })
+      .uuid("ID do usuário responsável é inválido."),
   })
   .refine(
     (data) => {

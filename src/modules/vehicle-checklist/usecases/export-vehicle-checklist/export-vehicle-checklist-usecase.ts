@@ -4,6 +4,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IVehicleChecklistRepository } from "../../repositories/IVehicle-checklist-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { VehicleChecklistNoChecklistsToExportError } from "../errors/vehicle-checklist-no-checklists-to-export-error";
 
 import { ExportFormatters } from "@/shared/services/export/formatters";
 import { ExportColumn } from "@/shared/services/export/types";
@@ -23,6 +24,15 @@ class ExportVehicleChecklistExcelUseCase {
   async execute(userId: string, search?: string) {
     const findUser = await this.user.findUserById(userId);
     if (!findUser) throw new ResourceNotFoundError();
+
+    const total = await this.vehicleChecklist.countChecklistForExport(
+      findUser.businessId as string,
+      findUser.role,
+    );
+
+    if (total === 0) {
+      throw new VehicleChecklistNoChecklistsToExportError();
+    }
 
     const iterator = this.vehicleChecklist.streamChecklistsForExport(
       findUser.businessId!,

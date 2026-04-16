@@ -33,7 +33,6 @@ class DeleteDriverController {
 
     try {
       await deleteDriverUseCase.execute(driverId, id, businessId);
-
       return reply
         .status(200)
         .send({ message: "Motorista deletado com sucesso!" });

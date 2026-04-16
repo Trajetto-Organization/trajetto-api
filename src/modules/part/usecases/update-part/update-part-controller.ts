@@ -33,7 +33,6 @@ class UpdatePartController {
 
     try {
       await updatePartUseCase.execute(partData, partId, id, businessId);
-
       return reply
         .status(200)
         .send({ message: "Peça atualizada com sucesso!" });

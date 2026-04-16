@@ -11,6 +11,7 @@ import { ExcelWriter } from "@/shared/services/export/writers/excel-writer";
 import { ExportColumn } from "@/shared/services/export/types";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { VehicleNoVehiclesToExportError } from "../errors/vehicle-no-vehicles-to-export-error";
 
 class ExportVehicleController {
   async handle(request: FastifyRequest, reply: FastifyReply) {
@@ -42,6 +43,10 @@ class ExportVehicleController {
       await pipeline.execute(reply, filename);
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof VehicleNoVehiclesToExportError) {
         return reply.status(400).send({ message: error.message });
       }
 

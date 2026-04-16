@@ -217,7 +217,7 @@ class BranchRepository implements IBranchRepository {
     businessId,
   }: SearchBranchWithCursorProps): Promise<CursorPaginatedBranch> {
     const items = await this.prisma.branch.findMany({
-      where: { businessId },
+      where: { businessId, is_active: true },
       take: limit + 1,
       ...(cursor && {
         cursor: { id: cursor },
@@ -234,6 +234,38 @@ class BranchRepository implements IBranchRepository {
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };
+  }
+
+  async countBranchDependencies(
+    branchId: string,
+  ): Promise<Record<string, number>> {
+    const [
+      vehicles,
+      drivers,
+      serviceOrders,
+      accountsPayable,
+      fines,
+      fuels,
+      vehicleChecklists,
+    ] = await Promise.all([
+      this.prisma.vehicle.count({ where: { branchId } }),
+      this.prisma.driver.count({ where: { branchId } }),
+      this.prisma.serviceOrder.count({ where: { branchId } }),
+      this.prisma.accountPayable.count({ where: { branchId } }),
+      this.prisma.fine.count({ where: { branchId } }),
+      this.prisma.fuel.count({ where: { branchId } }),
+      this.prisma.vehicleChecklist.count({ where: { branchId } }),
+    ]);
+
+    return {
+      vehicles,
+      drivers,
+      serviceOrders,
+      accountsPayable,
+      fines,
+      fuels,
+      vehicleChecklists,
+    };
   }
 }
 

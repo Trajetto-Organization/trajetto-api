@@ -11,6 +11,10 @@ import { DeleteFineController } from "@/modules/fine/usecases/delete-fine/delete
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import {
+  verifyBranchActive,
+  verifyBusinessActive,
+} from "@/modules/middlewares/verify-tenant-active";
 import { fineSchemas, fineResponses } from "./documentation/fine-documentation";
 
 const createFineController = new CreateFineController();
@@ -26,7 +30,11 @@ async function fineRoutes(app: FastifyInstance) {
     "/create-fine/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fine_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyBranchActive,
+        verifyPermission("fine_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fine"],
@@ -72,7 +80,7 @@ async function fineRoutes(app: FastifyInstance) {
     "/export-fine",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fine_manage", "read")],
+      preHandler: [verifyPermission("fine_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fine"],
@@ -80,6 +88,10 @@ async function fineRoutes(app: FastifyInstance) {
         description:
           "Export fine records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
         querystring: fineSchemas.exportFinesQuery,
+        response: {
+          400: fineResponses.exportFineErrors,
+          500: fineResponses.internalServerError,
+        },
       },
     },
     exportFineController.handle,
@@ -89,7 +101,11 @@ async function fineRoutes(app: FastifyInstance) {
     "/update-fine/:fineId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fine_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyBranchActive,
+        verifyPermission("fine_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fine"],

@@ -11,6 +11,7 @@ import { SearchProfileCursorController } from "@/modules/profile-access/usecases
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import {
   profileAccessResponses,
   profileAccessSchemas,
@@ -29,7 +30,10 @@ async function profileAccessRoutes(app: FastifyInstance) {
     "/create-profile-access",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("profile_access_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("profile_access_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],
@@ -98,7 +102,10 @@ async function profileAccessRoutes(app: FastifyInstance) {
     "/update-profile-access/:profileAccessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("profile_access_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("profile_access_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["profile-access"],

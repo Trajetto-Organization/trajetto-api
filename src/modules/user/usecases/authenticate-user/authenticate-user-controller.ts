@@ -10,6 +10,8 @@ import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-
 import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
 import { UserDriverInactiveError } from "../errors/user-driver-inactive-error";
 
+import { BusinessInactiveError } from "@/modules/business/usecases/errors/business-inactive-error";
+
 class AuthenticateUserController {
   async handle(
     request: FastifyRequest,
@@ -66,6 +68,10 @@ class AuthenticateUserController {
       }
 
       if (error instanceof UserDriverInactiveError) {
+        return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof BusinessInactiveError) {
         return reply.status(403).send({ message: error.message });
       }
 

@@ -230,7 +230,9 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     businessId,
   }: SearchVehicleWithCursorProps): Promise<CursorPaginatedVehicle> {
     let filtered = this.vehicles.filter(
-      (vehicle) => vehicle.businessId === businessId,
+      (vehicle) =>
+        vehicle.businessId === businessId &&
+        ["ACTIVE", "IN_ROUTE"].includes(vehicle.status),
     );
 
     if (cursor) {
@@ -246,6 +248,18 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };
+  }
+
+  async countVehiclesForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const filteredVehicles =
+      userRole === "MASTER"
+        ? this.vehicles
+        : this.vehicles.filter((vehicle) => vehicle.businessId === businessId);
+
+    return filteredVehicles.length;
   }
 }
 

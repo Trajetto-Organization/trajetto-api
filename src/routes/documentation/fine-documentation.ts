@@ -370,6 +370,16 @@ const fineResponses = {
     }),
   ]),
 
+  // Export errors (GET /export-fine)
+  exportFineErrors: z.union([
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Não existem multas para exportar!"),
+    }),
+  ]),
+
   // Forbidden errors for UPDATE (status 403)
   updateFineForbiddenErrors: z.union([
     z.object({

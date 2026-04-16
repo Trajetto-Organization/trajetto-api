@@ -9,7 +9,7 @@ const cursorPaginationSchema = z.object({
 });
 
 const cursorPaginationByBusinessSchema = cursorPaginationSchema.extend({
-  businessId: z.string(),
+  businessId: z.string().uuid("ID da empresa é inválido."),
 });
 
 export { cursorPaginationSchema, cursorPaginationByBusinessSchema };

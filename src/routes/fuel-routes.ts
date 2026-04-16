@@ -14,6 +14,10 @@ import { SearchFuelByVehicleCursorController } from "@/modules/fuel/usecases/sea
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import {
+  verifyBranchActive,
+  verifyBusinessActive,
+} from "@/modules/middlewares/verify-tenant-active";
 import { fuelSchemas, fuelResponses } from "./documentation/fuel-documentation";
 
 const createFuelController = new CreateFuelController();
@@ -33,7 +37,11 @@ async function fuelRoutes(app: FastifyInstance) {
     "/create-fuel/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fuel_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyBranchActive,
+        verifyPermission("fuel_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
@@ -78,7 +86,11 @@ async function fuelRoutes(app: FastifyInstance) {
     "/update-fuel/:fuelId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fuel_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyBranchActive,
+        verifyPermission("fuel_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
@@ -125,7 +137,7 @@ async function fuelRoutes(app: FastifyInstance) {
     "/export-fuel",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fuel_manage", "read")],
+      preHandler: [verifyPermission("fuel_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],
@@ -133,6 +145,10 @@ async function fuelRoutes(app: FastifyInstance) {
         description:
           "Export fuel refueling records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
         querystring: fuelSchemas.exportFuelsQuery,
+        response: {
+          400: fuelResponses.exportFuelErrors,
+          500: fuelResponses.internalServerError,
+        },
       },
     },
     exportFuelController.handle,

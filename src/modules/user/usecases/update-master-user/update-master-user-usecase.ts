@@ -27,7 +27,7 @@ interface UpdateMasterUserExecuteProps {
 }
 
 interface ChangeSummary {
-  /** Formatted for in-app notifications: "nome: X → Y, e-mail: A → B, senha" */
+  /** Formatted for in-app notifications: "name: X → Y, e-mail: A → B, password" */
   notificationText: string;
   /** Formatted for activity log: same as notificationText */
   activityText: string;
@@ -242,7 +242,7 @@ class UpdateMasterUserUseCase {
       data.password && data.password.trim() !== "" ? data.password : undefined;
 
     if (rawPassword) {
-      updateData.password = await hash(rawPassword, 6);
+      updateData.password = await hash(rawPassword, 10);
     }
 
     try {

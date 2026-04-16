@@ -310,11 +310,7 @@ const createDriverSchema = z.object({
   }),
   branchId: z.preprocess(
     emptyStringToNull,
-    z
-      .string()
-      .uuid("O ID da filial deve ser um UUID válido.")
-      .nullable()
-      .optional(),
+    z.string().uuid("ID da filial é inválido.").nullable().optional(),
   ),
 });
 

@@ -66,6 +66,9 @@ interface User {
       canWrite: boolean;
     }[];
   } | null;
+  business?: {
+    is_active: boolean;
+  } | null;
   whatsapp_notifications_enabled?: boolean;
   email_notifications_enabled?: boolean;
   activity_notifications_enabled?: boolean;

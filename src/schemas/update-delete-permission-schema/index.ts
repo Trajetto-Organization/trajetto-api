@@ -1,7 +1,9 @@
 import { z } from "zod";
 
 const updateDeletePermissionSchema = z.object({
-  permissionId: z.string().min(1, "O ID da permissão é obrigatória!"),
+  permissionId: z
+    .string({ required_error: "ID da permissão é obrigatório!" })
+    .uuid("ID da permissão é inválido."),
 });
 
 export { updateDeletePermissionSchema };

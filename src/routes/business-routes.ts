@@ -9,6 +9,8 @@ import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated"
 import { DeleteBusinessController } from "@/modules/business/usecases/delete-business/delete-business-controller";
 
 import { UpdateBusinessController } from "@/modules/business/usecases/update-business/update-business-controller";
+import { ToggleBusinessActiveController } from "@/modules/business/usecases/toggle-business-active/toggle-business-active-controller";
+
 import { UpdateAILimitController } from "@/modules/business/usecases/update-ai-limit/update-ai-limit-controller";
 
 import { GetAIUsageController } from "@/modules/business/usecases/get-ai-usage/get-ai-usage-controller";
@@ -26,6 +28,8 @@ const searchBusinessCursorController = new SearchBusinessCursorController();
 
 const deleteBusinessController = new DeleteBusinessController();
 const updateBusinessController = new UpdateBusinessController();
+
+const toggleBusinessActiveController = new ToggleBusinessActiveController();
 
 const updateAILimitController = new UpdateAILimitController();
 const getAIUsageController = new GetAIUsageController();
@@ -188,6 +192,28 @@ async function businessRoutes(app: FastifyInstance) {
       },
     },
     deleteBusinessController.handle,
+  );
+
+  app.patch(
+    "/toggle-business-active/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["business"],
+        summary: "Toggle business active status",
+        description:
+          "Activate or deactivate a business. Inactive businesses block login for all associated users.",
+        params: businessSchemas.updateDeleteBusiness,
+        response: {
+          200: businessResponses.businessToggled,
+          400: businessResponses.deleteBusinessErrors,
+          500: businessResponses.internalServerError,
+        },
+      },
+    },
+    toggleBusinessActiveController.handle,
   );
 }
 

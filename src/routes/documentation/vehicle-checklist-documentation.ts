@@ -384,6 +384,18 @@ const vehicleChecklistResponses = {
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
   }),
+
+  // Export errors (GET /export-vehicle-checklist)
+  exportVehicleChecklistErrors: z.union([
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Não existem checklists veiculares para exportar!"),
+    }),
+  ]),
 };
 
 export { vehicleChecklistSchemas, vehicleChecklistResponses };

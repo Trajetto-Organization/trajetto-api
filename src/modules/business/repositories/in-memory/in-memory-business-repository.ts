@@ -18,6 +18,7 @@ class InMemoryBusinessRepository implements IBusinessRepository {
     const newBusiness: Business = {
       id: uuidV7(),
       ...businessData,
+      is_active: true,
       erp_code: businessData.erp_code || null,
       complement: businessData.complement || null,
     };
@@ -148,7 +149,7 @@ class InMemoryBusinessRepository implements IBusinessRepository {
     limit = 10,
     cursor,
   }: SearchBusinessWithCursorProps): Promise<CursorPaginatedBusiness> {
-    let filtered = [...this.business];
+    let filtered = this.business.filter((business) => business.is_active);
 
     if (cursor) {
       const cursorIndex = filtered.findIndex((b) => b.id === cursor);
@@ -180,6 +181,11 @@ class InMemoryBusinessRepository implements IBusinessRepository {
       ai_analysis_used: found.ai_analysis_used ?? 0,
       ai_analysis_reset_at: found.ai_analysis_reset_at ?? new Date(),
     };
+  }
+  async countBusinessDependencies(
+    businessId: string,
+  ): Promise<{ branches: number; users: number; drivers: number }> {
+    return { branches: 0, users: 0, drivers: 0 };
   }
 }
 

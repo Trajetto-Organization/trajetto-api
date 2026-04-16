@@ -58,16 +58,14 @@ class UserTokensRepository implements IUsersTokensRepository {
     token,
     expires,
   }: CreateVerificationToken): Promise<VerificationToken> {
-    const createVerificationToken =
-      await this.prisma.emailVerificationToken.create({
-        data: {
-          email,
-          token,
-          expires,
-        },
+    const upsertedVerificationToken =
+      await this.prisma.emailVerificationToken.upsert({
+        where: { email },
+        update: { token, expires },
+        create: { email, token, expires },
       });
 
-    return createVerificationToken;
+    return upsertedVerificationToken;
   }
 
   async findEmailVerificationTokenByEmail(
@@ -105,15 +103,13 @@ class UserTokensRepository implements IUsersTokensRepository {
     expires,
     token,
   }: CreateTwoFactorToken): Promise<TwoFactor> {
-    const createTwoFactorToken = await this.prisma.twoFactorToken.create({
-      data: {
-        email,
-        expires,
-        token,
-      },
+    const upsertedTwoFactorToken = await this.prisma.twoFactorToken.upsert({
+      where: { email },
+      update: { token, expires },
+      create: { email, token, expires },
     });
 
-    return createTwoFactorToken;
+    return upsertedTwoFactorToken;
   }
 
   async findTwoFactorTokenByEmail(email: string): Promise<TwoFactor | null> {
@@ -175,16 +171,14 @@ class UserTokensRepository implements IUsersTokensRepository {
     token,
     expires,
   }: CreateVerificationToken): Promise<VerificationToken> {
-    const createForgotPasswordVerificationToken =
-      await this.prisma.forgotPasswordVerificationToken.create({
-        data: {
-          email,
-          token,
-          expires,
-        },
+    const upsertedForgotPasswordVerificationToken =
+      await this.prisma.forgotPasswordVerificationToken.upsert({
+        where: { email },
+        update: { token, expires },
+        create: { email, token, expires },
       });
 
-    return createForgotPasswordVerificationToken;
+    return upsertedForgotPasswordVerificationToken;
   }
 
   async findForgotPasswordVerificationTokenByEmail(

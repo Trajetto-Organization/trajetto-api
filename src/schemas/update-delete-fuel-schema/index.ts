@@ -1,8 +1,12 @@
 import { z } from "zod";
 
 const updateDeleteFuelSchema = z.object({
-  fuelId: z.string().uuid("O ID do abastecimento deve ser um UUID válido."),
-  businessId: z.string().uuid("O ID da empresa deve ser um UUID válido."),
+  fuelId: z
+    .string({ required_error: "ID do abastecimento é obrigatório!" })
+    .uuid("ID do abastecimento é inválido."),
+  businessId: z
+    .string({ required_error: "ID da empresa é obrigatório!" })
+    .uuid("ID da empresa é inválido."),
 });
 
 export { updateDeleteFuelSchema };

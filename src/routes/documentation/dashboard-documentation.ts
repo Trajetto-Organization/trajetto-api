@@ -129,8 +129,18 @@ const dashboardResponses = {
         entityId: z.string().describe("Entity ID related to activity"),
         description: z.string().describe("Activity description"),
         status: z.string().describe("Activity status"),
-        performedBy: z.string().describe("User who performed the activity"),
+        performedBy: z
+          .string()
+          .nullable()
+          .describe("User who performed the activity"),
         businessId: z.string().nullable().describe("Business ID"),
+        tenantName: z
+          .string()
+          .nullable()
+          .optional()
+          .describe(
+            "Business name snapshot at time of activity — preserved after deletion",
+          ),
         visibilityLevel: z
           .string()
           .nullable()

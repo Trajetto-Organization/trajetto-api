@@ -6,7 +6,9 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateMasterUserParamsSchema = z.object({
-  masterUserId: z.string().min(1, "O ID do usuário master é obrigatório."),
+  masterUserId: z
+    .string({ required_error: "ID do usuário master é obrigatório!" })
+    .uuid("ID do usuário master é inválido."),
 });
 
 const updateMasterUserSchema = z

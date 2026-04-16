@@ -29,7 +29,6 @@ class DeleteFuelTypeController {
 
     try {
       await deleteFuelTypeUseCase.execute(fuelTypeId, id, businessId);
-
       return reply
         .status(200)
         .send({ message: "Tipo de combustível deletado com sucesso!" });

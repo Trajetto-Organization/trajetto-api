@@ -367,6 +367,20 @@ class InMemoryVehicleChecklistRepository
       };
     }
   }
+
+  async countChecklistForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const filteredChecklists =
+      userRole === "MASTER"
+        ? this.checklists
+        : this.checklists.filter(
+            (checklist) => checklist.businessId === businessId,
+          );
+
+    return filteredChecklists.length;
+  }
 }
 
 export { InMemoryVehicleChecklistRepository };

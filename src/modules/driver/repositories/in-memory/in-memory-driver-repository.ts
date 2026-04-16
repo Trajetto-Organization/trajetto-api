@@ -191,6 +191,18 @@ class InMemoryDriverRepository implements IDriverRepository {
 
     return { data, nextCursor, hasMore };
   }
+
+  async countDriversForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const filteredDrivers =
+      userRole === "MASTER"
+        ? this.drivers
+        : this.drivers.filter((driver) => driver.businessId === businessId);
+
+    return filteredDrivers.length;
+  }
 }
 
 export { InMemoryDriverRepository };

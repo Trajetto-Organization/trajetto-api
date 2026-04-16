@@ -4,6 +4,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IServiceOrderRepository } from "../../repositories/IService-order-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { ServiceOrderNoServiceOrdersToExportError } from "../errors/service-order-no-service-orders-to-export-error";
 
 import { ExportFormatters } from "@/shared/services/export/formatters";
 import { ExportColumn } from "@/shared/services/export/types";
@@ -27,6 +28,15 @@ class ExportServiceOrderUseCase {
   }> {
     const findUser = await this.user.findUserById(userId);
     if (!findUser) throw new ResourceNotFoundError();
+
+    const total = await this.serviceOrder.countServiceOrderForExport(
+      findUser.businessId as string,
+      findUser.role,
+    );
+
+    if (total === 0) {
+      throw new ServiceOrderNoServiceOrdersToExportError();
+    }
 
     const iterator = this.serviceOrder.streamServiceOrdersForExport(
       findUser.businessId!,

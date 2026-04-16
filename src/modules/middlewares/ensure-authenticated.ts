@@ -40,6 +40,14 @@ async function ensureAuthenticated(
       );
     }
 
+    // Block login if business is inactive (MASTER users don't belong to a business)
+    if (findUserById.business && findUserById.business.is_active === false) {
+      throw new AppError(
+        "Esta empresa está desativada. Entre em contato com o administrador para reativar o acesso.",
+        403,
+      );
+    }
+
     // If user has a driverId, fetch driver information
     let driverInfo = null;
 

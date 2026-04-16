@@ -6,11 +6,15 @@ import { ListVehicleChecklistController } from "@/modules/vehicle-checklist/usec
 import { DeleteVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/delete-vehicle-checklist/delete-vehicle-checklist-controller";
 import { UpdateVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/update-vehicle-checklist/update-vehicle-checklist-controller";
 
-import { ExportVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/export-vehicle-checklist-excel/export-vehicle-checklist-controller";
+import { ExportVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/export-vehicle-checklist/export-vehicle-checklist-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import {
+  verifyBranchActive,
+  verifyBusinessActive,
+} from "@/modules/middlewares/verify-tenant-active";
 import {
   vehicleChecklistSchemas,
   vehicleChecklistResponses,
@@ -29,7 +33,11 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
     "/create-vehicle-checklist/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_checklist_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyBranchActive,
+        verifyPermission("vehicle_checklist_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-checklist"],
@@ -74,7 +82,11 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
     "/update-vehicle-checklist/:checklistId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_checklist_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyBranchActive,
+        verifyPermission("vehicle_checklist_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-checklist"],
@@ -122,7 +134,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
     "/export-vehicle-checklist",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_checklist_manage", "read")],
+      preHandler: [verifyPermission("vehicle_checklist_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle-checklist"],
@@ -130,6 +142,10 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
         description:
           "Export vehicle checklist records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
         querystring: vehicleChecklistSchemas.exportVehicleChecklistsQuery,
+        response: {
+          400: vehicleChecklistResponses.exportVehicleChecklistErrors,
+          500: vehicleChecklistResponses.internalServerError,
+        },
       },
     },
     exportVehicleChecklistController.handle,

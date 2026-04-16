@@ -11,6 +11,7 @@ import { UpdateSupplierController } from "@/modules/supplier/usecases/update-sup
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import {
   supplierResponses,
   supplierSchemas,
@@ -29,7 +30,10 @@ async function supplierRoutes(app: FastifyInstance) {
     "/create-supplier/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("supplier_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("supplier_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],
@@ -99,7 +103,10 @@ async function supplierRoutes(app: FastifyInstance) {
     "/update-supplier/:supplierId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("supplier_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("supplier_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["supplier"],

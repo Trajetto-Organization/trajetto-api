@@ -7,6 +7,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+import { BusinessHasChildrenError } from "@/modules/business/usecases/errors/business-has-children-error";
 
 class DeleteBusinessController {
   async handle(
@@ -16,10 +17,10 @@ class DeleteBusinessController {
     const { id } = request.user;
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
 
-    const createUserUseCase = container.resolve(DeleteBusinessUseCase);
+    const deleteBusinessUseCase = container.resolve(DeleteBusinessUseCase);
 
     try {
-      await createUserUseCase.execute(businessId, id);
+      await deleteBusinessUseCase.execute(businessId, id);
       return reply
         .status(200)
         .send({ message: "Empresa deletada com sucesso!" });
@@ -30,6 +31,10 @@ class DeleteBusinessController {
 
       if (error instanceof BusinessNotFoundError) {
         return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof BusinessHasChildrenError) {
+        return reply.status(409).send({ message: error.message });
       }
 
       throw error;

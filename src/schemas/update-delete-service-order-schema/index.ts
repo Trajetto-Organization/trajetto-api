@@ -1,7 +1,9 @@
 import { z } from "zod";
 
 const updateDeleteServiceOrderSchema = z.object({
-  serviceOrderId: z.string().min(1, "O ID da ordem de serviço é obrigatória!"),
+  serviceOrderId: z
+    .string({ required_error: "ID da ordem de serviço é obrigatório!" })
+    .uuid("ID da ordem de serviço é inválido."),
 });
 
 export { updateDeleteServiceOrderSchema };

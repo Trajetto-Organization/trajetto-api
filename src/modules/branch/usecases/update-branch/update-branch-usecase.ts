@@ -4,7 +4,7 @@ import { IBranchRepository } from "@/modules/branch/repositories/IBranch-reposit
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
-import { Branch } from "../../dtos/branch-dto";
+import { Branch, UpdateBranchProps } from "../../dtos/branch-dto";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
@@ -42,7 +42,7 @@ class UpdateBranchUseCase {
   ) {}
 
   async execute(
-    branchData: any,
+    branchData: UpdateBranchProps,
     branchId: string,
     businessId: string,
     userId: string,

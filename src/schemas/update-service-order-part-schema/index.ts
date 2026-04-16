@@ -22,7 +22,7 @@ const updateServiceOrderPartSchema = z.object({
       .nullable()
       .optional(),
   ),
-  partId: z.string().uuid("O ID da peça deve ser um UUID válido.").optional(),
+  partId: z.string().uuid("ID da peça é inválido.").optional(),
 });
 
 export { updateServiceOrderPartSchema };

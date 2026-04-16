@@ -78,8 +78,12 @@ const updatePermissionSchema = z
     ),
     canRead: z.boolean().optional().nullable(),
     canWrite: z.boolean().default(false).optional().nullable(),
-    businessId: z.string().min(1, "A empresa é obrigatória!"),
-    profileAccessId: z.string().min(1, "O Perfil de acesso é obrigatório!"),
+    businessId: z
+      .string({ required_error: "ID da empresa é obrigatório!" })
+      .uuid("ID da empresa é inválido."),
+    profileAccessId: z
+      .string({ required_error: "ID do perfil de acesso é obrigatório!" })
+      .uuid("ID do perfil de acesso é inválido."),
     permissionKey: permissionKeyEnum.optional(),
   })
   .refine((data) => data.canRead, {

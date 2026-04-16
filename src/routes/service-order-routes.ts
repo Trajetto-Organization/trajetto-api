@@ -15,6 +15,10 @@ import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated"
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import {
+  verifyBranchActive,
+  verifyBusinessActive,
+} from "@/modules/middlewares/verify-tenant-active";
+import {
   serviceOrderSchemas,
   serviceOrderResponses,
 } from "./documentation/service-order-documentation";
@@ -37,7 +41,11 @@ async function serviceOrderRoutes(app: FastifyInstance) {
     "/create-service-order/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("service_order_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyBranchActive,
+        verifyPermission("service_order_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
@@ -82,7 +90,7 @@ async function serviceOrderRoutes(app: FastifyInstance) {
     "/export-service-order",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("service_order_manage", "read")],
+      preHandler: [verifyPermission("service_order_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],
@@ -90,6 +98,10 @@ async function serviceOrderRoutes(app: FastifyInstance) {
         description:
           "Export service order records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
         querystring: serviceOrderSchemas.exportServiceOrderQuery,
+        response: {
+          400: serviceOrderResponses.exportServiceOrderErrors,
+          500: serviceOrderResponses.internalServerError,
+        },
       },
     },
     exportServiceOrderController.handle,
@@ -151,7 +163,11 @@ async function serviceOrderRoutes(app: FastifyInstance) {
     "/update-service-order/:serviceOrderId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("service_order_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyBranchActive,
+        verifyPermission("service_order_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order"],

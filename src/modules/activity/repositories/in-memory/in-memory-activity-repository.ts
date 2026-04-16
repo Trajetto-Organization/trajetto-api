@@ -95,8 +95,8 @@ class InMemoryActivityRepository implements IActivityRepository {
     // Add mock user data for testing (in real implementation this would come from joins)
     const activitiesWithUserData = paginatedActivities.map((activity) => ({
       ...activity,
-      userEmail: `user${activity.performedBy.slice(-3)}@test.com`,
-      userName: `Test User ${activity.performedBy.slice(-3)}`,
+      userEmail: `user${(activity.performedBy ?? "unknown").slice(-3)}@test.com`,
+      userName: `Test User ${(activity.performedBy ?? "unknown").slice(-3)}`,
       userRole: activity.performingUserRole || currentUserRole,
       business_name: activity.businessId
         ? currentUserRole === "MASTER" || currentUserRole === "BUSINESS_ADMIN"

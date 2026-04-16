@@ -156,7 +156,7 @@ class UpdateUserUseCase {
 
     let hashedPassword: string | undefined;
     if (userData.password) {
-      hashedPassword = await hash(userData.password, 6);
+      hashedPassword = await hash(userData.password, 10);
     }
 
     const newRole: UserRole = userData.role ? userData.role : userToUpdate.role;

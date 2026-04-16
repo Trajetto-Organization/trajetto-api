@@ -55,10 +55,7 @@ const createPartSchema = z.object({
       if (val === "" || val === undefined) return null;
       return val;
     },
-    z.union([
-      z.string().uuid("O ID do fornecedor deve ser um UUID válido."),
-      z.null(),
-    ]),
+    z.union([z.string().uuid("ID do fornecedor é inválido."), z.null()]),
   ),
 });
 

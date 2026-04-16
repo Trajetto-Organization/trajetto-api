@@ -425,6 +425,16 @@ const vehicleResponses = {
       message: z.string().default("Veículo não encontrado!"),
     }),
   ]),
+
+  // Export errors (GET /export-vehicle)
+  exportVehicleErrors: z.union([
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Não existem veículos para exportar!"),
+    }),
+  ]),
 };
 
 export { vehicleSchemas, vehicleResponses };

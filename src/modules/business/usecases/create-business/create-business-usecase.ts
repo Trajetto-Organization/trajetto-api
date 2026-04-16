@@ -8,6 +8,7 @@ import { IBranchRepository } from "@/modules/branch/repositories/IBranch-reposit
 
 import { Business, CreateBusinessProps } from "../../dtos/business-dto";
 import { AppError } from "@/shared/errors/AppError";
+import { NotificationService } from "@/shared/services/notification-service";
 
 import { BusinessEmailAlreadyExistsError } from "../errors/business-email-already-exists-error";
 import { BusinessErpCodeAlreadyExistsError } from "../errors/business-erp-code-already-exists-error";
@@ -30,6 +31,8 @@ class CreateBusinessUseCase {
     private business: IBusinessRepository,
     @inject("BranchRepository")
     private branch: IBranchRepository,
+    @inject("NotificationService")
+    private notificationService: NotificationService,
   ) {}
 
   async execute(
@@ -120,6 +123,17 @@ class CreateBusinessUseCase {
       };
 
       await this.branch.createBranch(branchData);
+
+      this.notificationService.createActivityIfEnabled({
+        type: "Empresa",
+        action: "create",
+        entityId: businessCreated.id as string,
+        description: `Empresa ${businessCreated.corporate_reason} cadastrada`,
+        status: "Completo",
+        performedBy: userId,
+        businessId: businessCreated.id as string,
+      });
+
       return businessCreated;
     } catch (error) {
       throw new AppError(

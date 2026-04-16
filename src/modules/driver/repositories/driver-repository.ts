@@ -140,7 +140,11 @@ class DriverRepository implements IDriverRepository {
         id: driverId,
       },
       include: {
-        branch: true,
+        branch: {
+          select: {
+            is_active: true,
+          },
+        },
         User: {
           select: {
             id: true,
@@ -328,6 +332,21 @@ class DriverRepository implements IDriverRepository {
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };
+  }
+
+  async countDriversForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const whereCondition: any = {
+      ...(userRole !== "MASTER" && { businessId }),
+    };
+
+    const driverCount = await this.prisma.driver.count({
+      where: whereCondition,
+    });
+
+    return driverCount;
   }
 }
 

@@ -320,7 +320,12 @@ class VehicleRepository implements IVehicleRepository {
     businessId,
   }: SearchVehicleWithCursorProps): Promise<CursorPaginatedVehicle> {
     const items = await this.prisma.vehicle.findMany({
-      where: { businessId },
+      where: {
+        businessId,
+        status: {
+          in: ["ACTIVE", "IN_ROUTE"],
+        },
+      },
       take: limit + 1,
       ...(cursor && { cursor: { id: cursor }, skip: 1 }),
       orderBy: { created_at: "desc" },
@@ -332,6 +337,21 @@ class VehicleRepository implements IVehicleRepository {
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };
+  }
+
+  async countVehiclesForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const whereCondition: any = {
+      ...(userRole !== "MASTER" && { businessId }),
+    };
+
+    const vehiclesCount = await this.prisma.vehicle.count({
+      where: whereCondition,
+    });
+
+    return vehiclesCount;
   }
 }
 

@@ -28,7 +28,6 @@ class DeletePartController {
 
     try {
       await deletePartUseCase.execute(partId, id, businessId);
-
       return reply.status(200).send({ message: "Peça deletada com sucesso!" });
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {

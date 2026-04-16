@@ -207,9 +207,9 @@ const updateVehicleChecklistSchema = z.object({
         "Condição geral inválida. Deve ser 'approved', 'approved_with_restrictions' ou 'rejected'.",
     })
     .optional(),
-  vehicleId: z.string().uuid().optional(),
-  driverId: z.string().uuid().optional(),
-  branchId: z.string().uuid().optional(),
+  vehicleId: z.string().uuid("ID do veículo é inválido.").optional(),
+  driverId: z.string().uuid("ID do motorista é inválido.").optional(),
+  branchId: z.string().uuid("ID da filial é inválido.").optional(),
   notes: z.preprocess(
     emptyStringToNull,
     z

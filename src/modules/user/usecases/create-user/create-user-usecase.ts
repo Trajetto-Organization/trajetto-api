@@ -83,6 +83,63 @@ class CreateUserUseCase {
     return password;
   }
 
+  private async processNotifications(
+    userCreated: User,
+    finalPassword: string,
+    performedById: string,
+    businessId: string,
+  ): Promise<void> {
+    try {
+      const token = uuidV4();
+      const expires = new Date(new Date().getTime() + 3600 * 1000); // 1 hour
+
+      const verificationToken =
+        await this.usersTokens.createEmailVerificationToken({
+          email: userCreated.email,
+          token,
+          expires,
+        });
+
+      await Promise.all([
+        this.emailQueue.enqueueEmail({
+          email: userCreated.email,
+          name: userCreated.name,
+          subject: "Verificação de e-mail",
+          templateName: "email-verification.hbs",
+          moduleName: "user",
+          additionalVariablesProperties: {
+            url: `${this.http_request}/new-verification?token=${verificationToken.token}`,
+            logo: this.cloudinaryLogo,
+          },
+        }),
+        this.emailQueue.enqueueEmail({
+          email: userCreated.email,
+          name: userCreated.name,
+          subject: "Conta criada com sucesso",
+          templateName: "user-created-successfully.hbs",
+          moduleName: "user",
+          additionalVariablesProperties: {
+            email: userCreated.email,
+            password: finalPassword,
+            logo: this.cloudinaryLogo,
+          },
+        }),
+      ]);
+
+      this.notificationService.createActivityIfEnabled({
+        type: "Usuário",
+        action: "create",
+        entityId: userCreated.id,
+        description: `Usuário ${userCreated.name} criado | E-mail não verificado: ${userCreated.email}`,
+        status: userCreated.email_verified ? "Ativo" : "Pendente",
+        performedBy: performedById,
+        businessId,
+      });
+    } catch (error) {
+      console.error("[Usuário] Erro ao processar notificações:", error);
+    }
+  }
+
   async execute(
     {
       password,
@@ -170,15 +227,12 @@ class CreateUserUseCase {
       }
     }
 
-    const hashedPassword = await hash(finalPassword, 6);
+    const hashedPassword = await hash(finalPassword, 10);
     const userAlreadyExists = await this.user.findUserByEmail(email);
 
     if (userAlreadyExists) {
       throw new UserAlreadyExistsError();
     }
-
-    const token = uuidV4();
-    const expires = new Date(new Date().getTime() + 3600 * 1000); // 1 hour in milliseconds
 
     // Sanitize: BUSINESS_ADMIN has no profileAccess; empty strings become undefined/null
     const cleanProfileAccessId =
@@ -193,68 +247,20 @@ class CreateUserUseCase {
         ? null
         : driverId;
 
-    try {
-      const userCreated = await this.user.createUser({
-        email,
-        password: hashedPassword,
-        name,
-        role,
-        businessId,
-        profileAccessId: cleanProfileAccessId,
-        driverId: cleanDriverId,
-      });
+    const userCreated = await this.user.createUser({
+      email,
+      password: hashedPassword,
+      name,
+      role,
+      businessId,
+      profileAccessId: cleanProfileAccessId,
+      driverId: cleanDriverId,
+    });
 
-      const verificationToken =
-        await this.usersTokens.createEmailVerificationToken({
-          email,
-          token,
-          expires,
-        });
+    // Process notifications asynchronously without blocking the main flow
+    this.processNotifications(userCreated, finalPassword, id, businessId);
 
-      await Promise.all([
-        this.emailQueue.enqueueEmail({
-          email,
-          name,
-          subject: "Verificação de e-mail",
-          templateName: "email-verification.hbs",
-          moduleName: "user",
-          additionalVariablesProperties: {
-            url: `${this.http_request}/new-verification?token=${verificationToken.token}`,
-            logo: this.cloudinaryLogo,
-          },
-        }),
-        this.emailQueue.enqueueEmail({
-          email,
-          name,
-          subject: "Conta criada com sucesso",
-          templateName: "user-created-successfully.hbs",
-          moduleName: "user",
-          additionalVariablesProperties: {
-            email: email,
-            password: finalPassword,
-            logo: this.cloudinaryLogo,
-          },
-        }),
-      ]);
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Usuário",
-        action: "create",
-        entityId: userCreated.id,
-        description: `Usuário ${userCreated.name} criado | E-mail não verificado: ${userCreated.email}`,
-        status: userCreated.email_verified ? "Ativo" : "Pendente",
-        performedBy: id,
-        businessId,
-      });
-
-      return userCreated;
-    } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar criar o usuário! Por favor, tente novamente.",
-        500,
-      );
-    }
+    return userCreated;
   }
 }
 

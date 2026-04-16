@@ -147,22 +147,13 @@ const updateFuelSchema = z
         }
       })
       .optional(),
-    vehicleId: z
-      .string()
-      .uuid("O ID do veículo deve ser um UUID válido.")
-      .optional(),
-    driverId: z
-      .string()
-      .uuid("O ID do motorista deve ser um UUID válido.")
-      .optional(),
+    vehicleId: z.string().uuid("ID do veículo é inválido.").optional(),
+    driverId: z.string().uuid("ID do motorista é inválido.").optional(),
     fuelTypeId: z
       .string()
-      .uuid("O ID do tipo de combustível deve ser um UUID válido.")
+      .uuid("ID do tipo de combustível é inválido.")
       .optional(),
-    branchId: z
-      .string()
-      .uuid("O ID da filial deve ser um UUID válido.")
-      .optional(),
+    branchId: z.string().uuid("ID da filial é inválido.").optional(),
 
     // 📍 GEOLOCATION: Final location (edited or original)
     latitude: z.preprocess(

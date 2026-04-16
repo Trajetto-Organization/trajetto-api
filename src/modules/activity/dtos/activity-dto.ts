@@ -6,6 +6,7 @@ interface CreateActivityProps {
   status: string; // Action-related status
   performedBy: string; // ID of the user who performed the action
   businessId: string | null; // Company ID
+  tenantName?: string | null; // Business name snapshot — pass explicitly when businessId is null (e.g. delete)
   visibilityLevel?: string; // "SYSTEM", "COMPANY", "USER" - controls who can see this activity
   performingUserRole?: string; // Role of the user who performed the action
 }
@@ -17,8 +18,9 @@ interface Activity {
   entityId: string;
   description: string;
   status: string;
-  performedBy: string;
+  performedBy: string | null;
   businessId: string | null;
+  tenantName?: string | null;
   visibilityLevel?: string | null;
   performingUserRole?: string | null;
   userEmail?: string;

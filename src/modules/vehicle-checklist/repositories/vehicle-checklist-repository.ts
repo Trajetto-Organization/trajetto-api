@@ -576,6 +576,21 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
       cursor = checklists[checklists.length - 1].id;
     }
   }
+
+  async countChecklistForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const whereCondition: any = {
+      ...(userRole !== "MASTER" && { businessId }),
+    };
+
+    const checklistsCount = await this.prisma.vehicleChecklist.count({
+      where: whereCondition,
+    });
+
+    return checklistsCount;
+  }
 }
 
 export { VehicleChecklistRepository };

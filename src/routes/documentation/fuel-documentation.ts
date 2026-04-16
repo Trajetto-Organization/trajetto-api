@@ -500,6 +500,16 @@ const fuelResponses = {
     }),
   ]),
 
+  // Export errors (GET /export-fuel)
+  exportFuelErrors: z.union([
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Não existem abastecimentos para exportar!"),
+    }),
+  ]),
+
   // Composite responses for get previous fuel
   getPreviousFuelErrors: z.union([
     z.object({

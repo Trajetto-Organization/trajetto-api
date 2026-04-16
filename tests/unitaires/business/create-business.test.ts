@@ -21,23 +21,33 @@ import { BranchErpCodeAlreadyExistsError } from "@/modules/branch/usecases/error
 import { BranchEmailAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-email-already-exists-error";
 
 import { AppError } from "@/shared/errors/AppError";
+import { NotificationService } from "@/shared/services/notification-service";
 
 describe("Create Business UseCase", () => {
   let userInMemory: InMemoryUserRepository;
   let businessInMemory: InMemoryBusinessRepository;
+
   let branchInMemory: InMemoryBranchRepository;
+  let notificationService: NotificationService;
 
   let createBusiness: CreateBusinessUseCase;
 
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
     businessInMemory = new InMemoryBusinessRepository();
+
     branchInMemory = new InMemoryBranchRepository();
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
 
     createBusiness = new CreateBusinessUseCase(
       userInMemory,
       businessInMemory,
       branchInMemory,
+      notificationService,
     );
   });
 

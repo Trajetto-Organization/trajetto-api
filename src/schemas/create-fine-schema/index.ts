@@ -180,12 +180,18 @@ const createFineSchema = z
           });
         }
       }),
-    branchId: z.string().uuid("ID da filial deve ser um UUID válido"),
-    driverId: z.string().uuid("ID do motorista deve ser um UUID válido"),
-    vehicleId: z.string().uuid("ID do veículo deve ser um UUID válido"),
+    branchId: z
+      .string({ required_error: "ID da filial é obrigatório!" })
+      .uuid("ID da filial é inválido."),
+    driverId: z
+      .string({ required_error: "ID do motorista é obrigatório!" })
+      .uuid("ID do motorista é inválido."),
+    vehicleId: z
+      .string({ required_error: "ID do veículo é obrigatório!" })
+      .uuid("ID do veículo é inválido."),
     trafficViolationCodeId: z
-      .string()
-      .uuid("ID do código de infração deve ser um UUID válido"),
+      .string({ required_error: "ID do código de infração é obrigatório!" })
+      .uuid("ID do código de infração é inválido"),
 
     // 📍 GEOLOCATION: Final location (edited or original)
     latitude: z.preprocess(

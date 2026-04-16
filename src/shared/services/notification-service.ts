@@ -12,6 +12,7 @@ interface CreateActivityProps {
   status: string;
   performedBy: string;
   businessId: string | null;
+  tenantName?: string | null;
   visibilityLevel?: string;
   performingUserRole?: string;
 }

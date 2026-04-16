@@ -53,7 +53,7 @@ class UpdateUserPasswordUseCase {
       throw new UserUpdateUserIsSamePasswordError();
     }
 
-    const hashedPassword = await hash(newPassword, 6);
+    const hashedPassword = await hash(newPassword, 10);
 
     try {
       await this.user.updateUserPassword({

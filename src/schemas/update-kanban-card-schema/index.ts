@@ -81,7 +81,7 @@ const updateKanbanCardSchema = z.object({
     .optional(),
   assignedUserId: z.preprocess(
     emptyStringToNull,
-    z.string().uuid("ID do usuário inválido.").nullable().optional(),
+    z.string().uuid("ID do usuário é inválido.").nullable().optional(),
   ),
   completed: z.preprocess(stringToBoolean, z.boolean().optional()),
 });

@@ -22,6 +22,9 @@ interface IBranchRepository {
     corporate_reason: string,
   ) => Promise<Branch | null>;
   deleteBranch: (branchId: string) => Promise<Branch>;
+  countBranchDependencies: (
+    branchId: string,
+  ) => Promise<Record<string, number>>;
   searchBranchWithCursor: (
     props: SearchBranchWithCursorProps,
   ) => Promise<CursorPaginatedBranch>;

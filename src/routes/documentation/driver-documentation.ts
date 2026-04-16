@@ -332,6 +332,16 @@ const driverResponses = {
         ),
     }),
   ]),
+
+  // Export errors (GET /export-driver)
+  exportDriverErrors: z.union([
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z.string().default("Não existem motorista para exportar!"),
+    }),
+  ]),
 };
 
 export { driverSchemas, driverResponses };

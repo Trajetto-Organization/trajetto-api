@@ -624,6 +624,21 @@ class FuelRepository implements IFuelRepository {
 
     return { data, nextCursor, hasMore };
   }
+
+  async countFuelForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const whereCondition: any = {
+      ...(userRole !== "MASTER" && { businessId }),
+    };
+
+    const fuelsCount = await this.prisma.fuel.count({
+      where: whereCondition,
+    });
+
+    return fuelsCount;
+  }
 }
 
 export { FuelRepository };

@@ -11,6 +11,7 @@ import { SearchFuelTypeCursorController } from "@/modules/fuel-type/usecases/sea
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import {
   fuelTypeSchemas,
   fuelTypeResponses,
@@ -29,7 +30,10 @@ async function fuelTypeRoutes(app: FastifyInstance) {
     "/create-fuel-type/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fuel_type_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("fuel_type_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuelType"],
@@ -99,7 +103,10 @@ async function fuelTypeRoutes(app: FastifyInstance) {
     "/update-fuel-type/:fuelTypeId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fuel_type_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("fuel_type_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuelType"],

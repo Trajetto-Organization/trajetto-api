@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-
 import { ListRecentActivitiesUseCase } from "@/modules/activity/usecases/list-recent-activities/list-recent-activities-usecase";
 
 import { InMemoryActivityRepository } from "@/modules/activity/repositories/in-memory/in-memory-activity-repository";

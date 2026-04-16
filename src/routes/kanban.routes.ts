@@ -17,6 +17,7 @@ import { ReorderKanbanCardsController } from "@/modules/kanban/usecases/reorder-
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import {
   kanbanSchemas,
   kanbanResponses,
@@ -41,7 +42,10 @@ async function kanbanRoutes(app: FastifyInstance) {
     "/column/create/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("kanban_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("kanban_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],
@@ -65,7 +69,10 @@ async function kanbanRoutes(app: FastifyInstance) {
     "/column/update/:columnId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("kanban_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("kanban_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["kanban"],

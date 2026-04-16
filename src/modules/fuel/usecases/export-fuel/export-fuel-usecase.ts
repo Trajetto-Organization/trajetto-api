@@ -4,6 +4,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { FuelNoFuelsToExportError } from "../errors/fuel-no-fuels-to-export-error";
 
 import { ExportFormatters } from "@/shared/services/export/formatters";
 import { ExportColumn } from "@/shared/services/export/types";
@@ -30,6 +31,15 @@ class ExportFuelUseCase {
   }> {
     const findUser = await this.userRepository.findUserById(userId);
     if (!findUser) throw new ResourceNotFoundError();
+
+    const total = await this.fuelRepository.countFuelForExport(
+      findUser.businessId as string,
+      findUser.role,
+    );
+
+    if (total === 0) {
+      throw new FuelNoFuelsToExportError();
+    }
 
     const iterator = this.fuelRepository.streamFuelsForExport(
       findUser.businessId!,

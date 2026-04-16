@@ -1,7 +1,9 @@
 import { z } from "zod";
 
 const updateDeleteDriverSchema = z.object({
-  driverId: z.string().uuid("O ID do motorista deve ser um UUID válido."),
+  driverId: z
+    .string({ required_error: "ID do motorista é obrigatório!" })
+    .uuid("ID do motorista é inválido."),
 });
 
 export { updateDeleteDriverSchema };

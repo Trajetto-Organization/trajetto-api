@@ -12,6 +12,10 @@ import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated"
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import {
+  verifyBranchActive,
+  verifyBusinessActive,
+} from "@/modules/middlewares/verify-tenant-active";
+import {
   accountPayableSchemas,
   accountPayableResponses,
 } from "./documentation/account-payable-documentation";
@@ -30,7 +34,11 @@ async function accountPayableRoutes(app: FastifyInstance) {
     "/create-account-payable/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("account_payable_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyBranchActive,
+        verifyPermission("account_payable_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["account-payable"],
@@ -100,7 +108,11 @@ async function accountPayableRoutes(app: FastifyInstance) {
     "/update-account-payable/:accountPayableId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("account_payable_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyBranchActive,
+        verifyPermission("account_payable_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["account-payable"],

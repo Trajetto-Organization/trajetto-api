@@ -4,6 +4,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IVehicleRepository } from "../../repositories/IVehicle-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { VehicleNoVehiclesToExportError } from "../errors/vehicle-no-vehicles-to-export-error";
 
 import { ExportFormatters } from "@/shared/services/export/formatters";
 import { ExportColumn } from "@/shared/services/export/types";
@@ -27,6 +28,15 @@ class ExportVehicleUseCase {
   }> {
     const findUser = await this.user.findUserById(userId);
     if (!findUser) throw new ResourceNotFoundError();
+
+    const total = await this.vehicle.countVehiclesForExport(
+      findUser.businessId as string,
+      findUser.role,
+    );
+
+    if (total === 0) {
+      throw new VehicleNoVehiclesToExportError();
+    }
 
     const iterator = this.vehicle.streamVehiclesForExport(
       findUser.businessId!,

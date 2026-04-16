@@ -10,6 +10,9 @@ import { ListBranchController } from "@/modules/branch/usecases/list-branch/list
 import { UpdateBranchController } from "@/modules/branch/usecases/update-branch/update-branch-controller";
 
 import { SearchBranchCursorController } from "@/modules/branch/usecases/search-branch-cursor/search-branch-cursor-controller";
+import { ToggleBranchActiveController } from "@/modules/branch/usecases/toggle-branch-active/toggle-branch-active-controller";
+
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import {
   branchResponses,
   branchSchemas,
@@ -22,13 +25,17 @@ const updateBranchController = new UpdateBranchController();
 const listBranchController = new ListBranchController();
 
 const searchBranchCursorController = new SearchBranchCursorController();
+const toggleBranchActiveController = new ToggleBranchActiveController();
 
 async function branchRoutes(app: FastifyInstance) {
   app.post(
     "/create-branch/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("branch_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("branch_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
@@ -98,7 +105,10 @@ async function branchRoutes(app: FastifyInstance) {
     "/update-branch/:branchId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("branch_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("branch_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
@@ -141,6 +151,33 @@ async function branchRoutes(app: FastifyInstance) {
       },
     },
     deleteBranchController.handle,
+  );
+
+  app.patch(
+    "/toggle-branch-active/:branchId/business/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("branch_manage", "write"),
+      ],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["branch"],
+        summary: "Toggle branch active status",
+        description:
+          "Activate or deactivate a branch. Inactive branches block operations for associated users.",
+        params: branchSchemas.updateDeleteBranch,
+        response: {
+          200: branchResponses.branchToggled,
+          400: branchResponses.deleteBranchErrors,
+          403: branchResponses.deleteBranchForbidden,
+          404: branchResponses.deleteBranchNotFound,
+          500: branchResponses.internalServerError,
+        },
+      },
+    },
+    toggleBranchActiveController.handle,
   );
 }
 

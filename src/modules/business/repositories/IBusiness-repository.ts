@@ -28,6 +28,9 @@ interface IBusinessRepository {
   ) => Promise<Business | null>;
   findBusinessByErpcode: (erpCode: string) => Promise<Business | null>;
   findBusinessByEmail: (email: string) => Promise<Business | null>;
+  countBusinessDependencies: (
+    businessId: string,
+  ) => Promise<{ branches: number; users: number; drivers: number }>;
   updateAILimit: (
     businessId: string,
     ai_analysis_limit: number,

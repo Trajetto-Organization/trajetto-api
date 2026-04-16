@@ -64,7 +64,9 @@ const updateProfileAccessSchema = z.object({
       .optional()
       .nullable(),
   ),
-  businessId: z.string().min(1, "A empresa é obrigatória!"),
+  businessId: z
+    .string({ required_error: "ID da empresa é obrigatório!" })
+    .uuid("ID da empresa é inválido."),
 });
 
 export { updateProfileAccessSchema };

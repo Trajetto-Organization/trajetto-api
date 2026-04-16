@@ -19,7 +19,6 @@ class UploadAvatarController {
 
     try {
       await uploadAvatarUseCase.execute(id, file);
-
       return reply
         .status(200)
         .send({ message: "Avatar atualizado com sucesso!" });

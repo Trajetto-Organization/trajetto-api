@@ -9,8 +9,8 @@ const getPreviousFuelQuerySchema = z.object({
     required_error: "A data do abastecimento atual é obrigatória!",
   }),
   businessId: z
-    .string({ required_error: "O ID da empresa é obrigatório!" })
-    .uuid("O ID da empresa deve ser um UUID válido!"),
+    .string({ required_error: "ID da empresa é obrigatório!" })
+    .uuid("ID da empresa é inválido."),
 });
 
 export { getPreviousFuelParamsSchema, getPreviousFuelQuerySchema };

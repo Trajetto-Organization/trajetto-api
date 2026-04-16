@@ -45,6 +45,10 @@ interface IVehicleChecklistRepository {
     userRole: string,
     search?: string,
   ): AsyncGenerator<any>;
+  countChecklistForExport: (
+    businessId: string,
+    userRole: string,
+  ) => Promise<number>;
 }
 
 export { IVehicleChecklistRepository };

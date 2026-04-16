@@ -12,8 +12,19 @@ class ActivityRepository implements IActivityRepository {
   constructor(private prisma = database) {}
 
   async createActivity(activityData: CreateActivityProps): Promise<Activity> {
+    let tenantName: string | null = activityData.tenantName ?? null;
+
+    if (!tenantName && activityData.businessId) {
+      const business = await this.prisma.business.findUnique({
+        where: { id: activityData.businessId },
+        select: { corporate_reason: true },
+      });
+
+      tenantName = business?.corporate_reason ?? null;
+    }
+
     const activity = await this.prisma.activity.create({
-      data: activityData,
+      data: { ...activityData, tenantName },
     });
 
     return activity;

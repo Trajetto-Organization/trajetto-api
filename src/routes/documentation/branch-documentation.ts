@@ -87,6 +87,10 @@ const branchResponses = {
   branchDeleted: z.object({
     message: z.string().default("Filial deletada com sucesso!"),
   }),
+  branchToggled: z.object({
+    message: z.string().default("Status da filial atualizado com sucesso!"),
+    is_active: z.boolean(),
+  }),
 
   searchBranchStreamDescription: z.object({
     description: z

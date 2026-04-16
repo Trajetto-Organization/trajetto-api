@@ -9,6 +9,7 @@ import { DeleteServiceOrderPartController } from "@/modules/service-order-part/u
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import {
   serviceOrderPartSchemas,
   serviceOrderPartResponses,
@@ -25,7 +26,10 @@ async function serviceOrderPartRoutes(app: FastifyInstance) {
     "/create-service-order-part/:serviceOrderId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("service_order_part_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("service_order_part_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order-part"],
@@ -70,7 +74,10 @@ async function serviceOrderPartRoutes(app: FastifyInstance) {
     "/update-service-order-part/:serviceOrderPartId/serviceOrder/:serviceOrderId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("service_order_part_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("service_order_part_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["service-order-part"],

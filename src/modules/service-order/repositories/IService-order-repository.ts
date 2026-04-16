@@ -41,6 +41,10 @@ interface IServiceOrderRepository {
   searchServiceOrderByVehicleWithCursor: (
     props: SearchServiceOrderByVehicleWithCursorProps,
   ) => Promise<CursorPaginatedServiceOrder>;
+  countServiceOrderForExport: (
+    businessId: string,
+    userRole: string,
+  ) => Promise<number>;
 }
 
 export { IServiceOrderRepository };

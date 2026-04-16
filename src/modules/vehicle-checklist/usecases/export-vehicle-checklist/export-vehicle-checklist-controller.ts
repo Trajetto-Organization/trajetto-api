@@ -11,6 +11,7 @@ import { ExcelWriter } from "@/shared/services/export/writers/excel-writer";
 import { ExportColumn } from "@/shared/services/export/types";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { VehicleChecklistNoChecklistsToExportError } from "../errors/vehicle-checklist-no-checklists-to-export-error";
 
 class ExportVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply) {
@@ -45,6 +46,10 @@ class ExportVehicleChecklistController {
       await pipeline.execute(reply, filename);
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof VehicleChecklistNoChecklistsToExportError) {
         return reply.status(400).send({ message: error.message });
       }
 

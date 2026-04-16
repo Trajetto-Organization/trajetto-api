@@ -106,6 +106,7 @@ class BusinessRepository implements IBusinessRepository {
   }: SearchBusinessWithCursorProps): Promise<CursorPaginatedBusiness> {
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { id: businessId }),
+      is_active: true,
     };
 
     const businesses = await this.prisma.business.findMany({
@@ -254,6 +255,18 @@ class BusinessRepository implements IBusinessRepository {
     });
 
     return business;
+  }
+
+  async countBusinessDependencies(
+    businessId: string,
+  ): Promise<{ branches: number; users: number; drivers: number }> {
+    const [branches, users, drivers] = await Promise.all([
+      this.prisma.branch.count({ where: { businessId } }),
+      this.prisma.user.count({ where: { businessId } }),
+      this.prisma.driver.count({ where: { businessId } }),
+    ]);
+
+    return { branches, users, drivers };
   }
 }
 

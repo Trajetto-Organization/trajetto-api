@@ -1,8 +1,12 @@
 import { z } from "zod";
 
 const updateDeleteSupplierSchema = z.object({
-  businessId: z.string().min(1, "O ID da empresa é obrigatório!"),
-  supplierId: z.string().min(1, "O ID do fornecedor é obrigatório!"),
+  businessId: z
+    .string({ required_error: "ID da empresa é obrigatório!" })
+    .uuid("ID da empresa é inválido."),
+  supplierId: z
+    .string({ required_error: "ID do fornecedor é obrigatório!" })
+    .uuid("ID do fornecedor é inválido."),
 });
 
 export { updateDeleteSupplierSchema };

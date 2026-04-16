@@ -32,7 +32,6 @@ class DeleteVehicleController {
 
     try {
       await deleteVehicleUseCase.execute(vehicleId, businessId, id);
-
       return reply
         .status(200)
         .send({ message: "Veículo deletado com sucesso!" });

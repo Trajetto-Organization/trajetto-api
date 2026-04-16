@@ -63,7 +63,7 @@ class ResendTwoFactorCodeUseCase {
     }
 
     const twoFactorToken = crypto.randomInt(100_000, 1_000_000).toString();
-    const hashedTwoFactorToken = await hash(twoFactorToken, 6);
+    const hashedTwoFactorToken = await hash(twoFactorToken, 10);
 
     const twoFactorExpires = new Date(new Date().getTime() + 15 * 60 * 1000); // 15 minutes in milliseconds
 

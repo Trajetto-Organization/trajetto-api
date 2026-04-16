@@ -181,21 +181,12 @@ const updateFineSchema = z
         .optional()
         .nullable(),
     ),
-    branchId: z
-      .string()
-      .uuid("ID da filial deve ser um UUID válido")
-      .optional(),
-    driverId: z
-      .string()
-      .uuid("ID do motorista deve ser um UUID válido")
-      .optional(),
-    vehicleId: z
-      .string()
-      .uuid("ID do veículo deve ser um UUID válido")
-      .optional(),
+    branchId: z.string().uuid("ID da filial é inválido.").optional(),
+    driverId: z.string().uuid("ID do motorista é inválido.").optional(),
+    vehicleId: z.string().uuid("ID do veículo é inválido.").optional(),
     trafficViolationCodeId: z
       .string()
-      .uuid("ID do código de infração deve ser um UUID válido")
+      .uuid("ID do código de infração é inválido.")
       .optional(),
 
     // 📍 GEOLOCATION: Final location (edited or original)

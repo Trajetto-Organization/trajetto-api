@@ -52,9 +52,15 @@ class WhatsAppStatusUseCase {
             userId,
             isConnected,
           );
-          console.log(`[WhatsApp] ✅ Status atualizado no banco: ${isConnected}`);
+
+          console.log(
+            `[WhatsApp] ✅ Status atualizado no banco: ${isConnected}`,
+          );
         } catch (error) {
-          console.error(`[WhatsApp] ⚠️ Erro ao atualizar status no banco:`, error);
+          console.error(
+            `[WhatsApp] ⚠️ Erro ao atualizar status no banco:`,
+            error,
+          );
           // Continue execution even if database update fails
         }
       }

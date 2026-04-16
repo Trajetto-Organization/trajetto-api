@@ -257,6 +257,18 @@ class InMemoryFineRepository implements IFineRepository {
       };
     }
   }
+
+  async countFinesForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const filteredFines =
+      userRole === "MASTER"
+        ? this.fines
+        : this.fines.filter((fine) => fine.businessId === businessId);
+
+    return filteredFines.length;
+  }
 }
 
 export { InMemoryFineRepository };

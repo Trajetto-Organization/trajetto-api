@@ -10,8 +10,8 @@ const listPagesByBusinessSchema = z.object({
     .transform((val) => Number(val) || 2)
     .refine((num) => num >= 1, "A quantidade de páginas é obrigatória!"),
   businessId: z
-    .string({ required_error: "A empresa é obrigatória!" })
-    .min(1, "A empresa é obrigatória!"),
+    .string({ required_error: "ID da empresa é obrigatório!" })
+    .uuid("ID da empresa é inválido."),
   search: z
     .string()
     .optional()

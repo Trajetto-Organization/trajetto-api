@@ -7,11 +7,14 @@ import { DeleteBusinessUseCase } from "@/modules/business/usecases/delete-busine
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+import { NotificationService } from "@/shared/services/notification-service";
+
 import { AppError } from "@/shared/errors/AppError";
 
 let userInMemory: InMemoryUserRepository;
 let businessInMemory: InMemoryBusinessRepository;
 
+let notificationService: NotificationService;
 let deleteBusiness: DeleteBusinessUseCase;
 
 describe("Delete Business UseCase", () => {
@@ -19,7 +22,17 @@ describe("Delete Business UseCase", () => {
     userInMemory = new InMemoryUserRepository();
     businessInMemory = new InMemoryBusinessRepository();
 
-    deleteBusiness = new DeleteBusinessUseCase(userInMemory, businessInMemory);
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
+
+    deleteBusiness = new DeleteBusinessUseCase(
+      userInMemory,
+      businessInMemory,
+      notificationService,
+    );
   });
 
   it("should be able to delete a business", async () => {

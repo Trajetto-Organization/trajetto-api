@@ -74,7 +74,9 @@ const createKanbanCardSchema = z.object({
         return;
       }
     }),
-  columnId: z.string().uuid("ID da coluna inválido."),
+  columnId: z
+    .string({ required_error: "ID da coluna é obrigatório!" })
+    .uuid("ID da coluna é inválido."),
   assignedUserId: z.preprocess(
     emptyStringToNull,
     z.string().uuid("ID do usuário inválido.").nullable().optional(),

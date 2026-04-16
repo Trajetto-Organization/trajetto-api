@@ -49,7 +49,7 @@ interface DashboardOverviewResponse {
     entityId: string;
     description: string;
     status: string;
-    performedBy: string;
+    performedBy: string | null;
     businessId: string | null;
     visibilityLevel?: string | null;
     performingUserRole?: string | null;

@@ -446,6 +446,21 @@ class FineRepository implements IFineRepository {
 
     return fines;
   }
+
+  async countFinesForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const whereCondition: any = {
+      ...(userRole !== "MASTER" && { businessId }),
+    };
+
+    const finesCount = await this.prisma.fine.count({
+      where: whereCondition,
+    });
+
+    return finesCount;
+  }
 }
 
 export { FineRepository };

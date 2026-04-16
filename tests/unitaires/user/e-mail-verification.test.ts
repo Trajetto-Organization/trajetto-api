@@ -12,20 +12,29 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 
 import { AppError } from "@/shared/errors/AppError";
+import { NotificationService } from "@/shared/services/notification-service";
 
 describe("Email Verification UseCase", () => {
   let userInMemory: InMemoryUserRepository;
   let userTokensInMemory: InMemoryUserTokensRepository;
 
+  let notificationService: NotificationService;
   let emailVerificationUseCase: EmailVerificationUseCase;
 
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
     userTokensInMemory = new InMemoryUserTokensRepository();
 
+    notificationService = {
+      createActivityIfEnabled: vi.fn(),
+      createNotificationIfEnabled: vi.fn(),
+      processUserNotifications: vi.fn(),
+    } as any;
+
     emailVerificationUseCase = new EmailVerificationUseCase(
       userInMemory,
       userTokensInMemory,
+      notificationService,
     );
   });
 

@@ -26,10 +26,10 @@ class CreateBusinessController {
     const { id } = request.user;
 
     const businessData = createBusinessSchema.parse(request.body);
-    const createUserUseCase = container.resolve(CreateBusinessUseCase);
+    const createBusinessUseCase = container.resolve(CreateBusinessUseCase);
 
     try {
-      await createUserUseCase.execute(businessData, id);
+      await createBusinessUseCase.execute(businessData, id);
       return reply
         .status(201)
         .send({ message: "Empresa e filial matriz criadas com sucesso!" });

@@ -32,6 +32,7 @@ interface Branch {
   responsible_name: string;
   telephone: string;
   email: string;
+  is_active?: boolean;
   businessId: string;
   created_at: Date | string;
   updated_at: Date | string;
@@ -50,8 +51,25 @@ interface ListBranchProps {
   total: number;
 }
 
+interface UpdateBranchProps {
+  corporate_reason?: string | null;
+  fantasy_name?: string | null;
+  cep?: string | null;
+  city?: string | null;
+  uf?: string | null;
+  street?: string | null;
+  address_number?: string | null;
+  cnpj?: string | null;
+  complement?: string | null;
+  cnae?: string | null;
+  erp_code?: string | null;
+  responsible_name?: string | null;
+  telephone?: string | null;
+  email?: string | null;
+}
+
 interface UpdateBranch {
-  branchData: Partial<CreateBranchProps>;
+  branchData: UpdateBranchProps;
   branchId: string;
 }
 
@@ -72,6 +90,7 @@ export {
   CreateBranchProps,
   ListBranchProps,
   UpdateBranch,
+  UpdateBranchProps,
   ListAllBranchesProps,
   SearchBranchWithCursorProps,
   CursorPaginatedBranch,

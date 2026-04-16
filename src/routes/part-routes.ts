@@ -12,6 +12,7 @@ import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated"
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import { partSchemas, partResponses } from "./documentation/part-documentation";
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 
 const createPartController = new CreatePartController();
 const listPartController = new ListPartController();
@@ -26,7 +27,10 @@ async function partRoutes(app: FastifyInstance) {
     "/create-part/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("part_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("part_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["part"],
@@ -97,7 +101,10 @@ async function partRoutes(app: FastifyInstance) {
     "/update-part/:partId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("part_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("part_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["part"],

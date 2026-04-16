@@ -17,10 +17,12 @@ class CreateProfileAccessController {
     const { id } = request.user;
 
     const { name, businessId } = createProfileAccessSchema.parse(request.body);
-    const createUserUseCase = container.resolve(CreateProfileAccessUseCase);
+    const createProfileAccessUseCase = container.resolve(
+      CreateProfileAccessUseCase,
+    );
 
     try {
-      await createUserUseCase.execute(
+      await createProfileAccessUseCase.execute(
         {
           name,
           businessId,

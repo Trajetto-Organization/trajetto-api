@@ -30,7 +30,6 @@ class DeleteServiceOrderController {
 
     try {
       await deleteServiceOrderUseCase.execute(serviceOrderId, businessId, id);
-
       return reply
         .status(200)
         .send({ message: "Ordem de serviço deletada com sucesso!" });

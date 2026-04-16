@@ -129,18 +129,18 @@ const createServiceOrderSchema = z
         .optional()
         .nullable(),
     ),
-    vehicleId: z.string().uuid("O ID do veículo deve ser um UUID válido."),
+    vehicleId: z
+      .string({ required_error: "ID do veículo é obrigatório!" })
+      .uuid("ID do veículo é inválido."),
     responsibleUserId: z
-      .string()
-      .uuid("O ID do usuário responsável deve ser um UUID válido."),
-    branchId: z.string().uuid("O ID da filial deve ser um UUID válido."),
+      .string({ required_error: "ID do usuário responsável é obrigatório!" })
+      .uuid("ID do usuário responsável é inválido."),
+    branchId: z
+      .string({ required_error: "ID da filial é obrigatório!" })
+      .uuid("ID da filial é inválido."),
     supplierId: z.preprocess(
       emptyStringToNull,
-      z
-        .string()
-        .uuid("O ID do fornecedor deve ser um UUID válido.")
-        .optional()
-        .nullable(),
+      z.string().uuid("ID do fornecedor é inválido.").optional().nullable(),
     ),
 
     // 📍 GEOLOCATION: Final location (edited or original)

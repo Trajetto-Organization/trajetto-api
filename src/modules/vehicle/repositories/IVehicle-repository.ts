@@ -35,6 +35,10 @@ interface IVehicleRepository {
   searchVehicleWithCursor: (
     props: SearchVehicleWithCursorProps,
   ) => Promise<CursorPaginatedVehicle>;
+  countVehiclesForExport: (
+    businessId: string,
+    userRole: string,
+  ) => Promise<number>;
 }
 
 export { IVehicleRepository };

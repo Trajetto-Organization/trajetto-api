@@ -141,25 +141,15 @@ const updateServiceOrderSchema = z
         .optional()
         .nullable(),
     ),
-    vehicleId: z
-      .string()
-      .uuid("O ID do veículo deve ser um UUID válido.")
-      .optional(),
+    vehicleId: z.string().uuid("ID do veículo é inválido.").optional(),
     responsibleUserId: z
       .string()
-      .uuid("O ID do usuário responsável deve ser um UUID válido.")
+      .uuid("ID do usuário responsável é inválido.")
       .optional(),
-    branchId: z
-      .string()
-      .uuid("O ID da filial deve ser um UUID válido.")
-      .optional(),
+    branchId: z.string().uuid("ID da filial é inválido.").optional(),
     supplierId: z.preprocess(
       emptyStringToNull,
-      z
-        .string()
-        .uuid("O ID do fornecedor deve ser um UUID válido.")
-        .optional()
-        .nullable(),
+      z.string().uuid("ID do fornecedor é inválido.").optional().nullable(),
     ),
 
     // 📍 GEOLOCATION: Final location (edited or original)

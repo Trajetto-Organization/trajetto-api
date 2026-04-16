@@ -12,6 +12,7 @@ import { SearchDriverCursorController } from "@/modules/driver/usecases/search-d
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import {
   driverSchemas,
   driverResponses,
@@ -31,7 +32,10 @@ async function driverRoutes(app: FastifyInstance) {
     "/create-driver/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("driver_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("driver_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
@@ -77,7 +81,7 @@ async function driverRoutes(app: FastifyInstance) {
     "/export-driver",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("driver_manage", "read")],
+      preHandler: [verifyPermission("driver_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
@@ -85,6 +89,10 @@ async function driverRoutes(app: FastifyInstance) {
         description:
           "Export driver records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
         querystring: driverSchemas.exportDriverQuery,
+        response: {
+          400: driverResponses.exportDriverErrors,
+          500: driverResponses.internalServerError,
+        },
       },
     },
     exportDriverController.handle,
@@ -119,7 +127,10 @@ async function driverRoutes(app: FastifyInstance) {
     "/update-driver/:driverId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("driver_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("driver_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],

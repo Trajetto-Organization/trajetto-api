@@ -280,29 +280,21 @@ const updateVehicleSchema = z
       emptyStringToNull,
       z
         .string()
-        .uuid("O ID do tipo de veículo deve ser um UUID válido.")
+        .uuid("ID do tipo de veículo é inválido.")
         .optional()
         .nullable(),
     ),
     fuelTypeId: z
       .string()
-      .uuid("O ID do tipo de combustível deve ser um UUID válido.")
+      .uuid("ID do tipo de combustível é inválido.")
       .optional(),
     driverId: z.preprocess(
       emptyStringToNull,
-      z
-        .string()
-        .uuid("O ID do motorista deve ser um UUID válido.")
-        .optional()
-        .nullable(),
+      z.string().uuid("ID do motorista é inválido.").optional().nullable(),
     ),
     branchId: z.preprocess(
       emptyStringToNull,
-      z
-        .string()
-        .uuid("O ID da filial deve ser um UUID válido.")
-        .optional()
-        .nullable(),
+      z.string().uuid("ID da filial é inválido.").optional().nullable(),
     ),
   })
   .refine(

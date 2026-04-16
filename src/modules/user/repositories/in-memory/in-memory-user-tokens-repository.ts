@@ -63,6 +63,14 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     expires,
     token,
   }: CreateTwoFactorToken): Promise<TwoFactor> {
+    const existing = this.twoFactorTokens.find((item) => item.email === email);
+
+    if (existing) {
+      existing.token = token;
+      existing.expires = expires;
+      return existing;
+    }
+
     const twoFactorToken: TwoFactor = {
       id: uuidV7(),
       email,
@@ -130,6 +138,16 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     token,
     expires,
   }: CreateVerificationToken): Promise<VerificationToken> {
+    const existing = this.forgotPasswordVerificationTokens.find(
+      (item) => item.email === email,
+    );
+
+    if (existing) {
+      existing.token = token;
+      existing.expires = expires;
+      return existing;
+    }
+
     const verificationToken: VerificationToken = {
       id: uuidV7(),
       email,
@@ -181,6 +199,16 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     token,
     expires,
   }: CreateVerificationToken): Promise<VerificationToken> {
+    const existing = this.emailVerificationTokens.find(
+      (item) => item.email === email,
+    );
+
+    if (existing) {
+      existing.token = token;
+      existing.expires = expires;
+      return existing;
+    }
+
     const verificationToken: VerificationToken = {
       id: uuidV7(),
       email,

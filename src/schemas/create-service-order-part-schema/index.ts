@@ -20,7 +20,9 @@ const createServiceOrderPartSchema = z.object({
       .optional()
       .nullable(),
   ),
-  partId: z.string().uuid("O ID da peça deve ser um UUID válido."),
+  partId: z
+    .string({ required_error: "ID da peça é obrigatório!" })
+    .uuid("ID da peça é inválido."),
 });
 
 export { createServiceOrderPartSchema };

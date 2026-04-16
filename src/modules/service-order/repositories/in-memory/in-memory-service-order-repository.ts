@@ -281,6 +281,20 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
 
     return { data, nextCursor, hasMore };
   }
+
+  async countServiceOrderForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const filteredServiceOrders =
+      userRole === "MASTER"
+        ? this.serviceOrders
+        : this.serviceOrders.filter(
+            (serviceOrder) => serviceOrder.businessId === businessId,
+          );
+
+    return filteredServiceOrders.length;
+  }
 }
 
 export { InMemoryServiceOrderRepository };

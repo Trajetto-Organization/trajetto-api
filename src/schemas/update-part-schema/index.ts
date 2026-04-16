@@ -54,13 +54,10 @@ const updatePartSchema = z.object({
     .optional(),
   supplierId: z
     .string()
-    .uuid("O ID do fornecedor deve ser um UUID válido.")
+    .uuid("ID do fornecedor é inválido.")
     .optional()
     .nullable(),
-  businessId: z
-    .string()
-    .uuid("O ID da empresa deve ser um UUID válido.")
-    .optional(),
+  businessId: z.string().uuid("ID da empresa é inválido.").optional(),
 });
 
 export { updatePartSchema };

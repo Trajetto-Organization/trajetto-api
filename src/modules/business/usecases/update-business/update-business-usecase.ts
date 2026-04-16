@@ -172,15 +172,8 @@ class UpdateBusinessUseCase {
 
       // Also update the branch matrix
       if (matrixBranch) {
-        const branchUpdateData = Object.fromEntries(
-          Object.entries(businessData).map(([key, value]) => [
-            key,
-            value === null ? undefined : value,
-          ]),
-        );
-
         await this.branch.updateBranch({
-          branchData: branchUpdateData,
+          branchData: businessData,
           branchId: matrixBranch.id,
         });
       }

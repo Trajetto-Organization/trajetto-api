@@ -1,11 +1,15 @@
 import { z } from "zod";
 
 const reorderKanbanColumnsSchema = z.object({
-  businessId: z.string().uuid("ID da empresa inválido."),
+  businessId: z
+    .string({ required_error: "ID da empresa é obrigatório!" })
+    .uuid("ID da empresa é inválido."),
   columns: z
     .array(
       z.object({
-        id: z.string().uuid("ID da coluna inválido."),
+        id: z
+          .string({ required_error: "ID da coluna é obrigatório!" })
+          .uuid("ID da coluna é inválido."),
         position: z
           .number()
           .int()

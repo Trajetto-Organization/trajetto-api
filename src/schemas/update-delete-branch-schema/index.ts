@@ -1,8 +1,12 @@
 import { z } from "zod";
 
 const updateDeleteBranchSchema = z.object({
-  businessId: z.string().uuid("O ID da empresa é obrigatório!"),
-  branchId: z.string().uuid("O ID da filial é obrigatória!"),
+  businessId: z
+    .string({ required_error: "ID da empresa é obrigatório!" })
+    .uuid("ID da empresa é inválido."),
+  branchId: z
+    .string({ required_error: "ID da filial é obrigatório!" })
+    .uuid("ID da filial é inválido."),
 });
 
 export { updateDeleteBranchSchema };

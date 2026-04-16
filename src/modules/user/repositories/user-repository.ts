@@ -260,6 +260,11 @@ class UserRepository implements IUserRepository {
         },
       },
       include: {
+        business: {
+          select: {
+            is_active: true,
+          },
+        },
         profileAccess: {
           select: {
             name: true,
@@ -319,6 +324,11 @@ class UserRepository implements IUserRepository {
         id: userId,
       },
       include: {
+        business: {
+          select: {
+            is_active: true,
+          },
+        },
         profileAccess: {
           select: {
             name: true,
@@ -439,6 +449,7 @@ class UserRepository implements IUserRepository {
         business: {
           select: {
             corporate_reason: true,
+            is_active: true,
           },
         },
       },
@@ -465,6 +476,7 @@ class UserRepository implements IUserRepository {
         business: {
           select: {
             corporate_reason: true,
+            is_active: true,
           },
         },
       },
@@ -487,6 +499,7 @@ class UserRepository implements IUserRepository {
         business: {
           select: {
             corporate_reason: true,
+            is_active: true,
           },
         },
       },

@@ -30,6 +30,8 @@ import { AppError } from "@/shared/errors/AppError";
 import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
 import { UserDriverInactiveError } from "../errors/user-driver-inactive-error";
 
+import { BusinessInactiveError } from "@/modules/business/usecases/errors/business-inactive-error";
+
 import { env } from "@/env";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
@@ -152,6 +154,11 @@ class AuthenticateUserUseCase {
       throw new UserInvalidCredentialsError();
     }
 
+    // Block login if business is inactive (MASTER users don't belong to a business)
+    if (findUser.business && findUser.business.is_active === false) {
+      throw new BusinessInactiveError();
+    }
+
     // Check if user is a driver and if driver is inactive
     if (findUser.driverId) {
       const findDriver = await this.driver.findDriverById(findUser.driverId);
@@ -196,7 +203,7 @@ class AuthenticateUserUseCase {
     }
 
     const twoFactorToken = crypto.randomInt(100_000, 1_000_000).toString();
-    const hashedTwoFactorToken = await hash(twoFactorToken, 6);
+    const hashedTwoFactorToken = await hash(twoFactorToken, 10);
 
     const twoFactorExpires = new Date(new Date().getTime() + 15 * 60 * 1000); // 15 minutes in milliseconds
 

@@ -63,6 +63,10 @@ const businessResponses = {
   businessDeleted: z.object({
     message: z.string().default("Empresa deletada com sucesso!"),
   }),
+  businessToggled: z.object({
+    message: z.string().default("Status da empresa atualizado com sucesso!"),
+    is_active: z.boolean(),
+  }),
 
   searchBusinessStreamDescription: z.object({
     description: z

@@ -66,17 +66,13 @@ const updateAccountPayableSchema = z
     }, z.number().nonnegative("O valor pago deve ser um valor não negativo.").min(1, "O valor pago deve ser no mínimo R$ 1,00").max(9999999.99, "O valor pago não pode exceder R$ 9.999.999,99.").optional().nullable()),
     branchId: z.preprocess(
       emptyStringToNull,
-      z
-        .string()
-        .uuid("O ID da filial deve ser um UUID válido.")
-        .optional()
-        .nullable(),
+      z.string().uuid("ID da filial é inválido.").optional().nullable(),
     ),
     serviceOrderId: z.preprocess(
       emptyStringToNull,
       z
         .string()
-        .uuid("O ID da ordem de serviço deve ser um UUID válido.")
+        .uuid("ID da ordem de serviço é inválido.")
         .optional()
         .nullable(),
     ),
@@ -84,7 +80,7 @@ const updateAccountPayableSchema = z
       emptyStringToNull,
       z
         .string()
-        .uuid("O ID do usuário responsável deve ser um UUID válido.")
+        .uuid("ID do usuário responsável é inválido.")
         .optional()
         .nullable(),
     ),

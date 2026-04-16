@@ -362,6 +362,18 @@ const serviceOrderResponses = {
       .string()
       .default("Esta ordem de serviço não pertence a esta empresa!"),
   }),
+
+  // Export errors (GET /export-service-order)
+  exportServiceOrderErrors: z.union([
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Não existem ordens de serviço para exportar!"),
+    }),
+  ]),
 };
 
 export { serviceOrderSchemas, serviceOrderResponses };

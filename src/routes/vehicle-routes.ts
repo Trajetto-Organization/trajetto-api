@@ -11,6 +11,7 @@ import { ExportVehicleController } from "@/modules/vehicle/usecases/export-vehic
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
+import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import {
   vehicleSchemas,
   vehicleResponses,
@@ -35,7 +36,10 @@ async function vehicleRoutes(app: FastifyInstance) {
     "/create-vehicle/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("vehicle_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle"],
@@ -80,7 +84,7 @@ async function vehicleRoutes(app: FastifyInstance) {
     "/export-vehicle",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_manage", "read")],
+      preHandler: [verifyPermission("vehicle_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle"],
@@ -88,6 +92,10 @@ async function vehicleRoutes(app: FastifyInstance) {
         description:
           "Export vehicle records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
         querystring: vehicleSchemas.exportVehicleQuery,
+        response: {
+          400: vehicleResponses.exportVehicleErrors,
+          500: vehicleResponses.internalServerError,
+        },
       },
     },
     exportVehicleController.handle,
@@ -144,7 +152,10 @@ async function vehicleRoutes(app: FastifyInstance) {
     "/update-vehicle/:vehicleId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("vehicle_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("vehicle_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["vehicle"],

@@ -4,6 +4,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverRepository } from "../../repositories/IDriver-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { DriverNoDriversToExportError } from "../errors/driver-no-drivers-to-export-error";
 
 import { ExportFormatters } from "@/shared/services/export/formatters";
 import { ExportColumn } from "@/shared/services/export/types";
@@ -27,6 +28,15 @@ class ExportDriverUseCase {
   }> {
     const findUser = await this.user.findUserById(userId);
     if (!findUser) throw new ResourceNotFoundError();
+
+    const total = await this.driver.countDriversForExport(
+      findUser.businessId as string,
+      findUser.role,
+    );
+
+    if (total === 0) {
+      throw new DriverNoDriversToExportError();
+    }
 
     const iterator = this.driver.streamDriversForExport(
       findUser.businessId!,

@@ -75,7 +75,7 @@ class InMemoryBranchRepository implements IBranchRepository {
       ...this.branches[branchIndex],
       ...branchData,
       updated_at: new Date(),
-    };
+    } as Branch;
 
     return this.branches[branchIndex];
   }
@@ -127,7 +127,7 @@ class InMemoryBranchRepository implements IBranchRepository {
     businessId,
   }: SearchBranchWithCursorProps): Promise<CursorPaginatedBranch> {
     let filtered = this.branches.filter(
-      (branch) => branch.businessId === businessId,
+      (branch) => branch.businessId === businessId && branch.is_active === true,
     );
 
     if (cursor) {
@@ -143,6 +143,20 @@ class InMemoryBranchRepository implements IBranchRepository {
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };
+  }
+
+  async countBranchDependencies(
+    branchId: string,
+  ): Promise<Record<string, number>> {
+    return {
+      vehicles: 0,
+      drivers: 0,
+      serviceOrders: 0,
+      accountsPayable: 0,
+      fines: 0,
+      fuels: 0,
+      vehicleChecklists: 0,
+    };
   }
 }
 

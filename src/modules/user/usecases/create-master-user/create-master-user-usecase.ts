@@ -164,7 +164,7 @@ class CreateMasterUserUseCase {
       throw new UserAlreadyExistsError();
     }
 
-    const hashedPassword = await hash(password, 6);
+    const hashedPassword = await hash(password, 10);
 
     try {
       const masterCreated = await this.user.createMasterUser({

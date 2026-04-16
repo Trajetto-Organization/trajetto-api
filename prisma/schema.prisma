@@ -83,6 +83,7 @@ model Business {
   responsible_name String
   telephone        String
   email            String  @unique
+  is_active        Boolean @default(true)
 
   users User[]
 
@@ -272,6 +273,7 @@ model Branch {
   responsible_name String
   telephone        String
   email            String  @unique
+  is_active        Boolean @default(true)
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
@@ -558,11 +560,12 @@ model Activity {
   description        String
   status             String
   businessId         String?
+  tenantName         String? // Snapshot of business name at creation time — preserved after deletion
   visibilityLevel    String? // "SYSTEM", "COMPANY", "USER" - controls hierarchical visibility
   performingUserRole String? // Role of user who performed the action
-  business           Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  user               User?     @relation(fields: [performedBy], references: [id], onDelete: Cascade)
-  performedBy        String
+  business           Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  user               User?     @relation(fields: [performedBy], references: [id], onDelete: SetNull)
+  performedBy        String?
   created_at         DateTime  @default(now())
   updated_at         DateTime  @updatedAt
 

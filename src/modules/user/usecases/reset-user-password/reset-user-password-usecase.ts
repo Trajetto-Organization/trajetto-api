@@ -45,7 +45,7 @@ class ResetUserPasswordUseCase {
       throw new ResourceNotFoundError();
     }
 
-    const hashedPassword = await hash(password, 6);
+    const hashedPassword = await hash(password, 10);
 
     try {
       await Promise.all([

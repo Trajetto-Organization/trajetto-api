@@ -15,6 +15,10 @@ interface Driver {
   contract_type: "OWNED" | "THIRD_PARTY";
   businessId: string;
   branchId?: string | null;
+  branch?: {
+    is_active?: boolean;
+    corporate_reason?: string;
+  } | null;
   created_at: Date | string;
   updated_at: Date | string;
 }

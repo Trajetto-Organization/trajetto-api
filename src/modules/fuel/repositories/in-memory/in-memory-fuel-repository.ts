@@ -363,6 +363,18 @@ class InMemoryFuelRepository implements IFuelRepository {
       };
     }
   }
+
+  async countFuelForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const filteredFuels =
+      userRole === "MASTER"
+        ? this.fuels
+        : this.fuels.filter((fuel) => fuel.businessId === businessId);
+
+    return filteredFuels.length;
+  }
 }
 
 export { InMemoryFuelRepository };

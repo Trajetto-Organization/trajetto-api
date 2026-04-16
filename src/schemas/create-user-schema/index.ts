@@ -78,15 +78,20 @@ const createUserSchema = z
       })
       .optional(),
     role: roleEnum,
-    businessId: z.string().min(1, "A empresa é obrigatória!"),
-    profileAccessId: z.string().optional(),
+    businessId: z
+      .string({ required_error: "ID da empresa é obrigatório!" })
+      .uuid("ID da empresa é inválido."),
+    profileAccessId: z
+      .string()
+      .uuid("ID do perfil de acesso é inválido.")
+      .optional(),
     driverId: z
       .string()
       .optional()
       .refine(
         (val) => !val || val === "" || z.string().uuid().safeParse(val).success,
         {
-          message: "O ID do motorista deve ser um UUID válido.",
+          message: "ID do motorista é inválido.",
         },
       ),
     userType: z.enum(["employee", "driver"]).optional(),

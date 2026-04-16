@@ -97,10 +97,16 @@ const updateUserSchema = z
         .nullable(),
     ),
     role: roleEnum.optional().nullable(),
-    businessId: z.string().min(1, "A empresa é obrigatória!"),
+    businessId: z
+      .string({ required_error: "ID da empresa é obrigatório!" })
+      .uuid("ID da empresa é inválido."),
     profileAccessId: z.preprocess(
       emptyStringToNull,
-      z.string().optional().nullable(),
+      z
+        .string()
+        .uuid("ID do perfil de acesso é inválido.")
+        .optional()
+        .nullable(),
     ),
     driverId: z
       .string()
@@ -109,7 +115,7 @@ const updateUserSchema = z
       .refine(
         (val) => !val || val === "" || z.string().uuid().safeParse(val).success,
         {
-          message: "O ID do motorista deve ser um UUID válido.",
+          message: "ID do motorista é inválido.",
         },
       ),
     userType: z.enum(["employee", "driver"]).optional(),

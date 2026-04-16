@@ -9,6 +9,7 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 import { BranchNotFoundError } from "../errors/branch-not-found-error";
 import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";
 
+import { BranchHasChildrenError } from "../errors/branch-has-children-error";
 import { updateDeleteBranchSchema } from "@/schemas/update-delete-branch-schema";
 
 class DeleteBranchController {
@@ -25,7 +26,6 @@ class DeleteBranchController {
 
     try {
       await deleteBranchUseCase.execute(branchId, businessId, id);
-
       return reply
         .status(200)
         .send({ message: "Filial deletada com sucesso!" });
@@ -44,6 +44,10 @@ class DeleteBranchController {
 
       if (error instanceof BranchNotBelongBusinessError) {
         return reply.status(403).send({ message: error.message });
+      }
+
+      if (error instanceof BranchHasChildrenError) {
+        return reply.status(409).send({ message: error.message });
       }
 
       throw error;

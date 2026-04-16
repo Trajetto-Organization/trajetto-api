@@ -41,6 +41,7 @@ interface IFuelRepository {
   searchFuelByVehicleWithCursor: (
     props: SearchFuelByVehicleWithCursorProps,
   ) => Promise<CursorPaginatedFuel>;
+  countFuelForExport: (businessId: string, userRole: string) => Promise<number>;
 }
 
 export { IFuelRepository };

@@ -10,10 +10,22 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "../errors/branch-not-found-error";
+
 import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";
+import { BranchHasChildrenError } from "../errors/branch-has-children-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { AppError } from "@/shared/errors/AppError";
+
+const dependencyLabels: Record<string, string> = {
+  vehicles: "veículo(s)",
+  drivers: "motorista(s)",
+  serviceOrders: "ordem(ns) de serviço",
+  accountsPayable: "conta(s) a pagar",
+  fines: "multa(s)",
+  fuels: "abastecimento(s)",
+  vehicleChecklists: "checklist(s) de veículo",
+};
 
 @injectable()
 class DeleteBranchUseCase {
@@ -55,10 +67,24 @@ class DeleteBranchUseCase {
       throw new BranchNotBelongBusinessError();
     }
 
+    // Validate child records before deletion
+    const dependencies = await this.branch.countBranchDependencies(branchId);
+    const details: string[] = [];
+
+    for (const [key, count] of Object.entries(dependencies)) {
+      if (count > 0) {
+        const label = dependencyLabels[key] || key;
+        details.push(`${count} ${label}`);
+      }
+    }
+
+    if (details.length > 0) {
+      throw new BranchHasChildrenError(`Existem ${details.join(", ")}.`);
+    }
+
     try {
       const deletedBranch = await this.branch.deleteBranch(branchId);
 
-      // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({
         type: "Filial",
         action: "delete",
@@ -71,6 +97,10 @@ class DeleteBranchUseCase {
 
       return deletedBranch;
     } catch (error) {
+      if (error instanceof BranchHasChildrenError) {
+        throw error;
+      }
+
       throw new AppError(
         "Houve um erro ao tentar excluir a filial! Por favor, tente novamente.",
         500,

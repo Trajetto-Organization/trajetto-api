@@ -563,6 +563,21 @@ class ServiceOrderRepository implements IServiceOrderRepository {
       cursor = serviceOrders[serviceOrders.length - 1].id;
     }
   }
+
+  async countServiceOrderForExport(
+    businessId: string,
+    userRole: string,
+  ): Promise<number> {
+    const whereCondition: any = {
+      ...(userRole !== "MASTER" && { businessId }),
+    };
+
+    const serviceOrdersCount = await this.prisma.serviceOrder.count({
+      where: whereCondition,
+    });
+
+    return serviceOrdersCount;
+  }
 }
 
 export { ServiceOrderRepository };
