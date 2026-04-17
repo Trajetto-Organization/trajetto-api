@@ -9,19 +9,33 @@ services:
       POSTGRES_DB: ${POSTGRES_DATABASE}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    deploy:
+      mode: replicated
+      replicas: 1 # Essential for preventing data corruption in large volumes locally
+      update_config:
+        parallelism: 1
+        order: stop-first # Ensures the old device lowers the volume before the new one does
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: any # It always restarts if the process crashes
+        delay: 5s
+        max_attempts: 3
     networks:
       - minha_rede
-    restart: always
     healthcheck:
       test:
         [
           "CMD-SHELL",
           "pg_isready -U ${POSTGRES_USERNAME} -d ${POSTGRES_DATABASE}",
         ]
-      interval: 30s
-      timeout: 10s
+      interval: 10s # Shorter interval for faster readiness detection in deployment
+      timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 30s
 
   trajetto-rabbitmq:
     image: rabbitmq:3.12-management-alpine
@@ -32,15 +46,29 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+    deploy:
+      mode: replicated
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: stop-first # Avoids conflicts on port 15672 during deployment
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
     networks:
       - minha_rede
-    restart: always
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 30s
-      timeout: 10s
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 30s
 
   api:
     image: ghcr.io/trajetto-organization/trajetto-api:latest
@@ -70,7 +98,7 @@ services:
       R2_PUBLIC_DOMAIN: ${R2_PUBLIC_DOMAIN}
     deploy:
       mode: replicated
-      replicas: 2
+      replicas: 1
       update_config:
         parallelism: 1
         delay: 5s
