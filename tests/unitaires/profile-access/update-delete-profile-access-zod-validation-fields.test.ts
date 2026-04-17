@@ -4,7 +4,7 @@ import { updateDeleteProfileAccessSchema } from "@/schemas/update-delete-profile
 describe("Update/Delete Profile Access Zod Validation Fields", () => {
   it("should pass when profileAccessId is provided", () => {
     const result = updateDeleteProfileAccessSchema.safeParse({
-      profileAccessId: "123",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
     });
 
     expect(result.success).toBe(true);
@@ -17,7 +17,7 @@ describe("Update/Delete Profile Access Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().profileAccessId?._errors).toContain(
-      "O ID do perfil de acesso é obrigatório!",
+      "ID do perfil de acesso é inválido.",
     );
   });
 });

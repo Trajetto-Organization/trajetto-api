@@ -12,7 +12,6 @@ describe("Update Email Notifications UseCase", () => {
 
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-
     updateEmailNotificationsUseCase = new UpdateEmailNotificationsUseCase(
       userInMemory,
     );

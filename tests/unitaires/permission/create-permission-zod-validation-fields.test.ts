@@ -9,8 +9,8 @@ describe("Create Permission Zod validation Fields", () => {
       action: "Valid Action",
       canRead: true,
       // canWrite is optional; defaults to false if not provided
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -22,8 +22,8 @@ describe("Create Permission Zod validation Fields", () => {
     const payload = {
       action: "Valid Action",
       canRead: true,
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -39,8 +39,8 @@ describe("Create Permission Zod validation Fields", () => {
     const payload = {
       action: "ab",
       canRead: true,
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -56,8 +56,8 @@ describe("Create Permission Zod validation Fields", () => {
     const payload = {
       action: "    ",
       canRead: true,
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -73,8 +73,8 @@ describe("Create Permission Zod validation Fields", () => {
     const payload = {
       action: "a".repeat(101),
       canRead: true,
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -90,8 +90,8 @@ describe("Create Permission Zod validation Fields", () => {
     const payload = {
       action: "Valid  Action", // two consecutive spaces
       canRead: true,
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -107,8 +107,8 @@ describe("Create Permission Zod validation Fields", () => {
     const payload = {
       action: " LeadingAction",
       canRead: true,
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -124,8 +124,8 @@ describe("Create Permission Zod validation Fields", () => {
     const payload = {
       action: "TrailingAction ",
       canRead: true,
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -142,7 +142,7 @@ describe("Create Permission Zod validation Fields", () => {
       action: "Valid Action",
       canRead: true,
       businessId: "",
-      profileAccessId: "profile-456",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -150,7 +150,7 @@ describe("Create Permission Zod validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().businessId?._errors).toContain(
-      "A empresa é obrigatória!",
+      "ID da empresa é inválido.",
     );
   });
 
@@ -158,7 +158,7 @@ describe("Create Permission Zod validation Fields", () => {
     const payload = {
       action: "Valid Action",
       canRead: true,
-      businessId: "123",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
       profileAccessId: "",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
@@ -167,7 +167,7 @@ describe("Create Permission Zod validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().profileAccessId?._errors).toContain(
-      "O Perfil de acesso é obrigatório!",
+      "ID do Perfil de acesso é inválido.",
     );
   });
 
@@ -175,8 +175,8 @@ describe("Create Permission Zod validation Fields", () => {
     const payload = {
       action: "Valid Action",
       canRead: true,
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: "invalid_permission", // not a valid enum value
     };
 
@@ -193,8 +193,8 @@ describe("Create Permission Zod validation Fields", () => {
     const payload = {
       action: "Valid Action",
       canRead: false, // refine rule: canRead must be true
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440001",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 

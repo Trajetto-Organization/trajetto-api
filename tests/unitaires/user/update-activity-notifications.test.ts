@@ -12,7 +12,6 @@ describe("Update Activity Notifications UseCase", () => {
 
   beforeEach(() => {
     userInMemory = new InMemoryUserRepository();
-
     updateActivityNotificationsUseCase = new UpdateActivityNotificationsUseCase(
       userInMemory,
     );

@@ -39,7 +39,6 @@ describe("Update Delete Vehicle Type Zod Validation Fields", () => {
 
   it("should fail if vehicleTypeId is missing", () => {
     const payload = {};
-
     const result = updateDeleteVehicleTypeSchema.safeParse(payload);
 
     expect(result.success).toBe(false);
@@ -55,7 +54,7 @@ describe("Update Delete Vehicle Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().vehicleTypeId?._errors).toContain(
-      "O ID do tipo de veículo é obrigatório!",
+      "ID do tipo de veículo é inválido.",
     );
   });
 
@@ -81,56 +80,6 @@ describe("Update Delete Vehicle Type Zod Validation Fields", () => {
     expect(result.error?.format().vehicleTypeId?._errors).toBeDefined();
   });
 
-  it("should accept any non-empty string as vehicleTypeId", () => {
-    const payload = {
-      vehicleTypeId: "invalid-uuid-format",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe("invalid-uuid-format");
-  });
-
-  it("should accept string that looks like almost valid UUID but missing character", () => {
-    const payload = {
-      vehicleTypeId: "550e8400-e29b-41d4-a716-44665544000",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      "550e8400-e29b-41d4-a716-44665544000",
-    );
-  });
-
-  it("should accept string that looks like almost valid UUID but with extra character", () => {
-    const payload = {
-      vehicleTypeId: "550e8400-e29b-41d4-a716-4466554400000",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      "550e8400-e29b-41d4-a716-4466554400000",
-    );
-  });
-
-  it("should accept string with underscores instead of dashes", () => {
-    const payload = {
-      vehicleTypeId: "550e8400_e29b_41d4_a716_446655440000",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      "550e8400_e29b_41d4_a716_446655440000",
-    );
-  });
-
   it("should accept vehicleTypeId with uppercase letters (UUID accepts both cases)", () => {
     const payload = {
       vehicleTypeId: "550E8400-E29B-41D4-A716-446655440000",
@@ -142,52 +91,6 @@ describe("Update Delete Vehicle Type Zod Validation Fields", () => {
     expect(result.data?.vehicleTypeId).toBe(
       "550E8400-E29B-41D4-A716-446655440000",
     );
-  });
-
-  it("should accept string with characters that would be invalid in UUID", () => {
-    const payload = {
-      vehicleTypeId: "550e8400-e29g-41d4-a716-446655440000",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      "550e8400-e29g-41d4-a716-446655440000",
-    );
-  });
-
-  it("should accept string with no dashes", () => {
-    const payload = {
-      vehicleTypeId: "550e8400e29b41d4a716446655440000",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe("550e8400e29b41d4a716446655440000");
-  });
-
-  it("should accept any non-empty random string", () => {
-    const payload = {
-      vehicleTypeId: "not-a-uuid-at-all",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe("not-a-uuid-at-all");
-  });
-
-  it("should accept numeric string", () => {
-    const payload = {
-      vehicleTypeId: "123456789",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe("123456789");
   });
 
   it("should fail if vehicleTypeId is number instead of string", () => {
@@ -249,19 +152,6 @@ describe("Update Delete Vehicle Type Zod Validation Fields", () => {
     );
   });
 
-  it("should accept string with whitespace around vehicleTypeId", () => {
-    const payload = {
-      vehicleTypeId: " 550e8400-e29b-41d4-a716-446655440000 ",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      " 550e8400-e29b-41d4-a716-446655440000 ",
-    );
-  });
-
   it("should validate UUID with all different hex characters", () => {
     const payload = {
       vehicleTypeId: "0123456f-89ab-cdef-0123-456789abcdef",
@@ -289,19 +179,6 @@ describe("Update Delete Vehicle Type Zod Validation Fields", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should accept string with different segment lengths", () => {
-    const payload = {
-      vehicleTypeId: "550e840-e29b-41d4-a716-446655440000",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      "550e840-e29b-41d4-a716-446655440000",
-    );
-  });
-
   it("should validate mixed case UUID format", () => {
     const payload = {
       vehicleTypeId: "550e8400-E29B-41d4-A716-446655440000",
@@ -309,58 +186,6 @@ describe("Update Delete Vehicle Type Zod Validation Fields", () => {
 
     const result = updateDeleteVehicleTypeSchema.safeParse(payload);
     expect(result.success).toBe(true);
-  });
-
-  it("should accept string with character 'g' in hex position", () => {
-    const payload = {
-      vehicleTypeId: "550g8400-e29b-41d4-a716-446655440000",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      "550g8400-e29b-41d4-a716-446655440000",
-    );
-  });
-
-  it("should accept string with character 'z' in hex position", () => {
-    const payload = {
-      vehicleTypeId: "550e8400-e29b-41d4-a716-446655440z00",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      "550e8400-e29b-41d4-a716-446655440z00",
-    );
-  });
-
-  it("should accept string with too many dashes", () => {
-    const payload = {
-      vehicleTypeId: "550e-8400-e29b-41d4-a716-446655440000",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      "550e-8400-e29b-41d4-a716-446655440000",
-    );
-  });
-
-  it("should accept string with too few dashes", () => {
-    const payload = {
-      vehicleTypeId: "550e8400-e29b41d4-a716-446655440000",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      "550e8400-e29b41d4-a716-446655440000",
-    );
   });
 
   it("should validate realistic vehicle type IDs", () => {
@@ -375,50 +200,9 @@ describe("Update Delete Vehicle Type Zod Validation Fields", () => {
     validVehicleTypeIds.forEach((vehicleTypeId) => {
       const payload = { vehicleTypeId };
       const result = updateDeleteVehicleTypeSchema.safeParse(payload);
+
       expect(result.success).toBe(true);
       expect(result.data?.vehicleTypeId).toBe(vehicleTypeId);
     });
-  });
-
-  it("should accept various non-empty string formats", () => {
-    const validVehicleTypeIds = [
-      "550e8400e29b41d4a716446655440000", // no dashes
-      "550e8400-e29b-41d4-a716", // shorter string
-      "550e8400-e29b-41d4-a716-446655440000-extra", // longer string
-      "550e8400-e29b-41d4-a716-44665544000g", // with 'g' character
-      "not-a-valid-uuid-at-all-whatsoever", // random string
-      "12345678-90ab-cdef-ghij-klmnopqrstuv", // with unusual characters
-    ];
-
-    validVehicleTypeIds.forEach((vehicleTypeId) => {
-      const payload = { vehicleTypeId };
-      const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-      expect(result.success).toBe(true);
-      expect(result.data?.vehicleTypeId).toBe(vehicleTypeId);
-    });
-  });
-
-  it("should accept string with all valid hex digits in unusual format", () => {
-    const payload = {
-      vehicleTypeId: "0123456789abcdef-0123-4567-89ab-cdef01234567",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe(
-      "0123456789abcdef-0123-4567-89ab-cdef01234567",
-    );
-  });
-
-  it("should accept string with only spaces", () => {
-    const payload = {
-      vehicleTypeId: "   ",
-    };
-
-    const result = updateDeleteVehicleTypeSchema.safeParse(payload);
-
-    expect(result.success).toBe(true);
-    expect(result.data?.vehicleTypeId).toBe("   ");
   });
 });

@@ -113,7 +113,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -133,7 +133,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -165,7 +165,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -177,7 +177,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -189,7 +189,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -201,7 +201,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -213,7 +213,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -225,7 +225,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -237,7 +237,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -304,7 +304,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -316,7 +316,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -328,7 +328,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -340,7 +340,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -352,7 +352,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -364,7 +364,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -376,7 +376,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -388,7 +388,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().fuelTypeId?._errors).toContain(
-      "O ID do tipo de combustível é obrigatório!",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -430,7 +430,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.format().fuelTypeId?._errors).toContain(
-        "O ID do tipo de combustível é obrigatório!",
+        "ID do tipo de combustível é inválido.",
       );
     });
   });
@@ -452,7 +452,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.format().fuelTypeId?._errors).toContain(
-        "O ID do tipo de combustível é obrigatório!",
+        "ID do tipo de combustível é inválido.",
       );
     });
   });
@@ -488,7 +488,7 @@ describe("Update Delete Fuel Type Zod Validation Fields", () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.format().fuelTypeId?._errors).toContain(
-        "O ID do tipo de combustível é obrigatório!",
+        "ID do tipo de combustível é inválido.",
       );
     });
   });

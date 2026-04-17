@@ -947,7 +947,7 @@ describe("Create Driver Zod Validation Fields", () => {
 
     expect(() => createDriverSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => createDriverSchema.parse(invalidData)).toThrow(
-      "O ID da filial deve ser um UUID válido.",
+      "ID da filial é inválido.",
     );
   });
 

@@ -22,7 +22,7 @@ describe("Update Delete Branch Zod Validation Fields", () => {
 
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(
-      "O ID da empresa é obrigatório!",
+      "ID da empresa é inválido.",
     );
   });
 
@@ -34,7 +34,7 @@ describe("Update Delete Branch Zod Validation Fields", () => {
 
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(
-      "O ID da filial é obrigatória!",
+      "ID da filial é inválido.",
     );
   });
 
@@ -62,7 +62,7 @@ describe("Update Delete Branch Zod Validation Fields", () => {
 
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(
-      "O ID da empresa é obrigatório!",
+      "ID da empresa é inválido.",
     );
   });
 
@@ -74,7 +74,7 @@ describe("Update Delete Branch Zod Validation Fields", () => {
 
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(
-      "O ID da filial é obrigatória!",
+      "ID da filial é inválido.",
     );
   });
 
@@ -122,7 +122,7 @@ describe("Update Delete Branch Zod Validation Fields", () => {
 
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(
-      "O ID da empresa é obrigatório!",
+      "ID da empresa é inválido.",
     );
   });
 
@@ -134,7 +134,7 @@ describe("Update Delete Branch Zod Validation Fields", () => {
 
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => updateDeleteBranchSchema.parse(invalidData)).toThrow(
-      "O ID da filial é obrigatória!",
+      "ID da filial é inválido.",
     );
   });
 
@@ -173,14 +173,10 @@ describe("Update Delete Branch Zod Validation Fields", () => {
         const issues = error.issues;
         expect(issues).toHaveLength(2);
         expect(
-          issues.some(
-            (issue) => issue.message === "O ID da empresa é obrigatório!",
-          ),
+          issues.some((issue) => issue.message === "ID da empresa é inválido."),
         ).toBe(true);
         expect(
-          issues.some(
-            (issue) => issue.message === "O ID da filial é obrigatória!",
-          ),
+          issues.some((issue) => issue.message === "ID da filial é inválido."),
         ).toBe(true);
       }
     }

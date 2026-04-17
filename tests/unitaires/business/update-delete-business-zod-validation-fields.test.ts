@@ -4,7 +4,7 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 describe("Update/Delete Business Zod Validation Fields", () => {
   it("should pass when businessId is provided", () => {
     const result = updateDeleteBusinessSchema.safeParse({
-      businessId: "123",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
     });
 
     expect(result.success).toBe(true);
@@ -17,7 +17,7 @@ describe("Update/Delete Business Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().businessId?._errors).toContain(
-      "O ID da empresa é obrigatório!",
+      "ID da empresa é inválido.",
     );
   });
 });

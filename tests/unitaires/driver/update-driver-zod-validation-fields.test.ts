@@ -882,9 +882,7 @@ describe("Update Driver Schema Validation", () => {
       const result = updateDriverSchema.safeParse(data);
 
       expect(result.success).toBe(false);
-      expect(result.error?.issues[0].message).toBe(
-        "O ID da filial deve ser um UUID válido.",
-      );
+      expect(result.error?.issues[0].message).toBe("ID da filial é inválido.");
     });
   });
 });

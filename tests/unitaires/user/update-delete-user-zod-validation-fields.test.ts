@@ -4,7 +4,7 @@ import { updateDeleteUserSchema } from "@/schemas/update-delete-user-schema";
 describe("Update/Delete User Zod Validation Fields", () => {
   it("should pass when profileAccessId is provided", () => {
     const result = updateDeleteUserSchema.safeParse({
-      userId: "123",
+      userId: "550e8400-e29b-41d4-a716-446655440000",
     });
 
     expect(result.success).toBe(true);
@@ -17,7 +17,7 @@ describe("Update/Delete User Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().userId?._errors).toContain(
-      "O ID do usuário é obrigatório!",
+      "ID do usuário é inválido.",
     );
   });
 });

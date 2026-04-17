@@ -317,7 +317,7 @@ describe("Create Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().supplierId?._errors).toContain(
-      "O ID do fornecedor deve ser um UUID válido.",
+      "ID do fornecedor é inválido.",
     );
   });
 

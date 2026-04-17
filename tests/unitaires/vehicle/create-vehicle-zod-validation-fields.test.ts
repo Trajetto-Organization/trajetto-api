@@ -1123,7 +1123,7 @@ describe("Create Vehicle Zod Validation Fields", () => {
 
     expect(() => createVehicleSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => createVehicleSchema.parse(invalidData)).toThrow(
-      "O ID do tipo de combustível deve ser um UUID válido.",
+      "ID do tipo de combustível é inválido.",
     );
   });
 
@@ -1150,7 +1150,7 @@ describe("Create Vehicle Zod Validation Fields", () => {
 
     expect(() => createVehicleSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => createVehicleSchema.parse(invalidData)).toThrow(
-      "O ID do tipo de veículo deve ser um UUID válido.",
+      "ID do tipo de veículo é inválido.",
     );
   });
 
@@ -1177,7 +1177,7 @@ describe("Create Vehicle Zod Validation Fields", () => {
 
     expect(() => createVehicleSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => createVehicleSchema.parse(invalidData)).toThrow(
-      "O ID do motorista deve ser um UUID válido.",
+      "ID do motorista é inválido.",
     );
   });
 
@@ -1204,7 +1204,7 @@ describe("Create Vehicle Zod Validation Fields", () => {
 
     expect(() => createVehicleSchema.parse(invalidData)).toThrow(ZodError);
     expect(() => createVehicleSchema.parse(invalidData)).toThrow(
-      "O ID da filial deve ser um UUID válido.",
+      "ID da filial é inválido.",
     );
   });
 

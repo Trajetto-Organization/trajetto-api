@@ -38,8 +38,8 @@ describe("Update Delete Supplier Zod Validation Fields", () => {
     }
 
     const payload = {
-      businessId: "valid-business-id",
-      supplierId: "valid-uuid-string",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
+      supplierId: "550e8400-e29b-41d4-a716-446655440001",
     };
 
     const result = updateDeleteSupplierSchema.safeParse(payload);
@@ -60,7 +60,7 @@ describe("Update Delete Supplier Zod Validation Fields", () => {
     }
 
     const payload = {
-      businessId: "valid-business-id",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
       supplierId: "",
     };
 

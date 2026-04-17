@@ -247,20 +247,26 @@ class CreateUserUseCase {
         ? null
         : driverId;
 
-    const userCreated = await this.user.createUser({
-      email,
-      password: hashedPassword,
-      name,
-      role,
-      businessId,
-      profileAccessId: cleanProfileAccessId,
-      driverId: cleanDriverId,
-    });
+    try {
+      const userCreated = await this.user.createUser({
+        email,
+        password: hashedPassword,
+        name,
+        role,
+        businessId,
+        profileAccessId: cleanProfileAccessId,
+        driverId: cleanDriverId,
+      });
 
-    // Process notifications asynchronously without blocking the main flow
-    this.processNotifications(userCreated, finalPassword, id, businessId);
-
-    return userCreated;
+      // Process notifications asynchronously without blocking the main flow
+      this.processNotifications(userCreated, finalPassword, id, businessId);
+      return userCreated;
+    } catch (error) {
+      throw new AppError(
+        "Houve um erro ao tentar criar o usuário! Por favor, tente novamente.",
+        500,
+      );
+    }
   }
 }
 

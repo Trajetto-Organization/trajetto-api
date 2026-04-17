@@ -16,7 +16,7 @@ describe("Update Delete Driver Schema Validation", () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.issues[0].message).toBe(
-        "O ID do motorista deve ser um UUID válido.",
+        "ID do motorista é inválido.",
       );
     });
 
@@ -26,7 +26,7 @@ describe("Update Delete Driver Schema Validation", () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.issues[0].message).toBe(
-        "O ID do motorista deve ser um UUID válido.",
+        "ID do motorista é inválido.",
       );
     });
 
@@ -64,7 +64,7 @@ describe("Update Delete Driver Schema Validation", () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.issues[0].message).toBe(
-        "O ID do motorista deve ser um UUID válido.",
+        "ID do motorista é inválido.",
       );
     });
 
@@ -74,7 +74,7 @@ describe("Update Delete Driver Schema Validation", () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.issues[0].message).toBe(
-        "O ID do motorista deve ser um UUID válido.",
+        "ID do motorista é inválido.",
       );
     });
 
@@ -84,7 +84,7 @@ describe("Update Delete Driver Schema Validation", () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.issues[0].message).toBe(
-        "O ID do motorista deve ser um UUID válido.",
+        "ID do motorista é inválido.",
       );
     });
 
@@ -94,7 +94,7 @@ describe("Update Delete Driver Schema Validation", () => {
 
       expect(result.success).toBe(false);
       expect(result.error?.issues[0].message).toBe(
-        "O ID do motorista deve ser um UUID válido.",
+        "ID do motorista é inválido.",
       );
     });
   });

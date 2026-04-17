@@ -49,7 +49,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 
@@ -81,7 +81,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 
@@ -93,7 +93,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 
@@ -105,7 +105,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 
@@ -117,7 +117,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 
@@ -139,7 +139,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 
@@ -151,7 +151,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 
@@ -163,7 +163,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 
@@ -175,7 +175,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 
@@ -239,7 +239,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 
@@ -279,7 +279,7 @@ describe("Update Delete Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().partId?._errors).toContain(
-      "O ID da peça é obrigatório!",
+      "ID da peça é inválido.",
     );
   });
 });

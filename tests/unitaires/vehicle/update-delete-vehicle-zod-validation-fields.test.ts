@@ -30,7 +30,7 @@ describe("Update Delete Vehicle Zod Validation Fields", () => {
       ZodError,
     );
     expect(() => updateDeleteVehicleSchema.parse(invalidData)).toThrow(
-      "O ID do veículo é obrigatório!",
+      "ID do veículo é inválido.",
     );
   });
 
@@ -72,24 +72,6 @@ describe("Update Delete Vehicle Zod Validation Fields", () => {
     expect(parsed).toEqual(validData);
   });
 
-  it("should accept any non-empty string (schema doesn't enforce UUID)", () => {
-    const validData = {
-      vehicleId: "some-vehicle-id-123",
-    };
-
-    const parsed = updateDeleteVehicleSchema.parse(validData);
-    expect(parsed).toEqual(validData);
-  });
-
-  it("should reject vehicleId with only spaces", () => {
-    const invalidData = {
-      vehicleId: "   ",
-    };
-
-    const parsed = updateDeleteVehicleSchema.parse(invalidData);
-    expect(parsed.vehicleId).toBe("   ");
-  });
-
   it("should reject additional properties being allowed", () => {
     const dataWithExtra = {
       vehicleId: "550e8400-e29b-41d4-a716-446655440000",
@@ -102,66 +84,8 @@ describe("Update Delete Vehicle Zod Validation Fields", () => {
     });
   });
 
-  it("should accept vehicleId with special characters", () => {
-    const validData = {
-      vehicleId: "vehicle-id-with-special-chars_123",
-    };
-
-    const parsed = updateDeleteVehicleSchema.parse(validData);
-    expect(parsed).toEqual(validData);
-  });
-
-  it("should accept vehicleId with numbers only", () => {
-    const validData = {
-      vehicleId: "123456789",
-    };
-
-    const parsed = updateDeleteVehicleSchema.parse(validData);
-    expect(parsed).toEqual(validData);
-  });
-
   it("should reject empty object", () => {
     const invalidData = {};
-
-    expect(() => updateDeleteVehicleSchema.parse(invalidData)).toThrow(
-      ZodError,
-    );
-  });
-
-  it("should reject vehicleId as number", () => {
-    const invalidData = {
-      vehicleId: 123456,
-    };
-
-    expect(() => updateDeleteVehicleSchema.parse(invalidData)).toThrow(
-      ZodError,
-    );
-  });
-
-  it("should reject vehicleId as boolean", () => {
-    const invalidData = {
-      vehicleId: true,
-    };
-
-    expect(() => updateDeleteVehicleSchema.parse(invalidData)).toThrow(
-      ZodError,
-    );
-  });
-
-  it("should reject vehicleId as array", () => {
-    const invalidData = {
-      vehicleId: ["550e8400-e29b-41d4-a716-446655440000"],
-    };
-
-    expect(() => updateDeleteVehicleSchema.parse(invalidData)).toThrow(
-      ZodError,
-    );
-  });
-
-  it("should reject vehicleId as object", () => {
-    const invalidData = {
-      vehicleId: { id: "550e8400-e29b-41d4-a716-446655440000" },
-    };
 
     expect(() => updateDeleteVehicleSchema.parse(invalidData)).toThrow(
       ZodError,

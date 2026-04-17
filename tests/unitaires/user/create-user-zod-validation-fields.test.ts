@@ -10,8 +10,8 @@ describe("Create User Zod Validation Fields", () => {
       name: "Full Name",
       password: "validPass1",
       role: UserBusinessRole.BUSINESS_USER,
-      businessId: "123",
-      profileAccessId: "profile-456",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440000",
     };
 
     const result = createUserSchema.safeParse(payload);
@@ -24,7 +24,7 @@ describe("Create User Zod Validation Fields", () => {
       name: "Full Name",
       password: "validPass1",
       role: UserBusinessRole.BUSINESS_ADMIN,
-      businessId: "123",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
       // profileAccessId is optional for BUSINESS_ADMIN
     };
 
@@ -227,7 +227,7 @@ describe("Create User Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().businessId?._errors).toContain(
-      "A empresa é obrigatória!",
+      "ID da empresa é inválido.",
     );
   });
 

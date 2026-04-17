@@ -4,7 +4,7 @@ import { updateDeletePermissionSchema } from "@/schemas/update-delete-permission
 describe("Update/Delete Permission Zod Validation Fields", () => {
   it("should pass when permissionId is provided", () => {
     const result = updateDeletePermissionSchema.safeParse({
-      permissionId: "123",
+      permissionId: "550e8400-e29b-41d4-a716-446655440000",
     });
 
     expect(result.success).toBe(true);
@@ -17,7 +17,7 @@ describe("Update/Delete Permission Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().permissionId?._errors).toContain(
-      "O ID da permissão é obrigatória!",
+      "ID da permissão é inválido.",
     );
   });
 });

@@ -31,7 +31,6 @@ describe("Two factor Verification Vode UseCase", () => {
       userInMemory,
       usersTokensInMemory,
     );
-
     twoFactorToken = crypto.randomInt(100_000, 1_000_000).toString();
   });
 

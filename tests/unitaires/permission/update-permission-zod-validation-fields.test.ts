@@ -9,8 +9,8 @@ describe("Update Permission Zod Validation Fields", () => {
       action: "Valid Action",
       canRead: true,
       canWrite: false,
-      businessId: "1",
-      profileAccessId: "1",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440000",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -23,14 +23,14 @@ describe("Update Permission Zod Validation Fields", () => {
       action: "   ",
       canRead: true,
       canWrite: false,
-      businessId: "1",
-      profileAccessId: "1",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440000",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
     const result = updatePermissionSchema.safeParse(data);
-
     expect(result.success).toBe(true);
+
     if (result.success) {
       expect(result.data.action).toBeNull();
     }
@@ -105,7 +105,7 @@ describe("Update Permission Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().businessId?._errors).toContain(
-      "A empresa é obrigatória!",
+      "ID da empresa é inválido.",
     );
   });
 
@@ -120,9 +120,10 @@ describe("Update Permission Zod Validation Fields", () => {
     };
 
     const result = updatePermissionSchema.safeParse(invalidData);
+
     expect(result.success).toBe(false);
     expect(result.error?.format().profileAccessId?._errors).toContain(
-      "O Perfil de acesso é obrigatório!",
+      "ID do perfil de acesso é inválido.",
     );
   });
 
@@ -149,8 +150,8 @@ describe("Update Permission Zod Validation Fields", () => {
       action: "Valid Action",
       canRead: true,
       canWrite: true,
-      businessId: "1",
-      profileAccessId: "1",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+      profileAccessId: "550e8400-e29b-41d4-a716-446655440000",
       permissionKey: EnumPermissionKey.PROFILE_ACCESS_MANAGE,
     };
 
@@ -169,15 +170,17 @@ describe("Update Permission Zod Validation Fields", () => {
     };
 
     const result = updatePermissionSchema.safeParse(invalidData);
-
     expect(result.success).toBe(false);
+
     const errorMessage =
       result.error?.format().permissionKey?._errors?.[0] || "";
     expect(errorMessage).toContain(
       "A permissão informada não é válida. Valores válidos:",
     );
+
     expect(errorMessage).toContain("branch_manage");
     expect(errorMessage).toContain("profile_access_manage");
+
     expect(errorMessage).toContain("user_permission_manage");
   });
 });

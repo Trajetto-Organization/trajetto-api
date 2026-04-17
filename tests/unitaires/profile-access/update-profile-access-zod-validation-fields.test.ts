@@ -5,7 +5,7 @@ describe("Update Profile Access Zod Validation Fields", () => {
   it("should pass when the name is valid and businessId is provided", () => {
     const result = updateProfileAccessSchema.safeParse({
       name: "Valid Access Profile",
-      businessId: "1",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     });
 
     expect(result.success).toBe(true);
@@ -14,7 +14,7 @@ describe("Update Profile Access Zod Validation Fields", () => {
   it("should fail when the name is less than 3 characters", () => {
     const result = updateProfileAccessSchema.safeParse({
       name: "Jo",
-      businessId: "1",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     });
 
     expect(result.success).toBe(false);
@@ -26,7 +26,7 @@ describe("Update Profile Access Zod Validation Fields", () => {
   it("should convert whitespace-only name to null", () => {
     const result = updateProfileAccessSchema.safeParse({
       name: "   ",
-      businessId: "1",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     });
 
     expect(result.success).toBe(true);
@@ -39,7 +39,7 @@ describe("Update Profile Access Zod Validation Fields", () => {
     const longName = "a".repeat(101);
     const result = updateProfileAccessSchema.safeParse({
       name: longName,
-      businessId: "1",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     });
 
     expect(result.success).toBe(false);
@@ -51,7 +51,7 @@ describe("Update Profile Access Zod Validation Fields", () => {
   it("should fail when the name contains consecutive spaces", () => {
     const result = updateProfileAccessSchema.safeParse({
       name: "Name  with spaces",
-      businessId: "1",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     });
 
     expect(result.success).toBe(false);
@@ -63,7 +63,7 @@ describe("Update Profile Access Zod Validation Fields", () => {
   it("should fail when the name starts or ends with a space", () => {
     const result = updateProfileAccessSchema.safeParse({
       name: " Name with space at the beginning",
-      businessId: "1",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     });
 
     expect(result.success).toBe(false);
@@ -82,14 +82,14 @@ describe("Update Profile Access Zod Validation Fields", () => {
 
     const errorMessages = result.error?.format();
     expect(errorMessages?.businessId?._errors).toContain(
-      "A empresa é obrigatória!",
+      "ID da empresa é inválido.",
     );
   });
 
   it("should pass when the name is empty (empty string) and businessId is valid", () => {
     const result = updateProfileAccessSchema.safeParse({
       name: "",
-      businessId: "1",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     });
 
     expect(result.success).toBe(true);

@@ -293,7 +293,7 @@ describe("Update Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().supplierId?._errors).toContain(
-      "O ID do fornecedor deve ser um UUID válido.",
+      "ID do fornecedor é inválido.",
     );
   });
 
@@ -336,7 +336,7 @@ describe("Update Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().supplierId?._errors).toContain(
-      "O ID do fornecedor deve ser um UUID válido.",
+      "ID do fornecedor é inválido.",
     );
   });
 
@@ -350,7 +350,7 @@ describe("Update Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().businessId?._errors).toContain(
-      "O ID da empresa deve ser um UUID válido.",
+      "ID da empresa é inválido.",
     );
   });
 
@@ -360,6 +360,7 @@ describe("Update Part Zod Validation Fields", () => {
     };
 
     const result = updatePartSchema.safeParse(payload);
+
     expect(result.success).toBe(true);
     expect(result.data?.businessId).toBe(
       "123e4567-e89b-12d3-a456-426614174000",
@@ -384,7 +385,7 @@ describe("Update Part Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().businessId?._errors).toContain(
-      "O ID da empresa deve ser um UUID válido.",
+      "ID da empresa é inválido.",
     );
   });
 
@@ -415,14 +416,16 @@ describe("Update Part Zod Validation Fields", () => {
     expect(result.error?.format().description?._errors).toContain(
       "A descrição deve ter no mínimo 3 caracteres.",
     );
+
     expect(result.error?.format().unit_price?._errors).toContain(
       "O preço unitário deve ser um valor positivo.",
     );
     expect(result.error?.format().supplierId?._errors).toContain(
-      "O ID do fornecedor deve ser um UUID válido.",
+      "ID do fornecedor é inválido.",
     );
+
     expect(result.error?.format().businessId?._errors).toContain(
-      "O ID da empresa deve ser um UUID válido.",
+      "ID da empresa é inválido.",
     );
   });
 

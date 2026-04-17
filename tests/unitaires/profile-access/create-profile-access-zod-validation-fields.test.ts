@@ -5,7 +5,7 @@ describe("Create Profile Access Zod Validation Fields", () => {
   it("should validate a valid payload", () => {
     const payload = {
       name: "Valid Profile Name",
-      businessId: "123",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     };
 
     const result = createProfileAccessSchema.safeParse(payload);
@@ -15,7 +15,7 @@ describe("Create Profile Access Zod Validation Fields", () => {
   it("should fail if the name has less than 3 characters", () => {
     const payload = {
       name: "ab",
-      businessId: "123",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     };
 
     const result = createProfileAccessSchema.safeParse(payload);
@@ -29,7 +29,7 @@ describe("Create Profile Access Zod Validation Fields", () => {
   it("should fail if the name is only whitespace", () => {
     const payload = {
       name: "    ",
-      businessId: "123",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     };
 
     const result = createProfileAccessSchema.safeParse(payload);
@@ -43,7 +43,7 @@ describe("Create Profile Access Zod Validation Fields", () => {
   it("should fail if the name exceeds 100 characters", () => {
     const payload = {
       name: "a".repeat(101),
-      businessId: "123",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     };
 
     const result = createProfileAccessSchema.safeParse(payload);
@@ -57,7 +57,7 @@ describe("Create Profile Access Zod Validation Fields", () => {
   it("should fail if the name contains consecutive spaces", () => {
     const payload = {
       name: "Valid  Profile", // two consecutive spaces
-      businessId: "123",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     };
 
     const result = createProfileAccessSchema.safeParse(payload);
@@ -71,7 +71,7 @@ describe("Create Profile Access Zod Validation Fields", () => {
   it("should fail if the name starts with whitespace", () => {
     const payload = {
       name: " LeadingSpace",
-      businessId: "123",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     };
 
     const result = createProfileAccessSchema.safeParse(payload);
@@ -85,7 +85,7 @@ describe("Create Profile Access Zod Validation Fields", () => {
   it("should fail if the name ends with whitespace", () => {
     const payload = {
       name: "TrailingSpace ",
-      businessId: "123",
+      businessId: "550e8400-e29b-41d4-a716-446655440001",
     };
 
     const result = createProfileAccessSchema.safeParse(payload);
@@ -106,7 +106,7 @@ describe("Create Profile Access Zod Validation Fields", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.format().businessId?._errors).toContain(
-      "A empresa é obrigatória!",
+      "ID da empresa é inválido.",
     );
   });
 });

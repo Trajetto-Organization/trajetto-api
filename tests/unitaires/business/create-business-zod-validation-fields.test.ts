@@ -691,10 +691,10 @@ describe("Create Business Zod Validation Fields", () => {
   });
 
   it("should validate a valid businessId", () => {
-    const validData = { businessId: "123" };
+    const validData = { businessId: "550e8400-e29b-41d4-a716-446655440000" };
     const parsed = updateDeleteBusinessSchema.parse(validData);
 
-    expect(parsed.businessId).toBe("123");
+    expect(parsed.businessId).toBe("550e8400-e29b-41d4-a716-446655440000");
   });
 
   it("should throw error if businessId is empty", () => {
@@ -708,7 +708,7 @@ describe("Create Business Zod Validation Fields", () => {
     } catch (error) {
       if (error instanceof ZodError) {
         const hasExpectedMessage = error.errors.some((err) =>
-          err.message.includes("O ID da empresa é obrigatório!"),
+          err.message.includes("ID da empresa é inválido."),
         );
         expect(hasExpectedMessage).toBeTruthy();
       }
@@ -716,32 +716,44 @@ describe("Create Business Zod Validation Fields", () => {
   });
 
   it("should validate valid query parameters", () => {
-    const validData = { page: "2", pageSize: "5", businessId: "business-123" };
+    const validData = {
+      page: "2",
+      pageSize: "5",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+    };
     const parsed = listPagesByBusinessSchema.parse(validData);
 
     expect(parsed.page).toBe(2);
     expect(parsed.pageSize).toBe(5);
 
-    expect(parsed.businessId).toBe("business-123");
+    expect(parsed.businessId).toBe("550e8400-e29b-41d4-a716-446655440000");
   });
 
   it("should default page to 1 if invalid", () => {
-    const data = { page: "", pageSize: "5", businessId: "business-123" };
+    const data = {
+      page: "",
+      pageSize: "5",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+    };
     const parsed = listPagesByBusinessSchema.parse(data);
 
     expect(parsed.page).toBe(1);
     expect(parsed.pageSize).toBe(5);
 
-    expect(parsed.businessId).toBe("business-123");
+    expect(parsed.businessId).toBe("550e8400-e29b-41d4-a716-446655440000");
   });
 
   it("should default pageSize to 2 if invalid", () => {
-    const data = { page: "2", pageSize: "", businessId: "business-123" };
+    const data = {
+      page: "2",
+      pageSize: "",
+      businessId: "550e8400-e29b-41d4-a716-446655440000",
+    };
     const parsed = listPagesByBusinessSchema.parse(data);
 
     expect(parsed.page).toBe(2);
     expect(parsed.pageSize).toBe(2);
 
-    expect(parsed.businessId).toBe("business-123");
+    expect(parsed.businessId).toBe("550e8400-e29b-41d4-a716-446655440000");
   });
 });

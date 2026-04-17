@@ -38,6 +38,7 @@ describe("Delete Avatar UseCase", () => {
         fs.unlinkSync(filePath);
       }
     }
+
     createdTestFiles = [];
   });
 

@@ -38,7 +38,11 @@ describe("Get Dashboard Trends UseCase", () => {
     // Use the same date construction approach as the use case (getCurrentDateLocal + formatDateToLocal)
     // to avoid timezone mismatches between test data and use case queries
     const now = new Date();
-    const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayLocal = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
 
     const entities = [
       "vehicle",
