@@ -5,6 +5,7 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch: # Creates the run button
 
 env:
   # Common environment variables for all jobs
@@ -135,7 +136,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    if: github.event_name == 'workflow_dispatch'
 
     # The line below enables manual approval on GitHub.
     environment: Production
