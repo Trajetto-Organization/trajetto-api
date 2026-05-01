@@ -72,6 +72,9 @@ import { TrafficViolationCodeRepository } from "@/modules/fine/repositories/traf
 import { IFineRepository } from "@/modules/fine/repositories/IFine-repository";
 import { ITrafficViolationCodeRepository } from "@/modules/fine/repositories/ITraffic-violation-code-repository";
 
+import { IPendingDeletionProvider } from "./providers/pending-deletion-provider/IPendingDeletion-provider";
+import { PendingDeletionProvider } from "./providers/pending-deletion-provider/pending-deletion-provider";
+
 import { IWhatsAppProvider } from "./providers/whatsapp-provider/IWhatsApp-provider";
 import { EvolutionApiProvider } from "./providers/whatsapp-provider/implementations/evolution-api-provider";
 
@@ -87,6 +90,11 @@ container.registerSingleton<IWhatsAppProvider>(
 container.registerSingleton<NotificationService>(
   "NotificationService",
   NotificationService,
+);
+
+container.registerSingleton<IPendingDeletionProvider>(
+  "PendingDeletionProvider",
+  PendingDeletionProvider,
 );
 
 container.registerSingleton<KanbanService>("KanbanService", KanbanService);

@@ -7,6 +7,7 @@ import { updateBusinessSchema } from "@/schemas/update-business-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 import { updateAILimitSchema } from "@/schemas/update-ai-limit-schema";
+import { confirmDeletionCodeSchema } from "@/schemas/confirm-deletion-code-schema";
 
 const businessSchemas = {
   createBusiness: createBusinessSchema,
@@ -24,6 +25,7 @@ const businessSchemas = {
   updateDeleteBusiness: updateDeleteBusinessSchema,
   updateBusiness: updateBusinessSchema,
   updateAILimit: updateAILimitSchema,
+  confirmDeletionCode: confirmDeletionCodeSchema,
 };
 
 const businessResponses = {
@@ -311,6 +313,66 @@ const businessResponses = {
       message: z
         .string()
         .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+  ]),
+
+  // Two-step deletion flow
+  businessDeletionCodeSent: z.object({
+    message: z
+      .string()
+      .default(
+        "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
+      ),
+  }),
+  businessHasChildrenConflict: z.object({
+    message: z
+      .string()
+      .default("Existem 2 filial(is) vinculada(s), 5 usuário(s) vinculado(s)."),
+  }),
+  requestBusinessDeletionErrors: z.union([
+    z.object({
+      message: z.string().default("Validation Error"),
+      issues: z.array(z.string()),
+    }),
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Houve um erro ao tentar enviar o código de confirmação! Por favor, tente novamente.",
+        ),
+    }),
+  ]),
+  confirmBusinessDeletionErrors: z.union([
+    z.object({
+      message: z.string().default("Validation Error"),
+      issues: z.array(z.string()),
+    }),
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Nenhuma solicitação de exclusão pendente. Solicite a exclusão novamente.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Código de confirmação expirado. Solicite a exclusão novamente para receber um novo código.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Código de confirmação inválido. Verifique e tente novamente.",
+        ),
     }),
   ]),
 };

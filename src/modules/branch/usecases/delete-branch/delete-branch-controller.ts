@@ -10,7 +10,14 @@ import { BranchNotFoundError } from "../errors/branch-not-found-error";
 import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";
 
 import { BranchHasChildrenError } from "../errors/branch-has-children-error";
+
+import { BranchDeletionCodeInvalidError } from "../errors/branch-deletion-code-invalid-error";
+import { BranchDeletionCodeExpiredError } from "../errors/branch-deletion-code-expired-error";
+
+import { BranchNoPendingDeletionError } from "../errors/branch-no-pending-deletion-error";
+
 import { updateDeleteBranchSchema } from "@/schemas/update-delete-branch-schema";
+import { confirmDeletionCodeSchema } from "@/schemas/confirm-deletion-code-schema";
 
 class DeleteBranchController {
   async handle(
@@ -21,11 +28,12 @@ class DeleteBranchController {
     const { businessId, branchId } = updateDeleteBranchSchema.parse(
       request.params,
     );
+    const { code } = confirmDeletionCodeSchema.parse(request.body);
 
     const deleteBranchUseCase = container.resolve(DeleteBranchUseCase);
 
     try {
-      await deleteBranchUseCase.execute(branchId, businessId, id);
+      await deleteBranchUseCase.execute(branchId, businessId, id, code);
       return reply
         .status(200)
         .send({ message: "Filial deletada com sucesso!" });
@@ -48,6 +56,18 @@ class DeleteBranchController {
 
       if (error instanceof BranchHasChildrenError) {
         return reply.status(409).send({ message: error.message });
+      }
+
+      if (error instanceof BranchNoPendingDeletionError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof BranchDeletionCodeExpiredError) {
+        return reply.status(400).send({ message: error.message });
+      }
+
+      if (error instanceof BranchDeletionCodeInvalidError) {
+        return reply.status(400).send({ message: error.message });
       }
 
       throw error;

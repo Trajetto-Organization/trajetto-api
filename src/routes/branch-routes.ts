@@ -3,6 +3,8 @@ import { FastifyInstance } from "fastify";
 import { CreateBranchController } from "@/modules/branch/usecases/create-branch/create-branch-controller";
 import { DeleteBranchController } from "@/modules/branch/usecases/delete-branch/delete-branch-controller";
 
+import { RequestBranchDeletionController } from "@/modules/branch/usecases/request-branch-deletion/request-branch-deletion-controller";
+
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 
@@ -20,6 +22,8 @@ import {
 
 const createBranchController = new CreateBranchController();
 const deleteBranchController = new DeleteBranchController();
+
+const requestBranchDeletionController = new RequestBranchDeletionController();
 
 const updateBranchController = new UpdateBranchController();
 const listBranchController = new ListBranchController();
@@ -129,6 +133,31 @@ async function branchRoutes(app: FastifyInstance) {
     updateBranchController.handle,
   );
 
+  app.post(
+    "/request-branch-deletion/:branchId/business/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("branch_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["branch"],
+        summary: "Request branch deletion (sends confirmation code)",
+        description:
+          "First step of the two-step branch deletion flow. Validates that the branch can be deleted (no dependencies) and sends a 6-digit confirmation code to the requesting user's email. The code expires in 5 minutes. Use the DELETE endpoint with the code to actually delete the branch.",
+        params: branchSchemas.updateDeleteBranch,
+        response: {
+          200: branchResponses.branchDeletionCodeSent,
+          400: branchResponses.requestBranchDeletionErrors,
+          403: branchResponses.deleteBranchForbidden,
+          404: branchResponses.deleteBranchNotFound,
+          409: branchResponses.branchHasChildrenConflict,
+          500: branchResponses.internalServerError,
+        },
+      },
+    },
+    requestBranchDeletionController.handle,
+  );
+
   app.delete(
     "/delete-branch/:branchId/business/:businessId",
     {
@@ -137,15 +166,17 @@ async function branchRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
-        summary: "Delete a branch",
+        summary: "Confirm branch deletion (with confirmation code)",
         description:
-          "Permanently remove a branch location and all associated operational data from the system",
+          "Second step of the two-step branch deletion flow. Validates the 6-digit confirmation code received by email, then permanently removes the branch. After deletion, all other business admins (excluding the deleter) receive an audit notification by email.",
         params: branchSchemas.updateDeleteBranch,
+        body: branchSchemas.confirmDeletionCode,
         response: {
           200: branchResponses.branchDeleted,
-          400: branchResponses.deleteBranchErrors,
+          400: branchResponses.confirmBranchDeletionErrors,
           403: branchResponses.deleteBranchForbidden,
           404: branchResponses.deleteBranchNotFound,
+          409: branchResponses.branchHasChildrenConflict,
           500: branchResponses.internalServerError,
         },
       },

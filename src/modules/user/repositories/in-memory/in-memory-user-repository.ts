@@ -274,6 +274,12 @@ class InMemoryUserRepository implements IUserRepository {
     );
   }
 
+  async findOtherMasters(excludeUserId: string): Promise<User[]> {
+    return this.user.filter(
+      (user) => user.role === "MASTER" && user.id !== excludeUserId,
+    );
+  }
+
   async findUserByDriverId(driverId: string): Promise<User | null> {
     const findUserByDriverId = this.user.find(
       (user) => user.driverId === driverId,

@@ -1,0 +1,141 @@
+<html>
+  <head>
+    <style>
+      body {
+        background-color: #efeef1;
+        font-family: HelveticaNeue, Helvetica, Arial, sans-serif;
+      }
+      .container {
+        max-width: 580px;
+        margin: 30px auto;
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.1);
+      }
+      .footer {
+        max-width: 580px;
+        margin: 0 auto;
+        text-align: center;
+        color: #706a7b;
+        font-size: 12px;
+      }
+      .content {
+        padding: 20px;
+      }
+      .logo {
+        text-align: center;
+        padding-bottom: 30px;
+      }
+      .logo img {
+        display: block;
+        margin: 0 auto;
+        max-width: 150px;
+        height: auto;
+      }
+      .sections-borders {
+        width: 100%;
+        display: flex;
+        margin-bottom: 20px;
+      }
+      .section-border {
+        border-bottom: 1px solid rgb(238, 238, 238);
+        width: 249px;
+      }
+      .section-center {
+        border-bottom: 1px solid #d50057;
+        width: 102px;
+      }
+      .paragraph {
+        line-height: 1.5;
+        font-size: 14px;
+        margin-bottom: 15px;
+      }
+      .alert {
+        background-color: #fff8e6;
+        border-left: 4px solid #f59e0b;
+        padding: 12px 16px;
+        margin: 20px 0;
+        border-radius: 4px;
+      }
+      .code {
+        font-size: 28px;
+        font-weight: bold;
+        letter-spacing: 6px;
+        color: #d50057;
+        text-align: center;
+        margin: 20px 0;
+        padding: 16px;
+        background-color: #fafafa;
+        border-radius: 8px;
+        border: 1px dashed #d50057;
+      }
+      .branch-info {
+        background-color: #f9fafb;
+        padding: 12px 16px;
+        border-radius: 6px;
+        margin: 16px 0;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="logo">
+        <img width="150" src="{{logo}}" alt="Trajetto Logo" />
+      </div>
+
+      <div class="sections-borders">
+        <div class="section-border"></div>
+        <div class="section-center"></div>
+        <div class="section-border"></div>
+      </div>
+
+      <div class="content">
+        <p class="paragraph">Olá {{name}},</p>
+
+        <p class="paragraph">
+          Recebemos uma solicitação para excluir a filial abaixo:
+        </p>
+
+        <div class="branch-info">
+          <strong>Filial:</strong>
+          {{branchName}}<br />
+          <strong>CNPJ:</strong>
+          {{branchCnpj}}<br />
+          <strong>Empresa:</strong>
+          {{businessName}}
+        </div>
+
+        <p class="paragraph">
+          Para confirmar a exclusão, utilize o código abaixo na tela de
+          confirmação:
+        </p>
+
+        <div class="code">{{code}}</div>
+
+        <p class="paragraph">
+          Este código expira em
+          <strong>5 minutos</strong>.
+        </p>
+
+        <div class="alert">
+          <strong>⚠️ Esta ação é permanente.</strong>
+          Após confirmada, a filial e todos os dados não poderão ser
+          recuperados. Se você não solicitou esta exclusão, ignore este e-mail e
+          altere sua senha imediatamente.
+        </div>
+
+        <p class="paragraph">
+          Obrigado,<br />
+          Equipe |
+          <strong>Trajetto</strong>
+        </p>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>© {{year}} Trajetto, Todos os direitos reservados</p>
+    </div>
+  </body>
+</html>

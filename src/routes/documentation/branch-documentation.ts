@@ -9,6 +9,8 @@ import { updateDeleteBranchSchema } from "@/schemas/update-delete-branch-schema"
 import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 import { listPagesSchema } from "@/schemas/list-pages-schema";
 
+import { confirmDeletionCodeSchema } from "@/schemas/confirm-deletion-code-schema";
+
 const branchSchemas = {
   createBranch: createBranchSchema,
   listBranch: listPagesSchema,
@@ -27,6 +29,7 @@ const branchSchemas = {
       .describe("ID da última empresa da página anterior para paginação"),
     businessId: z.string().describe("ID da empresa"),
   }),
+  confirmDeletionCode: confirmDeletionCodeSchema,
 };
 
 const branchResponses = {
@@ -358,6 +361,74 @@ const branchResponses = {
   deleteBranchNotFound: z.object({
     message: z.string().default("Filial não encontrada."),
   }),
+
+  // Two-step deletion flow
+  branchDeletionCodeSent: z.object({
+    message: z
+      .string()
+      .default(
+        "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
+      ),
+  }),
+  branchHasChildrenConflict: z.object({
+    message: z.string().default("Existem 3 veículo(s), 2 motorista(s)."),
+  }),
+  requestBranchDeletionErrors: z.union([
+    z.object({
+      message: z.string().default("Validation Error"),
+      issues: z.array(z.string()),
+    }),
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Houve um erro ao tentar enviar o código de confirmação! Por favor, tente novamente.",
+        ),
+    }),
+  ]),
+  confirmBranchDeletionErrors: z.union([
+    z.object({
+      message: z.string().default("Validation Error"),
+      issues: z.array(z.string()),
+    }),
+    z.object({
+      message: z.string().default("Recurso não encontrado!"),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default("Empresa não encontrada! Por favor, tente novamente."),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Nenhuma solicitação de exclusão pendente. Solicite a exclusão novamente.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Código de confirmação expirado. Solicite a exclusão novamente para receber um novo código.",
+        ),
+    }),
+    z.object({
+      message: z
+        .string()
+        .default(
+          "Código de confirmação inválido. Verifique e tente novamente.",
+        ),
+    }),
+  ]),
 };
 
 export { branchSchemas, branchResponses };

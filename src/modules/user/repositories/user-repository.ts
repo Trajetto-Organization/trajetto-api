@@ -461,6 +461,21 @@ class UserRepository implements IUserRepository {
     return admins;
   }
 
+  async findOtherMasters(excludeUserId: string): Promise<User[]> {
+    const masters = await this.prisma.user.findMany({
+      where: {
+        role: "MASTER",
+        access_revoked: false,
+        id: { not: excludeUserId },
+      },
+      orderBy: {
+        created_at: "asc",
+      },
+    });
+
+    return masters;
+  }
+
   async findBusinessAdminsForWhatsApp(businessId: string): Promise<User[]> {
     const admins = await this.prisma.user.findMany({
       where: {

@@ -6,6 +6,7 @@ import { RateLimitOptions } from "@fastify/rate-limit";
 export interface RateLimiterOptions extends RateLimitOptions {
   max?: number; // Maximum number of requests
   timeWindow?: number; // Time window (in milliseconds)
+  message?: string;
 }
 
 const getRateLimiterConfig = (options?: RateLimiterOptions) => {
@@ -28,7 +29,8 @@ const getRateLimiterConfig = (options?: RateLimiterOptions) => {
     // Configures the error response if the limit is exceeded
     errorResponseBuilder: (request: FastifyRequest, context: any) => {
       throw new AppError(
-        "Muitas solicitações vindas deste IP! Por favor, tente novamente mais tarde.",
+        options?.message ??
+          "Muitas solicitações vindas deste IP! Por favor, tente novamente mais tarde.",
         429,
       );
     },

@@ -11,6 +11,7 @@ import { DeleteBusinessController } from "@/modules/business/usecases/delete-bus
 import { UpdateBusinessController } from "@/modules/business/usecases/update-business/update-business-controller";
 import { ToggleBusinessActiveController } from "@/modules/business/usecases/toggle-business-active/toggle-business-active-controller";
 
+import { RequestBusinessDeletionController } from "@/modules/business/usecases/request-business-deletion/request-business-deletion-controller";
 import { UpdateAILimitController } from "@/modules/business/usecases/update-ai-limit/update-ai-limit-controller";
 
 import { GetAIUsageController } from "@/modules/business/usecases/get-ai-usage/get-ai-usage-controller";
@@ -27,8 +28,10 @@ const listBusinessController = new ListBusinessController();
 const searchBusinessCursorController = new SearchBusinessCursorController();
 
 const deleteBusinessController = new DeleteBusinessController();
-const updateBusinessController = new UpdateBusinessController();
+const requestBusinessDeletionController =
+  new RequestBusinessDeletionController();
 
+const updateBusinessController = new UpdateBusinessController();
 const toggleBusinessActiveController = new ToggleBusinessActiveController();
 
 const updateAILimitController = new UpdateAILimitController();
@@ -172,6 +175,30 @@ async function businessRoutes(app: FastifyInstance) {
     getAIUsageController.handle,
   );
 
+  app.post(
+    "/request-business-deletion/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["business"],
+        summary: "Request business deletion (sends confirmation code)",
+        description:
+          "First step of the two-step business deletion flow. Validates that the business can be deleted (no branches, users or drivers linked) and sends a 6-digit confirmation code to the requesting MASTER user's email. The code expires in 5 minutes. Use the DELETE endpoint with the code to actually delete the business.",
+        params: businessSchemas.updateDeleteBusiness,
+        response: {
+          200: businessResponses.businessDeletionCodeSent,
+          400: businessResponses.requestBusinessDeletionErrors,
+          404: businessResponses.businessNotFound,
+          409: businessResponses.businessHasChildrenConflict,
+          500: businessResponses.internalServerError,
+        },
+      },
+    },
+    requestBusinessDeletionController.handle,
+  );
+
   app.delete(
     "/delete-business/:businessId",
     {
@@ -180,13 +207,16 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Delete a business",
+        summary: "Confirm business deletion (with confirmation code)",
         description:
-          "Permanently remove a business entity and all associated data from the fleet management system",
+          "Second step of the two-step business deletion flow. Validates the 6-digit confirmation code received by email, then permanently removes the business. After deletion, all other MASTER users (excluding the deleter) receive an audit notification by email.",
         params: businessSchemas.updateDeleteBusiness,
+        body: businessSchemas.confirmDeletionCode,
         response: {
           200: businessResponses.businessDeleted,
-          400: businessResponses.deleteBusinessErrors,
+          400: businessResponses.confirmBusinessDeletionErrors,
+          404: businessResponses.businessNotFound,
+          409: businessResponses.businessHasChildrenConflict,
           500: businessResponses.internalServerError,
         },
       },

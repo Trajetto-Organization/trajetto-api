@@ -57,6 +57,7 @@ interface IUserRepository {
   }: UpdateUserWhatsAppSettings) => Promise<User | null>;
   findBusinessAdminsByBusinessId: (businessId: string) => Promise<User[]>;
   findBusinessAdminsForWhatsApp: (businessId: string) => Promise<User[]>;
+  findOtherMasters: (excludeUserId: string) => Promise<User[]>;
   updateWhatsAppInstanceStatus: (
     userId: string,
     connected: boolean,

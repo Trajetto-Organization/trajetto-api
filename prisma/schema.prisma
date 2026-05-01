@@ -151,6 +151,7 @@ model User {
 
   TwoFactorConfirmation TwoFactorConfirmation?
   KanbanCard            KanbanCard[]
+  PendingDeletion       PendingDeletion[]
 
   // WhatsApp fields
   whatsapp_notifications_enabled Boolean @default(false)
@@ -255,6 +256,22 @@ model TwoFactorToken {
 
   @@unique([email, token])
   @@map("two_factor_token")
+}
+
+model PendingDeletion {
+  id          String   @id @default(uuid(7))
+  entity_type String // 'branch' | 'business'
+  entity_id   String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  code_hash   String
+  expires     DateTime
+  created_at  DateTime @default(now())
+
+  @@unique([entity_type, entity_id, userId])
+  @@index([userId])
+  @@index([expires])
+  @@map("pending_deletion")
 }
 
 model Branch {
