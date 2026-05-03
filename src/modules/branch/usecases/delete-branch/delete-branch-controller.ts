@@ -28,8 +28,8 @@ class DeleteBranchController {
     const { businessId, branchId } = updateDeleteBranchSchema.parse(
       request.params,
     );
-    const { code } = confirmDeletionCodeSchema.parse(request.body);
 
+    const { code } = confirmDeletionCodeSchema.parse(request.body);
     const deleteBranchUseCase = container.resolve(DeleteBranchUseCase);
 
     try {
