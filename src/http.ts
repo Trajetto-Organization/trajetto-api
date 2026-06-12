@@ -10,6 +10,7 @@ import fastifyStatic from "@fastify/static";
 import multipart from "@fastify/multipart";
 
 import path from "node:path";
+import Redis from "ioredis";
 
 import { ZodError } from "zod";
 import { env } from "./env";
@@ -104,11 +105,28 @@ app.register(fastifySwaggerUi, {
   routePrefix: "/docs",
 });
 
+// Dedicated Redis client for rate limiting (separate from the main one).
+// Sharing the counter across replicas keeps the global limit correct when
+// scaling horizontally (in-memory would multiply the effective limit by N).
+// `enableOfflineQueue: false` makes calls fail fast when Redis is down, and
+// `skipOnError: true` below lets the request pass instead of returning 500.
+const rateLimitRedis = new Redis(env.REDIS_URL, {
+  connectionName: "trajetto-rate-limit",
+  maxRetriesPerRequest: 1,
+  enableOfflineQueue: false,
+  lazyConnect: false,
+});
+
+rateLimitRedis.on("error", (err) => {
+  console.error("[Redis · rate-limit] connection error:", err.message);
+});
+
 app.register(fastifyRateLimit, {
   global: true,
   max: 300, // 300 requests per minute (5 requests/second) - Suitable for B2B
   timeWindow: "1 minute",
-  skipOnError: false, // Do not skip rate limit if there is an error in the plugin
+  redis: rateLimitRedis,
+  skipOnError: true, // if Redis is down, let the request pass (don't crash the app)
   keyGenerator: (request) => {
     const forwardedFor = request.headers["x-forwarded-for"];
     const clientIP =

@@ -1,6 +1,9 @@
 import { Server as SocketIOServer } from "socket.io";
 import { Server } from "http";
 
+import { createAdapter } from "@socket.io/redis-adapter";
+import Redis from "ioredis";
+
 import { verify } from "jsonwebtoken";
 import auth from "@/config/auth";
 
@@ -11,10 +14,17 @@ import { env } from "./env";
 const connectedUsers: Record<string, string[]> = {};
 
 // Socket.IO instance
-let io: SocketIOServer;
+let io: SocketIOServer | null = null;
+
+// References for the Redis pub/sub clients on the adapter to shut them down gracefully
+// shutdown. Kept outside the RedisConnection singleton because pub/sub blocks
+// the client — we don't want to contaminate the main connection used in other
+// points (health check, rate-limit, etc.).
+let adapterPubClient: Redis | null = null;
+let adapterSubClient: Redis | null = null;
 
 // Function to initialize Socket.IO with HTTP server
-function initializeSocketIO(httpServer: Server): SocketIOServer {
+async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   // Create a Socket.IO instance connected to the HTTP server
   io = new SocketIOServer(httpServer, {
     cors: {
@@ -23,6 +33,49 @@ function initializeSocketIO(httpServer: Server): SocketIOServer {
       credentials: true,
     },
   });
+
+  // Plug in the Redis adapter BEFORE any `io.use`/`io.on` to ensure
+  // that all subsequent `emit` operations route via pub/sub. Without it, an
+  // `emit` on one replica doesn't reach the sockets connected to another — the
+  // real-time events (pushNotification, securityAction, aiVerification)
+  // are lost between instances when scaling horizontally. Failure here is
+  // non-fatal in development (follows single-instance).
+  try {
+    adapterPubClient = new Redis(env.REDIS_URL, {
+      maxRetriesPerRequest: 3,
+      lazyConnect: false,
+    });
+    adapterSubClient = adapterPubClient.duplicate();
+
+    await Promise.all([
+      new Promise<void>((resolve, reject) => {
+        adapterPubClient!.once("ready", resolve);
+        adapterPubClient!.once("error", reject);
+      }),
+      new Promise<void>((resolve, reject) => {
+        adapterSubClient!.once("ready", resolve);
+        adapterSubClient!.once("error", reject);
+      }),
+    ]);
+
+    io.adapter(createAdapter(adapterPubClient, adapterSubClient));
+    console.log(
+      "[Socket.IO] Redis adapter conectado — escalonamento horizontal ok",
+    );
+  } catch (error) {
+    console.warn(
+      "[Socket.IO] Falha ao conectar Redis adapter — operando em " +
+        "single-instance. Em produção com múltiplas réplicas, eventos NÃO " +
+        "se propagam entre instâncias.",
+      error instanceof Error ? error.message : error,
+    );
+    // Releases any clients that may have been left hanging to prevent data leaks
+    // TCP sockets. Quietly — the vulnerability has already been reported above.
+    adapterPubClient?.disconnect();
+    adapterSubClient?.disconnect();
+    adapterPubClient = null;
+    adapterSubClient = null;
+  }
 
   // Authentication Middleware for Socket.IO
   io.use(async (socket, next) => {
@@ -161,8 +214,25 @@ const sendSecurityEventToBusiness = (
   }
 };
 
+/**
+ * Closes the Redis connections for the pub/sub adapter on graceful shutdown. Without this,
+ * the process may take a long time to terminate (TCP sockets remain open).
+ */
+async function shutdownSocketIO(): Promise<void> {
+  try {
+    await adapterPubClient?.quit();
+    await adapterSubClient?.quit();
+  } catch {
+    // Best-effort no shutdown — does not interfere with shutdown due to a quit error.
+  } finally {
+    adapterPubClient = null;
+    adapterSubClient = null;
+  }
+}
+
 export {
   initializeSocketIO,
+  shutdownSocketIO,
   sendNotificationToUser,
   sendNotificationToBusiness,
   sendAIVerificationEvent,

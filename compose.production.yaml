@@ -70,12 +70,41 @@ services:
       retries: 5
       start_period: 30s
 
+  trajetto-redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    deploy:
+      mode: replicated
+      replicas: 1 # Stateful — single shared instance for all API replicas (pub/sub + rate-limit)
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+    networks:
+      - minha_rede
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   api:
     image: ghcr.io/trajetto-organization/trajetto-api:latest
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}?schema=public
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@${RABBITMQ_HOST}:${RABBITMQ_PORT}
+      REDIS_URL: redis://${REDIS_HOST}:${REDIS_PORT}
       HTTP_REQUEST: ${HTTP_REQUEST}
       API_HTTP_REQUEST: ${API_HTTP_REQUEST}
       CLOUDINARY_LOGO_IMAGE: ${CLOUDINARY_LOGO_IMAGE}
@@ -98,7 +127,7 @@ services:
       R2_PUBLIC_DOMAIN: ${R2_PUBLIC_DOMAIN}
     deploy:
       mode: replicated
-      replicas: 1
+      replicas: 2 # Horizontal scale — events propagate across replicas via Redis adapter
       update_config:
         parallelism: 1
         delay: 5s
@@ -123,12 +152,20 @@ services:
         - traefik.http.routers.api.service=api
         - traefik.http.services.api.loadbalancer.server.port=3333
         - traefik.http.services.api.loadbalancer.passHostHeader=true
+        # Sticky sessions — pin each client to one replica so the Socket.IO
+        # polling handshake stays consistent. The Redis adapter handles
+        # cross-replica event propagation; sticky keeps the connection stable.
+        - traefik.http.services.api.loadbalancer.sticky.cookie=true
+        - traefik.http.services.api.loadbalancer.sticky.cookie.name=trajetto_api_affinity
+        - traefik.http.services.api.loadbalancer.sticky.cookie.httponly=true
+        - traefik.http.services.api.loadbalancer.sticky.cookie.secure=true
         - traefik.docker.network=minha_rede
     networks:
       - minha_rede
     depends_on:
       - trajetto-database
       - trajetto-rabbitmq
+      - trajetto-redis
     healthcheck:
       test:
         [
@@ -146,6 +183,8 @@ volumes:
   postgres_data:
     driver: local
   rabbitmq_data:
+    driver: local
+  redis_data:
     driver: local
 
 networks:

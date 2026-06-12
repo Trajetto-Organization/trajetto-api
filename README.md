@@ -8,6 +8,8 @@
 ![Prisma](https://img.shields.io/badge/Prisma-3982CE?style=for-the-badge&logo=Prisma&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white)
 ![RabbitMQ](https://img.shields.io/badge/RabbitMQ-FF6600?style=for-the-badge&logo=rabbitmq&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)
+![Socket.IO](https://img.shields.io/badge/Socket.IO-010101?style=for-the-badge&logo=socket.io&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 
 **Sistema completo de gestão de frotas com funcionalidades avançadas de controle, manutenção e monitoramento de veículos**
@@ -131,27 +133,43 @@ O **Trajetto** é uma solução completa para gestão de frotas empresariais, de
 - **[Fastify](https://www.fastify.io/)** - Framework web rápido e eficiente
 - **[Prisma ORM](https://www.prisma.io/)** - ORM moderno para TypeScript
 
-### Banco de Dados
+### Banco de Dados e Cache
 
 - **[PostgreSQL](https://www.postgresql.org/)** - Banco de dados relacional
 - **[RabbitMQ](https://www.rabbitmq.com/)** - Message broker para filas
+- **[Redis](https://redis.io/)** + **[ioredis](https://github.com/redis/ioredis)** - Pub/sub do adapter de WebSocket e store distribuído de rate-limit
 
 ### Autenticação e Segurança
 
 - **[JWT](https://jwt.io/)** - JSON Web Tokens
 - **[bcrypt](https://www.npmjs.com/package/bcrypt)** - Hash de senhas
 - **[Helmet](https://helmetjs.github.io/)** - Middleware de segurança
+- **[@fastify/rate-limit](https://github.com/fastify/fastify-rate-limit)** - Limitação de requisições (distribuída via Redis)
 
 ### Comunicação em Tempo Real
 
-- **[Socket.IO](https://socket.io/)** - WebSocket para tempo real
-- **[Nodemailer](https://nodemailer.com/)** - Envio de emails
+- **[Socket.IO](https://socket.io/)** + **[@socket.io/redis-adapter](https://github.com/socketio/socket.io-redis-adapter)** - WebSocket com propagação entre réplicas
+- **[Nodemailer](https://nodemailer.com/)** + **[Handlebars](https://handlebarsjs.com/)** - Envio e templating de e-mails
+
+### Integrações e Processamento
+
+- **[@anthropic-ai/sdk](https://docs.anthropic.com/)** - Verificação por IA (Claude) de imagens/checklists
+- **[Evolution API](https://doc.evolution-api.com/)** - Integração de WhatsApp
+- **[OSRM](https://project-osrm.org/)** - Roteirização e cálculo de rotas
+- **[aws-sdk](https://www.npmjs.com/package/aws-sdk)** - Upload para Cloudflare R2 (S3-compatible)
+- **[ExcelJS](https://github.com/exceljs/exceljs)** - Geração de relatórios
+- **[Sharp](https://sharp.pixelplumbing.com/)** - Processamento de imagens
+
+### Validação e Injeção de Dependência
+
+- **[Zod](https://zod.dev/)** + **[fastify-type-provider-zod](https://github.com/turkerdev/fastify-type-provider-zod)** - Validação e tipagem das rotas
+- **[TSyringe](https://github.com/microsoft/tsyringe)** - Injeção de dependência
 
 ### Infraestrutura e DevOps
 
 - **[Docker](https://www.docker.com/)** - Containerização
 - **[Docker Compose](https://docs.docker.com/compose/)** - Orquestração local
-- **[GitHub Actions](https://github.com/features/actions)** - CI/CD
+- **[GitHub Actions](https://github.com/features/actions)** - CI/CD (testes + build + push para GHCR)
 
 ### Documentação e Testes
 
@@ -161,9 +179,7 @@ O **Trajetto** é uma solução completa para gestão de frotas empresariais, de
 
 ### Qualidade de Código
 
-- **[ESLint](https://eslint.org/)** - Linter para JavaScript/TypeScript
-- **[Prettier](https://prettier.io/)** - Formatador de código
-- **[Husky](https://typicode.github.io/husky/)** - Git hooks
+- **[Prettier](https://prettier.io/)** - Formatação de código (`yarn lint:check` / `yarn lint:fix`)
 
 ## 📋 Pré-requisitos
 
@@ -194,18 +210,15 @@ npm install
 ### 3. Configure as variáveis de ambiente
 
 ```bash
-# Copie o arquivo de exemplo
-cp .env.development.example .env.development
-
-# Edite o arquivo com suas configurações
-nano .env.development
+# Use o arquivo de desenvolvimento como base
+cp .env.development .env
 ```
 
 ### 4. Inicie os serviços com Docker
 
 ```bash
-# Inicia PostgreSQL e RabbitMQ
-yarn services:up
+# Inicia PostgreSQL, RabbitMQ e Redis
+yarn services:dev:up
 ```
 
 ### 5. Execute as migrações do banco
@@ -251,11 +264,14 @@ DATABASE_URL="postgresql://user:password@localhost:5432/database"
 # RabbitMQ
 RABBITMQ_URL="amqp://user:password@localhost:5672"
 
+# Redis (adapter de WebSocket + rate-limit distribuído)
+REDIS_URL="redis://localhost:6379"
+
 # Autenticação JWT
 JWT_SECRET="seu-jwt-secret-seguro"
 JWT_SECRET_REFRESH_TOKEN="seu-refresh-token-secret"
 
-# Email (Resend em produção)
+# Email (Resend)
 RESEND_SECRET_KEY="sua-api-key-resend"
 RESEND_FROM_EMAIL="noreply@seudominio.com"
 
@@ -263,21 +279,30 @@ RESEND_FROM_EMAIL="noreply@seudominio.com"
 MASTER_USER_EMAIL="admin@trajetto.com"
 MASTER_USER_INITIAL_PASSWORD="SenhaSegura123@"
 
+# Integrações
+OSRM_URL="http://localhost:5000"           # Roteirização
+EVOLUTION_API_URL="http://localhost:8080"  # WhatsApp (Evolution API)
+EVOLUTION_API_KEY="sua-evolution-api-key"
+ANTHROPIC_API_KEY="sk-ant-..."             # Verificação por IA
+
 # HTTP
 HTTP_REQUEST="http://localhost:3000"
 ```
 
 ### Docker Compose
 
-O projeto inclui configurações para desenvolvimento e produção:
+Os serviços de desenvolvimento ficam em composes dedicados, com scripts de atalho:
 
 ```bash
-# Desenvolvimento
-docker-compose up -d
+# Sobe todos os serviços de desenvolvimento (PostgreSQL, RabbitMQ, Redis)
+yarn services:dev:up
 
-# Produção
-docker-compose -f compose.deploy.yaml up -d
+# Serviços auxiliares (opcionais)
+yarn osrm:dev:up           # OSRM (roteirização)
+yarn evolution-api:dev:up  # Evolution API (WhatsApp)
 ```
+
+Em produção, a imagem é publicada no GHCR pela pipeline e o deploy é disparado via webhook (ver [Deploy](#-deploy)).
 
 ## 🎮 Uso
 
@@ -451,15 +476,19 @@ Proteção contra abuso com rate limiting:
 
 ### Paginação
 
-Resposta padrão para listagens:
+As listagens usam paginação baseada em cursor para performance estável em grandes volumes:
+
+```bash
+GET /vehicle/list-vehicle?cursor=<id>&limit=20
+```
+
+Resposta:
 
 ```json
 {
   "data": [],
-  "total": 100,
-  "page": 1,
-  "pageSize": 10,
-  "totalPages": 10
+  "nextCursor": "01J...",
+  "hasMore": true
 }
 ```
 
@@ -525,40 +554,27 @@ describe("Create User Use Case", () => {
 
 ## 🚀 Deploy
 
-### Produção com Docker
+### Pipeline CI/CD (GitHub Actions)
 
-#### 1. Build da imagem
+O deploy é automatizado por `.github/workflows/deploy.yml`, em três estágios:
+
+1. **Test** — sobe PostgreSQL, RabbitMQ e Redis como _services_ e roda os testes unitários e E2E
+2. **Build & Push** — builda a imagem Docker e publica no **GitHub Container Registry (GHCR)**
+3. **Deploy** — dispara o redeploy via webhook (Portainer), com aprovação manual no ambiente `Production`
+
+### Build local da imagem
 
 ```bash
-# Build da imagem de produção
 docker build -t trajetto-api .
-```
-
-#### 2. Deploy com docker-compose
-
-```bash
-# Produção
-docker-compose -f compose.deploy.yaml up -d
-```
-
-### CI/CD com GitHub Actions
-
-O projeto inclui pipeline completa de CI/CD:
-
-```yaml
-# .github/workflows/deploy.yml
-# - Build automático
-# - Testes
-# - Push para Docker Hub
-# - Deploy automático
 ```
 
 ### Variáveis de Ambiente (Produção)
 
 ```bash
-# Configure no seu provedor de cloud
+# Configure no seu provedor de cloud / orquestrador
 DATABASE_URL="postgresql://..."
 RABBITMQ_URL="amqp://..."
+REDIS_URL="redis://..."
 JWT_SECRET="production-secret"
 RESEND_SECRET_KEY="re_..."
 ```
@@ -637,8 +653,7 @@ refactor: optimize database queries
 
 #### Code Style
 
-- Use Prettier para formatação
-- ESLint para linting
+- Use Prettier para formatação (`yarn lint:fix`)
 - Nomeação em inglês
 - Interfaces com prefixo `I`
 - DTOs com sufixo `Props`

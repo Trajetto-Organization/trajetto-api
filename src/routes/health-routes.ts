@@ -2,6 +2,8 @@ import { FastifyInstance } from "fastify";
 import database from "@/../infra/database";
 
 import { RabbitMQConnection } from "@/../infra/messaging/rabbitmq-connection";
+import { RedisConnection } from "@/../infra/cache/redis-connection";
+
 import { healthResponses } from "./documentation/health-documentation";
 
 async function healthRoutes(app: FastifyInstance) {
@@ -48,6 +50,25 @@ async function healthRoutes(app: FastifyInstance) {
         };
       } catch (error) {
         services.rabbitmq = {
+          status: "unhealthy",
+          error: error instanceof Error ? error.message : "Unknown error",
+        };
+      }
+
+      try {
+        // Check Redis
+        const redisStart = Date.now();
+        const redis = RedisConnection.getInstance();
+
+        const client = await redis.getClient();
+        await client.ping();
+
+        services.redis = {
+          status: "healthy",
+          latency: Date.now() - redisStart,
+        };
+      } catch (error) {
+        services.redis = {
           status: "unhealthy",
           error: error instanceof Error ? error.message : "Unknown error",
         };

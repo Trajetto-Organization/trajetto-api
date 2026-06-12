@@ -25,6 +25,16 @@ const healthResponses = {
             .describe("RabbitMQ connection status"),
           error: z.string().optional().describe("Error message if unhealthy"),
         }),
+        redis: z.object({
+          status: z
+            .enum(["healthy", "unhealthy"])
+            .describe("Redis connection status"),
+          latency: z
+            .number()
+            .optional()
+            .describe("Redis ping latency in milliseconds"),
+          error: z.string().optional().describe("Error message if unhealthy"),
+        }),
       })
       .describe("Individual service health statuses"),
     message: z

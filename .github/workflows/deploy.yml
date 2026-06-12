@@ -12,6 +12,7 @@ env:
   NODE_ENV: test
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
   RABBITMQ_URL: amqp://guest:guest@localhost:5672
+  REDIS_URL: redis://localhost:6379
   HTTP_REQUEST: http://localhost:3000
   API_HTTP_REQUEST: http://localhost:3333
   JWT_SECRET: test-jwt-secret-key-for-github-actions-only
@@ -59,6 +60,16 @@ jobs:
           - 5672:5672
           - 15672:15672
 
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -76,6 +87,7 @@ jobs:
         run: |
           timeout 60 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
           timeout 60 bash -c 'until nc -z localhost 5672; do sleep 1; done'
+          timeout 60 bash -c 'until nc -z localhost 6379; do sleep 1; done'
 
       - name: Create tmp directory
         run: mkdir -p src/tmp
