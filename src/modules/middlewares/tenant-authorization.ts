@@ -40,9 +40,25 @@ function authorizeRequestedTenant(request: FastifyRequest): void {
   }
 }
 
+/**
+ * Fastify `preHandler` hook.
+ *
+ * `ensureAuthenticated` runs on `onRequest`, a stage where the body has not
+ * been parsed yet — so a `businessId` sent in the body is invisible there and
+ * escapes the check. This hook runs after parsing and closes that gap for
+ * every route, including ones added later.
+ */
+async function enforceRequestedTenant(request: FastifyRequest): Promise<void> {
+  // Public routes never populate `user`, so there is no tenant to enforce.
+  if (!request.user) return;
+
+  authorizeRequestedTenant(request);
+}
+
 export {
   TenantPrincipal,
   assertTenantAccess,
   authorizeRequestedTenant,
+  enforceRequestedTenant,
   getRequestedTenantId,
 };

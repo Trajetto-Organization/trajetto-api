@@ -32,6 +32,8 @@ import {
 import { routes } from "./routes/routes";
 import { AppError } from "./shared/errors/AppError";
 
+import { enforceRequestedTenant } from "./modules/middlewares/tenant-authorization";
+
 import { uploadConfig } from "./config/upload";
 
 const app = fastify({
@@ -168,6 +170,11 @@ app.register(multipart, {
     parts: 120,
   },
 });
+
+// Registered before the routes so it applies to every one of them. This runs
+// after body parsing, which `onRequest` (where `ensureAuthenticated` lives)
+// cannot do — without it a `businessId` sent in the body bypasses the check.
+app.addHook("preHandler", enforceRequestedTenant);
 
 app.register(routes);
 app.setErrorHandler((error, _, reply) => {

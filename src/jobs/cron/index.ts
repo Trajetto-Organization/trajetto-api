@@ -1,5 +1,6 @@
 import { CronSchedulerService } from "@/shared/services/cron-scheduler-service";
 import { resetAIUsageJob } from "./reset-ai-usage-job";
+
 import { cleanupExpiredRefreshTokensJob } from "./cleanup-expired-refresh-tokens-job";
 
 /**
@@ -10,6 +11,7 @@ import { cleanupExpiredRefreshTokensJob } from "./cleanup-expired-refresh-tokens
  */
 function registerCronJobs(): void {
   const scheduler = CronSchedulerService.getInstance();
+
   scheduler.registerJob(resetAIUsageJob);
   scheduler.registerJob(cleanupExpiredRefreshTokensJob);
 }
