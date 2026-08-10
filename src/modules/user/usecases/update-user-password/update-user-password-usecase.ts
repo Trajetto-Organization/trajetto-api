@@ -11,6 +11,7 @@ import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
 
 import { AppError } from "@/shared/errors/AppError";
 import { env } from "@/env";
+import { sendSecurityEventToUser } from "@/websocket";
 
 interface UpdateUserPasswordProps {
   currentPassword: string;
@@ -60,6 +61,8 @@ class UpdateUserPasswordUseCase {
         userId,
         password: hashedPassword,
       });
+
+      sendSecurityEventToUser(userId, { reason: "password_changed" });
     } catch (error) {
       throw new AppError(
         "Não foi possível atualizar a sua senha, por favor tente novamente!",

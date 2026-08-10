@@ -36,6 +36,7 @@ async function fuelRoutes(app: FastifyInstance) {
   app.post(
     "/create-fuel/:businessId",
     {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
       onRequest: [ensureAuthenticated],
       preHandler: [
         verifyBusinessActive,
@@ -85,6 +86,7 @@ async function fuelRoutes(app: FastifyInstance) {
   app.patch(
     "/update-fuel/:fuelId/business/:businessId",
     {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
       onRequest: [ensureAuthenticated],
       preHandler: [
         verifyBusinessActive,

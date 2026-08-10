@@ -10,6 +10,7 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 
 import { CursorPaginatedPart } from "../../dtos/part-dto";
 import { AppError } from "@/shared/errors/AppError";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 interface SearchPartWithCursorRequest {
   userId: string;
@@ -40,6 +41,8 @@ class SearchPartCursorUseCase {
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    assertTenantAccess(findUser, businessId);
 
     const findBusiness = await this.business.findBusinessById(businessId);
 

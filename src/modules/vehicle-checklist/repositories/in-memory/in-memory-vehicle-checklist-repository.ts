@@ -21,6 +21,7 @@ class InMemoryVehicleChecklistRepository
   ): Promise<VehicleChecklist> {
     const checklist: VehicleChecklist = {
       id: uuidV7(),
+      client_submission_id: checklistData.client_submission_id ?? null,
       current_mileage: checklistData.current_mileage,
       checklist_date: checklistData.checklist_date || new Date(),
       tires_condition: checklistData.tires_condition,
@@ -61,6 +62,36 @@ class InMemoryVehicleChecklistRepository
 
     this.checklists.push(checklist);
     return checklist;
+  }
+
+  async findBySubmissionId(
+    businessId: string,
+    clientSubmissionId: string,
+  ): Promise<VehicleChecklist | null> {
+    return (
+      this.checklists.find(
+        (checklist) =>
+          checklist.businessId === businessId &&
+          checklist.client_submission_id === clientSubmissionId,
+      ) ?? null
+    );
+  }
+
+  async createVehicleChecklistWithMileage(
+    checklistData: CreateVehicleChecklistProps,
+  ): Promise<{ checklist: VehicleChecklist; created: boolean }> {
+    if (checklistData.client_submission_id) {
+      const existing = await this.findBySubmissionId(
+        checklistData.businessId,
+        checklistData.client_submission_id,
+      );
+      if (existing) return { checklist: existing, created: false };
+    }
+
+    return {
+      checklist: await this.createVehicleChecklist(checklistData),
+      created: true,
+    };
   }
 
   async listVehicleChecklists({
@@ -159,6 +190,12 @@ class InMemoryVehicleChecklistRepository
 
     this.checklists[index] = updatedChecklist;
     return updatedChecklist;
+  }
+
+  async updateVehicleChecklistAndMileage(
+    update: UpdateVehicleChecklist,
+  ): Promise<VehicleChecklist> {
+    return this.updateVehicleChecklist(update);
   }
 
   async deleteVehicleChecklist(checklistId: string): Promise<VehicleChecklist> {

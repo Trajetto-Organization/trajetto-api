@@ -10,12 +10,14 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 
 import { CursorPaginatedFuelType } from "../../dtos/fuel-type-dto";
 import { AppError } from "@/shared/errors/AppError";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 interface SearchFuelTypeWithCursorRequest {
   userId: string;
   limit?: number;
   cursor?: string;
   businessId: string;
+  search?: string;
 }
 
 @injectable()
@@ -34,12 +36,15 @@ class SearchFuelTypeCursorUseCase {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchFuelTypeWithCursorRequest): Promise<CursorPaginatedFuelType> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    assertTenantAccess(findUser, businessId);
 
     const findBusiness = await this.business.findBusinessById(businessId);
 
@@ -52,6 +57,7 @@ class SearchFuelTypeCursorUseCase {
         limit,
         cursor,
         businessId,
+        search,
       });
 
       return result;

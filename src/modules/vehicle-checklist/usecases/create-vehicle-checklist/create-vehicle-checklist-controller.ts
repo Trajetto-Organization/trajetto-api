@@ -23,6 +23,37 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
 
 import { PhotoValidationService } from "@/shared/services/photo-validation-service";
+import { AppError } from "@/shared/errors/AppError";
+
+const MAX_CHECKLIST_UPLOAD_BYTES = 5 * 1024 * 1024;
+const MAX_CHECKLIST_FILES = 20;
+const FILE_READ_TIMEOUT_MS = 30_000;
+
+async function readFileWithTimeout(part: any): Promise<Buffer> {
+  let timeout: NodeJS.Timeout | undefined;
+
+  try {
+    return await Promise.race([
+      part.toBuffer(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          part.file?.destroy(
+            new Error("Tempo limite excedido durante o upload."),
+          );
+          reject(
+            new AppError(
+              "O upload demorou demais. Verifique a conexão e tente novamente.",
+              408,
+              "UPLOAD_TIMEOUT",
+            ),
+          );
+        }, FILE_READ_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 class CreateVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -31,47 +62,48 @@ class CreateVehicleChecklistController {
 
     const formData: Record<string, any> = {};
     const photosByField: Record<string, any[]> = {};
+    let totalSize = 0;
+    let fileCount = 0;
 
     try {
       const parts = request.parts();
 
-      // Add timeout to prevent infinite loops
-      const processingTimeout = setTimeout(() => {
-        console.error(
-          "[CreateVehicleChecklistController] TIMEOUT: Parts processing took too long!",
-        );
-      }, 30000); // 30 seconds timeout
-
-      let partCount = 0;
       for await (const part of parts) {
-        partCount++;
-
         if (part.type === "file") {
+          fileCount += 1;
+          if (fileCount > MAX_CHECKLIST_FILES) {
+            part.file.resume();
+            throw new AppError(
+              `O checklist permite no máximo ${MAX_CHECKLIST_FILES} fotos.`,
+              400,
+              "UPLOAD_FILE_LIMIT_EXCEEDED",
+            );
+          }
           // Group photos by field name and consume the file stream properly
           const fieldName = part.fieldname;
           if (!photosByField[fieldName]) {
             photosByField[fieldName] = [];
           }
 
-          // We need to consume the stream to prevent hanging
-          // Convert to buffer to ensure stream is consumed
-          try {
-            console.log(
-              `[CreateVehicleChecklistController] Reading file buffer for: ${fieldName}`,
+          const buffer = await readFileWithTimeout(part);
+          totalSize += buffer.length;
+
+          if (totalSize > MAX_CHECKLIST_UPLOAD_BYTES) {
+            throw new AppError(
+              "O tamanho total das fotos excede o limite permitido de 5 MB.",
+              400,
+              "UPLOAD_SIZE_LIMIT_EXCEEDED",
             );
-            const buffer = await part.toBuffer();
-
-            // Create a proper file object with consumed buffer
-            const fileObject = {
-              ...part,
-              buffer: buffer,
-              toBuffer: async () => buffer,
-            };
-
-            photosByField[fieldName].push(fileObject);
-          } catch (fileError) {
-            throw fileError;
           }
+
+          const fileObject = {
+            ...part,
+            buffer,
+            checklistFieldName: fieldName,
+            toBuffer: async () => buffer,
+          };
+
+          photosByField[fieldName].push(fileObject);
         } else if (part.type === "field") {
           // Handle form fields - inline processing to avoid 'this' context issues
           const fieldName = part.fieldname;
@@ -93,31 +125,20 @@ class CreateVehicleChecklistController {
           formData[fieldName] = value;
         }
       }
-
-      clearTimeout(processingTimeout);
     } catch (error) {
-      return reply.status(400).send({
-        message:
-          "Erro ao processar dados do formulário. Verifique se todos os campos estão preenchidos corretamente.",
-      });
-    }
-
-    // Validate total file size for all uploaded photos
-    let totalSize = 0;
-    const maxTotalSize = 5 * 1024 * 1024; // 5MB total for all files
-
-    for (const [fieldName, files] of Object.entries(photosByField)) {
-      for (const file of files as any[]) {
-        if (file.buffer) {
-          totalSize += file.buffer.length;
-        }
+      if (error instanceof AppError) {
+        return reply.status(error.statusCode).send({
+          code: error.code,
+          message: error.message,
+        });
       }
+
+      throw error;
     }
 
-    if (totalSize > maxTotalSize) {
-      return reply.status(400).send({
-        message: `O tamanho total dos arquivos excede o limite permitido de 5MB. Tamanho atual: ${(totalSize / 1024 / 1024).toFixed(2)}MB`,
-      });
+    const idempotencyKey = request.headers["idempotency-key"];
+    if (!formData.client_submission_id && typeof idempotencyKey === "string") {
+      formData.client_submission_id = idempotencyKey;
     }
 
     let checklistData: any;
@@ -162,7 +183,7 @@ class CreateVehicleChecklistController {
         allPhotos.push(...photos);
       });
 
-      await createVehicleChecklistUseCase.execute(
+      const checklist = await createVehicleChecklistUseCase.execute(
         {
           ...checklistData,
           businessId,
@@ -175,8 +196,15 @@ class CreateVehicleChecklistController {
       );
 
       return reply
+        .header(
+          "Idempotency-Key",
+          checklistData.client_submission_id ?? "not-provided",
+        )
         .status(201)
-        .send({ message: "Checklist veicular criado com sucesso!" });
+        .send({
+          message: "Checklist veicular criado com sucesso!",
+          id: checklist.id,
+        });
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {
         return reply.status(400).send({ message: error.message });

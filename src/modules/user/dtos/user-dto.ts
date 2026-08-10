@@ -50,6 +50,7 @@ interface User {
   email_verified?: Date | null;
   two_factor_enabled?: boolean;
   access_revoked: boolean;
+  session_version?: number;
   password: string;
   name: string;
   avatar?: string | null;

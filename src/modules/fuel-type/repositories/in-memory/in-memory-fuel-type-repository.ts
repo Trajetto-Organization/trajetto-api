@@ -136,8 +136,16 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchFuelTypeWithCursorProps): Promise<CursorPaginatedFuelType> {
     let filtered = this.fuelTypes.filter((ft) => ft.businessId === businessId);
+
+    if (search) {
+      const term = search.toLowerCase();
+      filtered = filtered.filter((fuelType) =>
+        fuelType.description.toLowerCase().includes(term),
+      );
+    }
 
     if (cursor) {
       const cursorIndex = filtered.findIndex((ft) => ft.id === cursor);

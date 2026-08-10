@@ -10,12 +10,14 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 
 import { CursorPaginatedVehicle } from "../../dtos/vehicle-dto";
 import { AppError } from "@/shared/errors/AppError";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 interface SearchVehicleWithCursorRequest {
   userId: string;
   limit?: number;
   cursor?: string;
   businessId: string;
+  search?: string;
 }
 
 @injectable()
@@ -34,12 +36,15 @@ class SearchVehicleCursorUseCase {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchVehicleWithCursorRequest): Promise<CursorPaginatedVehicle> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    assertTenantAccess(findUser, businessId);
 
     const findBusiness = await this.business.findBusinessById(businessId);
 
@@ -52,6 +57,8 @@ class SearchVehicleCursorUseCase {
         limit,
         cursor,
         businessId,
+        driverId: findUser.driverId ?? undefined,
+        search,
       });
     } catch (error) {
       throw new AppError(

@@ -13,6 +13,10 @@ import {
 
 const createFuelSchema = z
   .object({
+    client_submission_id: z
+      .string()
+      .uuid("A chave de idempotência do envio é inválida.")
+      .optional(),
     current_mileage: z.preprocess(
       (val) => {
         if (typeof val === "string") {
@@ -226,10 +230,10 @@ const createFuelSchema = z
       // If location source is GPS_MANUAL, validate distance
       if (
         data.location_source === LocationSource.GPS_MANUAL &&
-        data.latitude &&
-        data.longitude &&
-        data.latitude_original &&
-        data.longitude_original
+        data.latitude != null &&
+        data.longitude != null &&
+        data.latitude_original != null &&
+        data.longitude_original != null
       ) {
         return isWithinAllowedDistance(
           data.latitude_original,
@@ -248,7 +252,20 @@ const createFuelSchema = z
         "A localização editada está muito distante da localização capturada pelo GPS (máximo 500m permitido). Possível inconsistência detectada.",
       path: ["latitude"], // Field where error appears
     },
-  );
+  )
+  .superRefine((data, ctx) => {
+    if (
+      data.created_from === RecordOrigin.MOBILE_APP &&
+      !data.client_submission_id
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "A chave de idempotência é obrigatória para envios do aplicativo.",
+        path: ["client_submission_id"],
+      });
+    }
+  });
 
 // Schema for file validation
 const odometerPhotoSchema = z

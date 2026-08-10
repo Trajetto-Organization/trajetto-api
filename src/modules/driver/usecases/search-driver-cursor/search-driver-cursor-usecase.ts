@@ -10,12 +10,14 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 
 import { CursorPaginatedDriver } from "../../dtos/driver-dto";
 import { AppError } from "@/shared/errors/AppError";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 interface SearchDriverWithCursorRequest {
   userId: string;
   limit?: number;
   cursor?: string;
   businessId: string;
+  search?: string;
 }
 
 @injectable()
@@ -34,12 +36,15 @@ class SearchDriverCursorUseCase {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchDriverWithCursorRequest): Promise<CursorPaginatedDriver> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    assertTenantAccess(findUser, businessId);
 
     const findBusiness = await this.business.findBusinessById(businessId);
 
@@ -52,6 +57,7 @@ class SearchDriverCursorUseCase {
         limit,
         cursor,
         businessId,
+        search,
       });
 
       return result;

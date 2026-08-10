@@ -46,6 +46,8 @@
     "test:e2e:watch": "vitest --dir ./tests/E2E",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
+    "typecheck": "tsc --noEmit",
+    "validate": "npm run prisma:generate && npm run typecheck && npm test",
     "lint:check": "prettier --check .",
     "lint:fix": "prettier --write ."
   },

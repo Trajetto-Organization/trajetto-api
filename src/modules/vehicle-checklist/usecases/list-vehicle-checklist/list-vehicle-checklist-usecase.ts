@@ -6,7 +6,10 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { UploadService } from "@/shared/services/upload-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { ListVehicleChecklistProps } from "../../dtos/vehicle-checklist-dto";
+import {
+  ListVehicleChecklistProps,
+  VehicleChecklist,
+} from "../../dtos/vehicle-checklist-dto";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -20,6 +23,27 @@ class ListVehicleChecklistUseCase {
     @inject("UploadService")
     private uploadService: UploadService,
   ) {}
+
+  private signPhotosByField(
+    value: VehicleChecklist["photos_by_field"],
+  ): VehicleChecklist["photos_by_field"] {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return value;
+    }
+
+    return Object.fromEntries(
+      Object.entries(value).map(([fieldName, photoPaths]) => [
+        fieldName,
+        Array.isArray(photoPaths)
+          ? photoPaths.map((photoPath) =>
+              typeof photoPath === "string"
+                ? this.uploadService.getFileUrl(photoPath)
+                : photoPath,
+            )
+          : [],
+      ]),
+    ) as Record<string, string[]>;
+  }
 
   async execute(
     userId: string,
@@ -51,6 +75,7 @@ class ListVehicleChecklistUseCase {
                 this.uploadService.getFileUrl(photoPath),
               )
             : [],
+          photos_by_field: this.signPhotosByField(checklist.photos_by_field),
         })),
       };
     } catch (error) {

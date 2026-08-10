@@ -43,6 +43,8 @@ import { MultipartFile } from "@fastify/multipart";
 
 import { calculateDistance } from "@/shared/utils/geolocation";
 import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
+import { readMultipartFile } from "@/shared/utils/read-multipart-file";
+import { uploadConfig } from "@/config/upload";
 
 @injectable()
 class CreateFuelUseCase {
@@ -85,6 +87,32 @@ class CreateFuelUseCase {
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
+    }
+
+    if (
+      findUser.role !== "MASTER" &&
+      findUser.businessId !== fuelData.businessId
+    ) {
+      throw new AppError(
+        "Você não tem autorização para registrar dados nesta empresa.",
+        403,
+        "TENANT_ACCESS_DENIED",
+      );
+    }
+
+    if (fuelData.client_submission_id) {
+      const existingFuel = await this.fuel.findBySubmissionId(
+        fuelData.businessId,
+        fuelData.client_submission_id,
+      );
+
+      if (existingFuel) {
+        // The multipart stream must be consumed even when this is a retry.
+        await readMultipartFile(odometerPhotoFile, {
+          maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
+        });
+        return existingFuel;
+      }
     }
 
     // Validate vehicle exists and belongs to business
@@ -142,6 +170,14 @@ class CreateFuelUseCase {
       if (findDriver.businessId !== fuelData.businessId) {
         throw new DriverNotBelongBusinessError();
       }
+
+      if (findDriver.status !== "ACTIVE") {
+        throw new AppError(
+          "O motorista selecionado esta inativo.",
+          422,
+          "DRIVER_INACTIVE",
+        );
+      }
     }
 
     // Validate fuel type exists and belongs to business
@@ -166,19 +202,46 @@ class CreateFuelUseCase {
       if (findBranch.businessId !== fuelData.businessId) {
         throw new BranchNotBelongBusinessError();
       }
+
+      if (findBranch.is_active === false) {
+        throw new AppError(
+          "Não é permitido registrar abastecimento em uma filial inativa.",
+          409,
+          "BRANCH_INACTIVE",
+        );
+      }
+    }
+
+    if (!fuelData.branchId) {
+      throw new AppError(
+        "A filial é obrigatória para registrar o abastecimento.",
+        400,
+        "BRANCH_REQUIRED",
+      );
+    }
+
+    if (!fuelData.driverId) {
+      throw new AppError(
+        "O motorista é obrigatório para registrar o abastecimento.",
+        400,
+        "DRIVER_REQUIRED",
+      );
     }
 
     // 🆕 GEOLOCATION LOGIC: Validate and process location data
     if (fuelData.created_from === "MOBILE_APP") {
       // Mobile: Location is REQUIRED
-      if (!fuelData.latitude || !fuelData.longitude) {
+      if (fuelData.latitude == null || fuelData.longitude == null) {
         throw new FuelRegistrationsMobileLocationRequiredError();
       }
 
       // 🆕 VALIDATE DISTANCE IF GPS_MANUAL (manual adjustment)
       if (fuelData.location_source === "GPS_MANUAL") {
         // Verifica se temos a localização original
-        if (!fuelData.latitude_original || !fuelData.longitude_original) {
+        if (
+          fuelData.latitude_original == null ||
+          fuelData.longitude_original == null
+        ) {
           throw new FuelLocationNotProvidedAdjustmentValidationError();
         }
 
@@ -211,22 +274,28 @@ class CreateFuelUseCase {
       }
     } else if (fuelData.created_from === "WEB_DASHBOARD") {
       // Web: Location is OPTIONAL
-      if (fuelData.latitude && fuelData.longitude) {
+      if (fuelData.latitude != null && fuelData.longitude != null) {
         fuelData.location_source = "USER_MANUAL";
       } else {
         fuelData.location_source = "NONE";
       }
     }
 
+    let uploadedPhotoPath: string | null = null;
+    let databaseCommitted = false;
+
     try {
       // Upload odometer photo
-      const buffer = await odometerPhotoFile.toBuffer();
+      const buffer = await readMultipartFile(odometerPhotoFile, {
+        maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
+      });
       const uploadResult = await this.uploadService.uploadFile({
         buffer,
         filename: odometerPhotoFile.filename || "odometer-photo",
         mimetype: odometerPhotoFile.mimetype,
         uploadType: "odometerPhotos",
       });
+      uploadedPhotoPath = uploadResult.path;
 
       // Prepare fuel data with photo and geolocation audit fields
       const fuelDataWithPhoto: any = {
@@ -237,23 +306,24 @@ class CreateFuelUseCase {
       // Add audit fields for web dashboard manual location
       if (
         fuelData.created_from === "WEB_DASHBOARD" &&
-        fuelData.latitude &&
-        fuelData.longitude
+        fuelData.latitude != null &&
+        fuelData.longitude != null
       ) {
         fuelDataWithPhoto.location_edited_by = userId;
         fuelDataWithPhoto.location_edited_at = new Date();
       }
 
-      // Create fuel record
-      const fuelCreated = await this.fuel.createFuel(fuelDataWithPhoto);
+      // Record creation and the monotonic mileage update are one serializable
+      // transaction. A concurrent retry returns the original record.
+      const { fuel: fuelCreated, created } =
+        await this.fuel.createFuelWithMileage(fuelDataWithPhoto);
 
-      // Update vehicle mileage to the current_mileage from fuel record
-      await this.vehicle.updateVehicle({
-        vehicleId: fuelData.vehicleId,
-        vehicleData: {
-          current_mileage: fuelData.current_mileage,
-        },
-      });
+      if (!created) {
+        await this.uploadService.deleteFile(uploadResult.path);
+        uploadedPhotoPath = null;
+        return fuelCreated;
+      }
+      databaseCommitted = true;
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({
@@ -285,6 +355,19 @@ class CreateFuelUseCase {
 
       return fuelCreated;
     } catch (error) {
+      if (uploadedPhotoPath && !databaseCommitted) {
+        await this.uploadService.deleteFile(uploadedPhotoPath);
+      }
+
+      if (error instanceof VehicleMileageInvalidError) {
+        throw error;
+      }
+
+      if (error instanceof AppError) {
+        throw error;
+      }
+
+      console.error("[CreateFuelUseCase] Failed to create fuel:", error);
       throw new AppError(
         "Houve um erro ao tentar criar o abastecimento! Por favor, tente novamente.",
         500,

@@ -215,9 +215,23 @@ class BranchRepository implements IBranchRepository {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchBranchWithCursorProps): Promise<CursorPaginatedBranch> {
     const items = await this.prisma.branch.findMany({
-      where: { businessId, is_active: true },
+      where: {
+        businessId,
+        is_active: true,
+        ...(search && {
+          OR: [
+            { corporate_reason: { contains: search, mode: "insensitive" } },
+            { fantasy_name: { contains: search, mode: "insensitive" } },
+            { cnpj: { contains: search, mode: "insensitive" } },
+            { city: { contains: search, mode: "insensitive" } },
+            { uf: { contains: search, mode: "insensitive" } },
+            { email: { contains: search, mode: "insensitive" } },
+          ],
+        }),
+      },
       take: limit + 1,
       ...(cursor && {
         cursor: { id: cursor },

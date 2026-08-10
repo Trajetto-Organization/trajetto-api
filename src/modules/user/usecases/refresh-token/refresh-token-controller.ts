@@ -1,16 +1,9 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { JsonWebTokenError } from "jsonwebtoken";
-
 import { container } from "tsyringe";
+
 import { refreshTokenSchema } from "@/schemas/refresh-token-schema";
-
-import { UserRefreshTokenNotExistsError } from "../errors/user-refresh-token-not-exists-error";
-import { UserInvalidCredentialsError } from "../errors/user-invalid-credentials-error";
-
 import { RefreshTokenUseCase } from "./refresh-token-usecase";
-
-import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
-import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
 
 class RefreshTokenController {
   async handle(
@@ -23,28 +16,13 @@ class RefreshTokenController {
     try {
       const { refresh_token, token: newToken } =
         await refreshTokenUseCase.execute(token);
-      return reply.status(201).send({ refresh_token, token: newToken });
+
+      return reply.status(200).send({ refresh_token, token: newToken });
     } catch (error) {
-      if (error instanceof UserInvalidCredentialsError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof UserNotFoundPermissionOrProfileAccess) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      if (error instanceof UserRevokedAccessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      if (error instanceof UserRefreshTokenNotExistsError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
       if (error instanceof JsonWebTokenError) {
-        // Specific check for JsonWebTokenError
         return reply.status(401).send({
-          message: "Assinatura de token inválida!",
+          code: "AUTH_REFRESH_INVALID",
+          message: "Token de atualizacao invalido ou expirado.",
         });
       }
 

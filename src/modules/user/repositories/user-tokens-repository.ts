@@ -10,21 +10,26 @@ import {
   TwoFactor,
   TwoFactorConfirmation,
   CreateTwoFactorToken,
+  RotateUserRefreshTokenProps,
 } from "../dtos/user-tokens-dto";
 
 class UserTokensRepository implements IUsersTokensRepository {
   constructor(private prisma = database) {}
 
   async createUserRefreshToken({
-    refresh_token,
+    token_hash,
     expires_in,
     userId,
+    jti,
+    family_id,
   }: CreateUserRefreshTokenProps): Promise<UserRefreshTokenProps> {
     const createUserRefreshToken = await this.prisma.refreshToken.create({
       data: {
         userId,
-        refresh_token,
+        token_hash,
         expires_in,
+        jti,
+        family_id,
       },
     });
 
@@ -33,12 +38,15 @@ class UserTokensRepository implements IUsersTokensRepository {
 
   async findUserTokenByIdAndRefreshToken({
     user_id,
-    refresh_token,
+    token_hash,
+    jti,
   }: TokenByIdAndRefreshTokenProps): Promise<UserRefreshTokenProps | null> {
     const findUserTokenById = await this.prisma.refreshToken.findFirst({
       where: {
         userId: user_id,
-        refresh_token,
+        token_hash,
+        jti,
+        revoked_at: null,
       },
     });
 
@@ -51,6 +59,72 @@ class UserTokensRepository implements IUsersTokensRepository {
         id: refreshTokenId,
       },
     });
+  }
+
+  async rotateUserRefreshToken({
+    user_id,
+    current_jti,
+    current_token_hash,
+    replacement,
+  }: RotateUserRefreshTokenProps): Promise<UserRefreshTokenProps | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const rotated = await transaction.refreshToken.updateMany({
+        where: {
+          userId: user_id,
+          jti: current_jti,
+          token_hash: current_token_hash,
+          revoked_at: null,
+          expires_in: { gt: new Date() },
+        },
+        data: {
+          revoked_at: new Date(),
+          replaced_by_jti: replacement.jti,
+        },
+      });
+
+      if (rotated.count !== 1) {
+        return null;
+      }
+
+      return transaction.refreshToken.create({
+        data: replacement,
+      });
+    });
+  }
+
+  async hasActiveRefreshTokenFamily(
+    userId: string,
+    familyId: string,
+  ): Promise<boolean> {
+    const activeToken = await this.prisma.refreshToken.findFirst({
+      where: {
+        userId,
+        family_id: familyId,
+        revoked_at: null,
+        expires_in: { gt: new Date() },
+      },
+      select: { id: true },
+    });
+
+    return activeToken !== null;
+  }
+
+  async revokeUserRefreshTokenFamily(familyId: string): Promise<void> {
+    await this.prisma.refreshToken.deleteMany({
+      where: { family_id: familyId },
+    });
+  }
+
+  async revokeAllUserRefreshTokens(userId: string): Promise<void> {
+    await this.prisma.refreshToken.deleteMany({ where: { userId } });
+  }
+
+  async deleteExpiredUserRefreshTokens(now = new Date()): Promise<number> {
+    const result = await this.prisma.refreshToken.deleteMany({
+      where: { expires_in: { lt: now } },
+    });
+
+    return result.count;
   }
 
   async createEmailVerificationToken({

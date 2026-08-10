@@ -1,7 +1,9 @@
 interface CreateUserRefreshTokenProps {
   userId: string;
   expires_in: Date;
-  refresh_token: string;
+  token_hash: string;
+  jti: string;
+  family_id: string;
 }
 
 interface UserRefreshTokenProps {
@@ -11,7 +13,11 @@ interface UserRefreshTokenProps {
   user?: {
     role: string;
   };
-  refresh_token: string;
+  token_hash: string;
+  jti: string;
+  family_id: string;
+  revoked_at?: Date | null;
+  replaced_by_jti?: string | null;
 }
 
 interface VerificationToken {
@@ -29,7 +35,15 @@ interface CreateVerificationToken {
 
 interface TokenByIdAndRefreshTokenProps {
   user_id: string;
-  refresh_token: string;
+  token_hash: string;
+  jti: string;
+}
+
+interface RotateUserRefreshTokenProps {
+  user_id: string;
+  current_jti: string;
+  current_token_hash: string;
+  replacement: CreateUserRefreshTokenProps;
 }
 
 interface CreateTwoFactorToken {
@@ -59,4 +73,5 @@ export {
   TwoFactorConfirmation,
   CreateTwoFactorToken,
   TwoFactor,
+  RotateUserRefreshTokenProps,
 };

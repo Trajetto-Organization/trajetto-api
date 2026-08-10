@@ -2,6 +2,7 @@ import { JsonValue } from "@prisma/client/runtime/library";
 
 interface VehicleChecklist {
   id: string;
+  client_submission_id?: string | null;
   current_mileage: number;
   checklist_date: Date | string;
   tires_condition: string;
@@ -44,6 +45,7 @@ interface VehicleChecklist {
 }
 
 interface CreateVehicleChecklistProps {
+  client_submission_id?: string;
   current_mileage: number;
   checklist_date?: Date | string;
   tires_condition: string;

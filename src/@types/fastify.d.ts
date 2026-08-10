@@ -19,6 +19,9 @@ declare module "fastify" {
     user: {
       id: string;
       role: UserRole;
+      businessId: string | null;
+      sessionVersion: number;
+      sessionId: string;
       profileAccess?: ProfileAccess | null;
       driverId?: string | null;
       driver?: {

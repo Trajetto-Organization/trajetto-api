@@ -84,15 +84,22 @@ class UploadService {
   ): Promise<Buffer> {
     const config = uploadConfig.resize[uploadType];
 
-    let sharpInstance = sharp(buffer).resize(config.width, config.height, {
-      fit: config.fit,
-      withoutEnlargement: config.withoutEnlargement,
-    });
+    // `rotate()` applies EXIF orientation before resize. Sharp strips metadata
+    // by default, which prevents GPS/device EXIF from leaking to clients.
+    let sharpInstance = sharp(buffer, {
+      limitInputPixels: 40_000_000,
+      failOn: "warning",
+    })
+      .rotate()
+      .resize(config.width, config.height, {
+        fit: config.fit,
+        withoutEnlargement: config.withoutEnlargement,
+      });
 
     // Convert to WebP for better compression while maintaining quality
-    sharpInstance = sharpInstance
-      .webp({ quality: uploadConfig.quality.webp })
-      .withMetadata(); // Preserve metadata
+    sharpInstance = sharpInstance.webp({
+      quality: uploadConfig.quality.webp,
+    });
 
     return await sharpInstance.toBuffer();
   }
@@ -222,6 +229,7 @@ class UploadService {
 
   async deleteFile(filePath: string): Promise<void> {
     try {
+      const normalizedFilePath = this.extractFilePath(filePath);
       if (uploadConfig.storage.type === "r2") {
         if (!this.s3) {
           throw new AppError("R2 não foi configurado corretamente", 500);
@@ -230,11 +238,14 @@ class UploadService {
         await this.s3
           .deleteObject({
             Bucket: uploadConfig.r2.bucket,
-            Key: filePath,
+            Key: normalizedFilePath,
           })
           .promise();
       } else {
-        const fullPath = path.join(uploadConfig.storage.localPath, filePath);
+        const fullPath = path.join(
+          uploadConfig.storage.localPath,
+          normalizedFilePath,
+        );
         try {
           await fs.promises.access(fullPath);
           await fs.promises.unlink(fullPath);
@@ -248,18 +259,58 @@ class UploadService {
     }
   }
 
-  getFileUrl(filePath: string): string {
-    if (uploadConfig.storage.type === "r2") {
-      // Use custom domain if provided, otherwise use R2 public URL
-      if (uploadConfig.r2.publicDomain) {
-        return `https://${uploadConfig.r2.publicDomain}/${filePath}`;
+  extractFilePath(filePathOrUrl: string): string {
+    try {
+      const candidate = /^https?:\/\//i.test(filePathOrUrl)
+        ? decodeURIComponent(new URL(filePathOrUrl).pathname)
+        : decodeURIComponent(filePathOrUrl.split("?")[0]);
+      const uploadPrefix = [
+        "odometerPhotos/",
+        "checklistPhotos/",
+        "avatars/",
+      ].find((prefix) => candidate.includes(prefix));
+
+      if (!uploadPrefix) {
+        throw new Error("Unknown upload path");
       }
 
-      return `https://${uploadConfig.r2.bucket}.${uploadConfig.r2.accountId}.r2.cloudflarestorage.com/${filePath}`;
+      const normalized = candidate.substring(candidate.indexOf(uploadPrefix));
+      if (
+        normalized.includes("..") ||
+        normalized.includes("\\") ||
+        path.isAbsolute(normalized)
+      ) {
+        throw new Error("Unsafe upload path");
+      }
+
+      return normalized;
+    } catch {
+      throw new AppError(
+        "Caminho de arquivo inválido.",
+        400,
+        "INVALID_FILE_PATH",
+      );
+    }
+  }
+
+  getFileUrl(filePath: string): string {
+    const normalizedFilePath = this.extractFilePath(filePath);
+
+    if (uploadConfig.storage.type === "r2") {
+      if (!this.s3) {
+        throw new AppError("R2 não foi configurado corretamente", 500);
+      }
+
+      // The bucket remains private. Consumers only receive a short-lived URL.
+      return this.s3.getSignedUrl("getObject", {
+        Bucket: uploadConfig.r2.bucket,
+        Key: normalizedFilePath,
+        Expires: uploadConfig.signedUrlTtlSeconds,
+      });
     } else {
       // For local development, construct full URL to API server
       const baseUrl = env.API_HTTP_REQUEST || `http://localhost:${env.PORT}`;
-      return `${baseUrl}/tmp/${filePath}`;
+      return `${baseUrl}/tmp/${normalizedFilePath}`;
     }
   }
 
@@ -292,7 +343,11 @@ class UploadService {
       const generatedFilename = this.generateFilename(filename, uploadType);
 
       // Create Sharp transform stream for processing
-      const sharpTransform = sharp()
+      const sharpTransform = sharp({
+        limitInputPixels: 40_000_000,
+        failOn: "warning",
+      })
+        .rotate()
         .resize(
           uploadConfig.resize[uploadType].width,
           uploadConfig.resize[uploadType].height,
@@ -302,8 +357,7 @@ class UploadService {
               uploadConfig.resize[uploadType].withoutEnlargement,
           },
         )
-        .webp({ quality: uploadConfig.quality.webp })
-        .withMetadata();
+        .webp({ quality: uploadConfig.quality.webp });
 
       if (uploadConfig.storage.type === "r2") {
         return await this.uploadStreamToR2(

@@ -3,11 +3,9 @@ import { inject, injectable } from "tsyringe";
 import crypto from "node:crypto";
 import { hash } from "bcrypt";
 
-import { sign } from "jsonwebtoken";
 import { compare } from "bcrypt";
 
 import { v4 as uuidV4 } from "uuid";
-import auth from "@/config/auth";
 
 import {
   AuthenticateUserProps,
@@ -22,18 +20,14 @@ import { IUserRepository } from "../../repositories/IUser-repository";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 
 import { UserInvalidCredentialsError } from "../errors/user-invalid-credentials-error";
-import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
 
 import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
 import { AppError } from "@/shared/errors/AppError";
 
-import { UserRevokedAccessError } from "../errors/user-revoked-access-error";
-import { UserDriverInactiveError } from "../errors/user-driver-inactive-error";
-
-import { BusinessInactiveError } from "@/modules/business/usecases/errors/business-inactive-error";
-
 import { env } from "@/env";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+import { assertSessionEligible } from "../../services/session-eligibility";
+import { createUserSession } from "../../services/session-service";
 
 @injectable()
 class AuthenticateUserUseCase {
@@ -146,26 +140,8 @@ class AuthenticateUserUseCase {
     const { email, password } = authenticateUserSchema.parse(authenticateUser);
     const findUser = await this.user.findUserByEmail(email);
 
-    if (findUser?.access_revoked) {
-      throw new UserRevokedAccessError();
-    }
-
     if (!findUser) {
       throw new UserInvalidCredentialsError();
-    }
-
-    // Block login if business is inactive (MASTER users don't belong to a business)
-    if (findUser.business && findUser.business.is_active === false) {
-      throw new BusinessInactiveError();
-    }
-
-    // Check if user is a driver and if driver is inactive
-    if (findUser.driverId) {
-      const findDriver = await this.driver.findDriverById(findUser.driverId);
-
-      if (findDriver && findDriver.status === "INACTIVE") {
-        throw new UserDriverInactiveError();
-      }
     }
 
     const doesPasswordMatches = await compare(password, findUser.password);
@@ -173,6 +149,8 @@ class AuthenticateUserUseCase {
     if (!doesPasswordMatches) {
       throw new UserInvalidCredentialsError();
     }
+
+    await assertSessionEligible(findUser, this.driver);
 
     const findExistingToken =
       await this.usersTokens.findEmailVerificationTokenByEmail(email);
@@ -218,68 +196,9 @@ class AuthenticateUserUseCase {
       });
     }
 
-    // BUSINESS_USER must have either profileAccess OR driverId
-    if (findUser.role === "BUSINESS_USER") {
-      const hasProfileAccess =
-        findUser.profileAccess &&
-        findUser.profileAccess.permissions &&
-        findUser.profileAccess.permissions.length > 0;
+    const session = await createUserSession(findUser, this.usersTokens);
 
-      const hasDriverId = !!findUser.driverId;
-
-      // If doesn't have profileAccess and doesn't have driverId, throw error
-      if (!hasProfileAccess && !hasDriverId) {
-        throw new UserNotFoundPermissionOrProfileAccess();
-      }
-    }
-
-    const {
-      secret_token,
-      secret_refresh_token,
-      expires_in_token,
-      expires_in_refresh_token,
-      expires_in_refresh_token_days,
-    } = auth;
-
-    const token = sign(
-      {
-        role: findUser.role,
-        driverId: findUser.driverId || null,
-      },
-      secret_token,
-      {
-        subject: findUser.id,
-        expiresIn: expires_in_token,
-      },
-    );
-
-    const refresh_token = sign({ email }, secret_refresh_token, {
-      subject: findUser.id,
-      expiresIn: expires_in_refresh_token,
-    });
-
-    const expires_in = new Date(
-      new Date().getTime() + expires_in_refresh_token_days,
-    );
-
-    try {
-      await this.usersTokens.createUserRefreshToken({
-        userId: findUser.id,
-        expires_in,
-        refresh_token,
-      });
-
-      return {
-        token,
-        refresh_token,
-        role: findUser.role,
-      };
-    } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar entrar na sua conta! Por favor, tente novamente.",
-        500,
-      );
-    }
+    return { ...session, role: findUser.role };
   }
 }
 

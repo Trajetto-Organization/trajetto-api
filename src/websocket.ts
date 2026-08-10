@@ -8,6 +8,11 @@ import { verify } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { UserRepository } from "@/modules/user/repositories/user-repository";
+import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
+import { DriverRepository } from "@/modules/driver/repositories/driver-repository";
+import { assertSessionEligible } from "@/modules/user/services/session-eligibility";
+import { SessionJwtPayload } from "@/modules/user/services/session-service";
+import { AppError } from "@/shared/errors/AppError";
 import { env } from "./env";
 
 // Store socket connections per user
@@ -22,6 +27,14 @@ let io: SocketIOServer | null = null;
 // points (health check, rate-limit, etc.).
 let adapterPubClient: Redis | null = null;
 let adapterSubClient: Redis | null = null;
+
+function socketAuthenticationError(message: string, code: string): Error {
+  const error = new Error(message) as Error & {
+    data?: { code: string };
+  };
+  error.data = { code };
+  return error;
+}
 
 // Function to initialize Socket.IO with HTTP server
 async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
@@ -69,12 +82,22 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         "se propagam entre instâncias.",
       error instanceof Error ? error.message : error,
     );
+
     // Releases any clients that may have been left hanging to prevent data leaks
     // TCP sockets. Quietly — the vulnerability has already been reported above.
     adapterPubClient?.disconnect();
     adapterSubClient?.disconnect();
+
     adapterPubClient = null;
     adapterSubClient = null;
+
+    if (env.NODE_ENV === "production") {
+      throw new AppError(
+        "Redis adapter is required for secure multi-instance WebSocket delivery.",
+        503,
+        "SOCKET_REDIS_UNAVAILABLE",
+      );
+    }
   }
 
   // Authentication Middleware for Socket.IO
@@ -86,9 +109,23 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         return next(new Error("Token de autenticação não fornecido"));
       }
 
-      const { sub: userId } = verify(token, auth.secret_token) as {
-        sub: string;
-      };
+      const payload = verify(token, auth.secret_token) as SessionJwtPayload;
+
+      if (
+        !payload.sub ||
+        payload.tokenType !== "access" ||
+        typeof payload.sessionVersion !== "number" ||
+        !payload.familyId
+      ) {
+        return next(
+          socketAuthenticationError(
+            "Token de autenticacao invalido.",
+            "AUTH_TOKEN_INVALID",
+          ),
+        );
+      }
+
+      const userId = payload.sub;
 
       // Check if user exists
       const userRepository = new UserRepository();
@@ -98,13 +135,51 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         return next(new Error("Usuário não encontrado"));
       }
 
+      if ((user.session_version ?? 0) !== payload.sessionVersion) {
+        return next(
+          socketAuthenticationError(
+            "Sessao invalidada.",
+            "AUTH_SESSION_INVALIDATED",
+          ),
+        );
+      }
+
+      const driverRepository = new DriverRepository();
+      const tokenRepository = new UserTokensRepository();
+      await assertSessionEligible(user, driverRepository);
+
+      const hasActiveSession =
+        await tokenRepository.hasActiveRefreshTokenFamily(
+          userId,
+          payload.familyId,
+        );
+
+      if (!hasActiveSession) {
+        return next(
+          socketAuthenticationError(
+            "Sessao encerrada.",
+            "AUTH_SESSION_INVALIDATED",
+          ),
+        );
+      }
+
       // Store user and company ID in socket
       socket.data.userId = userId;
       socket.data.businessId = user.businessId;
+      socket.data.sessionId = payload.familyId;
 
       return next();
     } catch (error) {
-      return next(new Error("Falha na autenticação"));
+      if (error instanceof AppError) {
+        return next(socketAuthenticationError(error.message, error.code));
+      }
+
+      return next(
+        socketAuthenticationError(
+          "Token de autenticacao invalido ou expirado.",
+          "AUTH_TOKEN_INVALID",
+        ),
+      );
     }
   });
 
@@ -118,6 +193,10 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     // Add socket to user specific room
     socket.join(`user:${userId}`);
 
+    // A refresh-token family represents one logical login/device. Keeping a
+    // dedicated room lets normal logout terminate only that session.
+    socket.join(`session:${socket.data.sessionId}`);
+
     // Add to company room if applicable
     if (businessId) {
       socket.join(`business:${businessId}`);
@@ -130,7 +209,17 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
 
     connectedUsers[userId].push(socket.id);
 
-    socket.on("client_logout", () => {
+    socket.on("client_logout", async () => {
+      try {
+        await new UserTokensRepository().revokeUserRefreshTokenFamily(
+          socket.data.sessionId,
+        );
+        sendSecurityEventToSession(socket.data.sessionId, {
+          reason: "logout",
+        });
+      } catch (error) {
+        console.error("Falha ao invalidar a sessao no logout do socket", error);
+      }
       console.log(`Logout do usuário: ${userId}`);
 
       // Remove socket ID from list
@@ -201,6 +290,21 @@ const sendAIVerificationEvent = (userId: string, event: any) => {
 const sendSecurityEventToUser = (userId: string, event: { reason: string }) => {
   if (io) {
     io.to(`user:${userId}`).emit("securityAction", event);
+
+    if (event.reason !== "access_restored") {
+      io.in(`user:${userId}`).disconnectSockets(true);
+    }
+  }
+};
+
+// Function to send a security event to one refresh-token family/session.
+const sendSecurityEventToSession = (
+  sessionId: string,
+  event: { reason: string },
+) => {
+  if (io) {
+    io.to(`session:${sessionId}`).emit("securityAction", event);
+    io.in(`session:${sessionId}`).disconnectSockets(true);
   }
 };
 
@@ -211,6 +315,10 @@ const sendSecurityEventToBusiness = (
 ) => {
   if (io) {
     io.to(`business:${businessId}`).emit("securityAction", event);
+
+    if (event.reason !== "access_restored") {
+      io.in(`business:${businessId}`).disconnectSockets(true);
+    }
   }
 };
 
@@ -237,5 +345,6 @@ export {
   sendNotificationToBusiness,
   sendAIVerificationEvent,
   sendSecurityEventToUser,
+  sendSecurityEventToSession,
   sendSecurityEventToBusiness,
 };

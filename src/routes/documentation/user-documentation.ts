@@ -32,6 +32,8 @@ import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-sche
 import { getUserSchema } from "@/schemas/get-user-schema";
 import { revokeUserAccessSchema } from "@/schemas/revoke-user-access-schema";
 
+const codedError = z.object({ code: z.string().optional() });
+
 const userSchemas = {
   createUser: createUserSchema,
   createMasterUser: createMasterUserSchema,
@@ -181,9 +183,11 @@ const userResponses = {
   }),
   // Error responses
   internalServerError: z.object({
+    code: z.string().optional(),
     message: z.string().default("Internal server error"),
   }),
   resourceNotFound: z.object({
+    code: z.string().optional(),
     message: z.string().default("Recurso não encontrado!"),
   }),
   invalidCredentials: z.object({
@@ -378,35 +382,39 @@ const userResponses = {
     }),
   ]),
 
-  authenticateUserErrors: z.union([
-    z.object({
-      message: z.string().default("Credenciais inválidas!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Usuário sem perfil de acesso ou permissões configuradas! Por favor, contate o administrador.",
-        ),
-    }),
-  ]),
+  authenticateUserErrors: z
+    .union([
+      z.object({
+        message: z.string().default("Credenciais inválidas!"),
+      }),
+      z.object({
+        message: z
+          .string()
+          .default(
+            "Usuário sem perfil de acesso ou permissões configuradas! Por favor, contate o administrador.",
+          ),
+      }),
+    ])
+    .and(codedError),
 
-  authenticateUserForbiddenErrors: z.union([
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Seu acesso foi revogado! Para acessar a plataforma novamente, por favor contate o administrador.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Seu cadastro como motorista está inativo! Para acessar a plataforma novamente, por favor contate o administrador.",
-        ),
-    }),
-  ]),
+  authenticateUserForbiddenErrors: z
+    .union([
+      z.object({
+        message: z
+          .string()
+          .default(
+            "Seu acesso foi revogado! Para acessar a plataforma novamente, por favor contate o administrador.",
+          ),
+      }),
+      z.object({
+        message: z
+          .string()
+          .default(
+            "Seu cadastro como motorista está inativo! Para acessar a plataforma novamente, por favor contate o administrador.",
+          ),
+      }),
+    ])
+    .and(codedError),
 
   forgotVerificationErrors: z.union([
     z.object({
@@ -432,58 +440,68 @@ const userResponses = {
     }),
   ]),
 
-  refreshTokenErrors: z.union([
-    z.object({
-      message: z.string().default("Credenciais inválidas!"),
-    }),
-    z.object({
-      message: z.string().default("O token de atualização não existe!"),
-    }),
-  ]),
+  refreshTokenErrors: z
+    .union([
+      z.object({
+        message: z.string().default("Credenciais inválidas!"),
+      }),
+      z.object({
+        message: z.string().default("O token de atualização não existe!"),
+      }),
+    ])
+    .and(codedError),
 
-  refreshTokenUnauthorizedErrors: z.object({
-    message: z.string().default("Assinatura de token inválida!"),
-  }),
+  refreshTokenUnauthorizedErrors: z
+    .object({
+      message: z.string().default("Assinatura de token inválida!"),
+    })
+    .and(codedError),
 
-  refreshTokenForbiddenErrors: z.union([
-    z.object({
+  refreshTokenForbiddenErrors: z
+    .union([
+      z.object({
+        message: z
+          .string()
+          .default(
+            "Usuário sem perfil de acesso ou permissões configuradas! Por favor, contate o administrador.",
+          ),
+      }),
+      z.object({
+        message: z
+          .string()
+          .default(
+            "Seu acesso foi revogado! Para acessar a plataforma novamente, por favor contate o administrador.",
+          ),
+      }),
+    ])
+    .and(codedError),
+
+  twoFactorVerificationErrors: z
+    .union([
+      z.object({
+        message: z.string().default("Código inválido!"),
+      }),
+      z.object({
+        message: z.string().default("Código expirado!"),
+      }),
+      z.object({
+        message: z.string().default("Recurso não encontrado!"),
+      }),
+      z.object({
+        message: z.string().default("Código inválido para o usuário!"),
+      }),
+    ])
+    .and(codedError),
+
+  twoFactorVerificationForbiddenErrors: z
+    .object({
       message: z
         .string()
         .default(
           "Usuário sem perfil de acesso ou permissões configuradas! Por favor, contate o administrador.",
         ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Seu acesso foi revogado! Para acessar a plataforma novamente, por favor contate o administrador.",
-        ),
-    }),
-  ]),
-
-  twoFactorVerificationErrors: z.union([
-    z.object({
-      message: z.string().default("Código inválido!"),
-    }),
-    z.object({
-      message: z.string().default("Código expirado!"),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Código inválido para o usuário!"),
-    }),
-  ]),
-
-  twoFactorVerificationForbiddenErrors: z.object({
-    message: z
-      .string()
-      .default(
-        "Usuário sem perfil de acesso ou permissões configuradas! Por favor, contate o administrador.",
-      ),
-  }),
+    })
+    .and(codedError),
 
   resendTwoFactorCodeErrors: z.union([
     z.object({

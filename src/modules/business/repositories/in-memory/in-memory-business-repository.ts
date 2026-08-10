@@ -148,8 +148,28 @@ class InMemoryBusinessRepository implements IBusinessRepository {
   async searchBusinessWithCursor({
     limit = 10,
     cursor,
+    businessId,
+    currentUserRole,
+    search,
   }: SearchBusinessWithCursorProps): Promise<CursorPaginatedBusiness> {
-    let filtered = this.business.filter((business) => business.is_active);
+    let filtered = this.business.filter(
+      (business) =>
+        business.is_active &&
+        (currentUserRole === "MASTER" || business.id === businessId),
+    );
+
+    if (search) {
+      const term = search.toLowerCase();
+      filtered = filtered.filter((business) =>
+        [
+          business.corporate_reason,
+          business.fantasy_name ?? "",
+          business.cnpj,
+          business.email,
+          business.responsible_name,
+        ].some((value) => value.toLowerCase().includes(term)),
+      );
+    }
 
     if (cursor) {
       const cursorIndex = filtered.findIndex((b) => b.id === cursor);

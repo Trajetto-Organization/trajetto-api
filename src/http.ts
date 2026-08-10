@@ -71,15 +71,19 @@ app.register(fastifyCors, {
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
 });
 
-app.register(fastifyStatic, {
-  root: path.join(__dirname, "..", "tmp"),
-  prefix: "/tmp/",
-  decorateReply: false,
-  setHeaders: (res) => {
-    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-  },
-});
+// Local files are a development convenience only. Sensitive production
+// images live in a private R2 bucket and are exposed through signed URLs.
+if (env.NODE_ENV !== "production") {
+  app.register(fastifyStatic, {
+    root: path.join(__dirname, "..", "tmp"),
+    prefix: "/tmp/",
+    decorateReply: false,
+    setHeaders: (res) => {
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    },
+  });
+}
 
 app.register(fastifySwagger, {
   openapi: {
@@ -160,11 +164,56 @@ app.register(multipart, {
       uploadConfig.getSizeLimit("checklistPhotos"),
     ),
     files: 20, // Allow up to 20 files per request for checklist photos etc
+    fields: 100,
+    parts: 120,
   },
 });
 
 app.register(routes);
 app.setErrorHandler((error, _, reply) => {
+  const multipartErrorCodes: Record<
+    string,
+    { status: number; code: string; message: string }
+  > = {
+    FST_REQ_FILE_TOO_LARGE: {
+      status: 413,
+      code: "UPLOAD_FILE_TOO_LARGE",
+      message: "O arquivo excede o limite de tamanho permitido.",
+    },
+    FST_FILES_LIMIT: {
+      status: 413,
+      code: "UPLOAD_FILE_LIMIT_EXCEEDED",
+      message: "A quantidade de arquivos excede o limite permitido.",
+    },
+    FST_FIELDS_LIMIT: {
+      status: 413,
+      code: "UPLOAD_FIELD_LIMIT_EXCEEDED",
+      message: "A quantidade de campos excede o limite permitido.",
+    },
+    FST_PARTS_LIMIT: {
+      status: 413,
+      code: "UPLOAD_PART_LIMIT_EXCEEDED",
+      message:
+        "A quantidade de partes do formulario excede o limite permitido.",
+    },
+    FST_INVALID_MULTIPART_CONTENT_TYPE: {
+      status: 415,
+      code: "INVALID_MULTIPART_REQUEST",
+      message: "A requisicao deve usar multipart/form-data.",
+    },
+  };
+  const multipartError =
+    typeof error.code === "string"
+      ? multipartErrorCodes[error.code]
+      : undefined;
+
+  if (multipartError) {
+    return reply.status(multipartError.status).send({
+      code: multipartError.code,
+      message: multipartError.message,
+    });
+  }
+
   if (error instanceof ZodError || hasZodFastifySchemaValidationErrors(error)) {
     const issues =
       error instanceof ZodError
@@ -172,15 +221,20 @@ app.setErrorHandler((error, _, reply) => {
         : error.validation.map(({ message }) => message);
 
     return reply.status(400).send({
+      code: "VALIDATION_ERROR",
       message: "Validation Error",
       issues,
     });
   }
 
   if (error instanceof AppError) {
-    return reply.status(error.statusCode).send({
-      message: error.message,
-    });
+    return reply
+      .header("x-error-code", error.code)
+      .status(error.statusCode)
+      .send({
+        code: error.code,
+        message: error.message,
+      });
   }
 
   if (env.NODE_ENV !== "production") {
@@ -190,6 +244,7 @@ app.setErrorHandler((error, _, reply) => {
   }
 
   return reply.status(500).send({
+    code: "INTERNAL_ERROR",
     status: "error",
     message: "Internal server error",
   });

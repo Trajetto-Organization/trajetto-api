@@ -38,23 +38,38 @@ class TwoFactorVerificationController {
       });
     } catch (error) {
       if (error instanceof UserNotFoundPermissionOrProfileAccess) {
-        return reply.status(403).send({ message: error.message });
+        return reply.status(403).send({
+          code: "AUTH_PROFILE_NOT_CONFIGURED",
+          message: error.message,
+        });
       }
 
       if (error instanceof UserInvalidTwoFactorCodeError) {
-        return reply.status(400).send({ message: error.message });
+        return reply.status(400).send({
+          code: "AUTH_2FA_CODE_INVALID",
+          message: error.message,
+        });
       }
 
       if (error instanceof UserExpiredCodeError) {
-        return reply.status(400).send({ message: error.message });
+        return reply.status(400).send({
+          code: "AUTH_2FA_CODE_EXPIRED",
+          message: error.message,
+        });
       }
 
       if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
+        return reply.status(400).send({
+          code: "AUTH_2FA_NOT_FOUND",
+          message: error.message,
+        });
       }
 
       if (error instanceof UserInvalidCodeForUserError) {
-        return reply.status(400).send({ message: error.message });
+        return reply.status(400).send({
+          code: "AUTH_2FA_USER_MISMATCH",
+          message: error.message,
+        });
       }
 
       throw error;

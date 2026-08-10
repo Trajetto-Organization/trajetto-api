@@ -209,6 +209,8 @@ class UserRepository implements IUserRepository {
     // Password: only include if provided by use case
     if (password) {
       updateData.password = password;
+      updateData.session_version = { increment: 1 };
+      updateData.RefreshToken = { deleteMany: {} };
     }
 
     // Translate flat IDs to Prisma relation syntax
@@ -371,7 +373,11 @@ class UserRepository implements IUserRepository {
   }: UpdateUserPassword): Promise<User | null> {
     const updatedUserPassword = await this.prisma.user.update({
       where: { id: userId },
-      data: { password },
+      data: {
+        password,
+        session_version: { increment: 1 },
+        RefreshToken: { deleteMany: {} },
+      },
     });
 
     return updatedUserPassword;
@@ -404,10 +410,24 @@ class UserRepository implements IUserRepository {
   }: UpdateUserAccessRevocation): Promise<User | null> {
     const updateUserAccessRevocation = await this.prisma.user.update({
       where: { id: userId },
-      data: { access_revoked: isAccessRevoke },
+      data: {
+        access_revoked: isAccessRevoke,
+        session_version: { increment: 1 },
+        RefreshToken: { deleteMany: {} },
+      },
     });
 
     return updateUserAccessRevocation;
+  }
+
+  async invalidateUserSessions(userId: string): Promise<User | null> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        session_version: { increment: 1 },
+        RefreshToken: { deleteMany: {} },
+      },
+    });
   }
 
   async updateWhatsAppSettings({

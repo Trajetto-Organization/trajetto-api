@@ -318,13 +318,25 @@ class VehicleRepository implements IVehicleRepository {
     limit = 10,
     cursor,
     businessId,
+    driverId,
+    search,
   }: SearchVehicleWithCursorProps): Promise<CursorPaginatedVehicle> {
     const items = await this.prisma.vehicle.findMany({
       where: {
         businessId,
+        ...(driverId ? { driverId } : {}),
         status: {
           in: ["ACTIVE", "IN_ROUTE"],
         },
+        ...(search && {
+          OR: [
+            { description: { contains: search, mode: "insensitive" } },
+            { license_plate: { contains: search, mode: "insensitive" } },
+            { brand: { contains: search, mode: "insensitive" } },
+            { model: { contains: search, mode: "insensitive" } },
+            { renavam: { contains: search, mode: "insensitive" } },
+          ],
+        }),
       },
       take: limit + 1,
       ...(cursor && { cursor: { id: cursor }, skip: 1 }),

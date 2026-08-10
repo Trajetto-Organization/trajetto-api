@@ -8,6 +8,7 @@ import { ResetUserPasswordController } from "@/modules/user/usecases/reset-user-
 
 import { SendForgotPasswordMailController } from "@/modules/user/usecases/send-forgot-password-mail/send-forgot-password-mail-controller";
 import { RefreshTokenController } from "@/modules/user/usecases/refresh-token/refresh-token-controller";
+import { LogoutController } from "@/modules/user/usecases/logout/logout-controller";
 
 import { TwoFactorVerificationController } from "@/modules/user/usecases/two-factor-verification/two-factor-verification-controller";
 import { GetUserController } from "@/modules/user/usecases/get-user/get-user-controller";
@@ -59,6 +60,7 @@ const resetUserPasswordController = new ResetUserPasswordController();
 
 const sendForgotPasswordMailController = new SendForgotPasswordMailController();
 const refreshTokenController = new RefreshTokenController();
+const logoutController = new LogoutController();
 
 const twoFactorVerificationController = new TwoFactorVerificationController();
 const resendTwoFactorCodeController = new ResendTwoFactorCodeController();
@@ -265,7 +267,7 @@ async function userRoutes(app: FastifyInstance) {
           "Generate new access and refresh tokens using a valid refresh token to maintain user session",
         body: userSchemas.refreshToken,
         response: {
-          201: userResponses.tokenRefreshed,
+          200: userResponses.tokenRefreshed,
           400: userResponses.refreshTokenErrors,
           401: userResponses.refreshTokenUnauthorizedErrors,
           403: userResponses.refreshTokenForbiddenErrors,
@@ -274,6 +276,19 @@ async function userRoutes(app: FastifyInstance) {
       },
     },
     refreshTokenController.handle,
+  );
+
+  app.post(
+    "/logout",
+    {
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "End all authenticated sessions",
+      },
+    },
+    logoutController.handle,
   );
 
   app.post(

@@ -110,6 +110,8 @@ interface SearchVehicleWithCursorProps {
   limit: number;
   cursor?: string;
   businessId: string;
+  driverId?: string;
+  search?: string;
 }
 
 interface CursorPaginatedVehicle {

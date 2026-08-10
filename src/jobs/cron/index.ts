@@ -1,5 +1,6 @@
 import { CronSchedulerService } from "@/shared/services/cron-scheduler-service";
 import { resetAIUsageJob } from "./reset-ai-usage-job";
+import { cleanupExpiredRefreshTokensJob } from "./cleanup-expired-refresh-tokens-job";
 
 /**
  * It records all the application's cron jobs.
@@ -10,6 +11,7 @@ import { resetAIUsageJob } from "./reset-ai-usage-job";
 function registerCronJobs(): void {
   const scheduler = CronSchedulerService.getInstance();
   scheduler.registerJob(resetAIUsageJob);
+  scheduler.registerJob(cleanupExpiredRefreshTokensJob);
 }
 
 export { registerCronJobs };

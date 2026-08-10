@@ -10,6 +10,10 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 
 const createVehicleChecklistSchema = z.object({
+  client_submission_id: z
+    .string()
+    .uuid("A chave de idempotência do envio é inválida.")
+    .optional(),
   current_mileage: z.preprocess(
     (val) => {
       if (typeof val === "string") {

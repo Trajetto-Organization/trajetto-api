@@ -2,6 +2,7 @@ import {
   CreateTwoFactorToken,
   CreateUserRefreshTokenProps,
   CreateVerificationToken,
+  RotateUserRefreshTokenProps,
   TokenByIdAndRefreshTokenProps,
   TwoFactor,
   TwoFactorConfirmation,
@@ -11,15 +12,28 @@ import {
 
 interface IUsersTokensRepository {
   createUserRefreshToken: ({
-    refresh_token,
+    token_hash,
     expires_in,
     userId,
+    jti,
+    family_id,
   }: CreateUserRefreshTokenProps) => Promise<UserRefreshTokenProps>;
   findUserTokenByIdAndRefreshToken: ({
     user_id,
-    refresh_token,
+    token_hash,
+    jti,
   }: TokenByIdAndRefreshTokenProps) => Promise<UserRefreshTokenProps | null>;
   deleteUserRefreshTokenById: (refreshTokenId: string) => Promise<void>;
+  rotateUserRefreshToken: (
+    props: RotateUserRefreshTokenProps,
+  ) => Promise<UserRefreshTokenProps | null>;
+  hasActiveRefreshTokenFamily: (
+    userId: string,
+    familyId: string,
+  ) => Promise<boolean>;
+  revokeUserRefreshTokenFamily: (familyId: string) => Promise<void>;
+  revokeAllUserRefreshTokens: (userId: string) => Promise<void>;
+  deleteExpiredUserRefreshTokens: (now?: Date) => Promise<number>;
   createEmailVerificationToken: ({
     email,
     token,

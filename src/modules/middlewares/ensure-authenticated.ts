@@ -1,93 +1,112 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { verify } from "jsonwebtoken";
 
-import { UserRepository } from "../user/repositories/user-repository";
-import { DriverRepository } from "../driver/repositories/driver-repository";
-
 import auth from "@/config/auth";
+import { DriverRepository } from "../driver/repositories/driver-repository";
+import { UserRepository } from "../user/repositories/user-repository";
+import { UserTokensRepository } from "../user/repositories/user-tokens-repository";
+import { assertSessionEligible } from "../user/services/session-eligibility";
 import { AppError } from "@/shared/errors/AppError";
+import { authorizeRequestedTenant } from "./tenant-authorization";
 
-interface UserIdProps {
-  sub: string;
+interface AccessTokenPayload {
+  sub?: string;
+  tokenType?: string;
+  sessionVersion?: number;
+  familyId?: string;
 }
 
 async function ensureAuthenticated(
   request: FastifyRequest,
-  reply: FastifyReply,
-) {
-  const auth_header = request.headers.authorization;
+  _reply: FastifyReply,
+): Promise<void> {
+  const authorization = request.headers.authorization;
 
-  if (!auth_header) {
-    throw new AppError("Token ausente!");
+  if (!authorization?.startsWith("Bearer ")) {
+    throw new AppError(
+      "Token de autenticacao ausente.",
+      401,
+      "AUTH_TOKEN_MISSING",
+    );
   }
 
-  const [, token] = auth_header.split(" "); // Bearer Token
+  const token = authorization.slice("Bearer ".length).trim();
+
+  if (!token) {
+    throw new AppError(
+      "Token de autenticacao ausente.",
+      401,
+      "AUTH_TOKEN_MISSING",
+    );
+  }
 
   try {
-    const { sub: user_id } = verify(token, auth.secret_token) as UserIdProps;
+    const payload = verify(token, auth.secret_token) as AccessTokenPayload;
 
-    const userTokenId = new UserRepository();
-    const findUserById = await userTokenId.findUserById(user_id);
-
-    if (!findUserById) {
-      throw new AppError("Este usuário não existe!", 404);
-    }
-
-    if (findUserById.access_revoked) {
+    if (
+      !payload.sub ||
+      payload.tokenType !== "access" ||
+      typeof payload.sessionVersion !== "number" ||
+      !payload.familyId
+    ) {
       throw new AppError(
-        "Seu acesso foi revogado! Para acessar a plataforma novamente, por favor contate o administrador.",
-        403,
+        "Token de autenticacao invalido.",
+        401,
+        "AUTH_TOKEN_INVALID",
       );
     }
 
-    // Block login if business is inactive (MASTER users don't belong to a business)
-    if (findUserById.business && findUserById.business.is_active === false) {
+    const userRepository = new UserRepository();
+    const tokenRepository = new UserTokensRepository();
+    const driverRepository = new DriverRepository();
+    const user = await userRepository.findUserById(payload.sub);
+
+    if (!user) {
+      throw new AppError("Sessao invalida.", 401, "AUTH_SESSION_INVALID");
+    }
+
+    if ((user.session_version ?? 0) !== payload.sessionVersion) {
       throw new AppError(
-        "Esta empresa está desativada. Entre em contato com o administrador para reativar o acesso.",
-        403,
+        "Sessao expirada ou invalidada.",
+        401,
+        "AUTH_SESSION_INVALIDATED",
       );
     }
 
-    // If user has a driverId, fetch driver information
-    let driverInfo = null;
+    const { driver } = await assertSessionEligible(user, driverRepository);
+    const hasActiveSession = await tokenRepository.hasActiveRefreshTokenFamily(
+      user.id,
+      payload.familyId,
+    );
 
-    if (findUserById.driverId) {
-      const driverRepository = new DriverRepository();
-      const driver = await driverRepository.findDriverById(
-        findUserById.driverId,
+    if (!hasActiveSession) {
+      throw new AppError(
+        "Sessao expirada ou encerrada.",
+        401,
+        "AUTH_SESSION_INVALIDATED",
       );
-
-      if (driver) {
-        // Check if driver is inactive
-        if (driver.status === "INACTIVE") {
-          throw new AppError(
-            "Seu cadastro como motorista está inativo! Para acessar a plataforma novamente, por favor contate o administrador.",
-            403,
-          );
-        }
-
-        driverInfo = {
-          id: driver.id,
-          branchId: driver.branchId as string,
-        };
-      }
     }
 
     request.user = {
-      id: user_id,
-      role: findUserById.role,
-      profileAccess: findUserById.profileAccess,
-      driverId: findUserById.driverId,
-      driver: driverInfo,
+      id: user.id,
+      role: user.role,
+      businessId: user.businessId ?? null,
+      sessionVersion: user.session_version ?? 0,
+      sessionId: payload.familyId,
+      profileAccess: user.profileAccess,
+      driverId: user.driverId,
+      driver,
     };
-  } catch (error: any | undefined) {
-    // Re-throw AppError without modifying the message (for access_revoked and driver_inactive)
-    if (error instanceof AppError) {
-      throw error;
-    }
 
-    // For other errors (like JWT verification), throw invalid token error
-    throw new AppError(`Invalid Token => ${error.message}`, 401);
+    authorizeRequestedTenant(request);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+
+    throw new AppError(
+      "Token de autenticacao invalido ou expirado.",
+      401,
+      "AUTH_TOKEN_INVALID",
+    );
   }
 }
 

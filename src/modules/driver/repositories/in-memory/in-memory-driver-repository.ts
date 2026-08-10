@@ -172,10 +172,21 @@ class InMemoryDriverRepository implements IDriverRepository {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchDriverWithCursorProps): Promise<CursorPaginatedDriver> {
     let filtered = this.drivers.filter(
-      (driver) => driver.businessId === businessId,
+      (driver) =>
+        driver.businessId === businessId && driver.status === "ACTIVE",
     );
+
+    if (search) {
+      const term = search.toLowerCase();
+      filtered = filtered.filter((driver) =>
+        [driver.name, driver.cnh].some((value) =>
+          value.toLowerCase().includes(term),
+        ),
+      );
+    }
 
     if (cursor) {
       const cursorIndex = filtered.findIndex((d) => d.id === cursor);
@@ -186,7 +197,15 @@ class InMemoryDriverRepository implements IDriverRepository {
 
     const hasMore = filtered.length > limit;
 
-    const data = filtered.slice(0, limit);
+    const data = filtered.slice(0, limit).map((driver) => ({
+      id: driver.id,
+      name: driver.name,
+      cnh: driver.cnh,
+      branchId: driver.branchId,
+      businessId: driver.businessId,
+      status: driver.status,
+      created_at: driver.created_at,
+    }));
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };

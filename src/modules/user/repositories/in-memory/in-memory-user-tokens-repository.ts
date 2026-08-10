@@ -10,6 +10,7 @@ import {
   TwoFactor,
   TwoFactorConfirmation,
   CreateTwoFactorToken,
+  RotateUserRefreshTokenProps,
 } from "../../dtos/user-tokens-dto";
 
 class InMemoryUserTokensRepository implements IUsersTokensRepository {
@@ -22,15 +23,21 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
   public twoFactorConfirmationTokens: TwoFactorConfirmation[] = [];
 
   async createUserRefreshToken({
-    refresh_token,
+    token_hash,
     expires_in,
     userId,
+    jti,
+    family_id,
   }: CreateUserRefreshTokenProps): Promise<UserRefreshTokenProps> {
     const createRefreshToken: UserRefreshTokenProps = {
       id: uuidV7(),
-      refresh_token,
+      token_hash,
       expires_in,
       userId,
+      jti,
+      family_id,
+      revoked_at: null,
+      replaced_by_jti: null,
     };
 
     this.refreshTokenItems.push(createRefreshToken);
@@ -39,10 +46,15 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
 
   async findUserTokenByIdAndRefreshToken({
     user_id,
-    refresh_token,
+    token_hash,
+    jti,
   }: TokenByIdAndRefreshTokenProps): Promise<UserRefreshTokenProps | null> {
     const findUserTokenByIdAndRefreshToken = this.refreshTokenItems.find(
-      (item) => item.userId === user_id && item.refresh_token === refresh_token,
+      (item) =>
+        item.userId === user_id &&
+        item.token_hash === token_hash &&
+        item.jti === jti &&
+        !item.revoked_at,
     );
 
     if (!findUserTokenByIdAndRefreshToken) {
@@ -56,6 +68,62 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     this.refreshTokenItems = this.refreshTokenItems.filter(
       (item) => item.id !== refreshTokenId,
     );
+  }
+
+  async rotateUserRefreshToken({
+    user_id,
+    current_jti,
+    current_token_hash,
+    replacement,
+  }: RotateUserRefreshTokenProps): Promise<UserRefreshTokenProps | null> {
+    const current = this.refreshTokenItems.find(
+      (item) =>
+        item.userId === user_id &&
+        item.jti === current_jti &&
+        item.token_hash === current_token_hash &&
+        !item.revoked_at &&
+        item.expires_in > new Date(),
+    );
+
+    if (!current) return null;
+
+    current.revoked_at = new Date();
+    current.replaced_by_jti = replacement.jti;
+    return this.createUserRefreshToken(replacement);
+  }
+
+  async hasActiveRefreshTokenFamily(
+    userId: string,
+    familyId: string,
+  ): Promise<boolean> {
+    return this.refreshTokenItems.some(
+      (item) =>
+        item.userId === userId &&
+        item.family_id === familyId &&
+        !item.revoked_at &&
+        item.expires_in > new Date(),
+    );
+  }
+
+  async revokeUserRefreshTokenFamily(familyId: string): Promise<void> {
+    this.refreshTokenItems = this.refreshTokenItems.filter(
+      (item) => item.family_id !== familyId,
+    );
+  }
+
+  async revokeAllUserRefreshTokens(userId: string): Promise<void> {
+    this.refreshTokenItems = this.refreshTokenItems.filter(
+      (item) => item.userId !== userId,
+    );
+  }
+
+  async deleteExpiredUserRefreshTokens(now = new Date()): Promise<number> {
+    const previousCount = this.refreshTokenItems.length;
+    this.refreshTokenItems = this.refreshTokenItems.filter(
+      (item) => item.expires_in >= now,
+    );
+
+    return previousCount - this.refreshTokenItems.length;
   }
 
   async createTwoFactorToken({

@@ -38,6 +38,7 @@ interface SearchFuelTypeWithCursorProps {
   limit: number;
   cursor?: string;
   businessId: string;
+  search?: string;
 }
 
 interface CursorPaginatedFuelType {

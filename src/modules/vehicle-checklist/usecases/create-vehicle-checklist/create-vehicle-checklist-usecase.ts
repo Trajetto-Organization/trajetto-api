@@ -79,6 +79,26 @@ class CreateVehicleChecklistUseCase {
       throw new BusinessNotFoundError();
     }
 
+    if (
+      findUser.role !== "MASTER" &&
+      findUser.businessId !== checklistData.businessId
+    ) {
+      throw new AppError(
+        "Você não tem autorização para registrar dados nesta empresa.",
+        403,
+        "TENANT_ACCESS_DENIED",
+      );
+    }
+
+    if (checklistData.client_submission_id) {
+      const existingChecklist = await this.vehicleChecklist.findBySubmissionId(
+        checklistData.businessId,
+        checklistData.client_submission_id,
+      );
+
+      if (existingChecklist) return existingChecklist;
+    }
+
     // Validate vehicle exists and belongs to business
     const findVehicle = await this.vehicle.findVehicleById(
       checklistData.vehicleId,
@@ -130,6 +150,14 @@ class CreateVehicleChecklistUseCase {
       if (findDriver.businessId !== checklistData.businessId) {
         throw new DriverNotBelongBusinessError();
       }
+
+      if (findDriver.status !== "ACTIVE") {
+        throw new AppError(
+          "O motorista selecionado esta inativo.",
+          422,
+          "DRIVER_INACTIVE",
+        );
+      }
     }
 
     // Validate branch exists and belongs to business (if branchId is provided)
@@ -145,41 +173,80 @@ class CreateVehicleChecklistUseCase {
       if (findBranch.businessId !== checklistData.businessId) {
         throw new BranchNotBelongBusinessError();
       }
+
+      if (findBranch.is_active === false) {
+        throw new AppError(
+          "Não é permitido registrar checklist em uma filial inativa.",
+          409,
+          "BRANCH_INACTIVE",
+        );
+      }
     }
+
+    if (!checklistData.branchId) {
+      throw new AppError(
+        "A filial é obrigatória para registrar o checklist.",
+        400,
+        "BRANCH_REQUIRED",
+      );
+    }
+
+    if (!checklistData.driverId) {
+      throw new AppError(
+        "O motorista é obrigatório para registrar o checklist.",
+        400,
+        "DRIVER_REQUIRED",
+      );
+    }
+
+    const uploadedPhotoPaths: string[] = [];
+    let databaseCommitted = false;
 
     try {
       // Upload checklist photos if provided
-      let photoPaths: string[] = [];
+      const photoPaths: string[] = [];
       const photoPathsByField: Record<string, string[]> = {};
 
       if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
-        for (const photoFile of checklistPhotoFiles) {
-          const buffer = await photoFile.toBuffer();
-          const uploadResult = await this.uploadService.uploadFile({
-            buffer,
-            filename: photoFile.filename || "checklist-photo",
-            mimetype: photoFile.mimetype,
-            uploadType: "checklistPhotos",
-          });
+        // A small concurrency window shortens uploads without allowing a
+        // single request to saturate memory/CPU while Sharp processes images.
+        for (let index = 0; index < checklistPhotoFiles.length; index += 3) {
+          const batch = checklistPhotoFiles.slice(index, index + 3);
+          const uploadedBatch = await Promise.all(
+            batch.map(async (photoFile) => {
+              const buffer = await photoFile.toBuffer();
+              const uploadResult = await this.uploadService.uploadFile({
+                buffer,
+                filename: photoFile.filename || "checklist-photo",
+                mimetype: photoFile.mimetype,
+                uploadType: "checklistPhotos",
+              });
 
-          photoPaths.push(uploadResult.path);
+              uploadedPhotoPaths.push(uploadResult.path);
 
-          // Build field-to-path mapping from the original field name
-          if (photoFieldMapping) {
-            for (const [fieldName, originalFilenames] of Object.entries(
-              photoFieldMapping,
-            )) {
-              if (
-                originalFilenames.includes(
-                  photoFile.filename || "checklist-photo",
-                )
-              ) {
-                if (!photoPathsByField[fieldName]) {
-                  photoPathsByField[fieldName] = [];
-                }
+              const explicitFieldName = (
+                photoFile as MultipartFile & { checklistFieldName?: string }
+              ).checklistFieldName;
+              const fallbackFieldName = photoFieldMapping
+                ? Object.entries(photoFieldMapping).find(([, filenames]) =>
+                    filenames.includes(photoFile.filename || "checklist-photo"),
+                  )?.[0]
+                : undefined;
 
-                photoPathsByField[fieldName].push(uploadResult.path);
-              }
+              return {
+                path: uploadResult.path,
+                fieldName: explicitFieldName ?? fallbackFieldName,
+              };
+            }),
+          );
+
+          for (const uploadedPhoto of uploadedBatch) {
+            photoPaths.push(uploadedPhoto.path);
+            if (uploadedPhoto.fieldName) {
+              photoPathsByField[uploadedPhoto.fieldName] ??= [];
+              photoPathsByField[uploadedPhoto.fieldName].push(
+                uploadedPhoto.path,
+              );
             }
           }
         }
@@ -195,19 +262,21 @@ class CreateVehicleChecklistUseCase {
             : undefined,
       };
 
-      // Create checklist record
-      const checklistCreated =
-        await this.vehicleChecklist.createVehicleChecklist(
+      // Record creation and mileage advancement are committed atomically.
+      const { checklist: checklistCreated, created } =
+        await this.vehicleChecklist.createVehicleChecklistWithMileage(
           checklistDataWithPhotos,
         );
 
-      // Update vehicle mileage to the current_mileage from checklist record
-      await this.vehicle.updateVehicle({
-        vehicleId: checklistData.vehicleId,
-        vehicleData: {
-          current_mileage: checklistData.current_mileage,
-        },
-      });
+      if (!created) {
+        await Promise.allSettled(
+          uploadedPhotoPaths.map((photoPath) =>
+            this.uploadService.deleteFile(photoPath),
+          ),
+        );
+        return checklistCreated;
+      }
+      databaseCommitted = true;
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({
@@ -245,6 +314,26 @@ class CreateVehicleChecklistUseCase {
 
       return checklistCreated;
     } catch (error) {
+      if (!databaseCommitted) {
+        await Promise.allSettled(
+          uploadedPhotoPaths.map((photoPath) =>
+            this.uploadService.deleteFile(photoPath),
+          ),
+        );
+      }
+
+      if (error instanceof VehicleMileageInvalidError) {
+        throw error;
+      }
+
+      if (error instanceof AppError) {
+        throw error;
+      }
+
+      console.error(
+        "[CreateVehicleChecklistUseCase] Failed to create checklist:",
+        error,
+      );
       throw new AppError(
         "Houve um erro ao tentar criar o checklist veicular! Por favor, tente novamente.",
         500,

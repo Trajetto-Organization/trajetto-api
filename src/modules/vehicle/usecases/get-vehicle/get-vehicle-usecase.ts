@@ -14,6 +14,7 @@ import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";
 
 import { VehicleNotAssignedToDriverError } from "../errors/vehicle-not-assigned-to-driver-error";
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 @injectable()
 class GetVehicleUseCase {
@@ -38,6 +39,8 @@ class GetVehicleUseCase {
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    assertTenantAccess(findUser, businessId);
 
     const findBusinessById = await this.business.findBusinessById(businessId);
 

@@ -3,6 +3,7 @@ import { LocationSource, RecordOrigin } from "@prisma/client";
 
 interface Fuel {
   id: string;
+  client_submission_id?: string | null;
   current_mileage: number;
   liters_amount: Decimal;
   price_per_liter: Decimal;
@@ -44,6 +45,7 @@ interface Fuel {
 }
 
 interface CreateFuelProps {
+  client_submission_id?: string;
   current_mileage: number;
   liters_amount: number | string | Decimal;
   price_per_liter: number | string | Decimal;

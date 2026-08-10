@@ -42,6 +42,8 @@ import { UploadService } from "@/shared/services/upload-service";
 import { MultipartFile } from "@fastify/multipart";
 
 import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
+import { readMultipartFile } from "@/shared/utils/read-multipart-file";
+import { uploadConfig } from "@/config/upload";
 
 interface UpdateFuelRequest {
   fuelId: string;
@@ -90,6 +92,14 @@ class UpdateFuelUseCase {
       throw new BusinessNotFoundError();
     }
 
+    if (findUser.role !== "MASTER" && findUser.businessId !== businessId) {
+      throw new AppError(
+        "Você não tem autorização para alterar dados nesta empresa.",
+        403,
+        "TENANT_ACCESS_DENIED",
+      );
+    }
+
     // Validate fuel exists and belongs to business
     const findFuel = await this.fuel.getFuelByIdAndBusiness({
       businessId,
@@ -127,14 +137,16 @@ class UpdateFuelUseCase {
       throw new FuelVehicleInvalidStatusForFuelError();
     }
 
-    // Validate mileage only if it was changed
-    // If mileage is being updated and is different from the original fuel mileage
-    if (
-      fuelData.current_mileage &&
-      fuelData.current_mileage !== findFuel.current_mileage
-    ) {
+    const effectiveMileage =
+      fuelData.current_mileage ?? findFuel.current_mileage;
+    const vehicleChanged = vehicleId !== findFuel.vehicleId;
+    const mileageChanged = effectiveMileage !== findFuel.current_mileage;
+
+    // Moving a record to another vehicle must also advance that vehicle's
+    // odometer atomically; otherwise the record and vehicle diverge.
+    if (mileageChanged || vehicleChanged) {
       // New mileage must be strictly greater than current vehicle mileage
-      if (fuelData.current_mileage <= findVehicle.current_mileage) {
+      if (effectiveMileage <= findVehicle.current_mileage) {
         throw new VehicleMileageInvalidError();
       }
     }
@@ -164,6 +176,14 @@ class UpdateFuelUseCase {
       if (findDriver.businessId !== businessId) {
         throw new DriverNotBelongBusinessError();
       }
+
+      if (findDriver.status !== "ACTIVE") {
+        throw new AppError(
+          "O motorista selecionado esta inativo.",
+          422,
+          "DRIVER_INACTIVE",
+        );
+      }
     }
 
     // If updating fuel type, validate it exists and belongs to business
@@ -191,6 +211,14 @@ class UpdateFuelUseCase {
 
       if (findBranch.businessId !== businessId) {
         throw new BranchNotBelongBusinessError();
+      }
+
+      if (findBranch.is_active === false) {
+        throw new AppError(
+          "Não é permitido mover o abastecimento para uma filial inativa.",
+          409,
+          "BRANCH_INACTIVE",
+        );
       }
     }
 
@@ -229,44 +257,48 @@ class UpdateFuelUseCase {
       }
     }
 
+    let uploadedPhotoPath: string | null = null;
+    let databaseCommitted = false;
+
     try {
       let finalFuelData = { ...fuelData };
 
       // If there's a new photo, upload it and delete the old one
       if (odometerPhotoFile) {
         // Upload new photo
-        const buffer = await odometerPhotoFile.toBuffer();
+        const buffer = await readMultipartFile(odometerPhotoFile, {
+          maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
+        });
         const uploadResult = await this.uploadService.uploadFile({
           buffer,
           filename: odometerPhotoFile.filename || "odometer-photo",
           mimetype: odometerPhotoFile.mimetype,
           uploadType: "odometerPhotos",
         });
-
-        // Delete old photo if it exists
-        if (findFuel.odometer_photo) {
-          await this.uploadService.deleteFile(findFuel.odometer_photo);
-        }
+        uploadedPhotoPath = uploadResult.path;
 
         // Add new photo path to fuel data
         finalFuelData.odometer_photo = uploadResult.path;
       }
 
-      // Update fuel record
-      const updatedFuel = await this.fuel.updateFuel({
-        fuelId,
-        fuelData: finalFuelData,
-      });
+      const targetVehicleId = fuelData.vehicleId || findFuel.vehicleId;
 
-      // If mileage is updated, update vehicle mileage as well
-      if (fuelData.current_mileage) {
-        const vehicleId = fuelData.vehicleId || findFuel.vehicleId;
-        await this.vehicle.updateVehicle({
-          vehicleId,
-          vehicleData: {
-            current_mileage: fuelData.current_mileage,
-          },
-        });
+      const updatedFuel = await this.fuel.updateFuelAndMileage(
+        { fuelId, fuelData: finalFuelData },
+        mileageChanged || vehicleChanged
+          ? {
+              businessId,
+              vehicleId: targetVehicleId,
+              currentMileage: effectiveMileage,
+            }
+          : undefined,
+      );
+      databaseCommitted = true;
+
+      // Delete the previous object only after the database points to the new
+      // one. Deletion is best-effort and can never break the record.
+      if (uploadedPhotoPath && findFuel.odometer_photo) {
+        await this.uploadService.deleteFile(findFuel.odometer_photo);
       }
 
       // Process activity asynchronously without blocking the main flow
@@ -319,6 +351,18 @@ class UpdateFuelUseCase {
 
       return updatedFuel;
     } catch (error) {
+      if (uploadedPhotoPath && !databaseCommitted) {
+        await this.uploadService.deleteFile(uploadedPhotoPath);
+      }
+
+      if (
+        error instanceof VehicleMileageInvalidError ||
+        error instanceof AppError
+      ) {
+        throw error;
+      }
+
+      console.error("[UpdateFuelUseCase] Failed to update fuel:", error);
       throw new AppError(
         "Houve um erro ao tentar atualizar o abastecimento! Por favor, tente novamente.",
         500,

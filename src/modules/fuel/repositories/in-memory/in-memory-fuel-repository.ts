@@ -20,14 +20,13 @@ class InMemoryFuelRepository implements IFuelRepository {
   async createFuel(fuelData: CreateFuelProps): Promise<Fuel> {
     const newFuel: Fuel = {
       id: uuidV7(),
+      client_submission_id: fuelData.client_submission_id ?? null,
       current_mileage: fuelData.current_mileage,
       liters_amount: new Decimal(fuelData.liters_amount.toString()),
       price_per_liter: new Decimal(fuelData.price_per_liter.toString()),
-      total_amount: fuelData.total_amount
-        ? new Decimal(fuelData.total_amount.toString())
-        : new Decimal(
-            Number(fuelData.liters_amount) * Number(fuelData.price_per_liter),
-          ),
+      total_amount: new Decimal(
+        Number(fuelData.liters_amount) * Number(fuelData.price_per_liter),
+      ),
       odometer_photo: fuelData.odometer_photo || null,
       odometer_verified: fuelData.odometer_verified || false,
       notes: fuelData.notes || null,
@@ -51,6 +50,33 @@ class InMemoryFuelRepository implements IFuelRepository {
 
     this.fuels.push(newFuel);
     return newFuel;
+  }
+
+  async findBySubmissionId(
+    businessId: string,
+    clientSubmissionId: string,
+  ): Promise<Fuel | null> {
+    return (
+      this.fuels.find(
+        (fuel) =>
+          fuel.businessId === businessId &&
+          fuel.client_submission_id === clientSubmissionId,
+      ) ?? null
+    );
+  }
+
+  async createFuelWithMileage(
+    fuelData: CreateFuelProps,
+  ): Promise<{ fuel: Fuel; created: boolean }> {
+    if (fuelData.client_submission_id) {
+      const existing = await this.findBySubmissionId(
+        fuelData.businessId,
+        fuelData.client_submission_id,
+      );
+      if (existing) return { fuel: existing, created: false };
+    }
+
+    return { fuel: await this.createFuel(fuelData), created: true };
   }
 
   async listFuels({
@@ -155,6 +181,10 @@ class InMemoryFuelRepository implements IFuelRepository {
 
     this.fuels[index] = updatedFuel;
     return updatedFuel;
+  }
+
+  async updateFuelAndMileage(update: UpdateFuel): Promise<Fuel> {
+    return this.updateFuel(update);
   }
 
   async deleteFuel(fuelId: string): Promise<Fuel> {
