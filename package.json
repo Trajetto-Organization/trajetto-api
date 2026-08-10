@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "license": "MIT",
+  "description": "Back-end do Trajetto (Node.js + Fastify + Prisma + PostgreSQL): API multi-tenant de gestão de frotas — veículos, motoristas, abastecimentos, checklists, ordens de serviço, peças, multas, contas a pagar, filiais e controle de acesso por perfil (MASTER, BUSINESS_ADMIN, BUSINESS_USER). Atende o trajetto-fleet-manager-ui e o aplicativo mobile.",
   "scripts": {
     "dev": "run-s database:dev:up && run-s rabbitmq:dev:up && run-s redis:dev:up && run-s wait-for-postgres && run-s evolution-api:dev:up && run-s prisma:generate && run-s prisma:migrate:dev",
     "postdev": "run-s seed && run-s seed:infringement && run-s seed:whatsapp && tsx watch src/server.ts",
