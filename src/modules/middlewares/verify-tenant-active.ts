@@ -4,6 +4,7 @@ import { BusinessRepository } from "../business/repositories/business-repository
 import { BranchRepository } from "../branch/repositories/branch-repository";
 
 import { AppError } from "@/shared/errors/AppError";
+import { assertTenantAccess } from "./tenant-authorization";
 
 type Business = {
   id: string;
@@ -50,19 +51,22 @@ async function verifyBusinessActive(
   const businessId = getTenantId(req, "businessId");
   if (!businessId) return;
 
+  assertTenantAccess(request.user, businessId);
+
   const businessRepository = new BusinessRepository();
   const business = (await businessRepository.findBusinessById(
     businessId,
   )) as Business | null;
 
   if (!business) {
-    throw new AppError("Empresa não encontrada!", 404);
+    throw new AppError("Empresa não encontrada!", 404, "TENANT_NOT_FOUND");
   }
 
   if (!business.is_active) {
     throw new AppError(
       "Esta empresa está desativada. Entre em contato com o administrador para reativar o acesso.",
       403,
+      "TENANT_INACTIVE",
     );
   }
 
@@ -84,13 +88,16 @@ async function verifyBranchActive(
   )) as Branch | null;
 
   if (!branch) {
-    throw new AppError("Filial não encontrada!", 404);
+    throw new AppError("Filial não encontrada!", 404, "BRANCH_NOT_FOUND");
   }
+
+  assertTenantAccess(request.user, branch.businessId);
 
   if (!branch.is_active) {
     throw new AppError(
       "Esta filial está desativada. Entre em contato com o administrador para reativar o acesso.",
       403,
+      "BRANCH_INACTIVE",
     );
   }
 
@@ -103,7 +110,11 @@ async function verifyBranchBelongsToBusiness(
 ): Promise<void> {
   if (!request.branch || !request.business) return;
   if (request.branch.businessId !== request.business.id) {
-    throw new AppError("Esta filial não pertence à empresa informada.", 403);
+    throw new AppError(
+      "Esta filial não pertence à empresa informada.",
+      403,
+      "BRANCH_TENANT_MISMATCH",
+    );
   }
 }
 

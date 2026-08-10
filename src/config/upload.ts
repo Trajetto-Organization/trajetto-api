@@ -13,6 +13,7 @@ export const uploadConfig = {
     secretAccessKey: env.R2_SECRET_ACCESS_KEY || "",
     publicDomain: env.R2_PUBLIC_DOMAIN || "",
   },
+  signedUrlTtlSeconds: env.UPLOAD_SIGNED_URL_TTL_SECONDS,
   // Size limits function
   getSizeLimit: (
     uploadType: "odometerPhotos" | "avatars" | "checklistPhotos",

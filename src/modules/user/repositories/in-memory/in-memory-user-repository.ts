@@ -48,6 +48,7 @@ class InMemoryUserRepository implements IUserRepository {
       driverId: driverId ?? null,
       two_factor_enabled: false,
       access_revoked: false,
+      session_version: 0,
       email_verified: null,
       avatar: null,
       whatsapp_notifications_enabled: whatsapp_notifications_enabled ?? false,
@@ -115,6 +116,9 @@ class InMemoryUserRepository implements IUserRepository {
     const updatedUser = {
       ...this.user[index],
       ...filteredData,
+      ...(userData.password
+        ? { session_version: (this.user[index].session_version ?? 0) + 1 }
+        : {}),
     };
 
     this.user[index] = updatedUser;
@@ -163,6 +167,7 @@ class InMemoryUserRepository implements IUserRepository {
     }
 
     user.password = password;
+    user.session_version = (user.session_version ?? 0) + 1;
     return user;
   }
 
@@ -234,6 +239,16 @@ class InMemoryUserRepository implements IUserRepository {
     }
 
     user.access_revoked = isAccessRevoke;
+    user.session_version = (user.session_version ?? 0) + 1;
+    return user;
+  }
+
+  async invalidateUserSessions(userId: string): Promise<User | null> {
+    const user = this.user.find((item) => item.id === userId);
+
+    if (!user) return null;
+
+    user.session_version = (user.session_version ?? 0) + 1;
     return user;
   }
 
@@ -394,6 +409,7 @@ class InMemoryUserRepository implements IUserRepository {
       password,
       role: "MASTER",
       access_revoked: false,
+      session_version: 0,
       email_verified: now,
       created_at: now,
       updated_at: now,

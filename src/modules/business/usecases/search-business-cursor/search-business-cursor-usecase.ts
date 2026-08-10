@@ -12,6 +12,7 @@ interface SearchBusinessWithCursorRequest {
   userId: string;
   limit?: number;
   cursor?: string;
+  search?: string;
 }
 
 @injectable()
@@ -27,6 +28,7 @@ class SearchBusinessCursorUseCase {
     userId,
     limit = 10,
     cursor,
+    search,
   }: SearchBusinessWithCursorRequest): Promise<CursorPaginatedBusiness> {
     const findUser = await this.user.findUserById(userId);
 
@@ -40,6 +42,7 @@ class SearchBusinessCursorUseCase {
         cursor,
         businessId: findUser.businessId as string,
         currentUserRole: findUser.role,
+        search,
       });
 
       return result;

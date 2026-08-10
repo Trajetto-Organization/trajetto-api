@@ -12,6 +12,13 @@ interface IVehicleChecklistRepository {
   createVehicleChecklist: (
     checklistData: CreateVehicleChecklistProps,
   ) => Promise<VehicleChecklist>;
+  createVehicleChecklistWithMileage: (
+    checklistData: CreateVehicleChecklistProps,
+  ) => Promise<{ checklist: VehicleChecklist; created: boolean }>;
+  findBySubmissionId: (
+    businessId: string,
+    clientSubmissionId: string,
+  ) => Promise<VehicleChecklist | null>;
   listVehicleChecklists: (
     listChecklistProps: ListVehicleChecklistByBusinessIdProps,
   ) => Promise<ListVehicleChecklistProps>;
@@ -19,6 +26,14 @@ interface IVehicleChecklistRepository {
     checklistData,
     checklistId,
   }: UpdateVehicleChecklist) => Promise<VehicleChecklist>;
+  updateVehicleChecklistAndMileage: (
+    update: UpdateVehicleChecklist,
+    mileageUpdate?: {
+      businessId: string;
+      vehicleId: string;
+      currentMileage: number;
+    },
+  ) => Promise<VehicleChecklist>;
   deleteVehicleChecklist: (checklistId: string) => Promise<VehicleChecklist>;
   findVehicleChecklistById: (
     checklistId: string,

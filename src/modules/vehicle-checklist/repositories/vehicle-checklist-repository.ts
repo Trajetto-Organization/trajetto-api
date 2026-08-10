@@ -1,5 +1,7 @@
 import database from "@/../infra/database";
+import { Prisma } from "@prisma/client";
 import { IVehicleChecklistRepository } from "./IVehicle-checklist-repository";
+import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 
 import {
   VehicleChecklist,
@@ -27,6 +29,93 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     });
 
     return checklistCreated;
+  }
+
+  async findBySubmissionId(
+    businessId: string,
+    clientSubmissionId: string,
+  ): Promise<VehicleChecklist | null> {
+    return this.prisma.vehicleChecklist.findFirst({
+      where: {
+        businessId,
+        client_submission_id: clientSubmissionId,
+      },
+    });
+  }
+
+  async createVehicleChecklistWithMileage(
+    checklistData: CreateVehicleChecklistProps,
+  ): Promise<{ checklist: VehicleChecklist; created: boolean }> {
+    const executeTransaction = async () =>
+      this.prisma.$transaction(
+        async (transaction) => {
+          if (checklistData.client_submission_id) {
+            const existing = await transaction.vehicleChecklist.findFirst({
+              where: {
+                businessId: checklistData.businessId,
+                client_submission_id: checklistData.client_submission_id,
+              },
+            });
+
+            if (existing) {
+              return { checklist: existing, created: false };
+            }
+          }
+
+          const mileageUpdate = await transaction.vehicle.updateMany({
+            where: {
+              id: checklistData.vehicleId,
+              businessId: checklistData.businessId,
+              current_mileage: { lt: checklistData.current_mileage },
+            },
+            data: { current_mileage: checklistData.current_mileage },
+          });
+
+          if (mileageUpdate.count !== 1) {
+            throw new VehicleMileageInvalidError();
+          }
+
+          const checklist = await transaction.vehicleChecklist.create({
+            data: {
+              ...checklistData,
+              photos: checklistData.photos,
+              branchId: checklistData.branchId!,
+              driverId: checklistData.driverId!,
+            },
+          });
+
+          return { checklist, created: true };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await executeTransaction();
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002" &&
+          checklistData.client_submission_id
+        ) {
+          const existing = await this.findBySubmissionId(
+            checklistData.businessId,
+            checklistData.client_submission_id,
+          );
+
+          if (existing) return { checklist: existing, created: false };
+        }
+
+        const shouldRetry =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2034" &&
+          attempt < 2;
+
+        if (!shouldRetry) throw error;
+      }
+    }
+
+    throw new Error("Could not complete checklist transaction");
   }
 
   async listVehicleChecklists({
@@ -219,6 +308,46 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     });
 
     return updatedChecklist;
+  }
+
+  async updateVehicleChecklistAndMileage(
+    { checklistData, checklistId }: UpdateVehicleChecklist,
+    mileageUpdate?: {
+      businessId: string;
+      vehicleId: string;
+      currentMileage: number;
+    },
+  ): Promise<VehicleChecklist> {
+    return this.prisma.$transaction(
+      async (transaction) => {
+        if (mileageUpdate) {
+          const updatedMileage = await transaction.vehicle.updateMany({
+            where: {
+              id: mileageUpdate.vehicleId,
+              businessId: mileageUpdate.businessId,
+              current_mileage: { lt: mileageUpdate.currentMileage },
+            },
+            data: { current_mileage: mileageUpdate.currentMileage },
+          });
+
+          if (updatedMileage.count !== 1) {
+            throw new VehicleMileageInvalidError();
+          }
+        }
+
+        const filteredData = Object.fromEntries(
+          Object.entries(checklistData).filter(
+            ([, value]) => value !== undefined,
+          ),
+        );
+
+        return transaction.vehicleChecklist.update({
+          where: { id: checklistId },
+          data: filteredData,
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   async deleteVehicleChecklist(checklistId: string): Promise<VehicleChecklist> {

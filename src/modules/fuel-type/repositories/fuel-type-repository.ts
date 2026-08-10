@@ -171,9 +171,15 @@ class FuelTypeRepository implements IFuelTypeRepository {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchFuelTypeWithCursorProps): Promise<CursorPaginatedFuelType> {
     const items = await this.prisma.fuelType.findMany({
-      where: { businessId },
+      where: {
+        businessId,
+        ...(search && {
+          description: { contains: search, mode: "insensitive" },
+        }),
+      },
       take: limit + 1,
       ...(cursor && {
         cursor: { id: cursor },

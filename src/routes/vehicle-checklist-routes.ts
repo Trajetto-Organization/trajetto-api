@@ -32,6 +32,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
   app.post(
     "/create-vehicle-checklist/:businessId",
     {
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
       onRequest: [ensureAuthenticated],
       preHandler: [
         verifyBusinessActive,
@@ -81,6 +82,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
   app.patch(
     "/update-vehicle-checklist/:checklistId/business/:businessId",
     {
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
       onRequest: [ensureAuthenticated],
       preHandler: [
         verifyBusinessActive,

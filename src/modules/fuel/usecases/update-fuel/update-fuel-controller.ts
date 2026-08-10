@@ -28,6 +28,8 @@ import { FuelDriverCannotUpdateFuelError } from "../errors/fuel-driver-cannot-up
 
 import { updateFuelMultipartSchema } from "@/schemas/update-fuel-schema";
 import { updateDeleteFuelSchema } from "@/schemas/update-delete-fuel-schema";
+import { readMultipartFile } from "@/shared/utils/read-multipart-file";
+import { uploadConfig } from "@/config/upload";
 
 class UpdateFuelController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -59,7 +61,9 @@ class UpdateFuelController {
           part.fieldname === "odometer_photo"
         ) {
           // Create a proper file object that works with our existing validation
-          const buffer = await part.toBuffer();
+          const buffer = await readMultipartFile(part, {
+            maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
+          });
 
           fileUpload = {
             fieldname: part.fieldname,

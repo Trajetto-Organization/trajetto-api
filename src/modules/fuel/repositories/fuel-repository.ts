@@ -1,7 +1,9 @@
 import database from "@/../infra/database";
 
 import { Decimal } from "@prisma/client/runtime/library";
+import { Prisma } from "@prisma/client";
 import { IFuelRepository } from "./IFuel-repository";
+import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 
 import {
   Fuel,
@@ -22,9 +24,8 @@ class FuelRepository implements IFuelRepository {
     const litersAmount = new Decimal(fuelData.liters_amount.toString());
     const pricePerLiter = new Decimal(fuelData.price_per_liter.toString());
 
-    const totalAmount = fuelData.total_amount
-      ? new Decimal(fuelData.total_amount.toString())
-      : litersAmount.mul(pricePerLiter);
+    // Never trust a total supplied by a client.
+    const totalAmount = litersAmount.mul(pricePerLiter);
 
     const fuelCreated = await this.prisma.fuel.create({
       data: {
@@ -40,6 +41,102 @@ class FuelRepository implements IFuelRepository {
     });
 
     return fuelCreated;
+  }
+
+  async findBySubmissionId(
+    businessId: string,
+    clientSubmissionId: string,
+  ): Promise<Fuel | null> {
+    return this.prisma.fuel.findFirst({
+      where: {
+        businessId,
+        client_submission_id: clientSubmissionId,
+      },
+    });
+  }
+
+  async createFuelWithMileage(
+    fuelData: CreateFuelProps,
+  ): Promise<{ fuel: Fuel; created: boolean }> {
+    const executeTransaction = async () =>
+      this.prisma.$transaction(
+        async (transaction) => {
+          if (fuelData.client_submission_id) {
+            const existing = await transaction.fuel.findFirst({
+              where: {
+                businessId: fuelData.businessId,
+                client_submission_id: fuelData.client_submission_id,
+              },
+            });
+
+            if (existing) {
+              return { fuel: existing, created: false };
+            }
+          }
+
+          const mileageUpdate = await transaction.vehicle.updateMany({
+            where: {
+              id: fuelData.vehicleId,
+              businessId: fuelData.businessId,
+              current_mileage: { lt: fuelData.current_mileage },
+            },
+            data: { current_mileage: fuelData.current_mileage },
+          });
+
+          if (mileageUpdate.count !== 1) {
+            throw new VehicleMileageInvalidError();
+          }
+
+          const litersAmount = new Decimal(fuelData.liters_amount.toString());
+          const pricePerLiter = new Decimal(
+            fuelData.price_per_liter.toString(),
+          );
+
+          const fuel = await transaction.fuel.create({
+            data: {
+              ...fuelData,
+              liters_amount: litersAmount,
+              price_per_liter: pricePerLiter,
+              total_amount: litersAmount.mul(pricePerLiter),
+              odometer_verified: fuelData.odometer_verified ?? false,
+              odometer_photo: fuelData.odometer_photo as string,
+              branchId: fuelData.branchId!,
+              driverId: fuelData.driverId!,
+            },
+          });
+
+          return { fuel, created: true };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await executeTransaction();
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002" &&
+          fuelData.client_submission_id
+        ) {
+          const existing = await this.findBySubmissionId(
+            fuelData.businessId,
+            fuelData.client_submission_id,
+          );
+
+          if (existing) return { fuel: existing, created: false };
+        }
+
+        const shouldRetry =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2034" &&
+          attempt < 2;
+
+        if (!shouldRetry) throw error;
+      }
+    }
+
+    throw new Error("Could not complete fuel transaction");
   }
 
   async listFuels({
@@ -231,6 +328,67 @@ class FuelRepository implements IFuelRepository {
     });
 
     return updatedFuel;
+  }
+
+  async updateFuelAndMileage(
+    { fuelData, fuelId }: UpdateFuel,
+    mileageUpdate?: {
+      businessId: string;
+      vehicleId: string;
+      currentMileage: number;
+    },
+  ): Promise<Fuel> {
+    return this.prisma.$transaction(
+      async (transaction) => {
+        if (mileageUpdate) {
+          const updatedMileage = await transaction.vehicle.updateMany({
+            where: {
+              id: mileageUpdate.vehicleId,
+              businessId: mileageUpdate.businessId,
+              current_mileage: { lt: mileageUpdate.currentMileage },
+            },
+            data: { current_mileage: mileageUpdate.currentMileage },
+          });
+
+          if (updatedMileage.count !== 1) {
+            throw new VehicleMileageInvalidError();
+          }
+        }
+
+        const filteredData = Object.fromEntries(
+          Object.entries(fuelData).filter(([, value]) => value !== undefined),
+        );
+
+        if (filteredData.liters_amount || filteredData.price_per_liter) {
+          const currentFuel = await transaction.fuel.findUnique({
+            where: { id: fuelId },
+          });
+
+          if (currentFuel) {
+            const litersAmount = filteredData.liters_amount
+              ? new Decimal(filteredData.liters_amount.toString())
+              : currentFuel.liters_amount;
+            const pricePerLiter = filteredData.price_per_liter
+              ? new Decimal(filteredData.price_per_liter.toString())
+              : currentFuel.price_per_liter;
+
+            filteredData.total_amount = litersAmount.mul(pricePerLiter);
+            if (filteredData.liters_amount) {
+              filteredData.liters_amount = litersAmount;
+            }
+            if (filteredData.price_per_liter) {
+              filteredData.price_per_liter = pricePerLiter;
+            }
+          }
+        }
+
+        return transaction.fuel.update({
+          where: { id: fuelId },
+          data: filteredData,
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   async deleteFuel(fuelId: string): Promise<Fuel> {

@@ -9,6 +9,7 @@ import { IUserRepository } from "../../repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
+import { sendSecurityEventToUser } from "@/websocket";
 
 interface ResetUserPasswordProps {
   token: string;
@@ -55,6 +56,8 @@ class ResetUserPasswordUseCase {
         }),
         this.usersTokens.deleteForgotPasswordVerificationToken(userToken.id),
       ]);
+
+      sendSecurityEventToUser(user.id, { reason: "password_reset" });
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar atualizar sua senha! Por favor, tente novamente.",

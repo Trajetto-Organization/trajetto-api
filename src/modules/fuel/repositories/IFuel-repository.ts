@@ -11,10 +11,25 @@ import {
 
 interface IFuelRepository {
   createFuel: (fuelData: CreateFuelProps) => Promise<Fuel>;
+  createFuelWithMileage: (
+    fuelData: CreateFuelProps,
+  ) => Promise<{ fuel: Fuel; created: boolean }>;
+  findBySubmissionId: (
+    businessId: string,
+    clientSubmissionId: string,
+  ) => Promise<Fuel | null>;
   listFuels: (
     listFuelProps: ListFuelByBusinessIdProps,
   ) => Promise<ListFuelProps>;
   updateFuel: ({ fuelData, fuelId }: UpdateFuel) => Promise<Fuel>;
+  updateFuelAndMileage: (
+    update: UpdateFuel,
+    mileageUpdate?: {
+      businessId: string;
+      vehicleId: string;
+      currentMileage: number;
+    },
+  ) => Promise<Fuel>;
   deleteFuel: (fuelId: string) => Promise<Fuel>;
   findFuelById: (fuelId: string) => Promise<Fuel | null>;
   findFuelByIdWithRelations: (fuelId: string) => Promise<any | null>;

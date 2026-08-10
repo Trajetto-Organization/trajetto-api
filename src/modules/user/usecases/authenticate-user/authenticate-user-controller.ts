@@ -56,23 +56,38 @@ class AuthenticateUserController {
       });
     } catch (error) {
       if (error instanceof UserInvalidCredentialsError) {
-        return reply.status(400).send({ message: error.message });
+        return reply.status(401).send({
+          code: "AUTH_INVALID_CREDENTIALS",
+          message: error.message,
+        });
       }
 
       if (error instanceof UserNotFoundPermissionOrProfileAccess) {
-        return reply.status(403).send({ message: error.message });
+        return reply.status(403).send({
+          code: "AUTH_PROFILE_NOT_CONFIGURED",
+          message: error.message,
+        });
       }
 
       if (error instanceof UserRevokedAccessError) {
-        return reply.status(403).send({ message: error.message });
+        return reply.status(403).send({
+          code: "AUTH_ACCESS_REVOKED",
+          message: error.message,
+        });
       }
 
       if (error instanceof UserDriverInactiveError) {
-        return reply.status(403).send({ message: error.message });
+        return reply.status(403).send({
+          code: "AUTH_DRIVER_INACTIVE",
+          message: error.message,
+        });
       }
 
       if (error instanceof BusinessInactiveError) {
-        return reply.status(403).send({ message: error.message });
+        return reply.status(403).send({
+          code: "AUTH_BUSINESS_INACTIVE",
+          message: error.message,
+        });
       }
 
       throw error;

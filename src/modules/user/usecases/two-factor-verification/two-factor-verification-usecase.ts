@@ -1,9 +1,6 @@
 import { inject, injectable } from "tsyringe";
 
 import { compare } from "bcrypt";
-import { sign } from "jsonwebtoken";
-
-import auth from "@/config/auth";
 
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
@@ -14,8 +11,10 @@ import { UserExpiredCodeError } from "../errors/user-expired-code-error";
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserInvalidCodeForUserError } from "../errors/user-invalid-code-for-user-error";
 
-import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
 import { AppError } from "@/shared/errors/AppError";
+import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+import { assertSessionEligible } from "../../services/session-eligibility";
+import { createUserSession } from "../../services/session-service";
 
 interface TwoFactorVerificationQueryProps {
   twoFactorCode: string;
@@ -35,6 +34,8 @@ class TwoFactorVerificationUseCase {
     private user: IUserRepository,
     @inject("UsersTokensRepository")
     private usersTokens: IUsersTokensRepository,
+    @inject("DriverRepository")
+    private driver: IDriverRepository,
   ) {}
 
   async execute({
@@ -64,6 +65,8 @@ class TwoFactorVerificationUseCase {
     // Checks if the token has expired
     if (now > twoFactorToken.expires) throw new UserExpiredCodeError();
 
+    await assertSessionEligible(user, this.driver);
+
     await this.usersTokens.deleteTwoFactorToken(twoFactorToken.id);
 
     const existingConfirmation =
@@ -84,64 +87,9 @@ class TwoFactorVerificationUseCase {
       );
     }
 
-    // BUSINESS_USER must have either profileAccess OR driverId
-    if (user.role === "BUSINESS_USER") {
-      const hasProfileAccess =
-        user.profileAccess &&
-        user.profileAccess.permissions &&
-        user.profileAccess.permissions.length > 0;
+    const session = await createUserSession(user, this.usersTokens);
 
-      const hasDriverId = !!user.driverId;
-
-      // If doesn't have profileAccess and doesn't have driverId, throw error
-      if (!hasProfileAccess && !hasDriverId) {
-        throw new UserNotFoundPermissionOrProfileAccess();
-      }
-    }
-
-    const {
-      secret_token,
-      secret_refresh_token,
-      expires_in_token,
-      expires_in_refresh_token,
-      expires_in_refresh_token_days,
-    } = auth;
-
-    const token = sign(
-      {
-        role: user.role,
-        driverId: user.driverId || null,
-      },
-      secret_token,
-      {
-        subject: user.id,
-        expiresIn: expires_in_token,
-      },
-    );
-
-    const refresh_token = sign({ email: user.email }, secret_refresh_token, {
-      subject: user.id,
-      expiresIn: expires_in_refresh_token,
-    });
-
-    const expires_in = new Date(
-      new Date().getTime() + expires_in_refresh_token_days,
-    );
-
-    try {
-      await this.usersTokens.createUserRefreshToken({
-        userId: user.id,
-        expires_in,
-        refresh_token,
-      });
-
-      return { token, refresh_token, role: user.role };
-    } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar entrar na sua conta! Por favor, tente novamente.",
-        500,
-      );
-    }
+    return { ...session, role: user.role };
   }
 }
 

@@ -10,6 +10,7 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { CursorPaginatedServiceOrder } from "../../dtos/service-order-dto";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 interface SearchServiceOrderCursorRequest {
   userId: string;
@@ -40,6 +41,8 @@ class SearchServiceOrderCursorUseCase {
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    assertTenantAccess(findUser, businessId);
 
     const findBusinessById = await this.business.findBusinessById(businessId);
 

@@ -15,6 +15,7 @@ import { UploadService } from "@/shared/services/upload-service";
 
 import { CursorPaginatedFuel } from "../../dtos/fuel-dto";
 import { AppError } from "@/shared/errors/AppError";
+import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
 
 interface SearchFuelByVehicleCursorRequest {
   userId: string;
@@ -59,6 +60,10 @@ class SearchFuelByVehicleCursorUseCase {
     // Verify vehicle belongs to user's business
     if (findVehicle.businessId !== findUser.businessId) {
       throw new VehicleNotBelongBusinessError();
+    }
+
+    if (findUser.driverId && findVehicle.driverId !== findUser.driverId) {
+      throw new VehicleNotAssignedToDriverError();
     }
 
     const findBusiness = await this.business.findBusinessById(

@@ -14,6 +14,7 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 
 import { CursorPaginatedServiceOrder } from "../../dtos/service-order-dto";
 import { AppError } from "@/shared/errors/AppError";
+import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
 
 interface SearchServiceOrderByVehicleCursorRequest {
   userId: string;
@@ -56,6 +57,10 @@ class SearchServiceOrderByVehicleCursorUseCase {
     // Verify vehicle belongs to user's business
     if (findVehicle.businessId !== findUser.businessId) {
       throw new VehicleNotBelongBusinessError();
+    }
+
+    if (findUser.driverId && findVehicle.driverId !== findUser.driverId) {
+      throw new VehicleNotAssignedToDriverError();
     }
 
     const findBusiness = await this.business.findBusinessById(

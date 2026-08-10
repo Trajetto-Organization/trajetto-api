@@ -84,6 +84,14 @@ class UpdateVehicleChecklistUseCase {
       throw new BusinessNotFoundError();
     }
 
+    if (findUser.role !== "MASTER" && findUser.businessId !== businessId) {
+      throw new AppError(
+        "Você não tem autorização para alterar dados nesta empresa.",
+        403,
+        "TENANT_ACCESS_DENIED",
+      );
+    }
+
     // Validate checklist exists and belongs to business
     const findChecklist =
       await this.vehicleChecklist.getVehicleChecklistByIdAndBusiness({
@@ -136,14 +144,14 @@ class UpdateVehicleChecklistUseCase {
       throw new VehicleChecklistDriverCannotUpdateChecklistError();
     }
 
-    // Validate mileage only if it was changed
-    // If mileage is being updated and is different from the original checklist mileage
-    if (
-      checklistData.current_mileage !== undefined &&
-      checklistData.current_mileage !== findChecklist.current_mileage
-    ) {
+    const effectiveMileage =
+      checklistData.current_mileage ?? findChecklist.current_mileage;
+    const vehicleChanged = vehicleId !== findChecklist.vehicleId;
+    const mileageChanged = effectiveMileage !== findChecklist.current_mileage;
+
+    if (mileageChanged || vehicleChanged) {
       // New mileage must be strictly greater than current vehicle mileage
-      if (checklistData.current_mileage <= findVehicle.current_mileage) {
+      if (effectiveMileage <= findVehicle.current_mileage) {
         throw new VehicleMileageInvalidError();
       }
     }
@@ -172,6 +180,14 @@ class UpdateVehicleChecklistUseCase {
       if (findDriver.businessId !== businessId) {
         throw new DriverNotBelongBusinessError();
       }
+
+      if (findDriver.status !== "ACTIVE") {
+        throw new AppError(
+          "O motorista selecionado esta inativo.",
+          422,
+          "DRIVER_INACTIVE",
+        );
+      }
     }
 
     // If updating branch, validate it exists and belongs to business
@@ -187,11 +203,22 @@ class UpdateVehicleChecklistUseCase {
       if (findBranch.businessId !== businessId) {
         throw new BranchNotBelongBusinessError();
       }
+
+      if (findBranch.is_active === false) {
+        throw new AppError(
+          "Não é permitido mover o checklist para uma filial inativa.",
+          409,
+          "BRANCH_INACTIVE",
+        );
+      }
     }
+
+    const newPhotoPaths: string[] = [];
+    let oldPhotoPathsToDelete: string[] = [];
+    let databaseCommitted = false;
 
     try {
       // Upload checklist photos if provided
-      let newPhotoPaths: string[] = [];
       const newPhotoPathsByField: Record<string, string[]> = {};
 
       if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
@@ -239,34 +266,13 @@ class UpdateVehicleChecklistUseCase {
       // Remove photos that should be deleted
       if (photosToRemove && photosToRemove.length > 0) {
         // Convert URLs to relative paths for comparison and deletion
-        const photoPathsToRemove = photosToRemove.map((photoUrl) => {
-          if (photoUrl.includes("/tmp/")) {
-            // Local: http://localhost:3333/tmp/checklistPhotos/file.webp -> checklistPhotos/file.webp
-            return photoUrl.split("/tmp/")[1];
-          } else if (photoUrl.includes("checklistPhotos/")) {
-            // R2: https://domain.com/checklistPhotos/file.webp -> checklistPhotos/file.webp
-            const startIndex = photoUrl.indexOf("checklistPhotos/");
-            return photoUrl.substring(startIndex);
-          }
-          return photoUrl; // fallback if already relative
-        });
-
-        // Delete physical files from server/storage
-        for (const photoPath of photoPathsToRemove) {
-          try {
-            await this.uploadService.deleteFile(photoPath);
-          } catch (error) {
-            console.error(
-              `🔴 USECASE: Failed to delete photo file: ${photoPath}`,
-              error,
-            );
-            // Continue with other deletions even if one fails
-          }
-        }
+        oldPhotoPathsToDelete = photosToRemove.map((photoUrl) =>
+          this.uploadService.extractFilePath(photoUrl),
+        );
 
         // Remove from array using relative paths
         finalPhotos = finalPhotos.filter(
-          (photo) => !photoPathsToRemove.includes(photo),
+          (photo) => !oldPhotoPathsToDelete.includes(photo),
         );
       }
 
@@ -275,32 +281,68 @@ class UpdateVehicleChecklistUseCase {
         finalPhotos = [...finalPhotos, ...newPhotoPaths];
       }
 
-      // Add photo paths to checklist data only if there are photos or if photos were modified
-      const checklistDataWithPhotos =
-        newPhotoPaths.length > 0 ||
-        (photosToRemove && photosToRemove.length > 0)
-          ? { ...checklistData, photos: finalPhotos }
-          : checklistData;
+      const existingPhotosByField =
+        findChecklist.photos_by_field &&
+        typeof findChecklist.photos_by_field === "object" &&
+        !Array.isArray(findChecklist.photos_by_field)
+          ? (findChecklist.photos_by_field as Record<string, unknown>)
+          : {};
+      const finalPhotosByField = Object.fromEntries(
+        Object.entries(existingPhotosByField).map(([fieldName, paths]) => [
+          fieldName,
+          Array.isArray(paths)
+            ? paths.filter(
+                (photoPath): photoPath is string =>
+                  typeof photoPath === "string" &&
+                  !oldPhotoPathsToDelete.includes(photoPath),
+              )
+            : [],
+        ]),
+      ) as Record<string, string[]>;
 
-      // Update the checklist
-      const updatedChecklist =
-        await this.vehicleChecklist.updateVehicleChecklist({
-          checklistData: checklistDataWithPhotos,
-          checklistId,
-        });
-
-      // Update vehicle mileage if current_mileage is being updated
-      if (
-        checklistData.current_mileage !== undefined &&
-        checklistData.vehicleId
-      ) {
-        await this.vehicle.updateVehicle({
-          vehicleId: checklistData.vehicleId,
-          vehicleData: {
-            current_mileage: checklistData.current_mileage,
-          },
-        });
+      for (const [fieldName, paths] of Object.entries(newPhotoPathsByField)) {
+        finalPhotosByField[fieldName] = [
+          ...(finalPhotosByField[fieldName] ?? []),
+          ...paths,
+        ];
       }
+
+      // Add photo paths to checklist data only if there are photos or if photos were modified
+      const photosChanged =
+        newPhotoPaths.length > 0 ||
+        Boolean(photosToRemove && photosToRemove.length > 0);
+      const checklistDataWithPhotos = photosChanged
+        ? {
+            ...checklistData,
+            photos: finalPhotos,
+            photos_by_field: finalPhotosByField,
+          }
+        : checklistData;
+      const targetVehicleId =
+        checklistData.vehicleId ?? findChecklist.vehicleId;
+
+      const updatedChecklist =
+        await this.vehicleChecklist.updateVehicleChecklistAndMileage(
+          {
+            checklistData: checklistDataWithPhotos,
+            checklistId,
+          },
+          mileageChanged || vehicleChanged
+            ? {
+                businessId,
+                vehicleId: targetVehicleId,
+                currentMileage: effectiveMileage,
+              }
+            : undefined,
+        );
+      databaseCommitted = true;
+
+      // Remove superseded objects only after the transaction succeeds.
+      await Promise.allSettled(
+        oldPhotoPathsToDelete.map((photoPath) =>
+          this.uploadService.deleteFile(photoPath),
+        ),
+      );
 
       // Get vehicle information for activity description
       const findVehicle = await this.vehicle.findVehicleById(
@@ -345,6 +387,25 @@ class UpdateVehicleChecklistUseCase {
 
       return updatedChecklist;
     } catch (error) {
+      if (!databaseCommitted) {
+        await Promise.allSettled(
+          newPhotoPaths.map((photoPath) =>
+            this.uploadService.deleteFile(photoPath),
+          ),
+        );
+      }
+
+      if (
+        error instanceof VehicleMileageInvalidError ||
+        error instanceof AppError
+      ) {
+        throw error;
+      }
+
+      console.error(
+        "[UpdateVehicleChecklistUseCase] Failed to update checklist:",
+        error,
+      );
       throw new AppError(
         "Houve um erro ao tentar atualizar o checklist veicular! Por favor, tente novamente.",
         500,

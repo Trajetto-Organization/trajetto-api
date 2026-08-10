@@ -103,10 +103,30 @@ class BusinessRepository implements IBusinessRepository {
     cursor,
     businessId,
     currentUserRole,
+    search,
   }: SearchBusinessWithCursorProps): Promise<CursorPaginatedBusiness> {
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { id: businessId }),
       is_active: true,
+      ...(search && {
+        OR: [
+          {
+            corporate_reason: {
+              contains: search,
+              mode: "insensitive" as const,
+            },
+          },
+          { fantasy_name: { contains: search, mode: "insensitive" as const } },
+          { cnpj: { contains: search, mode: "insensitive" as const } },
+          { email: { contains: search, mode: "insensitive" as const } },
+          {
+            responsible_name: {
+              contains: search,
+              mode: "insensitive" as const,
+            },
+          },
+        ],
+      }),
     };
 
     const businesses = await this.prisma.business.findMany({

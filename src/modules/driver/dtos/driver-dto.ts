@@ -81,10 +81,16 @@ interface SearchDriverWithCursorProps {
   limit: number;
   cursor?: string;
   businessId: string;
+  search?: string;
 }
 
+type DriverCursorItem = Pick<
+  Driver,
+  "id" | "name" | "cnh" | "branchId" | "businessId" | "status" | "created_at"
+>;
+
 interface CursorPaginatedDriver {
-  data: Driver[];
+  data: DriverCursorItem[];
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -98,4 +104,5 @@ export {
   UpdateDriverProps,
   SearchDriverWithCursorProps,
   CursorPaginatedDriver,
+  DriverCursorItem,
 };

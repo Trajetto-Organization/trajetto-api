@@ -313,9 +313,28 @@ class DriverRepository implements IDriverRepository {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchDriverWithCursorProps): Promise<CursorPaginatedDriver> {
     const items = await this.prisma.driver.findMany({
-      where: { businessId },
+      where: {
+        businessId,
+        status: "ACTIVE",
+        ...(search && {
+          OR: [
+            { name: { contains: search, mode: "insensitive" } },
+            { cnh: { contains: search, mode: "insensitive" } },
+          ],
+        }),
+      },
+      select: {
+        id: true,
+        name: true,
+        cnh: true,
+        branchId: true,
+        businessId: true,
+        status: true,
+        created_at: true,
+      },
       take: limit + 1,
       ...(cursor && {
         cursor: { id: cursor },

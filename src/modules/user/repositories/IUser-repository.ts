@@ -50,6 +50,7 @@ interface IUserRepository {
     userId,
     isAccessRevoke,
   }: UpdateUserAccessRevocation) => Promise<User | null>;
+  invalidateUserSessions: (userId: string) => Promise<User | null>;
   updateWhatsAppSettings: ({
     userId,
     whatsapp_notifications_enabled,

@@ -228,12 +228,28 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     limit = 10,
     cursor,
     businessId,
+    driverId,
+    search,
   }: SearchVehicleWithCursorProps): Promise<CursorPaginatedVehicle> {
     let filtered = this.vehicles.filter(
       (vehicle) =>
         vehicle.businessId === businessId &&
+        (!driverId || vehicle.driverId === driverId) &&
         ["ACTIVE", "IN_ROUTE"].includes(vehicle.status),
     );
+
+    if (search) {
+      const term = search.toLowerCase();
+      filtered = filtered.filter((vehicle) =>
+        [
+          vehicle.description,
+          vehicle.license_plate,
+          vehicle.brand,
+          vehicle.model,
+          vehicle.renavam,
+        ].some((value) => value.toLowerCase().includes(term)),
+      );
+    }
 
     if (cursor) {
       const cursorIndex = filtered.findIndex((v) => v.id === cursor);

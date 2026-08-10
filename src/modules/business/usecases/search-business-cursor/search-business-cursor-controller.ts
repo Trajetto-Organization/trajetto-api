@@ -11,7 +11,9 @@ class SearchBusinessCursorController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const { id } = request.user;
-      const { limit, cursor } = cursorPaginationSchema.parse(request.query);
+      const { limit, cursor, search } = cursorPaginationSchema.parse(
+        request.query,
+      );
 
       const searchBusinessCursorUseCase = container.resolve(
         SearchBusinessCursorUseCase,
@@ -21,6 +23,7 @@ class SearchBusinessCursorController {
         userId: id,
         limit,
         cursor,
+        search,
       });
 
       return sendAsNDJSON({

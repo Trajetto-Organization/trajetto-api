@@ -77,6 +77,7 @@ interface SearchBranchWithCursorProps {
   limit: number;
   cursor?: string;
   businessId: string;
+  search?: string;
 }
 
 interface CursorPaginatedBranch {

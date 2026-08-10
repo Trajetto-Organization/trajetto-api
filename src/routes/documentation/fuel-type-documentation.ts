@@ -29,6 +29,7 @@ const fuelTypeSchemas = {
       .string()
       .optional()
       .describe("ID da última empresa da página anterior para paginação"),
+    search: z.string().trim().max(100).optional(),
     businessId: z.string().describe("ID da empresa"),
   }),
 };

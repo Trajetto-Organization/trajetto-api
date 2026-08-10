@@ -53,6 +53,11 @@ class CreateFuelController {
       });
     }
 
+    const idempotencyKey = request.headers["idempotency-key"];
+    if (!formData.client_submission_id && typeof idempotencyKey === "string") {
+      formData.client_submission_id = idempotencyKey;
+    }
+
     // Validate multipart data using Zod
     const { body: fuelData, file: validatedFile } =
       createFuelMultipartSchema.parse({
@@ -63,7 +68,7 @@ class CreateFuelController {
     const createFuelUseCase = container.resolve(CreateFuelUseCase);
 
     try {
-      await createFuelUseCase.execute(
+      const fuel = await createFuelUseCase.execute(
         {
           ...fuelData,
           businessId,
@@ -73,8 +78,12 @@ class CreateFuelController {
       );
 
       return reply
+        .header(
+          "Idempotency-Key",
+          fuelData.client_submission_id ?? "not-provided",
+        )
         .status(201)
-        .send({ message: "Abastecimento criado com sucesso!" });
+        .send({ message: "Abastecimento criado com sucesso!", id: fuel.id });
     } catch (error) {
       if (error instanceof ResourceNotFoundError) {
         return reply.status(400).send({ message: error.message });

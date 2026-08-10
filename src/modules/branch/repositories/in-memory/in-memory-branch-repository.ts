@@ -125,10 +125,25 @@ class InMemoryBranchRepository implements IBranchRepository {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchBranchWithCursorProps): Promise<CursorPaginatedBranch> {
     let filtered = this.branches.filter(
       (branch) => branch.businessId === businessId && branch.is_active === true,
     );
+
+    if (search) {
+      const term = search.toLowerCase();
+      filtered = filtered.filter((branch) =>
+        [
+          branch.corporate_reason,
+          branch.fantasy_name ?? "",
+          branch.cnpj,
+          branch.city,
+          branch.uf,
+          branch.email,
+        ].some((value) => value.toLowerCase().includes(term)),
+      );
+    }
 
     if (cursor) {
       const cursorIndex = filtered.findIndex((b) => b.id === cursor);

@@ -75,6 +75,7 @@ interface SearchBusinessWithCursorProps {
   cursor?: string;
   businessId: string;
   currentUserRole: UserRole;
+  search?: string;
 }
 
 interface CursorPaginatedBusiness {

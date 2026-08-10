@@ -10,12 +10,14 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 
 import { CursorPaginatedBranch } from "../../dtos/branch-dto";
 import { AppError } from "@/shared/errors/AppError";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 interface SearchBranchWithCursorRequest {
   userId: string;
   limit?: number;
   cursor?: string;
   businessId: string;
+  search?: string;
 }
 
 @injectable()
@@ -34,12 +36,15 @@ class SearchBranchCursorUseCase {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchBranchWithCursorRequest): Promise<CursorPaginatedBranch> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    assertTenantAccess(findUser, businessId);
 
     const findBusiness = await this.business.findBusinessById(businessId);
 
@@ -52,6 +57,7 @@ class SearchBranchCursorUseCase {
         limit,
         cursor,
         businessId,
+        search,
       });
 
       return result;

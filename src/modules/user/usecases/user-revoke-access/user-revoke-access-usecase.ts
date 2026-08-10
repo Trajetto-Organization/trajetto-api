@@ -8,6 +8,7 @@ import { UserRole } from "../../dtos/user-dto";
 import { UserCannotBeRevokeByHimselfError } from "../errors/user-cannot-be-revoke-access-by-himself-error";
 
 import { sendSecurityEventToUser } from "@/websocket";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 interface UserRevokeAccessProps {
   userId: string;
@@ -50,6 +51,18 @@ class UserRevokeAccessUseCase {
       throw new ResourceNotFoundError();
     }
 
+    if (!findRevokedUser.businessId && findUser.role !== "MASTER") {
+      throw new AppError(
+        "Acesso negado ao usuario informado.",
+        403,
+        "TENANT_ACCESS_DENIED",
+      );
+    }
+
+    if (findRevokedUser.businessId) {
+      assertTenantAccess(findUser, findRevokedUser.businessId);
+    }
+
     if (!this.allowedDeletion[findUser.role].includes(findRevokedUser.role)) {
       throw new AppError(
         `Usuários com o nível de acesso "${
@@ -58,6 +71,7 @@ class UserRevokeAccessUseCase {
           this.roleDisplayName[findRevokedUser.role]
         }.`,
         403,
+        "USER_ROLE_ACTION_FORBIDDEN",
       );
     }
 
