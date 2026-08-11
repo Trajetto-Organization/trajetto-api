@@ -1,5 +1,12 @@
 generator client {
   provider = "prisma-client-js"
+
+  // Sem `binaryTargets` o Prisma baixa a engine de mais de um alvo "por via das
+  // duvidas", e cada uma pesa dezenas de MB na imagem. Aqui fixamos os dois que
+  // realmente usamos: `native` para a maquina de desenvolvimento e
+  // `linux-musl-openssl-3.0.x` para o container (node:22-alpine usa musl).
+  // Ao trocar a base do Dockerfile, revise esta linha junto.
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+
 import { LogoutUseCase } from "@/modules/user/usecases/logout/logout-usecase";
 
 describe("auth and tenant security", () => {
@@ -60,6 +61,7 @@ describe("auth and tenant security", () => {
 
     expect(firstRotation?.jti).toBe("new-jti");
     expect(replay).toBeNull();
+
     await expect(
       repository.hasActiveRefreshTokenFamily("user-1", "family-1"),
     ).resolves.toBe(true);
@@ -85,10 +87,10 @@ describe("auth and tenant security", () => {
     });
 
     await new LogoutUseCase(tokens).execute("family-a");
-
     expect(await tokens.hasActiveRefreshTokenFamily("user-1", "family-a")).toBe(
       false,
     );
+
     expect(await tokens.hasActiveRefreshTokenFamily("user-1", "family-b")).toBe(
       true,
     );
@@ -105,6 +107,7 @@ describe("auth and tenant security", () => {
       family_id: "expired-family",
       expires_in: new Date(now.getTime() - 1),
     });
+
     await tokens.createUserRefreshToken({
       userId: "user-1",
       token_hash: "active-hash",

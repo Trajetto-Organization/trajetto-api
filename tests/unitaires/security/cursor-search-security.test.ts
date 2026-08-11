@@ -19,6 +19,7 @@ describe("cursor search validation", () => {
   it("bounds page size and validates the tenant id", () => {
     expect(() => cursorPaginationSchema.parse({ limit: "101" })).toThrow();
     expect(() => cursorPaginationSchema.parse({ limit: "1abc" })).toThrow();
+
     expect(() =>
       cursorPaginationSchema.parse({ cursor: "not-a-uuid" }),
     ).toThrow();

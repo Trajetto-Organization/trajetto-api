@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { RecordOrigin } from "@prisma/client";
 
 import { InMemoryFuelRepository } from "@/modules/fuel/repositories/in-memory/in-memory-fuel-repository";
+
 import { InMemoryVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/in-memory/in-memory-vehicle-checklist-repository";
 import { CreateVehicleChecklistProps } from "@/modules/vehicle-checklist/dtos/vehicle-checklist-dto";
 
@@ -31,8 +32,10 @@ describe("mobile submission idempotency", () => {
 
     expect(first.created).toBe(true);
     expect(retry.created).toBe(false);
+
     expect(retry.fuel.id).toBe(first.fuel.id);
     expect(repository.fuels).toHaveLength(1);
+
     expect(first.fuel.total_amount.toNumber()).toBe(55);
   });
 
@@ -80,6 +83,7 @@ describe("mobile submission idempotency", () => {
 
     expect(first.created).toBe(true);
     expect(retry.created).toBe(false);
+
     expect(retry.checklist.id).toBe(first.checklist.id);
     expect(repository.checklists).toHaveLength(1);
   });
