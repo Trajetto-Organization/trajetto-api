@@ -9,10 +9,14 @@ import auth from "@/config/auth";
 
 import { UserRepository } from "@/modules/user/repositories/user-repository";
 import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
+
 import { DriverRepository } from "@/modules/driver/repositories/driver-repository";
 import { assertSessionEligible } from "@/modules/user/services/session-eligibility";
+
 import { SessionJwtPayload } from "@/modules/user/services/session-service";
 import { AppError } from "@/shared/errors/AppError";
+
+import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
 import { env } from "./env";
 
 // Store socket connections per user
@@ -32,6 +36,7 @@ function socketAuthenticationError(message: string, code: string): Error {
   const error = new Error(message) as Error & {
     data?: { code: string };
   };
+
   error.data = { code };
   return error;
 }
@@ -55,10 +60,22 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   // non-fatal in development (follows single-instance).
   try {
     adapterPubClient = new Redis(env.REDIS_URL, {
+      connectionName: "trajetto-socket-pub",
       maxRetriesPerRequest: 3,
       lazyConnect: false,
     });
-    adapterSubClient = adapterPubClient.duplicate();
+
+    adapterSubClient = adapterPubClient.duplicate({
+      connectionName: "trajetto-socket-sub",
+    });
+
+    // Persistent handlers, attached before the startup gate below. That gate
+    // uses `once("error")`, which the first failure consumes — from then on
+    // the only listener left is the adapter's own fallback, which prints
+    // "missing 'error' handler on this Redis client" on every retry, per
+    // client, for as long as Redis is unreachable.
+    attachRedisConnectionLog(adapterPubClient, "socket.io/pub");
+    attachRedisConnectionLog(adapterSubClient, "socket.io/sub");
 
     await Promise.all([
       new Promise<void>((resolve, reject) => {
@@ -146,8 +163,8 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
 
       const driverRepository = new DriverRepository();
       const tokenRepository = new UserTokensRepository();
-      await assertSessionEligible(user, driverRepository);
 
+      await assertSessionEligible(user, driverRepository);
       const hasActiveSession =
         await tokenRepository.hasActiveRefreshTokenFamily(
           userId,
@@ -165,6 +182,7 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
 
       // Store user and company ID in socket
       socket.data.userId = userId;
+
       socket.data.businessId = user.businessId;
       socket.data.sessionId = payload.familyId;
 
@@ -220,6 +238,7 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       } catch (error) {
         console.error("Falha ao invalidar a sessao no logout do socket", error);
       }
+
       console.log(`Logout do usuário: ${userId}`);
 
       // Remove socket ID from list
