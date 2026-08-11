@@ -3,7 +3,10 @@
 # ================================
 # Stage: Base
 # ================================
-FROM node:22.12.0-slim AS base
+# Node 22 LTS, versao fixa para o build ser reproduzivel. Ao trocar, revise o
+# `binaryTargets` do prisma/schema.prisma: `debian-openssl-3.0.x` vale enquanto
+# a base for Debian bookworm.
+FROM node:22.21.1-slim AS base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -43,6 +46,21 @@ COPY . .
 RUN yarn prisma generate
 RUN yarn build
 
+# ================================
+# Stage: Production dependencies
+# ================================
+# Instalacao limpa, so com `dependencies`. O padrao anterior era rodar
+# `yarn install --production=true` POR CIMA do node_modules completo do builder,
+# o que no yarn 1 nao remove de forma confiavel o que ja estava instalado — e as
+# devDependencies acabavam indo para a imagem final (typescript, vitest, tsup,
+# semantic-release e @octokit somam mais de 100 MB).
+FROM base AS prod-deps
+
+WORKDIR /app
+
+COPY package.json yarn.lock* ./
+COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
+
 RUN --mount=type=cache,target=/usr/local/share/.cache/yarn \
     yarn install --frozen-lockfile --production=true
 
@@ -61,7 +79,12 @@ ENV NODE_ENV=production
 ENV PORT=3333
 ENV HOSTNAME="0.0.0.0"
 
-COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
+COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules
+
+# O cliente do Prisma e GERADO (`prisma generate`) e vive em node_modules/.prisma.
+# A instalacao limpa acima nao o produz, entao trazemos o artefato do builder.
+COPY --from=builder --chown=nodejs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
+
 COPY --from=builder --chown=nodejs:nodejs /app/build ./build
 COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=nodejs:nodejs /app/prisma ./prisma
