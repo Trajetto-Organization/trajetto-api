@@ -1,7 +1,18 @@
 import { injectable } from "tsyringe";
 
 import sharp from "sharp";
-import AWS from "aws-sdk";
+
+// AWS SDK v3 (modular). O v2 (`aws-sdk`) empacotava o cliente de TODOS os
+// servicos da AWS para usarmos dois metodos de S3, e esta em maintenance mode
+// desde 2024 — so recebe correcao critica.
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommandInput,
+  S3Client,
+} from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import fs from "node:fs";
 import path from "node:path";
@@ -40,16 +51,17 @@ export interface UploadStreamOptions {
 
 @injectable()
 class UploadService {
-  private s3?: AWS.S3;
+  private s3?: S3Client;
 
   constructor() {
     if (uploadConfig.storage.type === "r2") {
-      this.s3 = new AWS.S3({
-        accessKeyId: uploadConfig.r2.accessKeyId,
-        secretAccessKey: uploadConfig.r2.secretAccessKey,
+      this.s3 = new S3Client({
+        credentials: {
+          accessKeyId: uploadConfig.r2.accessKeyId,
+          secretAccessKey: uploadConfig.r2.secretAccessKey,
+        },
         endpoint: `https://${uploadConfig.r2.accountId}.r2.cloudflarestorage.com`,
         region: "auto",
-        signatureVersion: "v4",
       });
     }
   }
@@ -173,7 +185,7 @@ class UploadService {
     // Use streaming for R2 upload for better memory management
     const readableStream = Readable.from(processedBuffer);
 
-    const uploadParams: AWS.S3.PutObjectRequest = {
+    const uploadParams: PutObjectCommandInput = {
       Bucket: uploadConfig.r2.bucket,
       Key: filename,
       Body: readableStream,
@@ -184,14 +196,16 @@ class UploadService {
     };
 
     try {
-      await this.s3.upload(uploadParams).promise();
+      // `Upload` do lib-storage e o equivalente ao `.upload()` do v2: aceita
+      // stream e cuida do multipart quando necessario.
+      await new Upload({ client: this.s3, params: uploadParams }).done();
 
       return {
         filename: path.basename(filename),
         path: filename,
         size: processedBuffer.length,
         mimeType: "image/webp",
-        url: this.getFileUrl(filename),
+        url: await this.getFileUrl(filename),
       };
     } catch (error) {
       console.error("Erro ao fazer upload para R2:", error);
@@ -235,12 +249,12 @@ class UploadService {
           throw new AppError("R2 não foi configurado corretamente", 500);
         }
 
-        await this.s3
-          .deleteObject({
+        await this.s3.send(
+          new DeleteObjectCommand({
             Bucket: uploadConfig.r2.bucket,
             Key: normalizedFilePath,
-          })
-          .promise();
+          }),
+        );
       } else {
         const fullPath = path.join(
           uploadConfig.storage.localPath,
@@ -293,7 +307,7 @@ class UploadService {
     }
   }
 
-  getFileUrl(filePath: string): string {
+  async getFileUrl(filePath: string): Promise<string> {
     const normalizedFilePath = this.extractFilePath(filePath);
 
     if (uploadConfig.storage.type === "r2") {
@@ -302,11 +316,15 @@ class UploadService {
       }
 
       // The bucket remains private. Consumers only receive a short-lived URL.
-      return this.s3.getSignedUrl("getObject", {
-        Bucket: uploadConfig.r2.bucket,
-        Key: normalizedFilePath,
-        Expires: uploadConfig.signedUrlTtlSeconds,
-      });
+      // No v3 a assinatura e assincrona — dai `getFileUrl` retornar Promise.
+      return getSignedUrl(
+        this.s3,
+        new GetObjectCommand({
+          Bucket: uploadConfig.r2.bucket,
+          Key: normalizedFilePath,
+        }),
+        { expiresIn: uploadConfig.signedUrlTtlSeconds },
+      );
     } else {
       // For local development, construct full URL to API server
       const baseUrl = env.API_HTTP_REQUEST || `http://localhost:${env.PORT}`;
@@ -443,7 +461,7 @@ class UploadService {
         processedSize += chunk.length;
       });
 
-      const uploadParams: AWS.S3.PutObjectRequest = {
+      const uploadParams: PutObjectCommandInput = {
         Bucket: uploadConfig.r2.bucket,
         Key: filename,
         Body: processedStream,
@@ -453,19 +471,21 @@ class UploadService {
         },
       };
 
-      this.s3?.upload(uploadParams, (error, result) => {
-        if (error) {
-          reject(new AppError("Erro no upload para R2", 500));
-        } else {
+      // O v3 nao tem a variante por callback: `Upload.done()` devolve Promise.
+      new Upload({ client: this.s3!, params: uploadParams })
+        .done()
+        .then(async () => {
           resolve({
             filename: path.basename(filename),
             path: filename,
             size: processedSize || fileSize || 0,
             mimeType: "image/webp",
-            url: this.getFileUrl(filename),
+            url: await this.getFileUrl(filename),
           });
-        }
-      });
+        })
+        .catch(() => {
+          reject(new AppError("Erro no upload para R2", 500));
+        });
     });
   }
 }

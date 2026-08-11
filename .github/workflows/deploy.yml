@@ -104,13 +104,52 @@ jobs:
       - name: Run E2E tests
         run: yarn test:e2e --run --reporter=basic
 
+  release:
+    name: Release (semantic-release)
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write # criar a tag, a release e commitar o CHANGELOG
+      issues: write # comentar nas issues fechadas pela versao
+      pull-requests: write # comentar nos PRs incluidos na versao
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # semantic-release precisa do historico completo: ele descobre a
+          # ultima tag e analisa os commits desde entao para decidir se a versao
+          # sobe em patch, minor ou major. Com o clone raso padrao nao ha o que
+          # analisar e nenhuma release e criada.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release
+
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     needs: test
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    # Só no push: o dispatch é o botão de PROMOVER para producao, e deve apenas
+    # acionar o Portainer para repuxar a imagem que ja foi construida e validada
+    # neste push. Rebuildar no dispatch desperdicaria minutos e, pior, poderia
+    # publicar uma imagem diferente da que passou pelo portao de qualidade caso
+    # a main tenha andado nesse meio tempo.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
       - name: Checkout repository
@@ -154,8 +193,9 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    needs: build-and-push
 
+    # Sem `needs`: o deploy nao depende de nenhum job deste run. A imagem ja
+    # esta no ghcr desde o push; aqui so avisamos o Portainer para repuxar.
     if: github.event_name == 'workflow_dispatch'
 
     # The line below enables manual approval on GitHub.

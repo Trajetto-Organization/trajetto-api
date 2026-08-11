@@ -52,7 +52,10 @@ class KanbanRepository implements IKanbanRepository {
     this.uploadService = container.resolve(UploadService);
   }
 
-  private mapCard = (card: any): KanbanCard => {
+  // Assincrono porque `getFileUrl` assina a URL do R2 (AWS SDK v3). Atencao:
+  // `card` e `any`, entao o TypeScript NAO acusaria se o await ficasse de fora
+  // e o avatar viraria uma Promise serializada como {} no JSON.
+  private mapCard = async (card: any): Promise<KanbanCard> => {
     return {
       ...card,
       dueDate: card.dueDate,
@@ -63,7 +66,7 @@ class KanbanRepository implements IKanbanRepository {
         ? {
             ...card.assignedUser, // Keeps id, name, email
             avatar: card.assignedUser.avatar
-              ? this.uploadService.getFileUrl(card.assignedUser.avatar)
+              ? await this.uploadService.getFileUrl(card.assignedUser.avatar)
               : null,
           }
         : null,
@@ -420,7 +423,7 @@ class KanbanRepository implements IKanbanRepository {
         return {
           ...column,
           cardsCount: column._count.cards,
-          cards: cardsToShow.map(this.mapCard),
+          cards: await Promise.all(cardsToShow.map(this.mapCard)),
         };
       }),
     );
@@ -606,7 +609,7 @@ class KanbanRepository implements IKanbanRepository {
       },
     });
 
-    return cards.map(this.mapCard);
+    return Promise.all(cards.map(this.mapCard));
   }
 
   async getNextCardPosition(columnId: string): Promise<number> {
