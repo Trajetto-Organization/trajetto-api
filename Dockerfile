@@ -3,14 +3,14 @@
 # ================================
 # Stage: Base
 # ================================
-# Node 22 LTS em Alpine, versao fixa para o build ser reproduzivel.
+# Node 22 LTS on Alpine; version pinned for reproducible builds.
 #
-# Alpine usa musl no lugar da glibc, o que tem duas consequencias diretas:
-#   1. O `binaryTargets` do prisma/schema.prisma precisa incluir
-#      `linux-musl-openssl-3.0.x` — a engine de Debian NAO roda aqui.
-#   2. O sharp precisa da variante musl (`@img/sharp-linuxmusl-*`), que o yarn
-#      resolve sozinho por rodar a instalacao dentro deste container.
-# Ao voltar para Debian, reverta os dois pontos junto com a base.
+# Alpine uses musl instead of glibc, which has two direct consequences:
+#   1. The `binaryTargets` in prisma/schema.prisma must include
+#      `linux-musl-openssl-3.0.x` — the Debian engine does NOT run here.
+#   2. Sharp requires the musl variant (`@img/sharp-linuxmusl-*`), which yarn
+#      resolves automatically since the installation runs inside this container.
+# If switching back to Debian, revert both points along with the base image.
 FROM node:22.21.1-alpine AS base
 
 RUN apk add --no-cache \
@@ -18,8 +18,8 @@ RUN apk add --no-cache \
     procps \
     dumb-init \
     ca-certificates \
-    # O Prisma carrega a engine dinamicamente e espera os símbolos da glibc
-    # disponíveis via camada de compatibilidade.
+    # Prisma loads the engine dynamically and expects glibc symbols
+    # to be available via the compatibility layer.
     libc6-compat
 
 RUN addgroup --gid 1001 --system nodejs \
@@ -35,7 +35,12 @@ WORKDIR /app
 COPY package.json yarn.lock* ./
 COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
 
-RUN --mount=type=cache,target=/usr/local/share/.cache/yarn \
+# Dedicated cache id plus `sharing=locked`: this stage and `prod-deps` both
+# depend only on `base`, so BuildKit runs them in parallel. With the default
+# shared cache mount, two concurrent `yarn install` runs write to the same
+# directory and corrupt each other's entries, failing with ENOENT on a
+# `.yarn-tarball.tgz`.
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-dev,sharing=locked \
     yarn install --frozen-lockfile --production=false
 
 # ================================
@@ -54,11 +59,12 @@ RUN yarn build
 # ================================
 # Stage: Production dependencies
 # ================================
-# Instalacao limpa, so com `dependencies`. O padrao anterior era rodar
-# `yarn install --production=true` POR CIMA do node_modules completo do builder,
-# o que no yarn 1 nao remove de forma confiavel o que ja estava instalado — e as
-# devDependencies acabavam indo para a imagem final (typescript, vitest, tsup,
-# semantic-release e @octokit somam mais de 100 MB).
+# Clean installation, including only `dependencies`. The previous approach
+# involved running `yarn install --production=true` ON TOP of the builder's
+# full `node_modules` directory; however, Yarn 1 does not reliably remove
+# previously installed packages—meaning `devDependencies` would end up in
+# the final image (typescript, vitest, tsup, semantic-release, and @octokit
+# total over 100 MB).
 FROM base AS prod-deps
 
 WORKDIR /app
@@ -66,13 +72,14 @@ WORKDIR /app
 COPY package.json yarn.lock* ./
 COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
 
-RUN --mount=type=cache,target=/usr/local/share/.cache/yarn \
+# Separate cache id from the `deps` stage — see the note there.
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-prod,sharing=locked \
     yarn install --frozen-lockfile --production=true
 
-# O sharp publica um pacote por plataforma e o yarn baixa as variantes glibc e
-# musl. Em Alpine so a musl e carregada; a de glibc fica ocupando ~17 MB sem
-# nunca ser usada. Se algum dia a base voltar para Debian, REMOVA este passo —
-# senao o sharp fica sem binario.
+# sharp publishes one package per platform, and yarn downloads both glibc and
+# musl variants. On Alpine, only the musl version is loaded; the glibc one
+# takes up ~17 MB without ever being used. If the base image ever switches
+# back to Debian, REMOVE this step — otherwise, sharp will be left without a binary.
 RUN rm -rf \
     node_modules/@img/sharp-libvips-linux-x64 \
     node_modules/@img/sharp-linux-x64
@@ -94,8 +101,8 @@ ENV HOSTNAME="0.0.0.0"
 
 COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules
 
-# O cliente do Prisma e GERADO (`prisma generate`) e vive em node_modules/.prisma.
-# A instalacao limpa acima nao o produz, entao trazemos o artefato do builder.
+# The Prisma client is generated (`prisma generate`) and resides in node_modules/.prisma.
+# The clean installation above does not produce it, so we bring the artifact from the builder.
 COPY --from=builder --chown=nodejs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
 
 COPY --from=builder --chown=nodejs:nodejs /app/build ./build

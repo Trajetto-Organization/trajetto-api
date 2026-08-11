@@ -4,16 +4,8 @@
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "module": "commonjs",
-    // Sem `baseUrl`: ele esta depreciado e para de funcionar no TypeScript 7.
-    // Desde o 4.1 ele nao e necessario quando os `paths` sao relativos — sao
-    // resolvidos a partir da pasta deste tsconfig. Era o `baseUrl` que exigia o
-    // `ignoreDeprecations`, e era esse valor ("6.0", so valido no TS 6) que
-    // derrubava o typecheck no 5.7.2.
     "paths": {
       "@/*": ["./src/*"],
-      // Alguns modulos importam `infra/...` como bare specifier, o que antes
-      // funcionava por causa do `baseUrl`. Declarado explicitamente aqui, o
-      // mesmo import continua valendo sem depender da opcao depreciada.
       "infra/*": ["./infra/*"]
     },
     "esModuleInterop": true,
