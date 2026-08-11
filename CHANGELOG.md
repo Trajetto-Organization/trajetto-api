@@ -1,3 +1,10 @@
+## [1.0.3](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.0.2...v1.0.3) (2026-08-11)
+
+
+### Bug Fixes
+
+* para de vazar clientes Redis a cada tentativa de reconexao ([573f7ad](https://github.com/Trajetto-Organization/trajetto-api/commit/573f7ad8e0687f3f84cd99c42d8264e703d2f0e2))
+
 ## [1.0.2](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.0.1...v1.0.2) (2026-08-11)
 
 
