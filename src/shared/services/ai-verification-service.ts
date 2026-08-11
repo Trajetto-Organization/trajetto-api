@@ -2,7 +2,9 @@ import { env } from "@/env";
 import database from "@/../infra/database";
 
 import Anthropic from "@anthropic-ai/sdk";
-import AWS from "aws-sdk";
+
+// AWS SDK v3 (modular) — ver upload-service.
+import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 import fs from "node:fs";
 import path from "node:path";
@@ -60,7 +62,7 @@ const CHECKLIST_FIELD_PROMPTS: Record<string, (fieldValue: any) => string> = {
 // Service
 class AIVerificationService {
   private client: Anthropic | null = null;
-  private s3: AWS.S3 | null = null;
+  private s3: S3Client | null = null;
 
   private prisma = database;
 
@@ -73,12 +75,13 @@ class AIVerificationService {
 
     // Initialize S3 client for R2 if configured
     if (env.UPLOAD_STORAGE_TYPE === "r2" && env.R2_ACCOUNT_ID) {
-      this.s3 = new AWS.S3({
-        accessKeyId: env.R2_ACCESS_KEY_ID || "",
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY || "",
+      this.s3 = new S3Client({
+        credentials: {
+          accessKeyId: env.R2_ACCESS_KEY_ID || "",
+          secretAccessKey: env.R2_SECRET_ACCESS_KEY || "",
+        },
         endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
         region: "auto",
-        signatureVersion: "v4",
       });
     }
   }
@@ -95,14 +98,16 @@ class AIVerificationService {
     let buffer: Buffer;
     if (this.s3 && env.UPLOAD_STORAGE_TYPE === "r2") {
       // Fetch from R2
-      const result = await this.s3
-        .getObject({
+      const result = await this.s3.send(
+        new GetObjectCommand({
           Bucket: env.R2_BUCKET_NAME || "",
           Key: filePath,
-        })
-        .promise();
+        }),
+      );
 
-      buffer = result.Body as Buffer;
+      // No v3 o Body e um stream; `transformToByteArray` o materializa.
+      const bytes = await result.Body!.transformToByteArray();
+      buffer = Buffer.from(bytes);
     } else {
       // Fetch from local filesystem
       const localPath = env.UPLOAD_LOCAL_PATH;

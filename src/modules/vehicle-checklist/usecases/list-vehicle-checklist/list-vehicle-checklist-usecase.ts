@@ -24,25 +24,32 @@ class ListVehicleChecklistUseCase {
     private uploadService: UploadService,
   ) {}
 
-  private signPhotosByField(
+  // `getFileUrl` assina a URL de forma assincrona (AWS SDK v3), entao cada
+  // nivel precisa esperar as assinaturas antes de montar o objeto final.
+  private async signPhotosByField(
     value: VehicleChecklist["photos_by_field"],
-  ): VehicleChecklist["photos_by_field"] {
+  ): Promise<VehicleChecklist["photos_by_field"]> {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       return value;
     }
 
-    return Object.fromEntries(
-      Object.entries(value).map(([fieldName, photoPaths]) => [
-        fieldName,
-        Array.isArray(photoPaths)
-          ? photoPaths.map((photoPath) =>
-              typeof photoPath === "string"
-                ? this.uploadService.getFileUrl(photoPath)
-                : photoPath,
-            )
-          : [],
-      ]),
-    ) as Record<string, string[]>;
+    const signedEntries = await Promise.all(
+      Object.entries(value).map(async ([fieldName, photoPaths]) => {
+        if (!Array.isArray(photoPaths)) return [fieldName, []] as const;
+
+        const signed = await Promise.all(
+          photoPaths.map((photoPath) =>
+            typeof photoPath === "string"
+              ? this.uploadService.getFileUrl(photoPath)
+              : Promise.resolve(photoPath),
+          ),
+        );
+
+        return [fieldName, signed] as const;
+      }),
+    );
+
+    return Object.fromEntries(signedEntries) as Record<string, string[]>;
   }
 
   async execute(
@@ -68,15 +75,21 @@ class ListVehicleChecklistUseCase {
 
       return {
         ...checklists,
-        data: checklists.data.map((checklist) => ({
-          ...checklist,
-          photos: checklist.photos
-            ? checklist.photos.map((photoPath: string) =>
-                this.uploadService.getFileUrl(photoPath),
-              )
-            : [],
-          photos_by_field: this.signPhotosByField(checklist.photos_by_field),
-        })),
+        data: await Promise.all(
+          checklists.data.map(async (checklist) => ({
+            ...checklist,
+            photos: checklist.photos
+              ? await Promise.all(
+                  checklist.photos.map((photoPath: string) =>
+                    this.uploadService.getFileUrl(photoPath),
+                  ),
+                )
+              : [],
+            photos_by_field: await this.signPhotosByField(
+              checklist.photos_by_field,
+            ),
+          })),
+        ),
       };
     } catch (error) {
       throw new AppError(

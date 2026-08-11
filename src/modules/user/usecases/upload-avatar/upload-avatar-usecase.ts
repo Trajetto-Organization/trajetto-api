@@ -61,7 +61,7 @@ class UploadAvatarUseCase {
       return {
         ...updatedUser,
         avatar: updatedUser.avatar
-          ? this.uploadService.getFileUrl(updatedUser.avatar)
+          ? await this.uploadService.getFileUrl(updatedUser.avatar)
           : null,
       };
     } catch (error) {

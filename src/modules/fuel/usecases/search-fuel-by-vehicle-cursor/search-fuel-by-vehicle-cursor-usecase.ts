@@ -84,12 +84,16 @@ class SearchFuelByVehicleCursorUseCase {
 
       return {
         ...result,
-        data: result.data.map((fuel) => ({
-          ...fuel,
-          odometer_photo: fuel.odometer_photo
-            ? this.uploadService.getFileUrl(fuel.odometer_photo)
-            : null,
-        })),
+        // `getFileUrl` assina a URL de forma assincrona (AWS SDK v3), entao a
+        // projecao precisa esperar todas as assinaturas.
+        data: await Promise.all(
+          result.data.map(async (fuel) => ({
+            ...fuel,
+            odometer_photo: fuel.odometer_photo
+              ? await this.uploadService.getFileUrl(fuel.odometer_photo)
+              : null,
+          })),
+        ),
       };
     } catch (error) {
       throw new AppError(

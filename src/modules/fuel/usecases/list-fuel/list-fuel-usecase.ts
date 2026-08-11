@@ -44,12 +44,16 @@ class ListFuelUseCase {
 
       return {
         ...fuels,
-        data: fuels.data.map((fuel) => ({
-          ...fuel,
-          odometer_photo: fuel.odometer_photo
-            ? this.uploadService.getFileUrl(fuel.odometer_photo)
-            : null,
-        })),
+        // `getFileUrl` assina a URL de forma assincrona (AWS SDK v3), entao a
+        // projecao precisa esperar todas as assinaturas.
+        data: await Promise.all(
+          fuels.data.map(async (fuel) => ({
+            ...fuel,
+            odometer_photo: fuel.odometer_photo
+              ? await this.uploadService.getFileUrl(fuel.odometer_photo)
+              : null,
+          })),
+        ),
       };
     } catch (error) {
       throw new AppError(

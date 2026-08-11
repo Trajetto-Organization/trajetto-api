@@ -25,7 +25,7 @@ class GetUserUseCase {
     return {
       ...findUser,
       avatar: findUser.avatar
-        ? this.uploadService.getFileUrl(findUser.avatar)
+        ? await this.uploadService.getFileUrl(findUser.avatar)
         : null,
     };
   }
