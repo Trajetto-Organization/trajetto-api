@@ -33,7 +33,9 @@ const envSchema = z
     R2_BUCKET_NAME: z.string().optional(),
     R2_ACCESS_KEY_ID: z.string().optional(),
     R2_SECRET_ACCESS_KEY: z.string().optional(),
-    R2_PUBLIC_DOMAIN: z.string().optional(),
+    // Sem R2_PUBLIC_DOMAIN: o bucket e privado e todo acesso sai por URL
+    // assinada de curta duracao (ver upload-service.getFileUrl). Um dominio
+    // publico daria acesso permanente e sem assinatura as fotos.
     UPLOAD_SIGNED_URL_TTL_SECONDS: z.coerce
       .number()
       .int()

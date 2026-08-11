@@ -65,19 +65,33 @@ class CreateVehicleChecklistController {
     let totalSize = 0;
     let fileCount = 0;
 
+    // Erro de validacao encontrado no meio do multipart. NAO pode ser lancado
+    // de dentro do `for await`: as partes seguintes ficariam sem ser lidas e a
+    // requisicao trava sem resposta e sem log — o cliente fica girando para
+    // sempre. Guardamos o erro, drenamos o restante do stream e lancamos
+    // depois do laco.
+    let pendingError: AppError | null = null;
+
     try {
       const parts = request.parts();
 
       for await (const part of parts) {
+        // Ja falhou: so consome o que resta para liberar a requisicao.
+        if (pendingError) {
+          if (part.type === "file") part.file.resume();
+          continue;
+        }
+
         if (part.type === "file") {
           fileCount += 1;
           if (fileCount > MAX_CHECKLIST_FILES) {
             part.file.resume();
-            throw new AppError(
+            pendingError = new AppError(
               `O checklist permite no máximo ${MAX_CHECKLIST_FILES} fotos.`,
               400,
               "UPLOAD_FILE_LIMIT_EXCEEDED",
             );
+            continue;
           }
           // Group photos by field name and consume the file stream properly
           const fieldName = part.fieldname;
@@ -89,11 +103,12 @@ class CreateVehicleChecklistController {
           totalSize += buffer.length;
 
           if (totalSize > MAX_CHECKLIST_UPLOAD_BYTES) {
-            throw new AppError(
+            pendingError = new AppError(
               "O tamanho total das fotos excede o limite permitido de 5 MB.",
               400,
               "UPLOAD_SIZE_LIMIT_EXCEEDED",
             );
+            continue;
           }
 
           const fileObject = {
@@ -125,6 +140,9 @@ class CreateVehicleChecklistController {
           formData[fieldName] = value;
         }
       }
+
+      // Stream ja totalmente consumido: agora e seguro responder o erro.
+      if (pendingError) throw pendingError;
     } catch (error) {
       if (error instanceof AppError) {
         return reply.status(error.statusCode).send({
