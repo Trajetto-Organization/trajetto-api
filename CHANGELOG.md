@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.0.0...v1.0.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* separa os caches do yarn e serializa o acesso no build Docker ([f809ef0](https://github.com/Trajetto-Organization/trajetto-api/commit/f809ef0d269a8226dae0cd3f3bf2ffacaadcd951))
+
 # 1.0.0 (2026-08-11)
 
 
