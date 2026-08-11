@@ -49,7 +49,6 @@ class RedisConnection {
     if (!this.client) {
       // The URL carries credentials, so it is deliberately not logged.
       console.log("[Redis] Connecting to Redis");
-
       this.client = new Redis(env.REDIS_URL, {
         connectionName: "trajetto-cache",
         maxRetriesPerRequest: 3,

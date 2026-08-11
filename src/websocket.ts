@@ -9,10 +9,13 @@ import auth from "@/config/auth";
 
 import { UserRepository } from "@/modules/user/repositories/user-repository";
 import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
+
 import { DriverRepository } from "@/modules/driver/repositories/driver-repository";
 import { assertSessionEligible } from "@/modules/user/services/session-eligibility";
+
 import { SessionJwtPayload } from "@/modules/user/services/session-service";
 import { AppError } from "@/shared/errors/AppError";
+
 import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
 import { env } from "./env";
 
@@ -33,6 +36,7 @@ function socketAuthenticationError(message: string, code: string): Error {
   const error = new Error(message) as Error & {
     data?: { code: string };
   };
+
   error.data = { code };
   return error;
 }
@@ -60,6 +64,7 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       maxRetriesPerRequest: 3,
       lazyConnect: false,
     });
+
     adapterSubClient = adapterPubClient.duplicate({
       connectionName: "trajetto-socket-sub",
     });
@@ -158,8 +163,8 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
 
       const driverRepository = new DriverRepository();
       const tokenRepository = new UserTokensRepository();
-      await assertSessionEligible(user, driverRepository);
 
+      await assertSessionEligible(user, driverRepository);
       const hasActiveSession =
         await tokenRepository.hasActiveRefreshTokenFamily(
           userId,
@@ -177,6 +182,7 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
 
       // Store user and company ID in socket
       socket.data.userId = userId;
+
       socket.data.businessId = user.businessId;
       socket.data.sessionId = payload.familyId;
 
@@ -232,6 +238,7 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       } catch (error) {
         console.error("Falha ao invalidar a sessao no logout do socket", error);
       }
+
       console.log(`Logout do usuário: ${userId}`);
 
       // Remove socket ID from list
