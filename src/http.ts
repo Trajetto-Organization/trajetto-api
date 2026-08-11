@@ -33,7 +33,6 @@ import { routes } from "./routes/routes";
 import { AppError } from "./shared/errors/AppError";
 
 import { enforceRequestedTenant } from "./modules/middlewares/tenant-authorization";
-
 import { uploadConfig } from "./config/upload";
 
 const app = fastify({
@@ -175,8 +174,8 @@ app.register(multipart, {
 // after body parsing, which `onRequest` (where `ensureAuthenticated` lives)
 // cannot do — without it a `businessId` sent in the body bypasses the check.
 app.addHook("preHandler", enforceRequestedTenant);
-
 app.register(routes);
+
 app.setErrorHandler((error, _, reply) => {
   const multipartErrorCodes: Record<
     string,
@@ -209,6 +208,7 @@ app.setErrorHandler((error, _, reply) => {
       message: "A requisicao deve usar multipart/form-data.",
     },
   };
+
   const multipartError =
     typeof error.code === "string"
       ? multipartErrorCodes[error.code]

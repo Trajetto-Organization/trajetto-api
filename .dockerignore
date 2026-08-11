@@ -16,6 +16,9 @@ build/
 .env.*
 !.env.example
 
+# Local uploads
+tmp/
+
 # IDE and Editor files
 .vscode/
 .idea/
