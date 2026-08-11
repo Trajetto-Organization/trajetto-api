@@ -13,6 +13,7 @@ import { DriverRepository } from "@/modules/driver/repositories/driver-repositor
 import { assertSessionEligible } from "@/modules/user/services/session-eligibility";
 import { SessionJwtPayload } from "@/modules/user/services/session-service";
 import { AppError } from "@/shared/errors/AppError";
+import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
 import { env } from "./env";
 
 // Store socket connections per user
@@ -55,10 +56,21 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   // non-fatal in development (follows single-instance).
   try {
     adapterPubClient = new Redis(env.REDIS_URL, {
+      connectionName: "trajetto-socket-pub",
       maxRetriesPerRequest: 3,
       lazyConnect: false,
     });
-    adapterSubClient = adapterPubClient.duplicate();
+    adapterSubClient = adapterPubClient.duplicate({
+      connectionName: "trajetto-socket-sub",
+    });
+
+    // Persistent handlers, attached before the startup gate below. That gate
+    // uses `once("error")`, which the first failure consumes — from then on
+    // the only listener left is the adapter's own fallback, which prints
+    // "missing 'error' handler on this Redis client" on every retry, per
+    // client, for as long as Redis is unreachable.
+    attachRedisConnectionLog(adapterPubClient, "socket.io/pub");
+    attachRedisConnectionLog(adapterSubClient, "socket.io/sub");
 
     await Promise.all([
       new Promise<void>((resolve, reject) => {

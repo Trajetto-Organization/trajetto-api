@@ -12,6 +12,8 @@ import multipart from "@fastify/multipart";
 import path from "node:path";
 import Redis from "ioredis";
 
+import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
+
 import { ZodError } from "zod";
 import { env } from "./env";
 
@@ -122,9 +124,7 @@ const rateLimitRedis = new Redis(env.REDIS_URL, {
   lazyConnect: false,
 });
 
-rateLimitRedis.on("error", (err) => {
-  console.error("[Redis · rate-limit] connection error:", err.message);
-});
+attachRedisConnectionLog(rateLimitRedis, "rate-limit");
 
 app.register(fastifyRateLimit, {
   global: true,

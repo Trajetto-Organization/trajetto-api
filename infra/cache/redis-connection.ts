@@ -1,4 +1,6 @@
 import Redis, { Redis as RedisClient } from "ioredis";
+
+import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
 import { env } from "@/env";
 
 class RedisConnection {
@@ -38,39 +40,63 @@ class RedisConnection {
   }
 
   private async connect(): Promise<RedisClient> {
-    try {
-      console.log(`[Redis] Connecting to Redis at ${env.REDIS_URL}`);
+    // The client is built once and reused across every attempt. ioredis keeps
+    // retrying on its own, so constructing a new one per attempt would orphan
+    // the previous instance: it stays alive retrying forever, holding a socket
+    // and its listeners, and is never collected. `/health` calls getClient()
+    // on every hit, so an outage used to pile up one zombie client per probe —
+    // each one logging its own errors every couple of seconds.
+    if (!this.client) {
+      // The URL carries credentials, so it is deliberately not logged.
+      console.log("[Redis] Connecting to Redis");
 
       this.client = new Redis(env.REDIS_URL, {
+        connectionName: "trajetto-cache",
         maxRetriesPerRequest: 3,
         enableReadyCheck: true,
         lazyConnect: false,
       });
 
-      // Configure event listeners for the connection
-      this.client.on("error", (err) => {
-        console.error("[Redis] Connection error:", err);
-      });
+      attachRedisConnectionLog(this.client, "cache");
+    }
 
-      this.client.on("close", () => {
-        console.log("[Redis] Connection closed.");
-      });
+    const client = this.client;
 
-      this.client.on("reconnecting", () => {
-        console.log("[Redis] Reconnecting...");
-      });
-
-      // Wait for "ready" before resolving
+    try {
+      // Wait for "ready" before resolving. Both listeners are removed on the
+      // way out — leaving them behind leaks one pair per attempt and trips
+      // the EventEmitter max-listeners warning during a long outage.
       await new Promise<void>((resolve, reject) => {
-        this.client!.once("ready", () => resolve());
-        this.client!.once("error", (err) => reject(err));
+        if (client.status === "ready") {
+          resolve();
+          return;
+        }
+
+        const cleanup = (): void => {
+          client.off("ready", onReady);
+          client.off("error", onError);
+        };
+
+        const onReady = (): void => {
+          cleanup();
+          resolve();
+        };
+
+        const onError = (err: Error): void => {
+          cleanup();
+          reject(err);
+        };
+
+        client.once("ready", onReady);
+        client.once("error", onError);
       });
 
       console.log("[Redis] Successfully connected to Redis");
-      return this.client;
+      return client;
     } catch (error) {
-      console.error("[Redis] Failed to connect:", error);
-
+      // Clear the memoized promise so the next caller waits on a fresh
+      // attempt. The client itself is kept — ioredis is still reconnecting
+      // underneath, and dropping it here is what used to leak.
       this.connectionPromise = null;
       throw error;
     }
@@ -85,6 +111,10 @@ class RedisConnection {
         await this.client.quit();
         this.client = null;
       }
+
+      // Without this the next getClient() would hand back the memoized
+      // promise, which resolves to the client we just quit.
+      this.connectionPromise = null;
 
       console.log("[Redis] Connection closed successfully");
     } catch (error) {
