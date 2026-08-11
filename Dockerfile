@@ -3,22 +3,27 @@
 # ================================
 # Stage: Base
 # ================================
-# Node 22 LTS, versao fixa para o build ser reproduzivel. Ao trocar, revise o
-# `binaryTargets` do prisma/schema.prisma: `debian-openssl-3.0.x` vale enquanto
-# a base for Debian bookworm.
-FROM node:22.21.1-slim AS base
+# Node 22 LTS em Alpine, versao fixa para o build ser reproduzivel.
+#
+# Alpine usa musl no lugar da glibc, o que tem duas consequencias diretas:
+#   1. O `binaryTargets` do prisma/schema.prisma precisa incluir
+#      `linux-musl-openssl-3.0.x` — a engine de Debian NAO roda aqui.
+#   2. O sharp precisa da variante musl (`@img/sharp-linuxmusl-*`), que o yarn
+#      resolve sozinho por rodar a instalacao dentro deste container.
+# Ao voltar para Debian, reverta os dois pontos junto com a base.
+FROM node:22.21.1-alpine AS base
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        openssl \
-        procps \
-        dumb-init \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+RUN apk add --no-cache \
+    openssl \
+    procps \
+    dumb-init \
+    ca-certificates \
+    # O Prisma carrega a engine dinamicamente e espera os símbolos da glibc
+    # disponíveis via camada de compatibilidade.
+    libc6-compat
 
-RUN groupadd --gid 1001 --system nodejs \
-    && useradd --uid 1001 --system --gid nodejs --shell /bin/bash nodejs
+RUN addgroup --gid 1001 --system nodejs \
+    && adduser --uid 1001 --system --ingroup nodejs --shell /bin/sh nodejs
 
 # ================================
 # Stage: Dependencies
@@ -63,6 +68,14 @@ COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
 
 RUN --mount=type=cache,target=/usr/local/share/.cache/yarn \
     yarn install --frozen-lockfile --production=true
+
+# O sharp publica um pacote por plataforma e o yarn baixa as variantes glibc e
+# musl. Em Alpine so a musl e carregada; a de glibc fica ocupando ~17 MB sem
+# nunca ser usada. Se algum dia a base voltar para Debian, REMOVA este passo —
+# senao o sharp fica sem binario.
+RUN rm -rf \
+    node_modules/@img/sharp-libvips-linux-x64 \
+    node_modules/@img/sharp-linux-x64
 
 # ================================
 # Stage: Production Runtime
