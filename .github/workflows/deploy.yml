@@ -77,7 +77,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Alinhado com a base do Dockerfile (node:22.21.1-alpine) e com o
+          # ambiente local. O Node 20 saiu do suporte em abril/2026 e nao
+          # atende o engine de parte da cadeia (semantic-release exige
+          # ^22.14.0 || >=24.10.0).
+          node-version: "22"
           cache: "yarn"
 
       - name: Install dependencies
