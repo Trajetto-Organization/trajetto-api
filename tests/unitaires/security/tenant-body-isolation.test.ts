@@ -38,7 +38,6 @@ function buildApp({
   });
 
   app.addHook("preHandler", enforceRequestedTenant);
-
   app.register(async (instance) => {
     instance.post(
       "/update-profile-access/:profileAccessId",
@@ -46,6 +45,7 @@ function buildApp({
       { preHandler: [async () => undefined] },
       async () => ({ updated: true }),
     );
+
     instance.get("/by-params/:businessId", async () => ({ ok: true }));
   });
 
