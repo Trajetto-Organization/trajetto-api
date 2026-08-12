@@ -87,6 +87,11 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
+      # Primeiro passo de verificacao: e o mais barato de todos. Nao faz sentido
+      # gastar minutos em tsc e vitest se o codigo nem esta formatado.
+      - name: Lint
+        run: yarn lint:check
+
       - name: Generate Prisma client
         run: yarn prisma:generate
 
@@ -111,7 +116,12 @@ jobs:
   release:
     name: Release (semantic-release)
     runs-on: ubuntu-latest
-    needs: test
+    # Depende do build TAMBEM, nao so do test. Antes os dois corriam em
+    # paralelo depois do test, entao um build-and-push que falhasse nao
+    # impedia o release: a tag, o CHANGELOG e a GitHub Release saiam anunciando
+    # uma versao cuja imagem nunca chegou no registry. O release e o ultimo
+    # passo justamente por ser o unico irreversivel.
+    needs: [test, build-and-push]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: write # criar a tag, a release e commitar o CHANGELOG
