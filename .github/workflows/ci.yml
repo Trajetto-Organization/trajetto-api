@@ -1,12 +1,12 @@
 name: CI (branches)
 
-# Portao rapido de branch. Roda em toda branch que NAO seja a main/master, para
-# o problema aparecer antes do PR — e nao depois, no meio da pipeline pesada.
+# Fast branch gate. Runs on any branch other than main/master so that
+# the problem surfaces before the PR—not later, in the middle of the heavy pipeline.
 #
-# De proposito ficam de fora: E2E (precisa de postgres/rabbitmq/redis de pe),
-# build da imagem, release e deploy. Tudo isso e responsabilidade do deploy.yml
-# quando o codigo chega na main. Aqui a pergunta e uma so: esse codigo esta
-# saudavel o bastante para virar PR?
+# Intentionally excluded: E2E tests (they need postgres/rabbitmq/redis running),
+# image building, release, and deployment. All of that is handled by deploy.yml
+# once the code reaches main. Here, there is only one question: is this code
+# healthy enough to become a PR?
 on:
   push:
     branches-ignore: [main, master]
@@ -49,13 +49,13 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      # Primeiro passo de verificacao: e o mais barato de todos. Nao faz sentido
-      # gastar minutos em tsc e vitest se o codigo nem esta formatado.
+      # First check of all, because it is the cheapest one. There is no point
+      # spending minutes on tsc and vitest if the code is not even formatted.
       - name: Lint
         run: yarn lint:check
 
-      # Sem o client gerado o tsc nao acha os tipos do @prisma/client e o job
-      # quebra com centenas de erros falsos.
+      # Without the generated client, tsc cannot find the @prisma/client types
+      # and the job fails with hundreds of bogus type errors.
       - name: Generate Prisma client
         run: yarn prisma:generate
 
