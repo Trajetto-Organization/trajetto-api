@@ -1,3 +1,10 @@
+## [1.0.4](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.0.3...v1.0.4) (2026-08-12)
+
+
+### Bug Fixes
+
+* tira o CHANGELOG.md do lint ([9bf25eb](https://github.com/Trajetto-Organization/trajetto-api/commit/9bf25eb793869d973c86d35fcec1b0d9bb509854))
+
 ## [1.0.3](https://github.com/Trajetto-Organization/trajetto-api/compare/v1.0.2...v1.0.3) (2026-08-11)
 
 
