@@ -5,7 +5,18 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
-  workflow_dispatch: # Creates the run button
+  # The run button is the PROMOTE-to-production trigger.
+  #
+  # `image_tag` is what gets promoted. `latest` is whatever the newest main
+  # build produced — fine when nothing has landed since staging was validated.
+  # Pin `main-<sha>` to promote exactly the build that was checked, even if
+  # main has moved on in the meantime.
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to promote to production"
+        required: true
+        default: "latest"
 
 env:
   # Common environment variables for all jobs
@@ -77,15 +88,21 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          # Alinhado com a base do Dockerfile (node:22.21.1-alpine) e com o
-          # ambiente local. O Node 20 saiu do suporte em abril/2026 e nao
-          # atende o engine de parte da cadeia (semantic-release exige
-          # ^22.14.0 || >=24.10.0).
+          # Matches the Dockerfile base (node:22.21.1-alpine), the release job and
+          # the local environment. Node 20 left support in April 2026 and does not
+          # satisfy the engine required by part of the chain (semantic-release
+          # requires ^22.14.0 || >=24.10.0).
           node-version: "22"
           cache: "yarn"
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
+
+      # First check of all, because it is the cheapest one. There is no point
+      # spending minutes on tsc and the test suite if the code is not even
+      # formatted.
+      - name: Lint
+        run: yarn lint:check
 
       - name: Generate Prisma client
         run: yarn prisma:generate
@@ -111,21 +128,26 @@ jobs:
   release:
     name: Release (semantic-release)
     runs-on: ubuntu-latest
-    needs: test
+    # Depends on the build TOO, not only on the checks. Running in parallel, a
+    # failing build-and-push did not hold the release back: the tag, the
+    # CHANGELOG and the GitHub Release went out announcing a version whose
+    # image never reached the registry. The release is the last step precisely
+    # because it is the only irreversible one.
+    needs: [test, build-and-push]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
-      contents: write # criar a tag, a release e commitar o CHANGELOG
-      issues: write # comentar nas issues fechadas pela versao
-      pull-requests: write # comentar nos PRs incluidos na versao
+      contents: write # create the tag and the release, and commit the CHANGELOG
+      issues: write # comment on the issues closed by this version
+      pull-requests: write # comment on the PRs included in this version
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # semantic-release precisa do historico completo: ele descobre a
-          # ultima tag e analisa os commits desde entao para decidir se a versao
-          # sobe em patch, minor ou major. Com o clone raso padrao nao ha o que
-          # analisar e nenhuma release e criada.
+          # semantic-release needs the full history: it finds the last tag and reads
+          # the commits since then to decide whether the version goes up by patch,
+          # minor or major. With the default shallow clone there is nothing to
+          # analyse and no release is ever created.
           fetch-depth: 0
 
       - name: Setup Node.js
@@ -148,11 +170,11 @@ jobs:
       contents: read
       packages: write
     needs: test
-    # Só no push: o dispatch é o botão de PROMOVER para producao, e deve apenas
-    # acionar o Portainer para repuxar a imagem que ja foi construida e validada
-    # neste push. Rebuildar no dispatch desperdicaria minutos e, pior, poderia
-    # publicar uma imagem diferente da que passou pelo portao de qualidade caso
-    # a main tenha andado nesse meio tempo.
+    # Push only: the dispatch is the PROMOTE button, and it should merely tell
+    # the orchestrator to pull the image already built and validated in this
+    # push. Rebuilding on dispatch wastes minutes and, worse, could publish an
+    # image different from the one that passed the quality gate, in case main
+    # moved in the meantime.
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
@@ -195,16 +217,79 @@ jobs:
       - name: Image digest
         run: echo ${{ steps.build.outputs.digest }}
 
-  deploy:
+  # Staging redeploys on its own, with no approval: that is the whole point of
+  # having it. Every merge into main lands here first, and the environment is
+  # cheap to break.
+  #
+  # The API can share ONE image between staging and production because all of
+  # its configuration is read at runtime — only the container env differs.
+  # Gated on the `STAGING_ENABLED` repository variable so this whole path stays
+  # dormant until the environment actually exists. Without the guard, every
+  # merge into main would run this job, curl an empty webhook URL and paint the
+  # run red — and a pipeline that is always red is a pipeline nobody reads.
+  #
+  # To turn it on: create the Staging environment and its webhook secret, then
+  # set the repository variable STAGING_ENABLED to `true`
+  # (Settings > Secrets and variables > Actions > Variables).
+  #
+  # `vars` is used instead of checking the secret directly because the `secrets`
+  # context is not available in a job-level `if`.
+  deploy-staging:
     runs-on: ubuntu-latest
+    needs: build-and-push
+    if: >-
+      github.ref == 'refs/heads/main'
+      && github.event_name == 'push'
+      && vars.STAGING_ENABLED == 'true'
 
-    # Sem `needs`: o deploy nao depende de nenhum job deste run. A imagem ja
-    # esta no ghcr desde o push; aqui so avisamos o Portainer para repuxar.
+    # Points the stack at the `latest` tag, so it always follows main.
+    environment: Staging
+
+    steps:
+      - name: Trigger staging redeploy
+        run: |
+          curl --fail-with-body --retry 3 --proto '=https' --tlsv1.2 -X POST "${{ secrets.PORTAINER_STAGING_WEBHOOK_URL }}"
+
+  # Production promotion. No `needs`: it depends on no job of this run — the
+  # image has been in the registry since its own push.
+  #
+  # Promoting means moving the `stable` tag to the image being shipped and only
+  # then telling production to pull. The production stack is pinned to `stable`,
+  # never to `latest`: pinned to `latest` any redeploy would drag in whatever
+  # main built most recently, which defeats the point of a promotion.
+  promote-production:
+    runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
+
+    permissions:
+      contents: read
+      packages: write
 
     # The line below enables manual approval on GitHub.
     environment: Production
+
     steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `imagetools create` retags server-side, without pulling or rebuilding,
+      # so production runs the exact bytes that staging validated.
+      #
+      # Skipped until STAGING_ENABLED is set, because the production stack is
+      # still pinned to `latest` today. Retagging before the stack is moved to
+      # `stable` would achieve nothing, and a failure here would stop the
+      # webhook below from firing — breaking a deploy path that works.
+      - name: Promote image to stable
+        if: vars.STAGING_ENABLED == 'true'
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/trajetto-organization/trajetto-api:stable \
+            ghcr.io/trajetto-organization/trajetto-api:${{ inputs.image_tag }}
+
       - name: Deploy to Portainer via Webhook
         run: |
           curl --fail-with-body --retry 3 --proto '=https' --tlsv1.2 -X POST "${{ secrets.PORTAINER_WEBHOOK_URL }}"

@@ -1,0 +1,69 @@
+name: CI (branches)
+
+# Fast branch gate. Runs on any branch other than main/master so that
+# the problem surfaces before the PR—not later, in the middle of the heavy pipeline.
+#
+# Intentionally excluded: E2E tests (they need postgres/rabbitmq/redis running),
+# image building, release, and deployment. All of that is handled by deploy.yml
+# once the code reaches main. Here, there is only one question: is this code
+# healthy enough to become a PR?
+on:
+  push:
+    branches-ignore: [main, master]
+  workflow_dispatch:
+
+env:
+  NODE_ENV: test
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+  RABBITMQ_URL: amqp://guest:guest@localhost:5672
+  REDIS_URL: redis://localhost:6379
+  HTTP_REQUEST: http://localhost:3000
+  API_HTTP_REQUEST: http://localhost:3333
+  JWT_SECRET: test-jwt-secret-key-for-github-actions-only
+  JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
+  EVOLUTION_API_URL: http://localhost:8080/test
+  EVOLUTION_API_KEY: test-evolution-api-key
+  EVOLUTION_HTTP_REQUEST: http://localhost:3333
+  TRAJETTO_WHATSAPP_BUSINESS_PHONE: 5524999999999
+  TRAJETTO_WHATSAPP_INSTANCE_NAME: Trajetto-Business-Test
+  UPLOAD_STORAGE_TYPE: local
+  UPLOAD_LOCAL_PATH: ./tmp
+  MASTER_USER_EMAIL: test-master@example.com
+  MASTER_USER_INITIAL_PASSWORD: test-master-password-ci-only
+
+jobs:
+  validate:
+    name: Lint, type-check and unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # First check of all, because it is the cheapest one. There is no point
+      # spending minutes on tsc and vitest if the code is not even formatted.
+      - name: Lint
+        run: yarn lint:check
+
+      # Without the generated client, tsc cannot find the @prisma/client types
+      # and the job fails with hundreds of bogus type errors.
+      - name: Generate Prisma client
+        run: yarn prisma:generate
+
+      - name: Type-check
+        run: yarn typecheck
+
+      - name: Create tmp directory
+        run: mkdir -p src/tmp
+
+      - name: Run unit tests
+        run: yarn test --run --reporter=basic

@@ -211,7 +211,9 @@ class PermissionRepository implements IPermissionRepository {
     permissions,
   }: BulkConfigurePermissionsProps): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      await tx.permission.deleteMany({ where: { profileAccessId, businessId } });
+      await tx.permission.deleteMany({
+        where: { profileAccessId, businessId },
+      });
 
       if (permissions.length > 0) {
         await tx.permission.createMany({
