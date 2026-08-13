@@ -2,10 +2,13 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { verify } from "jsonwebtoken";
 
 import auth from "@/config/auth";
+
 import { DriverRepository } from "../driver/repositories/driver-repository";
 import { UserRepository } from "../user/repositories/user-repository";
+
 import { UserTokensRepository } from "../user/repositories/user-tokens-repository";
 import { assertSessionEligible } from "../user/services/session-eligibility";
+
 import { AppError } from "@/shared/errors/AppError";
 import { authorizeRequestedTenant } from "./tenant-authorization";
 
@@ -58,6 +61,7 @@ async function ensureAuthenticated(
 
     const userRepository = new UserRepository();
     const tokenRepository = new UserTokensRepository();
+
     const driverRepository = new DriverRepository();
     const user = await userRepository.findUserById(payload.sub);
 

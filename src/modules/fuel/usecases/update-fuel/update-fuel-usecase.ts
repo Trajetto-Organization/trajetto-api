@@ -42,6 +42,7 @@ import { UploadService } from "@/shared/services/upload-service";
 import { MultipartFile } from "@fastify/multipart";
 
 import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
+
 import { readMultipartFile } from "@/shared/utils/read-multipart-file";
 import { uploadConfig } from "@/config/upload";
 
@@ -78,6 +79,10 @@ class UpdateFuelUseCase {
     { fuelId, businessId, fuelData }: UpdateFuelRequest,
     userId: string,
     odometerPhotoFile?: MultipartFile,
+
+    // A replacement photo the client uploaded straight to storage. Absent when
+    // the edit does not touch the photo, in either request shape.
+    presignedPhoto?: { key: string },
   ): Promise<Fuel> {
     const findUser = await this.user.findUserById(userId);
 
@@ -139,6 +144,7 @@ class UpdateFuelUseCase {
 
     const effectiveMileage =
       fuelData.current_mileage ?? findFuel.current_mileage;
+
     const vehicleChanged = vehicleId !== findFuel.vehicleId;
     const mileageChanged = effectiveMileage !== findFuel.current_mileage;
 
@@ -263,8 +269,17 @@ class UpdateFuelUseCase {
     try {
       let finalFuelData = { ...fuelData };
 
-      // If there's a new photo, upload it and delete the old one
-      if (odometerPhotoFile) {
+      // If there's a new photo, record it and delete the old one
+      if (presignedPhoto) {
+        const [resolved] = await this.uploadService.resolvePresignedUploads(
+          [presignedPhoto],
+          "odometerPhotos",
+          businessId,
+        );
+
+        uploadedPhotoPath = resolved.path;
+        finalFuelData.odometer_photo = resolved.path;
+      } else if (odometerPhotoFile) {
         // Upload new photo
         const buffer = await readMultipartFile(odometerPhotoFile, {
           maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
@@ -275,6 +290,7 @@ class UpdateFuelUseCase {
           mimetype: odometerPhotoFile.mimetype,
           uploadType: "odometerPhotos",
         });
+
         uploadedPhotoPath = uploadResult.path;
 
         // Add new photo path to fuel data

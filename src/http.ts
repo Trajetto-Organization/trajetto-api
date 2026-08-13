@@ -170,6 +170,25 @@ app.register(multipart, {
   },
 });
 
+// Development only: the local upload route stands in for the storage bucket
+// and receives raw image bytes, which no other route does. The cap matches the
+// largest single file any upload type allows, so an oversized body is refused
+// before it is buffered rather than after.
+if (uploadConfig.storage.type !== "r2") {
+  app.addContentTypeParser(
+    uploadConfig.allowedMimeTypes.images,
+    {
+      parseAs: "buffer",
+      bodyLimit: Math.max(
+        uploadConfig.getSizeLimit("odometerPhotos"),
+        uploadConfig.getSizeLimit("avatars"),
+        uploadConfig.getSizeLimit("checklistPhotos"),
+      ),
+    },
+    (_request, body, done) => done(null, body),
+  );
+}
+
 // Registered before the routes so it applies to every one of them. This runs
 // after body parsing, which `onRequest` (where `ensureAuthenticated` lives)
 // cannot do — without it a `businessId` sent in the body bypasses the check.

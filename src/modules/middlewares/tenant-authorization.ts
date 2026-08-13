@@ -26,6 +26,7 @@ function assertTenantAccess(
 function getRequestedTenantId(request: FastifyRequest): string | undefined {
   const params = request.params as Record<string, unknown> | undefined;
   const query = request.query as Record<string, unknown> | undefined;
+
   const body = request.body as Record<string, unknown> | undefined;
   const candidate = params?.businessId ?? query?.businessId ?? body?.businessId;
 
@@ -51,7 +52,6 @@ function authorizeRequestedTenant(request: FastifyRequest): void {
 async function enforceRequestedTenant(request: FastifyRequest): Promise<void> {
   // Public routes never populate `user`, so there is no tenant to enforce.
   if (!request.user) return;
-
   authorizeRequestedTenant(request);
 }
 

@@ -27,7 +27,11 @@ import { FuelVehicleInvalidStatusForFuelError } from "../errors/fuel-vehicle-inv
 import { FuelDriverCannotUpdateFuelError } from "../errors/fuel-driver-cannot-update-fuel-error";
 
 import { updateFuelMultipartSchema } from "@/schemas/update-fuel-schema";
+import { presignedPhotoSchema } from "@/schemas/presigned-photos-schema";
+
+import { normalizeFormFields } from "@/shared/utils/normalize-form-field";
 import { updateDeleteFuelSchema } from "@/schemas/update-delete-fuel-schema";
+
 import { readMultipartFile } from "@/shared/utils/read-multipart-file";
 import { uploadConfig } from "@/config/upload";
 
@@ -40,8 +44,27 @@ class UpdateFuelController {
     const formData: Record<string, any> = {};
     let fileUpload: any = null;
 
+    let presignedPhoto: { key: string } | undefined;
+
+    // JSON body: the replacement photo, if any, is already in storage and only
+    // its key travels here. The multipart loop below is skipped entirely.
+    if (!request.isMultipart()) {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const { photo, ...fields } = body;
+
+      Object.assign(formData, normalizeFormFields(fields));
+
+      // Optional on update — an edit that does not touch the photo simply
+      // omits it, and the record keeps the one it already has.
+      if (photo !== undefined) {
+        presignedPhoto = { key: presignedPhotoSchema.parse(photo).key };
+      }
+    }
+
     try {
-      const parts = request.parts();
+      const parts = request.isMultipart()
+        ? request.parts()
+        : (async function* () {})();
 
       for await (const part of parts) {
         if (part.type === "field") {
@@ -98,6 +121,7 @@ class UpdateFuelController {
         },
         id,
         validatedFile,
+        presignedPhoto,
       );
 
       return reply

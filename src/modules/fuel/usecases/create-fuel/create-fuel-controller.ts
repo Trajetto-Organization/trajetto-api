@@ -26,7 +26,15 @@ import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/erro
 
 import { FuelRegistrationsMobileLocationRequiredError } from "../errors/fuel-registrations-mobile-location-required-error";
 
-import { createFuelMultipartSchema } from "@/schemas/create-fuel-schema";
+import { MultipartFile } from "@fastify/multipart";
+import {
+  createFuelMultipartSchema,
+  createFuelSchema,
+} from "@/schemas/create-fuel-schema";
+
+import { presignedPhotoSchema } from "@/schemas/presigned-photos-schema";
+import { normalizeFormFields } from "@/shared/utils/normalize-form-field";
+
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 class CreateFuelController {
@@ -34,23 +42,53 @@ class CreateFuelController {
     const { id } = request.user;
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
 
-    const file = await request.file();
-
-    if (!file) {
-      return reply.status(400).send({
-        message: "Arquivo de odômetro é obrigatório.",
-      });
-    }
-
-    // Extract form fields from multipart data
+    const isMultipart = request.isMultipart();
     const formData: Record<string, any> = {};
-    if (file.fields) {
-      Object.keys(file.fields).forEach((key) => {
-        const field = file.fields[key];
-        if (field && typeof field === "object" && "value" in field) {
-          formData[key] = field.value;
-        }
-      });
+
+    let validatedFile: MultipartFile | undefined;
+    let presignedPhoto: { key: string } | undefined;
+
+    if (isMultipart) {
+      const file = await request.file();
+
+      if (!file) {
+        return reply.status(400).send({
+          message: "Arquivo de odômetro é obrigatório.",
+        });
+      }
+
+      // Extract form fields from multipart data
+      if (file.fields) {
+        Object.keys(file.fields).forEach((key) => {
+          const field = file.fields[key];
+          if (field && typeof field === "object" && "value" in field) {
+            formData[key] = field.value;
+          }
+        });
+      }
+
+      validatedFile = createFuelMultipartSchema.parse({
+        body: formData,
+        file,
+      }).file;
+    } else {
+      // JSON body: the photo is already in storage and only its key travels
+      // here. `request.file()` is never called — there is no multipart stream
+      // to read, and asking for one would hang the request.
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const { photo, ...fields } = body;
+
+      Object.assign(formData, normalizeFormFields(fields));
+
+      const parsed = presignedPhotoSchema.safeParse(photo);
+
+      if (!parsed.success) {
+        return reply.status(400).send({
+          message: "Foto do odômetro é obrigatória.",
+        });
+      }
+
+      presignedPhoto = { key: parsed.data.key };
     }
 
     const idempotencyKey = request.headers["idempotency-key"];
@@ -58,13 +96,9 @@ class CreateFuelController {
       formData.client_submission_id = idempotencyKey;
     }
 
-    // Validate multipart data using Zod
-    const { body: fuelData, file: validatedFile } =
-      createFuelMultipartSchema.parse({
-        body: formData,
-        file: file,
-      });
-
+    // The body half of the schema is shared by both shapes — only the file
+    // half differs, and that was handled above.
+    const fuelData = createFuelSchema.parse(formData);
     const createFuelUseCase = container.resolve(CreateFuelUseCase);
 
     try {
@@ -75,6 +109,7 @@ class CreateFuelController {
         },
         id,
         validatedFile,
+        presignedPhoto,
       );
 
       return reply

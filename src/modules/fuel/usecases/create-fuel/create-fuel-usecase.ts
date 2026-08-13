@@ -43,6 +43,7 @@ import { MultipartFile } from "@fastify/multipart";
 
 import { calculateDistance } from "@/shared/utils/geolocation";
 import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
+
 import { readMultipartFile } from "@/shared/utils/read-multipart-file";
 import { uploadConfig } from "@/config/upload";
 
@@ -72,7 +73,11 @@ class CreateFuelUseCase {
   async execute(
     fuelData: CreateFuelProps,
     userId: string,
-    odometerPhotoFile: MultipartFile,
+    odometerPhotoFile?: MultipartFile,
+
+    // The odometer photo when the client uploaded it straight to storage.
+    // Exactly one of these two is provided; the controller enforces that.
+    presignedPhoto?: { key: string },
   ): Promise<Fuel> {
     const findUser = await this.user.findUserById(userId);
 
@@ -108,9 +113,13 @@ class CreateFuelUseCase {
 
       if (existingFuel) {
         // The multipart stream must be consumed even when this is a retry.
-        await readMultipartFile(odometerPhotoFile, {
-          maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
-        });
+        // Nothing to drain on the presigned path — no stream was opened.
+        if (odometerPhotoFile) {
+          await readMultipartFile(odometerPhotoFile, {
+            maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
+          });
+        }
+
         return existingFuel;
       }
     }
@@ -285,22 +294,34 @@ class CreateFuelUseCase {
     let databaseCommitted = false;
 
     try {
-      // Upload odometer photo
-      const buffer = await readMultipartFile(odometerPhotoFile, {
-        maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
-      });
-      const uploadResult = await this.uploadService.uploadFile({
-        buffer,
-        filename: odometerPhotoFile.filename || "odometer-photo",
-        mimetype: odometerPhotoFile.mimetype,
-        uploadType: "odometerPhotos",
-      });
-      uploadedPhotoPath = uploadResult.path;
+      if (presignedPhoto) {
+        // Already in the bucket; only ownership and existence are left to
+        // check before the key becomes a row.
+        const [resolved] = await this.uploadService.resolvePresignedUploads(
+          [presignedPhoto],
+          "odometerPhotos",
+          fuelData.businessId,
+        );
+
+        uploadedPhotoPath = resolved.path;
+      } else if (odometerPhotoFile) {
+        // Upload odometer photo
+        const buffer = await readMultipartFile(odometerPhotoFile, {
+          maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
+        });
+        const uploadResult = await this.uploadService.uploadFile({
+          buffer,
+          filename: odometerPhotoFile.filename || "odometer-photo",
+          mimetype: odometerPhotoFile.mimetype,
+          uploadType: "odometerPhotos",
+        });
+        uploadedPhotoPath = uploadResult.path;
+      }
 
       // Prepare fuel data with photo and geolocation audit fields
       const fuelDataWithPhoto: any = {
         ...fuelData,
-        odometer_photo: uploadResult.path,
+        odometer_photo: uploadedPhotoPath,
       };
 
       // Add audit fields for web dashboard manual location
@@ -319,7 +340,12 @@ class CreateFuelUseCase {
         await this.fuel.createFuelWithMileage(fuelDataWithPhoto);
 
       if (!created) {
-        await this.uploadService.deleteFile(uploadResult.path);
+        // Only delete what this request put there. On the presigned path the
+        // object was uploaded by the client, but it is still orphaned if the
+        // row was not created, so it is removed either way.
+        if (uploadedPhotoPath) {
+          await this.uploadService.deleteFile(uploadedPhotoPath);
+        }
         uploadedPhotoPath = null;
         return fuelCreated;
       }
@@ -338,14 +364,14 @@ class CreateFuelUseCase {
 
       // Enqueue AI verification for odometer photo (fire-and-forget)
       // Skip if business has AI disabled (limit === 0)
-      if ((findBusiness.ai_analysis_limit ?? 0) > 0) {
+      if ((findBusiness.ai_analysis_limit ?? 0) > 0 && uploadedPhotoPath) {
         AIVerificationWorkerService.getInstance()
           .enqueueVerification({
             type: "fuel_odometer",
             recordId: fuelCreated.id,
             businessId: fuelData.businessId,
             userId,
-            odometerPhotoPath: uploadResult.path,
+            odometerPhotoPath: uploadedPhotoPath,
             reportedMileage: fuelData.current_mileage,
           })
           .catch((err) =>
