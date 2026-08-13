@@ -20,12 +20,20 @@ import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/ve
 import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
+import { presignedPhotosSchema } from "@/schemas/presigned-photos-schema";
+
 import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
 
 import { PhotoValidationService } from "@/shared/services/photo-validation-service";
 import { AppError } from "@/shared/errors/AppError";
 
+import {
+  normalizeFormField,
+  normalizeFormFields,
+} from "@/shared/utils/normalize-form-field";
+
 const MAX_CHECKLIST_UPLOAD_BYTES = 5 * 1024 * 1024;
+
 const MAX_CHECKLIST_FILES = 20;
 const FILE_READ_TIMEOUT_MS = 30_000;
 
@@ -62,8 +70,40 @@ class CreateVehicleChecklistController {
 
     const formData: Record<string, any> = {};
     const photosByField: Record<string, any[]> = {};
+
     let totalSize = 0;
     let fileCount = 0;
+
+    // Photos uploaded straight to storage, when the client took that route.
+    let presignedPhotos: { key: string; fieldName?: string }[] | undefined;
+
+    // Two request shapes are accepted while the clients migrate:
+    //
+    //   multipart  the original — files stream through this API
+    //   JSON       the new one — files are already in the bucket, and only
+    //              their keys travel here
+    //
+    // The JSON branch skips the streaming machinery entirely, which is the
+    // whole point: no parts to drain, no buffers to hold, nothing that can
+    // stall halfway through twenty photos.
+    if (!request.isMultipart()) {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const { photos, ...fields } = body;
+
+      Object.assign(formData, normalizeFormFields(fields));
+
+      const parsedPhotos = presignedPhotosSchema.parse(photos);
+      presignedPhotos = parsedPhotos;
+
+      // Rebuilt so the existing required-photo validation keeps working
+      // unchanged: it only asks whether a field has photos, not what they are.
+      for (const photo of parsedPhotos ?? []) {
+        if (!photo.fieldName) continue;
+
+        photosByField[photo.fieldName] ??= [];
+        photosByField[photo.fieldName].push(photo);
+      }
+    }
 
     // Erro de validacao encontrado no meio do multipart. NAO pode ser lancado
     // de dentro do `for await`: as partes seguintes ficariam sem ser lidas e a
@@ -73,7 +113,9 @@ class CreateVehicleChecklistController {
     let pendingError: AppError | null = null;
 
     try {
-      const parts = request.parts();
+      const parts = request.isMultipart()
+        ? request.parts()
+        : (async function* () {})();
 
       for await (const part of parts) {
         // Ja falhou: so consome o que resta para liberar a requisicao.
@@ -120,24 +162,12 @@ class CreateVehicleChecklistController {
 
           photosByField[fieldName].push(fileObject);
         } else if (part.type === "field") {
-          // Handle form fields - inline processing to avoid 'this' context issues
-          const fieldName = part.fieldname;
-          let value: any = part.value;
-
-          // Convert string booleans to actual booleans
-          if (value === "true") {
-            value = true;
-          } else if (value === "false") {
-            value = false;
-          } else if (
-            fieldName === "current_mileage" &&
-            typeof value === "string"
-          ) {
-            // Convert string numbers to actual numbers for current_mileage
-            value = parseFloat(value.replace(/\./g, "").replace(",", "."));
-          }
-
-          formData[fieldName] = value;
+          // Same normalisation the JSON branch runs, so a checklist validates
+          // identically whichever way the client encoded it.
+          formData[part.fieldname] = normalizeFormField(
+            part.fieldname,
+            part.value,
+          );
         }
       }
 
@@ -194,12 +224,16 @@ class CreateVehicleChecklistController {
       const allPhotos: any[] = [];
       const photoFieldMapping: Record<string, string[]> = {};
 
-      Object.entries(photosByField).forEach(([fieldName, photos]) => {
-        photoFieldMapping[fieldName] = (photos as any[]).map(
-          (p) => p.filename || "checklist-photo",
-        );
-        allPhotos.push(...photos);
-      });
+      // Only meaningful for multipart: on the presigned path `photosByField`
+      // holds keys, not file streams, and the usecase reads those from
+      // `presignedPhotos` instead.
+      if (!presignedPhotos)
+        Object.entries(photosByField).forEach(([fieldName, photos]) => {
+          photoFieldMapping[fieldName] = (photos as any[]).map(
+            (p) => p.filename || "checklist-photo",
+          );
+          allPhotos.push(...photos);
+        });
 
       const checklist = await createVehicleChecklistUseCase.execute(
         {
@@ -211,6 +245,7 @@ class CreateVehicleChecklistController {
         Object.keys(photoFieldMapping).length > 0
           ? photoFieldMapping
           : undefined,
+        presignedPhotos,
       );
 
       return reply

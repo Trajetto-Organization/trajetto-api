@@ -19,6 +19,9 @@ import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/ve
 
 import { VehicleChecklistDriverCannotUpdateChecklistError } from "../errors/vehicle-checklist-driver-cannot-update-checklist-error";
 
+import { presignedPhotosSchema } from "@/schemas/presigned-photos-schema";
+import { normalizeFormFields } from "@/shared/utils/normalize-form-field";
+
 import { updateDeleteVehicleChecklistSchema } from "@/schemas/update-delete-vehicle-checklist-schema";
 import { updateVehicleChecklistSchema } from "@/schemas/update-vehicle-checklist-schema";
 
@@ -26,8 +29,9 @@ import { VehicleChecklistRequiredPhotosMissingError } from "../errors/vehicle-ch
 import { VehicleChecklistBusinessNotFoundError } from "../errors/vehicle-checklist-business-not-found-error";
 
 import { PhotoValidationService } from "@/shared/services/photo-validation-service";
-import { AppError } from "@/shared/errors/AppError";
 import { readMultipartFile } from "@/shared/utils/read-multipart-file";
+
+import { AppError } from "@/shared/errors/AppError";
 
 const MAX_CHECKLIST_UPLOAD_BYTES = 5 * 1024 * 1024;
 const MAX_CHECKLIST_FILES = 20;
@@ -40,11 +44,34 @@ class UpdateVehicleChecklistController {
 
     const formData: Record<string, any> = {};
     const photosByField: Record<string, any[]> = {};
+
     let totalSize = 0;
     let fileCount = 0;
 
+    let presignedPhotos: { key: string; fieldName?: string }[] | undefined;
+
+    // Same dual shape as the create endpoint: multipart streams the files
+    // through here, JSON carries only the keys of files already in storage.
+    // See the comment there for why both are accepted for now.
+    if (!request.isMultipart()) {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const { photos, ...fields } = body;
+
+      Object.assign(formData, normalizeFormFields(fields));
+      presignedPhotos = presignedPhotosSchema.parse(photos);
+
+      for (const photo of presignedPhotos ?? []) {
+        if (!photo.fieldName) continue;
+
+        photosByField[photo.fieldName] ??= [];
+        photosByField[photo.fieldName].push(photo);
+      }
+    }
+
     try {
-      const parts = request.parts();
+      const parts = request.isMultipart()
+        ? request.parts()
+        : (async function* () {})();
 
       for await (const part of parts) {
         if (part.type === "file") {
@@ -136,10 +163,16 @@ class UpdateVehicleChecklistController {
       });
     }
 
-    // Extract photos to remove list for validation in usecase
-    const photosToRemove: string[] = formData.photosToRemove
-      ? JSON.parse(formData.photosToRemove as string)
-      : [];
+    // Extract photos to remove list for validation in usecase.
+    //
+    // Multipart can only carry strings, so this field arrives JSON-encoded and
+    // has to be parsed. A JSON body already delivers it as an array — parsing
+    // that would throw, which is why the shape is checked instead of assumed.
+    const photosToRemove: string[] = Array.isArray(formData.photosToRemove)
+      ? formData.photosToRemove
+      : formData.photosToRemove
+        ? JSON.parse(formData.photosToRemove as string)
+        : [];
 
     const updateVehicleChecklistUseCase = container.resolve(
       UpdateVehicleChecklistUseCase,
@@ -147,9 +180,12 @@ class UpdateVehicleChecklistController {
 
     try {
       const allPhotos: any[] = [];
-      Object.values(photosByField).forEach((photos) => {
-        allPhotos.push(...photos);
-      });
+      // Multipart only: on the presigned path these entries are keys, not
+      // file streams, and the usecase reads them from `presignedPhotos`.
+      if (!presignedPhotos)
+        Object.values(photosByField).forEach((photos) => {
+          allPhotos.push(...photos);
+        });
 
       await updateVehicleChecklistUseCase.execute(
         checklistData,
@@ -159,6 +195,7 @@ class UpdateVehicleChecklistController {
         allPhotos.length > 0 ? allPhotos : undefined,
         photosByField,
         photosToRemove,
+        presignedPhotos,
       );
 
       return reply

@@ -36,6 +36,7 @@ import { UploadService } from "@/shared/services/upload-service";
 import { MultipartFile } from "@fastify/multipart";
 
 import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
+import { uploadConfig } from "@/config/upload";
 
 @injectable()
 class CreateVehicleChecklistUseCase {
@@ -63,6 +64,13 @@ class CreateVehicleChecklistUseCase {
     userId: string,
     checklistPhotoFiles?: MultipartFile[],
     photoFieldMapping?: Record<string, string[]>,
+
+    // Photos the client already uploaded straight to storage. Mutually
+    // exclusive with `checklistPhotoFiles` in practice: a request either
+    // streams its files here or it does not send them at all. Both paths are
+    // supported while the web and mobile clients migrate — dropping multipart
+    // before both have moved would break whichever went last.
+    presignedPhotos?: { key: string; fieldName?: string }[],
   ): Promise<VehicleChecklist> {
     const findUser = await this.user.findUserById(userId);
 
@@ -207,7 +215,26 @@ class CreateVehicleChecklistUseCase {
       const photoPaths: string[] = [];
       const photoPathsByField: Record<string, string[]> = {};
 
-      if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
+      if (presignedPhotos && presignedPhotos.length > 0) {
+        // Nothing to upload — the bytes are already in the bucket. All that is
+        // left is proving each key belongs to this business and really exists
+        // before it becomes a database row.
+        const resolved = await this.uploadService.resolvePresignedUploads(
+          presignedPhotos,
+          "checklistPhotos",
+          checklistData.businessId,
+          uploadConfig.maxChecklistTotalBytes,
+        );
+
+        for (const photo of resolved) {
+          photoPaths.push(photo.path);
+
+          if (photo.fieldName) {
+            photoPathsByField[photo.fieldName] ??= [];
+            photoPathsByField[photo.fieldName].push(photo.path);
+          }
+        }
+      } else if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
         // A small concurrency window shortens uploads without allowing a
         // single request to saturate memory/CPU while Sharp processes images.
         for (let index = 0; index < checklistPhotoFiles.length; index += 3) {

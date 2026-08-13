@@ -13,6 +13,16 @@ export const uploadConfig = {
     secretAccessKey: env.R2_SECRET_ACCESS_KEY || "",
   },
   signedUrlTtlSeconds: env.UPLOAD_SIGNED_URL_TTL_SECONDS,
+
+  // Separate from the read TTL on purpose. A read URL may live for a while so
+  // a page can render; an upload authorisation should expire almost as soon as
+  // the client is done with it.
+  presignedUploadTtlSeconds: 300,
+
+  // Ceiling for a checklist as a whole, on top of the per-file limit below.
+  // Twenty photos at the individual limit would otherwise be 100 MB for one
+  // inspection.
+  maxChecklistTotalBytes: 5 * 1024 * 1024,
   // Size limits function
   getSizeLimit: (
     uploadType: "odometerPhotos" | "avatars" | "checklistPhotos",

@@ -48,9 +48,9 @@ async function fuelRoutes(app: FastifyInstance) {
         tags: ["fuel"],
         summary: "Create a new fuel record",
         description:
-          "Register a new fuel refueling record for a vehicle with driver, mileage, and fuel details. Requires multipart/form-data with odometer photo.",
+          "Register a new fuel refueling record for a vehicle with driver, mileage, and fuel details. The odometer photo is mandatory. Accepts two body formats: application/json carrying `photo` as a key already uploaded to storage via POST /uploads/presign/:businessId (preferred), or multipart/form-data carrying the file itself (legacy).",
         params: fuelSchemas.updateDeleteBusiness,
-        consumes: ["multipart/form-data"],
+        consumes: ["application/json", "multipart/form-data"],
         response: {
           201: fuelResponses.fuelCreated,
           400: fuelResponses.createFuelErrors,
@@ -98,9 +98,9 @@ async function fuelRoutes(app: FastifyInstance) {
         tags: ["fuel"],
         summary: "Update a fuel record",
         description:
-          "Update information about an existing fuel refueling record including mileage, fuel details, and related entities. Supports multipart/form-data for optional odometer photo update.",
+          "Update information about an existing fuel refueling record including mileage, fuel details, and related entities. The odometer photo is optional on update. Accepts two body formats: application/json carrying `photo` as a key already uploaded to storage via POST /uploads/presign/:businessId (preferred), or multipart/form-data carrying the file itself (legacy).",
         params: fuelSchemas.updateDeleteFuel,
-        consumes: ["multipart/form-data"],
+        consumes: ["application/json", "multipart/form-data"],
         response: {
           200: fuelResponses.fuelUpdated,
           400: fuelResponses.updateFuelErrors,

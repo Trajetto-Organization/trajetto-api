@@ -8,6 +8,7 @@ import { ResetUserPasswordController } from "@/modules/user/usecases/reset-user-
 
 import { SendForgotPasswordMailController } from "@/modules/user/usecases/send-forgot-password-mail/send-forgot-password-mail-controller";
 import { RefreshTokenController } from "@/modules/user/usecases/refresh-token/refresh-token-controller";
+
 import { LogoutController } from "@/modules/user/usecases/logout/logout-controller";
 
 import { TwoFactorVerificationController } from "@/modules/user/usecases/two-factor-verification/two-factor-verification-controller";
@@ -549,8 +550,9 @@ async function userRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
         summary: "Upload or update user avatar",
+        consumes: ["application/json", "multipart/form-data"],
         description:
-          "Upload a new avatar image or replace the existing one for the authenticated user",
+          "Upload a new avatar image or replace the existing one for the authenticated user. Accepts two body formats: application/json carrying `photo` as a key already uploaded to storage via POST /uploads/presign/:businessId with uploadType `avatars` (preferred), or multipart/form-data carrying the file itself (legacy).",
         response: {
           200: userResponses.genericMessage,
           400: userResponses.resourceNotFound,

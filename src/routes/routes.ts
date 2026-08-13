@@ -36,7 +36,9 @@ import { kanbanRoutes } from "./kanban.routes";
 import { fineRoutes } from "./fine-routes";
 import { trafficViolationCodeRoutes } from "./traffic-violation-code-routes";
 
+import { uploadRoutes } from "./upload-routes";
 import { healthRoutes } from "./health-routes";
+
 import { whatsappRoutes } from "./whatsapp-routes";
 
 async function routes(app: FastifyInstance) {
@@ -64,6 +66,7 @@ async function routes(app: FastifyInstance) {
   app.register(fineRoutes, { prefix: "/fines" });
   app.register(trafficViolationCodeRoutes, { prefix: "/traffic-violation" });
   app.register(whatsappRoutes, { prefix: "/whatsapp" });
+  app.register(uploadRoutes, { prefix: "/uploads" });
   app.register(healthRoutes);
 }
 

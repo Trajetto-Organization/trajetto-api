@@ -40,6 +40,7 @@ import { PhotoValidationService } from "@/shared/services/photo-validation-servi
 import { VehicleChecklistRequiredPhotosMissingError } from "../errors/vehicle-checklist-required-photos-missing-error";
 
 import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
+import { uploadConfig } from "@/config/upload";
 
 @injectable()
 class UpdateVehicleChecklistUseCase {
@@ -70,6 +71,11 @@ class UpdateVehicleChecklistUseCase {
     checklistPhotoFiles?: MultipartFile[],
     photosByField?: { [key: string]: any },
     photosToRemove?: string[],
+
+    // Photos the client already put in storage. Takes precedence over
+    // `checklistPhotoFiles`: a request uses one route or the other, and both
+    // are accepted only while the web and mobile clients migrate.
+    presignedPhotos?: { key: string; fieldName?: string }[],
   ): Promise<VehicleChecklist> {
     const findUser = await this.user.findUserById(userId);
 
@@ -221,7 +227,25 @@ class UpdateVehicleChecklistUseCase {
       // Upload checklist photos if provided
       const newPhotoPathsByField: Record<string, string[]> = {};
 
-      if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
+      if (presignedPhotos && presignedPhotos.length > 0) {
+        // Already in the bucket. Only the ownership and existence checks are
+        // left before these keys become rows.
+        const resolved = await this.uploadService.resolvePresignedUploads(
+          presignedPhotos,
+          "checklistPhotos",
+          businessId,
+          uploadConfig.maxChecklistTotalBytes,
+        );
+
+        for (const photo of resolved) {
+          newPhotoPaths.push(photo.path);
+
+          if (photo.fieldName) {
+            newPhotoPathsByField[photo.fieldName] ??= [];
+            newPhotoPathsByField[photo.fieldName].push(photo.path);
+          }
+        }
+      } else if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
         // Build filename → fieldName mapping for direct field-to-path resolution
         const filenameToField: Record<string, string> = {};
         if (photosByField) {
