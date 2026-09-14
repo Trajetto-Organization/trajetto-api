@@ -15,6 +15,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import {
   DeliveryNotFoundError,
   DeliveryNotBelongBusinessError,
+  DeliveryStatusConflictError,
 } from "../errors/delivery-errors";
 
 import {
@@ -178,7 +179,12 @@ class ReportDeliveryOccurrenceUseCase {
         if (nextStatus !== findDelivery.status) {
           await this.delivery.updateDeliveryStatus(
             deliveryId,
-            { status: nextStatus },
+            // statusAfterOccurrence was asked about findDelivery.status, so
+            // that is what the write has to still find. If the delivery was
+            // proven or cancelled while the driver was uploading the photos,
+            // the whole transaction rolls back — occurrence, flip and alert —
+            // rather than dragging a finished delivery back to FAILED.
+            { status: nextStatus, expectedStatus: findDelivery.status },
             tx,
           );
         }
@@ -220,6 +226,10 @@ class ReportDeliveryOccurrenceUseCase {
         businessId,
       });
     } catch (error) {
+      if (error instanceof DeliveryStatusConflictError) {
+        throw new AppError(error.message, 409, "DELIVERY_STATUS_CONFLICT");
+      }
+
       if (error instanceof AppError) {
         throw error;
       }

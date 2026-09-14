@@ -5,7 +5,12 @@ import {
   DeliveryAssignmentPatch,
 } from "../IDelivery-repository";
 
-import { DeliveryAssignmentConflictError } from "../../usecases/errors/delivery-errors";
+import {
+  DeliveryAssignmentConflictError,
+  DeliveryStatusConflictError,
+} from "../../usecases/errors/delivery-errors";
+
+import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 
 import {
   Delivery,
@@ -139,7 +144,16 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     deliveryId: string,
     patch: DeliveryStatusPatch,
   ): Promise<Delivery> {
-    const index = this.deliveries.findIndex((d) => d.id === deliveryId);
+    // Mirrors the status filter in the Prisma `where`. Without it the fake
+    // would accept writes the real repository refuses, and a test proving the
+    // concurrency guard would be proving nothing.
+    const index = this.deliveries.findIndex(
+      (d) => d.id === deliveryId && d.status === patch.expectedStatus,
+    );
+
+    if (index === -1) {
+      throw new DeliveryStatusConflictError();
+    }
 
     this.deliveries[index] = {
       ...this.deliveries[index],
@@ -453,19 +467,25 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
 
   async registerDeliveryProof(
     eventData: CreateDeliveryEventProps,
+    expectedStatus: DeliveryStatus,
   ): Promise<void> {
-    // Mirrors the Prisma transaction: event and DELIVERED stamp together.
-    this.events.push({ ...eventData, type: "PROOF", id: uuidV7() });
-
+    // Mirrors the Prisma transaction: event and DELIVERED stamp together, and
+    // only while the delivery still holds the status the caller validated.
+    // The conflict is raised BEFORE the event is pushed, so the fake rolls
+    // back the same way the real transaction does.
     const delivery = this.deliveries.find(
       (entry) => entry.id === eventData.deliveryId,
     );
 
-    if (delivery) {
-      delivery.status = "DELIVERED";
-      delivery.delivered_at = new Date();
-      delivery.received_by = eventData.received_by ?? null;
+    if (!delivery || delivery.status !== expectedStatus) {
+      throw new DeliveryStatusConflictError();
     }
+
+    this.events.push({ ...eventData, type: "PROOF", id: uuidV7() });
+
+    delivery.status = "DELIVERED";
+    delivery.delivered_at = new Date();
+    delivery.received_by = eventData.received_by ?? null;
   }
 }
 

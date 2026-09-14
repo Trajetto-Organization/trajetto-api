@@ -46,6 +46,27 @@ class DeliveryAssignmentConflictError extends Error {
   }
 }
 
+/**
+ * The delivery moved between the moment its status was read and validated and
+ * the moment the write ran, so nothing was written.
+ *
+ * Four surfaces drive the same delivery — the driver's app, the dispatcher's
+ * dashboard, the admin panel and the control tower — and they are frequently
+ * looking at it at the same time. Without the precondition on the write, a
+ * dispatcher cancelling a delivery while the driver is submitting its proof
+ * would leave whichever request finished last standing: a cancelled delivery
+ * marked DELIVERED, or a proven one marked CANCELLED. Both are states the
+ * status machine forbids and neither is recoverable, since both are terminal.
+ */
+class DeliveryStatusConflictError extends Error {
+  constructor() {
+    super(
+      "O status desta entrega mudou enquanto você trabalhava nela e nada " +
+        "foi gravado. Atualize a tela e tente novamente.",
+    );
+  }
+}
+
 class DeliveryDriverInactiveError extends Error {
   constructor() {
     super("Só é possível atribuir entregas a um motorista ativo.");
@@ -68,6 +89,7 @@ export {
   DeliveryNotEditableError,
   DeliveryNotAssignableError,
   DeliveryAssignmentConflictError,
+  DeliveryStatusConflictError,
   DeliveryDriverInactiveError,
   DeliveryVehicleUnavailableError,
 };

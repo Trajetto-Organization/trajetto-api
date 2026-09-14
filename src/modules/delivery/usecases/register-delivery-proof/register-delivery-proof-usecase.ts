@@ -10,6 +10,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import {
   DeliveryNotFoundError,
   DeliveryNotBelongBusinessError,
+  DeliveryStatusConflictError,
 } from "../errors/delivery-errors";
 
 import {
@@ -130,17 +131,23 @@ class RegisterDeliveryProofUseCase {
     }
 
     try {
-      await this.delivery.registerDeliveryProof({
-        type: "PROOF",
-        deliveryId,
-        reportedById: userId,
-        latitude,
-        longitude,
-        photo: resolvedPhoto.path,
-        signature: signaturePath,
-        received_by,
-        client_submission_id,
-      });
+      await this.delivery.registerDeliveryProof(
+        {
+          type: "PROOF",
+          deliveryId,
+          reportedById: userId,
+          latitude,
+          longitude,
+          photo: resolvedPhoto.path,
+          signature: signaturePath,
+          received_by,
+          client_submission_id,
+        },
+        // The status canTransitionDelivery was asked about. The upload of the
+        // photo sits between that check and this write, which on a phone in a
+        // basement can be minutes — the widest window in the module.
+        findDelivery.status,
+      );
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({
@@ -156,6 +163,15 @@ class RegisterDeliveryProofUseCase {
         businessId,
       });
     } catch (error) {
+      // 409 and not 5xx matters twice here. The driver's app classifies a
+      // non-transient 4xx as permanent, so the submission stops retrying and
+      // lands on the pending screen carrying this message — which is the
+      // truth: the delivery was cancelled and no amount of retrying will
+      // change that. A 500 would have it retry forever against a wall.
+      if (error instanceof DeliveryStatusConflictError) {
+        throw new AppError(error.message, 409, "DELIVERY_STATUS_CONFLICT");
+      }
+
       if (error instanceof AppError) {
         throw error;
       }

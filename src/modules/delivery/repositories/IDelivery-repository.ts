@@ -17,6 +17,16 @@ import {
 
 interface DeliveryStatusPatch {
   status: DeliveryStatus;
+
+  /**
+   * The status the caller read and ran `canTransitionDelivery` against.
+   *
+   * Required, not optional, so that adding a status write to this module
+   * cannot silently skip the check: the compiler asks for it at every call
+   * site. The write only lands while the row still holds this value.
+   */
+  expectedStatus: DeliveryStatus;
+
   delivered_at?: Date | null;
   received_by?: string | null;
 }
@@ -44,6 +54,10 @@ interface IDeliveryRepository {
     deliveryId: string,
     deliveryData: UpdateDeliveryProps,
   ) => Promise<Delivery>;
+  /**
+   * Moves a delivery, but only from `patch.expectedStatus`. Throws
+   * DeliveryStatusConflictError (writing nothing) when the row already moved.
+   */
   updateDeliveryStatus: (
     deliveryId: string,
     patch: DeliveryStatusPatch,
@@ -91,9 +105,14 @@ interface IDeliveryRepository {
     clientSubmissionId: string,
   ) => Promise<DeliveryEventRecord | null>;
   createDeliveryEvent: (eventData: CreateDeliveryEventProps) => Promise<void>;
-  /** PROOF event + DELIVERED stamp in a single transaction. */
+  /**
+   * PROOF event + DELIVERED stamp in a single transaction, and only while the
+   * delivery still holds `expectedStatus`. Throws DeliveryStatusConflictError
+   * (writing neither) when it moved in the meantime.
+   */
   registerDeliveryProof: (
     eventData: CreateDeliveryEventProps,
+    expectedStatus: DeliveryStatus,
   ) => Promise<void>;
 }
 

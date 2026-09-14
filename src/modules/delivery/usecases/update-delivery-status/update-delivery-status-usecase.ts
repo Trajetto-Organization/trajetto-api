@@ -9,6 +9,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import {
   DeliveryNotFoundError,
   DeliveryNotBelongBusinessError,
+  DeliveryStatusConflictError,
 } from "../errors/delivery-errors";
 
 import {
@@ -78,6 +79,9 @@ class UpdateDeliveryStatusUseCase {
         deliveryId,
         {
           status,
+          // What canTransitionDelivery was asked about, three lines up. The
+          // write refuses if the row no longer holds it.
+          expectedStatus: findDelivery.status,
           // Proof metadata only exists on the proven outcome.
           delivered_at: status === "DELIVERED" ? new Date() : null,
           received_by: status === "DELIVERED" ? (received_by ?? null) : null,
@@ -99,6 +103,13 @@ class UpdateDeliveryStatusUseCase {
 
       return updatedDelivery;
     } catch (error) {
+      // 409, not 500: the request was well formed and the caller was allowed
+      // to make it — somebody else simply got there first. The screen has to
+      // be able to tell the operator to refresh, not to try again.
+      if (error instanceof DeliveryStatusConflictError) {
+        throw new AppError(error.message, 409, "DELIVERY_STATUS_CONFLICT");
+      }
+
       if (error instanceof AppError) {
         throw error;
       }

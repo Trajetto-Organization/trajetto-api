@@ -6,7 +6,12 @@ import {
   DeliveryAssignmentPatch,
 } from "./IDelivery-repository";
 
-import { DeliveryAssignmentConflictError } from "../usecases/errors/delivery-errors";
+import {
+  DeliveryAssignmentConflictError,
+  DeliveryStatusConflictError,
+} from "../usecases/errors/delivery-errors";
+
+import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 
 import {
   Delivery,
@@ -218,13 +223,30 @@ class DeliveryRepository implements IDeliveryRepository {
     return updated as Delivery;
   }
 
+  /**
+   * The status filter rides along in the `where`, the same way it does in
+   * `assignDeliveries`: it makes the read the caller validated and the write
+   * it authorised one atomic step, instead of two separated by a window that
+   * four different screens can drive through.
+   *
+   * `updateMany` + `count` rather than a filtered `update`, deliberately.
+   * Prisma's extended `where` on `update` would do this in one round trip and
+   * signal the miss as P2025, but that leans on a semantics this codebase has
+   * never exercised, and the failure mode of being wrong is the worst one
+   * available: a filter silently ignored, a guard that does nothing, and a
+   * green test suite saying otherwise. `updateMany` filters the way every
+   * other query here filters. The extra read costs one SELECT on a path that
+   * runs a handful of times per delivery.
+   */
   async updateDeliveryStatus(
     deliveryId: string,
     patch: DeliveryStatusPatch,
     tx?: Prisma.TransactionClient,
   ): Promise<Delivery> {
-    const updated = await (tx ?? this.prisma).delivery.update({
-      where: { id: deliveryId },
+    const client = tx ?? this.prisma;
+
+    const moved = await client.delivery.updateMany({
+      where: { id: deliveryId, status: patch.expectedStatus },
       data: {
         status: patch.status,
         ...(patch.delivered_at !== undefined && {
@@ -236,7 +258,13 @@ class DeliveryRepository implements IDeliveryRepository {
       },
     });
 
-    return updated as Delivery;
+    if (moved.count === 0) {
+      throw new DeliveryStatusConflictError();
+    }
+
+    return (await client.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    })) as Delivery;
   }
 
   async findDeliveriesByIds(deliveryIds: string[]): Promise<Delivery[]> {
@@ -623,11 +651,34 @@ class DeliveryRepository implements IDeliveryRepository {
 
   async registerDeliveryProof(
     eventData: CreateDeliveryEventProps,
+    expectedStatus: DeliveryStatus,
   ): Promise<void> {
     // Event and status stamp land together or not at all: a proof without
     // the DELIVERED transition (or vice versa) would lie in the trail.
-    await this.prisma.$transaction([
-      this.prisma.deliveryEvent.create({
+    //
+    // The status filter makes that hold against a concurrent write too. If a
+    // dispatcher cancelled the delivery while the driver was uploading the
+    // photo, the update matches nothing, the transaction rolls back, and the
+    // event never exists — rather than a PROOF row hanging off a cancelled
+    // delivery, which no screen in the product knows how to show.
+    // Interactive transaction rather than the array form, because the guard
+    // has to read `count` and abort — the same shape as `assignDeliveries`.
+    // Throwing in here rolls the event back with it.
+    await this.prisma.$transaction(async (tx) => {
+      const moved = await tx.delivery.updateMany({
+        where: { id: eventData.deliveryId, status: expectedStatus },
+        data: {
+          status: "DELIVERED",
+          delivered_at: new Date(),
+          received_by: eventData.received_by ?? null,
+        },
+      });
+
+      if (moved.count === 0) {
+        throw new DeliveryStatusConflictError();
+      }
+
+      await tx.deliveryEvent.create({
         data: {
           type: "PROOF",
           deliveryId: eventData.deliveryId,
@@ -639,16 +690,8 @@ class DeliveryRepository implements IDeliveryRepository {
           received_by: eventData.received_by ?? null,
           client_submission_id: eventData.client_submission_id,
         },
-      }),
-      this.prisma.delivery.update({
-        where: { id: eventData.deliveryId },
-        data: {
-          status: "DELIVERED",
-          delivered_at: new Date(),
-          received_by: eventData.received_by ?? null,
-        },
-      }),
-    ]);
+      });
+    });
   }
 }
 
