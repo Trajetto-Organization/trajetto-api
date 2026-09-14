@@ -134,6 +134,7 @@ model Business {
   entitlements BusinessEntitlement[]
 
   shippers        Shipper[]
+  routes          Route[]
   occurrenceTypes OccurrenceType[]
   deliveries      Delivery[]
 
@@ -464,6 +465,7 @@ model Driver {
   Fuel             Fuel[]
   VehicleChecklist VehicleChecklist[]
   deliveries       Delivery[]
+  routes           Route[]
   chatThreads      ChatThread[]
 
   created_at DateTime @default(now())
@@ -519,6 +521,7 @@ model Vehicle {
   Fuel             Fuel[]
   VehicleChecklist VehicleChecklist[]
   deliveries       Delivery[]
+  routes           Route[]
 
   // There was no tenant index at all here, so this was a sequential scan.
   // listVehicles plus four dashboard counts — the most frequent query in the app.
@@ -1341,6 +1344,118 @@ model VehicleChecklist {
 
 // ── Deliveries module ────────────────────────────────────────────────────
 
+// Delivery or pickup. The operation treats them as two kinds of the same
+// record, not as two flows — same route, same driver, same proof.
+enum DeliveryKind {
+  DELIVERY
+  PICKUP
+}
+
+enum RouteStatus {
+  PLANNED // being assembled; the driver cannot see it
+  RELEASED // handed to the driver, not yet departed
+  IN_PROGRESS // the driver left
+  COMPLETED // every stop resolved — reached on its own, never by a button
+  CANCELLED // terminal
+}
+
+enum RouteStopStatus {
+  PENDING
+  ARRIVED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// A day's work for one driver in one vehicle: the entity the delivery module
+// was missing. "Start route" used to be a verb — an updateMany moving every
+// PENDING delivery of a driver to IN_TRANSIT — with nothing to consult,
+// order, release, follow or close.
+model Route {
+  id String @id @default(uuid(7))
+
+  // Sequential PER COMPANY, not globally. The id is already a UUID; this is
+  // the number an operator says out loud and the proof document prints. A
+  // global sequence would leak one carrier's volume to all the others — the
+  // same enumeration leak the vehicle plate has today.
+  code Int
+  name String?
+
+  status RouteStatus @default(PLANNED)
+
+  // The operational day, kept apart from the execution timestamps: Tuesday's
+  // route is planned on Monday and may leave late.
+  scheduled_date DateTime
+
+  planned_departure_at DateTime?
+  planned_arrival_at   DateTime?
+
+  started_at   DateTime?
+  completed_at DateTime?
+
+  // Required to cancel a route that already left, so the trail says why.
+  cancellation_reason String?
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  driver   Driver @relation(fields: [driverId], references: [id])
+  driverId String
+
+  // Optional while planning, required to release — see canReleaseRoute.
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
+  vehicleId String?
+
+  stops  RouteStop[]
+  events DeliveryEvent[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([businessId, code])
+  // Serves the panel: routes of a company by status and day.
+  @@index([businessId, status, scheduled_date])
+  // Serves the app: the released or running route of one driver.
+  @@index([businessId, driverId, status])
+  // A vehicle may be in at most ONE route in progress — the truck is on one
+  // road. Enforced as a partial unique index in raw SQL (Prisma cannot
+  // express the WHERE), see the migration. Declared here only as a comment so
+  // nobody expects to find it in this file.
+  @@map("route")
+}
+
+// One delivery inside one route, in a chosen position.
+model RouteStop {
+  id String @id @default(uuid(7))
+
+  // Manual order, set by dragging. Spaced by ten on insert so dropping a stop
+  // between two others does not rewrite every row after it.
+  sequence Int
+
+  // The stop carries its own outcome rather than reading the delivery's,
+  // because the same delivery can appear in more than one route over time.
+  status RouteStopStatus @default(PENDING)
+
+  arrived_at   DateTime?
+  completed_at DateTime?
+
+  route   Route  @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  routeId String
+
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  deliveryId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([routeId, sequence])
+  @@index([routeId, status])
+  // A delivery may have at most ONE open stop across all routes. Also a
+  // partial unique index in raw SQL — see the migration.
+  @@index([deliveryId])
+  @@map("route_stop")
+}
+
 enum DeliveryStatus {
   PENDING // created (manually or imported), not yet on route
   IN_TRANSIT // out with a driver
@@ -1439,10 +1554,20 @@ model Delivery {
   driver   Driver? @relation(fields: [driverId], references: [id])
   driverId String?
 
+  // Delivery or pickup. Two kinds of the same record, not two flows: the
+  // operation treats them alike and every endpoint, filter and card built
+  // without this field would have to be revisited later. Cheap now.
+  kind DeliveryKind @default(DELIVERY)
+
   items        DeliveryItem[]
   occurrences  DeliveryOccurrence[]
   events       DeliveryEvent[]
   chatMessages ChatMessage[]
+
+  // N:N with Route on purpose. A failed delivery re-enters on the NEXT day's
+  // route as a new stop, and the previous stop stays exactly as it was — that
+  // record is what answers "what happened to invoice X".
+  stops RouteStop[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -1543,6 +1668,12 @@ model DeliveryEvent {
 
   delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
   deliveryId String
+
+  // Which route this happened on, so support can answer "on which route" and
+  // not only "on which delivery". SetNull rather than Cascade: the event IS
+  // the record, and has to outlive anything that might remove the route.
+  route   Route?  @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeId String?
 
   reportedBy   User   @relation(fields: [reportedById], references: [id])
   reportedById String
