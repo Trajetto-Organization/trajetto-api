@@ -6,7 +6,6 @@ const envSchema = z
       .enum(["development", "test", "production"])
       .default("development"),
     PORT: z.coerce.number().default(3333),
-    RABBITMQ_URL: z.string(),
     REDIS_URL: z.string(),
     OSRM_URL: z.string().optional(),
     HTTP_REQUEST: z.string(),
@@ -14,11 +13,13 @@ const envSchema = z
     JWT_SECRET: z.string(),
     JWT_SECRET_REFRESH_TOKEN: z.string(),
     CLOUDINARY_LOGO_IMAGE: z.string().optional(),
-    EVOLUTION_API_URL: z.string(),
-    EVOLUTION_API_KEY: z.string(),
-    EVOLUTION_HTTP_REQUEST: z.string().optional(),
-    TRAJETTO_WHATSAPP_BUSINESS_PHONE: z.string(),
-    TRAJETTO_WHATSAPP_INSTANCE_NAME: z.string(),
+    // Meta WhatsApp Cloud API. Optional so environments without WhatsApp
+    // still boot: the provider reports itself unconfigured and sends fail
+    // with a clear error instead of blocking startup.
+    META_WHATSAPP_ACCESS_TOKEN: z.string().optional(),
+    META_WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
+    META_WHATSAPP_TEMPLATE_NAME: z.string().default("trajetto_notification"),
+    META_WHATSAPP_API_VERSION: z.string().default("v23.0"),
     RESEND_SECRET_KEY: z.string().optional(),
     RESEND_FROM_EMAIL: z.string().optional(),
     MASTER_USER_EMAIL: z.string(),

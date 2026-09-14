@@ -9,6 +9,7 @@ import { UpdatePartController } from "@/modules/part/usecases/update-part/update
 import { DeletePartController } from "@/modules/part/usecases/delete-part/delete-part-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
+import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import { partSchemas, partResponses } from "./documentation/part-documentation";
@@ -23,6 +24,10 @@ const updatePartController = new UpdatePartController();
 const deletePartController = new DeletePartController();
 
 async function partRoutes(app: FastifyInstance) {
+  // Maintenance supply chain, only meaningful with fleet operations —
+  // gated for the whole plugin. MASTER bypasses.
+  app.addHook("preHandler", verifyModuleEnabled("FLEET"));
+
   app.post(
     "/create-part/:businessId",
     {

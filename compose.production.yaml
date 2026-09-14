@@ -37,39 +37,6 @@ services:
       retries: 5
       start_period: 30s
 
-  trajetto-rabbitmq:
-    image: rabbitmq:3.12-management-alpine
-    ports:
-      - "15672:15672" # UI
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    deploy:
-      mode: replicated
-      replicas: 1
-      update_config:
-        parallelism: 1
-        order: stop-first # Avoids conflicts on port 15672 during deployment
-        failure_action: rollback
-        monitor: 30s
-      rollback_config:
-        parallelism: 1
-        order: stop-first
-      restart_policy:
-        condition: any
-        delay: 5s
-        max_attempts: 3
-    networks:
-      - minha_rede
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
   trajetto-redis:
     image: redis:7-alpine
     volumes:
@@ -100,20 +67,22 @@ services:
 
   api:
     image: ghcr.io/trajetto-organization/trajetto-api:latest
+    # The default 10s SIGKILLs the process mid-shutdown; the graceful
+    # sequence is bounded at 25s by the server watchdog.
+    stop_grace_period: 40s
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}?schema=public
-      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@${RABBITMQ_HOST}:${RABBITMQ_PORT}
+      DATABASE_URL: postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}?schema=public&connection_limit=10&pool_timeout=20
       REDIS_URL: redis://${REDIS_HOST}:${REDIS_PORT}
       HTTP_REQUEST: ${HTTP_REQUEST}
       API_HTTP_REQUEST: ${API_HTTP_REQUEST}
       CLOUDINARY_LOGO_IMAGE: ${CLOUDINARY_LOGO_IMAGE}
       MASTER_USER_EMAIL: ${MASTER_USER_EMAIL}
       MASTER_USER_INITIAL_PASSWORD: ${MASTER_USER_INITIAL_PASSWORD}
-      EVOLUTION_API_URL: ${EVOLUTION_API_URL}
-      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
-      TRAJETTO_WHATSAPP_BUSINESS_PHONE: ${TRAJETTO_WHATSAPP_BUSINESS_PHONE}
-      TRAJETTO_WHATSAPP_INSTANCE_NAME: ${TRAJETTO_WHATSAPP_INSTANCE_NAME}
+      META_WHATSAPP_ACCESS_TOKEN: ${META_WHATSAPP_ACCESS_TOKEN}
+      META_WHATSAPP_PHONE_NUMBER_ID: ${META_WHATSAPP_PHONE_NUMBER_ID}
+      META_WHATSAPP_TEMPLATE_NAME: ${META_WHATSAPP_TEMPLATE_NAME}
+      META_WHATSAPP_API_VERSION: ${META_WHATSAPP_API_VERSION}
       JWT_SECRET: ${JWT_SECRET}
       JWT_SECRET_REFRESH_TOKEN: ${JWT_SECRET_REFRESH_TOKEN}
       RESEND_SECRET_KEY: ${RESEND_SECRET_KEY}
@@ -163,15 +132,19 @@ services:
       - minha_rede
     depends_on:
       - trajetto-database
-      - trajetto-rabbitmq
       - trajetto-redis
+    # Points at readiness, not /health: readiness is the explicit "this replica
+    # can serve traffic" contract (database only), while /health is the rich
+    # human diagnostic that will keep gaining checks. Restarting a container
+    # because a non-critical dependency blinked is how an e-mail broker used
+    # to take the whole API down.
     healthcheck:
       test:
         [
           "CMD",
           "node",
           "-e",
-          "require('http').get('http://localhost:3333/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))",
+          "require('http').get('http://localhost:3333/health/readiness', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))",
         ]
       interval: 30s
       timeout: 10s
@@ -180,8 +153,6 @@ services:
 
 volumes:
   postgres_data:
-    driver: local
-  rabbitmq_data:
     driver: local
   redis_data:
     driver: local

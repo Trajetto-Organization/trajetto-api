@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import { MultipartFile } from "@fastify/multipart";
 import { LocationSource } from "@prisma/client";
 
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
@@ -250,44 +249,7 @@ const updateFuelSchema = z
     },
   );
 
-// Schema for optional file validation in update
-const odometerPhotoUpdateSchema = z
-  .custom<MultipartFile>()
-  .optional()
-  .refine(
-    (file) => {
-      if (!file) return true; // Optional file
-      return file?.mimetype?.startsWith("image/");
-    },
-    {
-      message: "O arquivo deve ser uma imagem.",
-    },
-  )
-  .refine(
-    (file) => {
-      if (!file) return true; // Optional file
-      const allowedTypes = [
-        "image/jpeg",
-        "image/jpg",
-        "image/png",
-        "image/webp",
-      ];
-
-      return allowedTypes.includes(file?.mimetype);
-    },
-    {
-      message: "Tipo de arquivo não suportado. Use apenas JPEG, PNG ou WebP.",
-    },
-  );
-
-// Combined schema for multipart update request
-const updateFuelMultipartSchema = z.object({
-  body: updateFuelSchema,
-  file: odometerPhotoUpdateSchema,
-});
-
-export {
-  updateFuelSchema,
-  odometerPhotoUpdateSchema,
-  updateFuelMultipartSchema,
-};
+// The replacement photo is validated by `presignedPhotoSchema`: it never
+// reaches this API as a file, only as a key pointing at an object already in
+// storage.
+export { updateFuelSchema };

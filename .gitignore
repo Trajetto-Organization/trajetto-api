@@ -1,5 +1,9 @@
 # Node.js Dependencies
 /node_modules
+# yarn.lock is the tracked lockfile here; a package-lock.json left behind
+# by an accidental `npm install` resolves a different tree and must not
+# reach the repository.
+package-lock.json
 /.pnp
 .pnp.js
 .yarn/install-state.gz

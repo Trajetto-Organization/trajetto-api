@@ -10,7 +10,7 @@ import { IFuelTypeRepository } from "@/modules/fuel-type/repositories/IFuel-type
 import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
-import { NotificationService } from "@/shared/services/notification-service";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
@@ -39,13 +39,9 @@ import { AppError } from "@/shared/errors/AppError";
 import { Fuel, CreateFuelProps } from "../../dtos/fuel-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
-import { MultipartFile } from "@fastify/multipart";
 
 import { calculateDistance } from "@/shared/utils/geolocation";
-import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
-
-import { readMultipartFile } from "@/shared/utils/read-multipart-file";
-import { uploadConfig } from "@/config/upload";
+import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
 
 @injectable()
 class CreateFuelUseCase {
@@ -64,8 +60,8 @@ class CreateFuelUseCase {
     private branch: IBranchRepository,
     @inject("FuelRepository")
     private fuel: IFuelRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
     @inject("UploadService")
     private uploadService: UploadService,
   ) {}
@@ -73,10 +69,9 @@ class CreateFuelUseCase {
   async execute(
     fuelData: CreateFuelProps,
     userId: string,
-    odometerPhotoFile?: MultipartFile,
 
-    // The odometer photo when the client uploaded it straight to storage.
-    // Exactly one of these two is provided; the controller enforces that.
+    // The odometer photo, already in storage. Mandatory on create — the
+    // controller refuses the request without it.
     presignedPhoto?: { key: string },
   ): Promise<Fuel> {
     const findUser = await this.user.findUserById(userId);
@@ -111,17 +106,7 @@ class CreateFuelUseCase {
         fuelData.client_submission_id,
       );
 
-      if (existingFuel) {
-        // The multipart stream must be consumed even when this is a retry.
-        // Nothing to drain on the presigned path — no stream was opened.
-        if (odometerPhotoFile) {
-          await readMultipartFile(odometerPhotoFile, {
-            maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
-          });
-        }
-
-        return existingFuel;
-      }
+      if (existingFuel) return existingFuel;
     }
 
     // Validate vehicle exists and belongs to business
@@ -304,18 +289,6 @@ class CreateFuelUseCase {
         );
 
         uploadedPhotoPath = resolved.path;
-      } else if (odometerPhotoFile) {
-        // Upload odometer photo
-        const buffer = await readMultipartFile(odometerPhotoFile, {
-          maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
-        });
-        const uploadResult = await this.uploadService.uploadFile({
-          buffer,
-          filename: odometerPhotoFile.filename || "odometer-photo",
-          mimetype: odometerPhotoFile.mimetype,
-          uploadType: "odometerPhotos",
-        });
-        uploadedPhotoPath = uploadResult.path;
       }
 
       // Prepare fuel data with photo and geolocation audit fields
@@ -334,10 +307,29 @@ class CreateFuelUseCase {
         fuelDataWithPhoto.location_edited_at = new Date();
       }
 
-      // Record creation and the monotonic mileage update are one serializable
-      // transaction. A concurrent retry returns the original record.
-      const { fuel: fuelCreated, created } =
-        await this.fuel.createFuelWithMileage(fuelDataWithPhoto);
+      // Record creation, the monotonic mileage update and the outbox event
+      // are one serializable transaction; the pipeline turns the event into
+      // the activity trail entry after the commit. A concurrent retry
+      // returns the original record without publishing anything.
+      const { fuel: fuelCreated, created } = await this.fuel.createFuelWithMileage(
+        fuelDataWithPhoto,
+        (tx, fuel) =>
+          this.outbox.publish(tx, {
+            topic: "fuel.created",
+            aggregateType: "fuel",
+            aggregateId: fuel.id,
+            businessId: fuelData.businessId,
+            actorId: userId,
+            eventKey: `fuel.created:${fuel.id}`,
+            payload: {
+              fuelId: fuel.id,
+              businessId: fuelData.businessId,
+              vehiclePlate: findVehicle.license_plate,
+              vehicleDescription: findVehicle.description,
+              origin: fuelData.created_from,
+            },
+          }),
+      );
 
       if (!created) {
         // Only delete what this request put there. On the presigned path the
@@ -351,31 +343,22 @@ class CreateFuelUseCase {
       }
       databaseCommitted = true;
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Abastecimento",
-        action: "create",
-        entityId: fuelCreated.id,
-        description: `Abastecimento criado para o veículo ${findVehicle.license_plate} - ${findVehicle.description}`,
-        status: "Criado",
-        performedBy: userId,
-        businessId: fuelData.businessId,
-      });
-
-      // Enqueue AI verification for odometer photo (fire-and-forget)
+      // Request AI verification for odometer photo (fire-and-forget)
       // Skip if business has AI disabled (limit === 0)
       if ((findBusiness.ai_analysis_limit ?? 0) > 0 && uploadedPhotoPath) {
-        AIVerificationWorkerService.getInstance()
-          .enqueueVerification({
-            type: "fuel_odometer",
+        AIAnalysisService.getInstance()
+          .requestAnalysis({
+            type: "FUEL_ODOMETER",
             recordId: fuelCreated.id,
             businessId: fuelData.businessId,
-            userId,
-            odometerPhotoPath: uploadedPhotoPath,
-            reportedMileage: fuelData.current_mileage,
+            requestedById: userId,
+            input: {
+              odometerPhotoPath: uploadedPhotoPath,
+              reportedMileage: fuelData.current_mileage,
+            },
           })
           .catch((err) =>
-            console.error("[AI] Failed to enqueue fuel verification:", err),
+            console.error("[AI] Failed to request fuel verification:", err),
           );
       }
 

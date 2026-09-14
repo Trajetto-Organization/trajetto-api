@@ -12,8 +12,6 @@ import {
   UpdateUserEmailVerification,
   UpdateUserAccessRevocation,
   UpdateUserWhatsAppSettings,
-  UpdateEmailNotifications,
-  UpdateActivityNotifications,
   CreateMasterUserProps,
   ListMasterUsersProps,
   User,
@@ -34,7 +32,6 @@ class InMemoryUserRepository implements IUserRepository {
     driverId,
     whatsapp_notifications_enabled,
     whatsapp_phone,
-    whatsapp_instance_connected,
   }: CreateUserProps): Promise<User> {
     const now = new Date();
     const user: User & { created_at: Date; updated_at: Date } = {
@@ -55,7 +52,6 @@ class InMemoryUserRepository implements IUserRepository {
       email_notifications_enabled: true,
       activity_notifications_enabled: true,
       whatsapp_phone: whatsapp_phone ?? null,
-      whatsapp_instance_connected: whatsapp_instance_connected ?? false,
       created_at: now,
       updated_at: now,
     };
@@ -279,16 +275,6 @@ class InMemoryUserRepository implements IUserRepository {
     );
   }
 
-  async findBusinessAdminsForWhatsApp(businessId: string): Promise<User[]> {
-    return this.user.filter(
-      (user) =>
-        user.businessId === businessId &&
-        user.role === "BUSINESS_ADMIN" &&
-        user.whatsapp_notifications_enabled &&
-        user.whatsapp_phone,
-    );
-  }
-
   async findOtherMasters(excludeUserId: string): Promise<User[]> {
     return this.user.filter(
       (user) => user.role === "MASTER" && user.id !== excludeUserId,
@@ -303,83 +289,21 @@ class InMemoryUserRepository implements IUserRepository {
     return findUserByDriverId || null;
   }
 
-  async updateWhatsAppInstanceStatus(
-    userId: string,
-    connected: boolean,
-  ): Promise<User | null> {
-    const user = this.user.find((user) => user.id === userId);
-
-    if (!user) {
-      return null;
-    }
-
-    user.whatsapp_instance_connected = connected;
-    return user;
-  }
-
-  async updateEmailNotifications({
-    userId,
-    email_notifications_enabled,
-  }: UpdateEmailNotifications): Promise<User | null> {
-    const user = this.user.find((user) => user.id === userId);
-
-    if (!user) {
-      return null;
-    }
-
-    user.email_notifications_enabled = email_notifications_enabled;
-    return user;
-  }
-
-  async updateActivityNotifications({
-    userId,
-    activity_notifications_enabled,
-  }: UpdateActivityNotifications): Promise<User | null> {
-    const user = this.user.find((user) => user.id === userId);
-
-    if (!user) {
-      return null;
-    }
-
-    user.activity_notifications_enabled = activity_notifications_enabled;
-    return user;
-  }
-
-  async findUserWithConnectedWhatsAppByPhone(
-    phoneNumber: string,
-  ): Promise<User | null> {
-    const findUser = this.user.find(
-      (user) =>
-        user.whatsapp_phone === phoneNumber &&
-        user.whatsapp_instance_connected === true,
-    );
-
-    return findUser || null;
-  }
 
   async findUserWithWhatsAppByPhone(
     phoneNumber: string,
     excludeUserId?: string,
   ): Promise<User | null> {
+    // Mirrors the Prisma query: only enabled users hold a number, so a kept
+    // number on a disabled account never blocks someone else from using it.
     const findUser = this.user.find(
       (user) =>
         user.whatsapp_phone === phoneNumber &&
+        user.whatsapp_notifications_enabled === true &&
         (excludeUserId ? user.id !== excludeUserId : true),
     );
 
     return findUser || null;
-  }
-
-  async findAllUsersWithDisconnectedWhatsAppByPhone(
-    phoneNumber: string,
-    excludeUserId?: string,
-  ): Promise<User[]> {
-    return this.user.filter(
-      (user) =>
-        user.whatsapp_phone === phoneNumber &&
-        user.whatsapp_instance_connected === false &&
-        (excludeUserId ? user.id !== excludeUserId : true),
-    );
   }
 
   async updateAvatar(

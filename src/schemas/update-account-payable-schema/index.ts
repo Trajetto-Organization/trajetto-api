@@ -1,11 +1,54 @@
 import { z } from "zod";
+import { AccountPayableCategory } from "@prisma/client";
+
 import {
   emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
   isValidDateString,
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateAccountPayableSchema = z
   .object({
+    category: z
+      .nativeEnum(AccountPayableCategory, {
+        errorMap: () => ({ message: "Categoria da conta inválida." }),
+      })
+      .optional()
+      .describe(
+        "Categoria/tipo da conta (FUEL, MAINTENANCE, INSURANCE, TAXES_FEES, FINES, TOLLS, RENTAL, PAYROLL, OTHER). Com OTHER, category_description é obrigatória.",
+      ),
+    category_description: z.preprocess(
+      emptyStringToNull,
+      z
+        .string()
+        .max(
+          120,
+          "A descrição da categoria deve ter no máximo 120 caracteres.",
+        )
+        .superRefine((value, ctx) => {
+          if (hasConsecutiveSpaces(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "A descrição da categoria não deve conter espaços consecutivos.",
+            });
+
+            return;
+          }
+
+          if (hasSpaceAtEdges(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "A descrição da categoria não pode começar ou terminar com espaço em branco.",
+            });
+          }
+        })
+        .optional()
+        .nullable()
+        .describe("Descrição livre da categoria — usada quando category = OTHER."),
+    ),
     due_date: z
       .string()
       .min(1, "Data de vencimento é obrigatória.")
@@ -109,6 +152,22 @@ const updateAccountPayableSchema = z
         "Se há data de pagamento, deve haver valor pago e vice-versa. O valor pago não pode ser maior que o valor total.",
       path: ["amount_paid"],
     },
+  )
+  .refine(
+    (data) =>
+      data.category === undefined ||
+      data.category !== "OTHER" ||
+      Boolean(data.category_description),
+    {
+      message: "Descreva a categoria ao selecionar \"Outros\".",
+      path: ["category_description"],
+    },
+  )
+  // A description for a named category is stale text waiting to mislead.
+  .transform((data) =>
+    data.category === undefined || data.category === "OTHER"
+      ? data
+      : { ...data, category_description: null },
   );
 
 export { updateAccountPayableSchema };

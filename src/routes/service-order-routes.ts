@@ -12,6 +12,7 @@ import { SearchServiceOrderByVehicleCursorController } from "@/modules/service-o
 import { ExportServiceOrderController } from "@/modules/service-order/usecases/export-service-order/export-service-order-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
+import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import {
@@ -37,6 +38,10 @@ const updateServiceOrderController = new UpdateServiceOrderController();
 const deleteServiceOrderController = new DeleteServiceOrderController();
 
 async function serviceOrderRoutes(app: FastifyInstance) {
+  // Fleet operation: gated by the FLEET module for the whole plugin (runs
+  // after ensureAuthenticated, which is onRequest). MASTER bypasses.
+  app.addHook("preHandler", verifyModuleEnabled("FLEET"));
+
   app.post(
     "/create-service-order/:businessId",
     {

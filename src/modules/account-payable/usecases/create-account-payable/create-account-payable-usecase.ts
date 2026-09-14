@@ -18,30 +18,18 @@ import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usec
 import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
 import { AccountPayableInvalidAmountError } from "../errors/account-payable-invalid-amount-error";
 
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 import {
   AccountPayable,
   CreateAccountPayableProps,
 } from "../../dtos/account-payable-dto";
 
-import { formatCurrency } from "@/shared/utils/format-values";
-import { NotificationService } from "@/shared/services/notification-service";
-
-import { buildAccountPayableLink } from "@/shared/utils/link-redirect-page";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { AppError } from "@/shared/errors/AppError";
-import { env } from "@/env";
-
-interface AccountPayableNotificationTextProps {
-  serviceOrderId?: string;
-  accountPaybleId: string;
-  amount: string;
-}
+import database from "@/../infra/database";
 
 @injectable()
 class CreateAccountPayableUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -53,91 +41,9 @@ class CreateAccountPayableUseCase {
     private serviceOrder: IServiceOrderRepository,
     @inject("AccountPayableRepository")
     private accountPayable: IAccountPayableRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
-
-  private buildAccountPayableNotificationText({
-    amount,
-    serviceOrderId,
-    accountPaybleId,
-  }: AccountPayableNotificationTextProps): string {
-    return [
-      `💰 *Nova Conta a Pagar! Você foi designado como responsável por uma nova conta a pagar*`,
-      `Valor: *${formatCurrency(Number(amount))}*`,
-      `Identificador da conta a pagar: *${accountPaybleId}*`,
-      serviceOrderId && `Identificador da ordem de serviço: *${serviceOrderId}`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
-  private async processNotifications(
-    accountPayableCreated: AccountPayable,
-    accountPayableData: CreateAccountPayableProps,
-    userId: string,
-  ): Promise<void> {
-    try {
-      // Create activity for the user who created the account payable
-      const activityData = {
-        type: "Conta a pagar",
-        action: "create",
-        entityId: accountPayableCreated.id,
-        description: `Conta a pagar criada com sucesso, no valor de ${formatCurrency(Number(accountPayableCreated.amount))} | ID: ${accountPayableCreated.id}`,
-        status: "Completo",
-        performedBy: userId,
-        businessId: accountPayableData.businessId,
-      };
-
-      // Set the registration user to the current user if not provided
-      const registrationUserId = accountPayableData.registrationUserId;
-
-      // Check if the registration user exists
-      const findRegistrationUser =
-        await this.user.findUserById(registrationUserId);
-
-      if (findRegistrationUser) {
-        const notificationLink = buildAccountPayableLink({
-          baseUrl: this.http_request,
-          role: findRegistrationUser.role,
-          driverId: findRegistrationUser.driverId,
-          accountPayableId: accountPayableCreated.id,
-        });
-
-        const notificationData = {
-          userId: registrationUserId,
-          type: "account-payable",
-          title: "Nova Conta a Pagar",
-          message: `Você foi designado como responsável por uma nova conta a pagar ${accountPayableCreated.serviceOrderId ? `| ordem de serviço associada ${accountPayableCreated.serviceOrderId}` : ""}`,
-          entityId: accountPayableCreated.id,
-          link: notificationLink,
-          businessId: accountPayableData.businessId,
-          shouldSendEmail: true,
-          shouldSendWhatsApp: true,
-          whatsAppMessage: this.buildAccountPayableNotificationText({
-            amount: accountPayableCreated.amount as string,
-            serviceOrderId: accountPayableCreated.serviceOrderId as string,
-            accountPaybleId: accountPayableCreated.id,
-          }),
-          instanceName: generateWhatsAppInstanceName(
-            findRegistrationUser.email,
-            accountPayableData.businessId,
-          ),
-        };
-
-        // Process notification to assigned user (if different from creator)
-        await this.notificationService.processUserNotifications({
-          notification: notificationData,
-          activity: activityData,
-        });
-      } else {
-        // Fallback: Create activity even if registration user not found
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error("[Contas a pagar] Erro ao processar notificações:", error);
-      // Does not prevent the creation of the account payable
-    }
-  }
 
   async execute(
     accountPayableData: CreateAccountPayableProps,
@@ -194,15 +100,31 @@ class CreateAccountPayableUseCase {
     }
 
     try {
-      const accountPayableCreated =
-        await this.accountPayable.createAccountPayable(accountPayableData);
+      // Bill and outbox event commit together; the pipeline notifies the
+      // responsible user and records the activity after the commit.
+      const accountPayableCreated = await database.$transaction(async (tx) => {
+        const created = await this.accountPayable.createAccountPayable(
+          accountPayableData,
+          tx,
+        );
 
-      // Process notifications asynchronously without blocking the main flow
-      this.processNotifications(
-        accountPayableCreated,
-        accountPayableData,
-        userId,
-      );
+        await this.outbox.publish(tx, {
+          topic: "account-payable.created",
+          aggregateType: "account-payable",
+          aggregateId: created.id,
+          businessId: accountPayableData.businessId,
+          actorId: userId,
+          payload: {
+            accountPayableId: created.id,
+            businessId: accountPayableData.businessId,
+            amount: Number(created.amount),
+            serviceOrderId: (created.serviceOrderId as string) || null,
+            registrationUserId: accountPayableData.registrationUserId,
+          },
+        });
+
+        return created;
+      });
 
       return accountPayableCreated;
     } catch (error) {

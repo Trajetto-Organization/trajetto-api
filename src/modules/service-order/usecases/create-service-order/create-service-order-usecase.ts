@@ -8,7 +8,7 @@ import { IBranchRepository } from "@/modules/branch/repositories/IBranch-reposit
 import { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-repository";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
-import { NotificationService } from "@/shared/services/notification-service";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { KanbanService } from "@/shared/services/kanban-service";
 
@@ -40,26 +40,12 @@ import {
 } from "../../dtos/service-order-dto";
 
 import { AppError } from "@/shared/errors/AppError";
-import { env } from "@/env";
 
-import { formatCurrency } from "@/shared/utils/format-values";
-import { buildServiceOrderLink } from "@/shared/utils/link-redirect-page";
-
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 import { calculateDistance } from "@/shared/utils/geolocation";
-
-interface ServiceOrderNotificationTextProps {
-  serviceOrderId: string;
-  vehicleLicensePlate: string;
-  totalAmount: string;
-  currentMileage?: number;
-  newMileage?: number;
-}
+import database from "@/../infra/database";
 
 @injectable()
 class CreateServiceOrderUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -73,105 +59,11 @@ class CreateServiceOrderUseCase {
     private supplier: ISupplierRepository,
     @inject("ServiceOrderRepository")
     private serviceOrder: IServiceOrderRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
     @inject("KanbanService")
     private kanbanService: KanbanService,
   ) {}
-
-  private buildServiceOrderNotificationText({
-    serviceOrderId,
-    vehicleLicensePlate,
-    totalAmount,
-    currentMileage,
-    newMileage,
-  }: ServiceOrderNotificationTextProps): string {
-    return [
-      `🔧 *Nova Ordem de Serviço! Você foi designado como responsável por uma nova ordem de serviço*`,
-      `Veículo: *${vehicleLicensePlate || "N/A"}*`,
-      `Valor: *${formatCurrency(Number(totalAmount))}*`,
-      currentMileage &&
-        `Quilometragem: *${currentMileage}km${newMileage ? ` → ${newMileage}km` : ""}*`,
-      `Identificador da ordem de serviço: *${serviceOrderId}*`,
-      `Para mais detalhes, acesse o sistema.`,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  private async processNotifications(
-    serviceOrderCreated: ServiceOrder,
-    serviceOrderData: CreateServiceOrderProps,
-    findVehicle: any,
-    vehicleSnapshot: any,
-    userId: string,
-  ): Promise<void> {
-    try {
-      // Create activity for the user who created the service order
-      const activityData = {
-        type: "Ordem de serviço",
-        action: "create",
-        entityId: serviceOrderCreated.id,
-        description: `Ordem de serviço criada para o veículo ${findVehicle.license_plate || "N/A"} no valor de ${formatCurrency(Number(serviceOrderCreated.total_amount))} | Quilometragem: ${vehicleSnapshot.current_mileage_at_service}km${serviceOrderData.new_mileage_after_service ? ` → ${serviceOrderData.new_mileage_after_service}km` : ""} | ID: ${serviceOrderCreated.id}`,
-        status: serviceOrderCreated.completion_date ? "Completo" : "Pendente",
-        performedBy: userId,
-        businessId: serviceOrderData.businessId,
-      };
-
-      const findResponsibleUser = await this.user.findUserById(
-        serviceOrderData.responsibleUserId,
-      );
-
-      if (findResponsibleUser) {
-        // 🚗 Build correct link for driver or non-driver users
-        const notificationLink = buildServiceOrderLink({
-          baseUrl: this.http_request,
-          role: findResponsibleUser?.role,
-          vehicleId: serviceOrderData.vehicleId,
-          driverId: findResponsibleUser?.driverId,
-          serviceOrderId: serviceOrderCreated.id,
-        });
-
-        const notificationData = {
-          userId: serviceOrderData.responsibleUserId,
-          type: "service-order",
-          title: "Nova Ordem de Serviço",
-          message: `Você foi designado como responsável pela ordem de serviço para o veículo ${findVehicle.license_plate || "N/A"}.`,
-          entityId: serviceOrderCreated.id,
-          link: notificationLink,
-          businessId: serviceOrderData.businessId,
-          shouldSendEmail: true,
-          shouldSendWhatsApp: true,
-          whatsAppMessage: this.buildServiceOrderNotificationText({
-            serviceOrderId: serviceOrderCreated.id,
-            vehicleLicensePlate: findVehicle.license_plate || "N/A",
-            totalAmount: serviceOrderCreated.total_amount as string,
-            currentMileage: vehicleSnapshot.current_mileage_at_service,
-            newMileage: serviceOrderData.new_mileage_after_service as number,
-          }),
-          instanceName: generateWhatsAppInstanceName(
-            findResponsibleUser.email,
-            serviceOrderData.businessId,
-          ),
-        };
-
-        // Process notification to responsible user (if different from creator)
-        await this.notificationService.processUserNotifications({
-          notification: notificationData,
-          activity: activityData,
-        });
-      } else {
-        // Fallback: Create activity even if responsible user not found
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error(
-        "[Ordens de serviço] Erro ao processar notificações:",
-        error,
-      );
-      // Does not prevent the creation of the service order
-    }
-  }
 
   async execute(
     serviceOrderData: CreateServiceOrderProps,
@@ -401,10 +293,40 @@ class CreateServiceOrderUseCase {
     }
 
     try {
-      const serviceOrderCreated = await this.serviceOrder.createServiceOrder({
-        ...serviceOrderData,
-        // Uses snapshot values (from vehicle or custom from MASTER)
-        ...vehicleSnapshot,
+      // Order and outbox event commit together; the pipeline notifies the
+      // responsible user and records the activity after the commit.
+      const serviceOrderCreated = await database.$transaction(async (tx) => {
+        const created = await this.serviceOrder.createServiceOrder(
+          {
+            ...serviceOrderData,
+            // Uses snapshot values (from vehicle or custom from MASTER)
+            ...vehicleSnapshot,
+          },
+          tx,
+        );
+
+        await this.outbox.publish(tx, {
+          topic: "service-order.created",
+          aggregateType: "service-order",
+          aggregateId: created.id,
+          businessId: serviceOrderData.businessId,
+          actorId: userId,
+          payload: {
+            serviceOrderId: created.id,
+            businessId: serviceOrderData.businessId,
+            vehicleId: serviceOrderData.vehicleId,
+            vehiclePlate: findVehicle.license_plate || null,
+            totalAmount: Number(created.total_amount),
+            currentMileage:
+              (vehicleSnapshot.current_mileage_at_service as number) ?? null,
+            newMileage:
+              (serviceOrderData.new_mileage_after_service as number) ?? null,
+            isCompleted: Boolean(created.completion_date),
+            responsibleUserId: serviceOrderData.responsibleUserId,
+          },
+        });
+
+        return created;
       });
 
       // 🔄 UPDATE: If the OS was created and already completed, update the vehicle
@@ -422,15 +344,6 @@ class CreateServiceOrderUseCase {
           vehicleId: serviceOrderData.vehicleId,
         });
       }
-
-      // Process notifications asynchronously without blocking the main flow
-      this.processNotifications(
-        serviceOrderCreated,
-        serviceOrderData,
-        findVehicle,
-        vehicleSnapshot,
-        userId,
-      );
 
       // Create kanban card asynchronously without blocking the main flow
       console.log(

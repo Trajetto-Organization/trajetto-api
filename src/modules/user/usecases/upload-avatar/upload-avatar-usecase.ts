@@ -7,7 +7,6 @@ import { AppError } from "@/shared/errors/AppError";
 import { User } from "../../dtos/user-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
-import { MultipartFile } from "@fastify/multipart";
 
 @injectable()
 class UploadAvatarUseCase {
@@ -20,11 +19,11 @@ class UploadAvatarUseCase {
 
   async execute(
     userId: string,
-    avatarFile?: MultipartFile,
 
-    // The avatar when the client uploaded it straight to storage. Scoped by
-    // user, not by business: an avatar belongs to a person.
-    presignedPhoto?: { key: string },
+    // The avatar the client uploaded straight to storage. Scoped by user, not
+    // by business: an avatar belongs to a person, and a MASTER user may have
+    // no business at all.
+    presignedPhoto: { key: string },
   ): Promise<User> {
     const findUser = await this.user.findUserById(userId);
 
@@ -36,33 +35,15 @@ class UploadAvatarUseCase {
     const oldAvatarPath = findUser.avatar;
 
     try {
-      // Step 1: Resolve the new avatar first (before touching database or
-      // deleting the old file), whichever route it arrived by.
-      if (presignedPhoto) {
-        const [resolved] = await this.uploadService.resolvePresignedUploads(
-          [presignedPhoto],
-          "avatars",
-          userId,
-        );
+      // Step 1: Resolve the new avatar first, before touching the database or
+      // deleting the old file.
+      const [resolved] = await this.uploadService.resolvePresignedUploads(
+        [presignedPhoto],
+        "avatars",
+        userId,
+      );
 
-        newAvatarPath = resolved.path;
-      } else if (avatarFile) {
-        const buffer = await avatarFile.toBuffer();
-        const uploadResult = await this.uploadService.uploadFile({
-          buffer,
-          filename: avatarFile.filename || "avatar",
-          mimetype: avatarFile.mimetype,
-          uploadType: "avatars",
-        });
-
-        newAvatarPath = uploadResult.path;
-      } else {
-        throw new AppError(
-          "Nenhuma imagem foi enviada.",
-          400,
-          "AVATAR_MISSING",
-        );
-      }
+      newAvatarPath = resolved.path;
 
       // Step 2: Try to update user avatar path in database
       const updatedUser = await this.user.updateAvatar(userId, newAvatarPath);

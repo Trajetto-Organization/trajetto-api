@@ -25,7 +25,7 @@ import { AccountPayableNotAllowedTransferCompaniesError } from "../errors/accoun
 import { AccountPayableInvalidAmountError } from "../errors/account-payable-invalid-amount-error";
 
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
-import { NotificationService } from "@/shared/services/notification-service";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -33,23 +33,11 @@ import {
   AccountPayable,
   UpdateAccountPayableProps,
 } from "../../dtos/account-payable-dto";
-import { formatCurrency } from "@/shared/utils/format-values";
 
-import { buildAccountPayableLink } from "@/shared/utils/link-redirect-page";
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
-
-import { env } from "@/env";
-
-interface AccountPayableNotificationTextProps {
-  amount: string;
-  serviceOrderId?: string;
-  accountPaybleId: string;
-}
+import database from "@/../infra/database";
 
 @injectable()
 class UpdateAccountPayableUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -61,105 +49,9 @@ class UpdateAccountPayableUseCase {
     private serviceOrder: IServiceOrderRepository,
     @inject("AccountPayableRepository")
     private accountPayable: IAccountPayableRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
-
-  private buildAccountPayableNotificationText({
-    amount,
-    serviceOrderId,
-    accountPaybleId,
-  }: AccountPayableNotificationTextProps): string {
-    return [
-      `💰 *Conta a Pagar Atualizada! Você foi designado como responsável por uma conta a pagar atualizada*`,
-      `Valor: *${formatCurrency(Number(amount))}*`,
-      `Identificador da conta a pagar: *${accountPaybleId}*`,
-      serviceOrderId && `Identificador da ordem de serviço: *${serviceOrderId}`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
-  private async processNotifications(
-    originalAccountPayable: AccountPayable,
-    updatedAccountPayable: AccountPayable,
-    accountPayableData: UpdateAccountPayableProps,
-    userId: string,
-    businessId: string,
-  ): Promise<void> {
-    try {
-      // Always create activity for account payable update
-      const activityData = {
-        type: "Conta a pagar",
-        action: "update",
-        entityId: updatedAccountPayable.id,
-        description: `Conta a pagar atualizada com sucesso, no valor de ${formatCurrency(Number(updatedAccountPayable.amount))} | ID: ${updatedAccountPayable.id}`,
-        status: "Atualizado",
-        performedBy: userId,
-        businessId,
-      };
-
-      // Check if registrationUserId changed
-      const registrationUserChanged =
-        accountPayableData.registrationUserId !== undefined &&
-        originalAccountPayable.registrationUserId !==
-          accountPayableData.registrationUserId;
-
-      if (registrationUserChanged && accountPayableData.registrationUserId) {
-        // RegistrationUser changed, send notification
-        const registrationUser = await this.user.findUserById(
-          accountPayableData.registrationUserId,
-        );
-
-        if (registrationUser) {
-          const notificationLink = buildAccountPayableLink({
-            baseUrl: this.http_request,
-            role: registrationUser.role,
-            driverId: registrationUser.driverId,
-            accountPayableId: updatedAccountPayable.id,
-          });
-
-          const notificationData = {
-            userId: accountPayableData.registrationUserId,
-            type: "account-payable",
-            title: "Conta a Pagar Atualizada e Atribuída",
-            message: `Você foi designado como responsável por uma conta a pagar atualizada ${updatedAccountPayable.serviceOrderId ? `| ordem de serviço associada ${updatedAccountPayable.serviceOrderId}` : ""}`,
-            entityId: updatedAccountPayable.id,
-            link: notificationLink,
-            businessId,
-            shouldSendEmail: true,
-            shouldSendWhatsApp: true,
-            whatsAppMessage: this.buildAccountPayableNotificationText({
-              amount: updatedAccountPayable.amount as string,
-              serviceOrderId: updatedAccountPayable.serviceOrderId as string,
-              accountPaybleId: updatedAccountPayable.id,
-            }),
-            instanceName: generateWhatsAppInstanceName(
-              registrationUser.email,
-              businessId,
-            ),
-          };
-
-          // Process notification to newly assigned user
-          await this.notificationService.processUserNotifications({
-            notification: notificationData,
-            activity: activityData,
-          });
-        } else {
-          // Fallback: Create activity even if registration user not found
-          await this.notificationService.createActivityIfEnabled(activityData);
-        }
-      } else {
-        // No registrationUser change, just create activity
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error(
-        "[Contas a pagar Update] Erro ao processar notificações:",
-        error,
-      );
-      // Does not prevent the account payable update
-    }
-  }
 
   async execute(
     accountPayableData: UpdateAccountPayableProps,
@@ -278,20 +170,39 @@ class UpdateAccountPayableUseCase {
         businessId: businessId,
       };
 
-      const updatedAccountPayable =
-        await this.accountPayable.updateAccountPayable({
-          accountPayableData: updatedData,
-          accountPayableId,
+      // Only a hand-over pages someone: an update that keeps the responsible
+      // publishes with no recipient and feeds the activity trail alone.
+      const registrationUserChanged =
+        accountPayableData.registrationUserId !== undefined &&
+        findAccountPayable.registrationUserId !==
+          accountPayableData.registrationUserId;
+
+      const updatedAccountPayable = await database.$transaction(async (tx) => {
+        const updated = await this.accountPayable.updateAccountPayable(
+          { accountPayableData: updatedData, accountPayableId },
+          tx,
+        );
+
+        await this.outbox.publish(tx, {
+          topic: "account-payable.updated",
+          aggregateType: "account-payable",
+          aggregateId: updated.id,
+          businessId,
+          actorId: userId,
+          payload: {
+            accountPayableId: updated.id,
+            businessId,
+            amount: Number(updated.amount),
+            serviceOrderId: (updated.serviceOrderId as string) || null,
+            registrationUserId:
+              registrationUserChanged && accountPayableData.registrationUserId
+                ? accountPayableData.registrationUserId
+                : null,
+          },
         });
 
-      // Process notifications (activity + conditionally WhatsApp/Email)
-      this.processNotifications(
-        findAccountPayable,
-        updatedAccountPayable,
-        accountPayableData,
-        userId,
-        businessId,
-      );
+        return updated;
+      });
 
       return updatedAccountPayable;
     } catch (error) {

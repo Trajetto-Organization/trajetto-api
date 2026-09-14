@@ -21,7 +21,7 @@ import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-reposit
 
 import { UserInvalidCredentialsError } from "../errors/user-invalid-credentials-error";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
 
 import { env } from "@/env";
@@ -34,8 +34,6 @@ class AuthenticateUserUseCase {
   private http_request = env.HTTP_REQUEST;
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
 
-  private emailQueue: EmailWorkerAdapter;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -43,9 +41,7 @@ class AuthenticateUserUseCase {
     private usersTokens: IUsersTokensRepository,
     @inject("DriverRepository")
     private driver: IDriverRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("authenticateUserEmailQueue");
-  }
+  ) {}
 
   private async emailVerification({
     email,
@@ -60,7 +56,7 @@ class AuthenticateUserUseCase {
         expires,
       });
 
-      await this.emailQueue.enqueueEmail({
+      await sendTransactionalMail({
         email,
         name,
         subject: "Verificação de e-mail",
@@ -109,7 +105,7 @@ class AuthenticateUserUseCase {
         expires: twoFactorExpires,
       });
 
-      await this.emailQueue.enqueueEmail({
+      await sendTransactionalMail({
         email,
         name,
         subject: "Código de verificação de dois fatores",

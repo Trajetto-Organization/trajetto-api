@@ -9,6 +9,7 @@ import { UpdateFineController } from "@/modules/fine/usecases/update-fine/update
 import { DeleteFineController } from "@/modules/fine/usecases/delete-fine/delete-fine-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
+import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import {
@@ -26,6 +27,10 @@ const updateFineController = new UpdateFineController();
 const deleteFineController = new DeleteFineController();
 
 async function fineRoutes(app: FastifyInstance) {
+  // Fleet operation: gated by the FLEET module for the whole plugin (runs
+  // after ensureAuthenticated, which is onRequest). MASTER bypasses.
+  app.addHook("preHandler", verifyModuleEnabled("FLEET"));
+
   app.post(
     "/create-fine/:businessId",
     {

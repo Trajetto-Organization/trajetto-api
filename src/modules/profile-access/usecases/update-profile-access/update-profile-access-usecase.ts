@@ -19,6 +19,7 @@ import { NotificationService } from "@/shared/services/notification-service";
 
 import { ProfileAccessCannotBeUpdatedByHimselfError } from "../errors/profile-access-cannot-be-updated-by-himself-error";
 import { AppError } from "@/shared/errors/AppError";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 @injectable()
 class UpdateProfileAccessUseCase {
@@ -49,6 +50,11 @@ class UpdateProfileAccessUseCase {
     if (!existingProfile) {
       throw new ProfileAccessNotFoundError();
     }
+
+    // The profile's CURRENT tenant, not the one in the body: the repository
+    // moves every user of this profile to `businessId`, so without this a
+    // PATCH would transfer another company's people into the caller's.
+    assertTenantAccessToRecord(findUser, existingProfile.businessId);
 
     if (findUser.profileAccessId === profileAccessId) {
       throw new ProfileAccessCannotBeUpdatedByHimselfError();

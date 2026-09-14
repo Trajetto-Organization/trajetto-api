@@ -1,5 +1,7 @@
 import { container } from "tsyringe";
 
+import { env } from "@/env";
+
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { UserRepository } from "@/modules/user/repositories/user-repository";
 
@@ -26,6 +28,18 @@ import { IVehicleTypeRepository } from "@/modules/vehicle-type/repositories/IVeh
 
 import { FuelTypeRepository } from "@/modules/fuel-type/repositories/fuel-type-repository";
 import { IFuelTypeRepository } from "@/modules/fuel-type/repositories/IFuel-type-repository";
+
+import { ShipperRepository } from "@/modules/shipper/repositories/shipper-repository";
+import { IShipperRepository } from "@/modules/shipper/repositories/IShipper-repository";
+
+import { OccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/occurrence-type-repository";
+import { IOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/IOccurrence-type-repository";
+
+import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
+import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
+
+import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
+import { IChatRepository } from "@/modules/chat/repositories/IChat-repository";
 
 import { FuelRepository } from "@/modules/fuel/repositories/fuel-repository";
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
@@ -76,16 +90,29 @@ import { IPendingDeletionProvider } from "./providers/pending-deletion-provider/
 import { PendingDeletionProvider } from "./providers/pending-deletion-provider/pending-deletion-provider";
 
 import { IWhatsAppProvider } from "./providers/whatsapp-provider/IWhatsApp-provider";
-import { EvolutionApiProvider } from "./providers/whatsapp-provider/implementations/evolution-api-provider";
+import { MetaCloudApiProvider } from "./providers/whatsapp-provider/implementations/meta-cloud-api-provider";
+
+import { IMailProvider } from "./providers/mail-provider/IMail-provider";
+import { ResendMailProvider } from "./providers/mail-provider/implementations/resend-mail-provider";
+
+import { EtherealMailProvider } from "./providers/mail-provider/implementations/ethereal-mail-provider";
 
 import { NotificationService } from "./services/notification-service";
 import { KanbanService } from "./services/kanban-service";
 
 import { UploadService } from "./services/upload-service";
+import { OutboxService } from "./notifications/outbox-service";
 
 container.registerSingleton<IWhatsAppProvider>(
   "WhatsAppProvider",
-  EvolutionApiProvider,
+  MetaCloudApiProvider,
+);
+
+// Picked here now that the e-mail worker thread (which had its own factory)
+// is gone: outside production every message goes to an Ethereal test inbox.
+container.registerSingleton<IMailProvider>(
+  "MailProvider",
+  env.NODE_ENV === "production" ? ResendMailProvider : EtherealMailProvider,
 );
 container.registerSingleton<NotificationService>(
   "NotificationService",
@@ -99,6 +126,8 @@ container.registerSingleton<IPendingDeletionProvider>(
 
 container.registerSingleton<KanbanService>("KanbanService", KanbanService);
 container.registerSingleton<UploadService>("UploadService", UploadService);
+
+container.registerSingleton<OutboxService>("OutboxService", OutboxService);
 
 container.registerSingleton<IUserRepository>("UserRepository", UserRepository);
 container.registerSingleton<IUsersTokensRepository>(
@@ -196,3 +225,19 @@ container.registerSingleton<ITrafficViolationCodeRepository>(
   "TrafficViolationCodeRepository",
   TrafficViolationCodeRepository,
 );
+
+container.registerSingleton<IShipperRepository>(
+  "ShipperRepository",
+  ShipperRepository,
+);
+container.registerSingleton<IOccurrenceTypeRepository>(
+  "OccurrenceTypeRepository",
+  OccurrenceTypeRepository,
+);
+
+container.registerSingleton<IDeliveryRepository>(
+  "DeliveryRepository",
+  DeliveryRepository,
+);
+
+container.registerSingleton<IChatRepository>("ChatRepository", ChatRepository);

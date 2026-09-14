@@ -1,14 +1,10 @@
 /**
  * Coerces a form field to the type the schemas expect.
  *
- * Multipart has no types — every field arrives as a string, so `"true"` had to
- * be turned into `true` before validation. JSON does have types, but clients
- * are not consistent about using them: a form that used to build a FormData
- * tends to keep sending `"true"` and `"120.5"` after it switches to JSON.
- *
- * Running both branches through the same normalisation means a checklist
- * validates identically whichever way it was encoded, instead of the JSON path
- * quietly failing on a boolean that arrived as a string.
+ * JSON carries types, but the clients are not consistent about using them: the
+ * web forms are built on FormData and read every input as a string, so a
+ * checkbox still arrives as `"true"` and a mileage as `"120,5"`. Normalising
+ * here keeps that from failing validation on a boolean that is a string.
  */
 function normalizeFormField(fieldName: string, value: unknown): unknown {
   if (value === "true") return true;
@@ -32,4 +28,4 @@ function normalizeFormFields(
   );
 }
 
-export { normalizeFormField, normalizeFormFields };
+export { normalizeFormFields };

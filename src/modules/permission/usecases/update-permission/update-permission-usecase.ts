@@ -26,6 +26,7 @@ import { PermissionCannotBeUpdatedByHimselfError } from "../errors/permission-ca
 import { PermissionBusinessError } from "../errors/permission-business-error";
 
 import { sendSecurityEventToBusiness } from "@/websocket";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 @injectable()
 class UpdatePermissionUseCase {
@@ -67,6 +68,11 @@ class UpdatePermissionUseCase {
     if (!existingPermission) {
       throw new PermissionNotFoundError();
     }
+
+    // The permission's CURRENT tenant. The checks below only compare the NEW
+    // profile against the body's businessId, which the request hook already
+    // pinned to the caller — they never look at what is being edited.
+    assertTenantAccessToRecord(findUser, existingPermission.businessId);
 
     const permissionAlreadyExists =
       await this.permission.findPermissionNameByProfile({

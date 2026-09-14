@@ -17,9 +17,6 @@ import { GetUserController } from "@/modules/user/usecases/get-user/get-user-con
 import { UpdateUserNameController } from "@/modules/user/usecases/update-user-name/update-user-name-controller";
 import { UpdateTwoFactorAuthenticationController } from "@/modules/user/usecases/update-two-factor-authentication/update-two-factor-authentication-controller";
 
-import { UpdateEmailNotificationsController } from "@/modules/user/usecases/update-email-notifications/update-email-notifications-controller";
-import { UpdateActivityNotificationsController } from "@/modules/user/usecases/update-activity-notifications/update-activity-notifications-controller";
-
 import { UpdateUserPasswordController } from "@/modules/user/usecases/update-user-password/update-user-password-controller";
 import { ListUsersController } from "@/modules/user/usecases/list-users/list-users-controller";
 
@@ -77,11 +74,6 @@ const updateUserController = new UpdateUserController();
 const updateUserNameController = new UpdateUserNameController();
 const updateTwoFactorAuthenticationController =
   new UpdateTwoFactorAuthenticationController();
-
-const updateEmailNotificationsController =
-  new UpdateEmailNotificationsController();
-const updateActivityNotificationsController =
-  new UpdateActivityNotificationsController();
 
 const userRevokeAccessController = new UserRevokeAccessController();
 
@@ -480,45 +472,6 @@ async function userRoutes(app: FastifyInstance) {
     updateTwoFactorAuthenticationController.handle,
   );
 
-  app.patch(
-    "/email-notifications",
-    {
-      onRequest: [ensureAuthenticated],
-      schema: {
-        security: [{ bearerAuth: [] }],
-        tags: ["user"],
-        summary: "Update email notification settings",
-        description:
-          "Configure email notification preferences for the authenticated user's account",
-        response: {
-          200: userResponses.genericMessage,
-          400: userResponses.resourceNotFound,
-          500: userResponses.internalServerError,
-        },
-      },
-    },
-    updateEmailNotificationsController.handle,
-  );
-
-  app.patch(
-    "/activity-notifications",
-    {
-      onRequest: [ensureAuthenticated],
-      schema: {
-        security: [{ bearerAuth: [] }],
-        tags: ["user"],
-        summary: "Update activity notification settings",
-        description:
-          "Configure activity notification preferences for system events and updates for the authenticated user",
-        response: {
-          200: userResponses.genericMessage,
-          400: userResponses.resourceNotFound,
-          500: userResponses.internalServerError,
-        },
-      },
-    },
-    updateActivityNotificationsController.handle,
-  );
 
   app.patch(
     "/revoke-access/:userId",
@@ -550,9 +503,9 @@ async function userRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
         summary: "Upload or update user avatar",
-        consumes: ["application/json", "multipart/form-data"],
+        consumes: ["application/json"],
         description:
-          "Upload a new avatar image or replace the existing one for the authenticated user. Accepts two body formats: application/json carrying `photo` as a key already uploaded to storage via POST /uploads/presign/:businessId with uploadType `avatars` (preferred), or multipart/form-data carrying the file itself (legacy).",
+          "Upload a new avatar image or replace the existing one for the authenticated user. The image travels as `photo`, a key already uploaded to storage via POST /uploads/avatar/presign.",
         response: {
           200: userResponses.genericMessage,
           400: userResponses.resourceNotFound,

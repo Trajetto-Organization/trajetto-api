@@ -34,12 +34,11 @@ import {
 } from "../../dtos/vehicle-checklist-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
-import { MultipartFile } from "@fastify/multipart";
 
 import { PhotoValidationService } from "@/shared/services/photo-validation-service";
 import { VehicleChecklistRequiredPhotosMissingError } from "../errors/vehicle-checklist-required-photos-missing-error";
 
-import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
+import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
 import { uploadConfig } from "@/config/upload";
 
 @injectable()
@@ -68,13 +67,12 @@ class UpdateVehicleChecklistUseCase {
     userId: string,
     checklistId: string,
     businessId: string,
-    checklistPhotoFiles?: MultipartFile[],
     photosByField?: { [key: string]: any },
     photosToRemove?: string[],
 
-    // Photos the client already put in storage. Takes precedence over
-    // `checklistPhotoFiles`: a request uses one route or the other, and both
-    // are accepted only while the web and mobile clients migrate.
+    // Photos the client already put in storage, as keys. Grouped by field in
+    // `photosByField` as well, which is what the required-photo validation
+    // above reads.
     presignedPhotos?: { key: string; fieldName?: string }[],
   ): Promise<VehicleChecklist> {
     const findUser = await this.user.findUserById(userId);
@@ -245,38 +243,6 @@ class UpdateVehicleChecklistUseCase {
             newPhotoPathsByField[photo.fieldName].push(photo.path);
           }
         }
-      } else if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
-        // Build filename → fieldName mapping for direct field-to-path resolution
-        const filenameToField: Record<string, string> = {};
-        if (photosByField) {
-          for (const [fieldName, photos] of Object.entries(photosByField)) {
-            for (const photo of photos as any[]) {
-              const fn = photo.filename || "checklist-photo-update";
-              filenameToField[fn] = fieldName;
-            }
-          }
-        }
-
-        for (const photoFile of checklistPhotoFiles) {
-          const buffer = await photoFile.toBuffer();
-          const uploadResult = await this.uploadService.uploadFile({
-            buffer,
-            filename: photoFile.filename || "checklist-photo-update",
-            mimetype: photoFile.mimetype,
-            uploadType: "checklistPhotos",
-          });
-          newPhotoPaths.push(uploadResult.path);
-
-          // Map uploaded path to field name directly (no fragile filename matching)
-          const fieldName =
-            filenameToField[photoFile.filename || "checklist-photo-update"];
-          if (fieldName) {
-            if (!newPhotoPathsByField[fieldName]) {
-              newPhotoPathsByField[fieldName] = [];
-            }
-            newPhotoPathsByField[fieldName].push(uploadResult.path);
-          }
-        }
       }
 
       // Merge existing photos with new photos, considering photos to remove
@@ -392,18 +358,20 @@ class UpdateVehicleChecklistUseCase {
         (findBusiness.ai_analysis_limit ?? 0) > 0 &&
         Object.keys(newPhotoPathsByField).length > 0
       ) {
-        AIVerificationWorkerService.getInstance()
-          .enqueueVerification({
-            type: "checklist",
+        AIAnalysisService.getInstance()
+          .requestAnalysis({
+            type: "CHECKLIST",
             recordId: updatedChecklist.id,
             businessId,
-            userId,
-            photosByField: newPhotoPathsByField,
-            checklistData: checklistData as Record<string, any>,
+            requestedById: userId,
+            input: {
+              photosByField: newPhotoPathsByField,
+              checklistData: checklistData as Record<string, unknown>,
+            },
           })
           .catch((err) =>
             console.error(
-              "[AI] Failed to enqueue checklist re-verification:",
+              "[AI] Failed to request checklist re-verification:",
               err,
             ),
           );

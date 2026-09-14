@@ -42,6 +42,14 @@ const accountPayableResponses = {
         payment_date: z.union([z.string(), z.date()]).nullable(),
         amount: z.number(),
         amount_paid: z.number().nullable(),
+        category: z
+          .string()
+          .nullable()
+          .describe("Categoria da conta (enum AccountPayableCategory)."),
+        category_description: z
+          .string()
+          .nullable()
+          .describe("Descrição livre quando category = OTHER."),
         businessId: z.string(),
         branchId: z.string(),
         serviceOrderId: z.string().nullable(),

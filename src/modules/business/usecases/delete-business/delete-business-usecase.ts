@@ -20,7 +20,7 @@ import { BusinessNoPendingDeletionError } from "../errors/business-no-pending-de
 import { Business } from "../../dtos/business-dto";
 import { AppError } from "@/shared/errors/AppError";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { env } from "@/env";
 
 const roleLabels: Record<string, string> = {
@@ -32,7 +32,6 @@ const roleLabels: Record<string, string> = {
 @injectable()
 class DeleteBusinessUseCase {
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-  private notificationEmailQueue: EmailWorkerAdapter;
 
   constructor(
     @inject("UserRepository")
@@ -43,11 +42,7 @@ class DeleteBusinessUseCase {
     private pendingDeletion: IPendingDeletionProvider,
     @inject("NotificationService")
     private notificationService: NotificationService,
-  ) {
-    this.notificationEmailQueue = new EmailWorkerAdapter(
-      "businessDeletionNotificationEmailQueue",
-    );
-  }
+  ) {}
 
   async execute(
     businessId: string,
@@ -173,7 +168,7 @@ class DeleteBusinessUseCase {
 
     await Promise.allSettled(
       recipients.map((recipient) =>
-        this.notificationEmailQueue.enqueueEmail({
+        sendTransactionalMail({
           email: recipient.email,
           name: recipient.name,
           subject: `[Trajetto] Empresa "${params.businessName}" foi excluída`,

@@ -1,3 +1,4 @@
+import { RecordOrigin } from "@prisma/client";
 import { JsonValue } from "@prisma/client/runtime/library";
 
 interface VehicleChecklist {
@@ -46,6 +47,7 @@ interface VehicleChecklist {
 
 interface CreateVehicleChecklistProps {
   client_submission_id?: string;
+  created_from?: RecordOrigin;
   current_mileage: number;
   checklist_date?: Date | string;
   tires_condition: string;

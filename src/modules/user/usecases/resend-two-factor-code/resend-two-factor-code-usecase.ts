@@ -9,7 +9,7 @@ import { IUserRepository } from "../../repositories/IUser-repository";
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserResendTwoFactorError } from "../errors/user-resend-two-factor-error";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
 
 import { env } from "@/env";
@@ -20,7 +20,6 @@ interface ResendTwoFactorCodeProps {
 
 @injectable()
 class ResendTwoFactorCodeUseCase {
-  private emailQueue: EmailWorkerAdapter;
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
 
   constructor(
@@ -29,9 +28,7 @@ class ResendTwoFactorCodeUseCase {
 
     @inject("UsersTokensRepository")
     private usersTokens: IUsersTokensRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("resendTwoFactorCodeQueue");
-  }
+  ) {}
 
   async execute(email: string): Promise<ResendTwoFactorCodeProps> {
     const findUser = await this.user.findUserByEmail(email);
@@ -74,7 +71,7 @@ class ResendTwoFactorCodeUseCase {
         expires: twoFactorExpires,
       });
 
-      await this.emailQueue.enqueueEmail({
+      await sendTransactionalMail({
         email,
         name: findUser.name,
         subject: "Two factor verification code",

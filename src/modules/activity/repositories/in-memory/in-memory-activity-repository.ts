@@ -3,10 +3,16 @@ import { IActivityRepository } from "../IActivity-repository";
 
 import {
   Activity,
+  ActivitySummary,
+  ActivitySummaryProps,
   CreateActivityProps,
+  CursorPaginatedActivities,
+  ListActivitiesCursorProps,
   ListActivityProps,
   ListRecentActivitiesProps,
 } from "../../dtos/activity-dto";
+
+import { presentActivityActors } from "@/shared/activity/actor-presentation";
 
 class InMemoryActivityRepository implements IActivityRepository {
   public activities: Activity[] = [];
@@ -160,6 +166,89 @@ class InMemoryActivityRepository implements IActivityRepository {
     return this.activities.filter(
       (activity) => activity.performedBy === userId,
     );
+  }
+
+  /**
+   * Same keyset walk as the Prisma repository: newest first, one row past the
+   * page to decide whether there is more, and the cursor row excluded.
+   */
+  async listActivitiesWithCursor({
+    currentUserRole,
+    limit,
+    cursor,
+    periodDays,
+  }: ListActivitiesCursorProps): Promise<CursorPaginatedActivities> {
+    const since = new Date();
+    since.setDate(since.getDate() - periodDays);
+
+    const ordered = [...this.activities]
+      .filter((activity) => new Date(activity.created_at) >= since)
+      .sort((a, b) => (a.id < b.id ? 1 : -1));
+
+    const startIndex = cursor
+      ? ordered.findIndex((activity) => activity.id === cursor) + 1
+      : 0;
+
+    const window = ordered.slice(startIndex, startIndex + limit + 1);
+
+    const hasMore = window.length > limit;
+    const data = hasMore ? window.slice(0, limit) : window;
+
+    return {
+      data: presentActivityActors(data as never[], currentUserRole),
+      nextCursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
+      hasMore,
+    };
+  }
+
+  async summarizeActivities({
+    currentUserRole,
+    businessId,
+    userId,
+    periodDays,
+  }: ActivitySummaryProps): Promise<ActivitySummary> {
+    const since = new Date();
+    since.setDate(since.getDate() - periodDays);
+
+    const scoped = this.activities.filter((activity) => {
+      const createdAt = activity.created_at
+        ? new Date(activity.created_at)
+        : new Date();
+
+      if (createdAt < since) return false;
+
+      if (currentUserRole === "BUSINESS_USER") {
+        return activity.performedBy === userId;
+      }
+
+      return !businessId || activity.businessId === businessId;
+    });
+
+    const countFor = (action: string): number =>
+      scoped.filter((activity) => activity.action === action).length;
+
+    const typeCounts = scoped.reduce<Record<string, number>>(
+      (acc, activity) => {
+        acc[activity.type] = (acc[activity.type] ?? 0) + 1;
+        return acc;
+      },
+      {},
+    );
+
+    const [topType, topTypeCount] = Object.entries(typeCounts).sort(
+      (a, b) => b[1] - a[1],
+    )[0] ?? [null, 0];
+
+    return {
+      total: scoped.length,
+      created: countFor("create"),
+      updated: countFor("update"),
+      deleted: countFor("delete"),
+      activeUsers: new Set(scoped.map((activity) => activity.performedBy)).size,
+      topType: topType as string | null,
+      topTypeCount: topTypeCount as number,
+      periodDays,
+    };
   }
 }
 

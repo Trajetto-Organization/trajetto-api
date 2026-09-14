@@ -17,7 +17,7 @@ import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-busine
 
 import { BranchHasChildrenError } from "../errors/branch-has-children-error";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
 
 import { env } from "@/env";
@@ -37,7 +37,6 @@ const CODE_EXPIRATION_MINUTES = 5;
 @injectable()
 class RequestBranchDeletionUseCase {
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-  private emailQueue: EmailWorkerAdapter;
 
   constructor(
     @inject("UserRepository")
@@ -48,9 +47,7 @@ class RequestBranchDeletionUseCase {
     private branch: IBranchRepository,
     @inject("PendingDeletionProvider")
     private pendingDeletion: IPendingDeletionProvider,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("requestBranchDeletionEmailQueue");
-  }
+  ) {}
 
   async execute(
     branchId: string,
@@ -108,7 +105,7 @@ class RequestBranchDeletionUseCase {
         expires,
       });
 
-      await this.emailQueue.enqueueEmail({
+      await sendTransactionalMail({
         email: findUser.email,
         name: findUser.name,
         subject: "Código de confirmação para exclusão de filial",

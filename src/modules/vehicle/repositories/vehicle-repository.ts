@@ -11,6 +11,10 @@ import {
   SearchVehicleWithCursorProps,
   CursorPaginatedVehicle,
 } from "../dtos/vehicle-dto";
+import {
+  tallyStatuses,
+  totalFromStatusCounts,
+} from "@/shared/vehicle/vehicle-rules";
 
 class VehicleRepository implements IVehicleRepository {
   constructor(private prisma = database) {}
@@ -71,7 +75,7 @@ class VehicleRepository implements IVehicleRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const [vehicleData, total] = await Promise.all([
+    const [vehicleData, statusGroups] = await Promise.all([
       this.prisma.vehicle.findMany({
         skip,
         take: pageSize,
@@ -108,14 +112,23 @@ class VehicleRepository implements IVehicleRepository {
           created_at: "desc",
         },
       }),
-      this.prisma.vehicle.count({
+      // This replaces the separate count() that used to be here: grouping by
+      // status over the same rows answers both questions in one scan, and the
+      // total becomes the sum of the four cards instead of a second number
+      // that merely ought to agree with them. They cannot drift apart now.
+      this.prisma.vehicle.groupBy({
+        by: ["status"],
         where: whereCondition,
+        _count: { _all: true },
       }),
     ]);
 
+    const statusCounts = tallyStatuses(statusGroups);
+
     return {
       data: vehicleData,
-      total,
+      total: totalFromStatusCounts(statusCounts),
+      meta: { statusCounts },
     };
   }
 
@@ -364,6 +377,20 @@ class VehicleRepository implements IVehicleRepository {
     });
 
     return vehiclesCount;
+  }
+
+  // A contracted slot is occupied by every non-INACTIVE vehicle —
+  // inactivating frees the slot (see occupiesFleetSlot in entitlement-rules).
+  async countActiveVehiclesByBusinessId(businessId: string): Promise<number> {
+    return this.prisma.vehicle.count({
+      where: { businessId, status: { not: "INACTIVE" } },
+    });
+  }
+
+  async countInactiveVehiclesByBusinessId(businessId: string): Promise<number> {
+    return this.prisma.vehicle.count({
+      where: { businessId, status: "INACTIVE" },
+    });
   }
 }
 

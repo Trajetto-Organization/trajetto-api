@@ -31,6 +31,10 @@ interface IBusinessRepository {
   countBusinessDependencies: (
     businessId: string,
   ) => Promise<{ branches: number; users: number; drivers: number }>;
+  updateVehicleLimit: (
+    businessId: string,
+    vehicle_limit: number,
+  ) => Promise<Business>;
   updateAILimit: (
     businessId: string,
     ai_analysis_limit: number,
@@ -40,8 +44,6 @@ interface IBusinessRepository {
     corporate_reason: string;
     fantasy_name: string | null;
     ai_analysis_limit: number;
-    ai_analysis_used: number;
-    ai_analysis_reset_at: Date;
   } | null>;
 }
 

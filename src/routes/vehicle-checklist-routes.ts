@@ -9,6 +9,7 @@ import { UpdateVehicleChecklistController } from "@/modules/vehicle-checklist/us
 import { ExportVehicleChecklistController } from "@/modules/vehicle-checklist/usecases/export-vehicle-checklist/export-vehicle-checklist-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
+import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import {
@@ -29,6 +30,10 @@ const updateVehicleChecklistController = new UpdateVehicleChecklistController();
 const exportVehicleChecklistController = new ExportVehicleChecklistController();
 
 async function vehicleChecklistRoutes(app: FastifyInstance) {
+  // Fleet operation: gated by the FLEET module for the whole plugin (runs
+  // after ensureAuthenticated, which is onRequest). MASTER bypasses.
+  app.addHook("preHandler", verifyModuleEnabled("FLEET"));
+
   app.post(
     "/create-vehicle-checklist/:businessId",
     {
@@ -44,8 +49,8 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
         tags: ["vehicle-checklist"],
         summary: "Create a new vehicle checklist",
         description:
-          "Register a new vehicle inspection checklist with vehicle, driver, and checklist details. Photos are categorized by field and some are mandatory based on checklist values. Accepts two body formats: application/json carrying `photos` as keys already uploaded to storage via POST /uploads/presign/:businessId (preferred), or multipart/form-data carrying the files themselves (legacy).",
-        consumes: ["application/json", "multipart/form-data"],
+          "Register a new vehicle inspection checklist with vehicle, driver, and checklist details. Photos are categorized by field and some are mandatory based on checklist values. They travel as `photos`, keys already uploaded to storage via POST /uploads/presign/:businessId.",
+        consumes: ["application/json"],
         params: vehicleChecklistSchemas.businessIdParam,
         response: {
           201: vehicleChecklistResponses.vehicleChecklistCreated,
@@ -94,8 +99,8 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
         tags: ["vehicle-checklist"],
         summary: "Update a vehicle checklist",
         description:
-          "Update an existing vehicle inspection checklist with vehicle, driver, and checklist details. All fields are optional. Can add new photos or remove existing ones. Accepts two body formats: application/json carrying `photos` as keys already uploaded to storage via POST /uploads/presign/:businessId (preferred), or multipart/form-data carrying the files themselves (legacy).",
-        consumes: ["application/json", "multipart/form-data"],
+          "Update an existing vehicle inspection checklist with vehicle, driver, and checklist details. All fields are optional. Can add new photos or remove existing ones. New photos travel as `photos`, keys already uploaded to storage via POST /uploads/presign/:businessId.",
+        consumes: ["application/json"],
         params: vehicleChecklistSchemas.updateDeleteVehicleChecklist,
         response: {
           200: vehicleChecklistResponses.vehicleChecklistUpdated,

@@ -4,8 +4,10 @@ import { inject, injectable } from "tsyringe";
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { UserAlreadyExistsError } from "../errors/user-already-exists.error";
 
-import { NotificationService } from "@/shared/services/notification-service";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 import { UpdateMasterUserProps, User } from "../../dtos/user-dto";
+
+import database from "@/../infra/database";
 
 import { AppError } from "@/shared/errors/AppError";
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
@@ -15,7 +17,7 @@ import { UserCannotUpdateMasterUserError } from "../errors/user-cannot-update-ma
 
 import { UserIsNotMasterError } from "../errors/user-is-not-master-error";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { sendSecurityEventToUser } from "@/websocket";
 
 import { env } from "@/env";
@@ -39,16 +41,12 @@ class UpdateMasterUserUseCase {
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
   private http_request = env.HTTP_REQUEST;
 
-  private emailQueue: EmailWorkerAdapter;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("updateMasterUserEmailQueue");
-  }
+    @inject("OutboxService")
+    private outbox: OutboxService,
+  ) {}
 
   private buildChangeSummary(
     before: User,
@@ -94,100 +92,48 @@ class UpdateMasterUserUseCase {
     ].join("\n");
   }
 
-  private async processNotifications(
+  /**
+   * The update e-mail stays here rather than in the notification pipeline:
+   * it may carry the new password in plain text, which must never sit in a
+   * persisted outbox payload.
+   */
+  private async sendUpdateEmail(
     before: User,
     updatedMaster: User,
     changes: ChangeSummary,
     rawPassword: string | undefined,
-    performedById: string,
-    masterUserId: string,
     performingUserName: string,
     performingUserEmail: string,
   ): Promise<void> {
     try {
-      const { notificationText, activityText, passwordChanged } = changes;
-
-      // Activity + notification for the performer
-      await this.notificationService.processUserNotifications({
-        activity: {
-          type: "Usuário",
-          action: "update",
-          entityId: updatedMaster.id,
-          description: `Usuário Master ${updatedMaster.name} atualizado | Campos: ${activityText}`,
-          status: "Atualizado",
-          performedBy: performedById,
-          businessId: null,
-          visibilityLevel: "SYSTEM",
-        },
-        notification: {
-          userId: performedById,
-          type: "master-user",
-          title: "Usuário Master Atualizado",
-          message: `Você atualizou o usuário Master ${before.name}. Campos alterados: ${notificationText}.`,
-          entityId: updatedMaster.id,
-          link: `${this.http_request}/admin/master-users?search=${updatedMaster.id}&page=1`,
-          businessId: null,
-          shouldSendEmail: true,
-          shouldSendWhatsApp: true,
-          whatsAppMessage: this.buildWhatsAppText({
-            masterName: updatedMaster.name,
-            changesText: notificationText,
-            performingUserName,
-            performingUserEmail,
+      await sendTransactionalMail({
+        email: updatedMaster.email,
+        name: updatedMaster.name,
+        subject: "Sua conta Master foi atualizada",
+        templateName: "master-user-updated.hbs",
+        moduleName: "user",
+        additionalVariablesProperties: {
+          performingUserName,
+          performingUserEmail,
+          changesText: changes.notificationText,
+          hasFieldChanges:
+            before.name !== updatedMaster.name ||
+            before.email !== updatedMaster.email,
+          ...(before.name !== updatedMaster.name && {
+            oldName: before.name,
+            newName: updatedMaster.name,
           }),
+          ...(before.email !== updatedMaster.email && {
+            oldEmail: before.email,
+            newEmail: updatedMaster.email,
+          }),
+          ...(changes.passwordChanged &&
+            rawPassword && { newPassword: rawPassword }),
+          logo: this.cloudinaryLogo,
         },
       });
-
-      // Notify and email the updated MASTER (only if different from performer)
-      if (performedById !== masterUserId) {
-        await this.notificationService.createNotificationIfEnabled({
-          userId: masterUserId,
-          type: "master-user",
-          title: "Sua Conta Foi Atualizada",
-          message: `${performingUserName} (${performingUserEmail}) atualizou sua conta. Campos alterados: ${notificationText}.`,
-          entityId: updatedMaster.id,
-          link: `${this.http_request}/profile`,
-          businessId: null,
-          shouldSendEmail: true,
-          shouldSendWhatsApp: true,
-          whatsAppMessage: this.buildWhatsAppText({
-            masterName: updatedMaster.name,
-            changesText: notificationText,
-            performingUserName,
-            performingUserEmail,
-          }),
-        });
-
-        // Send update email to the updated Master with all changed fields
-        // including new password in plain text when applicable
-        await this.emailQueue.enqueueEmail({
-          email: updatedMaster.email,
-          name: updatedMaster.name,
-          subject: "Sua conta Master foi atualizada",
-          templateName: "master-user-updated.hbs",
-          moduleName: "user",
-          additionalVariablesProperties: {
-            performingUserName,
-            performingUserEmail,
-            changesText: notificationText,
-            hasFieldChanges:
-              before.name !== updatedMaster.name ||
-              before.email !== updatedMaster.email,
-            ...(before.name !== updatedMaster.name && {
-              oldName: before.name,
-              newName: updatedMaster.name,
-            }),
-            ...(before.email !== updatedMaster.email && {
-              oldEmail: before.email,
-              newEmail: updatedMaster.email,
-            }),
-            ...(passwordChanged && rawPassword && { newPassword: rawPassword }),
-            logo: this.cloudinaryLogo,
-          },
-        });
-      }
     } catch (error) {
-      console.error("[Usuário Master] Erro ao processar notificações:", error);
+      console.error("[Usuário Master] Erro ao enviar e-mail:", error);
     }
   }
 
@@ -246,9 +192,53 @@ class UpdateMasterUserUseCase {
     }
 
     try {
-      const updatedMaster = await this.user.updateUser({
-        userId: masterUserId,
-        userData: updateData,
+      // Two audiences, two events: the performer hears "you updated X", the
+      // updated master hears "your account changed" (self-update is blocked
+      // above, so both always apply). Both commit with the row itself.
+      const updatedMaster = await database.$transaction(async (tx) => {
+        const updated = await this.user.updateUser(
+          { userId: masterUserId, userData: updateData },
+          tx,
+        );
+
+        const changes = this.buildChangeSummary(
+          masterUser,
+          updated,
+          !!rawPassword,
+        );
+
+        await this.outbox.publish(tx, {
+          topic: "master-user.updated",
+          aggregateType: "master-user",
+          aggregateId: updated.id,
+          actorId: performedById,
+          payload: {
+            masterUserId: updated.id,
+            masterName: updated.name,
+            beforeName: masterUser.name,
+            changesNotificationText: changes.notificationText,
+            changesActivityText: changes.activityText,
+            actorUserId: performedById,
+            performingUserName: performingUser.name,
+            performingUserEmail: performingUser.email,
+          },
+        });
+
+        await this.outbox.publish(tx, {
+          topic: "master-user.account-updated",
+          aggregateType: "master-user",
+          aggregateId: updated.id,
+          actorId: performedById,
+          payload: {
+            masterUserId: updated.id,
+            masterName: updated.name,
+            changesNotificationText: changes.notificationText,
+            performingUserName: performingUser.name,
+            performingUserEmail: performingUser.email,
+          },
+        });
+
+        return updated;
       });
 
       const changes = this.buildChangeSummary(
@@ -261,14 +251,11 @@ class UpdateMasterUserUseCase {
         sendSecurityEventToUser(masterUserId, { reason: "user_updated" });
       }
 
-      // Process notifications asynchronously without blocking the main flow
-      this.processNotifications(
+      void this.sendUpdateEmail(
         masterUser,
         updatedMaster,
         changes,
         rawPassword,
-        performedById,
-        masterUserId,
         performingUser.name,
         performingUser.email,
       );

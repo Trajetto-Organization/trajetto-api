@@ -5,6 +5,8 @@ import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 
 import {
   emptyStringToNull,
+  hasConsecutiveSpaces,
+  hasSpaceAtEdges,
   isValidDateString,
 } from "@/shared/utils/zod-schema-helpers";
 
@@ -38,6 +40,33 @@ const updateServiceOrderSchema = z
           ),
       )
       .nullable(),
+    description: z.preprocess(
+      emptyStringToNull,
+      z
+        .string()
+        .max(500, "A descrição deve ter no máximo 500 caracteres.")
+        .superRefine((value, ctx) => {
+          if (hasConsecutiveSpaces(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "A descrição não deve conter espaços consecutivos.",
+            });
+
+            return;
+          }
+
+          if (hasSpaceAtEdges(value)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "A descrição não pode começar ou terminar com espaço em branco.",
+            });
+          }
+        })
+        .optional()
+        .nullable()
+        .describe("Descrição livre do que se trata a ordem de serviço."),
+    ),
     maintenance_type: z
       .enum(["INTERNAL", "EXTERNAL"], {
         errorMap: () => ({

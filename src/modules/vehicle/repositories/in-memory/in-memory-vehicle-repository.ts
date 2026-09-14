@@ -1,5 +1,10 @@
 import { v7 as uuidV7 } from "uuid";
 import { IVehicleRepository } from "../IVehicle-repository";
+import {
+  tallyStatuses,
+  VEHICLE_STATUSES,
+  totalFromStatusCounts,
+} from "@/shared/vehicle/vehicle-rules";
 
 import {
   Vehicle,
@@ -69,8 +74,22 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     const skip = (page - 1) * pageSize;
     const data = filteredVehicles.slice(skip, skip + pageSize);
 
-    const total = filteredVehicles.length;
-    return { data, total };
+    // Counted over filteredVehicles, NOT over `data` — the same distinction
+    // the real repository makes between the fleet and the page on screen.
+    const statusCounts = tallyStatuses(
+      VEHICLE_STATUSES.map((status) => ({
+        status,
+        _count: {
+          _all: filteredVehicles.filter((v) => v.status === status).length,
+        },
+      })),
+    );
+
+    return {
+      data,
+      total: totalFromStatusCounts(statusCounts),
+      meta: { statusCounts },
+    };
   }
 
   async updateVehicle({
@@ -276,6 +295,20 @@ class InMemoryVehicleRepository implements IVehicleRepository {
         : this.vehicles.filter((vehicle) => vehicle.businessId === businessId);
 
     return filteredVehicles.length;
+  }
+
+  async countActiveVehiclesByBusinessId(businessId: string): Promise<number> {
+    return this.vehicles.filter(
+      (vehicle) =>
+        vehicle.businessId === businessId && vehicle.status !== "INACTIVE",
+    ).length;
+  }
+
+  async countInactiveVehiclesByBusinessId(businessId: string): Promise<number> {
+    return this.vehicles.filter(
+      (vehicle) =>
+        vehicle.businessId === businessId && vehicle.status === "INACTIVE",
+    ).length;
   }
 }
 

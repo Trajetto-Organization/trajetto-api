@@ -1,4 +1,6 @@
 import database from "@/../infra/database";
+import { Prisma } from "@prisma/client";
+
 import {
   Fine,
   CreateFineProps,
@@ -12,8 +14,14 @@ import { IFineRepository } from "./IFine-repository";
 class FineRepository implements IFineRepository {
   constructor(private prisma = database) {}
 
-  async createFine(fineData: CreateFineProps): Promise<Fine> {
-    const fineCreated = await this.prisma.fine.create({
+  // `tx` lets the use case create the fine and its outbox event atomically.
+  async createFine(
+    fineData: CreateFineProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Fine> {
+    const client = tx ?? this.prisma;
+
+    const fineCreated = await client.fine.create({
       data: {
         violation_date: fineData.violation_date,
         due_date: fineData.due_date,

@@ -40,6 +40,11 @@ const getUserSchema = z.object({
   driverId: z.string().nullable().optional(),
   driver: driverSchema,
   profileAccess: profileAccessSchema,
+  /**
+   * Sellable modules the session may use. Always present so the client can
+   * enforce the gate without a nullable "unknown" state to reason about.
+   */
+  enabledModules: z.array(z.string()).default([]),
 });
 
 export { getUserSchema };

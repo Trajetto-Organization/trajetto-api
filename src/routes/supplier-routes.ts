@@ -9,6 +9,7 @@ import { SearchSupplierCursorController } from "@/modules/supplier/usecases/sear
 import { UpdateSupplierController } from "@/modules/supplier/usecases/update-supplier/update-supplier-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
+import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
@@ -26,6 +27,10 @@ const searchSupplierCursorController = new SearchSupplierCursorController();
 const updateSupplierController = new UpdateSupplierController();
 
 async function supplierRoutes(app: FastifyInstance) {
+  // Maintenance supply chain, only meaningful with fleet operations —
+  // gated for the whole plugin. MASTER bypasses.
+  app.addHook("preHandler", verifyModuleEnabled("FLEET"));
+
   app.post(
     "/create-supplier/:businessId",
     {

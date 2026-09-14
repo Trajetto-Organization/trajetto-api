@@ -55,8 +55,13 @@ class FuelRepository implements IFuelRepository {
     });
   }
 
+  // `afterCreate` runs inside the same transaction, only when this call
+  // actually created the record — an idempotent retry returns the original
+  // row and never fires it. It is how the use case publishes the outbox
+  // event atomically without this method giving up its serializable retry.
   async createFuelWithMileage(
     fuelData: CreateFuelProps,
+    afterCreate?: (tx: Prisma.TransactionClient, fuel: Fuel) => Promise<void>,
   ): Promise<{ fuel: Fuel; created: boolean }> {
     const executeTransaction = async () =>
       this.prisma.$transaction(
@@ -104,6 +109,10 @@ class FuelRepository implements IFuelRepository {
               driverId: fuelData.driverId!,
             },
           });
+
+          if (afterCreate) {
+            await afterCreate(transaction, fuel);
+          }
 
           return { fuel, created: true };
         },

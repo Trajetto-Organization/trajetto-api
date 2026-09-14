@@ -9,17 +9,20 @@ import {
   SearchServiceOrderByVehicleWithCursorProps,
 } from "../dtos/service-order-dto";
 
+import { Prisma } from "@prisma/client";
+
 interface IServiceOrderRepository {
   createServiceOrder: (
     serviceOrderData: CreateServiceOrderProps,
+    tx?: Prisma.TransactionClient,
   ) => Promise<ServiceOrder>;
   listServiceOrders: (
     listServiceOrderProps: ListServiceOrderByBusinessIdProps,
   ) => Promise<ListServiceOrderProps>;
-  updateServiceOrder: ({
-    serviceOrderData,
-    serviceOrderId,
-  }: UpdateServiceOrder) => Promise<ServiceOrder>;
+  updateServiceOrder: (
+    update: UpdateServiceOrder,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<ServiceOrder>;
   deleteServiceOrder: (serviceOrderId: string) => Promise<ServiceOrder>;
   findServiceOrderById: (
     serviceOrderId: string,

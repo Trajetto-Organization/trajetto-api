@@ -1,5 +1,6 @@
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { AppError } from "@/shared/errors/AppError";
+
 import { User } from "../dtos/user-dto";
 
 interface EligibleSession {

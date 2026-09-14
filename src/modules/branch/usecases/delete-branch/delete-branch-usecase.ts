@@ -22,7 +22,7 @@ import { BranchDeletionCodeExpiredError } from "../errors/branch-deletion-code-e
 import { BranchNoPendingDeletionError } from "../errors/branch-no-pending-deletion-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 
 import { AppError } from "@/shared/errors/AppError";
 import { env } from "@/env";
@@ -46,7 +46,6 @@ const roleLabels: Record<string, string> = {
 @injectable()
 class DeleteBranchUseCase {
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-  private notificationEmailQueue: EmailWorkerAdapter;
 
   constructor(
     @inject("UserRepository")
@@ -59,11 +58,7 @@ class DeleteBranchUseCase {
     private pendingDeletion: IPendingDeletionProvider,
     @inject("NotificationService")
     private notificationService: NotificationService,
-  ) {
-    this.notificationEmailQueue = new EmailWorkerAdapter(
-      "branchDeletionNotificationEmailQueue",
-    );
-  }
+  ) {}
 
   async execute(
     branchId: string,
@@ -201,7 +196,7 @@ class DeleteBranchUseCase {
 
     await Promise.allSettled(
       recipients.map((recipient) =>
-        this.notificationEmailQueue.enqueueEmail({
+        sendTransactionalMail({
           email: recipient.email,
           name: recipient.name,
           subject: `[Trajetto] Filial "${params.branchName}" foi excluída`,

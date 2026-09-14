@@ -40,6 +40,13 @@ import { uploadRoutes } from "./upload-routes";
 import { healthRoutes } from "./health-routes";
 
 import { whatsappRoutes } from "./whatsapp-routes";
+import { aiAnalysisRoutes } from "./ai-analysis-routes";
+
+import { shipperRoutes } from "./shipper-routes";
+import { occurrenceTypeRoutes } from "./occurrence-type-routes";
+
+import { deliveryRoutes } from "./delivery-routes";
+import { chatRoutes } from "./chat-routes";
 
 async function routes(app: FastifyInstance) {
   app.register(dashboardRoutes, { prefix: "/dashboard" });
@@ -66,6 +73,11 @@ async function routes(app: FastifyInstance) {
   app.register(fineRoutes, { prefix: "/fines" });
   app.register(trafficViolationCodeRoutes, { prefix: "/traffic-violation" });
   app.register(whatsappRoutes, { prefix: "/whatsapp" });
+  app.register(aiAnalysisRoutes, { prefix: "/ai-analysis" });
+  app.register(shipperRoutes, { prefix: "/shipper" });
+  app.register(occurrenceTypeRoutes, { prefix: "/occurrence-type" });
+  app.register(deliveryRoutes, { prefix: "/delivery" });
+  app.register(chatRoutes, { prefix: "/chat" });
   app.register(uploadRoutes, { prefix: "/uploads" });
   app.register(healthRoutes);
 }

@@ -39,6 +39,8 @@ interface IVehicleRepository {
     businessId: string,
     userRole: string,
   ) => Promise<number>;
+  countActiveVehiclesByBusinessId: (businessId: string) => Promise<number>;
+  countInactiveVehiclesByBusinessId: (businessId: string) => Promise<number>;
 }
 
 export { IVehicleRepository };

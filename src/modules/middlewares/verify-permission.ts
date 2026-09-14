@@ -46,6 +46,12 @@ function verifyPermission(
         vehicle_checklist_manage: ["read", "write"], // Read-only access to vehicles
         service_order_manage: ["read"], // Read-only access to service_orders
         fuel_manage: ["read", "write"], // Full access to fuel records
+        // Deliveries: the app lists the day (read) and appoints — start
+        // route, arrival, proof (write). Dispatcher-only operations
+        // (create, edit, assign, import) reject driver tokens inside
+        // their use cases.
+        delivery_manage: ["read", "write"],
+        occurrence_manage: ["write"], // Typed reports from the field
       };
 
       const allowedAccessTypes = driverPermissions[permissionKey];

@@ -83,9 +83,23 @@ interface UpdateVehicle {
   vehicleId: string;
 }
 
+/**
+ * Fleet-wide tally behind the four cards on the vehicle page. Counted over the
+ * SAME filter that produced `total`, so the four always add up to it — the
+ * cards used to be filtered client-side over the current page, which made them
+ * report the page (ten rows) as if it were the fleet.
+ */
+interface VehicleStatusCounts {
+  ACTIVE: number;
+  INACTIVE: number;
+  BLOCKED: number;
+  IN_ROUTE: number;
+}
+
 interface ListVehicleProps {
   data: Vehicle[];
   total: number;
+  meta: { statusCounts: VehicleStatusCounts };
 }
 
 interface ListVehicleByBusinessIdProps {
@@ -126,6 +140,7 @@ export {
   UpdateVehicleProps,
   UpdateVehicle,
   ListVehicleProps,
+  VehicleStatusCounts,
   ListVehicleByBusinessIdProps,
   GetVehicleByIdAndBusinessProps,
   VehicleWithLastFuel,

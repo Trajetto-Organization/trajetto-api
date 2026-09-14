@@ -30,7 +30,7 @@ import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-match-business-error";
 
 import { UserOnlyMasterBeAbleSetPasswordError } from "../errors/user-only-master-be-able-set-password-error";
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 
 import { env } from "@/env";
 
@@ -38,8 +38,6 @@ import { env } from "@/env";
 class CreateUserUseCase {
   private http_request = env.HTTP_REQUEST;
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
-  private emailQueue: EmailWorkerAdapter;
 
   private allowedRoles: Record<UserRole, UserRole[]> = {
     BUSINESS_USER: ["BUSINESS_USER"],
@@ -66,9 +64,7 @@ class CreateUserUseCase {
     private notificationService: NotificationService,
     @inject("DriverRepository")
     private driver: IDriverRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("createUserEmailQueue");
-  }
+  ) {}
 
   // Generate a random password with letters, numbers and special characters
   private generateRandomPassword(): string {
@@ -101,7 +97,7 @@ class CreateUserUseCase {
         });
 
       await Promise.all([
-        this.emailQueue.enqueueEmail({
+        sendTransactionalMail({
           email: userCreated.email,
           name: userCreated.name,
           subject: "Verificação de e-mail",
@@ -112,7 +108,7 @@ class CreateUserUseCase {
             logo: this.cloudinaryLogo,
           },
         }),
-        this.emailQueue.enqueueEmail({
+        sendTransactionalMail({
           email: userCreated.email,
           name: userCreated.name,
           subject: "Conta criada com sucesso",

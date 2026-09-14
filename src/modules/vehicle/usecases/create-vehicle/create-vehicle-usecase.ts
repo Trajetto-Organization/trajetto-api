@@ -30,6 +30,10 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
 
 import { AppError } from "@/shared/errors/AppError";
+import {
+  canRegisterVehicle,
+  occupiesFleetSlot,
+} from "@/shared/entitlements/entitlement-rules";
 import { translateVehicleStatus } from "@/shared/utils/format-values";
 
 import { Vehicle, CreateVehicleProps } from "../../dtos/vehicle-dto";
@@ -74,6 +78,27 @@ class CreateVehicleUseCase {
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
+    }
+
+    // Contracted fleet size (entitlement): 0 = not configured, no block.
+    // Only vehicles that occupy a slot count — registering one straight as
+    // INACTIVE is fine; activating it later passes the reactivation gate.
+    if (
+      (findBusiness.vehicle_limit ?? 0) > 0 &&
+      occupiesFleetSlot(vehicleData.status)
+    ) {
+      const activeCount = await this.vehicle.countActiveVehiclesByBusinessId(
+        vehicleData.businessId,
+      );
+
+      const verdict = canRegisterVehicle(
+        activeCount,
+        findBusiness.vehicle_limit ?? 0,
+      );
+
+      if (!verdict.allowed) {
+        throw new AppError(verdict.reason!, 400, "VEHICLE_LIMIT_REACHED");
+      }
     }
 
     // Check if the board already exists

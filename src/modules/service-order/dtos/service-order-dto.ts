@@ -7,6 +7,7 @@ interface ServiceOrder {
   completion_date?: Date | string | null;
   maintenance_type: "INTERNAL" | "EXTERNAL";
   total_amount: Decimal | string;
+  description?: string | null;
   businessId: string;
   vehicleId: string;
   responsibleUserId: string;
@@ -53,6 +54,7 @@ interface CreateServiceOrderProps {
   completion_date?: Date | null | string;
   maintenance_type: "INTERNAL" | "EXTERNAL";
   total_amount: number;
+  description?: string | null;
   current_mileage_at_service: number;
   maintenance_interval_km_at_service: number;
   last_maintenance_mileage_at_service?: number | null;
@@ -83,6 +85,7 @@ interface UpdateServiceOrderProps {
   completion_date?: Date | null | string;
   maintenance_type?: "INTERNAL" | "EXTERNAL";
   total_amount?: number;
+  description?: string | null;
   new_mileage_after_service?: number | null;
   vehicleId?: string;
   responsibleUserId?: string;

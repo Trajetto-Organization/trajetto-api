@@ -1,5 +1,4 @@
 import { injectable } from "tsyringe";
-import sharp from "sharp";
 
 // AWS SDK v3 (modular). O v2 (`aws-sdk`) empacotava o cliente de TODOS os
 // servicos da AWS para usarmos dois metodos de S3, e esta em maintenance mode
@@ -9,49 +8,47 @@ import {
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
-  PutObjectCommandInput,
   S3Client,
 } from "@aws-sdk/client-s3";
 
-import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import fs from "node:fs";
 import path from "node:path";
 
-import { Readable } from "node:stream";
-import pump from "pump";
-
-import { uploadConfig, UploadType } from "@/config/upload";
+import { uploadConfig, UploadType, UPLOAD_TYPES } from "@/config/upload";
 import { v4 as uuid } from "uuid";
 
+import { getRequestContext } from "@/shared/http/request-context";
 import { env } from "@/env";
 
 import { AppError } from "@/shared/errors/AppError";
 import { signLocalUploadToken } from "@/shared/services/local-upload-token";
 
-export interface UploadResult {
-  filename: string;
-  path: string;
-  size: number;
-  mimeType: string;
-  url?: string;
-}
-
-export interface UploadFileOptions {
-  buffer: Buffer;
-  filename: string;
-  mimetype: string;
-  uploadType: UploadType;
-}
-
-export interface UploadStreamOptions {
-  stream: NodeJS.ReadableStream;
-  filename: string;
-  mimetype: string;
-  uploadType: UploadType;
-  fileSize?: number;
-}
+/**
+ * The file extension each accepted content type lands under.
+ *
+ * A table rather than a ladder, and every allowed type is in it. The ladder
+ * this replaced ended in `: "jpg"`, so every voice note was stored as a .jpg —
+ * the signed url played anyway, but the key lied to storage, to any CDN
+ * sniffing by extension, and to the mobile cache, which takes a note's file
+ * extension from that path. Nothing here re-encodes bytes: the extension has
+ * to follow the content type that was signed, which is what the comment on
+ * `generatePresignedKey` always claimed.
+ *
+ * `bin` for anything unlisted, which the mime allow-list should have refused
+ * long before here — an unknown type is not a jpeg.
+ */
+const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "audio/m4a": "m4a",
+  "audio/x-m4a": "m4a",
+  "audio/mp4": "m4a",
+  "audio/aac": "aac",
+};
 
 @injectable()
 class UploadService {
@@ -67,181 +64,6 @@ class UploadService {
         endpoint: `https://${uploadConfig.r2.accountId}.r2.cloudflarestorage.com`,
         region: "auto",
       });
-    }
-  }
-
-  private validateFile(
-    buffer: Buffer,
-    mimetype: string,
-    uploadType: UploadType,
-  ): void {
-    // Validate MIME type
-    if (!uploadConfig.allowedMimeTypes.images.includes(mimetype)) {
-      throw new AppError(
-        "Tipo de arquivo não suportado. Use apenas JPEG, PNG ou WebP.",
-        400,
-      );
-    }
-
-    // Validate file size using function
-    const maxSize = uploadConfig.getSizeLimit(uploadType);
-    if (buffer.length > maxSize) {
-      const maxSizeMB = maxSize / (1024 * 1024);
-      throw new AppError(
-        `Arquivo muito grande. Tamanho máximo permitido: ${maxSizeMB}MB`,
-        400,
-      );
-    }
-  }
-
-  private async processImage(
-    buffer: Buffer,
-    uploadType: UploadType,
-  ): Promise<Buffer> {
-    const config = uploadConfig.resize[uploadType];
-
-    // `rotate()` applies EXIF orientation before resize. Sharp strips metadata
-    // by default, which prevents GPS/device EXIF from leaking to clients.
-    let sharpInstance = sharp(buffer, {
-      limitInputPixels: 40_000_000,
-      failOn: "warning",
-    })
-      .rotate()
-      .resize(config.width, config.height, {
-        fit: config.fit,
-        withoutEnlargement: config.withoutEnlargement,
-      });
-
-    // Convert to WebP for better compression while maintaining quality
-    sharpInstance = sharpInstance.webp({
-      quality: uploadConfig.quality.webp,
-    });
-
-    return await sharpInstance.toBuffer();
-  }
-
-  private generateFilename(
-    originalFilename: string,
-    uploadType: UploadType,
-  ): string {
-    const timestamp = Date.now();
-    const randomId = uuid().substring(0, 8);
-
-    // Clean original filename: remove extension, sanitize, and limit length
-    const cleanName = originalFilename
-      .replace(/\.[^/.]+$/, "") // Remove extension
-      .replace(/[^a-zA-Z0-9-_]/g, "-") // Replace special chars with dash
-      .replace(/-+/g, "-") // Replace multiple dashes with single dash
-      .replace(/^-|-$/g, "") // Remove leading/trailing dashes
-      .toLowerCase()
-      .substring(0, 35); // Limit to 35 characters (increased to accommodate vehicle checklist field names)
-
-    // Always save as .webp for processed images
-    const processedExtension = ".webp";
-    return `${uploadType}/${timestamp}-${cleanName}-${randomId}${processedExtension}`;
-  }
-
-  private async ensureDirectoryExists(dirPath: string): Promise<void> {
-    try {
-      await fs.promises.access(dirPath);
-    } catch {
-      await fs.promises.mkdir(dirPath, { recursive: true });
-    }
-  }
-
-  private async uploadToLocal(
-    processedBuffer: Buffer,
-    filename: string,
-  ): Promise<UploadResult> {
-    const fullPath = path.join(uploadConfig.storage.localPath, filename);
-    const dirPath = path.dirname(fullPath);
-
-    await this.ensureDirectoryExists(dirPath);
-
-    // Use streaming for better performance with large files
-    const readableStream = Readable.from(processedBuffer);
-    const writeStream = fs.createWriteStream(fullPath);
-
-    return new Promise((resolve, reject) => {
-      pump(readableStream, writeStream, (error) => {
-        if (error) {
-          reject(new AppError("Erro ao salvar arquivo localmente", 500));
-        } else {
-          resolve({
-            filename: path.basename(filename),
-            path: filename,
-            size: processedBuffer.length,
-            mimeType: "image/webp",
-          });
-        }
-      });
-    });
-  }
-
-  private async uploadToR2(
-    processedBuffer: Buffer,
-    filename: string,
-  ): Promise<UploadResult> {
-    if (!this.s3) {
-      throw new AppError("R2 não foi configurado corretamente", 500);
-    }
-
-    // Use streaming for R2 upload for better memory management
-    const readableStream = Readable.from(processedBuffer);
-
-    const uploadParams: PutObjectCommandInput = {
-      Bucket: uploadConfig.r2.bucket,
-      Key: filename,
-      Body: readableStream,
-      ContentType: "image/webp",
-      Metadata: {
-        "uploaded-at": new Date().toISOString(),
-      },
-    };
-
-    try {
-      // `Upload` do lib-storage e o equivalente ao `.upload()` do v2: aceita
-      // stream e cuida do multipart quando necessario.
-      await new Upload({ client: this.s3, params: uploadParams }).done();
-
-      return {
-        filename: path.basename(filename),
-        path: filename,
-        size: processedBuffer.length,
-        mimeType: "image/webp",
-        url: await this.getFileUrl(filename),
-      };
-    } catch (error) {
-      console.error("Erro ao fazer upload para R2:", error);
-      throw new AppError("Erro no upload do arquivo", 500);
-    }
-  }
-
-  async uploadFile(options: UploadFileOptions): Promise<UploadResult> {
-    const { buffer, filename, mimetype, uploadType } = options;
-
-    try {
-      // Validate file
-      this.validateFile(buffer, mimetype, uploadType);
-
-      // Process image with Sharp
-      const processedBuffer = await this.processImage(buffer, uploadType);
-
-      // Generate filename
-      const generatedFilename = this.generateFilename(filename, uploadType);
-
-      // Upload based on storage type
-      if (uploadConfig.storage.type === "r2") {
-        return await this.uploadToR2(processedBuffer, generatedFilename);
-      } else {
-        return await this.uploadToLocal(processedBuffer, generatedFilename);
-      }
-    } catch (error) {
-      if (error instanceof AppError) {
-        throw error;
-      }
-      console.error("Erro no serviço de upload:", error);
-      throw new AppError("Erro interno no upload do arquivo", 500);
     }
   }
 
@@ -264,6 +86,7 @@ class UploadService {
           uploadConfig.storage.localPath,
           normalizedFilePath,
         );
+
         try {
           await fs.promises.access(fullPath);
           await fs.promises.unlink(fullPath);
@@ -282,11 +105,11 @@ class UploadService {
       const candidate = /^https?:\/\//i.test(filePathOrUrl)
         ? decodeURIComponent(new URL(filePathOrUrl).pathname)
         : decodeURIComponent(filePathOrUrl.split("?")[0]);
-      const uploadPrefix = [
-        "odometerPhotos/",
-        "checklistPhotos/",
-        "avatars/",
-      ].find((prefix) => candidate.includes(prefix));
+      // Derived from the config's one list — a hand-written copy here is
+      // exactly how deliveryPhotos got refused with INVALID_FILE_PATH.
+      const uploadPrefix = UPLOAD_TYPES.map((type) => `${type}/`).find(
+        (prefix) => candidate.includes(prefix),
+      );
 
       if (!uploadPrefix) {
         throw new Error("Unknown upload path");
@@ -347,15 +170,17 @@ class UploadService {
     // useless on a phone, where localhost is the phone.
     publicBaseUrl?: string,
   ): Promise<{ key: string; uploadUrl: string; expiresIn: number }> {
-    if (!uploadConfig.allowedMimeTypes.images.includes(file.contentType)) {
+    if (
+      !uploadConfig.getAllowedMimeTypes(uploadType).includes(file.contentType)
+    ) {
       throw new AppError(
-        "Tipo de arquivo não suportado. Use apenas JPEG, JPG, PNG ou WebP.",
+        "Tipo de arquivo não suportado para este envio.",
         400,
         "UNSUPPORTED_FILE_TYPE",
       );
     }
 
-    const maxSize = uploadConfig.getSizeLimit(uploadType);
+    const maxSize = uploadConfig.getSizeLimit(uploadType, file.contentType);
 
     if (file.size <= 0 || file.size > maxSize) {
       throw new AppError(
@@ -436,16 +261,16 @@ class UploadService {
    *      authorises an upload; it does not prove one happened, and a client is
    *      free to skip the PUT and post the key anyway.
    *
-   * Together these re-establish what parsing the multipart used to guarantee
-   * implicitly, now that the bytes never reach the API.
+   * Together these are the whole guarantee: the bytes never reach the API, so
+   * this is the only place where what landed in storage is checked at all.
    */
   async resolvePresignedUploads(
     photos: { key: string; fieldName?: string }[],
     uploadType: UploadType,
     scopeId: string,
 
-    // Ceiling for the batch as a whole. The multipart path enforced this while
-    // draining the stream; here the only place that knows every real byte count
+    // Ceiling for the batch as a whole, on top of the per-file limit that
+    // storage itself enforces. The only place that knows every real byte count
     // is this loop, after storage has been asked how big each object actually
     // is. Left undefined for uploads that only ever carry one file.
     maxTotalBytes?: number,
@@ -497,9 +322,9 @@ class UploadService {
    * Reads back what actually landed in the bucket.
    *
    * With a direct upload the API never sees the bytes, so this is where the
-   * guarantee that used to come from parsing the multipart is restored: the
-   * object must exist, be within the limit for its type, and carry an image
-   * content type. Called before a key is written to the database.
+   * object is held to the rules at all: it must exist, be within the limit for
+   * its type, and carry an image content type. Called before a key is written
+   * to the database.
    */
   async headUploadedObject(
     key: string,
@@ -565,7 +390,7 @@ class UploadService {
     contentType: string,
     uploadType: UploadType,
   ): void {
-    if (!uploadConfig.allowedMimeTypes.images.includes(contentType)) {
+    if (!uploadConfig.getAllowedMimeTypes(uploadType).includes(contentType)) {
       throw new AppError(
         "Tipo de arquivo não suportado.",
         400,
@@ -573,7 +398,7 @@ class UploadService {
       );
     }
 
-    if (size <= 0 || size > uploadConfig.getSizeLimit(uploadType)) {
+    if (size <= 0 || size > uploadConfig.getSizeLimit(uploadType, contentType)) {
       throw new AppError(
         "Arquivo enviado excede o limite permitido.",
         400,
@@ -597,9 +422,10 @@ class UploadService {
   }
 
   /**
-   * Same shape as `generateFilename`, plus the tenant segment and the real
-   * extension — the client uploads the bytes as they are, so the stored
-   * extension has to match what was actually sent instead of always `.webp`.
+   * Where an upload is allowed to land: the type, then the owner, then a name
+   * that cannot collide. The extension follows the signed content type, since
+   * the client uploads the bytes as they are and nothing re-encodes them on
+   * the way in.
    */
   private generatePresignedKey(
     originalFilename: string,
@@ -618,12 +444,7 @@ class UploadService {
       .toLowerCase()
       .substring(0, 35);
 
-    const extension =
-      contentType === "image/png"
-        ? "png"
-        : contentType === "image/webp"
-          ? "webp"
-          : "jpg";
+    const extension = EXTENSION_BY_CONTENT_TYPE[contentType] ?? "bin";
 
     return `${uploadType}/${scopeId}/${timestamp}-${cleanName || "file"}-${randomId}.${extension}`;
   }
@@ -647,166 +468,25 @@ class UploadService {
         { expiresIn: uploadConfig.signedUrlTtlSeconds },
       );
     } else {
-      // For local development, construct full URL to API server
-      const baseUrl = env.API_HTTP_REQUEST || `http://localhost:${env.PORT}`;
+      // Same rule as the upload side: the caller's own host wins.
+      //
+      // `API_HTTP_REQUEST` is a single value, and there is no single right
+      // answer — the browser on the dev machine reaches this API at
+      // `localhost`, the phone reaches it at the LAN address, and each needs
+      // the URL on the host it can actually resolve. Answering `localhost` to
+      // a phone points it at itself, which is why every chat photo, avatar
+      // and voice note loaded forever and then failed there.
+      //
+      // The context is only populated outside production (see the onRequest
+      // hook in http.ts); in production this branch does not run at all,
+      // because R2 signs its own URLs above.
+      const baseUrl =
+        getRequestContext()?.publicBaseUrl ||
+        env.API_HTTP_REQUEST ||
+        `http://localhost:${env.PORT}`;
+
       return `${baseUrl}/tmp/${normalizedFilePath}`;
     }
-  }
-
-  // Method for streaming upload directly from request without loading all in memory
-  async uploadFromStream(options: UploadStreamOptions): Promise<UploadResult> {
-    const { stream, filename, mimetype, uploadType, fileSize } = options;
-
-    try {
-      // Validate MIME type
-      if (!uploadConfig.allowedMimeTypes.images.includes(mimetype)) {
-        throw new AppError(
-          "Tipo de arquivo não suportado. Use apenas JPEG, JPG, PNG ou WebP.",
-          400,
-        );
-      }
-
-      // Validate file size if provided
-      if (fileSize) {
-        const maxSize = uploadConfig.getSizeLimit(uploadType);
-        if (fileSize > maxSize) {
-          const maxSizeMB = maxSize / (1024 * 1024);
-          throw new AppError(
-            `Arquivo muito grande. Tamanho máximo permitido: ${maxSizeMB}MB`,
-            400,
-          );
-        }
-      }
-
-      // Generate filename
-      const generatedFilename = this.generateFilename(filename, uploadType);
-
-      // Create Sharp transform stream for processing
-      const sharpTransform = sharp({
-        limitInputPixels: 40_000_000,
-        failOn: "warning",
-      })
-        .rotate()
-        .resize(
-          uploadConfig.resize[uploadType].width,
-          uploadConfig.resize[uploadType].height,
-          {
-            fit: uploadConfig.resize[uploadType].fit,
-            withoutEnlargement:
-              uploadConfig.resize[uploadType].withoutEnlargement,
-          },
-        )
-        .webp({ quality: uploadConfig.quality.webp });
-
-      if (uploadConfig.storage.type === "r2") {
-        return await this.uploadStreamToR2(
-          stream,
-          sharpTransform,
-          generatedFilename,
-          fileSize,
-        );
-      } else {
-        return await this.uploadStreamToLocal(
-          stream,
-          sharpTransform,
-          generatedFilename,
-          fileSize,
-        );
-      }
-    } catch (error) {
-      if (error instanceof AppError) {
-        throw error;
-      }
-
-      console.error("Erro no serviço de upload via streaming:", error);
-      throw new AppError("Erro interno no upload do arquivo", 500);
-    }
-  }
-
-  private async uploadStreamToLocal(
-    inputStream: NodeJS.ReadableStream,
-    sharpTransform: sharp.Sharp,
-    filename: string,
-    fileSize?: number,
-  ): Promise<UploadResult> {
-    const fullPath = path.join(uploadConfig.storage.localPath, filename);
-    const dirPath = path.dirname(fullPath);
-
-    await this.ensureDirectoryExists(dirPath);
-    const writeStream = fs.createWriteStream(fullPath);
-
-    return new Promise((resolve, reject) => {
-      let processedSize = 0;
-
-      pump(inputStream, sharpTransform, writeStream, (error) => {
-        if (error) {
-          reject(
-            new AppError("Erro ao processar e salvar arquivo localmente", 500),
-          );
-        } else {
-          resolve({
-            filename: path.basename(filename),
-            path: filename,
-            size: processedSize || fileSize || 0,
-            mimeType: "image/webp",
-          });
-        }
-      });
-
-      // Track processed size
-      sharpTransform.on("data", (chunk) => {
-        processedSize += chunk.length;
-      });
-    });
-  }
-
-  private async uploadStreamToR2(
-    inputStream: NodeJS.ReadableStream,
-    sharpTransform: sharp.Sharp,
-    filename: string,
-    fileSize?: number,
-  ): Promise<UploadResult> {
-    if (!this.s3) {
-      throw new AppError("R2 não foi configurado corretamente", 500);
-    }
-
-    return new Promise((resolve, reject) => {
-      let processedSize = 0;
-
-      // Create pipeline: input -> sharp processing -> R2
-      const processedStream = inputStream.pipe(sharpTransform);
-
-      // Track processed size
-      processedStream.on("data", (chunk) => {
-        processedSize += chunk.length;
-      });
-
-      const uploadParams: PutObjectCommandInput = {
-        Bucket: uploadConfig.r2.bucket,
-        Key: filename,
-        Body: processedStream,
-        ContentType: "image/webp",
-        Metadata: {
-          "uploaded-at": new Date().toISOString(),
-        },
-      };
-
-      // O v3 nao tem a variante por callback: `Upload.done()` devolve Promise.
-      new Upload({ client: this.s3!, params: uploadParams })
-        .done()
-        .then(async () => {
-          resolve({
-            filename: path.basename(filename),
-            path: filename,
-            size: processedSize || fileSize || 0,
-            mimeType: "image/webp",
-            url: await this.getFileUrl(filename),
-          });
-        })
-        .catch(() => {
-          reject(new AppError("Erro no upload para R2", 500));
-        });
-    });
   }
 }
 

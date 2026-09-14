@@ -37,6 +37,11 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 import { VehicleCurrentMileageCanNotBeUpdatedError } from "../errors/vehicle-current-mileage-can-not-be-updated";
 
 import { translateVehicleStatus } from "@/shared/utils/format-values";
+import {
+  canReactivateVehicle,
+  occupiesFleetSlot,
+} from "@/shared/entitlements/entitlement-rules";
+
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
@@ -94,6 +99,27 @@ class UpdateVehicleUseCase {
       vehicleData.current_mileage !== findVehicle.current_mileage
     ) {
       throw new VehicleCurrentMileageCanNotBeUpdatedError();
+    }
+
+    // Reactivating an INACTIVE vehicle re-occupies a contracted slot, so it
+    // passes the same gate as a new registration (0 = limit not configured).
+    const isReactivation =
+      vehicleData.status !== undefined &&
+      !occupiesFleetSlot(findVehicle.status) &&
+      occupiesFleetSlot(vehicleData.status);
+
+    if (isReactivation && (findBusiness.vehicle_limit ?? 0) > 0) {
+      const activeCount =
+        await this.vehicle.countActiveVehiclesByBusinessId(businessId);
+
+      const verdict = canReactivateVehicle(
+        activeCount,
+        findBusiness.vehicle_limit ?? 0,
+      );
+
+      if (!verdict.allowed) {
+        throw new AppError(verdict.reason!, 400, "VEHICLE_LIMIT_REACHED");
+      }
     }
 
     // Check if license plate is being updated and if it already exists

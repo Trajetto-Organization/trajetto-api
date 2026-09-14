@@ -43,8 +43,16 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     });
   }
 
+  // `afterCreate` runs inside the same transaction, only when this call
+  // actually created the record — an idempotent retry returns the original
+  // row and never fires it. It is how the use case publishes the outbox
+  // event atomically without this method giving up its serializable retry.
   async createVehicleChecklistWithMileage(
     checklistData: CreateVehicleChecklistProps,
+    afterCreate?: (
+      tx: Prisma.TransactionClient,
+      checklist: VehicleChecklist,
+    ) => Promise<void>,
   ): Promise<{ checklist: VehicleChecklist; created: boolean }> {
     const executeTransaction = async () =>
       this.prisma.$transaction(
@@ -83,6 +91,10 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
               driverId: checklistData.driverId!,
             },
           });
+
+          if (afterCreate) {
+            await afterCreate(transaction, checklist);
+          }
 
           return { checklist, created: true };
         },

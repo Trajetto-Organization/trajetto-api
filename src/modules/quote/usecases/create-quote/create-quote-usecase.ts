@@ -3,7 +3,7 @@ import { inject, injectable } from "tsyringe";
 import { IQuoteRepository } from "../../repositories/IQuote-repository";
 import { CreateQuoteProps, Quote } from "../../dtos/quote-dto";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
 
 import { env } from "@/env";
@@ -11,14 +11,11 @@ import { env } from "@/env";
 @injectable()
 class CreateQuoteUseCase {
   private http_request = env.HTTP_REQUEST;
-  private emailQueue: EmailWorkerAdapter;
 
   constructor(
     @inject("QuoteRepository")
     private quoteRepository: IQuoteRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("quoteEmailQueue");
-  }
+  ) {}
 
   async execute(quoteData: CreateQuoteProps): Promise<Quote> {
     try {
@@ -42,7 +39,7 @@ class CreateQuoteUseCase {
   private async sendEmails(quote: Quote): Promise<void> {
     try {
       // Email to sales team
-      await this.emailQueue.enqueueEmail({
+      await sendTransactionalMail({
         email: "contato@intrajetto.com",
         name: "Equipe de Vendas",
         subject: `Nova Solicitação de Orçamento - ${quote.company}`,
@@ -61,7 +58,7 @@ class CreateQuoteUseCase {
       });
 
       // Confirmation email to customer
-      await this.emailQueue.enqueueEmail({
+      await sendTransactionalMail({
         email: quote.email,
         name: quote.name,
         subject: "Recebemos sua solicitação de orçamento - Trajetto",

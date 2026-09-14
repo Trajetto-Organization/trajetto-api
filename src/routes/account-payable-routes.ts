@@ -9,6 +9,7 @@ import { UpdateAccountPayableController } from "@/modules/account-payable/usecas
 import { DeleteAccountPayableController } from "@/modules/account-payable/usecases/delete-account-payable/delete-account-payable-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
+import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import {
@@ -30,6 +31,10 @@ const updateAccountPayableController = new UpdateAccountPayableController();
 const deleteAccountPayableController = new DeleteAccountPayableController();
 
 async function accountPayableRoutes(app: FastifyInstance) {
+  // Fleet operation: gated by the FLEET module for the whole plugin (runs
+  // after ensureAuthenticated, which is onRequest). MASTER bypasses.
+  app.addHook("preHandler", verifyModuleEnabled("FLEET"));
+
   app.post(
     "/create-account-payable/:businessId",
     {

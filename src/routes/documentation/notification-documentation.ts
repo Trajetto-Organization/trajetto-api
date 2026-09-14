@@ -1,6 +1,33 @@
 import { z } from "zod";
 
+import { updateNotificationPreferencesSchema } from "@/schemas/notification-preferences-schema";
+
+const preferenceRow = z.object({
+  category: z
+    .enum(["FINES", "MAINTENANCE", "FINANCE", "TASKS", "ACCOUNT"])
+    .describe("Categoria de notificação"),
+  inApp: z.boolean().describe("Receber no app"),
+  email: z.boolean().describe("Receber por e-mail"),
+  whatsapp: z.boolean().describe("Receber por WhatsApp"),
+  isDefault: z
+    .boolean()
+    .describe(
+      "True enquanto o usuário nunca salvou esta categoria (herdando os toggles globais)",
+    ),
+});
+
 const notificationSchemas = {
+  registerPushToken: z.object({
+    token: z
+      .string()
+      .min(1)
+      .max(4096)
+      .describe("Expo push token do dispositivo (ExponentPushToken[...])"),
+    platform: z.enum(["android", "ios"]).describe("Plataforma do dispositivo"),
+  }),
+  removePushToken: z.object({
+    token: z.string().min(1).max(4096).describe("Expo push token a remover"),
+  }),
   createNotification: z.object({
     userId: z.string().uuid().describe("ID do usuário destinatário"),
     type: z.string().describe("Tipo de notificação"),
@@ -37,6 +64,7 @@ const notificationSchemas = {
   notificationIdParam: z.object({
     notificationId: z.string().uuid().describe("ID da notificação"),
   }),
+  updatePreferences: updateNotificationPreferencesSchema,
 };
 
 const notificationResponses = {
@@ -120,4 +148,25 @@ const notificationResponses = {
   }),
 };
 
-export { notificationSchemas, notificationResponses };
+const allNotificationResponses = {
+  ...notificationResponses,
+
+  allNotificationsMarkedAsRead: z.object({
+    message: z.string().describe("Resumo da operação"),
+    count: z.number().describe("Quantidade de notificações marcadas"),
+  }),
+  pushTokenChanged: z.object({
+    message: z.string().describe("Resumo da operação"),
+  }),
+  preferencesRetrieved: z.object({
+    preferences: z.array(preferenceRow),
+  }),
+  preferencesUpdated: z.object({
+    message: z.string().default("Preferências de notificação atualizadas!"),
+  }),
+};
+
+export {
+  notificationSchemas,
+  allNotificationResponses as notificationResponses,
+};

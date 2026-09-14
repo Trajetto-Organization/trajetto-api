@@ -14,150 +14,21 @@ import { KanbanCardColumnNotFoundError } from "../errors/kanban-card-column-not-
 
 import { KanbanCardNotFoundError } from "../errors/kanban-card-not-found-error";
 
-import { NotificationService } from "@/shared/services/notification-service";
-import { redirectPage } from "@/shared/utils/link-redirect-page";
-
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
 import { AppError } from "@/shared/errors/AppError";
 
-import { env } from "@/env";
-
-interface KanbanCardNotificationTextProps {
-  title: string;
-  description: string;
-  priority: string;
-  dueDate: string;
-  cardId: string;
-}
+import { OutboxService } from "@/shared/notifications/outbox-service";
+import database from "@/../infra/database";
 
 @injectable()
 class UpdateKanbanCardUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
     @inject("KanbanRepository")
     private kanban: IKanbanRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
-
-  private buildKanbanCardNotificationText({
-    title,
-    description,
-    priority,
-    dueDate,
-    cardId,
-  }: KanbanCardNotificationTextProps): string {
-    const getPriorityInfo = (priority: string) => {
-      switch (priority.toLowerCase()) {
-        case "urgent":
-          return { emoji: "🆘", text: "Urgente" };
-        case "high":
-          return { emoji: "🔴", text: "Alta" };
-        case "medium":
-          return { emoji: "🟡", text: "Média" };
-        case "low":
-          return { emoji: "🟢", text: "Baixa" };
-        default:
-          return { emoji: "🟢", text: "Baixa" };
-      }
-    };
-
-    const priorityInfo = getPriorityInfo(priority);
-
-    return [
-      `📝 *Card Atualizado! Você foi designado como responsável por um card atualizado no kanban*`,
-      `Título: *${title}*`,
-      `Descrição: ${description}`,
-      `Prioridade: ${priorityInfo.emoji} *${priorityInfo.text}*`,
-      `Data de vencimento: *${dueDate}*`,
-      `Identificador do card: *${cardId}*`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
-  private async processNotifications(
-    originalCard: KanbanCard,
-    updatedCard: KanbanCard,
-    cardData: UpdateKanbanCardProps,
-    userId: string,
-    businessId: string,
-  ): Promise<void> {
-    try {
-      // Always create activity for card update
-      const activityData = {
-        type: "Card Kanban",
-        action: "update",
-        entityId: updatedCard.id,
-        description: `Card "${updatedCard.title}" atualizado com sucesso no kanban | ID: ${updatedCard.id}`,
-        status: updatedCard.completed ? "Completo" : "Pendente",
-        performedBy: userId,
-        businessId,
-      };
-
-      // Check if assignedUserId changed
-      const assignedUserChanged =
-        cardData.assignedUserId !== undefined &&
-        originalCard.assignedUserId !== cardData.assignedUserId;
-
-      if (assignedUserChanged && cardData.assignedUserId) {
-        // AssignedUser changed, send notification
-        const assignedUser = await this.user.findUserById(
-          cardData.assignedUserId,
-        );
-
-        if (assignedUser) {
-          const linkRedirectPage = redirectPage(
-            assignedUser.role,
-            assignedUser.driverId,
-          );
-
-          const notificationData = {
-            userId: cardData.assignedUserId,
-            type: "kanban-card",
-            title: "Card Atualizado e Atribuído",
-            message: `Você foi designado como responsável pelo card "${updatedCard.title}" que foi atualizado no kanban`,
-            entityId: updatedCard.id,
-            link: `${this.http_request}/${linkRedirectPage}/kanban?search=${updatedCard.id}&page=1`,
-            businessId,
-            shouldSendEmail: true,
-            shouldSendWhatsApp: true,
-            whatsAppMessage: this.buildKanbanCardNotificationText({
-              title: updatedCard.title,
-              description: updatedCard.description,
-              priority: updatedCard.priority,
-              dueDate: updatedCard.dueDate,
-              cardId: updatedCard.id,
-            }),
-            instanceName: generateWhatsAppInstanceName(
-              assignedUser.email,
-              businessId,
-            ),
-          };
-
-          // Process notification to newly assigned user
-          await this.notificationService.processUserNotifications({
-            notification: notificationData,
-            activity: activityData,
-          });
-        } else {
-          // Fallback: Create activity even if assigned user not found
-          await this.notificationService.createActivityIfEnabled(activityData);
-        }
-      } else {
-        // No assignedUser change, just create activity
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error(
-        "[Kanban Cards Update] Erro ao processar notificações:",
-        error,
-      );
-      // Does not prevent the card update
-    }
-  }
 
   async execute(
     cardData: UpdateKanbanCardProps,
@@ -211,19 +82,40 @@ class UpdateKanbanCardUseCase {
     }
 
     try {
-      const updatedCard = await this.kanban.updateCard({
-        cardData,
-        cardId,
-      });
+      // Only a hand-over pages someone: an update that keeps the assignment
+      // publishes with no recipient and feeds the activity trail alone.
+      const assignedUserChanged =
+        cardData.assignedUserId !== undefined &&
+        findCard.assignedUserId !== cardData.assignedUserId;
 
-      // Process notifications (activity + conditionally WhatsApp/Email)
-      this.processNotifications(
-        findCard,
-        updatedCard,
-        cardData,
-        userId,
-        findColumn.businessId,
-      );
+      const updatedCard = await database.$transaction(async (tx) => {
+        const updated = await this.kanban.updateCard({ cardData, cardId }, tx);
+
+        await this.outbox.publish(tx, {
+          topic: "kanban-card.updated",
+          aggregateType: "kanban-card",
+          aggregateId: updated.id,
+          businessId: findColumn.businessId,
+          actorId: userId,
+          payload: {
+            cardId: updated.id,
+            businessId: findColumn.businessId,
+            title: updated.title,
+            description: updated.description || null,
+            priority: updated.priority,
+            dueDate: updated.dueDate
+              ? new Date(updated.dueDate).toISOString()
+              : null,
+            isCompleted: Boolean(updated.completed),
+            assignedUserId:
+              assignedUserChanged && cardData.assignedUserId
+                ? cardData.assignedUserId
+                : null,
+          },
+        });
+
+        return updated;
+      });
 
       return updatedCard;
     } catch (error) {

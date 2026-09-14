@@ -23,6 +23,33 @@ function assertTenantAccess(
   }
 }
 
+/**
+ * Tenant check for a record reached by its OWN id, on a route that carries no
+ * :businessId for the request hook to catch. User, profile and permission are
+ * the three of those: the id in the path IS the sensitive resource, so the
+ * only thing standing between two tenants is this comparison inside the use
+ * case. A null businessId means the record belongs to no tenant (a MASTER
+ * user), which only another MASTER may touch.
+ */
+function assertTenantAccessToRecord(
+  principal: TenantPrincipal,
+  recordBusinessId: string | null | undefined,
+): void {
+  if (!recordBusinessId) {
+    if (principal.role !== "MASTER") {
+      throw new AppError(
+        "Acesso negado ao registro informado.",
+        403,
+        "TENANT_ACCESS_DENIED",
+      );
+    }
+
+    return;
+  }
+
+  assertTenantAccess(principal, recordBusinessId);
+}
+
 function getRequestedTenantId(request: FastifyRequest): string | undefined {
   const params = request.params as Record<string, unknown> | undefined;
   const query = request.query as Record<string, unknown> | undefined;
@@ -58,6 +85,7 @@ async function enforceRequestedTenant(request: FastifyRequest): Promise<void> {
 export {
   TenantPrincipal,
   assertTenantAccess,
+  assertTenantAccessToRecord,
   authorizeRequestedTenant,
   enforceRequestedTenant,
   getRequestedTenantId,

@@ -13,6 +13,7 @@ import { PermissionCannotBeDeletedByHimselfError } from "../errors/permission-ca
 import { PermissionNotFoundError } from "../errors/permission-not-found-error";
 
 import { sendSecurityEventToBusiness } from "@/websocket";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 @injectable()
 class DeletePermissionUseCase {
@@ -46,6 +47,8 @@ class DeletePermissionUseCase {
     if (!existingPermission) {
       throw new PermissionNotFoundError();
     }
+
+    assertTenantAccessToRecord(findUser, existingPermission.businessId);
 
     try {
       const permissionDeleted =

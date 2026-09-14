@@ -71,6 +71,10 @@ const serviceOrderResponses = {
         completion_date: z.union([z.string(), z.date()]).nullable(),
         maintenance_type: z.enum(["INTERNAL", "EXTERNAL"]),
         total_amount: z.number(),
+        description: z
+          .string()
+          .nullable()
+          .describe("Descrição livre do que se trata a ordem de serviço."),
         current_mileage_at_service: z.number().nullable(),
         maintenance_interval_km_at_service: z.number().nullable(),
         last_maintenance_mileage_at_service: z.number().nullable(),

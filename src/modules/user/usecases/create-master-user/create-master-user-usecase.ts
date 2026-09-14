@@ -7,7 +7,9 @@ import { IUserRepository } from "../../repositories/IUser-repository";
 import { UserAlreadyExistsError } from "../errors/user-already-exists.error";
 
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
-import { NotificationService } from "@/shared/services/notification-service";
+import { OutboxService } from "@/shared/notifications/outbox-service";
+
+import database from "@/../infra/database";
 
 import { AppError } from "@/shared/errors/AppError";
 import { CreateMasterUserProps, User } from "../../dtos/user-dto";
@@ -15,7 +17,7 @@ import { CreateMasterUserProps, User } from "../../dtos/user-dto";
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserCannotCreateMasterUserError } from "../errors/user-cannot-create-master-user-error";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { env } from "@/env";
 
 @injectable()
@@ -23,41 +25,23 @@ class CreateMasterUserUseCase {
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
   private http_request = env.HTTP_REQUEST;
 
-  private emailQueue: EmailWorkerAdapter;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
     @inject("UsersTokensRepository")
     private usersTokens: IUsersTokensRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("createMasterUserEmailQueue");
-  }
+    @inject("OutboxService")
+    private outbox: OutboxService,
+  ) {}
 
-  private buildMasterUserCreatedNotificationText({
-    masterName,
-    masterEmail,
-  }: {
-    masterName: string;
-    masterEmail: string;
-  }): string {
-    return [
-      `👤 *Novo Usuário Master Criado!*`,
-      `Nome: *${masterName}*`,
-      `E-mail: *${masterEmail}*`,
-      `As credenciais foram enviadas por e-mail.`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
-  private async processNotifications(
+  /**
+   * Credential and verification e-mails stay here rather than in the
+   * notification pipeline: the first one carries the plain password, which
+   * must never sit in a persisted outbox payload.
+   */
+  private async sendCredentialEmails(
     masterCreated: User,
     rawPassword: string,
-    performedById: string,
-    performingUserName: string,
-    performingUserEmail: string,
   ): Promise<void> {
     try {
       const token = uuidV4();
@@ -70,9 +54,8 @@ class CreateMasterUserUseCase {
           expires,
         });
 
-      // Send credentials email and verification email in parallel
       await Promise.all([
-        this.emailQueue.enqueueEmail({
+        sendTransactionalMail({
           email: masterCreated.email,
           name: masterCreated.name,
           subject: "Sua conta Master foi criada com sucesso",
@@ -84,7 +67,7 @@ class CreateMasterUserUseCase {
             logo: this.cloudinaryLogo,
           },
         }),
-        this.emailQueue.enqueueEmail({
+        sendTransactionalMail({
           email: masterCreated.email,
           name: masterCreated.name,
           subject: "Verificação de e-mail",
@@ -96,49 +79,8 @@ class CreateMasterUserUseCase {
           },
         }),
       ]);
-
-      // Activity + notification for the creator (performing MASTER)
-      await this.notificationService.processUserNotifications({
-        activity: {
-          type: "Usuário",
-          action: "create",
-          entityId: masterCreated.id,
-          description: `Usuário Master ${masterCreated.name} criado | E-mail não verificado: ${masterCreated.email}`,
-          status: "Pendente",
-          performedBy: performedById,
-          businessId: null,
-          visibilityLevel: "SYSTEM",
-        },
-        notification: {
-          userId: performedById,
-          type: "master-user",
-          title: "Novo Usuário Master Criado",
-          message: `Você criou o usuário Master ${masterCreated.name} (${masterCreated.email}).`,
-          entityId: masterCreated.id,
-          link: `${this.http_request}/admin/master-users?search=${masterCreated.id}&page=1`,
-          businessId: null,
-          shouldSendEmail: true,
-          shouldSendWhatsApp: true,
-          whatsAppMessage: this.buildMasterUserCreatedNotificationText({
-            masterName: masterCreated.name,
-            masterEmail: masterCreated.email,
-          }),
-        },
-      });
-
-      // Notification for the created MASTER user
-      await this.notificationService.createNotificationIfEnabled({
-        userId: masterCreated.id,
-        type: "master-user",
-        title: "Bem-vindo ao Trajetto",
-        message: `Sua conta Master foi criada por ${performingUserName} (${performingUserEmail}). Suas credenciais foram enviadas por e-mail.`,
-        entityId: masterCreated.id,
-        link: `${this.http_request}/admin`,
-        businessId: null,
-        shouldSendEmail: false,
-      });
     } catch (error) {
-      console.error("[Usuário Master] Erro ao processar notificações:", error);
+      console.error("[Usuário Master] Erro ao enviar e-mails:", error);
     }
   }
 
@@ -167,20 +109,45 @@ class CreateMasterUserUseCase {
     const hashedPassword = await hash(password, 10);
 
     try {
-      const masterCreated = await this.user.createMasterUser({
-        name,
-        email,
-        password: hashedPassword,
+      // Two audiences, two events: the performer hears "you created X", the
+      // new master hears "welcome". Both commit with the user row itself.
+      const masterCreated = await database.$transaction(async (tx) => {
+        const created = await this.user.createMasterUser(
+          { name, email, password: hashedPassword },
+          tx,
+        );
+
+        await this.outbox.publish(tx, {
+          topic: "master-user.created",
+          aggregateType: "master-user",
+          aggregateId: created.id,
+          actorId: performedById,
+          payload: {
+            masterUserId: created.id,
+            masterName: created.name,
+            masterEmail: created.email,
+            actorUserId: performedById,
+          },
+        });
+
+        await this.outbox.publish(tx, {
+          topic: "master-user.welcomed",
+          aggregateType: "master-user",
+          aggregateId: created.id,
+          actorId: performedById,
+          payload: {
+            masterUserId: created.id,
+            performingUserName: performingUser.name,
+            performingUserEmail: performingUser.email,
+          },
+        });
+
+        return created;
       });
 
-      // Process notifications asynchronously without blocking the main flow
-      this.processNotifications(
-        masterCreated,
-        password,
-        performedById,
-        performingUser.name,
-        performingUser.email,
-      );
+      // Fire-and-forget as before; the plain password must not block nor
+      // outlive this request in any persisted form.
+      void this.sendCredentialEmails(masterCreated, password);
 
       return masterCreated;
     } catch (error) {

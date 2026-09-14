@@ -7,6 +7,15 @@ import { MarkNotificationAsReadController } from "@/modules/notification/usecase
 import { DeleteNotificationController } from "@/modules/notification/usecases/delete-notification/delete-notification-controller";
 import { CountUnreadNotificationsController } from "@/modules/notification/usecases/count-unread-notifications/count-unread-notifications-controller";
 
+import { MarkAllNotificationsReadController } from "@/modules/notification/usecases/mark-all-notifications-read/mark-all-notifications-read-controller";
+import { NotificationPreferencesController } from "@/modules/notification/usecases/manage-preferences/notification-preferences-controller";
+import {
+  RegisterPushTokenController,
+  RemovePushTokenController,
+} from "@/modules/notification/usecases/manage-push-token/manage-push-token-controller";
+
+import { getRateLimiterConfig } from "@/modules/middlewares/rate-limiter";
+
 import {
   notificationResponses,
   notificationSchemas,
@@ -20,6 +29,15 @@ const deleteNotificationController = new DeleteNotificationController();
 
 const countUnreadNotificationsController =
   new CountUnreadNotificationsController();
+
+const registerPushTokenController = new RegisterPushTokenController();
+const removePushTokenController = new RemovePushTokenController();
+
+const markAllNotificationsReadController =
+  new MarkAllNotificationsReadController();
+
+const notificationPreferencesController =
+  new NotificationPreferencesController();
 
 async function notificationRoutes(app: FastifyInstance) {
   app.get(
@@ -108,6 +126,121 @@ async function notificationRoutes(app: FastifyInstance) {
       },
     },
     deleteNotificationController.handle,
+  );
+
+  app.patch(
+    "/read-all",
+    {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["notification"],
+        summary: "Mark all notifications as read",
+        description:
+          "Mark every unread notification of the authenticated user as read",
+        response: {
+          200: notificationResponses.allNotificationsMarkedAsRead,
+          400: notificationResponses.listNotificationsErrors,
+          500: notificationResponses.internalServerError,
+        },
+      },
+    },
+    markAllNotificationsReadController.handle,
+  );
+
+  app.post(
+    "/push-token",
+    {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["notification"],
+        summary: "Register the device's Expo push token",
+        description:
+          "Registers (or reassigns to the authenticated user) the Expo push token of the mobile device. The PUSH pipeline channel only fans out to users with a registered token.",
+        body: notificationSchemas.registerPushToken,
+        response: {
+          200: notificationResponses.pushTokenChanged,
+          400: notificationResponses.listNotificationsErrors,
+          500: notificationResponses.internalServerError,
+        },
+      },
+    },
+    registerPushTokenController.handle,
+  );
+
+  app.delete(
+    "/push-token",
+    {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["notification"],
+        summary: "Unregister the device's Expo push token",
+        description:
+          "Best-effort logout cleanup — dead tokens are also pruned automatically when the provider reports DeviceNotRegistered.",
+        body: notificationSchemas.removePushToken,
+        response: {
+          200: notificationResponses.pushTokenChanged,
+          400: notificationResponses.listNotificationsErrors,
+          500: notificationResponses.internalServerError,
+        },
+      },
+    },
+    removePushTokenController.handle,
+  );
+
+  app.get(
+    "/preferences",
+    {
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["notification"],
+        summary: "Get notification preferences",
+        description:
+          "Per-category channel preferences for the authenticated user. Categories never saved return the user's legacy global toggles as defaults (isDefault: true)",
+        response: {
+          200: notificationResponses.preferencesRetrieved,
+          400: notificationResponses.listNotificationsErrors,
+          500: notificationResponses.internalServerError,
+        },
+      },
+    },
+    notificationPreferencesController.getPreferences,
+  );
+
+  app.put(
+    "/preferences",
+    {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["notification"],
+        summary: "Update notification preferences",
+        description:
+          "Upsert per-category channel preferences. Mandatory account notices are always delivered in-app regardless of these settings; WhatsApp additionally requires a configured phone number",
+        body: notificationSchemas.updatePreferences,
+        response: {
+          200: notificationResponses.preferencesUpdated,
+          400: notificationResponses.listNotificationsErrors,
+          500: notificationResponses.internalServerError,
+        },
+      },
+    },
+    notificationPreferencesController.updatePreferences,
   );
 }
 

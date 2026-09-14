@@ -17,13 +17,6 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
 
 import { Fine, CreateFineProps } from "../../dtos/fine-dto";
-import { User } from "@/modules/user/dtos/user-dto";
-
-import { Driver } from "@/modules/driver/dtos/driver-dto";
-import { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
-
-import { Branch } from "@/modules/branch/dtos/branch-dto";
-import { TrafficViolationCode } from "../../dtos/traffic-violation-code-dto";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
@@ -36,7 +29,6 @@ import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-
 import { FineDateInfractionCannotBeFutureError } from "../errors/fine-date-infraction-cannot-be-future-error";
 import { FineDueDateMustBeAfterInfractionError } from "../errors/fine-due-date-must-be-after-infraction-error";
 
-import { formatCurrency, formatDate } from "@/shared/utils/format-values";
 import { TrafficViolationCodeNotFoundError } from "../errors/traffic-violation-code-not-found-error";
 
 import { FinePaymentDateCannotBeEarlierInfractionError } from "../errors/fine-payment-date-cannot-be-earlier-infraction-error";
@@ -44,40 +36,13 @@ import { FineRegistrationsMobileLocationRequiredError } from "../errors/fine-reg
 
 import { FineLocationNotProvidedAdjustmentValidationError } from "../errors/fine-location-not-provided-adjustment-validation-error";
 
-import { NotificationService } from "@/shared/services/notification-service";
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
-
+import { OutboxService } from "@/shared/notifications/outbox-service";
 import { AppError } from "@/shared/errors/AppError";
-import { env } from "@/env";
 
-interface FineNotificationsTextProps {
-  userName?: string;
-  fineAmount: string;
-  vehiclePlate: string;
-  violationDate: string;
-  location?: string;
-  observation?: string;
-  points?: number;
-  branchName: string;
-  email?: string;
-  fineId: string;
-}
-
-interface ProcessNotificationsParams {
-  fineCreated: Fine;
-  findUser: User;
-  findDriver: Driver;
-  findVehicle: Vehicle;
-  findBranch: Branch;
-  findTrafficViolationCode: TrafficViolationCode;
-  businessId: string;
-  userId: string;
-}
+import database from "@/../infra/database";
 
 @injectable()
 class CreateFineUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -93,138 +58,9 @@ class CreateFineUseCase {
     private fine: IFineRepository,
     @inject("TrafficViolationCodeRepository")
     private trafficViolationCode: ITrafficViolationCodeRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
-
-  private buildFineNotificationText({
-    branchName,
-    email,
-    fineAmount,
-    userName,
-    vehiclePlate,
-    violationDate,
-    location,
-    observation,
-    points,
-    fineId,
-  }: FineNotificationsTextProps): string {
-    const locationPart = location ? `\nLocal: ${location}` : "";
-
-    return [
-      `🚨 *Nova Multa Registrada!*`,
-      userName && `Usuário: *${userName}*`,
-      email && `E-mail: *${email}*`,
-      `Filial: *${branchName}*`,
-      `Veículo: *${vehiclePlate}*`,
-      `Valor: *${fineAmount}*`,
-      `Identificador da multa: *${fineId}*`,
-      `Data da infração: *${violationDate}*${locationPart}`,
-      points && `Pontos na carteira: *${points}`,
-      observation && `Observação: *${observation}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  private async processNotifications({
-    fineCreated,
-    findUser,
-    findDriver,
-    findVehicle,
-    findBranch,
-    findTrafficViolationCode,
-    userId,
-    businessId,
-  }: ProcessNotificationsParams): Promise<void> {
-    try {
-      // Create activity for the user who created the fine
-      const activityData = {
-        type: "Multa",
-        action: "create",
-        entityId: fineCreated.id,
-        description: `Multa registrada para o motorista ${findDriver.name} 
-        no valor de ${formatCurrency(Number(fineCreated.amount))} | 
-        Infração: ${findTrafficViolationCode.code}-${findTrafficViolationCode.sub_code} | 
-        Veículo: ${findVehicle.license_plate} | 
-        Pontos: ${fineCreated.points} | 
-        ID: ${fineCreated.id}`,
-        status: "Pendente",
-        performedBy: userId,
-        businessId: businessId,
-      };
-
-      // Get notification recipients based on user role
-      let notificationRecipients: any[] = [];
-
-      if (findUser.role === "MASTER") {
-        notificationRecipients =
-          await this.user.findBusinessAdminsByBusinessId(businessId);
-      } else if (
-        findUser.role === "BUSINESS_ADMIN" ||
-        findUser.role === "BUSINESS_USER"
-      ) {
-        // BUSINESS_ADMIN/USER notificam apenas outros BUSINESS_ADMINs da mesma empresa
-        notificationRecipients = await this.user.findBusinessAdminsByBusinessId(
-          findUser.businessId as string,
-        );
-      }
-
-      // Build WhatsApp message
-      const whatsAppMessage = this.buildFineNotificationText({
-        userName: findUser.role === "MASTER" ? undefined : findUser.name,
-        email: findUser.role === "MASTER" ? undefined : findUser.email,
-        fineAmount: formatCurrency(Number(fineCreated.amount)),
-        vehiclePlate: findVehicle.license_plate,
-        violationDate: formatDate(fineCreated.violation_date, "pt-BR"),
-        location: fineCreated.location || undefined,
-        branchName: findBranch.corporate_reason,
-        observation: fineCreated.observation as string,
-        points: fineCreated.points as number,
-        fineId: fineCreated.id,
-      });
-
-      // Send notifications to each administrator (if any)
-      if (notificationRecipients.length > 0) {
-        const notificationPromises = notificationRecipients.map(
-          async (admin) => {
-            const instanceName = generateWhatsAppInstanceName(
-              admin.email,
-              businessId,
-            );
-
-            const notificationData = {
-              userId: admin.id,
-              type: "fine",
-              title: "Nova Multa Registrada",
-              message: `Nova multa de ${formatCurrency(Number(fineCreated.amount))} foi registrada para o veículo ${findVehicle.license_plate}`,
-              entityId: fineCreated.id,
-              link: `${this.http_request}/dashboard/fine?search=${fineCreated.id}&page=1`,
-              businessId: businessId,
-              shouldSendEmail: admin.email_notifications_enabled,
-              shouldSendWhatsApp: admin.whatsapp_notifications_enabled,
-              whatsAppMessage,
-              instanceName,
-            };
-
-            await this.notificationService.processUserNotifications({
-              notification: notificationData,
-              activity: activityData,
-            });
-          },
-        );
-
-        // Wait for all notifications to process
-        await Promise.allSettled(notificationPromises);
-      } else {
-        // Fallback: Create activity even if no recipients found
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error("[Fine] Erro ao processar notificações:", error);
-      // Does not prevent the creation of the service order
-    }
-  }
 
   async execute(fineData: CreateFineProps, userId: string): Promise<Fine> {
     const findUser = await this.user.findUserById(userId);
@@ -350,18 +186,40 @@ class CreateFineUseCase {
     }
 
     try {
-      const fineCreated = await this.fine.createFine(fineData);
+      // Fine and outbox event commit together: the notification pipeline
+      // picks the event up afterwards, so a crash right here can no longer
+      // lose the alert nor announce a fine that was rolled back.
+      const fineCreated = await database.$transaction(async (tx) => {
+        const created = await this.fine.createFine(fineData, tx);
 
-      // Process notifications asynchronously without blocking the main flow
-      this.processNotifications({
-        fineCreated,
-        findUser,
-        findDriver,
-        findVehicle,
-        findBranch,
-        findTrafficViolationCode,
-        userId,
-        businessId: fineData.businessId,
+        await this.outbox.publish(tx, {
+          topic: "fine.created",
+          aggregateType: "fine",
+          aggregateId: created.id,
+          businessId: fineData.businessId,
+          actorId: userId,
+          payload: {
+            fineId: created.id,
+            businessId: fineData.businessId,
+            amount: Number(created.amount),
+            points: (created.points as number) ?? null,
+            violationDate: new Date(created.violation_date).toISOString(),
+            location: created.location || null,
+            observation: (created.observation as string) || null,
+            vehiclePlate: findVehicle.license_plate,
+            driverName: findDriver.name,
+            branchName: findBranch.corporate_reason,
+            violationCode: `${findTrafficViolationCode.code}-${findTrafficViolationCode.sub_code}`,
+            actor: {
+              id: userId,
+              name: findUser.name,
+              email: findUser.email,
+              role: findUser.role,
+            },
+          },
+        });
+
+        return created;
       });
 
       return fineCreated;

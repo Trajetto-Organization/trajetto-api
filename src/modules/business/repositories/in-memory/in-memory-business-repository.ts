@@ -127,19 +127,29 @@ class InMemoryBusinessRepository implements IBusinessRepository {
     return found;
   }
 
+  async updateVehicleLimit(
+    businessId: string,
+    vehicle_limit: number,
+  ): Promise<Business> {
+    const index = this.business.findIndex((b) => b.id === businessId);
+
+    this.business[index] = {
+      ...this.business[index],
+      vehicle_limit,
+    };
+
+    return this.business[index];
+  }
+
   async updateAILimit(
     businessId: string,
     ai_analysis_limit: number,
   ): Promise<Business> {
     const index = this.business.findIndex((b) => b.id === businessId);
-    const currentUsed = this.business[index].ai_analysis_used ?? 0;
 
     this.business[index] = {
       ...this.business[index],
       ai_analysis_limit,
-      ai_analysis_used: Math.min(currentUsed, ai_analysis_limit),
-      ai_analysis_reset_at:
-        this.business[index].ai_analysis_reset_at ?? new Date(),
     };
 
     return this.business[index];
@@ -198,8 +208,6 @@ class InMemoryBusinessRepository implements IBusinessRepository {
       corporate_reason: found.corporate_reason,
       fantasy_name: found.fantasy_name || null,
       ai_analysis_limit: found.ai_analysis_limit ?? 0,
-      ai_analysis_used: found.ai_analysis_used ?? 0,
-      ai_analysis_reset_at: found.ai_analysis_reset_at ?? new Date(),
     };
   }
   async countBusinessDependencies(

@@ -1,0 +1,299 @@
+import { describe, expect, it } from "vitest";
+import { NotificationChannel } from "@prisma/client";
+
+import {
+  assertDeliveryLeaseInvariant,
+  channelsForRecipient,
+  DELIVERY_CONCURRENCY,
+  DELIVERY_LEASE_SECONDS,
+  DELIVERY_RETRY_DELAYS_MS,
+  nextRetryDelayMs,
+  PER_DELIVERY_TIMEOUT_MS,
+  resolveRecipientChannelFlags,
+  withRetryJitter,
+} from "@/shared/notifications/pipeline-rules";
+
+const allEnabled = {
+  activityNotificationsEnabled: true,
+  emailNotificationsEnabled: true,
+  whatsappNotificationsEnabled: true,
+  hasWhatsAppPhone: true,
+};
+
+const fullContent = {
+  hasInAppContent: true,
+  hasEmailContent: true,
+  hasWhatsAppContent: true,
+};
+
+describe("push channel", () => {
+  /**
+   * Push is the phone-shaped form of in-app: same content, same preference
+   * decision — it only exists where a registered device does.
+   */
+  it("adds PUSH alongside IN_APP when the recipient has a device", () => {
+    const channels = channelsForRecipient(allEnabled, {
+      ...fullContent,
+      hasPushDevice: true,
+    });
+
+    expect(channels).toContain(NotificationChannel.IN_APP);
+    expect(channels).toContain(NotificationChannel.PUSH);
+  });
+
+  it("no device, no PUSH row — web-only users never accumulate dead pushes", () => {
+    const channels = channelsForRecipient(allEnabled, fullContent);
+
+    expect(channels).not.toContain(NotificationChannel.PUSH);
+  });
+
+  it("in-app disabled disables PUSH with it", () => {
+    const channels = channelsForRecipient(
+      { ...allEnabled, activityNotificationsEnabled: false },
+      { ...fullContent, hasPushDevice: true },
+    );
+
+    expect(channels).not.toContain(NotificationChannel.IN_APP);
+    expect(channels).not.toContain(NotificationChannel.PUSH);
+  });
+});
+
+describe("retry backoff", () => {
+  it("waits longer after each failed attempt", () => {
+    const delays = [1, 2, 3, 4].map((attempt) =>
+      nextRetryDelayMs(attempt, DELIVERY_RETRY_DELAYS_MS),
+    );
+
+    expect(delays).toEqual(DELIVERY_RETRY_DELAYS_MS);
+  });
+
+  /**
+   * Null is the signal to mark the row FAILED. Without a hard stop, one
+   * permanently broken delivery would be retried forever.
+   */
+  it("gives up after the schedule is exhausted", () => {
+    expect(nextRetryDelayMs(DELIVERY_RETRY_DELAYS_MS.length + 1)).toBeNull();
+  });
+});
+
+describe("channel gating", () => {
+  it("gives an all-enabled recipient every channel", () => {
+    expect(channelsForRecipient(allEnabled, fullContent)).toEqual([
+      NotificationChannel.IN_APP,
+      NotificationChannel.EMAIL,
+      NotificationChannel.WHATSAPP,
+    ]);
+  });
+
+  it("honors each per-user toggle independently", () => {
+    expect(
+      channelsForRecipient(
+        { ...allEnabled, activityNotificationsEnabled: false },
+        fullContent,
+      ),
+    ).not.toContain(NotificationChannel.IN_APP);
+
+    expect(
+      channelsForRecipient(
+        { ...allEnabled, emailNotificationsEnabled: false },
+        fullContent,
+      ),
+    ).not.toContain(NotificationChannel.EMAIL);
+
+    expect(
+      channelsForRecipient(
+        { ...allEnabled, whatsappNotificationsEnabled: false },
+        fullContent,
+      ),
+    ).not.toContain(NotificationChannel.WHATSAPP);
+  });
+
+  /**
+   * Opt-in without a number would create deliveries that can only fail —
+   * noise in the failure metrics for something that isn't a failure.
+   */
+  it("skips WhatsApp when the recipient has no phone", () => {
+    expect(
+      channelsForRecipient(
+        { ...allEnabled, hasWhatsAppPhone: false },
+        fullContent,
+      ),
+    ).not.toContain(NotificationChannel.WHATSAPP);
+  });
+
+  it("skips WhatsApp when the topic has no WhatsApp content", () => {
+    expect(
+      channelsForRecipient(allEnabled, {
+        ...fullContent,
+        hasWhatsAppContent: false,
+      }),
+    ).not.toContain(NotificationChannel.WHATSAPP);
+  });
+
+  /**
+   * An activity-only topic (checklist, refuelling) renders nothing in-app,
+   * and e-mail reuses the in-app render — so neither channel may fire even
+   * for a recipient with everything enabled.
+   */
+  it("skips in-app and e-mail when the topic has no in-app content", () => {
+    expect(
+      channelsForRecipient(allEnabled, {
+        ...fullContent,
+        hasInAppContent: false,
+        hasEmailContent: false,
+      }),
+    ).toEqual([NotificationChannel.WHATSAPP]);
+  });
+
+  /**
+   * A topic can carry in-app content and still refuse e-mail — the welcome
+   * note whose real content already went out as a credentials e-mail.
+   */
+  it("suppresses only e-mail when the topic asks for it", () => {
+    expect(
+      channelsForRecipient(allEnabled, {
+        ...fullContent,
+        hasEmailContent: false,
+        hasWhatsAppContent: false,
+      }),
+    ).toEqual([NotificationChannel.IN_APP]);
+  });
+
+  /**
+   * Mandatory topics ("your account changed") exist so preferences control
+   * noise, never critical notices: in-app fires even with everything off.
+   */
+  it("forces in-app for a mandatory topic with everything disabled", () => {
+    expect(
+      channelsForRecipient(
+        {
+          activityNotificationsEnabled: false,
+          emailNotificationsEnabled: false,
+          whatsappNotificationsEnabled: false,
+          hasWhatsAppPhone: false,
+        },
+        { ...fullContent, isMandatory: true },
+      ),
+    ).toEqual([NotificationChannel.IN_APP]);
+  });
+});
+
+describe("preference layering", () => {
+  const legacyAllOn = {
+    activity_notifications_enabled: true,
+    email_notifications_enabled: true,
+    whatsapp_notifications_enabled: true,
+    whatsapp_phone: "24999999999",
+  };
+
+  /**
+   * No saved row = no opinion: shipping the preferences table changed
+   * nobody's behavior until they touch the screen.
+   */
+  it("falls back to the legacy toggles without a row", () => {
+    expect(resolveRecipientChannelFlags(legacyAllOn, undefined)).toEqual({
+      activityNotificationsEnabled: true,
+      emailNotificationsEnabled: true,
+      whatsappNotificationsEnabled: true,
+      hasWhatsAppPhone: true,
+    });
+  });
+
+  it("lets a saved row override the globals for its category", () => {
+    expect(
+      resolveRecipientChannelFlags(legacyAllOn, {
+        inApp: false,
+        email: false,
+        whatsapp: false,
+      }),
+    ).toEqual({
+      activityNotificationsEnabled: false,
+      emailNotificationsEnabled: false,
+      whatsappNotificationsEnabled: false,
+      hasWhatsAppPhone: true,
+    });
+  });
+
+  /**
+   * A preference can want WhatsApp all it likes — without a configured
+   * number there is nowhere to send, and the phone gate stays in charge.
+   */
+  it("keeps WhatsApp blocked without a phone even when the row wants it", () => {
+    const flags = resolveRecipientChannelFlags(
+      { ...legacyAllOn, whatsapp_phone: null },
+      { inApp: true, email: true, whatsapp: true },
+    );
+
+    expect(flags.whatsappNotificationsEnabled).toBe(true);
+    expect(flags.hasWhatsAppPhone).toBe(false);
+
+    expect(
+      channelsForRecipient(flags, {
+        hasInAppContent: true,
+        hasEmailContent: true,
+        hasWhatsAppContent: true,
+      }),
+    ).not.toContain(NotificationChannel.WHATSAPP);
+  });
+});
+
+/**
+ * The lease is the only thing standing between a slow batch and a duplicate
+ * WhatsApp: once it expires, another replica claims rows the first one is
+ * still sending. These pin the arithmetic so a future tuning change cannot
+ * quietly cross the line.
+ */
+describe("delivery lease invariant", () => {
+  it("accepts the shipped batch size", () => {
+    expect(() => assertDeliveryLeaseInvariant(20)).not.toThrow();
+  });
+
+  it("refuses a batch whose worst case outruns the lease", () => {
+    // 200 items at concurrency 5 is 40 waves; at 15s each that is 600s,
+    // well past the 180s lease.
+    expect(() => assertDeliveryLeaseInvariant(200)).toThrow(
+      /lease invariant violated/i,
+    );
+  });
+
+  it("refuses a timeout raise that no longer fits", () => {
+    expect(() =>
+      assertDeliveryLeaseInvariant(20, DELIVERY_CONCURRENCY, 60_000),
+    ).toThrow(/lease invariant violated/i);
+  });
+
+  it("keeps a real margin with the shipped numbers", () => {
+    const worstCaseMs =
+      Math.ceil(20 / DELIVERY_CONCURRENCY) * PER_DELIVERY_TIMEOUT_MS;
+
+    // Not merely under the lease: comfortably under it.
+    expect(worstCaseMs * 2).toBeLessThan(DELIVERY_LEASE_SECONDS * 1000);
+  });
+});
+
+describe("retry jitter", () => {
+  it("stays within twenty percent of the scheduled delay", () => {
+    const base = 30_000;
+
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const jittered = withRetryJitter(base);
+
+      expect(jittered).toBeGreaterThanOrEqual(base * 0.8);
+      expect(jittered).toBeLessThanOrEqual(base * 1.2);
+    }
+  });
+
+  it("never schedules a retry sooner than a second", () => {
+    expect(withRetryJitter(100)).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it("actually spreads the batch instead of returning one value", () => {
+    const seen = new Set(
+      Array.from({ length: 50 }, () => withRetryJitter(30_000)),
+    );
+
+    // A convoy of retries marching back in lockstep is the failure this
+    // exists to prevent, so identical values across 50 draws is a bug.
+    expect(seen.size).toBeGreaterThan(1);
+  });
+});

@@ -22,17 +22,13 @@ env:
   # Common environment variables for all jobs
   NODE_ENV: test
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
-  RABBITMQ_URL: amqp://guest:guest@localhost:5672
   REDIS_URL: redis://localhost:6379
   HTTP_REQUEST: http://localhost:3000
   API_HTTP_REQUEST: http://localhost:3333
   JWT_SECRET: test-jwt-secret-key-for-github-actions-only
   JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
-  EVOLUTION_API_URL: http://localhost:8080/test
-  EVOLUTION_API_KEY: test-evolution-api-key
-  EVOLUTION_HTTP_REQUEST: http://localhost:3333
-  TRAJETTO_WHATSAPP_BUSINESS_PHONE: 5524999999999
-  TRAJETTO_WHATSAPP_INSTANCE_NAME: Trajetto-Business-Test
+  META_WHATSAPP_TEMPLATE_NAME: trajetto_notification
+  META_WHATSAPP_API_VERSION: v23.0
   UPLOAD_STORAGE_TYPE: local
   UPLOAD_LOCAL_PATH: ./tmp
   MASTER_USER_EMAIL: test-master@example.com
@@ -57,19 +53,6 @@ jobs:
         ports:
           - 5432:5432
 
-      rabbitmq:
-        image: rabbitmq:3.13-management-alpine
-        env:
-          RABBITMQ_DEFAULT_USER: guest
-          RABBITMQ_DEFAULT_PASS: guest
-        options: >-
-          --health-cmd "rabbitmq-diagnostics -q ping"
-          --health-interval 30s
-          --health-timeout 30s
-          --health-retries 5
-        ports:
-          - 5672:5672
-          - 15672:15672
 
       redis:
         image: redis:7-alpine
@@ -110,10 +93,13 @@ jobs:
       - name: Type-check
         run: yarn typecheck
 
+      # Port 5672 was RabbitMQ. The broker was removed in 09/2026 — the outbox
+      # lives in Postgres — but this wait stayed, and the default shell is
+      # `bash -e`: `timeout` exits 124 after a minute and takes the whole job
+      # with it, so no image is ever built and production never moves.
       - name: Wait for services
         run: |
           timeout 60 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
-          timeout 60 bash -c 'until nc -z localhost 5672; do sleep 1; done'
           timeout 60 bash -c 'until nc -z localhost 6379; do sleep 1; done'
 
       - name: Create tmp directory

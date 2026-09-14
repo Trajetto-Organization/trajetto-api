@@ -24,7 +24,7 @@ import { ServiceOrderNotBelongBusinessError } from "../errors/service-order-not-
 import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
 
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
-import { NotificationService } from "@/shared/services/notification-service";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { ServiceOrderCompletionDateCannotBeEarlierOrderError } from "../errors/service-order-completion-date-cannot-be-earlier-order-date-error";
 import { UserResponsibleNotFoundError } from "@/modules/user/usecases/errors/user-responsible-not-found-error";
@@ -38,22 +38,10 @@ import {
   UpdateServiceOrderProps,
 } from "../../dtos/service-order-dto";
 
-import { formatCurrency } from "@/shared/utils/format-values";
-import { buildServiceOrderLink } from "@/shared/utils/link-redirect-page";
-
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
-import { env } from "@/env";
-
-interface ServiceOrderNotificationTextProps {
-  totalAmount: string;
-  licensePlate: string;
-  serviceOrderId: string;
-}
+import database from "@/../infra/database";
 
 @injectable()
 class UpdateServiceOrderUseCase {
-  private http_request = env.HTTP_REQUEST;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -67,108 +55,9 @@ class UpdateServiceOrderUseCase {
     private supplier: ISupplierRepository,
     @inject("ServiceOrderRepository")
     private serviceOrder: IServiceOrderRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
-
-  private buildServiceOrderNotificationText({
-    totalAmount,
-    licensePlate,
-    serviceOrderId,
-  }: ServiceOrderNotificationTextProps): string {
-    return [
-      `🔧 *Ordem de Serviço Atualizada! Você foi designado como responsável por uma ordem de serviço atualizada*`,
-      `Veículo: *${licensePlate}*`,
-      `Valor total: *${formatCurrency(Number(totalAmount))}*`,
-      `Identificador da OS: *${serviceOrderId}*`,
-      `Para mais detalhes, acesse o sistema.`,
-    ].join("\n");
-  }
-
-  private async processNotifications(
-    originalServiceOrder: ServiceOrder,
-    updatedServiceOrder: ServiceOrder,
-    serviceOrderData: UpdateServiceOrderProps,
-    userId: string,
-    businessId: string,
-    vehicleLicensePlate: string,
-  ): Promise<void> {
-    try {
-      // Always create activity for service order update
-      const activityData = {
-        type: "Ordem de serviço",
-        action: "update",
-        entityId: updatedServiceOrder.id,
-        description: `Ordem de serviço atualizada para o veículo ${vehicleLicensePlate} no valor de ${formatCurrency(Number(updatedServiceOrder.total_amount))} | ID: ${updatedServiceOrder.id}`,
-        status: "Atualizado",
-        performedBy: userId,
-        businessId,
-      };
-
-      // Check if responsibleUserId changed
-      const responsibleUserChanged =
-        serviceOrderData.responsibleUserId !== undefined &&
-        originalServiceOrder.responsibleUserId !==
-          serviceOrderData.responsibleUserId;
-
-      if (responsibleUserChanged && serviceOrderData.responsibleUserId) {
-        // ResponsibleUser changed, send notification
-        const responsibleUser = await this.user.findUserById(
-          serviceOrderData.responsibleUserId,
-        );
-
-        if (responsibleUser) {
-          // 🚗 Build correct link for driver or non-driver users
-          const notificationLink = buildServiceOrderLink({
-            baseUrl: this.http_request,
-            role: responsibleUser.role,
-            driverId: responsibleUser.driverId,
-            vehicleId: updatedServiceOrder.vehicleId,
-            serviceOrderId: updatedServiceOrder.id,
-          });
-
-          const notificationData = {
-            userId: serviceOrderData.responsibleUserId,
-            type: "service-order",
-            title: "Ordem de Serviço Atualizada e Atribuída",
-            message: `Você foi designado como responsável por uma ordem de serviço atualizada para o veículo ${vehicleLicensePlate}`,
-            entityId: updatedServiceOrder.id,
-            link: notificationLink,
-            businessId,
-            shouldSendEmail: true,
-            shouldSendWhatsApp: true,
-            whatsAppMessage: this.buildServiceOrderNotificationText({
-              totalAmount: updatedServiceOrder.total_amount as string,
-              licensePlate: vehicleLicensePlate,
-              serviceOrderId: updatedServiceOrder.id,
-            }),
-            instanceName: generateWhatsAppInstanceName(
-              responsibleUser.email,
-              businessId,
-            ),
-          };
-
-          // Process notification to newly assigned user
-          await this.notificationService.processUserNotifications({
-            notification: notificationData,
-            activity: activityData,
-          });
-        } else {
-          // Fallback: Create activity even if responsible user not found
-          await this.notificationService.createActivityIfEnabled(activityData);
-        }
-      } else {
-        // No responsibleUser change, just create activity
-        await this.notificationService.createActivityIfEnabled(activityData);
-      }
-    } catch (error) {
-      console.error(
-        "[Service Order Update] Erro ao processar notificações:",
-        error,
-      );
-      // Does not prevent the service order update
-    }
-  }
 
   async execute(
     serviceOrderData: UpdateServiceOrderProps,
@@ -381,9 +270,45 @@ class UpdateServiceOrderUseCase {
     }
 
     try {
-      const updatedServiceOrder = await this.serviceOrder.updateServiceOrder({
-        serviceOrderData: updateData,
-        serviceOrderId,
+      // The plate feeds the notification texts; fetched before the update so
+      // the transaction stays write-only.
+      const vehicleForNotification = await this.vehicle.findVehicleById(
+        serviceOrderData.vehicleId || findServiceOrder.vehicleId,
+      );
+
+      // Only a hand-over pages someone: an update that keeps the responsible
+      // publishes with no recipient and feeds the activity trail alone.
+      const responsibleUserChanged =
+        serviceOrderData.responsibleUserId !== undefined &&
+        findServiceOrder.responsibleUserId !==
+          serviceOrderData.responsibleUserId;
+
+      const updatedServiceOrder = await database.$transaction(async (tx) => {
+        const updated = await this.serviceOrder.updateServiceOrder(
+          { serviceOrderData: updateData, serviceOrderId },
+          tx,
+        );
+
+        await this.outbox.publish(tx, {
+          topic: "service-order.updated",
+          aggregateType: "service-order",
+          aggregateId: updated.id,
+          businessId,
+          actorId: userId,
+          payload: {
+            serviceOrderId: updated.id,
+            businessId,
+            vehicleId: updated.vehicleId,
+            vehiclePlate: vehicleForNotification?.license_plate || null,
+            totalAmount: Number(updated.total_amount),
+            responsibleUserId:
+              responsibleUserChanged && serviceOrderData.responsibleUserId
+                ? serviceOrderData.responsibleUserId
+                : null,
+          },
+        });
+
+        return updated;
       });
 
       // 🔄 CONDITIONAL UPDATE: If you are finalizing the OS now
@@ -421,20 +346,6 @@ class UpdateServiceOrderUseCase {
           vehicleId: vehicleId,
         });
       }
-
-      const vehicle = await this.vehicle.findVehicleById(
-        serviceOrderData.vehicleId || findServiceOrder.vehicleId,
-      );
-
-      // Process notifications (activity + conditionally WhatsApp/Email)
-      this.processNotifications(
-        findServiceOrder,
-        updatedServiceOrder,
-        serviceOrderData,
-        userId,
-        businessId,
-        vehicle?.license_plate || "N/A",
-      );
 
       return updatedServiceOrder;
     } catch (error) {

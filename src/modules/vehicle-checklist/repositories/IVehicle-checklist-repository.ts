@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import {
   VehicleChecklist,
   CreateVehicleChecklistProps,
@@ -14,6 +16,10 @@ interface IVehicleChecklistRepository {
   ) => Promise<VehicleChecklist>;
   createVehicleChecklistWithMileage: (
     checklistData: CreateVehicleChecklistProps,
+    afterCreate?: (
+      tx: Prisma.TransactionClient,
+      checklist: VehicleChecklist,
+    ) => Promise<void>,
   ) => Promise<{ checklist: VehicleChecklist; created: boolean }>;
   findBySubmissionId: (
     businessId: string,

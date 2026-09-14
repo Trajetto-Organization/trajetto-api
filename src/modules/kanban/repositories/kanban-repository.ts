@@ -1,4 +1,6 @@
 import database from "@/../infra/database";
+import { Prisma } from "@prisma/client";
+
 import { IKanbanRepository } from "./IKanban-repository";
 
 import {
@@ -480,11 +482,17 @@ class KanbanRepository implements IKanbanRepository {
     });
   }
 
-  async createCard(cardData: CreateKanbanCardProps): Promise<KanbanCard> {
+  // `tx` lets callers create the card and its outbox event atomically.
+  async createCard(
+    cardData: CreateKanbanCardProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<KanbanCard> {
+    const client = tx ?? this.prisma;
+
     const position =
       cardData.position ?? (await this.getNextCardPosition(cardData.columnId));
 
-    const card = await this.prisma.kanbanCard.create({
+    const card = await client.kanbanCard.create({
       data: {
         ...cardData,
         position,
@@ -506,10 +514,12 @@ class KanbanRepository implements IKanbanRepository {
     return this.mapCard(card);
   }
 
-  async updateCard({
-    cardData,
-    cardId,
-  }: UpdateKanbanCard): Promise<KanbanCard> {
+  async updateCard(
+    { cardData, cardId }: UpdateKanbanCard,
+    tx?: Prisma.TransactionClient,
+  ): Promise<KanbanCard> {
+    const client = tx ?? this.prisma;
+
     const filteredData = Object.fromEntries(
       Object.entries(cardData).filter(([_, value]) => value !== undefined),
     );
@@ -523,7 +533,7 @@ class KanbanRepository implements IKanbanRepository {
       filteredData.completed = Boolean(filteredData.completed);
     }
 
-    const card = await this.prisma.kanbanCard.update({
+    const card = await client.kanbanCard.update({
       where: { id: cardId },
       data: filteredData,
       include: {

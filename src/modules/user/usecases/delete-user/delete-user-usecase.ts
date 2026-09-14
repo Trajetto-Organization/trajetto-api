@@ -16,6 +16,7 @@ import { IAccountPayableRepository } from "@/modules/account-payable/repositorie
 
 import { AppError } from "@/shared/errors/AppError";
 import { User, UserRole } from "../../dtos/user-dto";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 interface DeleteUserProps {
   userId: string;
@@ -63,6 +64,11 @@ class DeleteUserUseCase {
     if (!findDeletedUser) {
       throw new ResourceNotFoundError();
     }
+
+    // The route carries no :businessId, so nothing before this point has
+    // compared the target's tenant with the caller's. Same shape as
+    // user-revoke-access, which already does it.
+    assertTenantAccessToRecord(findUser, findDeletedUser.businessId);
 
     if (!this.allowedDeletion[findUser.role].includes(findDeletedUser.role)) {
       throw new AppError(

@@ -12,6 +12,7 @@ import { GetPreviousFuelController } from "@/modules/fuel/usecases/get-previous-
 import { SearchFuelByVehicleCursorController } from "@/modules/fuel/usecases/search-fuel-by-vehicle-cursor/search-fuel-by-vehicle-cursor-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
+import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import {
@@ -33,6 +34,10 @@ const searchFuelByVehicleCursorController =
   new SearchFuelByVehicleCursorController();
 
 async function fuelRoutes(app: FastifyInstance) {
+  // Fleet operation: gated by the FLEET module for the whole plugin (runs
+  // after ensureAuthenticated, which is onRequest). MASTER bypasses.
+  app.addHook("preHandler", verifyModuleEnabled("FLEET"));
+
   app.post(
     "/create-fuel/:businessId",
     {
@@ -48,9 +53,9 @@ async function fuelRoutes(app: FastifyInstance) {
         tags: ["fuel"],
         summary: "Create a new fuel record",
         description:
-          "Register a new fuel refueling record for a vehicle with driver, mileage, and fuel details. The odometer photo is mandatory. Accepts two body formats: application/json carrying `photo` as a key already uploaded to storage via POST /uploads/presign/:businessId (preferred), or multipart/form-data carrying the file itself (legacy).",
+          "Register a new fuel refueling record for a vehicle with driver, mileage, and fuel details. The odometer photo is mandatory and travels as `photo`, a key already uploaded to storage via POST /uploads/presign/:businessId.",
         params: fuelSchemas.updateDeleteBusiness,
-        consumes: ["application/json", "multipart/form-data"],
+        consumes: ["application/json"],
         response: {
           201: fuelResponses.fuelCreated,
           400: fuelResponses.createFuelErrors,
@@ -98,9 +103,9 @@ async function fuelRoutes(app: FastifyInstance) {
         tags: ["fuel"],
         summary: "Update a fuel record",
         description:
-          "Update information about an existing fuel refueling record including mileage, fuel details, and related entities. The odometer photo is optional on update. Accepts two body formats: application/json carrying `photo` as a key already uploaded to storage via POST /uploads/presign/:businessId (preferred), or multipart/form-data carrying the file itself (legacy).",
+          "Update information about an existing fuel refueling record including mileage, fuel details, and related entities. The odometer photo is optional on update and travels as `photo`, a key already uploaded to storage via POST /uploads/presign/:businessId.",
         params: fuelSchemas.updateDeleteFuel,
-        consumes: ["application/json", "multipart/form-data"],
+        consumes: ["application/json"],
         response: {
           200: fuelResponses.fuelUpdated,
           400: fuelResponses.updateFuelErrors,

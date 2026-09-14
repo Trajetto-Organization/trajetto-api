@@ -7,7 +7,6 @@ import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyCompress from "@fastify/compress";
 
 import fastifyStatic from "@fastify/static";
-import multipart from "@fastify/multipart";
 
 import path from "node:path";
 import Redis from "ioredis";
@@ -34,8 +33,14 @@ import {
 import { routes } from "./routes/routes";
 import { AppError } from "./shared/errors/AppError";
 
+import { enterRequestContext } from "@/shared/http/request-context";
+import { buildPublicBaseUrl } from "@/shared/utils/public-base-url";
+import { clientRateLimitKey, rateLimitExceeded } from "@/config/rate-limit";
+
 import { enforceRequestedTenant } from "./modules/middlewares/tenant-authorization";
-import { uploadConfig } from "./config/upload";
+import { UPLOAD_TYPES, uploadConfig } from "./config/upload";
+
+import { isOriginAllowed } from "./config/cors-origin";
 
 const app = fastify({
   logger: true,
@@ -65,11 +70,17 @@ app.register(fastifyCompress, {
 });
 
 app.register(fastifyCors, {
-  origin: [
-    env.HTTP_REQUEST,
-    env.EVOLUTION_API_URL,
-    env.EVOLUTION_HTTP_REQUEST as string,
-  ],
+  // The rule lives in config/cors-origin.ts, tested on its own. Refusing by
+  // answering without the allow header (rather than throwing) is what a
+  // rejection looks like to a browser, and it keeps the log quiet.
+  origin: (origin, callback) =>
+    callback(
+      null,
+      isOriginAllowed(origin, {
+        allowedOrigin: env.HTTP_REQUEST,
+        isProduction: env.NODE_ENV === "production",
+      }),
+    ),
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
 });
@@ -132,41 +143,13 @@ app.register(fastifyRateLimit, {
   timeWindow: "1 minute",
   redis: rateLimitRedis,
   skipOnError: true, // if Redis is down, let the request pass (don't crash the app)
-  keyGenerator: (request) => {
-    const forwardedFor = request.headers["x-forwarded-for"];
-    const clientIP =
-      request.headers["cf-connecting-ip"] ||
-      request.headers["x-real-ip"] ||
-      (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor) ||
-      request.socket.remoteAddress;
-
-    return (Array.isArray(clientIP) ? clientIP[0] : clientIP) || "";
-  },
-  errorResponseBuilder: (req, context) => {
-    return {
-      statusCode: 429,
-      error: "Too Many Requests",
-      message: `Limite de requisições excedido. Por favor, tente novamente mais tarde.`,
-    };
-  },
+  keyGenerator: clientRateLimitKey,
+  errorResponseBuilder: () => rateLimitExceeded(),
   addHeaders: {
     "x-ratelimit-limit": true, // Add X-RateLimit-Limit header
     "x-ratelimit-remaining": true, // Add X-RateLimit-Remaining header
     "x-ratelimit-reset": true, // Add X-RateLimit-Reset header
     "retry-after": true, // Adds Retry-After header
-  },
-});
-
-app.register(multipart, {
-  limits: {
-    fileSize: Math.max(
-      uploadConfig.getSizeLimit("odometerPhotos"),
-      uploadConfig.getSizeLimit("avatars"),
-      uploadConfig.getSizeLimit("checklistPhotos"),
-    ),
-    files: 20, // Allow up to 20 files per request for checklist photos etc
-    fields: 100,
-    parts: 120,
   },
 });
 
@@ -176,18 +159,39 @@ app.register(multipart, {
 // before it is buffered rather than after.
 if (uploadConfig.storage.type !== "r2") {
   app.addContentTypeParser(
-    uploadConfig.allowedMimeTypes.images,
+    // Every MIME any upload type accepts — images plus the chat's voice
+    // notes. Derived, not listed: a type registered in config/upload.ts
+    // can no longer be forgotten here and fail only on local storage.
+    [
+      ...uploadConfig.allowedMimeTypes.images,
+      ...uploadConfig.allowedMimeTypes.audio,
+    ],
     {
       parseAs: "buffer",
       bodyLimit: Math.max(
-        uploadConfig.getSizeLimit("odometerPhotos"),
-        uploadConfig.getSizeLimit("avatars"),
-        uploadConfig.getSizeLimit("checklistPhotos"),
+        ...UPLOAD_TYPES.map((type) => uploadConfig.getSizeLimit(type)),
       ),
     },
     (_request, body, done) => done(null, body),
   );
 }
+
+/**
+ * Publishes the caller's own host to the whole request.
+ *
+ * Only local-storage mode consumes it, to build URLs back to this API's own
+ * files. Production signs R2 URLs and never looks at it — which is also why
+ * the header is only trusted outside production: `Host` is client-controlled,
+ * and a spoofed one would otherwise hand a user a link to somebody else's
+ * server. In development the trade is the right way round: the alternative is
+ * every image and voice note being dead on the phone, because the API answers
+ * `localhost` and on a phone `localhost` is the phone.
+ */
+app.addHook("onRequest", async (request) => {
+  if (env.NODE_ENV === "production") return;
+
+  enterRequestContext({ publicBaseUrl: buildPublicBaseUrl(request) });
+});
 
 // Registered before the routes so it applies to every one of them. This runs
 // after body parsing, which `onRequest` (where `ensureAuthenticated` lives)
@@ -195,48 +199,54 @@ if (uploadConfig.storage.type !== "r2") {
 app.addHook("preHandler", enforceRequestedTenant);
 app.register(routes);
 
-app.setErrorHandler((error, _, reply) => {
-  const multipartErrorCodes: Record<
-    string,
-    { status: number; code: string; message: string }
-  > = {
-    FST_REQ_FILE_TOO_LARGE: {
-      status: 413,
-      code: "UPLOAD_FILE_TOO_LARGE",
-      message: "O arquivo excede o limite de tamanho permitido.",
-    },
-    FST_FILES_LIMIT: {
-      status: 413,
-      code: "UPLOAD_FILE_LIMIT_EXCEEDED",
-      message: "A quantidade de arquivos excede o limite permitido.",
-    },
-    FST_FIELDS_LIMIT: {
-      status: 413,
-      code: "UPLOAD_FIELD_LIMIT_EXCEEDED",
-      message: "A quantidade de campos excede o limite permitido.",
-    },
-    FST_PARTS_LIMIT: {
-      status: 413,
-      code: "UPLOAD_PART_LIMIT_EXCEEDED",
-      message:
-        "A quantidade de partes do formulario excede o limite permitido.",
-    },
-    FST_INVALID_MULTIPART_CONTENT_TYPE: {
-      status: 415,
-      code: "INVALID_MULTIPART_REQUEST",
-      message: "A requisicao deve usar multipart/form-data.",
-    },
+app.setErrorHandler((error, request, reply) => {
+  // Raised by the local upload route when the body exceeds its parser limit.
+  // In production the equivalent refusal comes from R2, which rejects a PUT
+  // whose length does not match the signed `ContentLength`.
+  const isBodyTooLarge = error.code === "FST_ERR_CTP_BODY_TOO_LARGE";
+
+  const isValidationError =
+    error instanceof ZodError || hasZodFastifySchemaValidationErrors(error);
+
+  const isAppError = error instanceof AppError;
+
+  const statusCode = isBodyTooLarge
+    ? 413
+    : isValidationError
+      ? 400
+      : isAppError
+        ? error.statusCode
+        : 500;
+
+  // This custom handler REPLACES the one Fastify installs by default, and the
+  // default is what logs errors out of the box. Without an explicit log here
+  // an unhandled exception is completely invisible: the client gets a generic
+  // "Internal server error" and the server keeps no trace of the stack, in
+  // any environment. So the log happens once, before the response, for every
+  // branch below and with the status code already resolved.
+  //
+  // Level split on purpose: a 4xx is the client being told it is wrong, which
+  // is expected traffic and would otherwise bury real failures under
+  // validation noise. Anything 5xx is ours and is logged as an error. `err`
+  // is pino's reserved key, so the stack is serialized in full.
+  const logContext = {
+    err: error,
+    method: request.method,
+    url: request.url,
+    requestId: request.id,
+    statusCode,
   };
 
-  const multipartError =
-    typeof error.code === "string"
-      ? multipartErrorCodes[error.code]
-      : undefined;
+  if (statusCode >= 500) {
+    request.log.error(logContext, "Unhandled error while processing request");
+  } else {
+    request.log.warn(logContext, "Request rejected");
+  }
 
-  if (multipartError) {
-    return reply.status(multipartError.status).send({
-      code: multipartError.code,
-      message: multipartError.message,
+  if (isBodyTooLarge) {
+    return reply.status(413).send({
+      code: "UPLOAD_FILE_TOO_LARGE",
+      message: "O arquivo excede o limite de tamanho permitido.",
     });
   }
 
@@ -263,12 +273,8 @@ app.setErrorHandler((error, _, reply) => {
       });
   }
 
-  if (env.NODE_ENV !== "production") {
-    console.error(error);
-  } else {
-    // for production sentry, datadog, etc.
-  }
-
+  // The stack stays in the log and never in the body: an unhandled exception
+  // must not leak internals to the client, in any environment.
   return reply.status(500).send({
     code: "INTERNAL_ERROR",
     status: "error",

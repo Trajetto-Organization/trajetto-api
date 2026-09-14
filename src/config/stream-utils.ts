@@ -7,7 +7,13 @@ import { Decimal } from "@prisma/client/runtime/library";
 
 interface ListResponse<T> {
   data: T[];
-  total: number;
+  /**
+   * Optional because a cursor feed has no total to give: counting the whole
+   * set on every "load more" would cost more than the page itself, and the
+   * summary endpoint already publishes the real number for the period.
+   * Offset listings still send it — that is what draws their pager.
+   */
+  total?: number;
   meta?: any;
 }
 
@@ -80,7 +86,7 @@ async function sendAsNDJSON<T>({
   // Send metadata as the first record
   const metaInfo = {
     meta: {
-      total: result.total,
+      ...(result.total !== undefined && { total: result.total }),
       page,
       pageSize,
       ...(result.meta && { searchMeta: result.meta }),

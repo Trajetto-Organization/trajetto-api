@@ -13,6 +13,12 @@ import { ToggleBusinessActiveController } from "@/modules/business/usecases/togg
 
 import { RequestBusinessDeletionController } from "@/modules/business/usecases/request-business-deletion/request-business-deletion-controller";
 import { UpdateAILimitController } from "@/modules/business/usecases/update-ai-limit/update-ai-limit-controller";
+import { UpdateVehicleLimitController } from "@/modules/business/usecases/update-vehicle-limit/update-vehicle-limit-controller";
+import {
+  GetBusinessEntitlementsController,
+  GetModuleImpactController,
+  UpdateBusinessEntitlementController,
+} from "@/modules/business/usecases/manage-entitlements/manage-entitlements-controller";
 
 import { GetAIUsageController } from "@/modules/business/usecases/get-ai-usage/get-ai-usage-controller";
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
@@ -35,6 +41,13 @@ const updateBusinessController = new UpdateBusinessController();
 const toggleBusinessActiveController = new ToggleBusinessActiveController();
 
 const updateAILimitController = new UpdateAILimitController();
+const updateVehicleLimitController = new UpdateVehicleLimitController();
+
+const getBusinessEntitlementsController =
+  new GetBusinessEntitlementsController();
+const updateBusinessEntitlementController =
+  new UpdateBusinessEntitlementController();
+const getModuleImpactController = new GetModuleImpactController();
 const getAIUsageController = new GetAIUsageController();
 
 async function businessRoutes(app: FastifyInstance) {
@@ -153,6 +166,29 @@ async function businessRoutes(app: FastifyInstance) {
     updateAILimitController.handle,
   );
 
+  app.patch(
+    "/update-vehicle-limit/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["business"],
+        summary: "Update the contracted vehicle limit for a business",
+        description:
+          "Set the contracted fleet size (billing baseline). 0 = not configured, never blocks. Lowering below the current fleet keeps existing vehicles and only blocks new registrations.",
+        params: businessSchemas.updateDeleteBusiness,
+        body: businessSchemas.updateVehicleLimit,
+        response: {
+          200: businessResponses.vehicleLimitUpdated,
+          400: businessResponses.aiLimitErrors,
+          500: businessResponses.internalServerError,
+        },
+      },
+    },
+    updateVehicleLimitController.handle,
+  );
+
   app.get(
     "/get-ai-usage/:businessId",
     {
@@ -173,6 +209,73 @@ async function businessRoutes(app: FastifyInstance) {
       },
     },
     getAIUsageController.handle,
+  );
+
+  app.get(
+    "/entitlements/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER", "BUSINESS_ADMIN"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["business"],
+        summary: "Get the company's plan: hired modules and fleet usage",
+        description:
+          "Hired modules (FLEET, DELIVERIES) plus the contracted vehicle limit and how many vehicles are registered. Business admins read their own company; MASTER reads any.",
+        params: businessSchemas.updateDeleteBusiness,
+        response: {
+          200: businessResponses.entitlementsData,
+          400: businessResponses.aiLimitErrors,
+          500: businessResponses.internalServerError,
+        },
+      },
+    },
+    getBusinessEntitlementsController.handle,
+  );
+
+  app.get(
+    "/entitlements/:businessId/impact/:module",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["business"],
+        summary: "What a company has riding on a module",
+        description:
+          "Record counts, work in flight and how many users lose menu items if the module is switched off. Feeds the confirmation dialog — nothing here is deleted by disabling.",
+        params: businessSchemas.moduleImpactParams,
+        response: {
+          200: businessResponses.moduleImpactData,
+          400: businessResponses.aiLimitErrors,
+          500: businessResponses.internalServerError,
+        },
+      },
+    },
+    getModuleImpactController.handle,
+  );
+
+  app.put(
+    "/entitlements/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["business"],
+        summary: "Enable or disable a module for a company",
+        description:
+          "Flips a sellable module (FLEET, DELIVERIES) on or off for the company. Module-gated routes reject companies without the module enabled.",
+        params: businessSchemas.updateDeleteBusiness,
+        body: businessSchemas.updateEntitlement,
+        response: {
+          200: businessResponses.entitlementUpdated,
+          400: businessResponses.aiLimitErrors,
+          500: businessResponses.internalServerError,
+        },
+      },
+    },
+    updateBusinessEntitlementController.handle,
   );
 
   app.post(

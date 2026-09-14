@@ -1,7 +1,10 @@
 import { CronSchedulerService } from "@/shared/services/cron-scheduler-service";
-import { resetAIUsageJob } from "./reset-ai-usage-job";
 
 import { cleanupExpiredRefreshTokensJob } from "./cleanup-expired-refresh-tokens-job";
+import { cleanupNotificationPipelineJob } from "./cleanup-notification-pipeline-job";
+
+import { cleanupAIPipelineJob } from "./cleanup-ai-pipeline-job";
+import { cleanupUserHistoryJob } from "./cleanup-user-history-job";
 
 /**
  * It records all the application's cron jobs.
@@ -12,8 +15,11 @@ import { cleanupExpiredRefreshTokensJob } from "./cleanup-expired-refresh-tokens
 function registerCronJobs(): void {
   const scheduler = CronSchedulerService.getInstance();
 
-  scheduler.registerJob(resetAIUsageJob);
   scheduler.registerJob(cleanupExpiredRefreshTokensJob);
+  scheduler.registerJob(cleanupNotificationPipelineJob);
+
+  scheduler.registerJob(cleanupAIPipelineJob);
+  scheduler.registerJob(cleanupUserHistoryJob);
 }
 
 export { registerCronJobs };

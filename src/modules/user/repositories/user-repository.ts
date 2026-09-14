@@ -1,4 +1,6 @@
 import database from "@/../infra/database";
+import { Prisma } from "@prisma/client";
+
 import { IUserRepository } from "./IUser-repository";
 
 import {
@@ -14,8 +16,6 @@ import {
   UpdateUserEmailVerification,
   UpdateUserAccessRevocation,
   UpdateUserWhatsAppSettings,
-  UpdateEmailNotifications,
-  UpdateActivityNotifications,
   CreateMasterUserProps,
   ListMasterUsersProps,
   SearchUserWithCursorProps,
@@ -186,7 +186,11 @@ class UserRepository implements IUserRepository {
     return updatedEmailVerification;
   }
 
-  async updateUser({ userId, userData }: UpdateUser): Promise<User> {
+  // `tx` lets callers update the user and an outbox event atomically.
+  async updateUser(
+    { userId, userData }: UpdateUser,
+    tx?: Prisma.TransactionClient,
+  ): Promise<User> {
     // Extract relation fields that need Prisma-specific translation
     const {
       businessId,
@@ -237,7 +241,7 @@ class UserRepository implements IUserRepository {
           : { connect: { id: driverId } };
     }
 
-    const updatedUser = await this.prisma.user.update({
+    const updatedUser = await (tx ?? this.prisma).user.update({
       where: { id: userId },
       data: updateData,
     });
@@ -329,6 +333,12 @@ class UserRepository implements IUserRepository {
         business: {
           select: {
             is_active: true,
+            // Hired modules ride along with the session lookup: the web app
+            // gates its navigation with them, and a second round trip on
+            // every navigation would buy nothing.
+            entitlements: {
+              select: { module: true, enabled: true },
+            },
           },
         },
         profileAccess: {
@@ -440,10 +450,6 @@ class UserRepository implements IUserRepository {
       data: {
         whatsapp_notifications_enabled: whatsapp_notifications_enabled,
         whatsapp_phone: whatsapp_phone || null,
-        // If disabling, also mark as disconnected
-        ...(whatsapp_notifications_enabled === false && {
-          whatsapp_instance_connected: false,
-        }),
       },
       include: {
         business: true,
@@ -496,113 +502,6 @@ class UserRepository implements IUserRepository {
     return masters;
   }
 
-  async findBusinessAdminsForWhatsApp(businessId: string): Promise<User[]> {
-    const admins = await this.prisma.user.findMany({
-      where: {
-        businessId,
-        role: "BUSINESS_ADMIN",
-        access_revoked: false,
-        whatsapp_notifications_enabled: true,
-        whatsapp_phone: {
-          not: null,
-        },
-      },
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
-            is_active: true,
-          },
-        },
-      },
-    });
-
-    return admins;
-  }
-
-  async findUsersWithWhatsAppEnabled(businessId: string): Promise<User[]> {
-    const users = await this.prisma.user.findMany({
-      where: {
-        businessId,
-        whatsapp_notifications_enabled: true,
-        whatsapp_phone: {
-          not: null,
-        },
-        access_revoked: false,
-      },
-      include: {
-        business: {
-          select: {
-            corporate_reason: true,
-            is_active: true,
-          },
-        },
-      },
-      orderBy: {
-        name: "asc",
-      },
-    });
-
-    return users;
-  }
-
-  async updateWhatsAppInstanceStatus(
-    userId: string,
-    connected: boolean,
-  ): Promise<User | null> {
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        whatsapp_instance_connected: connected,
-      },
-    });
-
-    return updatedUser;
-  }
-
-  async updateEmailNotifications({
-    userId,
-    email_notifications_enabled,
-  }: UpdateEmailNotifications): Promise<User | null> {
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        email_notifications_enabled,
-      },
-    });
-
-    return updatedUser;
-  }
-
-  async updateActivityNotifications({
-    userId,
-    activity_notifications_enabled,
-  }: UpdateActivityNotifications): Promise<User | null> {
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        activity_notifications_enabled,
-      },
-    });
-
-    return updatedUser;
-  }
-
-  async findUserWithConnectedWhatsAppByPhone(
-    phoneNumber: string,
-  ): Promise<User | null> {
-    const user = await this.prisma.user.findFirst({
-      where: {
-        whatsapp_phone: phoneNumber,
-        whatsapp_notifications_enabled: true,
-        whatsapp_instance_connected: true,
-        access_revoked: false,
-      },
-    });
-
-    return user;
-  }
-
   async findUserWithWhatsAppByPhone(
     phoneNumber: string,
     excludeUserId?: string,
@@ -617,23 +516,6 @@ class UserRepository implements IUserRepository {
     });
 
     return user;
-  }
-
-  async findAllUsersWithDisconnectedWhatsAppByPhone(
-    phoneNumber: string,
-    excludeUserId?: string,
-  ): Promise<User[]> {
-    const users = await this.prisma.user.findMany({
-      where: {
-        whatsapp_phone: phoneNumber,
-        whatsapp_notifications_enabled: true,
-        whatsapp_instance_connected: false,
-        access_revoked: false,
-        ...(excludeUserId && { id: { not: excludeUserId } }),
-      },
-    });
-
-    return users;
   }
 
   async findUserByDriverId(driverId: string): Promise<User | null> {
@@ -678,8 +560,9 @@ class UserRepository implements IUserRepository {
     name,
     email,
     password,
-  }: CreateMasterUserProps): Promise<User> {
-    const masterUser = await this.prisma.user.create({
+  }: CreateMasterUserProps,
+  tx?: Prisma.TransactionClient): Promise<User> {
+    const masterUser = await (tx ?? this.prisma).user.create({
       data: {
         name,
         email,

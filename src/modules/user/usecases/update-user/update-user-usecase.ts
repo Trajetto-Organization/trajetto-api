@@ -30,14 +30,14 @@ import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-mat
 
 import { UserMasterOnlyCanBeUpdatePasswordError } from "../errors/user-master-only-can-be-update-password-error";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { sendSecurityEventToUser } from "@/websocket";
 
 import { env } from "@/env";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 @injectable()
 class UpdateUserUseCase {
-  private emailQueue: EmailWorkerAdapter;
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
 
   private allowedUpdate: Record<UserRole, UserRole[]> = {
@@ -63,9 +63,7 @@ class UpdateUserUseCase {
     private notificationService: NotificationService,
     @inject("DriverRepository")
     private driver: IDriverRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("updateUserEmailQueue");
-  }
+  ) {}
 
   async execute({ userId, userData }: UpdateUser, id: string): Promise<User> {
     const findUser = await this.user.findUserById(id);
@@ -83,6 +81,11 @@ class UpdateUserUseCase {
     if (!userToUpdate) {
       throw new ResourceNotFoundError();
     }
+
+    // Against the target's CURRENT tenant, before any of the checks below —
+    // those validate against `targetBusinessId`, which comes from the body and
+    // is therefore always the caller's own company.
+    assertTenantAccessToRecord(findUser, userToUpdate.businessId);
 
     const isChangingToBusinessAdmin = userData.role === "BUSINESS_ADMIN";
 
@@ -219,7 +222,7 @@ class UpdateUserUseCase {
       });
 
       if (userData.email && userData.name) {
-        await this.emailQueue.enqueueEmail({
+        await sendTransactionalMail({
           email: userData.email,
           name: userData.name,
           subject: "Conta atualizada com sucesso",
@@ -231,7 +234,7 @@ class UpdateUserUseCase {
         });
 
         if (userData.password && userData.password !== findUser.password) {
-          await this.emailQueue.enqueueEmail({
+          await sendTransactionalMail({
             email: userData.email,
             name: userData.name,
             subject: "Senha alterada com sucesso",

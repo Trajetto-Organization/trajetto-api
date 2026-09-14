@@ -25,163 +25,31 @@ import { presignedPhotosSchema } from "@/schemas/presigned-photos-schema";
 import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
 
 import { PhotoValidationService } from "@/shared/services/photo-validation-service";
-import { AppError } from "@/shared/errors/AppError";
-
-import {
-  normalizeFormField,
-  normalizeFormFields,
-} from "@/shared/utils/normalize-form-field";
-
-const MAX_CHECKLIST_UPLOAD_BYTES = 5 * 1024 * 1024;
-
-const MAX_CHECKLIST_FILES = 20;
-const FILE_READ_TIMEOUT_MS = 30_000;
-
-async function readFileWithTimeout(part: any): Promise<Buffer> {
-  let timeout: NodeJS.Timeout | undefined;
-
-  try {
-    return await Promise.race([
-      part.toBuffer(),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          part.file?.destroy(
-            new Error("Tempo limite excedido durante o upload."),
-          );
-          reject(
-            new AppError(
-              "O upload demorou demais. Verifique a conexão e tente novamente.",
-              408,
-              "UPLOAD_TIMEOUT",
-            ),
-          );
-        }, FILE_READ_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-}
+import { normalizeFormFields } from "@/shared/utils/normalize-form-field";
 
 class CreateVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
 
-    const formData: Record<string, any> = {};
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const { photos, ...fields } = body;
+
+    // The photos are already in storage; only their keys travel here. Nothing
+    // to drain, nothing to buffer, nothing that can stall halfway through
+    // twenty camera photos.
+    const formData: Record<string, any> = normalizeFormFields(fields);
+    const presignedPhotos = presignedPhotosSchema.parse(photos);
+
+    // Grouped by field so the existing required-photo validation keeps working
+    // unchanged: it only asks whether a field has photos, not what they are.
     const photosByField: Record<string, any[]> = {};
 
-    let totalSize = 0;
-    let fileCount = 0;
+    for (const photo of presignedPhotos ?? []) {
+      if (!photo.fieldName) continue;
 
-    // Photos uploaded straight to storage, when the client took that route.
-    let presignedPhotos: { key: string; fieldName?: string }[] | undefined;
-
-    // Two request shapes are accepted while the clients migrate:
-    //
-    //   multipart  the original — files stream through this API
-    //   JSON       the new one — files are already in the bucket, and only
-    //              their keys travel here
-    //
-    // The JSON branch skips the streaming machinery entirely, which is the
-    // whole point: no parts to drain, no buffers to hold, nothing that can
-    // stall halfway through twenty photos.
-    if (!request.isMultipart()) {
-      const body = (request.body ?? {}) as Record<string, unknown>;
-      const { photos, ...fields } = body;
-
-      Object.assign(formData, normalizeFormFields(fields));
-
-      const parsedPhotos = presignedPhotosSchema.parse(photos);
-      presignedPhotos = parsedPhotos;
-
-      // Rebuilt so the existing required-photo validation keeps working
-      // unchanged: it only asks whether a field has photos, not what they are.
-      for (const photo of parsedPhotos ?? []) {
-        if (!photo.fieldName) continue;
-
-        photosByField[photo.fieldName] ??= [];
-        photosByField[photo.fieldName].push(photo);
-      }
-    }
-
-    // Erro de validacao encontrado no meio do multipart. NAO pode ser lancado
-    // de dentro do `for await`: as partes seguintes ficariam sem ser lidas e a
-    // requisicao trava sem resposta e sem log — o cliente fica girando para
-    // sempre. Guardamos o erro, drenamos o restante do stream e lancamos
-    // depois do laco.
-    let pendingError: AppError | null = null;
-
-    try {
-      const parts = request.isMultipart()
-        ? request.parts()
-        : (async function* () {})();
-
-      for await (const part of parts) {
-        // Ja falhou: so consome o que resta para liberar a requisicao.
-        if (pendingError) {
-          if (part.type === "file") part.file.resume();
-          continue;
-        }
-
-        if (part.type === "file") {
-          fileCount += 1;
-          if (fileCount > MAX_CHECKLIST_FILES) {
-            part.file.resume();
-            pendingError = new AppError(
-              `O checklist permite no máximo ${MAX_CHECKLIST_FILES} fotos.`,
-              400,
-              "UPLOAD_FILE_LIMIT_EXCEEDED",
-            );
-            continue;
-          }
-          // Group photos by field name and consume the file stream properly
-          const fieldName = part.fieldname;
-          if (!photosByField[fieldName]) {
-            photosByField[fieldName] = [];
-          }
-
-          const buffer = await readFileWithTimeout(part);
-          totalSize += buffer.length;
-
-          if (totalSize > MAX_CHECKLIST_UPLOAD_BYTES) {
-            pendingError = new AppError(
-              "O tamanho total das fotos excede o limite permitido de 5 MB.",
-              400,
-              "UPLOAD_SIZE_LIMIT_EXCEEDED",
-            );
-            continue;
-          }
-
-          const fileObject = {
-            ...part,
-            buffer,
-            checklistFieldName: fieldName,
-            toBuffer: async () => buffer,
-          };
-
-          photosByField[fieldName].push(fileObject);
-        } else if (part.type === "field") {
-          // Same normalisation the JSON branch runs, so a checklist validates
-          // identically whichever way the client encoded it.
-          formData[part.fieldname] = normalizeFormField(
-            part.fieldname,
-            part.value,
-          );
-        }
-      }
-
-      // Stream ja totalmente consumido: agora e seguro responder o erro.
-      if (pendingError) throw pendingError;
-    } catch (error) {
-      if (error instanceof AppError) {
-        return reply.status(error.statusCode).send({
-          code: error.code,
-          message: error.message,
-        });
-      }
-
-      throw error;
+      photosByField[photo.fieldName] ??= [];
+      photosByField[photo.fieldName].push(photo);
     }
 
     const idempotencyKey = request.headers["idempotency-key"];
@@ -221,30 +89,12 @@ class CreateVehicleChecklistController {
     );
 
     try {
-      const allPhotos: any[] = [];
-      const photoFieldMapping: Record<string, string[]> = {};
-
-      // Only meaningful for multipart: on the presigned path `photosByField`
-      // holds keys, not file streams, and the usecase reads those from
-      // `presignedPhotos` instead.
-      if (!presignedPhotos)
-        Object.entries(photosByField).forEach(([fieldName, photos]) => {
-          photoFieldMapping[fieldName] = (photos as any[]).map(
-            (p) => p.filename || "checklist-photo",
-          );
-          allPhotos.push(...photos);
-        });
-
       const checklist = await createVehicleChecklistUseCase.execute(
         {
           ...checklistData,
           businessId,
         },
         id,
-        allPhotos.length > 0 ? allPhotos : undefined,
-        Object.keys(photoFieldMapping).length > 0
-          ? photoFieldMapping
-          : undefined,
         presignedPhotos,
       );
 

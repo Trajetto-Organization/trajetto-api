@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import {
   Fine,
   CreateFineProps,
@@ -7,7 +9,10 @@ import {
 } from "../dtos/fine-dto";
 
 interface IFineRepository {
-  createFine: (fineData: CreateFineProps) => Promise<Fine>;
+  createFine: (
+    fineData: CreateFineProps,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<Fine>;
   listFines: (
     listFineProps: ListFineByBusinessIdProps,
   ) => Promise<ListFineProps>;

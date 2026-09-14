@@ -153,7 +153,10 @@ const dashboardResponses = {
           .describe("Performing user role"),
         user: z
           .object({
-            email: z.string().describe("User email"),
+            // Nullable because a MASTER action shown to a company user is
+            // presented as the platform, with the operator's personal address
+            // stripped — see shared/activity/actor-presentation.
+            email: z.string().nullable().describe("User email"),
             role: z.string().describe("User role"),
             name: z.string().describe("User name"),
           })

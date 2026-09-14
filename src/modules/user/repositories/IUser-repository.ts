@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import {
   CreateUserProps,
   User,
@@ -10,8 +12,6 @@ import {
   UpdateUserEmailVerification,
   UpdateUserAccessRevocation,
   UpdateUserWhatsAppSettings,
-  UpdateEmailNotifications,
-  UpdateActivityNotifications,
   CreateMasterUserProps,
   ListMasterUsersProps,
   SearchUserWithCursorProps,
@@ -28,7 +28,10 @@ interface IUserRepository {
     email_verified,
     userId,
   }: UpdateUserEmailVerification) => Promise<User | null>;
-  updateUser: ({ userId, userData }: UpdateUser) => Promise<User>;
+  updateUser: (
+    update: UpdateUser,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<User>;
   deleteUser: (userId: string) => Promise<User>;
   findUserByEmail: (email: string) => Promise<User | null>;
   findUserByEmailAndBusinessId: (
@@ -57,37 +60,20 @@ interface IUserRepository {
     whatsapp_phone,
   }: UpdateUserWhatsAppSettings) => Promise<User | null>;
   findBusinessAdminsByBusinessId: (businessId: string) => Promise<User[]>;
-  findBusinessAdminsForWhatsApp: (businessId: string) => Promise<User[]>;
   findOtherMasters: (excludeUserId: string) => Promise<User[]>;
-  updateWhatsAppInstanceStatus: (
-    userId: string,
-    connected: boolean,
-  ) => Promise<User | null>;
-  updateEmailNotifications: ({
-    userId,
-    email_notifications_enabled,
-  }: UpdateEmailNotifications) => Promise<User | null>;
-  updateActivityNotifications: ({
-    userId,
-    activity_notifications_enabled,
-  }: UpdateActivityNotifications) => Promise<User | null>;
-  findUserWithConnectedWhatsAppByPhone: (
-    phoneNumber: string,
-  ) => Promise<User | null>;
   findUserWithWhatsAppByPhone: (
     phoneNumber: string,
     excludeUserId?: string,
   ) => Promise<User | null>;
-  findAllUsersWithDisconnectedWhatsAppByPhone: (
-    phoneNumber: string,
-    excludeUserId?: string,
-  ) => Promise<User[]>;
   findUserByDriverId: (driverId: string) => Promise<User | null>;
   updateAvatar: (
     userId: string,
     avatarPath: string | null,
   ) => Promise<User | null>;
-  createMasterUser: (data: CreateMasterUserProps) => Promise<User>;
+  createMasterUser: (
+    data: CreateMasterUserProps,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<User>;
   listMasterUsers: (props: ListMasterUsersProps) => Promise<ListUsers>;
   searchUserWithCursor: (
     props: SearchUserWithCursorProps,

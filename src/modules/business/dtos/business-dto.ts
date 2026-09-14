@@ -35,8 +35,9 @@ interface Business {
   email: string;
   is_active?: boolean;
   ai_analysis_limit?: number;
-  ai_analysis_used?: number;
-  ai_analysis_reset_at?: Date;
+  vehicle_limit?: number;
+  // Registered fleet size — only populated by listBusiness (relation count).
+  vehicle_count?: number;
 }
 
 interface UpdateBusinessProps {

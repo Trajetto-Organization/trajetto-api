@@ -3,7 +3,7 @@ name: CI (branches)
 # Fast branch gate. Runs on any branch other than main/master so that
 # the problem surfaces before the PR—not later, in the middle of the heavy pipeline.
 #
-# Intentionally excluded: E2E tests (they need postgres/rabbitmq/redis running),
+# Intentionally excluded: E2E tests (they need postgres/redis running),
 # image building, release, and deployment. All of that is handled by deploy.yml
 # once the code reaches main. Here, there is only one question: is this code
 # healthy enough to become a PR?
@@ -15,17 +15,13 @@ on:
 env:
   NODE_ENV: test
   DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
-  RABBITMQ_URL: amqp://guest:guest@localhost:5672
   REDIS_URL: redis://localhost:6379
   HTTP_REQUEST: http://localhost:3000
   API_HTTP_REQUEST: http://localhost:3333
   JWT_SECRET: test-jwt-secret-key-for-github-actions-only
   JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
-  EVOLUTION_API_URL: http://localhost:8080/test
-  EVOLUTION_API_KEY: test-evolution-api-key
-  EVOLUTION_HTTP_REQUEST: http://localhost:3333
-  TRAJETTO_WHATSAPP_BUSINESS_PHONE: 5524999999999
-  TRAJETTO_WHATSAPP_INSTANCE_NAME: Trajetto-Business-Test
+  META_WHATSAPP_TEMPLATE_NAME: trajetto_notification
+  META_WHATSAPP_API_VERSION: v23.0
   UPLOAD_STORAGE_TYPE: local
   UPLOAD_LOCAL_PATH: ./tmp
   MASTER_USER_EMAIL: test-master@example.com

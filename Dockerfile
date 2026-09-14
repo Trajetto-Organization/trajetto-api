@@ -5,12 +5,9 @@
 # ================================
 # Node 22 LTS on Alpine; version pinned for reproducible builds.
 #
-# Alpine uses musl instead of glibc, which has two direct consequences:
-#   1. The `binaryTargets` in prisma/schema.prisma must include
-#      `linux-musl-openssl-3.0.x` — the Debian engine does NOT run here.
-#   2. Sharp requires the musl variant (`@img/sharp-linuxmusl-*`), which yarn
-#      resolves automatically since the installation runs inside this container.
-# If switching back to Debian, revert both points along with the base image.
+# Alpine uses musl instead of glibc, which means the `binaryTargets` in
+# prisma/schema.prisma must include `linux-musl-openssl-3.0.x` — the Debian
+# engine does NOT run here. Revert that along with the base image if switching.
 FROM node:22.21.1-alpine AS base
 
 RUN apk add --no-cache \
@@ -75,14 +72,6 @@ COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
 # Separate cache id from the `deps` stage — see the note there.
 RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-prod,sharing=locked \
     yarn install --frozen-lockfile --production=true
-
-# sharp publishes one package per platform, and yarn downloads both glibc and
-# musl variants. On Alpine, only the musl version is loaded; the glibc one
-# takes up ~17 MB without ever being used. If the base image ever switches
-# back to Debian, REMOVE this step — otherwise, sharp will be left without a binary.
-RUN rm -rf \
-    node_modules/@img/sharp-libvips-linux-x64 \
-    node_modules/@img/sharp-linux-x64
 
 # ================================
 # Stage: Production Runtime

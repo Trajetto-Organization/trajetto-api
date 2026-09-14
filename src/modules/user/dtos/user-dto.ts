@@ -17,11 +17,10 @@ interface CreateUserProps {
   name: string;
   role: UserRole;
   businessId: string;
-  profileAccessId?: string;
+  profileAccessId?: string | null;
   driverId?: string | null;
   whatsapp_notifications_enabled?: boolean;
   whatsapp_phone?: string | null;
-  whatsapp_instance_connected?: boolean;
 }
 
 interface UpdateUserProps {
@@ -57,6 +56,9 @@ interface User {
   businessId?: string | null;
   profileAccessId?: string | null;
   driverId?: string | null;
+
+  /** Last time this user was seen connected — the chat's presence line. */
+  last_seen_at?: Date | null;
   profileAccess?: {
     name: string;
     permissions: {
@@ -69,12 +71,18 @@ interface User {
   } | null;
   business?: {
     is_active: boolean;
+    entitlements?: { module: string; enabled: boolean }[];
   } | null;
+
+  /**
+   * Sellable modules this session may use, resolved by the get-user usecase.
+   * MASTER carries every module: the back office operates across companies.
+   */
+  enabledModules?: string[];
   whatsapp_notifications_enabled?: boolean;
   email_notifications_enabled?: boolean;
   activity_notifications_enabled?: boolean;
   whatsapp_phone?: string | null;
-  whatsapp_instance_connected?: boolean;
 }
 
 interface UpdateUserPassword {
@@ -91,16 +99,6 @@ interface UpdateUserWhatsAppSettings {
   userId: string;
   whatsapp_notifications_enabled: boolean;
   whatsapp_phone?: string | null;
-}
-
-interface UpdateEmailNotifications {
-  userId: string;
-  email_notifications_enabled: boolean;
-}
-
-interface UpdateActivityNotifications {
-  userId: string;
-  activity_notifications_enabled: boolean;
 }
 
 interface UpdateUserAccessRevocation {
@@ -212,8 +210,6 @@ export {
   EnumUserRole,
   UpdateUserAccessRevocation,
   UpdateUserWhatsAppSettings,
-  UpdateEmailNotifications,
-  UpdateActivityNotifications,
   CreateMasterUserProps,
   UpdateMasterUserProps,
   ListMasterUsersProps,

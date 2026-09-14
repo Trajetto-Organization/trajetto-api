@@ -13,6 +13,7 @@ import { ProfileAccessNotFoundError } from "../errors/profile-access-not-found-e
 import { ProfileAccessCannotBeDeletedByHimselfError } from "../errors/profile-access-cannot-be-deleted-by-himself-error";
 
 import { sendSecurityEventToBusiness } from "@/websocket";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 @injectable()
 class DeleteProfileAccessUseCase {
@@ -41,6 +42,8 @@ class DeleteProfileAccessUseCase {
     if (!existingProfileAccess) {
       throw new ProfileAccessNotFoundError();
     }
+
+    assertTenantAccessToRecord(findUser, existingProfileAccess.businessId);
 
     if (findUser.profileAccessId === profileAccessId) {
       throw new ProfileAccessCannotBeDeletedByHimselfError();

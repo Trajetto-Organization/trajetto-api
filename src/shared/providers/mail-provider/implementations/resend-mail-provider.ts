@@ -2,25 +2,39 @@ import { MailProviderProps } from "../dtos/mail-provider-dto";
 import { IMailProvider } from "../IMail-provider";
 
 import nodemailer, { Transporter } from "nodemailer";
-import handlebars from "handlebars";
 
 import { env } from "@/env";
-import fs from "node:fs";
+import { renderMailTemplate } from "../template-renderer";
+
+import { toMailDeliveryError } from "../errors/mail-delivery-error";
+
+/**
+ * Every timeout is bounded because sending now happens inside the
+ * notification pipeline worker: an SMTP server that accepts the TCP
+ * connection and then goes silent would otherwise hold a delivery slot (and
+ * its lease) open indefinitely.
+ */
+const SMTP_TIMEOUT_MS = 10_000;
 
 class ResendMailProvider implements IMailProvider {
-  private client?: Transporter;
+  private client: Transporter;
 
   constructor() {
-    const tranporter = nodemailer.createTransport({
+    this.client = nodemailer.createTransport({
       host: "smtp.resend.com",
-      port: 587, // ⚡ CHANGE: Use port 587 (STARTTLS) instead of 465 (SSL)
+      port: 587, // STARTTLS
       auth: {
         user: "resend",
         pass: env.RESEND_SECRET_KEY,
       },
+      // The pipeline sends in-process and in batches; pooling reuses the
+      // authenticated SMTP connection instead of handshaking per message.
+      pool: true,
+      maxConnections: 3,
+      connectionTimeout: SMTP_TIMEOUT_MS,
+      greetingTimeout: SMTP_TIMEOUT_MS,
+      socketTimeout: SMTP_TIMEOUT_MS,
     });
-
-    this.client = tranporter;
   }
 
   async sendMail({
@@ -28,28 +42,34 @@ class ResendMailProvider implements IMailProvider {
     subject,
     variables,
     path,
+    referenceId,
   }: MailProviderProps): Promise<void> {
+    const templateHTML = renderMailTemplate(path, variables);
+
     try {
-      const templateFileContent = fs.readFileSync(path).toString("utf-8");
-      const templateParse = handlebars.compile(templateFileContent);
-
-      const templateHTML = templateParse(variables);
-
-      const message = await this.client?.sendMail({
+      await this.client.sendMail({
         to,
         from: env.RESEND_FROM_EMAIL,
         subject,
         html: templateHTML,
         headers: {
-          "X-Entity-Ref-ID": "trajetto-notifications",
+          // Only sent when the caller supplied one: a constant here made
+          // Resend treat unrelated messages as the same entity.
+          ...(referenceId ? { "X-Entity-Ref-ID": referenceId } : {}),
           "X-Mailer": "Trajetto Fleet Management System",
         },
       });
-
-      console.log("Message sent: %s", message.messageId);
-      console.log("Preview URL: %s", nodemailer.getTestMessageUrl(message));
     } catch (error) {
-      console.log(error);
+      const deliveryError = toMailDeliveryError(
+        error,
+        `Falha ao enviar e-mail para ${to}`,
+      );
+
+      console.error(
+        `[ResendMailProvider] ${deliveryError.message} (retryable=${deliveryError.retryable})`,
+      );
+
+      throw deliveryError;
     }
   }
 }

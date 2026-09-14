@@ -11,19 +11,25 @@ import {
 } from "../dtos/service-order-dto";
 
 import database from "@/../infra/database";
+import { Prisma } from "@prisma/client";
 
 class ServiceOrderRepository implements IServiceOrderRepository {
   constructor(private prisma = database) {}
 
+  // `tx` lets the use case create the order and its outbox event atomically.
   async createServiceOrder(
     serviceOrderData: CreateServiceOrderProps,
+    tx?: Prisma.TransactionClient,
   ): Promise<ServiceOrder> {
-    const serviceOrderCreated = await this.prisma.serviceOrder.create({
+    const client = tx ?? this.prisma;
+
+    const serviceOrderCreated = await client.serviceOrder.create({
       data: {
         date: serviceOrderData.date || new Date(),
         completion_date: serviceOrderData.completion_date,
         maintenance_type: serviceOrderData.maintenance_type,
         total_amount: serviceOrderData.total_amount,
+        description: serviceOrderData.description,
         current_mileage_at_service: serviceOrderData.current_mileage_at_service,
         maintenance_interval_km_at_service:
           serviceOrderData.maintenance_interval_km_at_service,
@@ -224,17 +230,19 @@ class ServiceOrderRepository implements IServiceOrderRepository {
     };
   }
 
-  async updateServiceOrder({
-    serviceOrderData,
-    serviceOrderId,
-  }: UpdateServiceOrder): Promise<ServiceOrder> {
+  async updateServiceOrder(
+    { serviceOrderData, serviceOrderId }: UpdateServiceOrder,
+    tx?: Prisma.TransactionClient,
+  ): Promise<ServiceOrder> {
+    const client = tx ?? this.prisma;
+
     const filteredData = Object.fromEntries(
       Object.entries(serviceOrderData).filter(
         ([_, value]) => value !== undefined,
       ),
     );
 
-    const updateServiceOrder = await this.prisma.serviceOrder.update({
+    const updateServiceOrder = await client.serviceOrder.update({
       where: {
         id: serviceOrderId,
       },

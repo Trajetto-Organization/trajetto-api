@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import {
   Fuel,
   CreateFuelProps,
@@ -13,6 +15,7 @@ interface IFuelRepository {
   createFuel: (fuelData: CreateFuelProps) => Promise<Fuel>;
   createFuelWithMileage: (
     fuelData: CreateFuelProps,
+    afterCreate?: (tx: Prisma.TransactionClient, fuel: Fuel) => Promise<void>,
   ) => Promise<{ fuel: Fuel; created: boolean }>;
   findBySubmissionId: (
     businessId: string,

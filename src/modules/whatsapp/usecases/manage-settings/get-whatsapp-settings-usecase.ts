@@ -6,9 +6,6 @@ import { IWhatsAppProvider } from "@/shared/providers/whatsapp-provider/IWhatsAp
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import { AppError } from "@/shared/errors/AppError";
-import { generateWhatsAppInstanceName } from "@/shared/utils/whatsapp-instance-name";
-
 @injectable()
 class GetWhatsAppSettingsUseCase {
   constructor(
@@ -25,48 +22,11 @@ class GetWhatsAppSettingsUseCase {
       throw new ResourceNotFoundError();
     }
 
-    try {
-      const instanceName = generateWhatsAppInstanceName(
-        user.email,
-        user.businessId as string,
-      );
-      // Check connection status if WhatsApp is enabled
-      let instanceConnected = false;
-
-      if (user.whatsapp_notifications_enabled && user.whatsapp_phone) {
-        try {
-          const status =
-            await this.whatsAppProvider.getConnectionStatus(instanceName);
-          instanceConnected = status.status === "connected";
-
-          // Update status in bank if different
-          if (instanceConnected !== user.whatsapp_instance_connected) {
-            await this.userRepository.updateWhatsAppInstanceStatus(
-              userId,
-              instanceConnected,
-            );
-          }
-        } catch (error) {
-          console.error(
-            "[WhatsApp] Erro ao verificar status da instância:",
-            error,
-          );
-          instanceConnected = false;
-        }
-      }
-
-      return {
-        enabled: user.whatsapp_notifications_enabled || false,
-        phoneNumber: user.whatsapp_phone || undefined,
-        instanceConnected,
-        instanceName,
-      };
-    } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar buscar as configurações do WhatsApp! Por favor, tente novamente.",
-        500,
-      );
-    }
+    return {
+      enabled: user.whatsapp_notifications_enabled || false,
+      phoneNumber: user.whatsapp_phone || undefined,
+      serviceConfigured: this.whatsAppProvider.isConfigured(),
+    };
   }
 }
 

@@ -39,12 +39,8 @@ import { AppError } from "@/shared/errors/AppError";
 import { Fuel, UpdateFuelProps } from "../../dtos/fuel-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
-import { MultipartFile } from "@fastify/multipart";
 
-import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
-
-import { readMultipartFile } from "@/shared/utils/read-multipart-file";
-import { uploadConfig } from "@/config/upload";
+import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
 
 interface UpdateFuelRequest {
   fuelId: string;
@@ -78,10 +74,9 @@ class UpdateFuelUseCase {
   async execute(
     { fuelId, businessId, fuelData }: UpdateFuelRequest,
     userId: string,
-    odometerPhotoFile?: MultipartFile,
 
     // A replacement photo the client uploaded straight to storage. Absent when
-    // the edit does not touch the photo, in either request shape.
+    // the edit does not touch the photo.
     presignedPhoto?: { key: string },
   ): Promise<Fuel> {
     const findUser = await this.user.findUserById(userId);
@@ -279,22 +274,6 @@ class UpdateFuelUseCase {
 
         uploadedPhotoPath = resolved.path;
         finalFuelData.odometer_photo = resolved.path;
-      } else if (odometerPhotoFile) {
-        // Upload new photo
-        const buffer = await readMultipartFile(odometerPhotoFile, {
-          maxBytes: uploadConfig.getSizeLimit("odometerPhotos"),
-        });
-        const uploadResult = await this.uploadService.uploadFile({
-          buffer,
-          filename: odometerPhotoFile.filename || "odometer-photo",
-          mimetype: odometerPhotoFile.mimetype,
-          uploadType: "odometerPhotos",
-        });
-
-        uploadedPhotoPath = uploadResult.path;
-
-        // Add new photo path to fuel data
-        finalFuelData.odometer_photo = uploadResult.path;
       }
 
       const targetVehicleId = fuelData.vehicleId || findFuel.vehicleId;
@@ -335,7 +314,10 @@ class UpdateFuelUseCase {
       // Re-verify AI when photo or mileage changed (fire-and-forget)
       // Skip if business has AI disabled (limit === 0)
       if ((findBusiness.ai_analysis_limit ?? 0) > 0) {
-        const photoChanged = odometerPhotoFile !== undefined;
+        // Was tied to the multipart file, which the presigned path never set —
+        // so replacing only the photo never re-triggered verification, and the
+        // record kept an AI result describing the previous image.
+        const photoChanged = presignedPhoto !== undefined;
         const mileageChanged =
           fuelData.current_mileage &&
           fuelData.current_mileage !== findFuel.current_mileage;
@@ -346,18 +328,20 @@ class UpdateFuelUseCase {
           const mileage = fuelData.current_mileage || findFuel.current_mileage;
 
           if (photoPath) {
-            AIVerificationWorkerService.getInstance()
-              .enqueueVerification({
-                type: "fuel_odometer",
+            AIAnalysisService.getInstance()
+              .requestAnalysis({
+                type: "FUEL_ODOMETER",
                 recordId: fuelId,
                 businessId,
-                userId,
-                odometerPhotoPath: photoPath,
-                reportedMileage: mileage,
+                requestedById: userId,
+                input: {
+                  odometerPhotoPath: photoPath,
+                  reportedMileage: mileage,
+                },
               })
               .catch((err) =>
                 console.error(
-                  "[AI] Failed to enqueue fuel re-verification:",
+                  "[AI] Failed to request fuel re-verification:",
                   err,
                 ),
               );

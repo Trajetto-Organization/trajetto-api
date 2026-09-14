@@ -8,7 +8,7 @@ import { IDriverRepository } from "@/modules/driver/repositories/IDriver-reposit
 import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
-import { NotificationService } from "@/shared/services/notification-service";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
@@ -33,9 +33,8 @@ import {
 } from "../../dtos/vehicle-checklist-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
-import { MultipartFile } from "@fastify/multipart";
 
-import AIVerificationWorkerService from "@/shared/services/ai-verification-worker-service";
+import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
 import { uploadConfig } from "@/config/upload";
 
 @injectable()
@@ -53,8 +52,8 @@ class CreateVehicleChecklistUseCase {
     private branch: IBranchRepository,
     @inject("VehicleChecklistRepository")
     private vehicleChecklist: IVehicleChecklistRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
     @inject("UploadService")
     private uploadService: UploadService,
   ) {}
@@ -62,14 +61,9 @@ class CreateVehicleChecklistUseCase {
   async execute(
     checklistData: CreateVehicleChecklistProps,
     userId: string,
-    checklistPhotoFiles?: MultipartFile[],
-    photoFieldMapping?: Record<string, string[]>,
 
-    // Photos the client already uploaded straight to storage. Mutually
-    // exclusive with `checklistPhotoFiles` in practice: a request either
-    // streams its files here or it does not send them at all. Both paths are
-    // supported while the web and mobile clients migrate — dropping multipart
-    // before both have moved would break whichever went last.
+    // Photos the client already uploaded straight to storage. Only their keys
+    // reach this API — the bytes went from the device to the bucket.
     presignedPhotos?: { key: string; fieldName?: string }[],
   ): Promise<VehicleChecklist> {
     const findUser = await this.user.findUserById(userId);
@@ -207,11 +201,13 @@ class CreateVehicleChecklistUseCase {
       );
     }
 
-    const uploadedPhotoPaths: string[] = [];
+    // Photos this request attached, kept so they can be removed if the record
+    // never gets written. The client uploaded them, not this API, but an object
+    // with no row pointing at it is still just cost sitting in the bucket.
+    const attachedPhotoPaths: string[] = [];
     let databaseCommitted = false;
 
     try {
-      // Upload checklist photos if provided
       const photoPaths: string[] = [];
       const photoPathsByField: Record<string, string[]> = {};
 
@@ -228,53 +224,11 @@ class CreateVehicleChecklistUseCase {
 
         for (const photo of resolved) {
           photoPaths.push(photo.path);
+          attachedPhotoPaths.push(photo.path);
 
           if (photo.fieldName) {
             photoPathsByField[photo.fieldName] ??= [];
             photoPathsByField[photo.fieldName].push(photo.path);
-          }
-        }
-      } else if (checklistPhotoFiles && checklistPhotoFiles.length > 0) {
-        // A small concurrency window shortens uploads without allowing a
-        // single request to saturate memory/CPU while Sharp processes images.
-        for (let index = 0; index < checklistPhotoFiles.length; index += 3) {
-          const batch = checklistPhotoFiles.slice(index, index + 3);
-          const uploadedBatch = await Promise.all(
-            batch.map(async (photoFile) => {
-              const buffer = await photoFile.toBuffer();
-              const uploadResult = await this.uploadService.uploadFile({
-                buffer,
-                filename: photoFile.filename || "checklist-photo",
-                mimetype: photoFile.mimetype,
-                uploadType: "checklistPhotos",
-              });
-
-              uploadedPhotoPaths.push(uploadResult.path);
-
-              const explicitFieldName = (
-                photoFile as MultipartFile & { checklistFieldName?: string }
-              ).checklistFieldName;
-              const fallbackFieldName = photoFieldMapping
-                ? Object.entries(photoFieldMapping).find(([, filenames]) =>
-                    filenames.includes(photoFile.filename || "checklist-photo"),
-                  )?.[0]
-                : undefined;
-
-              return {
-                path: uploadResult.path,
-                fieldName: explicitFieldName ?? fallbackFieldName,
-              };
-            }),
-          );
-
-          for (const uploadedPhoto of uploadedBatch) {
-            photoPaths.push(uploadedPhoto.path);
-            if (uploadedPhoto.fieldName) {
-              photoPathsByField[uploadedPhoto.fieldName] ??= [];
-              photoPathsByField[uploadedPhoto.fieldName].push(
-                uploadedPhoto.path,
-              );
-            }
           }
         }
       }
@@ -289,51 +243,67 @@ class CreateVehicleChecklistUseCase {
             : undefined,
       };
 
-      // Record creation and mileage advancement are committed atomically.
+      // Record creation, mileage advancement and the outbox event are
+      // committed atomically; the pipeline turns the event into the activity
+      // trail entry after the commit.
       const { checklist: checklistCreated, created } =
         await this.vehicleChecklist.createVehicleChecklistWithMileage(
           checklistDataWithPhotos,
+          (tx, checklist) =>
+            this.outbox.publish(tx, {
+              topic: "vehicle-checklist.created",
+              aggregateType: "vehicle-checklist",
+              aggregateId: checklist.id,
+              businessId: checklistData.businessId,
+              actorId: userId,
+              eventKey: `vehicle-checklist.created:${checklist.id}`,
+              payload: {
+                checklistId: checklist.id,
+                businessId: checklistData.businessId,
+                vehiclePlate: findVehicle.license_plate,
+                vehicleDescription: findVehicle.description,
+                origin: checklistData.created_from ?? "WEB_DASHBOARD",
+              },
+            }),
         );
 
       if (!created) {
+        // An idempotent retry: the original checklist keeps its own photos, so
+        // the ones this attempt uploaded belong to nothing.
         await Promise.allSettled(
-          uploadedPhotoPaths.map((photoPath) =>
+          attachedPhotoPaths.map((photoPath) =>
             this.uploadService.deleteFile(photoPath),
           ),
         );
+
         return checklistCreated;
       }
+
       databaseCommitted = true;
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Checklist Veicular",
-        action: "create",
-        entityId: checklistCreated.id,
-        description: `Checklist veicular criado para o veículo ${findVehicle.license_plate} - ${findVehicle.description}`,
-        status: "Criado",
-        performedBy: userId,
-        businessId: checklistData.businessId,
-      });
-
-      // Enqueue AI verification for checklist photos (fire-and-forget)
+      // Request AI verification for checklist photos (fire-and-forget)
       // Skip if business has AI disabled (limit === 0)
       if (
         (findBusiness.ai_analysis_limit ?? 0) > 0 &&
         Object.keys(photoPathsByField).length > 0
       ) {
-        AIVerificationWorkerService.getInstance()
-          .enqueueVerification({
-            type: "checklist",
+        AIAnalysisService.getInstance()
+          .requestAnalysis({
+            type: "CHECKLIST",
             recordId: checklistCreated.id,
             businessId: checklistData.businessId,
-            userId,
-            photosByField: photoPathsByField,
-            checklistData: checklistData as Record<string, any>,
+            requestedById: userId,
+            input: {
+              photosByField: photoPathsByField,
+              checklistData: checklistData as unknown as Record<
+                string,
+                unknown
+              >,
+            },
           })
           .catch((err) =>
             console.error(
-              "[AI] Failed to enqueue checklist verification:",
+              "[AI] Failed to request checklist verification:",
               err,
             ),
           );
@@ -343,7 +313,7 @@ class CreateVehicleChecklistUseCase {
     } catch (error) {
       if (!databaseCommitted) {
         await Promise.allSettled(
-          uploadedPhotoPaths.map((photoPath) =>
+          attachedPhotoPaths.map((photoPath) =>
             this.uploadService.deleteFile(photoPath),
           ),
         );

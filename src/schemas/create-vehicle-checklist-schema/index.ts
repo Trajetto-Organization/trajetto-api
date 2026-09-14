@@ -1,6 +1,6 @@
 import { z } from "zod";
+import { RecordOrigin } from "@prisma/client";
 
-import { MultipartFile } from "@fastify/multipart";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -226,93 +226,19 @@ const createVehicleChecklistSchema = z.object({
     .uuid("ID do veículo é inválido."),
   driverId: z.string().uuid("ID do motorista é inválido.").optional(),
   branchId: z.string().uuid("ID da filial é inválido.").optional(),
+
+  // Optional on purpose: the web forms omit it and the column default
+  // (WEB_DASHBOARD) applies; the mobile app sends MOBILE_APP explicitly.
+  created_from: z
+    .nativeEnum(RecordOrigin, {
+      errorMap: () => ({
+        message: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
+      }),
+    })
+    .optional()
+    .describe("Origem do cadastro (MOBILE_APP ou WEB_DASHBOARD)."),
 });
 
-// Schema for categorized photo validation
-const photoFileSchema = z
-  .custom<MultipartFile>()
-  .refine((file) => file?.mimetype?.startsWith("image/"), {
-    message: "O arquivo deve ser uma imagem.",
-  })
-  .refine(
-    (file) => {
-      const allowedTypes = [
-        "image/jpeg",
-        "image/jpg",
-        "image/png",
-        "image/webp",
-      ];
-
-      return allowedTypes.includes(file?.mimetype);
-    },
-    {
-      message: "Tipo de arquivo não suportado. Use apenas JPEG, PNG ou WebP.",
-    },
-  );
-
-// Schema for categorized photos (each field can have multiple photos)
-const checklistPhotosSchema = z
-  .object({
-    // LEGAL PROTECTION - Always mandatory
-    current_mileage: z
-      .array(photoFileSchema)
-      .min(1, "Foto da quilometragem é obrigatória")
-      .optional(),
-    fuel_level_adequate: z
-      .array(photoFileSchema)
-      .min(1, "Foto do nível de combustível é obrigatória")
-      .optional(),
-    tires_condition: z
-      .array(photoFileSchema)
-      .min(1, "Foto dos pneus é obrigatória")
-      .optional(),
-
-    // CRITICAL SECURITY - Mandatory if not OK
-    brakes_working: z.array(photoFileSchema).optional(),
-    headlights_working: z.array(photoFileSchema).optional(),
-    taillights_working: z.array(photoFileSchema).optional(),
-    turn_signals_working: z.array(photoFileSchema).optional(),
-    steering_wheel_condition: z.array(photoFileSchema).optional(),
-    battery_condition: z.array(photoFileSchema).optional(),
-    bumpers_condition: z.array(photoFileSchema).optional(),
-    windshield_condition: z.array(photoFileSchema).optional(),
-    mirrors_condition: z.array(photoFileSchema).optional(),
-    spare_tire_condition: z.array(photoFileSchema).optional(),
-
-    // TECHNICAL CHECKS - Mandatory if not OK
-    oil_level_adequate: z.array(photoFileSchema).optional(),
-    radiator_water_adequate: z.array(photoFileSchema).optional(),
-    brake_fluid_adequate: z.array(photoFileSchema).optional(),
-
-    // INTERNAL ITEMS - Mandatory if not OK
-    seatbelts_working: z.array(photoFileSchema).optional(),
-    dashboard_working: z.array(photoFileSchema).optional(),
-    clutch_working: z.array(photoFileSchema).optional(),
-
-    // EQUIPMENT - Always optional
-    fire_extinguisher_valid: z.array(photoFileSchema).optional(),
-    warning_triangle_present: z.array(photoFileSchema).optional(),
-    jack_present: z.array(photoFileSchema).optional(),
-
-    // DOCUMENTATION - Always optional
-    driver_license_valid: z.array(photoFileSchema).optional(),
-    vehicle_documents_valid: z.array(photoFileSchema).optional(),
-    insurance_valid: z.array(photoFileSchema).optional(),
-
-    // GENERAL PHOTOS - Always optional
-    general_photos: z.array(photoFileSchema).optional(),
-  })
-  .optional();
-
-// Combined schema for multipart request
-const createVehicleChecklistMultipartSchema = z.object({
-  body: createVehicleChecklistSchema,
-  photos: checklistPhotosSchema,
-});
-
-export {
-  createVehicleChecklistSchema,
-  checklistPhotosSchema,
-  createVehicleChecklistMultipartSchema,
-  photoFileSchema,
-};
+// Photos are validated by `presignedPhotosSchema`: they never reach this API
+// as files, only as keys pointing at objects already in storage.
+export { createVehicleChecklistSchema };

@@ -1,4 +1,6 @@
 import { Server as SocketIOServer } from "socket.io";
+
+import { endsSession } from "@/shared/security/session-policy";
 import { Server } from "http";
 
 import { createAdapter } from "@socket.io/redis-adapter";
@@ -16,8 +18,17 @@ import { assertSessionEligible } from "@/modules/user/services/session-eligibili
 import { SessionJwtPayload } from "@/modules/user/services/session-service";
 import { AppError } from "@/shared/errors/AppError";
 
+import {
+  canSubscribeToChatBusiness,
+  canWriteInChat,
+  chatStaffRoom,
+  readBusinessIdPayload,
+} from "@/modules/chat/usecases/shared/chat-access-rules";
+
 import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
 import { env } from "./env";
+
+import database from "@/../infra/database";
 
 // Store socket connections per user
 const connectedUsers: Record<string, string[]> = {};
@@ -186,6 +197,38 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       socket.data.businessId = user.businessId;
       socket.data.sessionId = payload.familyId;
 
+      socket.data.userName = user.name;
+      socket.data.driverId = user.driverId ?? null;
+
+      // The role is the authenticated fact every chat rule reads from. Kept
+      // on socket.data so no handler ever decides permission from a payload.
+      socket.data.role = user.role;
+
+      // Chat staff = the SAC side of the driver chat: anyone who is not a
+      // driver and may read deliveries. Resolved once here (a connection is
+      // rare; a message is not) so emits can target the room without a
+      // permission lookup per event.
+      //
+      // A MASTER belongs to no company (businessId is NULL) and works over
+      // the one picked in the interface, so company membership cannot be
+      // part of their check — requiring it is what used to leave the master
+      // out of every chat room. Their room comes from `chatSubscribe`.
+      const permissions = user.profileAccess?.permissions as
+        | Array<{ permissionKey: string; canRead: boolean }>
+        | undefined;
+
+      socket.data.isChatStaff = Boolean(
+        !user.driverId &&
+          (user.role === "MASTER" ||
+            (user.businessId &&
+              (user.role === "BUSINESS_ADMIN" ||
+                permissions?.some(
+                  (permission) =>
+                    permission.permissionKey === "delivery_manage" &&
+                    permission.canRead,
+                )))),
+      );
+
       return next();
     } catch (error) {
       if (error instanceof AppError) {
@@ -220,12 +263,184 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       socket.join(`business:${businessId}`);
     }
 
+    // The SAC side of the driver chat listens as a team. Whoever has a
+    // company of their own is put in its room right away — that room is
+    // theirs for the whole connection. A MASTER has no company here and
+    // subscribes explicitly.
+    if (socket.data.isChatStaff && businessId) {
+      socket.join(chatStaffRoom(businessId));
+      socket.data.chatBusinessId = businessId;
+    }
+
     // Track connections by user
     if (!connectedUsers[userId]) {
       connectedUsers[userId] = [];
     }
 
     connectedUsers[userId].push(socket.id);
+
+    // A driver coming online is chat presence the SAC cares about. Announce
+    // only the offline→online transition: fetchSockets goes through the
+    // Redis adapter, so the answer is cluster-wide, not per-replica.
+    if (socket.data.driverId && businessId && io) {
+      io.in(`user:${userId}`)
+        .fetchSockets()
+        .then((sockets) => {
+          if (sockets.length === 1) {
+            io?.to(chatStaffRoom(businessId)).emit("chatPresence", {
+              driverId: socket.data.driverId,
+              userId,
+              online: true,
+              last_seen_at: null,
+            });
+          }
+        })
+        .catch(() => undefined);
+    }
+
+    // Explicit company subscription. This is the one place where a socket
+    // asks for another tenant's data, so the decision is taken only from
+    // socket.data — filled at the authenticated handshake — and the payload
+    // contributes nothing but the company being asked for. Anything that
+    // does not pass is ignored in silence: no disconnect, and no answer that
+    // would tell the caller whether that company exists.
+    socket.on("chatSubscribe", (payload?: unknown) => {
+      try {
+        const requestedBusinessId = readBusinessIdPayload(payload);
+
+        if (!requestedBusinessId) return;
+
+        const allowed = canSubscribeToChatBusiness(
+          {
+            role: socket.data.role,
+            businessId: socket.data.businessId,
+            isChatStaff: socket.data.isChatStaff,
+          },
+          requestedBusinessId,
+        );
+
+        if (!allowed) return;
+
+        const previous = socket.data.chatBusinessId as string | undefined;
+
+        // Switching companies in the selector must not stack rooms: one
+        // socket hears exactly one company's chat, or tenants would mix.
+        if (previous && previous !== requestedBusinessId) {
+          socket.leave(chatStaffRoom(previous));
+        }
+
+        socket.join(chatStaffRoom(requestedBusinessId));
+        socket.data.chatBusinessId = requestedBusinessId;
+      } catch {
+        // A failed subscription must never bring a connection down.
+      }
+    });
+
+    // Leaving the chat screen. The own-company room joined at connect stays:
+    // it is what feeds the tab badge from anywhere in the app, and dropping
+    // it here would regress the behaviour every non-master user has today.
+    socket.on("chatUnsubscribe", (payload?: unknown) => {
+      try {
+        const requestedBusinessId = readBusinessIdPayload(payload);
+
+        if (!requestedBusinessId) return;
+        if (socket.data.chatBusinessId !== requestedBusinessId) return;
+        if (requestedBusinessId === socket.data.businessId) return;
+
+        socket.leave(chatStaffRoom(requestedBusinessId));
+        socket.data.chatBusinessId = null;
+      } catch {
+        // Same as above: leaving a room is never worth a dropped socket.
+      }
+    });
+
+    // Typing is ephemeral: relayed, never persisted, debounced by clients.
+    socket.on("chatTyping", async (payload?: { driverUserId?: string }) => {
+      try {
+        // A driver types to the team; the team types to that driver.
+        if (socket.data.driverId) {
+          socket.to(chatStaffRoom(businessId)).emit("chatTyping", {
+            driverId: socket.data.driverId,
+            userName: socket.data.userName,
+          });
+          return;
+        }
+
+        if (!socket.data.isChatStaff || !payload?.driverUserId) return;
+
+        // Same rule as sending: a master's "digitando" would show up on the
+        // driver's screen as the company's own counter typing. They keep
+        // receiving the hint, they just never produce one.
+        if (!canWriteInChat(socket.data.role)) return;
+
+        // The target user id comes from the client, so cross-tenant reach
+        // is cut here: only sockets of the sender's own company hear it.
+        const targets = await io
+          ?.in(`user:${payload.driverUserId}`)
+          .fetchSockets();
+
+        targets?.forEach((target) => {
+          if (target.data.businessId === businessId) {
+            target.emit("chatTyping", { userName: socket.data.userName });
+          }
+        });
+      } catch {
+        // A lost typing hint must never bring a connection down.
+      }
+    });
+
+    /**
+     * "Gravando um áudio", relayed exactly like "digitando".
+     *
+     * Its own event rather than a flag on the typing one: the two can be true
+     * at the same moment on the web (a hand on the keyboard, a note recording
+     * on the desk beside it), and collapsing them would make whichever
+     * arrived last erase the other. The receiving side decides which sentence
+     * wins when both are lit.
+     *
+     * Like typing, it is a hint and nothing more: never persisted, never
+     * retried, and a lost one costs nothing. `recording: false` is sent when
+     * the recording ends so the other side does not have to wait out a
+     * timeout to stop saying it.
+     */
+    socket.on(
+      "chatRecording",
+      async (payload?: { driverUserId?: string; recording?: boolean }) => {
+        try {
+          const recording = payload?.recording !== false;
+
+          if (socket.data.driverId) {
+            socket.to(chatStaffRoom(businessId)).emit("chatRecording", {
+              driverId: socket.data.driverId,
+              userName: socket.data.userName,
+              recording,
+            });
+            return;
+          }
+
+          if (!socket.data.isChatStaff || !payload?.driverUserId) return;
+
+          // Same rule as typing and as sending: a master's hint would read on
+          // the driver's screen as his own company's counter.
+          if (!canWriteInChat(socket.data.role)) return;
+
+          const targets = await io
+            ?.in(`user:${payload.driverUserId}`)
+            .fetchSockets();
+
+          targets?.forEach((target) => {
+            if (target.data.businessId === businessId) {
+              target.emit("chatRecording", {
+                userName: socket.data.userName,
+                recording,
+              });
+            }
+          });
+        } catch {
+          // A lost recording hint must never bring a connection down.
+        }
+      },
+    );
 
     socket.on("client_logout", async () => {
       try {
@@ -272,6 +487,38 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
           delete connectedUsers[userId];
         }
       }
+
+      // Chat presence: when the driver's LAST socket in the whole cluster is
+      // gone, stamp "visto por último" and tell the SAC. By the time
+      // "disconnect" fires this socket already left its rooms, so the
+      // adapter answer no longer includes it.
+      if (socket.data.driverId && businessId && io) {
+        io.in(`user:${userId}`)
+          .fetchSockets()
+          .then(async (sockets) => {
+            if (sockets.length > 0) return;
+
+            const lastSeenAt = new Date();
+
+            // Transport-layer bookkeeping, stamped straight on the column:
+            // best-effort on purpose — presence must never crash a
+            // disconnect.
+            await database.user
+              .update({
+                where: { id: userId },
+                data: { last_seen_at: lastSeenAt },
+              })
+              .catch(() => undefined);
+
+            io?.to(chatStaffRoom(businessId)).emit("chatPresence", {
+              driverId: socket.data.driverId,
+              userId,
+              online: false,
+              last_seen_at: lastSeenAt.toISOString(),
+            });
+          })
+          .catch(() => undefined);
+      }
     });
   });
 
@@ -310,7 +557,7 @@ const sendSecurityEventToUser = (userId: string, event: { reason: string }) => {
   if (io) {
     io.to(`user:${userId}`).emit("securityAction", event);
 
-    if (event.reason !== "access_restored") {
+    if (endsSession(event.reason)) {
       io.in(`user:${userId}`).disconnectSockets(true);
     }
   }
@@ -323,7 +570,10 @@ const sendSecurityEventToSession = (
 ) => {
   if (io) {
     io.to(`session:${sessionId}`).emit("securityAction", event);
-    io.in(`session:${sessionId}`).disconnectSockets(true);
+
+    if (endsSession(event.reason)) {
+      io.in(`session:${sessionId}`).disconnectSockets(true);
+    }
   }
 };
 
@@ -335,11 +585,121 @@ const sendSecurityEventToBusiness = (
   if (io) {
     io.to(`business:${businessId}`).emit("securityAction", event);
 
-    if (event.reason !== "access_restored") {
+    if (endsSession(event.reason)) {
       io.in(`business:${businessId}`).disconnectSockets(true);
     }
   }
 };
+
+/**
+ * Tells every connected client of a company that its hired modules changed.
+ *
+ * Deliberately does NOT disconnect anyone: authentication (who you are) and
+ * authorization (what you may access) are different things. The API is the
+ * enforcement point — module-gated routes answer 403 MODULE_NOT_ENABLED from
+ * the next request on; this event only lets the UI redraw the menu and leave
+ * a screen that just became unavailable.
+ */
+const sendEntitlementsChangedEvent = (
+  businessId: string,
+  event: { module: string; enabled: boolean },
+) => {
+  if (io) {
+    io.to(`business:${businessId}`).emit("entitlementsChanged", event);
+  }
+};
+
+/**
+ * Fans a chat message out to its two audiences: the SAC team room and the
+ * driver's own user room. Whichever replica emits, the Redis adapter delivers
+ * to every connected socket of both.
+ */
+const sendChatMessageEvent = (
+  businessId: string,
+  driverUserId: string | null,
+  message: unknown,
+) => {
+  if (!io) return;
+
+  io.to(chatStaffRoom(businessId)).emit("chatMessage", message);
+
+  if (driverUserId) {
+    io.to(`user:${driverUserId}`).emit("chatMessage", message);
+  }
+};
+
+/** A read cursor advanced — the other side's checks turn double, live. */
+const sendChatReadEvent = (
+  businessId: string,
+  driverUserId: string | null,
+  event: { threadId: string; userId: string; last_read_at: string },
+) => {
+  if (!io) return;
+
+  io.to(chatStaffRoom(businessId)).emit("chatRead", event);
+
+  if (driverUserId) {
+    io.to(`user:${driverUserId}`).emit("chatRead", event);
+  }
+};
+
+/**
+ * A device on one side confirmed it holds the messages — the other side's
+ * grey double check.
+ *
+ * It goes to the OPPOSITE counter only. A receipt is worthless to whoever
+ * issued it, and echoing it back would make every panel in the room answer
+ * its own confirmation. `side` says who confirmed, so a client that hears
+ * both directions (an agent who is also watching a driver's screen in
+ * support) can never cross the two cursors.
+ */
+const sendChatDeliveredEvent = (
+  businessId: string,
+  event: {
+    threadId: string;
+    side: "DRIVER" | "STAFF";
+    driverUserId: string | null;
+    delivered_at: string;
+  },
+): void => {
+  if (!io) return;
+
+  if (event.side === "DRIVER") {
+    io.to(chatStaffRoom(businessId)).emit("chatDelivered", event);
+    return;
+  }
+
+  // A staff receipt is news for exactly one phone.
+  if (event.driverUserId) {
+    io.to(`user:${event.driverUserId}`).emit("chatDelivered", event);
+  }
+};
+
+/**
+ * Who of a company is connected right now, cluster-wide (the adapter
+ * answers for every replica). Feeds the thread list's presence dots.
+ */
+async function getOnlineUserIdsForBusiness(
+  businessId: string,
+): Promise<string[]> {
+  if (!io) return [];
+
+  try {
+    const sockets = await io.in(`business:${businessId}`).fetchSockets();
+
+    return [
+      ...new Set(
+        sockets
+          .map((socket) => socket.data.userId as string)
+          .filter((userId) => Boolean(userId)),
+      ),
+    ];
+  } catch {
+    // Presence is decoration: an adapter hiccup degrades to "nobody
+    // online", never to a failed request.
+    return [];
+  }
+}
 
 /**
  * Closes the Redis connections for the pub/sub adapter on graceful shutdown. Without this,
@@ -366,4 +726,9 @@ export {
   sendSecurityEventToUser,
   sendSecurityEventToSession,
   sendSecurityEventToBusiness,
+  sendEntitlementsChangedEvent,
+  sendChatMessageEvent,
+  sendChatReadEvent,
+  sendChatDeliveredEvent,
+  getOnlineUserIdsForBusiness,
 };

@@ -13,7 +13,7 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 
 import { BusinessHasChildrenError } from "@/modules/business/usecases/errors/business-has-children-error";
 
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
 
 import { env } from "@/env";
@@ -23,7 +23,6 @@ const CODE_EXPIRATION_MINUTES = 5;
 @injectable()
 class RequestBusinessDeletionUseCase {
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-  private emailQueue: EmailWorkerAdapter;
 
   constructor(
     @inject("UserRepository")
@@ -32,11 +31,7 @@ class RequestBusinessDeletionUseCase {
     private business: IBusinessRepository,
     @inject("PendingDeletionProvider")
     private pendingDeletion: IPendingDeletionProvider,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter(
-      "requestBusinessDeletionEmailQueue",
-    );
-  }
+  ) {}
 
   async execute(
     businessId: string,
@@ -90,7 +85,7 @@ class RequestBusinessDeletionUseCase {
         expires,
       });
 
-      await this.emailQueue.enqueueEmail({
+      await sendTransactionalMail({
         email: findUser.email,
         name: findUser.name,
         subject: "Código de confirmação para exclusão de empresa",

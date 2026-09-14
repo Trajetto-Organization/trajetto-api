@@ -10,19 +10,26 @@ import {
 } from "../dtos/account-payable-dto";
 
 import database from "@/../infra/database";
+import { Prisma } from "@prisma/client";
 
 class AccountPayableRepository implements IAccountPayableRepository {
   constructor(private prisma = database) {}
 
+  // `tx` lets the use case create the bill and its outbox event atomically.
   async createAccountPayable(
     accountPayableData: CreateAccountPayableProps,
+    tx?: Prisma.TransactionClient,
   ): Promise<AccountPayable> {
-    const accountPayableCreated = await this.prisma.accountPayable.create({
+    const client = tx ?? this.prisma;
+
+    const accountPayableCreated = await client.accountPayable.create({
       data: {
         due_date: accountPayableData.due_date,
         payment_date: accountPayableData.payment_date,
         amount: accountPayableData.amount,
         amount_paid: accountPayableData.amount_paid,
+        category: accountPayableData.category,
+        category_description: accountPayableData.category_description,
         business: {
           connect: {
             id: accountPayableData.businessId,
@@ -200,17 +207,19 @@ class AccountPayableRepository implements IAccountPayableRepository {
     return { data: accountPayableData, total };
   }
 
-  async updateAccountPayable({
-    accountPayableData,
-    accountPayableId,
-  }: UpdateAccountPayable): Promise<AccountPayable> {
+  async updateAccountPayable(
+    { accountPayableData, accountPayableId }: UpdateAccountPayable,
+    tx?: Prisma.TransactionClient,
+  ): Promise<AccountPayable> {
+    const client = tx ?? this.prisma;
+
     const filteredData = Object.fromEntries(
       Object.entries(accountPayableData).filter(
         ([_, value]) => value !== undefined,
       ),
     );
 
-    const updateAccountPayable = await this.prisma.accountPayable.update({
+    const updateAccountPayable = await client.accountPayable.update({
       where: {
         id: accountPayableId,
       },

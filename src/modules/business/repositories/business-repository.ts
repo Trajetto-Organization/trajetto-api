@@ -20,6 +20,12 @@ class BusinessRepository implements IBusinessRepository {
         ...businessData,
         erp_code: businessData.erp_code || null,
         complement: businessData.complement || null,
+
+        // Every new company starts with the fleet module — it is the base
+        // product; additional modules are toggled by the master afterwards.
+        entitlements: {
+          create: { module: "FLEET", enabled: true },
+        },
       },
     });
 
@@ -81,7 +87,7 @@ class BusinessRepository implements IBusinessRepository {
       ...(orConditions.length > 0 && { OR: orConditions }),
     };
 
-    const [businessData, total] = await Promise.all([
+    const [businessRows, total] = await Promise.all([
       this.prisma.business.findMany({
         skip,
         take: pageSize,
@@ -89,11 +95,26 @@ class BusinessRepository implements IBusinessRepository {
         orderBy: {
           created_at: "desc", // Sort by created_at
         },
+        include: {
+          _count: {
+            // Active fleet only — INACTIVE vehicles free their slot.
+            select: {
+              vehicles: { where: { status: { not: "INACTIVE" } } },
+            },
+          },
+        },
       }),
       this.prisma.business.count({
         where: whereCondition,
       }),
     ]);
+
+    // Flatten the relation count so the API exposes registered fleet size
+    // next to the contracted limit (vehicle_limit).
+    const businessData = businessRows.map(({ _count, ...business }) => ({
+      ...business,
+      vehicle_count: _count.vehicles,
+    }));
 
     return { data: businessData, total };
   }
@@ -238,24 +259,30 @@ class BusinessRepository implements IBusinessRepository {
     return findBusinessByEmail;
   }
 
+  async updateVehicleLimit(
+    businessId: string,
+    vehicle_limit: number,
+  ): Promise<Business> {
+    // Lowering the limit below the current fleet never deletes vehicles —
+    // it only blocks new registrations (checked at create-vehicle time).
+    const updatedBusiness = await this.prisma.business.update({
+      where: { id: businessId },
+      data: { vehicle_limit },
+    });
+
+    return updatedBusiness;
+  }
+
   async updateAILimit(
     businessId: string,
     ai_analysis_limit: number,
   ): Promise<Business> {
-    const current = await this.prisma.business.findUnique({
-      where: { id: businessId },
-      select: { ai_analysis_used: true },
-    });
-
-    const currentUsed = current?.ai_analysis_used ?? 0;
+    // Consumption lives in the AIUsagePeriod ledger and is never rewritten:
+    // lowering the limit below what was already spent simply leaves zero
+    // remaining for the rest of the period.
     const updatedBusiness = await this.prisma.business.update({
       where: { id: businessId },
-      data: {
-        ai_analysis_limit,
-        ...(currentUsed > ai_analysis_limit && {
-          ai_analysis_used: ai_analysis_limit,
-        }),
-      },
+      data: { ai_analysis_limit },
     });
 
     return updatedBusiness;
@@ -269,8 +296,6 @@ class BusinessRepository implements IBusinessRepository {
         corporate_reason: true,
         fantasy_name: true,
         ai_analysis_limit: true,
-        ai_analysis_used: true,
-        ai_analysis_reset_at: true,
       },
     });
 

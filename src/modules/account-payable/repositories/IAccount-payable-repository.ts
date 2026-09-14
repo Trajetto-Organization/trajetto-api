@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import {
   AccountPayable,
   CreateAccountPayableProps,
@@ -11,14 +13,15 @@ import {
 interface IAccountPayableRepository {
   createAccountPayable: (
     accountPayableData: CreateAccountPayableProps,
+    tx?: Prisma.TransactionClient,
   ) => Promise<AccountPayable>;
   listAccountPayables: (
     listAccountPayableProps: ListAccountPayableByBusinessIdProps,
   ) => Promise<ListAccountPayableProps>;
-  updateAccountPayable: ({
-    accountPayableData,
-    accountPayableId,
-  }: UpdateAccountPayable) => Promise<AccountPayable>;
+  updateAccountPayable: (
+    update: UpdateAccountPayable,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<AccountPayable>;
   deleteAccountPayable: (accountPayableId: string) => Promise<AccountPayable>;
   findAccountPayableById: (
     accountPayableId: string,

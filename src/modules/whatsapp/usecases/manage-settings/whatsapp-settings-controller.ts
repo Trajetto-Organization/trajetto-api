@@ -7,13 +7,9 @@ import { UpdateWhatsAppSettingsUseCase } from "./update-whatsapp-settings-usecas
 import { updateWhatsAppSettingsSchema } from "@/schemas/phone-validation-schema";
 
 import { WhatsAppNumberRequiredError } from "../errors/whatsapp-number-required-error";
-import { WhatsAppPhoneUpdateNotAllowedError } from "../errors/whatsapp-phone-update-not-allowed-error";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { WhatsAppPhoneAlreadyInUseError } from "../errors/whatsapp-phone-already-in-use-error";
 
-import { WhatsAppBusinessInstanceNotFoundError } from "../errors/whatsapp-business-instance-not-found-error";
-import { WhatsAppBusinessNotConnected } from "../errors/whatsapp-business-not-connected-error";
+import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
 class WhatsAppSettingsController {
   async getSettings(request: FastifyRequest, reply: FastifyReply) {
@@ -63,19 +59,7 @@ class WhatsAppSettingsController {
         return reply.status(400).send({ message: error.message });
       }
 
-      if (error instanceof WhatsAppBusinessInstanceNotFoundError) {
-        return reply.status(404).send({ message: error.message });
-      }
-
-      if (error instanceof WhatsAppBusinessNotConnected) {
-        return reply.status(400).send({ message: error.message });
-      }
-
       if (error instanceof WhatsAppNumberRequiredError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof WhatsAppPhoneUpdateNotAllowedError) {
         return reply.status(400).send({ message: error.message });
       }
 

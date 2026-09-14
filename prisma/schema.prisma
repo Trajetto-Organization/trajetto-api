@@ -112,10 +112,16 @@ model Business {
   Activity     Activity[]
   Notification Notification[]
 
-  // AI Analysis limits (per company, managed by master)
-  ai_analysis_limit    Int      @default(0) // Monthly limit (0 = disabled/unlimited for master)
-  ai_analysis_used     Int      @default(0) // Current month usage count
-  ai_analysis_reset_at DateTime @default(now()) // When to reset the counter
+  chatThreads ChatThread[]
+
+  // Monthly AI analysis quota (managed by master; 0 = disabled). Consumption
+  // lives in AIUsagePeriod — one ledger row per month, nothing is ever reset.
+  ai_analysis_limit Int @default(0)
+
+  // Contracted fleet size (managed by master; 0 = not configured). Billing
+  // baseline per vehicle — becomes the enforcement input when entitlements
+  // land; until then it is registration data only.
+  vehicle_limit Int @default(0)
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -125,7 +131,38 @@ model Business {
   Fuel             Fuel[]
   VehicleChecklist VehicleChecklist[]
 
+  entitlements BusinessEntitlement[]
+
+  shippers        Shipper[]
+  occurrenceTypes OccurrenceType[]
+  deliveries      Delivery[]
+
   @@map("business")
+}
+
+enum BusinessModule {
+  FLEET
+  DELIVERIES
+}
+
+// Sellable modules per company — the on/off of access. A missing row means
+// the module was never hired (the migration seeds FLEET for every existing
+// business: the product they already bought). Numeric limits (vehicles, AI)
+// stay as Business columns; this table only answers "does this company have
+// this module?" for API middleware and front-end navigation.
+model BusinessEntitlement {
+  id         String         @id @default(uuid(7))
+  businessId String
+  module     BusinessModule
+  enabled    Boolean        @default(true)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([businessId, module])
+  @@map("business_entitlement")
 }
 
 model User {
@@ -157,18 +194,29 @@ model User {
   access_revoked     Boolean @default(false)
   session_version    Int     @default(0)
 
-  TwoFactorConfirmation TwoFactorConfirmation?
-  KanbanCard            KanbanCard[]
-  PendingDeletion       PendingDeletion[]
+  TwoFactorConfirmation  TwoFactorConfirmation?
+  KanbanCard             KanbanCard[]
+  PendingDeletion        PendingDeletion[]
+  NotificationDelivery   NotificationDelivery[]
+  NotificationPreference NotificationPreference[]
+  PushDeviceToken        PushDeviceToken[]
 
   // WhatsApp fields
   whatsapp_notifications_enabled Boolean @default(false)
   whatsapp_phone                 String?
 
-  whatsapp_instance_connected Boolean @default(false)
-
   email_notifications_enabled    Boolean @default(true)
   activity_notifications_enabled Boolean @default(true)
+
+  deliveryOccurrences DeliveryOccurrence[]
+  deliveryEvents      DeliveryEvent[]
+
+  chatMessages    ChatMessage[]
+  chatThreadReads ChatThreadRead[]
+
+  // Stamped when the user's last socket disconnects — the "visto por
+  // último" the SAC sees next to a driver's name in the chat.
+  last_seen_at DateTime?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -409,6 +457,8 @@ model Driver {
   Fine             Fine[]
   Fuel             Fuel[]
   VehicleChecklist VehicleChecklist[]
+  deliveries       Delivery[]
+  chatThreads      ChatThread[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -459,6 +509,7 @@ model Vehicle {
   Fine             Fine[]
   Fuel             Fuel[]
   VehicleChecklist VehicleChecklist[]
+  deliveries       Delivery[]
 
   @@map("vehicle")
 }
@@ -488,6 +539,10 @@ model ServiceOrder {
   completion_date  DateTime?
   maintenance_type MaintenanceType
   total_amount     Decimal         @db.Decimal(10, 2)
+
+  // Free text: what this service order is about. Nullable because legacy
+  // rows predate the field.
+  description String?
 
   // 📸 SNAPSHOT: Vehicle data at the time of OS creation
   current_mileage_at_service          Float? // Current mileage when creating the OS
@@ -558,6 +613,18 @@ model ServiceOrderPart {
   @@map("service_order_part")
 }
 
+enum AccountPayableCategory {
+  FUEL
+  MAINTENANCE
+  INSURANCE
+  TAXES_FEES
+  FINES
+  TOLLS
+  RENTAL
+  PAYROLL
+  OTHER
+}
+
 model AccountPayable {
   id           String    @id @default(uuid(7))
   issue_date   DateTime  @default(now())
@@ -565,6 +632,11 @@ model AccountPayable {
   payment_date DateTime?
   amount       Decimal   @db.Decimal(10, 2)
   amount_paid  Decimal?  @db.Decimal(10, 2)
+
+  // What the bill is about — the first question a management report asks.
+  // Nullable because legacy rows predate the field; the form requires it.
+  category             AccountPayableCategory?
+  category_description String? // free text, only meaningful with OTHER
 
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
@@ -621,13 +693,330 @@ model Notification {
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId     String // recipient user ID
   business   Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  created_at DateTime  @default(now())
-  updated_at DateTime  @updatedAt
+
+  // Set when the notification pipeline created this row. The unique
+  // constraint is what makes the IN_APP channel idempotent: a delivery
+  // retried after a crash can't insert the same notification twice.
+  deliveryId String? @unique
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
   @@index([userId])
   @@index([businessId])
   @@index([read])
+  // Declared so `migrate dev` stops offering to drop it. The nightly purge
+  // orders by created_at; without this index each batch sorts the whole
+  // expired set and the job runs out of budget before draining the table.
+  @@index([created_at])
   @@map("notification")
+}
+
+// ============================================================================
+// Notification pipeline (transactional outbox)
+//
+// Use cases publish a DomainOutboxEvent inside the same transaction as the
+// business write — so an event exists if and only if the write committed.
+// Background workers expand events into per-recipient, per-channel
+// NotificationDelivery rows and execute them with persisted retries. Every
+// claim uses FOR UPDATE SKIP LOCKED plus a lease, so any number of API
+// replicas can run the workers without duplicating work.
+// ============================================================================
+
+enum OutboxEventStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  WHATSAPP
+  ACTIVITY
+  PUSH
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  PROCESSING
+  DELIVERED
+  FAILED
+}
+
+enum ScheduledJobExecutionStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model DomainOutboxEvent {
+  id            String  @id @default(uuid(7))
+  eventKey      String  @unique
+  topic         String
+  aggregateType String
+  aggregateId   String
+  businessId    String?
+  actorId       String?
+  payload       Json
+
+  status         OutboxEventStatus @default(PENDING)
+  availableAt    DateTime          @default(now())
+  attempts       Int               @default(0)
+  leaseExpiresAt DateTime?
+  processedAt    DateTime?
+  lastError      String?
+
+  deliveries NotificationDelivery[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  // Kept for /health/metrics (counts by status, oldest pending row) and for
+  // the batched purge, which locates PUBLISHED/FAILED rows by status. The
+  // claim itself no longer uses it: it runs on the partial index
+  // domain_outbox_event_claim_idx, created in raw SQL because Prisma cannot
+  // express a partial index. See migrations/20260908120000_harden_queue_tables.
+  @@index([status, availableAt])
+  @@index([aggregateType, aggregateId])
+  @@map("domain_outbox_event")
+}
+
+model NotificationDelivery {
+  id            String              @id @default(uuid(7))
+  outboxEventId String
+  userId        String
+  channel       NotificationChannel
+
+  status         NotificationDeliveryStatus @default(PENDING)
+  attempts       Int                        @default(0)
+  availableAt    DateTime                   @default(now())
+  leaseExpiresAt DateTime?
+  deliveredAt    DateTime?
+  lastError      String?
+
+  event DomainOutboxEvent @relation(fields: [outboxEventId], references: [id], onDelete: Cascade)
+  user  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  // One delivery per event × recipient × channel — duplication is impossible
+  // by construction, whatever crashes or how many replicas run.
+  @@unique([outboxEventId, userId, channel])
+  // No ([status, availableAt]) index: the claim was its only reader and it now
+  // runs on the partial index notification_delivery_claim_idx (raw SQL, see
+  // migrations/20260908120000_harden_queue_tables). Deliveries are never
+  // queried by status elsewhere and are purged by cascade from their event, so
+  // a full-history btree here was pure write amplification on the widest table
+  // in the pipeline.
+  @@index([userId])
+  @@map("notification_delivery")
+}
+
+enum NotificationCategory {
+  FINES
+  MAINTENANCE
+  FINANCE
+  TASKS
+  ACCOUNT
+  SYSTEM
+}
+
+// Per-user, per-category channel choices. A missing row means "no opinion":
+// the legacy per-user toggles keep deciding, so shipping this table changed
+// nobody's behavior. Topics marked mandatory deliver in-app regardless —
+// the user controls noise, not critical account events.
+model NotificationPreference {
+  id       String               @id @default(uuid(7))
+  userId   String
+  category NotificationCategory
+
+  inApp    Boolean @default(true)
+  email    Boolean @default(true)
+  whatsapp Boolean @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([userId, category])
+  @@map("notification_preference")
+}
+
+// One row per device the user allowed push notifications on. The token is
+// globally unique: a device that logs into another account is reassigned to
+// the new user on registration, so pushes never reach a stale owner. Tokens
+// the provider reports as dead (DeviceNotRegistered) are pruned on delivery.
+model PushDeviceToken {
+  id       String @id @default(uuid(7))
+  userId   String
+  token    String @unique
+  platform String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([userId])
+  @@map("push_device_token")
+}
+
+// Leader election for cron jobs: every replica fires on schedule and tries to
+// insert (jobName, scheduledFor); the unique constraint lets exactly one win.
+// The lease allows a takeover if the winner dies mid-run.
+model ScheduledJobExecution {
+  id           String                      @id @default(uuid(7))
+  jobName      String
+  scheduledFor DateTime
+  status       ScheduledJobExecutionStatus @default(RUNNING)
+
+  attempts       Int       @default(1)
+  leaseExpiresAt DateTime?
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+  lastError      String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([jobName, scheduledFor])
+  @@map("scheduled_job_execution")
+}
+
+enum AIAnalysisType {
+  FUEL_ODOMETER
+  CHECKLIST
+}
+
+enum AIAnalysisRequestStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  PARTIAL
+  FAILED
+  SKIPPED
+}
+
+enum AIAnalysisUnitStatus {
+  RESERVED
+  CONSUMED
+  RELEASED
+}
+
+enum AIProviderAttemptStatus {
+  SUCCEEDED
+  FAILED
+}
+
+// Quota ledger: one row per business per calendar month. The limit itself
+// stays on Business (single source of truth — raising it mid-month applies
+// immediately); this row only counts what the month spent. Replaces the
+// mutable ai_analysis_used counter and the monthly reset cron: a new month
+// simply starts a new row, so history is kept and nothing is ever zeroed.
+model AIUsagePeriod {
+  id          String   @id @default(uuid(7))
+  businessId  String
+  periodStart DateTime @db.Date
+
+  reservedUnits Int @default(0)
+  consumedUnits Int @default(0)
+
+  requests AIAnalysisRequest[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([businessId, periodStart])
+  @@map("ai_usage_period")
+}
+
+// Every AI job is a row: auditable, idempotent and retryable in place.
+// Replaces the fire-and-forget RabbitMQ message. The idempotency key hashes
+// type + record + input, so re-running a usecase never duplicates a job while
+// a genuinely new input (photo replaced, mileage edited) creates a new one.
+model AIAnalysisRequest {
+  id             String         @id @default(uuid(7))
+  idempotencyKey String         @unique
+  type           AIAnalysisType
+  recordId       String
+  businessId     String
+  periodId       String
+  requestedById  String
+  input          Json
+
+  status         AIAnalysisRequestStatus @default(PENDING)
+  attempts       Int                     @default(0)
+  availableAt    DateTime                @default(now())
+  leaseExpiresAt DateTime?
+  completedAt    DateTime?
+  lastError      String?
+
+  period AIUsagePeriod    @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  units  AIAnalysisUnit[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  // Kept for /health/metrics (PENDING and PROCESSING counts) and for the
+  // batched purge over the terminal statuses. The claim runs on the partial
+  // index ai_analysis_request_claim_idx (raw SQL, see
+  // migrations/20260908120000_harden_queue_tables).
+  @@index([status, availableAt])
+  @@index([type, recordId])
+  @@map("ai_analysis_request")
+}
+
+// One billable provider call: a checklist field or the odometer photo. Quota
+// is reserved when the unit is created, then either consumed on success or
+// released when retries are exhausted — a crash anywhere in between can only
+// leave a reservation for the lease/retry machinery to settle, never a
+// double charge.
+model AIAnalysisUnit {
+  id        String @id @default(uuid(7))
+  requestId String
+  unitKey   String
+
+  status     AIAnalysisUnitStatus @default(RESERVED)
+  result     Json?
+  lastError  String?
+  consumedAt DateTime?
+  releasedAt DateTime?
+
+  request  AIAnalysisRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  attempts AIProviderAttempt[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([requestId, unitKey])
+  @@map("ai_analysis_unit")
+}
+
+// Attempt trail: one row per provider call with token counts, so cost and
+// failure history are auditable per unit.
+model AIProviderAttempt {
+  id        String @id @default(uuid(7))
+  unitId    String
+  attemptNo Int
+
+  provider     String
+  model        String
+  status       AIProviderAttemptStatus
+  inputTokens  Int?
+  outputTokens Int?
+  durationMs   Int?
+  errorMessage String?
+
+  unit AIAnalysisUnit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  created_at DateTime @default(now())
+
+  @@unique([unitId, attemptNo])
+  @@map("ai_provider_attempt")
 }
 
 model Quote {
@@ -904,4 +1293,328 @@ model VehicleChecklist {
   @@index([driverId])
   @@index([checklist_date])
   @@map("vehicle_checklist")
+}
+
+// ── Deliveries module ────────────────────────────────────────────────────
+
+enum DeliveryStatus {
+  PENDING // created (manually or imported), not yet on route
+  IN_TRANSIT // out with a driver
+  DELIVERED // completed with proof of delivery
+  FAILED // blocking occurrence — awaiting a redelivery decision
+  CANCELLED // cancelled by management (terminal)
+}
+
+// Shipper = embarcador: the cargo owner a carrier delivers for. It is a
+// dimension INSIDE the tenant (a carrier serves many shippers), never a
+// second tenant — the delivery module is multi-shipper by design.
+model Shipper {
+  id String @id @default(uuid(7))
+
+  name      String
+  cnpj      String?
+  email     String?
+  telephone String?
+  is_active Boolean @default(true)
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  deliveries Delivery[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([businessId, name])
+  @@index([businessId])
+  @@map("shipper")
+}
+
+// Per-company occurrence catalog (Comprovei-style): the company defines its
+// own vocabulary; blocking types flip the delivery to FAILED when reported.
+model OccurrenceType {
+  id String @id @default(uuid(7))
+
+  name            String
+  description     String?
+  requires_photo  Boolean @default(false)
+  blocks_delivery Boolean @default(false)
+  is_active       Boolean @default(true)
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  occurrences DeliveryOccurrence[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([businessId, name])
+  @@index([businessId])
+  @@map("occurrence_type")
+}
+
+model Delivery {
+  id String @id @default(uuid(7))
+
+  // Client-facing reference (order number) and the NFe backing the cargo.
+  // invoice_key (44-digit access key) is the dedupe anchor for XML import.
+  code           String?
+  invoice_key    String?
+  invoice_number String?
+
+  recipient_name      String
+  recipient_document  String?
+  recipient_email     String?
+  recipient_telephone String?
+
+  cep            String?
+  city           String
+  uf             String
+  street         String
+  address_number String?
+  complement     String?
+  neighborhood   String?
+
+  status         DeliveryStatus @default(PENDING)
+  scheduled_date DateTime?
+  delivered_at   DateTime?
+  received_by    String? // who signed at the door
+
+  notes String?
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  shipper   Shipper @relation(fields: [shipperId], references: [id])
+  shipperId String
+
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
+  vehicleId String?
+
+  driver   Driver? @relation(fields: [driverId], references: [id])
+  driverId String?
+
+  items        DeliveryItem[]
+  occurrences  DeliveryOccurrence[]
+  events       DeliveryEvent[]
+  chatMessages ChatMessage[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([businessId, invoice_key])
+  @@index([businessId, status])
+  @@index([businessId, scheduled_date])
+  @@index([shipperId])
+  @@index([driverId])
+  @@map("delivery")
+}
+
+model DeliveryItem {
+  id String @id @default(uuid(7))
+
+  description String
+  quantity    Decimal  @default(1) @db.Decimal(10, 3)
+  unit        String?
+  unit_value  Decimal? @db.Decimal(10, 2)
+
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  deliveryId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([deliveryId])
+  @@map("delivery_item")
+}
+
+model DeliveryOccurrence {
+  id String @id @default(uuid(7))
+
+  description String?
+  latitude    Float?
+  longitude   Float?
+  photos      String[] // storage paths — populated by the driver app slice
+
+  // Outbox idempotency anchor: the driver app may resend after a dead
+  // network; the same submission never becomes two occurrences.
+  client_submission_id String? @unique
+
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  deliveryId String
+
+  occurrenceType   OccurrenceType @relation(fields: [occurrenceTypeId], references: [id])
+  occurrenceTypeId String
+
+  reportedBy   User   @relation(fields: [reportedById], references: [id])
+  reportedById String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([deliveryId])
+  @@map("delivery_occurrence")
+}
+
+// A driver appointment on a delivery: arriving at the address, proving the
+// drop-off. Events, not columns on Delivery, because a redelivery attempt
+// (FAILED -> PENDING -> IN_TRANSIT) legitimately produces a second arrival
+// and the trail must keep both.
+enum DeliveryEventType {
+  ARRIVAL
+  PROOF
+}
+
+model DeliveryEvent {
+  id String @id @default(uuid(7))
+
+  type DeliveryEventType
+
+  latitude  Float?
+  longitude Float?
+
+  // Storage keys validated against the bucket before they become rows.
+  photo     String? // delivery receipt ("canhoto") — PROOF only
+  signature String? // on-screen signature image — PROOF only
+
+  received_by String?
+
+  // Outbox idempotency anchor: the driver app may resend after a dead
+  // network; the same submission never becomes two events.
+  client_submission_id String? @unique
+
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  deliveryId String
+
+  reportedBy   User   @relation(fields: [reportedById], references: [id])
+  reportedById String
+
+  created_at DateTime @default(now())
+
+  @@index([deliveryId])
+  @@map("delivery_event")
+}
+
+// ============================================================================
+// Chat SAC × driver (Deliveries module, slice 6)
+//
+// One thread per driver per business: the dispatcher talks to the person,
+// not to a delivery — a message references a delivery as optional context.
+// Reads are per-user cursors, never per-message receipts: WhatsApp-style
+// checks and unread counts are DERIVED by comparing cursors against
+// created_at, which stays correct under horizontal scale by construction
+// (no counter to increment, nothing to reconcile between replicas).
+
+model ChatThread {
+  id String @id @default(uuid(7))
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  driver   Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  driverId String
+
+  // Ordering key for the SAC's thread list, kept in the same transaction
+  // that inserts a message — it can never drift from the messages.
+  last_message_at DateTime?
+
+  // Delivery cursors: everything created up to each instant is already on a
+  // real device of that side. They live on the thread because a thread has
+  // exactly one driver and one SAC team, so neither can denormalize.
+  //
+  // The staff side is a team, not a person: the cursor is the most advanced
+  // confirmation from ANY agent's open panel, which is what "the base has
+  // it" means to a driver. A MASTER never advances it — the vendor holding
+  // a message is not the customer's operation holding it.
+  driver_delivered_at DateTime?
+  staff_delivered_at  DateTime?
+
+  messages ChatMessage[]
+  reads    ChatThreadRead[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([businessId, driverId])
+  @@index([businessId, last_message_at])
+  @@map("chat_thread")
+}
+
+enum ChatMessageKind {
+  TEXT
+  IMAGE
+  AUDIO
+}
+
+// A message is an immutable operational record (who told the driver to move
+// on stays on file) — there is no edit or delete, removal only cascades with
+// the tenant.
+model ChatMessage {
+  id String @id @default(uuid(7))
+
+  kind ChatMessageKind
+
+  // The text, or the caption under an attachment.
+  body String?
+
+  // Storage key for IMAGE/AUDIO — validated against bucket and tenant
+  // before it becomes a row, signed on read (presigned-PUT pattern).
+  attachment_key String?
+
+  // Audio length so the player can render before the file loads.
+  duration_ms Int?
+
+  // Optional context chip: "this message is about that delivery".
+  delivery   Delivery? @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+  deliveryId String?
+
+  // The same text fanned out to several drivers shares one broadcast id,
+  // so the UI can label it as a mass notice.
+  broadcast_id String?
+
+  // Retry idempotency anchor: the send button may fire again after a dead
+  // network; the same submission never becomes two messages.
+  client_submission_id String? @unique
+
+  thread   ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  threadId String
+
+  sender   User   @relation(fields: [senderId], references: [id])
+  senderId String
+
+  created_at DateTime @default(now())
+
+  // Wider than it looks like it needs to be, on purpose. The ordered prefix
+  // (threadId, created_at) still serves history pagination; the trailing
+  // senderId is what lets the unread count filter inside the index instead of
+  // scanning the whole table. One index doing both is 141 MB where two were
+  // 287 — see the 20260910120000_chat_scale_indexes migration for the numbers.
+  //
+  // That migration also creates a GIN trigram index on `body` for the message
+  // search, which Prisma has no syntax for: `migrate dev` will offer to drop
+  // it. Say no.
+  @@index([threadId, created_at, senderId])
+  @@map("chat_message")
+}
+
+// One read cursor per participant per thread. The SAC side is a team: each
+// agent keeps their own cursor, and "read by the company" is the most
+// advanced one.
+model ChatThreadRead {
+  id String @id @default(uuid(7))
+
+  thread   ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  threadId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  last_read_at DateTime
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([threadId, userId])
+  @@map("chat_thread_read")
 }

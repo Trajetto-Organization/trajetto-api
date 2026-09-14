@@ -1,3 +1,4 @@
+import { AccountPayableCategory } from "@prisma/client";
 import { Decimal } from "@prisma/client/runtime/library";
 
 type AccountPayableStatus =
@@ -15,6 +16,8 @@ interface AccountPayable {
   payment_date?: Date | string | null;
   amount: Decimal | string;
   amount_paid?: Decimal | string | null;
+  category?: AccountPayableCategory | null;
+  category_description?: string | null;
   businessId: string;
   branchId: string;
   serviceOrderId?: string | null;
@@ -33,6 +36,8 @@ interface CreateAccountPayableProps {
   payment_date?: Date | string | null;
   amount: number;
   amount_paid?: number | null;
+  category: AccountPayableCategory;
+  category_description?: string | null;
   businessId: string;
   branchId: string;
   serviceOrderId?: string | null;
@@ -45,6 +50,8 @@ interface UpdateAccountPayableProps {
   payment_date?: Date | string | null;
   amount?: number;
   amount_paid?: number | null;
+  category?: AccountPayableCategory;
+  category_description?: string | null;
   branchId?: string | null;
   serviceOrderId?: string | null;
   registrationUserId?: string | null;

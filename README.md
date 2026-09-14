@@ -7,7 +7,6 @@
 ![Fastify](https://img.shields.io/badge/Fastify-000000?style=for-the-badge&logo=fastify&logoColor=white)
 ![Prisma](https://img.shields.io/badge/Prisma-3982CE?style=for-the-badge&logo=Prisma&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white)
-![RabbitMQ](https://img.shields.io/badge/RabbitMQ-FF6600?style=for-the-badge&logo=rabbitmq&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)
 ![Socket.IO](https://img.shields.io/badge/Socket.IO-010101?style=for-the-badge&logo=socket.io&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
@@ -136,7 +135,6 @@ O **Trajetto** é uma solução completa para gestão de frotas empresariais, de
 ### Banco de Dados e Cache
 
 - **[PostgreSQL](https://www.postgresql.org/)** - Banco de dados relacional
-- **[RabbitMQ](https://www.rabbitmq.com/)** - Message broker para filas
 - **[Redis](https://redis.io/)** + **[ioredis](https://github.com/redis/ioredis)** - Pub/sub do adapter de WebSocket e store distribuído de rate-limit
 
 ### Autenticação e Segurança
@@ -149,16 +147,15 @@ O **Trajetto** é uma solução completa para gestão de frotas empresariais, de
 ### Comunicação em Tempo Real
 
 - **[Socket.IO](https://socket.io/)** + **[@socket.io/redis-adapter](https://github.com/socketio/socket.io-redis-adapter)** - WebSocket com propagação entre réplicas
-- **[Nodemailer](https://nodemailer.com/)** + **[Handlebars](https://handlebarsjs.com/)** - Envio e templating de e-mails
+- **[Nodemailer](https://nodemailer.com/)** + **[Handlebars](https://handlebarsjs.com/)** - Envio e templating de e-mails (SMTP direto, sem broker)
 
 ### Integrações e Processamento
 
 - **[@anthropic-ai/sdk](https://docs.anthropic.com/)** - Verificação por IA (Claude) de imagens/checklists
-- **[Evolution API](https://doc.evolution-api.com/)** - Integração de WhatsApp
+- **[Meta WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api)** - Notificações via WhatsApp oficial (templates aprovados)
 - **[OSRM](https://project-osrm.org/)** - Roteirização e cálculo de rotas
 - **[aws-sdk](https://www.npmjs.com/package/aws-sdk)** - Upload para Cloudflare R2 (S3-compatible)
 - **[ExcelJS](https://github.com/exceljs/exceljs)** - Geração de relatórios
-- **[Sharp](https://sharp.pixelplumbing.com/)** - Processamento de imagens
 
 ### Validação e Injeção de Dependência
 
@@ -217,7 +214,7 @@ cp .env.development .env
 ### 4. Inicie os serviços com Docker
 
 ```bash
-# Inicia PostgreSQL, RabbitMQ e Redis
+# Inicia PostgreSQL e Redis
 yarn services:dev:up
 ```
 
@@ -261,9 +258,6 @@ O projeto utiliza diferentes arquivos de ambiente:
 # Banco de dados
 DATABASE_URL="postgresql://user:password@localhost:5432/database"
 
-# RabbitMQ
-RABBITMQ_URL="amqp://user:password@localhost:5672"
-
 # Redis (adapter de WebSocket + rate-limit distribuído)
 REDIS_URL="redis://localhost:6379"
 
@@ -280,10 +274,12 @@ MASTER_USER_EMAIL="admin@trajetto.com"
 MASTER_USER_INITIAL_PASSWORD="SenhaSegura123@"
 
 # Integrações
-OSRM_URL="http://localhost:5000"           # Roteirização
-EVOLUTION_API_URL="http://localhost:8080"  # WhatsApp (Evolution API)
-EVOLUTION_API_KEY="sua-evolution-api-key"
-ANTHROPIC_API_KEY="sk-ant-..."             # Verificação por IA
+OSRM_URL="http://localhost:5000"            # Roteirização
+META_WHATSAPP_ACCESS_TOKEN=""               # WhatsApp oficial (Meta Cloud API)
+META_WHATSAPP_PHONE_NUMBER_ID=""            # Id do número no painel da Meta
+META_WHATSAPP_TEMPLATE_NAME="trajetto_notification"
+META_WHATSAPP_API_VERSION="v23.0"
+ANTHROPIC_API_KEY="sk-ant-..."              # Verificação por IA
 
 # HTTP
 HTTP_REQUEST="http://localhost:3000"
@@ -294,13 +290,32 @@ HTTP_REQUEST="http://localhost:3000"
 Os serviços de desenvolvimento ficam em composes dedicados, com scripts de atalho:
 
 ```bash
-# Sobe todos os serviços de desenvolvimento (PostgreSQL, RabbitMQ, Redis)
+# Sobe todos os serviços de desenvolvimento (PostgreSQL, Redis)
 yarn services:dev:up
 
 # Serviços auxiliares (opcionais)
 yarn osrm:dev:up           # OSRM (roteirização)
-yarn evolution-api:dev:up  # Evolution API (WhatsApp)
 ```
+
+### WhatsApp (Meta Cloud API)
+
+O envio usa a API oficial da Meta — não há serviço local para subir. Em
+desenvolvimento, use o número de teste do painel
+([developers.facebook.com](https://developers.facebook.com) → seu app →
+WhatsApp → API Setup): ele fornece o `META_WHATSAPP_ACCESS_TOKEN` temporário e
+o `META_WHATSAPP_PHONE_NUMBER_ID`, e envia para até 5 números verificados.
+
+Como mensagem proativa exige template pré-aprovado, crie no Meta Business
+Manager um template de utilidade com o nome de `META_WHATSAPP_TEMPLATE_NAME`
+(padrão `trajetto_notification`), idioma `pt_BR` e **uma única variável** no
+corpo. Exemplo aprovável:
+
+> Olá! Você tem uma nova notificação do Trajetto: {{1}} Acesse o sistema para
+> mais detalhes.
+
+O texto da notificação entra em `{{1}}` (o provider já remove quebras de linha,
+que a Meta não aceita em variáveis). Sem as credenciais configuradas a API
+sobe normalmente e apenas os envios de WhatsApp falham, com erro claro no log.
 
 Em produção, a imagem é publicada no GHCR pela pipeline e o deploy é disparado via webhook (ver [Deploy](#-deploy)).
 
@@ -389,7 +404,7 @@ src/
 ├── @types/           # Definições de tipos TypeScript
 ├── config/           # Configurações da aplicação
 ├── env/              # Validação de variáveis de ambiente
-├── jobs/             # Jobs e filas (RabbitMQ)
+├── jobs/             # Jobs agendados (cron)
 ├── modules/          # Módulos da aplicação
 │   ├── user/         # Módulo de usuários
 │   │   ├── dtos/     # Data Transfer Objects
@@ -440,10 +455,16 @@ graph TD
     E --> F[Database/Prisma]
     D --> G[External Services]
     D --> H[Event Dispatcher]
-    H --> I[Notification Service]
-    I --> J[Email Queue]
-    I --> K[WebSocket]
+    H --> I[Notification Outbox - Postgres]
+    I --> J[Notification Pipeline]
+    J --> K[Email / SMTP]
+    J --> L[WebSocket]
+    J --> M[WhatsApp / Push]
 ```
+
+O e-mail é apenas mais um canal do pipeline de notificações: a fila durável é
+o próprio Postgres (outbox + entregas com claim `FOR UPDATE SKIP LOCKED`,
+lease, backoff persistido e idempotência), sem message broker no caminho.
 
 ## 📚 API Documentation
 
@@ -558,7 +579,7 @@ describe("Create User Use Case", () => {
 
 O deploy é automatizado por `.github/workflows/deploy.yml`, em três estágios:
 
-1. **Test** — sobe PostgreSQL, RabbitMQ e Redis como _services_ e roda os testes unitários e E2E
+1. **Test** — sobe PostgreSQL e Redis como _services_ e roda os testes unitários e E2E
 2. **Build & Push** — builda a imagem Docker e publica no **GitHub Container Registry (GHCR)**
 3. **Deploy** — dispara o redeploy via webhook (Portainer), com aprovação manual no ambiente `Production`
 
@@ -573,7 +594,6 @@ docker build -t trajetto-api .
 ```bash
 # Configure no seu provedor de cloud / orquestrador
 DATABASE_URL="postgresql://..."
-RABBITMQ_URL="amqp://..."
 REDIS_URL="redis://..."
 JWT_SECRET="production-secret"
 RESEND_SECRET_KEY="re_..."
@@ -616,7 +636,7 @@ console.log({
 
 - **Database**: Índices otimizados, connection pooling
 - **API**: Rate limiting, compression, caching
-- **Workers**: Processamento assíncrono com RabbitMQ
+- **Workers**: Processamento assíncrono pelo pipeline de notificações (fila durável em Postgres)
 - **Memory**: Singleton patterns, garbage collection tuning
 
 ### Benchmarks
@@ -700,16 +720,6 @@ docker-compose ps
 
 # Recrie o banco se necessário
 yarn prisma:migrate:reset
-```
-
-#### RabbitMQ Connection Failed
-
-```bash
-# Verifique os logs do RabbitMQ
-docker-compose logs rabbitmq
-
-# Reinicie o serviço
-docker-compose restart rabbitmq
 ```
 
 #### Port Already in Use

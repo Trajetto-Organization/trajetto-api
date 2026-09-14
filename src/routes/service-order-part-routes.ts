@@ -7,6 +7,7 @@ import { UpdateServiceOrderPartController } from "@/modules/service-order-part/u
 import { DeleteServiceOrderPartController } from "@/modules/service-order-part/usecases/delete-service-order-part/delete-service-order-part-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
+import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
@@ -22,6 +23,10 @@ const updateServiceOrderPartController = new UpdateServiceOrderPartController();
 const deleteServiceOrderPartController = new DeleteServiceOrderPartController();
 
 async function serviceOrderPartRoutes(app: FastifyInstance) {
+  // Fleet operation: gated by the FLEET module for the whole plugin (runs
+  // after ensureAuthenticated, which is onRequest). MASTER bypasses.
+  app.addHook("preHandler", verifyModuleEnabled("FLEET"));
+
   app.post(
     "/create-service-order-part/:serviceOrderId/business/:businessId",
     {

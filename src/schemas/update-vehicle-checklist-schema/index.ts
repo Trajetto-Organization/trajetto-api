@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import { MultipartFile } from "@fastify/multipart";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -251,37 +250,6 @@ const updateVehicleChecklistSchema = z.object({
   ),
 });
 
-// Photo file validation schema
-const photoFileSchema = z
-  .custom<MultipartFile>()
-  .refine((file) => file?.mimetype?.startsWith("image/"), {
-    message: "O arquivo deve ser uma imagem.",
-  })
-  .refine(
-    (file) => {
-      const allowedTypes = [
-        "image/jpeg",
-        "image/jpg",
-        "image/png",
-        "image/webp",
-      ];
-
-      return allowedTypes.includes(file?.mimetype);
-    },
-    {
-      message:
-        "Tipo de arquivo não suportado. Use apenas JPEG, JPG, PNG ou WebP.",
-    },
-  );
-
-// Schema for multipart request with photos - same structure as create but all optional
-const updateVehicleChecklistMultipartSchema = z.object({
-  body: updateVehicleChecklistSchema,
-  photos: z.record(z.string(), z.array(photoFileSchema)).optional(),
-});
-
-export {
-  updateVehicleChecklistSchema,
-  updateVehicleChecklistMultipartSchema,
-  photoFileSchema,
-};
+// Photos are validated by `presignedPhotosSchema`: they never reach this API
+// as files, only as keys pointing at objects already in storage.
+export { updateVehicleChecklistSchema };

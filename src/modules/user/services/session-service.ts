@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
 import { sign } from "jsonwebtoken";
+
 import { v7 as uuidV7 } from "uuid";
 
 import auth from "@/config/auth";
+
 import { AppError } from "@/shared/errors/AppError";
 import { User } from "../dtos/user-dto";
+
 import { IUsersTokensRepository } from "../repositories/IUsers-tokens-repository";
 
 interface SessionTokenPair {
@@ -34,6 +37,7 @@ function issueSessionTokenPair(
   familyId = uuidV7(),
 ): SessionTokenPair {
   const sessionVersion = user.session_version ?? 0;
+
   const accessJti = uuidV7();
   const refreshJti = uuidV7();
 

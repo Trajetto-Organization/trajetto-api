@@ -45,8 +45,54 @@ interface ListActivityProps {
   total: number;
 }
 
+/**
+ * Keyset page of the timeline feed. `cursor` is the id of the last row the
+ * client already has — ids are uuid v7, so ordering by id descending is the
+ * same as by creation time, with a unique tiebreaker built in.
+ */
+interface ListActivitiesCursorProps {
+  currentUserRole: string;
+  businessId?: string;
+  userId: string;
+  limit: number;
+  cursor?: string;
+  search?: string;
+  /** Days back from now; the panel offers 7 and 30. */
+  periodDays: number;
+}
+
+interface CursorPaginatedActivities {
+  data: Activity[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+interface ActivitySummaryProps {
+  currentUserRole: string;
+  businessId?: string;
+  userId: string;
+  /** Days back from now — the panel offers 7 and 30. */
+  periodDays: number;
+}
+
+interface ActivitySummary {
+  total: number;
+  created: number;
+  updated: number;
+  deleted: number;
+  activeUsers: number;
+  /** Busiest module in the period, e.g. "Entrega". */
+  topType: string | null;
+  topTypeCount: number;
+  periodDays: number;
+}
+
 export {
   Activity,
+  ListActivitiesCursorProps,
+  CursorPaginatedActivities,
+  ActivitySummary,
+  ActivitySummaryProps,
   CreateActivityProps,
   ListActivityProps,
   ListRecentActivitiesProps,

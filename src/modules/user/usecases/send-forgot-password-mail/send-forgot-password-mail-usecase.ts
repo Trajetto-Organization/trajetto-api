@@ -8,23 +8,19 @@ import { UserEmailNotFoundError } from "../errors/user-email-not-found-error";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 
 import { AppError } from "@/shared/errors/AppError";
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 
 @injectable()
 class SendForgotPasswordMailUseCase {
   private http_request = env.HTTP_REQUEST;
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
 
-  private emailQueue: EmailWorkerAdapter;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
     @inject("UsersTokensRepository")
     private usersTokens: IUsersTokensRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("forgotPasswordUserEmailQueue");
-  }
+  ) {}
 
   async execute(email: string): Promise<void> {
     const findUserByEmail = await this.user.findUserByEmail(email);
@@ -57,7 +53,7 @@ class SendForgotPasswordMailUseCase {
           token,
         });
 
-      await this.emailQueue.enqueueEmail({
+      await sendTransactionalMail({
         email,
         name: findUserByEmail.name,
         subject: "Solicitação de redefinição de senha",

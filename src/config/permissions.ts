@@ -15,7 +15,10 @@ type PermissionKey =
   | "account_payable_manage"
   | "kanban_manage"
   | "fine_manage"
-  | "vehicle_checklist_manage";
+  | "vehicle_checklist_manage"
+  | "delivery_manage"
+  | "occurrence_manage"
+  | "integration_manage";
 
 enum EnumPermissionKey {
   BRANCH_MANAGE = "branch_manage",
@@ -35,6 +38,9 @@ enum EnumPermissionKey {
   KANBAN_MANAGE = "kanban_manage",
   FINE_MANAGE = "fine_manage",
   VEHICLE_CHECKLIST_MANAGE = "vehicle_checklist_manage",
+  DELIVERY_MANAGE = "delivery_manage",
+  OCCURRENCE_MANAGE = "occurrence_manage",
+  INTEGRATION_MANAGE = "integration_manage",
 }
 
 const permissionLabels = {
@@ -55,6 +61,9 @@ const permissionLabels = {
   kanban_manage: "Gerenciar Kanban",
   fine_manage: "Gerenciar Multas",
   vehicle_checklist_manage: "Gerenciar Checklist dos Veículos",
+  delivery_manage: "Gerenciar Entregas",
+  occurrence_manage: "Gerenciar Ocorrências de Entrega",
+  integration_manage: "Gerenciar Integrações",
 };
 
 export { PermissionKey, EnumPermissionKey, permissionLabels };

@@ -1,4 +1,6 @@
 import database from "@/../infra/database";
+import { NotificationPreference } from "@prisma/client";
+
 import {
   Notification,
   CreateNotificationProps,
@@ -8,10 +10,53 @@ import {
 import {
   INotificationRepository,
   ListNotificationsParams,
+  UpsertPreferenceInput,
 } from "./INotification-repository";
 
 class NotificationRepository implements INotificationRepository {
   constructor(private prisma = database) {}
+
+  async markAllAsRead(userId: string): Promise<number> {
+    const result = await this.prisma.notification.updateMany({
+      where: { userId, read: false },
+      data: { read: true },
+    });
+
+    return result.count;
+  }
+
+  async listPreferences(userId: string): Promise<NotificationPreference[]> {
+    return this.prisma.notificationPreference.findMany({
+      where: { userId },
+    });
+  }
+
+  async upsertPreferences(
+    userId: string,
+    preferences: UpsertPreferenceInput[],
+  ): Promise<void> {
+    await this.prisma.$transaction(
+      preferences.map((preference) =>
+        this.prisma.notificationPreference.upsert({
+          where: {
+            userId_category: { userId, category: preference.category },
+          },
+          create: {
+            userId,
+            category: preference.category,
+            inApp: preference.inApp,
+            email: preference.email,
+            whatsapp: preference.whatsapp,
+          },
+          update: {
+            inApp: preference.inApp,
+            email: preference.email,
+            whatsapp: preference.whatsapp,
+          },
+        }),
+      ),
+    );
+  }
 
   async createNotification(
     notificationData: CreateNotificationProps,

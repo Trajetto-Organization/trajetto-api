@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  emptyStringToNull,
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
@@ -81,10 +82,17 @@ const createUserSchema = z
     businessId: z
       .string({ required_error: "ID da empresa é obrigatório!" })
       .uuid("ID da empresa é inválido."),
-    profileAccessId: z
-      .string()
-      .uuid("ID do perfil de acesso é inválido.")
-      .optional(),
+    // The admin form always submits this field; for a BUSINESS_ADMIN it comes
+    // as "" — which a bare .uuid() rejects before the role check can accept
+    // it. Same preprocess the update schema already uses.
+    profileAccessId: z.preprocess(
+      emptyStringToNull,
+      z
+        .string()
+        .uuid("ID do perfil de acesso é inválido.")
+        .optional()
+        .nullable(),
+    ),
     driverId: z
       .string()
       .optional()

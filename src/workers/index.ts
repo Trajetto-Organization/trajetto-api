@@ -1,9 +1,7 @@
-import EmailWorkerService from "../shared/services/email-worker-service";
-import WhatsAppWorkerService from "../shared/services/whatsapp-worker-service";
-
-import AIVerificationWorkerService from "../shared/services/ai-verification-worker-service";
-
 import { CronSchedulerService } from "../shared/services/cron-scheduler-service";
+import { NotificationPipelineService } from "../shared/notifications/notification-pipeline-service";
+
+import { AIAnalysisPipelineService } from "../shared/ai/ai-analysis-pipeline-service";
 import { registerCronJobs } from "../jobs/cron";
 
 /**
@@ -17,9 +15,8 @@ export async function initializeWorkers(): Promise<void> {
 
     // Initialize services in parallel for better performance
     await Promise.all([
-      EmailWorkerService.getInstance().initialize(),
-      WhatsAppWorkerService.getInstance().initialize(),
-      AIVerificationWorkerService.getInstance().initialize(),
+      NotificationPipelineService.getInstance().initialize(),
+      AIAnalysisPipelineService.getInstance().initialize(),
     ]);
 
     console.log("[WorkerSystem] Sistema de workers inicializado com sucesso");
@@ -36,9 +33,8 @@ export async function shutdownWorkers(): Promise<void> {
   try {
     // Shutdown services in parallel for better performance
     await Promise.all([
-      EmailWorkerService.getInstance().shutdown(),
-      WhatsAppWorkerService.getInstance().shutdown(),
-      AIVerificationWorkerService.getInstance().shutdown(),
+      NotificationPipelineService.getInstance().shutdown(),
+      AIAnalysisPipelineService.getInstance().shutdown(),
       CronSchedulerService.getInstance().shutdown(),
     ]);
 

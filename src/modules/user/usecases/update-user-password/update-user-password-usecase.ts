@@ -7,7 +7,7 @@ import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserUpdateUserIsSamePasswordError } from "../errors/user-update-user-is-same-password-error";
 
 import { UserUpdateUserPasswordNotMatchError } from "../errors/user-update-user-password-not-match-error";
-import { EmailWorkerAdapter } from "@/jobs/email-worker-adapter";
+import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 
 import { AppError } from "@/shared/errors/AppError";
 import { env } from "@/env";
@@ -21,15 +21,12 @@ interface UpdateUserPasswordProps {
 
 @injectable()
 class UpdateUserPasswordUseCase {
-  private emailQueue: EmailWorkerAdapter;
   private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
 
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
-  ) {
-    this.emailQueue = new EmailWorkerAdapter("updateUserPasswordQueue");
-  }
+  ) {}
 
   async execute({
     currentPassword,
@@ -70,7 +67,7 @@ class UpdateUserPasswordUseCase {
       );
     }
 
-    await this.emailQueue.enqueueEmail({
+    await sendTransactionalMail({
       email: findUser.email,
       name: findUser.name,
       subject: "Sua senha foi atualizada com sucesso",

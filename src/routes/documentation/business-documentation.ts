@@ -7,6 +7,8 @@ import { updateBusinessSchema } from "@/schemas/update-business-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 import { updateAILimitSchema } from "@/schemas/update-ai-limit-schema";
+import { updateVehicleLimitSchema } from "@/schemas/update-vehicle-limit-schema";
+
 import { confirmDeletionCodeSchema } from "@/schemas/confirm-deletion-code-schema";
 
 const businessSchemas = {
@@ -24,8 +26,18 @@ const businessSchemas = {
     search: z.string().trim().max(100).optional(),
   }),
   updateDeleteBusiness: updateDeleteBusinessSchema,
+  // Wire format only: the controller re-parses and owns the real validation.
+  moduleImpactParams: z.object({
+    businessId: z.string().describe("ID da empresa"),
+    module: z.string().describe("FLEET ou DELIVERIES"),
+  }),
   updateBusiness: updateBusinessSchema,
   updateAILimit: updateAILimitSchema,
+  updateVehicleLimit: updateVehicleLimitSchema,
+  updateEntitlement: z.object({
+    module: z.enum(["FLEET", "DELIVERIES"]).describe("Módulo vendável."),
+    enabled: z.boolean().describe("Habilitar (true) ou desabilitar (false)."),
+  }),
   confirmDeletionCode: confirmDeletionCodeSchema,
 };
 
@@ -53,6 +65,14 @@ const businessResponses = {
         updated_at: z.string(),
         telephone: z.string(),
         cnpj: z.string(),
+        vehicle_limit: z
+          .number()
+          .describe(
+            "Nº de veículos contratados (base de cobrança; 0 = não configurado).",
+          ),
+        vehicle_count: z
+          .number()
+          .describe("Veículos ativos (ocupando vaga do plano)."),
       }),
     ),
     total: z.number(),
@@ -290,9 +310,47 @@ const businessResponses = {
       corporate_reason: z.string(),
       fantasy_name: z.string().nullable(),
       ai_analysis_limit: z.number(),
-      ai_analysis_used: z.number(),
-      ai_analysis_reset_at: z.coerce.string().nullable(),
     }),
+  }),
+  vehicleLimitUpdated: z.object({
+    message: z.string().default("Limite de veículos atualizado com sucesso!"),
+    data: z.object({
+      id: z.string(),
+      corporate_reason: z.string(),
+      fantasy_name: z.string().nullable(),
+      vehicle_limit: z.number(),
+    }),
+  }),
+  moduleImpactData: z.object({
+    data: z.object({
+      module: z.string(),
+      records: z.array(z.object({ label: z.string(), count: z.number() })),
+      affectedUsers: z.number(),
+      inFlight: z.array(z.object({ label: z.string(), count: z.number() })),
+    }),
+  }),
+  entitlementsData: z.object({
+    data: z.object({
+      modules: z.array(
+        z.object({
+          module: z.string().describe("FLEET | DELIVERIES"),
+          enabled: z.boolean(),
+        }),
+      ),
+      vehicle_limit: z
+        .number()
+        .describe("Nº de veículos contratados (0 = não configurado)."),
+      vehicle_count: z
+        .number()
+        .describe("Veículos ativos (ocupando vaga do plano)."),
+      vehicle_inactive_count: z
+        .number()
+        .describe("Veículos inativos (histórico preservado, sem ocupar vaga)."),
+      vehicle_limit_enabled: z.boolean(),
+    }),
+  }),
+  entitlementUpdated: z.object({
+    message: z.string().default("Módulo da empresa atualizado com sucesso!"),
   }),
   aiUsageData: z.object({
     data: z.object({
@@ -300,7 +358,14 @@ const businessResponses = {
       corporate_reason: z.string(),
       fantasy_name: z.string().nullable(),
       ai_analysis_limit: z.number(),
-      ai_analysis_used: z.number(),
+      ai_analysis_used: z
+        .number()
+        .describe("Verificações concluídas no período (unidades consumidas)."),
+      ai_analysis_in_progress: z
+        .number()
+        .describe(
+          "Unidades reservadas por análises em andamento — voltam ao saldo se a análise falhar.",
+        ),
       ai_analysis_reset_at: z.coerce.string().nullable(),
       ai_analysis_remaining: z.number(),
       ai_analysis_enabled: z.boolean(),
