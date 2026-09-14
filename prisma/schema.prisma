@@ -221,6 +221,9 @@ model User {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
+  // There was no tenant index at all here, so this was a sequential scan.
+  // listUsers, and findUsersByBusiness, which the notification pipeline calls to expand recipients on EVERY domain event.
+  @@index([businessId, created_at])
   @@map("user")
 }
 
@@ -369,6 +372,9 @@ model Branch {
   Fuel             Fuel[]
   VehicleChecklist VehicleChecklist[]
 
+  // There was no tenant index at all here, so this was a sequential scan.
+  // listAllBranches; small per tenant, but read by nearly every form.
+  @@index([businessId, created_at])
   @@map("branch")
 }
 
@@ -463,6 +469,9 @@ model Driver {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
+  // There was no tenant index at all here, so this was a sequential scan.
+  // listDrivers and the driver picker used by delivery, fine, fuel, checklist and chat.
+  @@index([businessId, created_at])
   @@map("driver")
 }
 
@@ -511,6 +520,9 @@ model Vehicle {
   VehicleChecklist VehicleChecklist[]
   deliveries       Delivery[]
 
+  // There was no tenant index at all here, so this was a sequential scan.
+  // listVehicles plus four dashboard counts — the most frequent query in the app.
+  @@index([businessId, created_at])
   @@map("vehicle")
 }
 
@@ -589,6 +601,9 @@ model ServiceOrder {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
+  // There was no tenant index at all here, so this was a sequential scan.
+  // listServiceOrders; a history table that only grows.
+  @@index([businessId, created_at])
   @@map("service_order")
 }
 
@@ -653,6 +668,9 @@ model AccountPayable {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
+  // There was no tenant index at all here, so this was a sequential scan.
+  // listAccountPayables; an accumulating financial table.
+  @@index([businessId, created_at])
   @@map("account_payable")
 }
 
@@ -680,10 +698,15 @@ model Activity {
   created_at         DateTime  @default(now())
   updated_at         DateTime  @updatedAt
 
-  @@index([businessId])
+  // Both compounds replace single-column indexes of the same write cost, so
+  // the sort disappears for free — and "for free" is the whole argument on a
+  // table written by every action of every user.
+  @@index([businessId, created_at])
+  @@index([performedBy, created_at])
+  // ([visibilityLevel]) removed: three possible values, no tenant in front,
+  // and it only ever appears as one branch of an OR inside an already
+  // tenant-scoped query. The planner never picks it as the driving index.
   @@index([created_at])
-  @@index([visibilityLevel])
-  @@index([performedBy])
   @@map("activity")
 }
 
@@ -709,9 +732,15 @@ model Notification {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  @@index([userId])
-  @@index([businessId])
-  @@index([read])
+  // The single highest-frequency query in the product: the bell, polled by
+  // every one of 150k users. It was an index scan on (userId) followed by a
+  // sort of that user's entire history, on every poll.
+  @@index([userId, created_at])
+  // ([businessId]) removed: notification is never queried by business — every
+  // access is by userId or by id.
+  // ([read]) removed: a boolean, never queried without userId, and it is the
+  // column markAsRead rewrites — so every click on a notification was also
+  // rewriting an entry in a btree covering the whole history.
   // Declared so `migrate dev` stops offering to drop it. The nightly purge
   // orders by created_at; without this index each batch sorts the whole
   // expired set and the job runs out of budget before draining the table.
@@ -1067,7 +1096,6 @@ model KanbanColumn {
   updated_at DateTime @updatedAt
 
   @@index([businessId, position])
-  @@index([businessId])
   @@map("kanban_column")
 }
 
@@ -1090,7 +1118,6 @@ model KanbanCard {
   updated_at DateTime @updatedAt
 
   @@index([columnId, position])
-  @@index([columnId])
   @@index([assignedUserId])
   @@map("kanban_card")
 }
@@ -1114,7 +1141,7 @@ model TrafficViolationCode {
   updated_at DateTime @updatedAt
 
   @@unique([code, sub_code])
-  @@index([code])
+  // ([code]) removed: an exact duplicate of the @unique on the same column.
   @@index([gravity])
   @@map("traffic_violation_code")
 }
@@ -1164,11 +1191,12 @@ model Fine {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  @@index([businessId])
+  @@index([businessId, created_at])
   @@index([driverId])
   @@index([vehicleId])
-  @@index([due_date])
-  @@index([violation_date])
+  // ([due_date]) removed: it appears in no `where`.
+  // ([violation_date]) removed: its only reader is getFinesByDateRange, which
+  // is declared on the interface and called by nothing.
   @@map("fine")
 }
 
@@ -1225,11 +1253,14 @@ model Fuel {
   updated_at DateTime @updatedAt
 
   @@unique([businessId, client_submission_id])
-  @@index([businessId])
+  @@index([businessId, created_at])
   @@index([branchId])
-  @@index([vehicleId])
+  // Replaces ([vehicleId]) and ([refueling_date]), absorbing the first as its
+  // prefix. Serves getPreviousFuelByVehicleId, which runs on every refuelling
+  // created (consumption maths) and used to either sort or walk a global date
+  // index filtering vehicleId in the heap.
+  @@index([vehicleId, refueling_date])
   @@index([driverId])
-  @@index([refueling_date])
   @@map("fuel")
 }
 
@@ -1300,7 +1331,7 @@ model VehicleChecklist {
   updated_at DateTime @updatedAt
 
   @@unique([businessId, client_submission_id])
-  @@index([businessId])
+  @@index([businessId, created_at])
   @@index([branchId])
   @@index([vehicleId])
   @@index([driverId])
@@ -1417,9 +1448,22 @@ model Delivery {
   updated_at DateTime @updatedAt
 
   @@unique([businessId, invoice_key])
-  @@index([businessId, status])
-  @@index([businessId, scheduled_date])
+  // The default listing carries no status filter, so it needs businessId
+  // leading and created_at behind it — otherwise every page is a top-N sort
+  // over the tenant's whole history, and the paired count() sorts it again.
+  @@index([businessId, created_at])
+  // Superset of the old ([businessId, status]) at the same write cost: serves
+  // the filtered listing AND countDeliveriesByStatus AND operationSummary,
+  // now without the sort.
+  @@index([businessId, status, created_at])
+  // ([businessId, scheduled_date]) removed: scheduled_date appears in no
+  // `where` anywhere in the codebase — only in an orderBy whose `where` is
+  // (businessId, driverId, status), which that index cannot serve. It was a
+  // dead index on the most-written table in the system.
   @@index([shipperId])
+  // Kept on purpose despite looking redundant: every driver query is
+  // (businessId, driverId, status), and driverId is far more selective than
+  // businessId.
   @@index([driverId])
   @@map("delivery")
 }
