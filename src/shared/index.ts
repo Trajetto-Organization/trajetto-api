@@ -36,6 +36,9 @@ import { OccurrenceTypeRepository } from "@/modules/occurrence-type/repositories
 import { IOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/IOccurrence-type-repository";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
+
+import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
 
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
@@ -239,5 +242,7 @@ container.registerSingleton<IDeliveryRepository>(
   "DeliveryRepository",
   DeliveryRepository,
 );
+
+container.registerSingleton<IRouteRepository>("RouteRepository", RouteRepository);
 
 container.registerSingleton<IChatRepository>("ChatRepository", ChatRepository);
