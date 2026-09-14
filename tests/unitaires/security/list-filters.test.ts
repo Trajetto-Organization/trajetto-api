@@ -32,7 +32,7 @@ describe("the OR of a list search", () => {
   it("is exactly what a non-MASTER produces today", () => {
     // The shape that was in eight repositories: a MASTER-only clause written
     // as a spread inside an object literal, which for everyone else is `{}`.
-    const currentUserRole = "BUSINESS_ADMIN";
+    const currentUserRole: string = "BUSINESS_ADMIN";
     const search = "João";
 
     const built = buildSearchOr([

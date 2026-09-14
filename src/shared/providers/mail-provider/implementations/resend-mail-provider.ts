@@ -1,4 +1,7 @@
-import { MailProviderProps } from "../dtos/mail-provider-dto";
+import {
+  MailProviderProps,
+  MailSendResult,
+} from "../dtos/mail-provider-dto";
 import { IMailProvider } from "../IMail-provider";
 
 import nodemailer, { Transporter } from "nodemailer";
@@ -7,6 +10,7 @@ import { env } from "@/env";
 import { renderMailTemplate } from "../template-renderer";
 
 import { toMailDeliveryError } from "../errors/mail-delivery-error";
+import { buildMessageId, senderDomain } from "../message-id";
 
 /**
  * Every timeout is bounded because sending now happens inside the
@@ -43,15 +47,28 @@ class ResendMailProvider implements IMailProvider {
     variables,
     path,
     referenceId,
-  }: MailProviderProps): Promise<void> {
+  }: MailProviderProps): Promise<MailSendResult> {
     const templateHTML = renderMailTemplate(path, variables);
 
     try {
-      await this.client.sendMail({
+      const info = await this.client.sendMail({
         to,
         from: env.RESEND_FROM_EMAIL,
         subject,
         html: templateHTML,
+
+        // Deterministic, so a redelivery of the same notification carries the
+        // same message identity and most receivers suppress the copy. See
+        // message-id.ts for what this does and does not guarantee.
+        ...(referenceId
+          ? {
+              messageId: buildMessageId(
+                referenceId,
+                senderDomain(env.RESEND_FROM_EMAIL),
+              ),
+            }
+          : {}),
+
         headers: {
           // Only sent when the caller supplied one: a constant here made
           // Resend treat unrelated messages as the same entity.
@@ -59,6 +76,8 @@ class ResendMailProvider implements IMailProvider {
           "X-Mailer": "Trajetto Fleet Management System",
         },
       });
+
+      return { messageId: info.messageId };
     } catch (error) {
       const deliveryError = toMailDeliveryError(
         error,

@@ -18,8 +18,20 @@ class InMemoryActivityRepository implements IActivityRepository {
   public activities: Activity[] = [];
 
   async createActivity(activityData: CreateActivityProps): Promise<Activity> {
+    // Mirrors the upsert in the Prisma repository. Without it the fake would
+    // accept a second write that the real one collapses, and a test proving
+    // the pipeline is idempotent would be proving the opposite.
+    if (activityData.deliveryId) {
+      const existing = this.activities.find(
+        (entry) => entry.deliveryId === activityData.deliveryId,
+      );
+
+      if (existing) return existing;
+    }
+
     const activity: Activity = {
       id: uuidV7(),
+      deliveryId: activityData.deliveryId ?? null,
       type: activityData.type,
       action: activityData.action,
       entityId: activityData.entityId,

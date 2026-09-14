@@ -32,6 +32,25 @@ class ActivityRepository implements IActivityRepository {
       tenantName = business?.corporate_reason ?? null;
     }
 
+    /**
+     * A write coming from the notification pipeline is idempotent by its
+     * delivery id.
+     *
+     * `upsert` rather than a check followed by a create: the check-then-act
+     * version races two replicas against each other and Postgres settles it
+     * with a unique violation, which this then has to catch and interpret.
+     * The upsert is one statement, so there is nothing to interpret — and the
+     * empty `update` is the point: an activity that already exists is left
+     * exactly as it was recorded the first time, timestamps included.
+     */
+    if (activityData.deliveryId) {
+      return this.prisma.activity.upsert({
+        where: { deliveryId: activityData.deliveryId },
+        create: { ...activityData, tenantName },
+        update: {},
+      });
+    }
+
     const activity = await this.prisma.activity.create({
       data: { ...activityData, tenantName },
     });

@@ -1,10 +1,14 @@
-import { MailProviderProps } from "../dtos/mail-provider-dto";
+import {
+  MailProviderProps,
+  MailSendResult,
+} from "../dtos/mail-provider-dto";
 import { IMailProvider } from "../IMail-provider";
 
 import nodemailer, { Transporter } from "nodemailer";
 
 import { renderMailTemplate } from "../template-renderer";
 import { toMailDeliveryError } from "../errors/mail-delivery-error";
+import { buildMessageId } from "../message-id";
 
 const SMTP_TIMEOUT_MS = 10_000;
 
@@ -55,7 +59,7 @@ class EtherealMailProvider implements IMailProvider {
     variables,
     path,
     referenceId,
-  }: MailProviderProps): Promise<void> {
+  }: MailProviderProps): Promise<MailSendResult> {
     const templateHTML = renderMailTemplate(path, variables);
 
     try {
@@ -66,6 +70,17 @@ class EtherealMailProvider implements IMailProvider {
         from: "Trajetto <noreply@intrajetto.com>",
         subject,
         html: templateHTML,
+        // Same deterministic identity as production, so the dev path
+        // exercises the behaviour rather than diverging from it.
+        ...(referenceId
+          ? {
+              messageId: buildMessageId(
+                referenceId,
+                "intrajetto.com",
+              ),
+            }
+          : {}),
+
         headers: {
           ...(referenceId ? { "X-Entity-Ref-ID": referenceId } : {}),
           "X-Mailer": "Trajetto Fleet Management System",
@@ -78,6 +93,8 @@ class EtherealMailProvider implements IMailProvider {
         "[EtherealMailProvider] Preview URL: %s",
         nodemailer.getTestMessageUrl(message) || "indisponível",
       );
+
+      return { messageId: message.messageId };
     } catch (error) {
       const deliveryError = toMailDeliveryError(
         error,

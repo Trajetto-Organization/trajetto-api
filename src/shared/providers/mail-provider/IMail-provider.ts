@@ -1,4 +1,7 @@
-import { MailProviderProps } from "./dtos/mail-provider-dto";
+import {
+  MailProviderProps,
+  MailSendResult,
+} from "./dtos/mail-provider-dto";
 
 interface IMailProvider {
   /**
@@ -12,7 +15,7 @@ interface IMailProvider {
     variables,
     path,
     referenceId,
-  }: MailProviderProps) => Promise<void>;
+  }: MailProviderProps) => Promise<MailSendResult>;
 }
 
 export { IMailProvider };

@@ -9,10 +9,20 @@ interface CreateActivityProps {
   tenantName?: string | null; // Business name snapshot — pass explicitly when businessId is null (e.g. delete)
   visibilityLevel?: string; // "SYSTEM", "COMPANY", "USER" - controls who can see this activity
   performingUserRole?: string; // Role of the user who performed the action
+
+  /**
+   * Set only by the notification pipeline, where it is the id of the delivery
+   * being executed. It makes the write idempotent: a redelivery of the same
+   * item — a crash between the provider call and the DELIVERED mark, a lease
+   * expiring under a slow send, a deploy mid-batch — records the activity
+   * once. Absent for every activity a use case writes directly.
+   */
+  deliveryId?: string | null;
 }
 
 interface Activity {
   id: string;
+  deliveryId?: string | null;
   type: string;
   action: string;
   entityId: string;

@@ -670,6 +670,13 @@ model Activity {
   business           Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
   user               User?     @relation(fields: [performedBy], references: [id], onDelete: SetNull)
   performedBy        String?
+
+  // Set only when the row came from the notification pipeline, and unique so
+  // a redelivery cannot write the same activity twice. Deliberately NOT a
+  // foreign key: deliveries are purged on a schedule and the activity trail
+  // has to outlive them — a cascade here would quietly erase history.
+  deliveryId         String?   @unique
+
   created_at         DateTime  @default(now())
   updated_at         DateTime  @updatedAt
 
@@ -795,6 +802,12 @@ model NotificationDelivery {
   leaseExpiresAt DateTime?
   deliveredAt    DateTime?
   lastError      String?
+
+  // What the provider called this message. The only way, after the fact, to
+  // ask a provider what happened to one specific notification — and the only
+  // evidence that distinguishes "we sent it twice" from "they received it
+  // twice" when a customer reports a duplicate.
+  providerMessageId String?
 
   event DomainOutboxEvent @relation(fields: [outboxEventId], references: [id], onDelete: Cascade)
   user  User              @relation(fields: [userId], references: [id], onDelete: Cascade)

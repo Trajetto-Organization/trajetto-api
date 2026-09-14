@@ -454,7 +454,7 @@ class NotificationPipelineService {
         throw new NonRetryableDeliveryError("Outbox event no longer exists");
       }
 
-      await this.withDeliveryTimeout(
+      const providerMessageId = await this.withDeliveryTimeout(
         this.executeDelivery(delivery, {
           topic: event.topic,
           payload: event.payload as unknown as AnyPayload,
@@ -469,6 +469,10 @@ class NotificationPipelineService {
           status: "DELIVERED",
           deliveredAt: new Date(),
           lastError: null,
+          // Only the channels that talk to an external provider return one.
+          // It is what makes a duplicate report answerable after the fact:
+          // which message, under which provider id, accepted when.
+          ...(providerMessageId ? { providerMessageId } : {}),
         },
       });
     } catch (error) {
@@ -533,7 +537,7 @@ class NotificationPipelineService {
       payload: AnyPayload;
       businessId: string | null;
     },
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const policy = getNotificationPolicy(event.topic) as AnyPolicy | null;
 
     if (!policy) {
@@ -571,7 +575,7 @@ class NotificationPipelineService {
     delivery: ClaimedDelivery,
     payload: AnyPayload,
     policy: AnyPolicy,
-  ): Promise<void> {
+  ): Promise<undefined> {
     if (!policy.renderPush && !policy.renderInApp) {
       throw new NonRetryableDeliveryError(
         "Delivery channel PUSH for a topic without push or in-app content",
@@ -641,6 +645,12 @@ class NotificationPipelineService {
 
       throw new Error("Expo não aceitou nenhum ticket de push");
     }
+
+    // No provider id recorded. Expo answers with one ticket PER DEVICE, and a
+    // recipient can have several — there is no single id for "this delivery".
+    // Turning tickets into receipts is Expo's own second call and belongs in
+    // its own piece of work, not here.
+    return undefined;
   }
 
   private async deliverInApp(
@@ -648,7 +658,7 @@ class NotificationPipelineService {
     payload: AnyPayload,
     policy: AnyPolicy,
     event: { businessId: string | null },
-  ): Promise<void> {
+  ): Promise<undefined> {
     if (!policy.renderInApp) {
       throw new NonRetryableDeliveryError(
         "Delivery channel IN_APP for a topic without in-app content",
@@ -706,7 +716,7 @@ class NotificationPipelineService {
     delivery: ClaimedDelivery,
     payload: AnyPayload,
     policy: AnyPolicy,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     if (!policy.renderInApp) {
       throw new NonRetryableDeliveryError(
         "Delivery channel EMAIL for a topic without in-app content",
@@ -740,7 +750,7 @@ class NotificationPipelineService {
       // Awaited on purpose: this row only becomes DELIVERED when the
       // transport actually accepted the message. Handing it to another queue
       // and reporting success is what made a failed e-mail invisible.
-      await mailProvider.sendMail({
+      const sent = await mailProvider.sendMail({
         to: user.email,
         subject: `Trajetto - ${rendered.title}`,
         path: templatePath,
@@ -757,6 +767,8 @@ class NotificationPipelineService {
           logo: env.CLOUDINARY_LOGO_IMAGE,
         },
       });
+
+      return sent.messageId;
     } catch (error) {
       // A permanent refusal (invalid recipient, bad credentials, missing
       // template) must not burn the retry budget.
@@ -772,7 +784,7 @@ class NotificationPipelineService {
     delivery: ClaimedDelivery,
     payload: AnyPayload,
     policy: AnyPolicy,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     if (!policy.renderWhatsApp) {
       throw new NonRetryableDeliveryError(
         "Delivery channel WHATSAPP for a topic without WhatsApp content",
@@ -795,7 +807,9 @@ class NotificationPipelineService {
       message: policy.renderWhatsApp(payload),
     });
 
-    if (result.success) return;
+    // Meta's wamid, so a later status webhook can be matched back to this
+    // delivery — and so a duplicate report can be traced to one send or two.
+    if (result.success) return result.messageId;
 
     const reason = result.message || "Falha ao enviar WhatsApp";
 
@@ -815,7 +829,7 @@ class NotificationPipelineService {
     payload: AnyPayload,
     policy: AnyPolicy,
     event: { businessId: string | null },
-  ): Promise<void> {
+  ): Promise<undefined> {
     if (!policy.renderActivity) {
       throw new NonRetryableDeliveryError(
         "Delivery channel ACTIVITY for a topic without activity content",
@@ -843,7 +857,16 @@ class NotificationPipelineService {
       tenantName: rendered.tenantName,
       visibilityLevel: rendered.visibilityLevel,
       performingUserRole: rendered.performingUserRole,
+
+      // Makes this write idempotent, the same way IN_APP already is. The
+      // audit trail is our own table, so a duplicate here is entirely
+      // preventable — and a trail that double-counts is worse than one that
+      // is merely incomplete, because it is confidently wrong.
+      deliveryId: delivery.id,
     });
+
+    // No provider: the activity trail is our own table.
+    return undefined;
   }
 
   private async findRecipient(userId: string): Promise<RecipientUser> {
