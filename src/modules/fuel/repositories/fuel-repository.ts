@@ -16,6 +16,8 @@ import {
   CursorPaginatedFuel,
 } from "../dtos/fuel-dto";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class FuelRepository implements IFuelRepository {
   constructor(private prisma = database) {}
 
@@ -246,7 +248,7 @@ class FuelRepository implements IFuelRepository {
 
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [fuelData, total] = await Promise.all([
@@ -635,7 +637,7 @@ class FuelRepository implements IFuelRepository {
 
     const whereCondition = {
       ...(userRole !== "MASTER" && { businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const batchSize = 1000;

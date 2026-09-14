@@ -11,6 +11,8 @@ import {
 
 import database from "@/../infra/database";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class BusinessRepository implements IBusinessRepository {
   constructor(private prisma = database) {}
 
@@ -84,7 +86,7 @@ class BusinessRepository implements IBusinessRepository {
 
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { id: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [businessRows, total] = await Promise.all([

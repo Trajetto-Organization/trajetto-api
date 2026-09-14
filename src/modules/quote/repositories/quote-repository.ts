@@ -9,6 +9,8 @@ import {
 
 import database from "@/../infra/database";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class QuoteRepository implements IQuoteRepository {
   constructor(private prisma = database) {}
 
@@ -85,7 +87,7 @@ class QuoteRepository implements IQuoteRepository {
 
     const whereCondition = {
       ...(status && { status }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [quotes, total] = await Promise.all([

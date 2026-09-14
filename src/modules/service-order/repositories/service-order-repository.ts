@@ -13,6 +13,8 @@ import {
 import database from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class ServiceOrderRepository implements IServiceOrderRepository {
   constructor(private prisma = database) {}
 
@@ -172,7 +174,7 @@ class ServiceOrderRepository implements IServiceOrderRepository {
 
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [serviceOrderData, total] = await Promise.all([
@@ -502,7 +504,7 @@ class ServiceOrderRepository implements IServiceOrderRepository {
 
     const whereCondition: any = {
       ...(userRole !== "MASTER" && { businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const batchSize = 1000;

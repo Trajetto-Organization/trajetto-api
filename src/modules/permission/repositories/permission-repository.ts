@@ -14,6 +14,8 @@ import {
 import { IPermissionRepository } from "./IPermission-repository";
 import { permissionLabels, PermissionKey } from "@/config/permissions";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class PermissionRepository implements IPermissionRepository {
   constructor(private prisma = database) {}
 
@@ -107,7 +109,7 @@ class PermissionRepository implements IPermissionRepository {
       ...(currentUserRole === "BUSINESS_USER" && {
         profileAccessId: { not: profileAccessId },
       }),
-      ...(orConditions.length > 0 ? { OR: orConditions } : {}),
+      ...buildSearchOr(orConditions),
     };
 
     const [permissionData, total] = await Promise.all([

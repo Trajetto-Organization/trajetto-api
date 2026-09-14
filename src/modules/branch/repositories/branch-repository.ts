@@ -11,6 +11,8 @@ import {
 
 import database from "@/../infra/database";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class BranchRepository implements IBranchRepository {
   constructor(private prisma = database) {}
 
@@ -97,7 +99,7 @@ class BranchRepository implements IBranchRepository {
     // Adds filtering by businessId if the user is not MASTER
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [branchData, total] = await Promise.all([

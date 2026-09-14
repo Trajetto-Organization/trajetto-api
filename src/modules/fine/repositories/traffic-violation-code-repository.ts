@@ -9,6 +9,8 @@ import {
 
 import { ITrafficViolationCodeRepository } from "./ITraffic-violation-code-repository";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class TrafficViolationCodeRepository
   implements ITrafficViolationCodeRepository
 {
@@ -56,7 +58,7 @@ class TrafficViolationCodeRepository
       ...(violatorType && {
         violator_type: { contains: violatorType, mode: "insensitive" },
       }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [trafficViolationCodeData, total] = await Promise.all([

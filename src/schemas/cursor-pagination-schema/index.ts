@@ -1,13 +1,15 @@
 import { z } from "zod";
 
+import { MAX_PAGE_SIZE } from "@/shared/pagination/page-size";
+
 const cursorPaginationSchema = z.object({
   limit: z
     .string()
     .regex(/^\d+$/, "O limite deve conter apenas dígitos.")
     .optional()
     .transform((val) => (val ? parseInt(val, 10) : 10))
-    .refine((val) => Number.isInteger(val) && val >= 1 && val <= 100, {
-      message: "O limite deve ser um inteiro entre 1 e 100.",
+    .refine((val) => Number.isInteger(val) && val >= 1 && val <= MAX_PAGE_SIZE, {
+      message: `O limite deve ser um inteiro entre 1 e ${MAX_PAGE_SIZE}.`,
     }),
   cursor: z.string().uuid("Cursor inválido.").optional(),
   search: z

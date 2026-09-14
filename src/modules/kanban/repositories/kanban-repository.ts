@@ -19,6 +19,8 @@ import {
 import { UploadService } from "@/shared/services/upload-service";
 import { container } from "tsyringe";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 // Mapping priorities from Portuguese to English
 const PRIORITY_MAPPING: Record<string, string[]> = {
   baixa: ["low"],
@@ -244,7 +246,7 @@ class KanbanRepository implements IKanbanRepository {
 
     const whereCondition: any = {
       businessId,
-      ...(searchConditions.length > 0 && { OR: searchConditions }),
+      ...buildSearchOr(searchConditions),
     };
 
     // If there is a filter by user, ALWAYS filter only columns that have the user's cards.

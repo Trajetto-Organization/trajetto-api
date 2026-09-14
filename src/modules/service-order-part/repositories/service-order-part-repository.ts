@@ -9,6 +9,8 @@ import {
 
 import database from "@/../infra/database";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class ServiceOrderPartRepository implements IServiceOrderPartRepository {
   constructor(private prisma = database) {}
 
@@ -106,7 +108,7 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
 
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [serviceOrderPartData, total] = await Promise.all([

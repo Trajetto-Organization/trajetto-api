@@ -22,6 +22,8 @@ import {
   CursorPaginatedUser,
 } from "../dtos/user-dto";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class UserRepository implements IUserRepository {
   constructor(private prisma = database) {}
 
@@ -135,7 +137,7 @@ class UserRepository implements IUserRepository {
       role: { in: allowedRoles },
       ...(currentUserRole !== "MASTER" && { businessId }),
       id: { not: currentUserId },
-      ...(orConditions.length > 0 ? { OR: orConditions } : {}),
+      ...buildSearchOr(orConditions),
     };
 
     const [usersAccessData, total] = await Promise.all([

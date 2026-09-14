@@ -15,6 +15,8 @@ import { presentActivityActors } from "@/shared/activity/actor-presentation";
 import { IActivityRepository } from "./IActivity-repository";
 import { TENANT_VISIBLE } from "@/shared/notifications/policies/business-plan-policies";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class ActivityRepository implements IActivityRepository {
   constructor(private prisma = database) {}
 
@@ -107,7 +109,7 @@ class ActivityRepository implements IActivityRepository {
     // Base condition
     let whereCondition: any = {
       ...(currentUserRole !== "MASTER" && businessId ? { businessId } : {}),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     // Hierarchical visibility logic based on role and activity_notifications_enabled

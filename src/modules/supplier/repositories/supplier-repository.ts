@@ -11,6 +11,8 @@ import {
 import { ISupplierRepository } from "./ISupplier-repository";
 import database from "@/../infra/database";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class SupplierRepository implements ISupplierRepository {
   constructor(private prisma = database) {}
 
@@ -72,7 +74,7 @@ class SupplierRepository implements ISupplierRepository {
 
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [supplierData, total] = await Promise.all([

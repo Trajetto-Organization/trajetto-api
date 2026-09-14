@@ -12,6 +12,8 @@ import {
   CursorPaginatedProfileAccess,
 } from "../dtos/profile-access-dto";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class ProfileAccessRepository implements IProfileAccessRepository {
   constructor(private prisma = database) {}
 
@@ -73,7 +75,7 @@ class ProfileAccessRepository implements IProfileAccessRepository {
       ...(currentUserRole === "BUSINESS_USER" && {
         id: { not: profileAccessId },
       }),
-      ...(orConditions.length > 0 ? { OR: orConditions } : {}),
+      ...buildSearchOr(orConditions),
     };
 
     const [profileAccessData, total] = await Promise.all([

@@ -11,6 +11,8 @@ import {
 
 import database from "@/../infra/database";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class DriverRepository implements IDriverRepository {
   constructor(private prisma = database) {}
 
@@ -74,7 +76,7 @@ class DriverRepository implements IDriverRepository {
 
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [driverData, total] = await Promise.all([
@@ -256,7 +258,7 @@ class DriverRepository implements IDriverRepository {
 
     const whereCondition: any = {
       ...(userRole !== "MASTER" && { businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const batchSize = 1000;

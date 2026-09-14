@@ -11,6 +11,8 @@ import {
 
 import database from "@/../infra/database";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class FuelTypeRepository implements IFuelTypeRepository {
   constructor(private prisma = database) {}
 
@@ -66,7 +68,7 @@ class FuelTypeRepository implements IFuelTypeRepository {
 
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [fuelTypeData, total] = await Promise.all([

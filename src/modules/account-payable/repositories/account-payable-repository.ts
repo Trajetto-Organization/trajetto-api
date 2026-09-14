@@ -12,6 +12,8 @@ import {
 import database from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class AccountPayableRepository implements IAccountPayableRepository {
   constructor(private prisma = database) {}
 
@@ -156,7 +158,7 @@ class AccountPayableRepository implements IAccountPayableRepository {
 
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [accountPayableData, total] = await Promise.all([

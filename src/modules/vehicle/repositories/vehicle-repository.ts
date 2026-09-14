@@ -16,6 +16,8 @@ import {
   totalFromStatusCounts,
 } from "@/shared/vehicle/vehicle-rules";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class VehicleRepository implements IVehicleRepository {
   constructor(private prisma = database) {}
 
@@ -72,7 +74,7 @@ class VehicleRepository implements IVehicleRepository {
 
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [vehicleData, statusGroups] = await Promise.all([
@@ -263,7 +265,7 @@ class VehicleRepository implements IVehicleRepository {
 
     const whereCondition: any = {
       ...(userRole !== "MASTER" && { businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const batchSize = 1000;

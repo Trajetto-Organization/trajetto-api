@@ -11,6 +11,8 @@ import {
   CursorPaginatedVehicleType,
 } from "../dtos/vehicle-type-dto";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class VehicleTypeRepository implements IVehicleTypeRepository {
   constructor(private prisma = database) {}
 
@@ -64,7 +66,7 @@ class VehicleTypeRepository implements IVehicleTypeRepository {
 
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [vehicleTypeData, total] = await Promise.all([

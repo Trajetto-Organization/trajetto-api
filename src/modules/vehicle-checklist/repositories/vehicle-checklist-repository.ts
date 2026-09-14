@@ -13,6 +13,8 @@ import {
   VehicleChecklistWithRelations,
 } from "../dtos/vehicle-checklist-dto";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class VehicleChecklistRepository implements IVehicleChecklistRepository {
   constructor(private prisma = database) {}
 
@@ -231,7 +233,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
 
     const whereConditions: any = {
       ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     // Add additional filters
@@ -620,7 +622,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
 
     const whereCondition = {
       ...(userRole !== "MASTER" && { businessId: businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const batchSize = 1000;

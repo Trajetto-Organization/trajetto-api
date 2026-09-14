@@ -11,6 +11,8 @@ import {
 
 import { IFineRepository } from "./IFine-repository";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+
 class FineRepository implements IFineRepository {
   constructor(private prisma = database) {}
 
@@ -145,7 +147,7 @@ class FineRepository implements IFineRepository {
 
     const whereCondition: any = {
       ...(currentUserRole !== "MASTER" && { businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const [fineData, total] = await Promise.all([
@@ -270,7 +272,7 @@ class FineRepository implements IFineRepository {
 
     const whereCondition: any = {
       ...(userRole !== "MASTER" && { businessId }),
-      ...(orConditions.length > 0 && { OR: orConditions }),
+      ...buildSearchOr(orConditions),
     };
 
     const batchSize = 1000;
