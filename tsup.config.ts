@@ -9,6 +9,9 @@ export default defineConfig({
     server: "./src/server.ts",
     seed: "./infra/scripts/seed.ts",
     "import-violation-codes": "./infra/scripts/import-violation-codes.ts",
+    // Compiled because it runs in the production image, where tsx does not
+    // exist — only production dependencies are installed there.
+    "wait-for-postgres": "./infra/scripts/wait-for-postgres.ts",
   },
   format: ["cjs"],
   target: "es2020",

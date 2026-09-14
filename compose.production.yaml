@@ -24,6 +24,13 @@ services:
         condition: any # It always restarts if the process crashes
         delay: 5s
         max_attempts: 3
+        # Without a window the attempt counter NEVER resets: Swarm's default is
+        # 0, meaning "evaluate over the whole lifetime of the service". Three
+        # restarts spread over three months exhaust the budget exactly like
+        # three in fifteen seconds, and once exhausted Swarm stops recreating
+        # the task permanently — including after the cause is long gone. With a
+        # window, a task that survives two minutes gets its three attempts back.
+        window: 120s
     networks:
       - minha_rede
     healthcheck:
@@ -56,6 +63,7 @@ services:
         condition: any
         delay: 5s
         max_attempts: 3
+        window: 120s # See trajetto-database above.
     networks:
       - minha_rede
     healthcheck:
@@ -111,6 +119,7 @@ services:
         condition: any
         delay: 5s
         max_attempts: 3
+        window: 120s # See trajetto-database above.
       labels:
         - traefik.enable=true
         - traefik.http.routers.api.rule=Host(`trajettoapi.thorsolucoes.com.br`)
@@ -127,29 +136,50 @@ services:
         - traefik.http.services.api.loadbalancer.sticky.cookie.name=trajetto_api_affinity
         - traefik.http.services.api.loadbalancer.sticky.cookie.httponly=true
         - traefik.http.services.api.loadbalancer.sticky.cookie.secure=true
+        # Readiness lives HERE, where being unready costs traffic instead of
+        # costing the container. A replica whose database is unreachable stops
+        # receiving requests and rejoins by itself once it answers 200 again.
+        - traefik.http.services.api.loadbalancer.healthcheck.path=/health/readiness
+        - traefik.http.services.api.loadbalancer.healthcheck.interval=10s
+        - traefik.http.services.api.loadbalancer.healthcheck.timeout=5s
         - traefik.docker.network=minha_rede
     networks:
       - minha_rede
     depends_on:
       - trajetto-database
       - trajetto-redis
-    # Points at readiness, not /health: readiness is the explicit "this replica
-    # can serve traffic" contract (database only), while /health is the rich
-    # human diagnostic that will keep gaining checks. Restarting a container
-    # because a non-critical dependency blinked is how an e-mail broker used
-    # to take the whole API down.
+    # LIVENESS, not readiness — and the distinction is the whole point.
+    #
+    # In Swarm this probe is a KILL SWITCH: failing it does not take the
+    # replica out of rotation, it destroys the task. Pointing it at readiness
+    # made "the database is unreachable" mean "destroy every replica", and
+    # both replicas observe the same database on the same interval, so they
+    # cross the threshold seconds apart. A Postgres blip of two or three
+    # minutes took the API from 2/2 to 0/2 — and the recreated containers ran
+    # `prisma migrate deploy` at boot, failed against the same dead database,
+    # burned all three restart attempts in under a minute and, with no window
+    # on the policy, stayed down permanently. The outage outlived its cause by
+    # however long it took a human to notice.
+    #
+    # /health/liveness answers "is this process alive", touching no
+    # dependency. Whether a replica should receive traffic is answered by
+    # Traefik against /health/readiness (see the labels above): a replica with
+    # no database leaves the load balancer and comes back on its own, which is
+    # what readiness is for.
     healthcheck:
       test:
         [
           "CMD",
           "node",
           "-e",
-          "require('http').get('http://localhost:3333/health/readiness', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))",
+          "require('http').get('http://localhost:3333/health/liveness', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))",
         ]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 120s
+      # Liveness waits for the process, not for its dependencies, so the long
+      # grace period the readiness probe needed is no longer justified.
+      start_period: 30s
 
 volumes:
   postgres_data:

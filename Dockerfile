@@ -113,8 +113,14 @@ USER nodejs
 
 EXPOSE 3333
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:3333/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+# Liveness, matching compose.production.yaml. A probe that decides whether to
+# DESTROY the container must not depend on Postgres: /health answers 503 when
+# the database is down, which turned a blip into a restart loop. The image
+# default matters on its own because anything running it outside the stack —
+# a debug run, a one-off task, another orchestrator — inherits this and used
+# to get the more aggressive `/health` with retries=3.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD node -e "require('http').get('http://localhost:3333/health/liveness', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
 ENTRYPOINT ["dumb-init", "--"]
 
