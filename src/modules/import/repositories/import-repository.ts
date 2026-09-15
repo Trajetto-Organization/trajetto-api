@@ -3,6 +3,7 @@ import database from "@/../infra/database";
 import type { IImportRepository } from "./IImport-repository";
 import type {
   CreateImportProps,
+  FinishImportProps,
   ImportRecord,
   ImportReport,
   ListImportsProps,
@@ -12,6 +13,16 @@ import type {
 
 import { Prisma } from "@prisma/client";
 
+/** What an upload's report says before it has processed anything. */
+const EMPTY_REPORT: ImportReport = {
+  imported: 0,
+  duplicated: 0,
+  invalid: 0,
+  unknownHeaders: [],
+  rows: [],
+  routes: [],
+};
+
 class ImportRepository implements IImportRepository {
   constructor(private prisma = database) {}
 
@@ -19,17 +30,38 @@ class ImportRepository implements IImportRepository {
     const created = await this.prisma.import.create({
       data: {
         source: data.source,
+        status: "IN_PROGRESS",
         filename: data.filename,
-        imported: data.imported,
-        duplicated: data.duplicated,
-        invalid: data.invalid,
-        report: data.report as unknown as Prisma.InputJsonValue,
+        report: EMPTY_REPORT as unknown as Prisma.InputJsonValue,
         businessId: data.businessId,
         performedById: data.performedById,
       },
     });
 
     return created as unknown as ImportRecord;
+  }
+
+  async finishImport(
+    importId: string,
+    businessId: string,
+    data: FinishImportProps,
+  ): Promise<ImportRecord> {
+    // updateMany, not update: the businessId belongs in the `where`, not in a
+    // check above it.
+    await this.prisma.import.updateMany({
+      where: { id: importId, businessId },
+      data: {
+        status: "COMPLETED",
+        imported: data.imported,
+        duplicated: data.duplicated,
+        invalid: data.invalid,
+        report: data.report as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    return this.prisma.import.findFirstOrThrow({
+      where: { id: importId, businessId },
+    }) as unknown as Promise<ImportRecord>;
   }
 
   async findImportById(

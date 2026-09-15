@@ -353,3 +353,121 @@ describe("the delivery status override, as published", () => {
     expect(body).toContain("required");
   });
 });
+
+describe("the import module's published surface", () => {
+  /**
+   * Loading a day's work from a spreadsheet, and taking it back.
+   *
+   * The two responses here that a client can get wrong in a way no status code
+   * reveals are both documented by hand: the listing is a stream, and both the
+   * template download and the exports are FILES. A caller who reads either as
+   * JSON gets a parse error that looks like a server fault.
+   */
+  const imports = () => operationsUnder("/import/");
+
+  it("publishes exactly the four endpoints the module implements", () => {
+    expect(
+      imports().map(([path, method]) => `${method.toUpperCase()} ${path}`),
+    ).toEqual([
+      "GET /import/download-template",
+      "POST /import/import-spreadsheet/{businessId}",
+      "GET /import/list-imports",
+      "POST /import/reverse-import/{importId}/business/{businessId}",
+    ]);
+  });
+
+  it("declares a bearer token, a tag and a real description on every one", () => {
+    for (const [path, method, operation] of imports()) {
+      expect(operation.security, `${method} ${path}`).toBeTruthy();
+      expect(operation.tags, `${method} ${path}`).toEqual(["import"]);
+
+      expect(
+        (operation.description ?? "").length,
+        `${method} ${path}`,
+      ).toBeGreaterThan(80);
+    }
+  });
+
+  it("claims 409 only on the undo", () => {
+    // The undo is the one call here with a precondition it can lose: the
+    // upload may already have been reversed, or may still be running.
+    const withConflict = imports()
+      .filter(([, , operation]) =>
+        Object.keys(operation.responses).includes("409"),
+      )
+      .map(([path]) => path);
+
+    expect(withConflict).toEqual([
+      "/import/reverse-import/{importId}/business/{businessId}",
+    ]);
+  });
+
+  it("warns that the listing is NDJSON and not JSON", () => {
+    const listing =
+      imports().find(([path]) => path.endsWith("/list-imports"))?.[2]
+        .description ?? "";
+
+    expect(listing).toContain("ndjson");
+  });
+
+  it("warns that the template is a file and not JSON", () => {
+    const template =
+      imports().find(([path]) => path.endsWith("/download-template"))?.[2]
+        .description ?? "";
+
+    expect(template).toContain(".xlsx");
+
+    // And it publishes no 200 schema, because there is no JSON body to
+    // describe — documenting one would be describing a response that never
+    // arrives.
+    const responses = Object.keys(
+      imports().find(([path]) => path.endsWith("/download-template"))![2]
+        .responses,
+    );
+
+    expect(responses).not.toContain("200");
+  });
+
+  it("describes the per-row report on the upload, not just a count", () => {
+    // "Qual das duzentas falhou?" is the whole reason the response is not a
+    // number. A contract that published only the totals would let a client be
+    // built that cannot answer it.
+    const upload = Object.entries(document.paths).find(([path]) =>
+      path.includes("/import/import-spreadsheet/"),
+    );
+
+    const body = JSON.stringify(
+      (upload![1].post as OpenApiOperation).responses["200"] ?? {},
+    );
+
+    expect(body).toContain("unknownHeaders");
+    expect(body).toContain("outcome");
+    expect(body).toContain("line");
+  });
+});
+
+describe("the delivery exports, as published", () => {
+  const exports = () =>
+    operationsUnder("/delivery/export-").map(
+      ([path, method, operation]) =>
+        [path, method, operation] as [string, string, OpenApiOperation],
+    );
+
+  it("publishes both of them", () => {
+    expect(
+      exports().map(([path, method]) => `${method.toUpperCase()} ${path}`),
+    ).toEqual(["GET /delivery/export-delivery", "GET /delivery/export-occurrence"]);
+  });
+
+  it("publishes no 200 schema, because the answer is a file", () => {
+    for (const [path, method, operation] of exports()) {
+      expect(Object.keys(operation.responses), `${method} ${path}`).not.toContain(
+        "200",
+      );
+
+      expect(operation.description ?? "", `${method} ${path}`).toContain(
+        "NÃO com JSON",
+      );
+    }
+  });
+});

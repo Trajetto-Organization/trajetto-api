@@ -1,0 +1,12 @@
+-- An upload is IN_PROGRESS while it writes its rows.
+--
+-- The record is created before the first delivery, so everything it creates
+-- carries its id from birth and a process that dies halfway leaves an upload
+-- the operator can still undo. That ordering needs a state for "open": without
+-- it the listing would show a COMPLETED import with zero rows while it is in
+-- fact writing two hundred, and the undo button next to it would delete
+-- deliveries while the loop is still creating them.
+--
+-- A separate migration rather than an edit to 20260915160000, because editing
+-- an applied migration breaks its checksum.
+ALTER TYPE "ImportStatus" ADD VALUE IF NOT EXISTS 'IN_PROGRESS' BEFORE 'COMPLETED';

@@ -1,5 +1,5 @@
 type ImportSource = "SPREADSHEET" | "NFE_XML";
-type ImportStatus = "COMPLETED" | "REVERSED";
+type ImportStatus = "IN_PROGRESS" | "COMPLETED" | "REVERSED";
 
 type RowOutcome = "imported" | "duplicated" | "invalid";
 
@@ -56,18 +56,30 @@ interface ImportRecord {
   created_at: Date | string;
 }
 
+/**
+ * Opening an upload, before a single row exists.
+ *
+ * No counts and no report, because at this point there are none: the record is
+ * written FIRST so every delivery and every route it creates can carry its id
+ * from birth. A process that dies halfway then leaves rows that the undo can
+ * still find — whereas stamping them afterwards leaves orphans that no undo
+ * can ever group again, and the operator deletes two hundred rows by hand.
+ */
 interface CreateImportProps {
   source: ImportSource;
   filename: string;
 
+  businessId: string;
+  performedById: string;
+}
+
+/** Closing it: the counts and the per-row report, once they are known. */
+interface FinishImportProps {
   imported: number;
   duplicated: number;
   invalid: number;
 
   report: ImportReport;
-
-  businessId: string;
-  performedById: string;
 }
 
 interface ListImportsProps {
@@ -101,6 +113,7 @@ interface ReversalResult {
 
 export type {
   CreateImportProps,
+  FinishImportProps,
   ImportRecord,
   ImportReport,
   ImportRowResult,

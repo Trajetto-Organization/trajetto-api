@@ -16,6 +16,8 @@ import { listDeliverySchema } from "@/schemas/list-delivery-schema";
 import { listOccurrencesSchema } from "@/schemas/list-occurrences-schema";
 import { operationSummarySchema } from "@/schemas/operation-summary-schema";
 
+import { exportDeliverySchema } from "@/schemas/export-delivery-schema";
+
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDeleteDeliverySchema } from "@/schemas/update-delete-delivery-schema";
 
@@ -62,6 +64,7 @@ const deliverySchemas = {
   listDeliveries: listDeliverySchema,
   listOccurrences: listOccurrencesSchema,
   operationSummary: operationSummarySchema,
+  exportDelivery: exportDeliverySchema,
 };
 
 const deliveryResponses = {

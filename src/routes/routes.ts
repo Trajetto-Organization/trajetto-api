@@ -48,6 +48,7 @@ import { statusChangeReasonRoutes } from "./status-change-reason-routes";
 
 import { deliveryRoutes } from "./delivery-routes";
 import { routeRoutes } from "./route-routes";
+import { importRoutes } from "./import-routes";
 
 import { chatRoutes } from "./chat-routes";
 
@@ -82,6 +83,7 @@ async function routes(app: FastifyInstance) {
   app.register(statusChangeReasonRoutes, { prefix: "/status-change-reason" });
   app.register(deliveryRoutes, { prefix: "/delivery" });
   app.register(routeRoutes, { prefix: "/route" });
+  app.register(importRoutes, { prefix: "/import" });
   app.register(chatRoutes, { prefix: "/chat" });
   app.register(uploadRoutes, { prefix: "/uploads" });
   app.register(healthRoutes);

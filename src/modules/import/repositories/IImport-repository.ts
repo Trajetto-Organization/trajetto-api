@@ -1,5 +1,6 @@
 import type {
   CreateImportProps,
+  FinishImportProps,
   ImportRecord,
   ListImportsProps,
   ListImportsResult,
@@ -15,7 +16,20 @@ import type {
  * thought about.
  */
 interface IImportRepository {
+  /** Opens the upload. IN_PROGRESS until `finishImport` closes it. */
   createImport: (data: CreateImportProps) => Promise<ImportRecord>;
+
+  /**
+   * Closes it with the counts and the report.
+   *
+   * Scoped by company like everything else here, so a crash in one tenant's
+   * import can never write a report onto another's.
+   */
+  finishImport: (
+    importId: string,
+    businessId: string,
+    data: FinishImportProps,
+  ) => Promise<ImportRecord>;
 
   findImportById: (
     importId: string,

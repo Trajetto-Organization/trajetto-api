@@ -3,6 +3,7 @@ import { v7 as uuidV7 } from "uuid";
 import type { IImportRepository } from "../IImport-repository";
 import type {
   CreateImportProps,
+  FinishImportProps,
   ImportRecord,
   ListImportsProps,
   ListImportsResult,
@@ -46,7 +47,25 @@ class InMemoryImportRepository implements IImportRepository {
   async createImport(data: CreateImportProps): Promise<ImportRecord> {
     const created: ImportRecord = {
       id: uuidV7(),
-      status: "COMPLETED",
+
+      // IN_PROGRESS like the real one. A fake that opened an upload as
+      // COMPLETED would let a test prove the undo accepts a running import,
+      // which is the one thing the status exists to refuse.
+      status: "IN_PROGRESS",
+
+      imported: 0,
+      duplicated: 0,
+      invalid: 0,
+
+      report: {
+        imported: 0,
+        duplicated: 0,
+        invalid: 0,
+        unknownHeaders: [],
+        rows: [],
+        routes: [],
+      },
+
       reversed_at: null,
       created_at: new Date(),
       ...data,
@@ -55,6 +74,28 @@ class InMemoryImportRepository implements IImportRepository {
     this.imports.push(created);
 
     return created;
+  }
+
+  async finishImport(
+    importId: string,
+    businessId: string,
+    data: FinishImportProps,
+  ): Promise<ImportRecord> {
+    const found = this.imports.find(
+      (entry) => entry.id === importId && entry.businessId === businessId,
+    );
+
+    if (!found) throw new Error("Import not found");
+
+    found.status = "COMPLETED";
+
+    found.imported = data.imported;
+    found.duplicated = data.duplicated;
+    found.invalid = data.invalid;
+
+    found.report = data.report;
+
+    return found;
   }
 
   async findImportById(

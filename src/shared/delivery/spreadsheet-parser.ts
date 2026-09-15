@@ -416,6 +416,20 @@ function parseDeliverySpreadsheet(matrix: unknown[][]): ParseResult {
     });
   });
 
+  if (rows.length === 0 && errors.length === 0) {
+    // The header is right and there is nothing under it. Almost always the
+    // model downloaded and uploaded back untouched, and "0 importadas, 0
+    // duplicadas, 0 com erro" reads like the importer broke rather than like
+    // the file was blank.
+    errors.push({
+      line: 1,
+      column: null,
+      message:
+        "A planilha tem o cabeçalho, mas nenhuma linha preenchida. " +
+        "Preencha uma linha por entrega abaixo do cabeçalho.",
+    });
+  }
+
   return { rows, errors, unknownHeaders };
 }
 

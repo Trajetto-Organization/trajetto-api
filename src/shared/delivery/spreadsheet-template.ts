@@ -206,12 +206,19 @@ const TEMPLATE_COLUMNS: TemplateColumn[] = [
  * A dispatcher who typed "Nº da NF" and one who typed "numero_da_nf" meant the
  * same column, and a format that only accepts one of them is a format that
  * generates support tickets instead of deliveries.
+ *
+ * The asterisk goes too, and that one is not a courtesy: the template we
+ * publish marks its required columns "Destinatário *", so a file filled in
+ * from our own model comes back with asterisks in the header row. Without
+ * this the four columns that matter most would arrive unrecognised and every
+ * row would fail as incomplete — the format refusing the exact file it told
+ * people to use.
  */
 function normalizeHeader(value: string): string {
   return value
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
-    .replace(/[_.]/g, " ")
+    .replace(/[_.*]/g, " ")
     .replace(/[º°]/g, "")
     .replace(/\s+/g, " ")
     .trim()

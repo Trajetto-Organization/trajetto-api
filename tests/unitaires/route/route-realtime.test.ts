@@ -52,6 +52,7 @@ function closedRoute(): Route {
     businessId: BUSINESS,
     driverId: "driver-1",
     vehicleId: "vehicle-1",
+    importId: null,
     created_at: new Date(),
     updated_at: new Date(),
   };

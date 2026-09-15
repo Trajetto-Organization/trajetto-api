@@ -22,6 +22,16 @@ interface Route {
   driverId: string;
   vehicleId: string | null;
 
+  /**
+   * The upload that created it, when one did.
+   *
+   * On the domain type and not only in the database because the undo finds
+   * routes BY it: a fake that dropped this on the way in would let a test
+   * prove a spreadsheet's routes are reversible when in fact none of them
+   * carries the stamp the reversal looks for.
+   */
+  importId: string | null;
+
   created_at: Date;
   updated_at: Date;
 }

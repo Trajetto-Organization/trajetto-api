@@ -70,6 +70,19 @@ class ReverseImportUseCase {
       throw new AppError(new ImportNotFoundError().message, 404);
     }
 
+    // A running import is still writing rows. Undoing one would delete
+    // deliveries while the loop above is creating them, and the two would
+    // race over the same ids — the report would name rows that no longer
+    // exist and the operator would be left with a half-import nobody can
+    // account for.
+    if (findImport.status === "IN_PROGRESS") {
+      throw new AppError(
+        "Esta importação ainda está em andamento. Aguarde o fim para estorná-la.",
+        409,
+        "IMPORT_IN_PROGRESS",
+      );
+    }
+
     // Undoing twice would report removing nothing and read like a failure.
     // Saying so is what tells the operator the first click worked.
     if (findImport.status === "REVERSED") {

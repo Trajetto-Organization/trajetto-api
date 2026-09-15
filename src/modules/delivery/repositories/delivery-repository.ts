@@ -30,6 +30,9 @@ import {
 
 import database from "@/../infra/database";
 
+import { buildSearchOr } from "@/shared/pagination/search-or";
+import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
+
 // Every read surfaces the shipper name and the assignment context — the
 // panels never fetch relations in a second round-trip.
 const listInclude = {
@@ -720,13 +723,193 @@ class DeliveryRepository implements IDeliveryRepository {
     return found as Delivery | null;
   }
 
-  async stampImport(deliveryIds: string[], importId: string): Promise<void> {
-    if (deliveryIds.length === 0) return;
+  /**
+   * Batched by cursor, a thousand at a time.
+   *
+   * `orderBy: id` and not `created_at`: the cursor has to be unique or a batch
+   * boundary between two rows written in the same millisecond either repeats a
+   * delivery or skips one, and an export that quietly loses a row is worse
+   * than one that fails.
+   */
+  async *streamDeliveriesForExport({
+    businessId,
+    driverId,
+    search,
+    status,
+  }: {
+    businessId: string;
+    driverId?: string;
+    search?: string;
+    status?: string;
+  }): AsyncGenerator<Record<string, unknown>> {
+    const normalizedSearch = search ? search.trim() : "";
 
-    await this.prisma.delivery.updateMany({
-      where: { id: { in: deliveryIds } },
-      data: { importId },
-    });
+    const where: Prisma.DeliveryWhereInput = {
+      businessId,
+      ...(driverId && { driverId }),
+      ...(status && { status: status as Prisma.EnumDeliveryStatusFilter["equals"] }),
+      ...buildSearchOr([
+        ...(normalizedSearch
+          ? [
+              { recipient_name: { contains: normalizedSearch, mode: "insensitive" as const } },
+              { code: { contains: normalizedSearch, mode: "insensitive" as const } },
+              { invoice_key: { contains: normalizedSearch, mode: "insensitive" as const } },
+              { invoice_number: { contains: normalizedSearch, mode: "insensitive" as const } },
+              { city: { contains: normalizedSearch, mode: "insensitive" as const } },
+            ]
+          : []),
+      ]),
+    };
+
+    const batchSize = 1000;
+
+    let cursor: string | undefined;
+
+    while (true) {
+      const batch = await this.prisma.delivery.findMany({
+        where,
+        include: {
+          shipper: { select: { name: true } },
+          driver: { select: { name: true } },
+          vehicle: { select: { license_plate: true } },
+          stops: {
+            select: { route: { select: { code: true } } },
+            orderBy: { created_at: "desc" },
+            take: 1,
+          },
+        },
+        orderBy: { id: "asc" },
+        take: batchSize,
+        ...(cursor && { skip: 1, cursor: { id: cursor } }),
+      });
+
+      if (batch.length === 0) break;
+
+      for (const delivery of batch) {
+        yield {
+          id: delivery.id,
+          code: delivery.code,
+          invoice_key: delivery.invoice_key,
+          invoice_number: delivery.invoice_number,
+
+          // Portuguese, because an export is read by a person in Excel and
+          // "IN_TRANSIT" in a column called Status has to be explained every
+          // single time.
+          status: DELIVERY_STATUS_LABELS[delivery.status],
+
+          recipient_name: delivery.recipient_name,
+          recipient_document: delivery.recipient_document,
+          recipient_telephone: delivery.recipient_telephone,
+
+          street: delivery.street,
+          address_number: delivery.address_number,
+          neighborhood: delivery.neighborhood,
+          city: delivery.city,
+          uf: delivery.uf,
+          cep: delivery.cep,
+
+          shipperName: delivery.shipper?.name ?? null,
+          driverName: delivery.driver?.name ?? null,
+          vehiclePlate: delivery.vehicle?.license_plate ?? null,
+          routeCode: delivery.stops[0]?.route?.code ?? null,
+
+          scheduled_date: delivery.scheduled_date,
+          delivered_at: delivery.delivered_at,
+          received_by: delivery.received_by,
+          notes: delivery.notes,
+        };
+      }
+
+      cursor = batch[batch.length - 1].id;
+
+      if (batch.length < batchSize) break;
+    }
+  }
+
+  async *streamOccurrencesForExport({
+    businessId,
+    driverId,
+    search,
+  }: {
+    businessId: string;
+    driverId?: string;
+    search?: string;
+  }): AsyncGenerator<Record<string, unknown>> {
+    const normalizedSearch = search ? search.trim() : "";
+
+    const where: Prisma.DeliveryOccurrenceWhereInput = {
+      delivery: {
+        businessId,
+        ...(driverId && { driverId }),
+      },
+      ...buildSearchOr([
+        ...(normalizedSearch
+          ? [
+              { description: { contains: normalizedSearch, mode: "insensitive" as const } },
+              {
+                occurrenceType: {
+                  name: { contains: normalizedSearch, mode: "insensitive" as const },
+                },
+              },
+              {
+                delivery: {
+                  recipient_name: {
+                    contains: normalizedSearch,
+                    mode: "insensitive" as const,
+                  },
+                },
+              },
+            ]
+          : []),
+      ]),
+    };
+
+    const batchSize = 1000;
+
+    let cursor: string | undefined;
+
+    while (true) {
+      const batch = await this.prisma.deliveryOccurrence.findMany({
+        where,
+        include: {
+          occurrenceType: { select: { name: true, blocks_delivery: true } },
+          reportedBy: { select: { name: true } },
+          delivery: {
+            select: { id: true, recipient_name: true, city: true, uf: true },
+          },
+        },
+        orderBy: { id: "asc" },
+        take: batchSize,
+        ...(cursor && { skip: 1, cursor: { id: cursor } }),
+      });
+
+      if (batch.length === 0) break;
+
+      for (const occurrence of batch) {
+        yield {
+          id: occurrence.id,
+          created_at: occurrence.created_at,
+          typeName: occurrence.occurrenceType?.name ?? null,
+
+          // "Sim"/"Não" rather than true/false: the column is read, filtered
+          // and counted by a person in a spreadsheet.
+          blocking: occurrence.occurrenceType?.blocks_delivery ? "Sim" : "Não",
+
+          deliveryId: occurrence.delivery?.id ?? null,
+          recipientName: occurrence.delivery?.recipient_name ?? null,
+          city: occurrence.delivery?.city ?? null,
+          uf: occurrence.delivery?.uf ?? null,
+
+          reporterName: occurrence.reportedBy?.name ?? null,
+          description: occurrence.description,
+          photoCount: occurrence.photos?.length ?? 0,
+        };
+      }
+
+      cursor = batch[batch.length - 1].id;
+
+      if (batch.length < batchSize) break;
+    }
   }
 
   async countDeliveriesReferencing(reference: {

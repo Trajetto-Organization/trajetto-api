@@ -148,6 +148,17 @@ class ImportDeliverySpreadsheetUseCase {
 
     const parsed = parseDeliverySpreadsheet(matrix);
 
+    // The record exists before a single row does, so everything created below
+    // carries its id from birth. A process that dies halfway then leaves an
+    // upload the operator can still undo; stamping the rows at the end would
+    // leave orphans no undo could ever group again.
+    const record = await this.importRepository.createImport({
+      source: "SPREADSHEET",
+      filename,
+      businessId,
+      performedById: userId,
+    });
+
     const rows: ImportRowResult[] = parsed.errors.map((error) => ({
       line: error.line,
       outcome: "invalid" as const,
@@ -177,7 +188,7 @@ class ImportDeliverySpreadsheetUseCase {
         const created = await this.delivery.createDelivery({
           businessId,
           shipperId,
-          importId: null,
+          importId: record.id,
 
           recipient_name: row.recipient_name,
           recipient_document: row.recipient_document,
@@ -241,6 +252,7 @@ class ImportDeliverySpreadsheetUseCase {
 
     const routes = await this.buildRoutes(
       businessId,
+      record.id,
       parsed.rows,
       createdDeliveryIdByLine,
       rows,
@@ -258,23 +270,15 @@ class ImportDeliverySpreadsheetUseCase {
       routes,
     };
 
-    const record = await this.importRepository.createImport({
-      source: "SPREADSHEET",
-      filename,
-      imported: report.imported,
-      duplicated: report.duplicated,
-      invalid: report.invalid,
-      report,
-      businessId,
-      performedById: userId,
-    });
-
-    // The rows are stamped after the import exists — it is the parent, and a
-    // delivery pointing at an import that had not been written yet would be a
-    // foreign key with nothing behind it.
-    await this.delivery.stampImport(
-      [...createdDeliveryIdByLine.values()],
+    const finished = await this.importRepository.finishImport(
       record.id,
+      businessId,
+      {
+        imported: report.imported,
+        duplicated: report.duplicated,
+        invalid: report.invalid,
+        report,
+      },
     );
 
     this.notificationService.createActivityIfEnabled({
@@ -289,7 +293,7 @@ class ImportDeliverySpreadsheetUseCase {
       businessId,
     });
 
-    return { ...record, report };
+    return { ...finished, report };
   }
 
   /**
@@ -341,6 +345,7 @@ class ImportDeliverySpreadsheetUseCase {
    */
   private async buildRoutes(
     businessId: string,
+    importId: string,
     parsedRows: ParsedRow[],
     createdDeliveryIdByLine: Map<number, string>,
     rows: ImportRowResult[],
@@ -407,6 +412,7 @@ class ImportDeliverySpreadsheetUseCase {
       try {
         const createdRoute = await this.route.createRoute({
           businessId,
+          importId,
           driverId: findDriver.id!,
           vehicleId,
           name: route.name,

@@ -513,11 +513,44 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     );
   }
 
-  async stampImport(deliveryIds: string[], importId: string): Promise<void> {
+  async *streamDeliveriesForExport({
+    businessId,
+    driverId,
+    status,
+  }: {
+    businessId: string;
+    driverId?: string;
+    search?: string;
+    status?: string;
+  }): AsyncGenerator<Record<string, unknown>> {
     for (const delivery of this.deliveries) {
-      if (deliveryIds.includes(delivery.id ?? "")) {
-        (delivery as { importId?: string | null }).importId = importId;
-      }
+      if (delivery.businessId !== businessId) continue;
+      if (driverId && delivery.driverId !== driverId) continue;
+      if (status && delivery.status !== status) continue;
+
+      yield { ...delivery } as Record<string, unknown>;
+    }
+  }
+
+  async *streamOccurrencesForExport({
+    businessId,
+    driverId,
+  }: {
+    businessId: string;
+    driverId?: string;
+    search?: string;
+  }): AsyncGenerator<Record<string, unknown>> {
+    const deliveriesById = new Map(
+      this.deliveries.map((delivery) => [delivery.id, delivery]),
+    );
+
+    for (const occurrence of this.occurrences) {
+      const delivery = deliveriesById.get(occurrence.deliveryId);
+
+      if (!delivery || delivery.businessId !== businessId) continue;
+      if (driverId && delivery.driverId !== driverId) continue;
+
+      yield { ...occurrence } as Record<string, unknown>;
     }
   }
 

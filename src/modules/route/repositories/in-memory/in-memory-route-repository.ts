@@ -257,6 +257,7 @@ class InMemoryRouteRepository implements IRouteRepository {
       businessId: data.businessId,
       driverId: data.driverId,
       vehicleId: data.vehicleId ?? null,
+      importId: data.importId ?? null,
       created_at: now,
       updated_at: now,
     };

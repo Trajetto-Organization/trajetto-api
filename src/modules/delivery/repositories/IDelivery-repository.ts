@@ -127,13 +127,25 @@ interface IDeliveryRepository {
   ) => Promise<Delivery | null>;
 
   /**
-   * Marks rows as belonging to an upload, after the upload row exists.
+   * The operation, one batch at a time.
    *
-   * Two steps rather than one because the import is the parent: a delivery
-   * pointing at an import that had not been written yet is a foreign key with
-   * nothing behind it.
+   * A generator rather than a list, because an export is the one screen where
+   * a company with five million deliveries asks for all of them: the
+   * difference between a cursor loop and a `findMany` is the difference
+   * between a download and a dead replica.
    */
-  stampImport: (deliveryIds: string[], importId: string) => Promise<void>;
+  streamDeliveriesForExport: (props: {
+    businessId: string;
+    driverId?: string;
+    search?: string;
+    status?: string;
+  }) => AsyncGenerator<Record<string, unknown>>;
+
+  streamOccurrencesForExport: (props: {
+    businessId: string;
+    driverId?: string;
+    search?: string;
+  }) => AsyncGenerator<Record<string, unknown>>;
 
   countDeliveriesReferencing: (reference: {
     driverId?: string;

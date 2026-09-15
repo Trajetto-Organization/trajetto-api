@@ -21,6 +21,9 @@ import { ReportDeliveryOccurrenceController } from "@/modules/delivery/usecases/
 
 import { ImportDeliveryXmlController } from "@/modules/delivery/usecases/import-delivery-xml/import-delivery-xml-controller";
 
+import { ExportDeliveryController } from "@/modules/delivery/usecases/export-delivery/export-delivery-controller";
+import { ExportOccurrenceController } from "@/modules/delivery/usecases/export-occurrence/export-occurrence-controller";
+
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
@@ -54,6 +57,9 @@ const reportDeliveryOccurrenceController =
   new ReportDeliveryOccurrenceController();
 
 const importDeliveryXmlController = new ImportDeliveryXmlController();
+
+const exportDeliveryController = new ExportDeliveryController();
+const exportOccurrenceController = new ExportOccurrenceController();
 
 // A batch of NF-e files is bigger than any other JSON body in the API, so
 // this route (and only it) raises the limit: 25 files of up to 512 KB.
@@ -447,6 +453,52 @@ async function deliveryRoutes(app: FastifyInstance) {
       },
     },
     reportDeliveryOccurrenceController.handle,
+  );
+  app.get(
+    "/export-delivery",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["delivery"],
+        summary: "Export deliveries (CSV or Excel)",
+        description:
+          "Responde com o arquivo, NÃO com JSON. `format=csv|excel`, `search` e `status` filtram igual à listagem, e o motorista só exporta as próprias entregas — a mesma regra que a tela obedece. As linhas saem do banco em blocos por cursor, não de uma vez: é a única tela em que uma empresa pede a operação inteira, e a diferença entre o cursor e um findMany é a diferença entre um download e uma réplica fora do ar. O status vem em português porque quem lê isso está no Excel.",
+        querystring: deliverySchemas.exportDelivery,
+        response: {
+          400: deliveryResponses.genericError,
+          403: deliveryResponses.genericError,
+          500: deliveryResponses.internalServerError,
+        },
+      },
+    },
+    exportDeliveryController.handle,
+  );
+
+  app.get(
+    "/export-occurrence",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("occurrence_manage", "read"),
+      ],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["delivery"],
+        summary: "Export occurrences (CSV or Excel)",
+        description:
+          "Responde com o arquivo, NÃO com JSON. O relatório que a transportadora manda ao embarcador quando ele pergunta por que a carga não entrou: uma linha por ocorrência, com o tipo, se ele barra a entrega, o destinatário e quem reportou. Mesmo streaming por cursor da exportação de entregas.",
+        querystring: deliverySchemas.exportDelivery,
+        response: {
+          400: deliveryResponses.genericError,
+          403: deliveryResponses.genericError,
+          500: deliveryResponses.internalServerError,
+        },
+      },
+    },
+    exportOccurrenceController.handle,
   );
 }
 

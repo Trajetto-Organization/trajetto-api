@@ -1530,6 +1530,10 @@ enum ImportSource {
 }
 
 enum ImportStatus {
+  /// Rows are being written. A crash leaves the upload here, and the rows
+  /// it already created are reversible because they already carry its id.
+  IN_PROGRESS
+
   COMPLETED
   REVERSED
 }
