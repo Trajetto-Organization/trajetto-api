@@ -236,6 +236,26 @@ class InMemoryUserRepository implements IUserRepository {
     return this.user.filter((user) => user.businessId === businessId);
   }
 
+  /**
+   * Mirrors the real precondition, including refusing.
+   *
+   * A fake that flipped unconditionally would let every test agree with a
+   * repository that can refuse, and refusing is the whole point.
+   */
+  async toggleUserAccessRevocation(
+    userId: string,
+    expectedRevoked: boolean,
+  ): Promise<boolean> {
+    const user = this.user.find((item) => item.id === userId);
+
+    if (!user) return false;
+    if ((user.access_revoked ?? false) !== expectedRevoked) return false;
+
+    user.access_revoked = !expectedRevoked;
+
+    return true;
+  }
+
   async updateUserAccessRevocation({
     userId,
     isAccessRevoke,

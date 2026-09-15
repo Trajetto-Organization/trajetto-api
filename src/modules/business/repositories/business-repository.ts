@@ -172,6 +172,22 @@ class BusinessRepository implements IBusinessRepository {
     return { data, nextCursor, hasMore };
   }
 
+  async toggleBusinessActive(
+    businessId: string,
+    expectedActive: boolean,
+  ): Promise<Business | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const { count } = await transaction.business.updateMany({
+        where: { id: businessId, is_active: expectedActive },
+        data: { is_active: !expectedActive },
+      });
+
+      if (count === 0) return null;
+
+      return transaction.business.findUnique({ where: { id: businessId } });
+    });
+  }
+
   async updateBusiness({
     businessData,
     businessId,

@@ -3,6 +3,7 @@ import { IUserRepository } from "../../repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
+import { ToggleConflictError } from "@/modules/business/usecases/errors/toggle-conflict-error";
 
 import { UserRole } from "../../dtos/user-dto";
 import { UserCannotBeRevokeByHimselfError } from "../errors/user-cannot-be-revoke-access-by-himself-error";
@@ -75,29 +76,31 @@ class UserRevokeAccessUseCase {
       );
     }
 
-    try {
-      if (findRevokedUser.access_revoked) {
-        await this.user.updateUserAccessRevocation({
-          userId,
-          isAccessRevoke: false,
-        });
+    /**
+     * The state that was read is the precondition, and the event follows the
+     * write rather than the intention.
+     *
+     * Two administrators acting on the same account at once — one revoking,
+     * one restoring — both read the old value and both wrote. The row ended up
+     * with whichever query landed last, while BOTH pushed a security event
+     * down the socket: the user could be told "your access was restored" and
+     * remain locked out, or be kicked out of a session that was never revoked.
+     * Now the second one writes nothing, sends nothing, and is told why.
+     */
+    const wasRevoked = findRevokedUser.access_revoked ?? false;
 
-        sendSecurityEventToUser(userId, { reason: "access_restored" });
-        return;
-      }
+    const flipped = await this.user.toggleUserAccessRevocation(
+      userId,
+      wasRevoked,
+    );
 
-      await this.user.updateUserAccessRevocation({
-        userId,
-        isAccessRevoke: true,
-      });
-
-      sendSecurityEventToUser(userId, { reason: "access_revoked" });
-    } catch (error) {
-      throw new AppError(
-        "Não foi possível revogar o acesso deste usuário! Por favor, Tente novamente.",
-        500,
-      );
+    if (!flipped) {
+      throw new ToggleConflictError("de acesso deste usuário");
     }
+
+    sendSecurityEventToUser(userId, {
+      reason: wasRevoked ? "access_restored" : "access_revoked",
+    });
   }
 }
 

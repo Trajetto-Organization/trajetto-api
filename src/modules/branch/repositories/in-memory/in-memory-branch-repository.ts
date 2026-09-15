@@ -62,6 +62,26 @@ class InMemoryBranchRepository implements IBranchRepository {
     return { data, total };
   }
 
+  /**
+   * Mirrors the real precondition, including refusing.
+   *
+   * A fake that flipped unconditionally would let every test agree with a
+   * repository that can refuse, and refusing is the whole point.
+   */
+  async toggleBranchActive(
+    branchId: string,
+    expectedActive: boolean,
+  ): Promise<Branch | null> {
+    const branch = this.branches.find((item) => item.id === branchId);
+
+    if (!branch) return null;
+    if (branch.is_active !== expectedActive) return null;
+
+    branch.is_active = !expectedActive;
+
+    return branch;
+  }
+
   async updateBranch({ branchData, branchId }: UpdateBranch): Promise<Branch> {
     const branchIndex = this.branches.findIndex(
       (branch) => branch.id === branchId,

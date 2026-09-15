@@ -16,6 +16,22 @@ import { buildSearchOr } from "@/shared/pagination/search-or";
 class BranchRepository implements IBranchRepository {
   constructor(private prisma = database) {}
 
+  async toggleBranchActive(
+    branchId: string,
+    expectedActive: boolean,
+  ): Promise<Branch | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const { count } = await transaction.branch.updateMany({
+        where: { id: branchId, is_active: expectedActive },
+        data: { is_active: !expectedActive },
+      });
+
+      if (count === 0) return null;
+
+      return transaction.branch.findUnique({ where: { id: branchId } });
+    });
+  }
+
   async createBranch(branchData: CreateBranchProps): Promise<Branch> {
     const branchCreated = await this.prisma.branch.create({
       data: {

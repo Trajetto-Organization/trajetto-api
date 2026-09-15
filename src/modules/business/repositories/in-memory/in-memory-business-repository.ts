@@ -39,6 +39,26 @@ class InMemoryBusinessRepository implements IBusinessRepository {
     return { data, total };
   }
 
+  /**
+   * Mirrors the real precondition, including refusing.
+   *
+   * A fake that flipped the flag unconditionally would let every test agree
+   * with a repository that can answer null, and null is the whole point.
+   */
+  async toggleBusinessActive(
+    businessId: string,
+    expectedActive: boolean,
+  ): Promise<Business | null> {
+    const business = this.business.find((item) => item.id === businessId);
+
+    if (!business) return null;
+    if (business.is_active !== expectedActive) return null;
+
+    business.is_active = !expectedActive;
+
+    return business;
+  }
+
   async updateBusiness({
     businessData,
     businessId,

@@ -507,6 +507,21 @@ class UserRepository implements IUserRepository {
     return updatedTwoFactorAuthentication;
   }
 
+  async toggleUserAccessRevocation(
+    userId: string,
+    expectedRevoked: boolean,
+  ): Promise<boolean> {
+    // Anything cached for this request describes the row before this write.
+    forgetRequestCache();
+
+    const { count } = await this.prisma.user.updateMany({
+      where: { id: userId, access_revoked: expectedRevoked },
+      data: { access_revoked: !expectedRevoked },
+    });
+
+    return count === 1;
+  }
+
   async updateUserAccessRevocation({
     userId,
     isAccessRevoke,

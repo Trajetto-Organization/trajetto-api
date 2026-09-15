@@ -59,6 +59,24 @@ interface IUserRepository {
     userId,
     isTwoFactorEnabled,
   }: UpdateTwoFactorAuthentication) => Promise<User | null>;
+
+  /**
+   * Revokes or restores only if the flag is still where the caller saw it.
+   *
+   * Two administrators acting on the same account at once — one revoking, one
+   * restoring — both read the old value and both wrote. Whichever query landed
+   * last decided the row, while BOTH pushed a security event down the socket:
+   * the user could be told "your access was restored" and stay locked out, or
+   * the reverse. The state that was read is now the precondition for the
+   * write, so the second one changes nothing and says so.
+   *
+   * Returns false when the precondition did not hold.
+   */
+  toggleUserAccessRevocation: (
+    userId: string,
+    expectedRevoked: boolean,
+  ) => Promise<boolean>;
+
   updateUserAccessRevocation: ({
     userId,
     isAccessRevoke,

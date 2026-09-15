@@ -16,6 +16,23 @@ interface IBusinessRepository {
   searchBusinessWithCursor: (
     props: SearchBusinessWithCursorProps,
   ) => Promise<CursorPaginatedBusiness>;
+
+  /**
+   * Flips the flag only if it is still where the caller last saw it.
+   *
+   * A toggle read the current value, negated it and wrote — so two people
+   * flipping at the same moment both read the same state, both wrote the same
+   * opposite, and two actions produced one change. The expected value goes
+   * into the `where`: whoever runs second matches nothing and is told so,
+   * instead of quietly agreeing with the first.
+   *
+   * Returns null when the precondition did not hold.
+   */
+  toggleBusinessActive: (
+    businessId: string,
+    expectedActive: boolean,
+  ) => Promise<Business | null>;
+
   updateBusiness: ({
     businessData,
     businessId,

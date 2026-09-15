@@ -10,6 +10,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "../errors/branch-not-found-error";
+import { ToggleConflictError } from "@/modules/business/usecases/errors/toggle-conflict-error";
 import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
@@ -54,12 +55,24 @@ class ToggleBranchActiveUseCase {
       throw new BranchNotBelongBusinessError();
     }
 
-    const newStatus = !findBranch.is_active;
-
-    const updatedBranch = await this.branch.updateBranch({
-      branchData: { is_active: newStatus } as any,
+    /**
+     * The value that was read is the precondition for the write.
+     *
+     * Reading `is_active` and writing its opposite loses one of two
+     * simultaneous flips: both read the same state, both write the same
+     * opposite, and the activity feed records two entries for one change.
+     */
+    const updatedBranch = await this.branch.toggleBranchActive(
       branchId,
-    });
+      // NOT NULL with `@default(true)` in the schema; the DTO widens it.
+      findBranch.is_active ?? true,
+    );
+
+    if (!updatedBranch) {
+      throw new ToggleConflictError("desta filial");
+    }
+
+    const newStatus = updatedBranch.is_active;
 
     const statusLabel = newStatus ? "Ativo" : "Inativo";
 
