@@ -148,8 +148,20 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
   async updateDelivery(
     deliveryId: string,
     deliveryData: UpdateDeliveryProps,
+    expectedStatus?: DeliveryStatus,
   ): Promise<Delivery> {
-    const index = this.deliveries.findIndex((d) => d.id === deliveryId);
+    // Espelha a pré-condição do `where` real, como `updateDeliveryStatus`
+    // logo abaixo. Sem isto o fake aceitaria escritas que o repositório
+    // recusa, e um teste da corrida provaria nada.
+    const index = this.deliveries.findIndex(
+      (d) =>
+        d.id === deliveryId &&
+        (!expectedStatus || d.status === expectedStatus),
+    );
+
+    if (index === -1) {
+      throw new DeliveryStatusConflictError();
+    }
 
     const filteredData = Object.fromEntries(
       Object.entries(deliveryData).filter(([, value]) => value !== undefined),

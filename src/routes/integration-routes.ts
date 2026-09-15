@@ -90,7 +90,19 @@ async function integrationRoutes(app: FastifyInstance) {
       preHandler: [verifyApiScope("deliveries:read")],
       config: {
         rateLimit: {
-          max: 600,
+          /**
+           * O teto DA CHAVE, não um número fixo.
+           *
+           * `rate_limit_per_minute` era gravado na chave, editável por rota de
+           * administração e publicado no schema — e nenhum limitador o lia.
+           * Uma chave provisionada em 60/min recebia 600. Um limite que o
+           * produto promete e não aplica é pior que nenhum: alguém dimensiona
+           * a integração confiando nele.
+           *
+           * O fallback de 600 vale enquanto `ensureApiKey` ainda não resolveu
+           * a chave — numa recusa 401, por exemplo.
+           */
+          max: (request) => request.apiKey?.rateLimitPerMinute ?? 600,
           timeWindow: "1 minute",
 
           // Per key, not per IP: several customers behind one corporate NAT
@@ -125,7 +137,8 @@ async function integrationRoutes(app: FastifyInstance) {
       preHandler: [verifyApiScope("deliveries:read")],
       config: {
         rateLimit: {
-          max: 600,
+          // O teto DA CHAVE — ver a primeira rota deste arquivo.
+          max: (request) => request.apiKey?.rateLimitPerMinute ?? 600,
           timeWindow: "1 minute",
           keyGenerator: (request) => request.apiKey?.prefix ?? request.ip,
         },
@@ -157,7 +170,8 @@ async function integrationRoutes(app: FastifyInstance) {
       preHandler: [verifyApiScope("routes:read")],
       config: {
         rateLimit: {
-          max: 600,
+          // O teto DA CHAVE — ver a primeira rota deste arquivo.
+          max: (request) => request.apiKey?.rateLimitPerMinute ?? 600,
           timeWindow: "1 minute",
           keyGenerator: (request) => request.apiKey?.prefix ?? request.ip,
         },
@@ -188,7 +202,8 @@ async function integrationRoutes(app: FastifyInstance) {
       preHandler: [verifyApiScope("routes:read")],
       config: {
         rateLimit: {
-          max: 600,
+          // O teto DA CHAVE — ver a primeira rota deste arquivo.
+          max: (request) => request.apiKey?.rateLimitPerMinute ?? 600,
           timeWindow: "1 minute",
           keyGenerator: (request) => request.apiKey?.prefix ?? request.ip,
         },
@@ -220,7 +235,8 @@ async function integrationRoutes(app: FastifyInstance) {
       preHandler: [verifyApiScope("events:read")],
       config: {
         rateLimit: {
-          max: 600,
+          // O teto DA CHAVE — ver a primeira rota deste arquivo.
+          max: (request) => request.apiKey?.rateLimitPerMinute ?? 600,
           timeWindow: "1 minute",
           keyGenerator: (request) => request.apiKey?.prefix ?? request.ip,
         },

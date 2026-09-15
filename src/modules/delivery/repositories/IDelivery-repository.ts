@@ -53,9 +53,17 @@ interface IDeliveryRepository {
     businessId: string,
     invoiceKey: string,
   ) => Promise<Delivery | null>;
+  /**
+   * Edita, mas só a partir do status esperado.
+   *
+   * `expectedStatus` não é opcional por comodidade: uma chamada sem ele é um
+   * read-then-write, e a janela entre a leitura e a escrita é onde o motorista
+   * comprova a entrega que o painel está editando.
+   */
   updateDelivery: (
     deliveryId: string,
     deliveryData: UpdateDeliveryProps,
+    expectedStatus?: DeliveryStatus,
   ) => Promise<Delivery>;
   /**
    * Moves a delivery, but only from `patch.expectedStatus`. Throws

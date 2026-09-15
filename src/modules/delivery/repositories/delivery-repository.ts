@@ -255,17 +255,44 @@ class DeliveryRepository implements IDeliveryRepository {
     return found as Delivery | null;
   }
 
+  /**
+   * A edição do painel, com a pré-condição junto.
+   *
+   * Era a única escrita do módulo sem ela, e a janela é larga: a use case lê o
+   * status, passa pela porteira, faz mais três consultas (embarcador, veículo,
+   * motorista) e só então grava. Nesse intervalo o motorista comprova a
+   * entrega — e a edição reescrevia destinatário, endereço e motorista de uma
+   * entrega cujo canhoto já estava assinado e cujo webhook já tinha saído para
+   * o ERP do cliente.
+   *
+   * `updateMany` com o status esperado no `where` e `count === 0` → 409, como
+   * `updateDeliveryStatus` logo abaixo, como `assignDeliveries` e como toda
+   * transição de rota. Nenhum índice expressa isso; a pré-condição é o único
+   * lugar onde ela cabe.
+   */
   async updateDelivery(
     deliveryId: string,
     deliveryData: UpdateDeliveryProps,
+    expectedStatus?: DeliveryStatus,
   ): Promise<Delivery> {
     const filteredData = Object.fromEntries(
       Object.entries(deliveryData).filter(([, value]) => value !== undefined),
     );
 
-    const updated = await this.prisma.delivery.update({
-      where: { id: deliveryId },
+    const { count } = await this.prisma.delivery.updateMany({
+      where: {
+        id: deliveryId,
+        ...(expectedStatus && { status: expectedStatus }),
+      },
       data: filteredData,
+    });
+
+    if (count === 0) {
+      throw new DeliveryStatusConflictError();
+    }
+
+    const updated = await this.prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
     });
 
     return updated as Delivery;

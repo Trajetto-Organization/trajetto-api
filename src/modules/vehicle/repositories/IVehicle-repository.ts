@@ -11,6 +11,20 @@ import {
 
 interface IVehicleRepository {
   createVehicle: (vehicleData: CreateVehicleProps) => Promise<Vehicle>;
+
+  /**
+   * Cria dentro da frota contratada, com a contagem e a inserção na MESMA
+   * transação e a empresa travada.
+   *
+   * Contar e depois criar é um read-then-write, e o limite é um controle de
+   * cobrança: N requisições simultâneas liam a mesma contagem, todas passavam,
+   * e a empresa terminava acima do contrato. Devolve `vehicle: null` quando o
+   * limite bateu, para quem chamou formular a recusa.
+   */
+  createVehicleWithinLimit: (
+    vehicleData: CreateVehicleProps,
+    limit: { max: number; occupiesSlot: boolean },
+  ) => Promise<{ vehicle: Vehicle | null; activeCount: number }>;
   listVehicles: (
     listVehicleProps: ListVehicleByBusinessIdProps,
   ) => Promise<ListVehicleProps>;

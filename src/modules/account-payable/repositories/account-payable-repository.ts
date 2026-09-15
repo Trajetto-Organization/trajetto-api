@@ -14,6 +14,8 @@ import { Prisma } from "@prisma/client";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 
+import { AccountPayableNotDeleteHasAlreadyPaidError } from "../usecases/errors/account-payable-not-delete-has-already-paid-error";
+
 class AccountPayableRepository implements IAccountPayableRepository {
   constructor(private prisma = database) {}
 
@@ -238,14 +240,35 @@ class AccountPayableRepository implements IAccountPayableRepository {
 
   async deleteAccountPayable(
     accountPayableId: string,
+    businessId: string,
   ): Promise<AccountPayable> {
-    const deleteAccountPayable = await this.prisma.accountPayable.delete({
-      where: {
-        id: accountPayableId,
-      },
+    /**
+     * A conta em aberto, dentro desta empresa, ou nada.
+     *
+     * `deleteMany` e não `delete`: `delete` exige chave única e explode com
+     * P2025 quando o `where` não casa, e aqui não casar é uma resposta
+     * legítima — a conta foi paga no meio do caminho. A leitura antes existe
+     * só para devolver o que foi apagado, como o contrato promete.
+     */
+    const found = await this.prisma.accountPayable.findFirst({
+      where: { id: accountPayableId, businessId, payment_date: null },
     });
 
-    return deleteAccountPayable;
+    if (!found) {
+      throw new AccountPayableNotDeleteHasAlreadyPaidError();
+    }
+
+    const { count } = await this.prisma.accountPayable.deleteMany({
+      where: { id: accountPayableId, businessId, payment_date: null },
+    });
+
+    // Zero significa que alguém carimbou o pagamento entre a leitura acima e
+    // esta linha. Nada foi apagado, e quem chamou precisa saber disso.
+    if (count === 0) {
+      throw new AccountPayableNotDeleteHasAlreadyPaidError();
+    }
+
+    return found;
   }
 
   async findAccountPayableById(

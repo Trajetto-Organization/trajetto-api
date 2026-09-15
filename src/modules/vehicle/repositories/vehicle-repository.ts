@@ -389,6 +389,47 @@ class VehicleRepository implements IVehicleRepository {
     });
   }
 
+  /**
+   * Cria o veículo sem estourar a frota contratada, mesmo sob concorrência.
+   *
+   * Contar e depois criar é um read-then-write, e o limite é um controle de
+   * COBRANÇA: com nove veículos num contrato de dez, N requisições
+   * simultâneas com placas diferentes liam nove, todas passavam, e a empresa
+   * terminava com 9+N num contrato de dez.
+   *
+   * Nem índice nem `updateMany` resolvem — "no máximo N linhas por empresa"
+   * não é uma condição que o Postgres saiba expressar. O que resolve é
+   * serializar POR EMPRESA: a transação trava a linha da empresa com
+   * `FOR UPDATE`, e a segunda requisição espera a primeira terminar antes de
+   * contar. Criar veículo é operação rara; o lock não custa nada e não sai do
+   * tenant.
+   */
+  async createVehicleWithinLimit(
+    vehicleData: CreateVehicleProps,
+    limit: { max: number; occupiesSlot: boolean },
+  ): Promise<{ vehicle: Vehicle | null; activeCount: number }> {
+    return this.prisma.$transaction(async (tx) => {
+      // O lock. Sem ele a contagem abaixo é a mesma leitura obsoleta de antes.
+      await tx.$queryRaw`
+        SELECT "id" FROM "business"
+        WHERE "id" = ${vehicleData.businessId}
+        FOR UPDATE
+      `;
+
+      const activeCount = await tx.vehicle.count({
+        where: { businessId: vehicleData.businessId, status: { not: "INACTIVE" } },
+      });
+
+      if (limit.occupiesSlot && limit.max > 0 && activeCount >= limit.max) {
+        return { vehicle: null, activeCount };
+      }
+
+      const vehicle = await tx.vehicle.create({ data: vehicleData });
+
+      return { vehicle, activeCount };
+    });
+  }
+
   async countInactiveVehiclesByBusinessId(businessId: string): Promise<number> {
     return this.prisma.vehicle.count({
       where: { businessId, status: "INACTIVE" },

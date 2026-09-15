@@ -46,6 +46,30 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     return newVehicle;
   }
 
+  /**
+   * A mesma decisão do repositório real, no mesmo lugar.
+   *
+   * Contar e criar juntos, e não a use case contando antes: um fake que
+   * criasse sem olhar o limite deixaria o teste do teto de frota passar com o
+   * teto quebrado.
+   */
+  async createVehicleWithinLimit(
+    vehicleData: CreateVehicleProps,
+    limit: { max: number; occupiesSlot: boolean },
+  ): Promise<{ vehicle: Vehicle | null; activeCount: number }> {
+    const activeCount = this.vehicles.filter(
+      (vehicle) =>
+        vehicle.businessId === vehicleData.businessId &&
+        vehicle.status !== "INACTIVE",
+    ).length;
+
+    if (limit.occupiesSlot && limit.max > 0 && activeCount >= limit.max) {
+      return { vehicle: null, activeCount };
+    }
+
+    return { vehicle: await this.createVehicle(vehicleData), activeCount };
+  }
+
   async listVehicles({
     page,
     pageSize,

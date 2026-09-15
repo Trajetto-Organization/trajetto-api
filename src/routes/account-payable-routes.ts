@@ -89,6 +89,13 @@ async function accountPayableRoutes(app: FastifyInstance) {
     "/search-account-payable-by-responsible-user",
     {
       onRequest: [ensureAuthenticated],
+
+      // A permissão que as quatro rotas vizinhas exigem e esta não exigia.
+      // Sem ela, quem tem `account_payable_manage` DESLIGADO no perfil ainda
+      // lia as contas que registrou — fornecedor, filial, valores e a ordem
+      // de serviço vinculada.
+      preHandler: [verifyPermission("account_payable_manage", "read")],
+
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["account-payable"],

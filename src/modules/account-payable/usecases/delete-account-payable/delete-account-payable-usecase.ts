@@ -69,7 +69,10 @@ class DeleteAccountPayableUseCase {
 
     try {
       const deletedAccountPayable =
-        await this.accountPayable.deleteAccountPayable(accountPayableId);
+        await this.accountPayable.deleteAccountPayable(
+          accountPayableId,
+          businessId,
+        );
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

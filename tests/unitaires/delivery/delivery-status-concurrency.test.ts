@@ -333,3 +333,58 @@ describe("the proof write", () => {
     expect(deliveryRepository.deliveries[0].received_by).toBe("Porteiro");
   });
 });
+
+describe("o painel editando enquanto o motorista comprova", () => {
+  /**
+   * A única escrita do módulo que era read-then-write.
+   *
+   * A janela é larga de verdade: a use case lê o status, passa pela porteira
+   * ("só PENDING ou FAILED podem ser editados") e faz mais TRÊS consultas —
+   * embarcador, veículo, motorista — antes de gravar. Nesse intervalo o
+   * motorista comprova a entrega, e a edição reescrevia destinatário, endereço
+   * e motorista de uma entrega cujo canhoto já estava assinado e cujo webhook
+   * já tinha saído para o ERP do cliente.
+   */
+  it("é recusada com 409 quando o status mudou no meio", async () => {
+    const repository = new InMemoryDeliveryRepository();
+    const delivery = await seedDelivery(repository);
+
+    // O que aconteceu na janela: a comprovação landou.
+    const row = repository.deliveries.find((entry) => entry.id === delivery.id)!;
+
+    row.status = "DELIVERED";
+
+    // E a edição, que leu PENDING lá atrás, chega agora.
+    await expect(
+      repository.updateDelivery(
+        delivery.id,
+        { recipient_name: "Reescrito" },
+        "PENDING",
+      ),
+    ).rejects.toThrow(DeliveryStatusConflictError);
+
+    // Nada foi reescrito.
+    expect(
+      repository.deliveries.find((entry) => entry.id === delivery.id)
+        ?.recipient_name,
+    ).not.toBe("Reescrito");
+  });
+
+  it("passa quando o status é o esperado", async () => {
+    // A outra metade do par: sem ela, o teste acima passaria para um
+    // repositório que recusa tudo.
+    const repository = new InMemoryDeliveryRepository();
+    const delivery = await seedDelivery(repository);
+
+    await repository.updateDelivery(
+      delivery.id,
+      { recipient_name: "Editado" },
+      "PENDING",
+    );
+
+    expect(
+      repository.deliveries.find((entry) => entry.id === delivery.id)
+        ?.recipient_name,
+    ).toBe("Editado");
+  });
+});

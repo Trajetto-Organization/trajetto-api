@@ -540,3 +540,48 @@ describe("counting what a customer's system asked for", () => {
     expect(theirs).toBeGreaterThan(0);
   });
 });
+
+/**
+ * O teto que a chave carrega.
+ *
+ * `rate_limit_per_minute` era gravado na chave, editável pela rota de
+ * administração e publicado no schema — e nenhum limitador o lia. Uma chave
+ * provisionada em 60/min recebia 600. Um limite que o produto promete e não
+ * aplica é pior que nenhum: alguém dimensiona a integração confiando nele.
+ */
+describe("o limite por chave", () => {
+  it("recusa quando a chave chega ao teto que foi provisionado para ela", async () => {
+    const tight = generateApiKey();
+
+    await prisma.apiKey.create({
+      data: {
+        name: "Apertada",
+        prefix: tight.prefix,
+        token_hash: tight.tokenHash,
+        scopes: ["deliveries:read"],
+
+        // O menor que o schema aceita.
+        rate_limit_per_minute: 10,
+        businessId: CARRIER,
+      },
+    });
+
+    const statuses: number[] = [];
+
+    // Quinze chamadas num teto de dez.
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      statuses.push((await call("/deliveries?limit=1", tight.token)).statusCode);
+    }
+
+    expect(statuses.filter((status) => status === 200).length).toBeLessThan(15);
+    expect(statuses).toContain(429);
+  });
+
+  it("não gasta o teto de uma chave com as chamadas de outra", async () => {
+    // O balde é por chave, não por empresa nem por IP: uma integração em laço
+    // não pode derrubar a outra da mesma transportadora.
+    const response = await call("/deliveries?limit=1", readKey);
+
+    expect(response.statusCode).toBe(200);
+  });
+});

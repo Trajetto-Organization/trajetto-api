@@ -143,7 +143,14 @@ class UpdateDeliveryUseCase {
     }
 
     try {
-      return await this.delivery.updateDelivery(deliveryId, deliveryData);
+      // O status que a porteira acima aprovou, levado até a escrita. Entre
+      // uma coisa e outra há três consultas — embarcador, veículo, motorista
+      // — e é nesse intervalo que o motorista comprova a entrega.
+      return await this.delivery.updateDelivery(
+        deliveryId,
+        deliveryData,
+        findDelivery.status,
+      );
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar atualizar a entrega! Por favor, tente novamente.",

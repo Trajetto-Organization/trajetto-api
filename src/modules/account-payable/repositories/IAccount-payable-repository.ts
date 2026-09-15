@@ -22,7 +22,17 @@ interface IAccountPayableRepository {
     update: UpdateAccountPayable,
     tx?: Prisma.TransactionClient,
   ) => Promise<AccountPayable>;
-  deleteAccountPayable: (accountPayableId: string) => Promise<AccountPayable>;
+  /**
+   * Apaga, mas só uma conta que continua em aberto.
+   *
+   * O `businessId` e a pré-condição vão juntos no mesmo `where`: entre ler
+   * `payment_date` e apagar, a atualização carimba o pagamento — e um registro
+   * financeiro liquidado desaparece sem deixar rastro.
+   */
+  deleteAccountPayable: (
+    accountPayableId: string,
+    businessId: string,
+  ) => Promise<AccountPayable>;
   findAccountPayableById: (
     accountPayableId: string,
   ) => Promise<AccountPayable | null>;

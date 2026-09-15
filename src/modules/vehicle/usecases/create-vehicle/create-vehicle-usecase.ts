@@ -81,25 +81,19 @@ class CreateVehicleUseCase {
     }
 
     // Contracted fleet size (entitlement): 0 = not configured, no block.
-    // Only vehicles that occupy a slot count — registering one straight as
-    // INACTIVE is fine; activating it later passes the reactivation gate.
-    if (
-      (findBusiness.vehicle_limit ?? 0) > 0 &&
-      occupiesFleetSlot(vehicleData.status)
-    ) {
-      const activeCount = await this.vehicle.countActiveVehiclesByBusinessId(
-        vehicleData.businessId,
-      );
-
-      const verdict = canRegisterVehicle(
-        activeCount,
-        findBusiness.vehicle_limit ?? 0,
-      );
-
-      if (!verdict.allowed) {
-        throw new AppError(verdict.reason!, 400, "VEHICLE_LIMIT_REACHED");
-      }
-    }
+    /**
+     * A contagem do limite saiu daqui.
+     *
+     * Ela vivia neste ponto — contar, decidir, e criar oitenta linhas depois —
+     * e isso é um read-then-write sobre um controle de COBRANÇA: com nove
+     * veículos num contrato de dez, N requisições simultâneas liam nove, todas
+     * passavam, e a empresa terminava com 9+N. Agora a contagem e a inserção
+     * acontecem na mesma transação, com a empresa travada, dentro de
+     * `createVehicleWithinLimit`.
+     *
+     * O que fica aqui é só o que não depende de concorrência: quais status
+     * ocupam vaga, e a mensagem que a recusa usa.
+     */
 
     // Check if the board already exists
     const findVehicleByLicensePlate =
@@ -183,7 +177,28 @@ class CreateVehicleUseCase {
     }
 
     try {
-      const vehicleCreated = await this.vehicle.createVehicle(vehicleData);
+      const { vehicle: created, activeCount } =
+        await this.vehicle.createVehicleWithinLimit(vehicleData, {
+          max: findBusiness.vehicle_limit ?? 0,
+          occupiesSlot: occupiesFleetSlot(vehicleData.status),
+        });
+
+      if (!created) {
+        // A frase vem da mesma regra de sempre, agora com a contagem que a
+        // transação realmente viu.
+        const verdict = canRegisterVehicle(
+          activeCount,
+          findBusiness.vehicle_limit ?? 0,
+        );
+
+        throw new AppError(
+          verdict.reason ?? "Limite de veículos contratado atingido.",
+          400,
+          "VEHICLE_LIMIT_REACHED",
+        );
+      }
+
+      const vehicleCreated = created;
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({
