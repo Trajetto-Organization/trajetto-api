@@ -209,7 +209,7 @@ async function deliveryRoutes(app: FastifyInstance) {
         tags: ["delivery"],
         summary: "Get a delivery with items and occurrences",
         description:
-          "Full detail: recipient, address, cargo items, and `timeline` — everything that ever happened to this delivery in one list, newest first: chegadas e comprovações do app (com o aparelho que reportou), ocorrências tipadas, mudanças de status feitas na mão (com o motivo do catálogo e a anotação) e as mensagens do chat que citaram esta entrega. A trilha é MONTADA a partir das tabelas que já são donas desses fatos, não copiada para uma tabela própria — dois escritores para um fato é como um fato começa a discordar de si mesmo. Fotos e assinaturas vêm como URLs assinadas de vida curta. Driver users only open their own deliveries."
+          "Full detail: recipient, address, cargo items, and `timeline` — everything that ever happened to this delivery in one list, newest first: chegadas e comprovações do app (com o aparelho que reportou), ocorrências tipadas, mudanças de status feitas na mão (com o motivo do catálogo e a anotação) e as mensagens do chat que citaram esta entrega. A trilha é MONTADA a partir das tabelas que já são donas desses fatos, não copiada para uma tabela própria — dois escritores para um fato é como um fato começa a discordar de si mesmo. Fotos e assinaturas vêm como URLs assinadas de vida curta. Driver users only open their own deliveries.",
         params: deliverySchemas.deliveryBusinessParams,
       },
     },
