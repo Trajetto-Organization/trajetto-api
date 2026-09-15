@@ -24,6 +24,11 @@ import {
 import { deliveryOccurrenceReportedPolicy } from "./policies/delivery-occurrence-policy";
 import { chatMessageSentPolicy } from "./policies/chat-message-policy";
 import { deliveryStatusOverriddenPolicy } from "./policies/delivery-status-policy";
+import {
+  deliveryDeliveredPolicy,
+  deliveryDispatchedPolicy,
+  deliveryFailedPolicy,
+} from "./policies/delivery-customer-policy";
 
 import {
   routeCancelledPolicy,
@@ -69,6 +74,10 @@ const notificationPolicies: {
   "route.released": routeReleasedPolicy,
   "route.cancelled": routeCancelledPolicy,
   "delivery.status_overridden": deliveryStatusOverriddenPolicy,
+
+  "delivery.dispatched": deliveryDispatchedPolicy,
+  "delivery.delivered": deliveryDeliveredPolicy,
+  "delivery.failed": deliveryFailedPolicy,
 };
 
 function getNotificationPolicy(

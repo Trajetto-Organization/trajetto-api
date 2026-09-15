@@ -456,6 +456,7 @@ describe("driver surface: proof", () => {
       repos.deliveryRepository,
       repos.routeRepository,
       notificationStub,
+      outboxStub,
       uploadStub,
     );
   }

@@ -235,6 +235,7 @@ function makeContext() {
       deliveryRepository,
       routeRepository,
       notificationService,
+      outboxStub,
       uploadService,
     ),
     occurrence: new ReportDeliveryOccurrenceUseCase(

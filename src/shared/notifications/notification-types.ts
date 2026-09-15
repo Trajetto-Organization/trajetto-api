@@ -344,6 +344,39 @@ interface DeliveryStatusOverriddenPayload {
   removedFromWorklist: boolean;
 }
 
+/**
+ * What the person waiting for a delivery is told about, and nothing more.
+ *
+ * Carries the contact details rather than an id to look them up by, because
+ * the policy has to be able to decide "there is nobody to tell" without a
+ * query — and because an outbox row is a snapshot: a phone number corrected
+ * after the message was queued should not silently redirect a message that
+ * was already about to go.
+ *
+ * The carrier's NAME is deliberately absent. It is the same for every delivery
+ * a company ever makes and changes almost never, so putting it here would be
+ * copying one constant into a million rows; the policy reads it once when it
+ * renders.
+ */
+interface DeliveryCustomerPayload {
+  deliveryId: string;
+  businessId: string;
+
+  recipientName: string;
+  recipientEmail: string | null;
+  recipientTelephone: string | null;
+
+  invoiceNumber: string | null;
+  code: string | null;
+
+  city: string;
+  uf: string;
+
+  scheduledDate: Date | string | null;
+  deliveredAt: Date | string | null;
+  receivedBy: string | null;
+}
+
 interface TopicPayloadMap {
   "fine.created": FineCreatedPayload;
   "vehicle-checklist.created": VehicleChecklistCreatedPayload;
@@ -367,6 +400,11 @@ interface TopicPayloadMap {
   "route.released": RouteReleasedPayload;
   "route.cancelled": RouteCancelledPayload;
   "delivery.status_overridden": DeliveryStatusOverriddenPayload;
+
+  // The three moments a carrier tells the person waiting for their delivery.
+  "delivery.dispatched": DeliveryCustomerPayload;
+  "delivery.delivered": DeliveryCustomerPayload;
+  "delivery.failed": DeliveryCustomerPayload;
 }
 
 type NotificationTopic = keyof TopicPayloadMap;
@@ -416,8 +454,51 @@ interface RenderedPush {
   data?: Record<string, unknown>;
 }
 
+/**
+ * Somebody a notification reaches who has no account.
+ *
+ * Deliberately not shaped like a `User`: no role, no permissions, no
+ * preferences, no in-app inbox. Only the two ways to reach them and the token
+ * that identifies their link.
+ */
+interface ExternalRecipient {
+  id: string;
+
+  name: string | null;
+  email: string | null;
+  telephone: string | null;
+
+  access_token: string;
+
+  opted_out_at: Date | string | null;
+}
+
+/**
+ * What a company says to the person waiting for a delivery, already rendered.
+ *
+ * The voice is the company's, not the product's: a carrier that addresses
+ * "prezado cliente" and one that uses the shipper's brand are both right, and
+ * a single hard-coded sentence would make Trajetto speak over them.
+ */
+interface RenderedExternalMessage {
+  subject: string;
+  body: string;
+
+  /** Where the message sends them. Their tracking page, not our dashboard. */
+  link: string;
+}
+
 interface PolicyDeps {
   userRepository: IUserRepository;
+
+  /**
+   * Only the policies that address outsiders ever touch these, which is why
+   * they are optional: eighteen existing policies neither know nor care that
+   * the pipeline learnt to reach people without accounts.
+   */
+  externalRecipientRepository?: unknown;
+  messageTemplateRepository?: unknown;
+  businessRepository?: unknown;
 }
 
 /**
@@ -430,6 +511,36 @@ interface PolicyDeps {
  */
 interface NotificationPolicyEntry<TPayload> {
   resolveRecipients(payload: TPayload, deps: PolicyDeps): Promise<User[]>;
+
+  /**
+   * People with no account who must hear about this. Optional, and absent on
+   * every internal topic.
+   *
+   * Separate from `resolveRecipients` rather than widening its return type,
+   * because the two are governed by different rules end to end: a User has
+   * preferences, an in-app inbox, a push device and a role that shapes the
+   * link; an outsider has a phone number and a way to say stop. Merging them
+   * would have meant a null check at every one of those points.
+   */
+  resolveExternalRecipients?(
+    payload: TPayload,
+    deps: PolicyDeps,
+  ): Promise<ExternalRecipient[]>;
+
+  /**
+   * What the outsider is told, in the company's own words.
+   *
+   * Async because the template is the company's and lives in a table. Returns
+   * null when the company has no active template for this moment and channel —
+   * which is a decision, not a failure: a carrier that has not written the
+   * "saiu para entrega" message does not want one sent.
+   */
+  renderExternal?(
+    payload: TPayload,
+    recipient: ExternalRecipient,
+    deps: PolicyDeps,
+    channel: string,
+  ): Promise<RenderedExternalMessage | null>;
 
   /**
    * Which preference row governs this topic. The recipient's per-category
@@ -480,6 +591,9 @@ interface NotificationPolicyEntry<TPayload> {
 }
 
 export type {
+  DeliveryCustomerPayload,
+  ExternalRecipient,
+  RenderedExternalMessage,
   RouteReleasedPayload,
   DeliveryStatusOverriddenPayload,
   RouteCancelledPayload,

@@ -72,7 +72,11 @@ interface ClaimedEvent {
 interface ClaimedDelivery {
   id: string;
   outboxEventId: string;
-  userId: string;
+
+  /** Exactly one of these is set — the CHECK constraint says so. */
+  userId: string | null;
+  externalRecipientId: string | null;
+
   channel: NotificationChannel;
   attempts: number;
 }
@@ -263,9 +267,25 @@ class NotificationPipelineService {
     const userRepository =
       container.resolve<IUserRepository>("UserRepository");
 
-    const recipients = await policy.resolveRecipients(payload, {
+    const policyDeps = {
       userRepository,
-    });
+
+      externalRecipientRepository: container.resolve(
+        "ExternalRecipientRepository",
+      ),
+      messageTemplateRepository: container.resolve(
+        "DeliveryMessageTemplateRepository",
+      ),
+      businessRepository: container.resolve("BusinessRepository"),
+    };
+
+    const recipients = await policy.resolveRecipients(payload, policyDeps);
+
+    // People with no account. Absent on every internal topic, which is why
+    // the hook is optional and nothing else in this method changed.
+    const externals = policy.resolveExternalRecipients
+      ? await policy.resolveExternalRecipients(payload, policyDeps)
+      : [];
 
     // Per-category choices, fetched in one query for the whole batch. A user
     // without a row falls back to their legacy global toggles.
@@ -317,6 +337,33 @@ class NotificationPipelineService {
 
       for (const channel of channels) {
         rows.push({ outboxEventId: event.id, userId: recipient.id, channel });
+      }
+    }
+
+    for (const external of externals) {
+      // Somebody who asked to stop hearing from us. Checked here rather than
+      // at send time so no row is even created — a queued message that is
+      // then skipped is a message that shows as failed in every report.
+      if (external.opted_out_at) continue;
+
+      // The channels follow the contact details we actually hold. No in-app,
+      // no push: there is no app and no inbox. No preferences either — an
+      // outsider never had a row to express one, and the way they say stop is
+      // the opt-out link in the message itself.
+      if (external.email) {
+        rows.push({
+          outboxEventId: event.id,
+          externalRecipientId: external.id,
+          channel: NotificationChannel.EMAIL,
+        });
+      }
+
+      if (external.telephone) {
+        rows.push({
+          outboxEventId: event.id,
+          externalRecipientId: external.id,
+          channel: NotificationChannel.WHATSAPP,
+        });
       }
     }
 
@@ -526,7 +573,7 @@ class NotificationPipelineService {
         LIMIT ${DELIVERY_BATCH_SIZE}
         FOR UPDATE SKIP LOCKED
       )
-      RETURNING "id", "outboxEventId", "userId", "channel", "attempts"
+      RETURNING "id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"
     `;
   }
 
@@ -582,7 +629,9 @@ class NotificationPipelineService {
       );
     }
 
-    const user = await this.findRecipient(delivery.userId);
+    const userId = this.requireUserId(delivery);
+
+    const user = await this.findRecipient(userId);
     const recipient = { id: user.id, role: user.role, driverId: user.driverId };
 
     const content = policy.renderPush
@@ -614,7 +663,7 @@ class NotificationPipelineService {
         })();
 
     const devices = await database.pushDeviceToken.findMany({
-      where: { userId: delivery.userId },
+      where: { userId },
     });
 
     if (devices.length === 0) {
@@ -665,7 +714,8 @@ class NotificationPipelineService {
       );
     }
 
-    const user = await this.findRecipient(delivery.userId);
+    const userId = this.requireUserId(delivery);
+    const user = await this.findRecipient(userId);
 
     const rendered = policy.renderInApp(
       payload,
@@ -676,7 +726,7 @@ class NotificationPipelineService {
     try {
       const notification = await database.notification.create({
         data: {
-          userId: delivery.userId,
+          userId,
           type: rendered.type,
           title: rendered.title,
           message: rendered.message,
@@ -687,7 +737,7 @@ class NotificationPipelineService {
         },
       });
 
-      sendNotificationToUser(delivery.userId, {
+      sendNotificationToUser(userId, {
         id: notification.id,
         type: notification.type,
         title: notification.title,
@@ -717,13 +767,19 @@ class NotificationPipelineService {
     payload: AnyPayload,
     policy: AnyPolicy,
   ): Promise<string | undefined> {
+    // Somebody with no account. A different message, in the company's words,
+    // to an address that has no inbox behind it.
+    if (delivery.externalRecipientId) {
+      return this.deliverExternalEmail(delivery, payload, policy);
+    }
+
     if (!policy.renderInApp) {
       throw new NonRetryableDeliveryError(
         "Delivery channel EMAIL for a topic without in-app content",
       );
     }
 
-    const user = await this.findRecipient(delivery.userId);
+    const user = await this.findRecipient(this.requireUserId(delivery));
 
     const rendered = policy.renderInApp(
       payload,
@@ -785,13 +841,17 @@ class NotificationPipelineService {
     payload: AnyPayload,
     policy: AnyPolicy,
   ): Promise<string | undefined> {
+    if (delivery.externalRecipientId) {
+      return this.deliverExternalWhatsApp(delivery, payload, policy);
+    }
+
     if (!policy.renderWhatsApp) {
       throw new NonRetryableDeliveryError(
         "Delivery channel WHATSAPP for a topic without WhatsApp content",
       );
     }
 
-    const user = await this.findRecipient(delivery.userId);
+    const user = await this.findRecipient(this.requireUserId(delivery));
 
     if (!user.whatsapp_phone) {
       throw new NonRetryableDeliveryError(
@@ -817,6 +877,161 @@ class NotificationPipelineService {
     // without WhatsApp can never succeed, and retrying it four times only
     // spends the account quality rating. `retryable !== false` keeps the old
     // behaviour for anything the provider chose not to classify.
+    if (result.retryable === false) {
+      throw new NonRetryableDeliveryError(reason);
+    }
+
+    throw new Error(reason);
+  }
+
+  /**
+   * The message a company sends to somebody outside it.
+   *
+   * Three things differ from the internal path and each of them is the point:
+   *
+   *  - the WORDS are the company's, from their own template, not ours;
+   *  - the LINK is their tracking page, not a dashboard they cannot open;
+   *  - a missing template is a DECISION. A carrier that never wrote the
+   *    "saiu para entrega" message does not want one sent, so the delivery is
+   *    dropped as non-retryable rather than failing forever.
+   */
+  private async loadExternalMessage(
+    delivery: ClaimedDelivery,
+    payload: AnyPayload,
+    policy: AnyPolicy,
+    channel: string,
+  ) {
+    if (!policy.renderExternal || !policy.resolveExternalRecipients) {
+      throw new NonRetryableDeliveryError(
+        `Delivery addressed to an external recipient on a topic that does not write to one`,
+      );
+    }
+
+    const externalRecipientRepository = container.resolve(
+      "ExternalRecipientRepository",
+    );
+
+    const external = await database.externalRecipient.findUnique({
+      where: { id: delivery.externalRecipientId! },
+    });
+
+    if (!external) {
+      throw new NonRetryableDeliveryError(
+        "External recipient no longer exists",
+      );
+    }
+
+    // Asked to stop between the row being created and the worker reaching it.
+    // A message sent after somebody opted out is the one failure in this whole
+    // feature that a customer reports to the provider.
+    if (external.opted_out_at) {
+      throw new NonRetryableDeliveryError(
+        "External recipient opted out before this message was sent",
+      );
+    }
+
+    const rendered = await policy.renderExternal(
+      payload,
+      external,
+      {
+        userRepository: container.resolve<IUserRepository>("UserRepository"),
+        externalRecipientRepository,
+        messageTemplateRepository: container.resolve(
+          "DeliveryMessageTemplateRepository",
+        ),
+        businessRepository: container.resolve("BusinessRepository"),
+      },
+      channel,
+    );
+
+    if (!rendered) {
+      throw new NonRetryableDeliveryError(
+        `No active ${channel} template for this company and moment`,
+      );
+    }
+
+    return { external, rendered };
+  }
+
+  private async deliverExternalEmail(
+    delivery: ClaimedDelivery,
+    payload: AnyPayload,
+    policy: AnyPolicy,
+  ): Promise<string | undefined> {
+    const { external, rendered } = await this.loadExternalMessage(
+      delivery,
+      payload,
+      policy,
+      NotificationChannel.EMAIL,
+    );
+
+    if (!external.email) {
+      throw new NonRetryableDeliveryError(
+        "External recipient no longer has an e-mail address",
+      );
+    }
+
+    const mailProvider = container.resolve<IMailProvider>("MailProvider");
+
+    const templatePath = resolve(
+      process.cwd(),
+      "src",
+      "modules",
+      NOTIFICATION_TEMPLATE_MODULE,
+      "views",
+      NOTIFICATION_TEMPLATE_FILE,
+    );
+
+    const [firstName] = external.name?.split(" ") ?? ["Cliente"];
+
+    const sent = await mailProvider.sendMail({
+      to: external.email,
+      subject: rendered.subject,
+      path: templatePath,
+      referenceId: delivery.id,
+      variables: {
+        name: firstName,
+        year: new Date().getFullYear(),
+        title: rendered.subject,
+        message: rendered.body,
+        link: rendered.link,
+        logo: env.CLOUDINARY_LOGO_IMAGE,
+      },
+    });
+
+    return sent?.messageId;
+  }
+
+  private async deliverExternalWhatsApp(
+    delivery: ClaimedDelivery,
+    payload: AnyPayload,
+    policy: AnyPolicy,
+  ): Promise<string | undefined> {
+    const { external, rendered } = await this.loadExternalMessage(
+      delivery,
+      payload,
+      policy,
+      NotificationChannel.WHATSAPP,
+    );
+
+    if (!external.telephone) {
+      throw new NonRetryableDeliveryError(
+        "External recipient no longer has a phone number",
+      );
+    }
+
+    const whatsAppProvider =
+      container.resolve<IWhatsAppProvider>("WhatsAppProvider");
+
+    const result = await whatsAppProvider.sendMessage({
+      phoneNumber: external.telephone,
+      message: rendered.body,
+    });
+
+    if (result.success) return result.messageId;
+
+    const reason = result.message || "Falha ao enviar WhatsApp";
+
     if (result.retryable === false) {
       throw new NonRetryableDeliveryError(reason);
     }
@@ -852,7 +1067,7 @@ class NotificationPipelineService {
       entityId: rendered.entityId,
       description: rendered.description,
       status: rendered.status,
-      performedBy: delivery.userId,
+      performedBy: this.requireUserId(delivery),
       businessId: event.businessId,
       tenantName: rendered.tenantName,
       visibilityLevel: rendered.visibilityLevel,
@@ -867,6 +1082,24 @@ class NotificationPipelineService {
 
     // No provider: the activity trail is our own table.
     return undefined;
+  }
+
+  /**
+   * The user behind a delivery row, or a refusal that will not be retried.
+   *
+   * A row with no `userId` reached a channel only a User has — an inbox, a
+   * push device, an activity trail. That is a bug in whoever created the row,
+   * and no amount of retrying will grow the outsider an account, so it fails
+   * once and stays failed with a sentence that names the cause.
+   */
+  private requireUserId(delivery: ClaimedDelivery): string {
+    if (!delivery.userId) {
+      throw new NonRetryableDeliveryError(
+        `Delivery channel ${delivery.channel} requires a user, and this row addresses an external recipient`,
+      );
+    }
+
+    return delivery.userId;
   }
 
   private async findRecipient(userId: string): Promise<RecipientUser> {

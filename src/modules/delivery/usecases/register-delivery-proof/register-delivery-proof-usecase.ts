@@ -25,6 +25,13 @@ import { stopOutcomeForDelivery } from "@/shared/route/route-rules";
 
 import { announceStopSettled } from "@/shared/route/route-realtime";
 
+import {
+  buildDeliveryCustomerPayload,
+  hasSomebodyToTell,
+} from "@/shared/delivery/customer-notice";
+
+import { OutboxService } from "@/shared/notifications/outbox-service";
+
 import { AppError } from "@/shared/errors/AppError";
 
 interface RegisterDeliveryProofRequest {
@@ -57,6 +64,8 @@ class RegisterDeliveryProofUseCase {
     private route: IRouteRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
     @inject("UploadService")
     private uploadService: UploadService,
   ) {}
@@ -183,6 +192,27 @@ class RegisterDeliveryProofUseCase {
             outcome,
             tx,
           );
+        }
+
+        // The person who was waiting for this. Published in the SAME
+        // transaction as the proof, because a delivery that is DELIVERED in
+        // the database and whose customer was never told is the state the
+        // whole feature exists to prevent — and the check happens before the
+        // publish so a carrier that collects no contact details never writes
+        // an outbox row that could only ever expand into nothing.
+        if (hasSomebodyToTell(findDelivery)) {
+          await this.outbox.publish(tx, {
+            topic: "delivery.delivered",
+            aggregateType: "delivery",
+            aggregateId: deliveryId,
+            businessId,
+            actorId: userId,
+            payload: {
+              ...buildDeliveryCustomerPayload(deliveryId, findDelivery),
+              deliveredAt: provenAt,
+              receivedBy: received_by ?? null,
+            },
+          });
         }
       });
 

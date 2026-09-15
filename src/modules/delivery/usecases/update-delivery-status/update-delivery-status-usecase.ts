@@ -28,6 +28,11 @@ import { announceStopSettled } from "@/shared/route/route-realtime";
 import { announceDeliveryOverride } from "@/shared/delivery/delivery-realtime";
 
 import { driverShouldHearOverride } from "@/shared/delivery/driver-worklist";
+
+import {
+  buildDeliveryCustomerPayload,
+  hasSomebodyToTell,
+} from "@/shared/delivery/customer-notice";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -216,6 +221,32 @@ class UpdateDeliveryStatusUseCase {
               reason: findReason.name,
               note: note?.trim() || null,
               removedFromWorklist: !["PENDING", "IN_TRANSIT"].includes(status),
+            },
+          });
+        }
+
+        // And the person waiting for it, when the panel resolved it for them.
+        // Only the two outcomes a customer can act on: a delivery moved back
+        // to pending or marked in transit is bookkeeping, and a message for
+        // every one of those is how somebody learns to ignore the next one.
+        const customerTopic =
+          status === "DELIVERED"
+            ? ("delivery.delivered" as const)
+            : status === "FAILED"
+              ? ("delivery.failed" as const)
+              : null;
+
+        if (customerTopic && hasSomebodyToTell(findDelivery)) {
+          await this.outbox.publish(tx, {
+            topic: customerTopic,
+            aggregateType: "delivery",
+            aggregateId: deliveryId,
+            businessId,
+            actorId: userId,
+            payload: {
+              ...buildDeliveryCustomerPayload(deliveryId, findDelivery),
+              deliveredAt: status === "DELIVERED" ? new Date() : null,
+              receivedBy: status === "DELIVERED" ? (received_by ?? null) : null,
             },
           });
         }
