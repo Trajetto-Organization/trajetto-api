@@ -8,7 +8,6 @@ import { AppError } from "@/shared/errors/AppError";
 import { canTransitionRoute } from "@/shared/route/route-rules";
 
 import {
-  RouteNotBelongBusinessError,
   RouteNotFoundError,
   RouteStatusConflictError,
 } from "../errors/route-errors";
@@ -60,17 +59,11 @@ class CancelRouteUseCase {
       );
     }
 
-    const findRoute = await this.route.findRouteById(routeId);
+    const findRoute = await this.route.findRouteById(routeId, businessId);
 
+    // Scoped read: another company's route reads as absent, so there is no
+    // separate "not yours" answer to learn from.
     if (!findRoute) throw new AppError(new RouteNotFoundError().message, 404);
-
-    if (findRoute.businessId !== businessId) {
-      throw new AppError(
-        new RouteNotBelongBusinessError().message,
-        403,
-        "ROUTE_NOT_BELONG_BUSINESS",
-      );
-    }
 
     const verdict = canTransitionRoute(findRoute.status, "CANCELLED");
 
@@ -79,7 +72,7 @@ class CancelRouteUseCase {
     }
 
     try {
-      const cancelled = await this.route.transitionRoute(routeId, {
+      const cancelled = await this.route.transitionRoute(routeId, businessId, {
         expectedStatus: findRoute.status,
         status: "CANCELLED",
         cancellation_reason: trimmedReason,

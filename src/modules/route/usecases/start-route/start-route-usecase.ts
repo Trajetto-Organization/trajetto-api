@@ -73,16 +73,12 @@ class StartRouteUseCase {
       );
     }
 
-    const findRoute = await this.route.findRouteById(routeId);
+    const findRoute = await this.route.findRouteById(routeId, businessId);
 
     // Same answer for "does not exist" and "is not yours": a driver must not
     // be able to learn that a route id is real by being told a different
     // refusal.
-    if (
-      !findRoute ||
-      findRoute.businessId !== businessId ||
-      findRoute.driverId !== findUser.driverId
-    ) {
+    if (!findRoute || findRoute.driverId !== findUser.driverId) {
       throw new AppError(new RouteNotFoundError().message, 404);
     }
 
@@ -122,7 +118,7 @@ class StartRouteUseCase {
     }
 
     try {
-      const started = await this.route.transitionRoute(routeId, {
+      const started = await this.route.transitionRoute(routeId, businessId, {
         expectedStatus: findRoute.status,
         status: "IN_PROGRESS",
         vehicleId: departingVehicleId,

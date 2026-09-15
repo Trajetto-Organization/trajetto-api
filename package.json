@@ -39,6 +39,7 @@
     "ci": "yarn install --frozen-lockfile",
     "test": "vitest run --dir tests/unitaires",
     "test:watch": "vitest --dir tests/unitaires",
+    "test:integration": "vitest run --dir ./tests/E2E",
     "test:e2e": "vitest run --dir ./tests/E2E",
     "test:e2e:watch": "vitest --dir ./tests/E2E",
     "test:coverage": "vitest run --coverage",

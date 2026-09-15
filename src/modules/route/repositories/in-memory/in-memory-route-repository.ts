@@ -27,20 +27,18 @@ import type {
   UpdateRouteProps,
 } from "../../dtos/route-dto";
 
-import type { RouteStatus } from "@/shared/route/route-rules";
+import type { RouteStatus, RouteStopStatus } from "@/shared/route/route-rules";
 
 /**
  * A stand-in for Postgres, and the rules it enforces are not decoration.
  *
- * Two of this module's invariants live in the database as partial unique
- * indexes rather than in application code — precisely because a check in a use
- * case protects the path someone remembered, and the database protects every
- * other one. A fake that did not mirror them would accept writes the real
- * repository refuses, and a test proving the route module safe would be
- * proving nothing at all.
- *
- * So: R1 (one open stop per delivery, across every route) and R6 (one route in
- * progress per vehicle) are enforced here too, and raise the same errors.
+ * Three kinds of guarantee live in the real repository's `where` rather than
+ * in application code: the tenant scope, the status precondition, and the two
+ * partial unique indexes. A fake that skipped any of them would accept writes
+ * the real repository refuses, and the tests built on it would prove the
+ * opposite of the truth. So all three are mirrored here, raising the same
+ * errors — including the one that matters most: a route reached from the wrong
+ * company behaves exactly like a route that does not exist.
  */
 const ROUTE_STATUSES: RouteStatus[] = [
   "PLANNED",
@@ -50,8 +48,11 @@ const ROUTE_STATUSES: RouteStatus[] = [
   "CANCELLED",
 ];
 
+const EDITABLE_STATUSES: RouteStatus[] = ["PLANNED", "RELEASED"];
+
 interface DeliveryMirror {
   id: string;
+  businessId: string;
   driverId: string | null;
   vehicleId: string | null;
   kind?: string;
@@ -73,6 +74,13 @@ class InMemoryRouteRepository implements IRouteRepository {
     return this.stops
       .filter((stop) => stop.routeId === routeId)
       .sort((a, b) => a.sequence - b.sequence);
+  }
+
+  /** Mirrors `where: { id, businessId }` — wrong tenant reads as absent. */
+  private routeOf(routeId: string, businessId: string): Route | undefined {
+    return this.routes.find(
+      (route) => route.id === routeId && route.businessId === businessId,
+    );
   }
 
   /** R1, as the partial unique index states it. */
@@ -135,7 +143,9 @@ class InMemoryRouteRepository implements IRouteRepository {
   private mirror(route: Route): void {
     const ending = route.status === "COMPLETED" || route.status === "CANCELLED";
 
-    const open = this.stopsOf(route.id).filter((stop) => isStopOpen(stop.status));
+    const open = this.stopsOf(route.id).filter((stop) =>
+      isStopOpen(stop.status),
+    );
 
     if (open.length === 0) return;
 
@@ -197,7 +207,11 @@ class InMemoryRouteRepository implements IRouteRepository {
         updated_at: now,
       });
 
-      const delivery = this.deliveries.find((entry) => entry.id === deliveryId);
+      // Scoped, like the real `updateMany`: the mirror never reaches a row of
+      // another company even if a bad id slipped past the use case.
+      const delivery = this.deliveries.find(
+        (entry) => entry.id === deliveryId && entry.businessId === data.businessId,
+      );
 
       if (delivery) {
         delivery.driverId = data.driverId;
@@ -208,9 +222,16 @@ class InMemoryRouteRepository implements IRouteRepository {
     return this.hydrate(route);
   }
 
-  async updateRoute(routeId: string, data: UpdateRouteProps): Promise<Route> {
-    const route = this.routes.find((entry) => entry.id === routeId);
-    if (!route) throw new RouteStopNotFoundError();
+  async updateRoute(
+    routeId: string,
+    businessId: string,
+    data: UpdateRouteProps,
+  ): Promise<Route> {
+    const route = this.routeOf(routeId, businessId);
+
+    if (!route || !EDITABLE_STATUSES.includes(route.status)) {
+      throw new RouteStatusConflictError();
+    }
 
     Object.assign(route, {
       ...(data.name !== undefined && { name: data.name }),
@@ -228,11 +249,16 @@ class InMemoryRouteRepository implements IRouteRepository {
       updated_at: new Date(),
     });
 
+    this.mirror(route);
+
     return route;
   }
 
-  async findRouteById(routeId: string): Promise<RouteWithStops | null> {
-    const route = this.routes.find((entry) => entry.id === routeId);
+  async findRouteById(
+    routeId: string,
+    businessId: string,
+  ): Promise<RouteWithStops | null> {
+    const route = this.routeOf(routeId, businessId);
 
     return route ? this.hydrate(route) : null;
   }
@@ -291,18 +317,21 @@ class InMemoryRouteRepository implements IRouteRepository {
 
   async transitionRoute(
     routeId: string,
+    businessId: string,
     transition: RouteTransition,
   ): Promise<Route> {
-    const route = this.routes.find((entry) => entry.id === routeId);
+    const route = this.routeOf(routeId, businessId);
 
-    // Mirrors the status filter in the Prisma `where`: the write only lands
-    // while the row still holds the status the caller validated against.
+    // Mirrors `where: { id, businessId, status }`: wrong tenant and wrong
+    // status are the same answer, because they are the same empty result set.
     if (!route || route.status !== transition.expectedStatus) {
       throw new RouteStatusConflictError();
     }
 
     const nextVehicleId =
-      transition.vehicleId !== undefined ? transition.vehicleId : route.vehicleId;
+      transition.vehicleId !== undefined
+        ? transition.vehicleId
+        : route.vehicleId;
 
     if (transition.status === "IN_PROGRESS") {
       this.assertVehicleFree(routeId, nextVehicleId);
@@ -325,11 +354,18 @@ class InMemoryRouteRepository implements IRouteRepository {
     return route;
   }
 
-  async addStops(routeId: string, deliveryIds: string[]): Promise<RouteStop[]> {
-    this.assertDeliveriesFree(deliveryIds);
+  async addStops(
+    routeId: string,
+    businessId: string,
+    deliveryIds: string[],
+  ): Promise<RouteStop[]> {
+    const route = this.routeOf(routeId, businessId);
 
-    const route = this.routes.find((entry) => entry.id === routeId);
-    if (!route) throw new RouteStopNotFoundError();
+    if (!route || !EDITABLE_STATUSES.includes(route.status)) {
+      throw new RouteStatusConflictError();
+    }
+
+    this.assertDeliveriesFree(deliveryIds);
 
     const existing = this.stopsOf(routeId);
 
@@ -358,7 +394,9 @@ class InMemoryRouteRepository implements IRouteRepository {
       this.stops.push(stop);
       created.push(stop);
 
-      const delivery = this.deliveries.find((entry) => entry.id === deliveryId);
+      const delivery = this.deliveries.find(
+        (entry) => entry.id === deliveryId && entry.businessId === businessId,
+      );
 
       if (delivery) {
         delivery.driverId = route.driverId;
@@ -369,17 +407,28 @@ class InMemoryRouteRepository implements IRouteRepository {
     return created;
   }
 
-  async removeStop(routeId: string, stopId: string): Promise<void> {
+  async removeStop(
+    routeId: string,
+    businessId: string,
+    stopId: string,
+  ): Promise<void> {
+    const route = this.routeOf(routeId, businessId);
+
     const stop = this.stops.find((entry) => entry.id === stopId);
 
-    if (!stop || stop.routeId !== routeId) {
+    if (
+      !route ||
+      !EDITABLE_STATUSES.includes(route.status) ||
+      !stop ||
+      stop.routeId !== routeId
+    ) {
       throw new RouteStopNotFoundError();
     }
 
     this.stops = this.stops.filter((entry) => entry.id !== stopId);
 
     const delivery = this.deliveries.find(
-      (entry) => entry.id === stop.deliveryId,
+      (entry) => entry.id === stop.deliveryId && entry.businessId === businessId,
     );
 
     if (delivery) {
@@ -390,8 +439,15 @@ class InMemoryRouteRepository implements IRouteRepository {
 
   async reorderStops(
     routeId: string,
+    businessId: string,
     orderedStopIds: string[],
   ): Promise<void> {
+    const route = this.routeOf(routeId, businessId);
+
+    if (!route || !EDITABLE_STATUSES.includes(route.status)) {
+      throw new RouteStatusConflictError();
+    }
+
     const currentIds = new Set(this.stopsOf(routeId).map((stop) => stop.id));
     const orderedIds = new Set(orderedStopIds);
 
@@ -408,21 +464,57 @@ class InMemoryRouteRepository implements IRouteRepository {
     }
   }
 
-  async closeRouteIfFinished(routeId: string): Promise<Route | null> {
-    const stops = this.stopsOf(routeId);
+  async findStopById(
+    stopId: string,
+    businessId: string,
+  ): Promise<(RouteStop & { route: Route }) | null> {
+    const stop = this.stops.find((entry) => entry.id === stopId);
+    if (!stop) return null;
 
-    if (stops.length === 0) return null;
-    if (stops.some((stop) => isStopOpen(stop.status))) return null;
+    const route = this.routeOf(stop.routeId, businessId);
+    if (!route) return null;
 
-    const route = this.routes.find((entry) => entry.id === routeId);
+    return { ...stop, route };
+  }
 
-    // Idempotent: a resend finds it already closed and answers null.
-    if (!route || route.status !== "IN_PROGRESS") return null;
+  async settleStop(
+    stopId: string,
+    businessId: string,
+    outcome: {
+      expectedStatus: RouteStopStatus;
+      status: RouteStopStatus;
+      arrived_at?: Date;
+      completed_at?: Date;
+    },
+  ): Promise<{ stop: RouteStop; closedRoute: Route | null }> {
+    const stop = this.stops.find((entry) => entry.id === stopId);
+
+    const route = stop ? this.routeOf(stop.routeId, businessId) : undefined;
+
+    if (
+      !stop ||
+      !route ||
+      route.status !== "IN_PROGRESS" ||
+      stop.status !== outcome.expectedStatus
+    ) {
+      throw new RouteStatusConflictError();
+    }
+
+    stop.status = outcome.status;
+    if (outcome.arrived_at) stop.arrived_at = outcome.arrived_at;
+    if (outcome.completed_at) stop.completed_at = outcome.completed_at;
+    stop.updated_at = new Date();
+
+    const stillOpen = this.stopsOf(route.id).some((entry) =>
+      isStopOpen(entry.status),
+    );
+
+    if (stillOpen) return { stop, closedRoute: null };
 
     route.status = "COMPLETED";
     route.completed_at = new Date();
 
-    return route;
+    return { stop, closedRoute: route };
   }
 }
 

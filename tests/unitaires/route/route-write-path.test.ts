@@ -4,6 +4,7 @@ import { CreateRouteUseCase } from "@/modules/route/usecases/create-route/create
 import { ReleaseRouteUseCase } from "@/modules/route/usecases/release-route/release-route-usecase";
 import { StartRouteUseCase } from "@/modules/route/usecases/start-route/start-route-usecase";
 import { CancelRouteUseCase } from "@/modules/route/usecases/cancel-route/cancel-route-usecase";
+import { UpdateRouteUseCase } from "@/modules/route/usecases/update-route/update-route-usecase";
 
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
@@ -115,6 +116,12 @@ function makeContext() {
       notificationService,
     ),
     cancel: new CancelRouteUseCase(routeRepository, notificationService),
+    update: new UpdateRouteUseCase(
+      routeRepository,
+      driverRepository,
+      vehicleRepository,
+      notificationService,
+    ),
   };
 }
 
@@ -138,6 +145,7 @@ async function seedDelivery(
   // to be able to see them.
   context.routeRepository.deliveries.push({
     id: created.id!,
+    businessId: created.businessId,
     driverId: null,
     vehicleId: null,
     status: created.status,
@@ -354,7 +362,10 @@ describe("releasing a route", () => {
     ).rejects.toMatchObject({ code: "ROUTE_NOT_RELEASABLE" });
   });
 
-  it("refuses a route of another company", async () => {
+  it("answers 404 — not 403 — for a route of another company", async () => {
+    // Deliberately indistinguishable from a route that does not exist. A
+    // separate "exists but is not yours" refusal is an oracle: it tells whoever
+    // is probing which ids are real, one request at a time.
     const delivery = await seedDelivery(context);
     const route = await createRoute(context, [delivery]);
 
@@ -364,7 +375,10 @@ describe("releasing a route", () => {
         businessId: OTHER_BUSINESS,
         routeId: route.id,
       }),
-    ).rejects.toMatchObject({ code: "ROUTE_NOT_BELONG_BUSINESS" });
+    ).rejects.toMatchObject({ statusCode: 404 });
+
+    // And it really did not act: the route is untouched.
+    expect(context.routeRepository.routes[0].status).toBe("PLANNED");
   });
 
   it("can be pulled back while nothing was worked", async () => {
@@ -738,5 +752,146 @@ describe("cancelling a route", () => {
     await expect(cancel()).rejects.toMatchObject({
       code: "INVALID_ROUTE_TRANSITION",
     });
+  });
+});
+
+describe("editing the plan", () => {
+  async function plannedRoute(): Promise<string> {
+    const delivery = await seedDelivery(context);
+    const route = await createRoute(context, [delivery]);
+
+    return route.id;
+  }
+
+  const edit = (routeId: string) =>
+    context.update.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId,
+      name: "Zona Sul — manhã",
+    });
+
+  it("edits a route that is still being planned", async () => {
+    const routeId = await plannedRoute();
+
+    const updated = await edit(routeId);
+
+    expect(updated.name).toBe("Zona Sul — manhã");
+  });
+
+  it("still edits one that is released but has not left", async () => {
+    // The dispatcher fixing a name or a window after handing the route over
+    // is normal; nothing has been executed yet.
+    const routeId = await plannedRoute();
+
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId,
+    });
+
+    const updated = await edit(routeId);
+
+    expect(updated.name).toBe("Zona Sul — manhã");
+    expect(updated.status).toBe("RELEASED");
+  });
+
+  it("refuses to edit a route that already left", async () => {
+    // From here the route is a record of what the driver is doing. Editing it
+    // would rewrite that — silently, and after the fact.
+    const routeId = await plannedRoute();
+
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId,
+    });
+
+    await context.start.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      routeId,
+    });
+
+    await expect(edit(routeId)).rejects.toMatchObject({
+      code: "ROUTE_NOT_EDITABLE",
+    });
+
+    expect(context.routeRepository.routes[0].name).toBeNull();
+  });
+
+  it("refuses to edit a cancelled route", async () => {
+    const routeId = await plannedRoute();
+
+    await context.cancel.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId,
+      reason: "Cliente remarcou",
+    });
+
+    await expect(edit(routeId)).rejects.toMatchObject({
+      code: "ROUTE_NOT_EDITABLE",
+    });
+  });
+
+  it("refuses the repository write too, not only the use case", async () => {
+    // The state guard is in the `where`, so a caller that skipped the use case
+    // — a future controller, a job, an import script — is refused by the data
+    // layer rather than silently rewriting a route that ran.
+    const routeId = await plannedRoute();
+
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId,
+    });
+
+    await context.start.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      routeId,
+    });
+
+    await expect(
+      context.routeRepository.updateRoute(routeId, BUSINESS, {
+        name: "por fora do use case",
+      }),
+    ).rejects.toThrow();
+
+    expect(context.routeRepository.routes[0].name).toBeNull();
+  });
+
+  it("moves the shadow when the driver changes", async () => {
+    const delivery = await seedDelivery(context);
+    const route = await createRoute(context, [delivery]);
+
+    await context.update.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId: route.id,
+      driverId: OTHER_DRIVER,
+    });
+
+    const mirrored = context.routeRepository.deliveries.find(
+      (entry) => entry.id === delivery,
+    );
+
+    expect(mirrored?.driverId).toBe(OTHER_DRIVER);
+  });
+
+  it("refuses to hand the route to an inactive driver", async () => {
+    const routeId = await plannedRoute();
+
+    context.driverRepository.drivers[1].status = "INACTIVE";
+
+    await expect(
+      context.update.execute({
+        userId: DISPATCHER,
+        businessId: BUSINESS,
+        routeId,
+        driverId: OTHER_DRIVER,
+      }),
+    ).rejects.toMatchObject({ code: "ROUTE_DRIVER_INACTIVE" });
   });
 });

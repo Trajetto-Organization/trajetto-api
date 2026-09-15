@@ -60,6 +60,9 @@ const routeInclude = {
 
 const OPEN_STOP_STATUSES: RouteStopStatus[] = ["PENDING", "ARRIVED"];
 
+/** A route may only be edited while it has not been executed. */
+const EDITABLE_STATUSES: RouteStatus[] = ["PLANNED", "RELEASED"];
+
 const ROUTE_STATUSES: RouteStatus[] = [
   "PLANNED",
   "RELEASED",
@@ -135,9 +138,13 @@ class RouteRepository implements IRouteRepository {
         // The route is PLANNED, so the deliveries are not on the road yet —
         // but the panel has to show who they are destined for, and driverId is
         // the column every existing screen reads. Mirroring starts here.
+        //
+        // The businessId in the `where` is not redundant with the use case's
+        // check: this is the one statement in the module that writes to a
+        // table the route does not own.
         if (data.deliveryIds.length > 0) {
           await tx.delivery.updateMany({
-            where: { id: { in: data.deliveryIds } },
+            where: { id: { in: data.deliveryIds }, businessId: data.businessId },
             data: { driverId: data.driverId, vehicleId: data.vehicleId ?? null },
           });
         }
@@ -163,10 +170,14 @@ class RouteRepository implements IRouteRepository {
 
   async updateRoute(
     routeId: string,
+    businessId: string,
     data: UpdateRouteProps,
   ): Promise<Route> {
-    const updated = await this.prisma.route.update({
-      where: { id: routeId },
+    // Tenant AND state in the `where`. A route of another company matches no
+    // row; so does one that has already been executed. Both come back as a
+    // conflict, which is what the caller can act on.
+    const updated = await this.prisma.route.updateMany({
+      where: { id: routeId, businessId, status: { in: EDITABLE_STATUSES } },
       data: {
         ...(data.name !== undefined && { name: data.name }),
         ...(data.scheduled_date !== undefined && {
@@ -183,12 +194,24 @@ class RouteRepository implements IRouteRepository {
       },
     });
 
-    return updated as unknown as Route;
+    if (updated.count === 0) throw new RouteStatusConflictError();
+
+    const route = await this.prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
+
+    // Editing the driver or the vehicle changes what the shadow should say.
+    await this.mirrorOntoDeliveries(this.prisma, route as unknown as Route);
+
+    return route as unknown as Route;
   }
 
-  async findRouteById(routeId: string): Promise<RouteWithStops | null> {
-    const found = await this.prisma.route.findUnique({
-      where: { id: routeId },
+  async findRouteById(
+    routeId: string,
+    businessId: string,
+  ): Promise<RouteWithStops | null> {
+    const found = await this.prisma.route.findFirst({
+      where: { id: routeId, businessId },
       include: routeInclude,
     });
 
@@ -233,7 +256,15 @@ class RouteRepository implements IRouteRepository {
       ...(normalizedSearch && {
         OR: [
           { name: { contains: normalizedSearch, mode: "insensitive" } },
-          { driver: { name: { contains: normalizedSearch, mode: "insensitive" } } },
+          {
+            driver: {
+              name: { contains: normalizedSearch, mode: "insensitive" },
+            },
+          },
+          // Spread of an ARRAY, never of an object: `...(cond ? {x} : {})`
+          // leaves a bare {} in the OR, which is an empty conjunction and
+          // therefore TRUE — it would discard the search term entirely. See
+          // shared/pagination/search-or.
           ...(Number.isInteger(Number(normalizedSearch))
             ? [{ code: Number(normalizedSearch) }]
             : []),
@@ -283,19 +314,24 @@ class RouteRepository implements IRouteRepository {
   }
 
   /**
-   * The status filter rides in the `where`, the same way it does in
-   * assignDeliveries and updateDeliveryStatus: the read the caller validated
-   * and the write it authorised become one atomic step, instead of two
-   * separated by a window that four screens can drive through.
+   * The status filter rides in the `where` alongside the tenant, the same way
+   * it does in assignDeliveries and updateDeliveryStatus: the read the caller
+   * validated and the write it authorised become one atomic step, instead of
+   * two separated by a window that four screens can drive through.
    */
   async transitionRoute(
     routeId: string,
+    businessId: string,
     transition: RouteTransition,
   ): Promise<Route> {
     try {
       return await this.prisma.$transaction(async (tx) => {
         const moved = await tx.route.updateMany({
-          where: { id: routeId, status: transition.expectedStatus },
+          where: {
+            id: routeId,
+            businessId,
+            status: transition.expectedStatus,
+          },
           data: {
             status: transition.status,
             ...(transition.vehicleId !== undefined && {
@@ -345,7 +381,7 @@ class RouteRepository implements IRouteRepository {
    * historical fact the panels report.
    */
   private async mirrorOntoDeliveries(
-    tx: Prisma.TransactionClient,
+    tx: Prisma.TransactionClient | typeof database,
     route: Route,
   ): Promise<void> {
     const ending = route.status === "COMPLETED" || route.status === "CANCELLED";
@@ -383,14 +419,21 @@ class RouteRepository implements IRouteRepository {
 
   async addStops(
     routeId: string,
+    businessId: string,
     deliveryIds: string[],
   ): Promise<RouteStop[]> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const route = await tx.route.findUniqueOrThrow({
-          where: { id: routeId },
+        const route = await tx.route.findFirst({
+          where: {
+            id: routeId,
+            businessId,
+            status: { in: EDITABLE_STATUSES },
+          },
           select: { driverId: true, vehicleId: true },
         });
+
+        if (!route) throw new RouteStatusConflictError();
 
         const highest = await tx.routeStop.aggregate({
           where: { routeId },
@@ -412,7 +455,7 @@ class RouteRepository implements IRouteRepository {
         }
 
         await tx.delivery.updateMany({
-          where: { id: { in: deliveryIds } },
+          where: { id: { in: deliveryIds }, businessId },
           data: { driverId: route.driverId, vehicleId: route.vehicleId },
         });
 
@@ -427,20 +470,28 @@ class RouteRepository implements IRouteRepository {
     }
   }
 
-  async removeStop(routeId: string, stopId: string): Promise<void> {
+  async removeStop(
+    routeId: string,
+    businessId: string,
+    stopId: string,
+  ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      const stop = await tx.routeStop.findUnique({ where: { id: stopId } });
+      const stop = await tx.routeStop.findFirst({
+        where: {
+          id: stopId,
+          routeId,
+          route: { businessId, status: { in: EDITABLE_STATUSES } },
+        },
+      });
 
-      if (!stop || stop.routeId !== routeId) {
-        throw new RouteStopNotFoundError();
-      }
+      if (!stop) throw new RouteStopNotFoundError();
 
       await tx.routeStop.delete({ where: { id: stopId } });
 
       // Back to the unassigned pool. Only the mirror is cleared — the delivery
       // keeps its own status, which removing it from a route never changed.
-      await tx.delivery.update({
-        where: { id: stop.deliveryId },
+      await tx.delivery.updateMany({
+        where: { id: stop.deliveryId, businessId },
         data: { driverId: null, vehicleId: null },
       });
     });
@@ -448,9 +499,17 @@ class RouteRepository implements IRouteRepository {
 
   async reorderStops(
     routeId: string,
+    businessId: string,
     orderedStopIds: string[],
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
+      const route = await tx.route.findFirst({
+        where: { id: routeId, businessId, status: { in: EDITABLE_STATUSES } },
+        select: { id: true },
+      });
+
+      if (!route) throw new RouteStatusConflictError();
+
       const current = await tx.routeStop.findMany({
         where: { routeId },
         select: { id: true },
@@ -485,33 +544,84 @@ class RouteRepository implements IRouteRepository {
     });
   }
 
-  async closeRouteIfFinished(routeId: string): Promise<Route | null> {
-    const openStops = await this.prisma.routeStop.count({
-      where: { routeId, status: { in: OPEN_STOP_STATUSES } },
+  async findStopById(
+    stopId: string,
+    businessId: string,
+  ): Promise<(RouteStop & { route: Route }) | null> {
+    const found = await this.prisma.routeStop.findFirst({
+      where: { id: stopId, route: { businessId } },
+      include: { route: true },
     });
 
-    if (openStops > 0) return null;
+    return found as unknown as (RouteStop & { route: Route }) | null;
+  }
 
-    const totalStops = await this.prisma.routeStop.count({ where: { routeId } });
+  /**
+   * Records a stop's outcome and closes the route if that was the last one.
+   *
+   * The two writes are one fact and share a transaction. Split apart, a crash
+   * between them leaves a route the panel reports as running with nothing left
+   * to run — and nothing would ever come back to close it, because closing is
+   * triggered by a stop resolving and no stop would resolve again.
+   */
+  async settleStop(
+    stopId: string,
+    businessId: string,
+    outcome: {
+      expectedStatus: RouteStopStatus;
+      status: RouteStopStatus;
+      arrived_at?: Date;
+      completed_at?: Date;
+    },
+  ): Promise<{ stop: RouteStop; closedRoute: Route | null }> {
+    return this.prisma.$transaction(async (tx) => {
+      const settled = await tx.routeStop.updateMany({
+        where: {
+          id: stopId,
+          status: outcome.expectedStatus,
+          route: { businessId, status: "IN_PROGRESS" },
+        },
+        data: {
+          status: outcome.status,
+          ...(outcome.arrived_at && { arrived_at: outcome.arrived_at }),
+          ...(outcome.completed_at && { completed_at: outcome.completed_at }),
+        },
+      });
 
-    // A route with no stops never closes: it was never released, and closing
-    // it would invent a completed route nobody ran — which the panel counts.
-    if (totalStops === 0) return null;
+      if (settled.count === 0) throw new RouteStatusConflictError();
 
-    const closed = await this.prisma.route.updateMany({
-      where: { id: routeId, status: "IN_PROGRESS" },
-      data: { status: "COMPLETED", completed_at: new Date() },
+      const stop = await tx.routeStop.findUniqueOrThrow({
+        where: { id: stopId },
+      });
+
+      const stillOpen = await tx.routeStop.count({
+        where: { routeId: stop.routeId, status: { in: OPEN_STOP_STATUSES } },
+      });
+
+      if (stillOpen > 0) {
+        return { stop: stop as unknown as RouteStop, closedRoute: null };
+      }
+
+      const closed = await tx.route.updateMany({
+        where: { id: stop.routeId, businessId, status: "IN_PROGRESS" },
+        data: { status: "COMPLETED", completed_at: new Date() },
+      });
+
+      // Idempotent: a resend finds the route already closed and answers null
+      // rather than failing.
+      if (closed.count === 0) {
+        return { stop: stop as unknown as RouteStop, closedRoute: null };
+      }
+
+      const route = await tx.route.findUniqueOrThrow({
+        where: { id: stop.routeId },
+      });
+
+      return {
+        stop: stop as unknown as RouteStop,
+        closedRoute: route as unknown as Route,
+      };
     });
-
-    // Idempotent on purpose: an outbox resend of the event that triggered this
-    // finds the route already COMPLETED and answers null, not an error.
-    if (closed.count === 0) return null;
-
-    const route = await this.prisma.route.findUniqueOrThrow({
-      where: { id: routeId },
-    });
-
-    return route as unknown as Route;
   }
 }
 

@@ -13,7 +13,6 @@ import {
 } from "@/shared/route/route-rules";
 
 import {
-  RouteNotBelongBusinessError,
   RouteNotFoundError,
   RouteStatusConflictError,
 } from "../errors/route-errors";
@@ -54,17 +53,13 @@ class ReleaseRouteUseCase {
     routeId,
     released = true,
   }: ReleaseRouteRequest): Promise<Route> {
-    const findRoute = await this.route.findRouteById(routeId);
+    const findRoute = await this.route.findRouteById(routeId, businessId);
 
+    // The read is already scoped by business, so a route of another company
+    // is indistinguishable from one that does not exist — which is the point.
+    // A different refusal for "exists but is not yours" tells a caller which
+    // ids are real.
     if (!findRoute) throw new AppError(new RouteNotFoundError().message, 404);
-
-    if (findRoute.businessId !== businessId) {
-      throw new AppError(
-        new RouteNotBelongBusinessError().message,
-        403,
-        "ROUTE_NOT_BELONG_BUSINESS",
-      );
-    }
 
     const target = released ? "RELEASED" : "PLANNED";
 
@@ -100,7 +95,7 @@ class ReleaseRouteUseCase {
     }
 
     try {
-      const updated = await this.route.transitionRoute(routeId, {
+      const updated = await this.route.transitionRoute(routeId, businessId, {
         expectedStatus: findRoute.status,
         status: target,
       });
