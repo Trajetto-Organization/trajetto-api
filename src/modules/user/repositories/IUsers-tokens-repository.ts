@@ -46,6 +46,17 @@ interface IUsersTokensRepository {
     token: string,
   ) => Promise<VerificationToken | null>;
   deleteEmailVerificationToken: (tokenId: string) => Promise<void>;
+  /**
+   * Spends the token, and says whether THIS caller was the one who spent it.
+   *
+   * A single-use token was being read, checked and only then deleted. Two
+   * requests carrying the same token both read it, both passed every check
+   * and both went on to act — so "single use" held only when nobody tried
+   * twice at once. The delete is the precondition now: it either removes the
+   * row and returns true, or finds nothing and returns false because someone
+   * else got there first.
+   */
+  consumeEmailVerificationToken: (tokenId: string) => Promise<boolean>;
   createTwoFactorToken: ({
     email,
     expires,
@@ -62,6 +73,17 @@ interface IUsersTokensRepository {
     twoFactorConfirmationId: string,
   ) => Promise<void>;
   deleteTwoFactorToken: (twoFactorId: string) => Promise<void>;
+  /**
+   * Spends the token, and says whether THIS caller was the one who spent it.
+   *
+   * A single-use token was being read, checked and only then deleted. Two
+   * requests carrying the same token both read it, both passed every check
+   * and both went on to act — so "single use" held only when nobody tried
+   * twice at once. The delete is the precondition now: it either removes the
+   * row and returns true, or finds nothing and returns false because someone
+   * else got there first.
+   */
+  consumeTwoFactorToken: (twoFactorId: string) => Promise<boolean>;
 
   /**
    * Conta mais um palpite errado e devolve o total.
@@ -83,6 +105,19 @@ interface IUsersTokensRepository {
     token: string,
   ) => Promise<VerificationToken | null>;
   deleteForgotPasswordVerificationToken: (tokenId: string) => Promise<void>;
+  /**
+   * Spends the token, and says whether THIS caller was the one who spent it.
+   *
+   * A single-use token was being read, checked and only then deleted. Two
+   * requests carrying the same token both read it, both passed every check
+   * and both went on to act — so "single use" held only when nobody tried
+   * twice at once. The delete is the precondition now: it either removes the
+   * row and returns true, or finds nothing and returns false because someone
+   * else got there first.
+   */
+  consumeForgotPasswordVerificationToken: (
+    tokenId: string,
+  ) => Promise<boolean>;
 }
 
 export { IUsersTokensRepository };

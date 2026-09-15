@@ -164,6 +164,16 @@ class UserTokensRepository implements IUsersTokensRepository {
     return findVerificationTokenByToken;
   }
 
+  async consumeEmailVerificationToken(tokenId: string): Promise<boolean> {
+    // `deleteMany` and not `delete`: `delete` throws when the row is already
+    // gone, and "someone else spent this token" is an answer, not a fault.
+    const { count } = await this.prisma.emailVerificationToken.deleteMany({
+      where: { id: tokenId },
+    });
+
+    return count === 1;
+  }
+
   async deleteEmailVerificationToken(tokenId: string): Promise<void> {
     await this.prisma.emailVerificationToken.delete({
       where: {
@@ -198,6 +208,14 @@ class UserTokensRepository implements IUsersTokensRepository {
     });
 
     return findTwoFactorByEmail;
+  }
+
+  async consumeTwoFactorToken(twoFactorId: string): Promise<boolean> {
+    const { count } = await this.prisma.twoFactorToken.deleteMany({
+      where: { id: twoFactorId },
+    });
+
+    return count === 1;
   }
 
   async deleteTwoFactorToken(twoFactorId: string): Promise<void> {
@@ -289,6 +307,17 @@ class UserTokensRepository implements IUsersTokensRepository {
       });
 
     return findForgotPasswordVerificationTokenByToken;
+  }
+
+  async consumeForgotPasswordVerificationToken(
+    tokenId: string,
+  ): Promise<boolean> {
+    const { count } =
+      await this.prisma.forgotPasswordVerificationToken.deleteMany({
+        where: { id: tokenId },
+      });
+
+    return count === 1;
   }
 
   async deleteForgotPasswordVerificationToken(tokenId: string): Promise<void> {

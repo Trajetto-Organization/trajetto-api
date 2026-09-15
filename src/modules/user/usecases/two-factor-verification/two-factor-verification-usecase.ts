@@ -74,7 +74,9 @@ class TwoFactorVerificationUseCase {
       // Apagado: passar do teto queima o código. Continuar aceitando
       // tentativas num código travado seria um oráculo de "este e-mail tem
       // 2FA pendente" que dura quinze minutos.
-      await this.usersTokens.deleteTwoFactorToken(twoFactorToken.id);
+      // `consume` and not `delete`: burning a code that a parallel request
+      // has already burned is a no-op, not a 500.
+      await this.usersTokens.consumeTwoFactorToken(twoFactorToken.id);
 
       throw new UserInvalidTwoFactorCodeError();
     }
@@ -88,7 +90,7 @@ class TwoFactorVerificationUseCase {
       );
 
       if (attempts >= MAX_TWO_FACTOR_ATTEMPTS) {
-        await this.usersTokens.deleteTwoFactorToken(twoFactorToken.id);
+        await this.usersTokens.consumeTwoFactorToken(twoFactorToken.id);
       }
 
       // A MESMA recusa de um código inexistente ou queimado. Uma mensagem
@@ -104,7 +106,21 @@ class TwoFactorVerificationUseCase {
 
     await assertSessionEligible(user, this.driver);
 
-    await this.usersTokens.deleteTwoFactorToken(twoFactorToken.id);
+    /**
+     * Spend the code, and stop if somebody else already spent it.
+     *
+     * This used to be a plain `delete` after the check, which is two problems
+     * in one line: two requests carrying the same correct code both got past
+     * every check and each opened a session, and the second `delete` hit a
+     * row that was already gone — Prisma throws on that, so the caller got a
+     * 500 instead of an answer. One code, one session, and losing the race
+     * reads as what it is: a code that has already been used.
+     */
+    const spent = await this.usersTokens.consumeTwoFactorToken(
+      twoFactorToken.id,
+    );
+
+    if (!spent) throw new UserInvalidTwoFactorCodeError();
 
     const existingConfirmation =
       await this.usersTokens.findTwoFactorConfirmationByUserId(user.id);

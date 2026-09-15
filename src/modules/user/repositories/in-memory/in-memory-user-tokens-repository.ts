@@ -168,6 +168,22 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     return findTwoFactorTokenByEmail;
   }
 
+  /**
+   * Mirrors the real precondition, including losing the race.
+   *
+   * A fake that always returns true would make every test agree with a
+   * repository that can answer false, which is the whole point of the method.
+   */
+  async consumeTwoFactorToken(twoFactorId: string): Promise<boolean> {
+    const before = this.twoFactorTokens.length;
+
+    this.twoFactorTokens = this.twoFactorTokens.filter(
+      (item) => item.id !== twoFactorId,
+    );
+
+    return this.twoFactorTokens.length < before;
+  }
+
   async deleteTwoFactorToken(twoFactorId: string): Promise<void> {
     this.twoFactorTokens = this.twoFactorTokens.filter(
       (item) => item.id !== twoFactorId,
@@ -274,6 +290,25 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     return verificationToken;
   }
 
+  /**
+   * Mirrors the real precondition, including losing the race.
+   *
+   * A fake that always returns true would make every test agree with a
+   * repository that can answer false, which is the whole point of the method.
+   */
+  async consumeForgotPasswordVerificationToken(
+    tokenId: string,
+  ): Promise<boolean> {
+    const before = this.forgotPasswordVerificationTokens.length;
+
+    this.forgotPasswordVerificationTokens =
+      this.forgotPasswordVerificationTokens.filter(
+        (item) => item.id !== tokenId,
+      );
+
+    return this.forgotPasswordVerificationTokens.length < before;
+  }
+
   async deleteForgotPasswordVerificationToken(tokenId: string): Promise<void> {
     this.forgotPasswordVerificationTokens =
       this.forgotPasswordVerificationTokens.filter(
@@ -333,6 +368,22 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     }
 
     return verificationToken;
+  }
+
+  /**
+   * Mirrors the real precondition, including losing the race.
+   *
+   * A fake that always returns true would make every test agree with a
+   * repository that can answer false, which is the whole point of the method.
+   */
+  async consumeEmailVerificationToken(tokenId: string): Promise<boolean> {
+    const before = this.emailVerificationTokens.length;
+
+    this.emailVerificationTokens = this.emailVerificationTokens.filter(
+      (item) => item.id !== tokenId,
+    );
+
+    return this.emailVerificationTokens.length < before;
   }
 
   async deleteEmailVerificationToken(tokenId: string): Promise<void> {
