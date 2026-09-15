@@ -124,6 +124,7 @@ class RouteRepository implements IRouteRepository {
             businessId: data.businessId,
             driverId: data.driverId,
             vehicleId: data.vehicleId ?? null,
+            importId: data.importId ?? null,
             stops: {
               create: data.deliveryIds.map((deliveryId, index) => ({
                 deliveryId,

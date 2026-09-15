@@ -498,6 +498,29 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     };
   }
 
+  async findDeliveryByShipperAndCode(
+    businessId: string,
+    shipperId: string,
+    code: string,
+  ): Promise<Delivery | null> {
+    return (
+      this.deliveries.find(
+        (delivery) =>
+          delivery.businessId === businessId &&
+          delivery.shipperId === shipperId &&
+          delivery.code === code,
+      ) ?? null
+    );
+  }
+
+  async stampImport(deliveryIds: string[], importId: string): Promise<void> {
+    for (const delivery of this.deliveries) {
+      if (deliveryIds.includes(delivery.id ?? "")) {
+        (delivery as { importId?: string | null }).importId = importId;
+      }
+    }
+  }
+
   async countDeliveriesReferencing(reference: {
     driverId?: string;
     vehicleId?: string;

@@ -112,6 +112,29 @@ interface IDeliveryRepository {
    * delivered_at and nobody who delivered it. This count is what turns that
    * silence into a refusal the operator can read.
    */
+  /**
+   * The other identity a delivery can have.
+   *
+   * A company that issues invoices is deduplicated by the access key, which
+   * has a unique index. One that works from order numbers has neither, so the
+   * import asks here — (shipper, pedido) is the pair that means "the same
+   * job" for them.
+   */
+  findDeliveryByShipperAndCode: (
+    businessId: string,
+    shipperId: string,
+    code: string,
+  ) => Promise<Delivery | null>;
+
+  /**
+   * Marks rows as belonging to an upload, after the upload row exists.
+   *
+   * Two steps rather than one because the import is the parent: a delivery
+   * pointing at an import that had not been written yet is a foreign key with
+   * nothing behind it.
+   */
+  stampImport: (deliveryIds: string[], importId: string) => Promise<void>;
+
   countDeliveriesReferencing: (reference: {
     driverId?: string;
     vehicleId?: string;

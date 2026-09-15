@@ -38,6 +38,9 @@ import { IOccurrenceTypeRepository } from "@/modules/occurrence-type/repositorie
 import { StatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/status-change-reason-repository";
 import { IStatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/IStatus-change-reason-repository";
 
+import { ImportRepository } from "@/modules/import/repositories/import-repository";
+import { IImportRepository } from "@/modules/import/repositories/IImport-repository";
+
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 
 import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
@@ -239,6 +242,11 @@ container.registerSingleton<IShipperRepository>(
 container.registerSingleton<IStatusChangeReasonRepository>(
   "StatusChangeReasonRepository",
   StatusChangeReasonRepository,
+);
+
+container.registerSingleton<IImportRepository>(
+  "ImportRepository",
+  ImportRepository,
 );
 
 container.registerSingleton<IOccurrenceTypeRepository>(

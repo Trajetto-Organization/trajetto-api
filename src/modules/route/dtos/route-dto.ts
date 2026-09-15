@@ -54,6 +54,9 @@ interface CreateRouteProps {
 
   /** Deliveries to become stops, in the order given. May be empty. */
   deliveryIds: string[];
+
+  /** The upload that created it, when one did. See the Import model. */
+  importId?: string | null;
 }
 
 interface UpdateRouteProps {

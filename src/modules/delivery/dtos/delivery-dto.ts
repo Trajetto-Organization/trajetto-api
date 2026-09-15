@@ -58,6 +58,9 @@ interface CreateDeliveryProps {
   vehicleId?: string | null;
   driverId?: string | null;
   items?: DeliveryItemInput[];
+
+  /** The upload that created it, when one did. See the Import model. */
+  importId?: string | null;
 }
 
 interface UpdateDeliveryProps {

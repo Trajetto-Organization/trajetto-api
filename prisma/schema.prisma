@@ -137,6 +137,7 @@ model Business {
   routes          Route[]
   occurrenceTypes OccurrenceType[]
   statusChangeReasons StatusChangeReason[]
+  imports Import[]
   deliveries      Delivery[]
 
   @@map("business")
@@ -202,6 +203,7 @@ model User {
   NotificationDelivery   NotificationDelivery[]
   NotificationPreference NotificationPreference[]
   PushDeviceToken        PushDeviceToken[]
+  Import                 Import[]
 
   // WhatsApp fields
   whatsapp_notifications_enabled Boolean @default(false)
@@ -1400,6 +1402,13 @@ model Route {
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
+  /// The upload that created this route, when one did. SetNull rather than
+  /// Cascade: reversing an import removes what it created deliberately, one
+  /// row at a time and only when nothing has happened to it — a cascade would
+  /// take a route somebody has since worked.
+  import   Import? @relation(fields: [importId], references: [id], onDelete: SetNull)
+  importId String?
+
   driver   Driver @relation(fields: [driverId], references: [id])
   driverId String
 
@@ -1422,6 +1431,7 @@ model Route {
   // road. Enforced as a partial unique index in raw SQL (Prisma cannot
   // express the WHERE), see the migration. Declared here only as a comment so
   // nobody expects to find it in this file.
+  @@index([importId])
   @@map("route")
 }
 
@@ -1514,6 +1524,63 @@ model OccurrenceType {
   @@map("occurrence_type")
 }
 
+enum ImportSource {
+  SPREADSHEET
+  NFE_XML
+}
+
+enum ImportStatus {
+  COMPLETED
+  REVERSED
+}
+
+/// One upload, and everything it created.
+///
+/// Exists so an import can be UNDONE. A dispatcher who loads the wrong file at
+/// 6am — yesterday's sheet, the customer's other branch, a column shifted by
+/// one — needs to take two hundred deliveries back out, and doing that by hand
+/// is not doing it: they will miss some, and the ones they miss go out on a
+/// truck.
+///
+/// The report is stored, not only returned. "Which of the two hundred failed?"
+/// is asked hours later, by somebody who did not do the upload, and a report
+/// that lived in one HTTP response cannot answer it.
+model Import {
+  id String @id @default(uuid(7))
+
+  source ImportSource
+  status ImportStatus @default(COMPLETED)
+
+  /// What the operator uploaded, for the report to name.
+  filename String
+
+  imported   Int @default(0)
+  duplicated Int @default(0)
+  invalid    Int @default(0)
+
+  /// The per-row outcome, exactly as the operator saw it.
+  report Json
+
+  reversed_at DateTime?
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  /// Who uploaded it. Restrict for the same reason the events use it: this is
+  /// a record of something a person did.
+  performedBy   User   @relation(fields: [performedById], references: [id], onDelete: Restrict)
+  performedById String
+
+  deliveries Delivery[]
+  routes     Route[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId, created_at])
+  @@map("import")
+}
+
 /// Why somebody changed a delivery's status by hand.
 ///
 /// A catalogue per company, exactly like OccurrenceType: the operation names
@@ -1576,6 +1643,10 @@ model Delivery {
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
+  /// The upload that created this delivery, when one did. See Import.
+  import   Import? @relation(fields: [importId], references: [id], onDelete: SetNull)
+  importId String?
+
   shipper   Shipper @relation(fields: [shipperId], references: [id])
   shipperId String
 
@@ -1621,6 +1692,8 @@ model Delivery {
   // (businessId, driverId, status), and driverId is far more selective than
   // businessId.
   @@index([driverId])
+  // The reversal reads every row one upload created.
+  @@index([importId])
   @@map("delivery")
 }
 

@@ -708,6 +708,27 @@ class DeliveryRepository implements IDeliveryRepository {
     });
   }
 
+  async findDeliveryByShipperAndCode(
+    businessId: string,
+    shipperId: string,
+    code: string,
+  ): Promise<Delivery | null> {
+    const found = await this.prisma.delivery.findFirst({
+      where: { businessId, shipperId, code },
+    });
+
+    return found as Delivery | null;
+  }
+
+  async stampImport(deliveryIds: string[], importId: string): Promise<void> {
+    if (deliveryIds.length === 0) return;
+
+    await this.prisma.delivery.updateMany({
+      where: { id: { in: deliveryIds } },
+      data: { importId },
+    });
+  }
+
   async countDeliveriesReferencing(reference: {
     driverId?: string;
     vehicleId?: string;
