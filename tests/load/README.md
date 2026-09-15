@@ -128,3 +128,45 @@ paralelo e cada uma tem relógio de 500 ms.
   nenhuma, então uma queda externa não vira laço de restart.
 - Tudo volta sozinho quando os containers voltam. Nenhum restart de processo
   foi necessário em nenhum dos cenários.
+
+
+## Multi-réplica
+
+`bash tests/load/multi-replica.sh` sobe duas réplicas contra o mesmo banco e o
+mesmo Redis e faz cinco perguntas. Quatro têm resposta aqui.
+
+### O que foi verificado
+
+**O tráfego se divide.** Com nginx em round-robin sobre as duas portas: 9.092 e
+9.102 requisições. O balanceador não é o assunto — o assunto é que nenhuma
+réplica se recusa a atender.
+
+**O rate limit é compartilhado.** Quarenta chamadas alternando entre as
+réplicas com a MESMA sessão: o `x-ratelimit-remaining` cai de um em um,
+independente de quem atendeu. Se cada réplica contasse sozinha, o limite
+efetivo seria N vezes o configurado — e o número existe justamente para não
+ser N vezes maior.
+
+**O socket atravessa as réplicas.** Painel conectado na réplica A, telefone
+escrevendo posições na réplica B: o evento chega. É o que mais silenciosamente
+quebra ao escalar — sem o adapter do Redis cada processo emite só para os
+sockets que ele mesmo segura, e o sintoma é "às vezes o painel não atualiza",
+que ninguém reproduz porque depende de onde o navegador caiu.
+
+**A fila é disputada sem duplicar.** Sessenta webhooks enfileirados, duas
+réplicas varrendo: 60 entregas, 60 POSTs, zero duplicados. `FOR UPDATE SKIP
+LOCKED` fazendo o que promete. A falha aqui seria silenciosa do nosso lado — o
+banco ficaria consistente e o CLIENTE é que receberia o mesmo evento duas
+vezes.
+
+### O que NÃO dá para medir aqui
+
+**Se a vazão sobe.** Duas réplicas deram 269 req/s contra 303 de uma só — com
+o Postgres em 0,17% de CPU, o que descarta o banco. A causa é o caminho: com o
+nginx em container, cada requisição vira k6 (WSL2) → nginx (WSL2) →
+`host.docker.internal` → Node (Windows), duas travessias da fronteira
+WSL2/Windows, contra uma só na medição de réplica única.
+
+Ou seja: a medição de duas réplicas mede a fronteira, não a aplicação. Um
+número daqui seria pior do que nenhum. Escalonamento horizontal de VAZÃO
+precisa de hosts separados; está registrado em `docs/PENDENCIAS-DO-USUARIO.md`.
