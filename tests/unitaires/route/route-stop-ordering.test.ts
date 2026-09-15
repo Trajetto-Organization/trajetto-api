@@ -130,6 +130,7 @@ function makeContext() {
       userRepository,
       vehicleRepository,
       notificationService,
+      outboxStub,
     ),
 
     addStops: new AddRouteStopsUseCase(

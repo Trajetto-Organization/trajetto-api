@@ -57,8 +57,20 @@ const SHIPPER = "018f0000-0000-7000-8000-0000000000f1";
 
 const TOMORROW = new Date("2026-09-15T08:00:00.000Z");
 
+/**
+ * Records instead of discarding: the outbox is the only way a use case reaches
+ * a driver's phone or a customer's, so what it received IS the notification
+ * behaviour under test.
+ */
+const published: Array<{ topic: string; payload: Record<string, unknown> }> = [];
+
 const outboxStub = {
-  publish: async () => undefined,
+  publish: async (
+    _tx: unknown,
+    event: { topic: string; payload: Record<string, unknown> },
+  ) => {
+    published.push({ topic: event.topic, payload: event.payload });
+  },
 } as unknown as OutboxService;
 
 function makeContext() {
@@ -133,6 +145,7 @@ function makeContext() {
       userRepository,
       vehicleRepository,
       notificationService,
+      outboxStub,
     ),
     cancel: new CancelRouteUseCase(
       routeRepository,
@@ -167,7 +180,8 @@ async function seedDelivery(
   } as CreateDeliveryProps);
 
   // The route repository mirrors driverId/vehicleId onto these rows, so it has
-  // to be able to see them.
+  // to be able to see them — and it reads the contact details from here when a
+  // departure has to tell the people waiting.
   context.routeRepository.deliveries.push({
     id: created.id!,
     businessId: created.businessId,
@@ -175,6 +189,10 @@ async function seedDelivery(
     vehicleId: null,
     status: created.status,
     recipient_name: created.recipient_name,
+    recipient_email: created.recipient_email ?? null,
+    recipient_telephone: created.recipient_telephone ?? null,
+    invoice_number: created.invoice_number ?? null,
+    code: created.code ?? null,
   });
 
   return created.id!;
@@ -973,5 +991,100 @@ describe("editing the plan", () => {
         driverId: OTHER_DRIVER,
       }),
     ).rejects.toMatchObject({ code: "ROUTE_DRIVER_INACTIVE" });
+  });
+});
+
+describe("telling the people waiting that the truck left", () => {
+  /**
+   * The "saiu para entrega" message, published with the departure rather than
+   * after it: a route departs once, and there is no second chance to publish.
+   *
+   * The other half is the silence. Most deliveries carry neither an e-mail nor
+   * a phone for the person receiving them, and a forty-stop route that queued
+   * forty rows for forty people who cannot be reached would be forty rows
+   * claimed, expanded into nothing and discarded, every day, forever.
+   */
+  function dispatched() {
+    return published.filter((event) => event.topic === "delivery.dispatched");
+  }
+
+  async function releasedRouteWith(
+    overrides: Array<Partial<CreateDeliveryProps>>,
+  ): Promise<string> {
+    const deliveryIds: string[] = [];
+
+    for (const override of overrides) {
+      deliveryIds.push(await seedDelivery(context, override));
+    }
+
+    const route = await createRoute(context, deliveryIds);
+
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId: route.id,
+    });
+
+    published.length = 0;
+
+    return route.id;
+  }
+
+  it("publishes one message per stop that has somebody to tell", async () => {
+    const routeId = await releasedRouteWith([
+      { recipient_email: "cliente@exemplo.com.br", invoice_number: "111" },
+      { recipient_telephone: "11999999999", invoice_number: "222" },
+    ]);
+
+    await context.start.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      routeId,
+    });
+
+    expect(dispatched()).toHaveLength(2);
+
+    expect(dispatched()[0].payload).toMatchObject({
+      recipientEmail: "cliente@exemplo.com.br",
+      invoiceNumber: "111",
+      businessId: BUSINESS,
+    });
+  });
+
+  it("queues nothing for a stop nobody can be told about", async () => {
+    const routeId = await releasedRouteWith([
+      {},
+      { recipient_email: "cliente@exemplo.com.br" },
+      {},
+    ]);
+
+    await context.start.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      routeId,
+    });
+
+    expect(dispatched()).toHaveLength(1);
+  });
+
+  it("publishes nothing at all when the departure was refused", async () => {
+    // The route never left, so nobody's phone should have been told it did.
+    const delivery = await seedDelivery(context, {
+      recipient_email: "cliente@exemplo.com.br",
+    });
+
+    const route = await createRoute(context, [delivery]);
+
+    published.length = 0;
+
+    await expect(
+      context.start.execute({
+        userId: DRIVER_USER,
+        businessId: BUSINESS,
+        routeId: route.id,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_ROUTE_TRANSITION" });
+
+    expect(dispatched()).toEqual([]);
   });
 });

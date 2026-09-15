@@ -64,13 +64,21 @@ function buildDeliveryCustomerPayload(
 /**
  * Whether there is anybody to tell.
  *
+ * Takes only the two columns it reads, rather than a whole delivery: the route
+ * module asks this about a stop's projection, which carries the contact details
+ * and little else, and a parameter demanding fields the function never touches
+ * would have forced a cast at the one call site that matters most.
+ *
  * Checked before publishing rather than inside the policy so an outbox row is
  * never written for a delivery that can never produce a message. The row would
  * be claimed, expanded into nothing and marked published — work, a lock and a
  * log line, forever, for every delivery of every carrier that does not collect
  * customer contact details.
  */
-function hasSomebodyToTell(delivery: CustomerNoticeSource): boolean {
+function hasSomebodyToTell(delivery: {
+  recipient_email?: string | null;
+  recipient_telephone?: string | null;
+}): boolean {
   return Boolean(delivery.recipient_email || delivery.recipient_telephone);
 }
 

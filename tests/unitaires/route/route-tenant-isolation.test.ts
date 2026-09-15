@@ -145,6 +145,7 @@ function makeContext() {
       userRepository,
       vehicleRepository,
       notificationService,
+      outboxStub,
     ),
     cancel: new CancelRouteUseCase(
       routeRepository,

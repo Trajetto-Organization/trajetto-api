@@ -216,6 +216,7 @@ function makeContext() {
       userRepository,
       vehicleRepository,
       notificationService,
+      outboxStub,
     ),
     cancel: new CancelRouteUseCase(
       routeRepository,
@@ -272,11 +273,12 @@ function makeContext() {
       vehicleRepository,
       routeRepository,
       new StartRouteUseCase(
-        routeRepository,
-        userRepository,
-        vehicleRepository,
-        notificationService,
-      ),
+      routeRepository,
+      userRepository,
+      vehicleRepository,
+      notificationService,
+      outboxStub,
+    ),
       notificationService,
     ),
   };

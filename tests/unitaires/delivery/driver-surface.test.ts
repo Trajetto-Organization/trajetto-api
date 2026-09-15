@@ -222,6 +222,7 @@ function makeStartRoute(repos: ReturnType<typeof makeRepositories>) {
       repos.userRepository,
       repos.vehicleRepository,
       notificationStub,
+      outboxStub,
     ),
     notificationStub,
   );

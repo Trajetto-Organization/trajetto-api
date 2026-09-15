@@ -53,6 +53,16 @@ const routeInclude = {
           street: true,
           address_number: true,
           neighborhood: true,
+
+          // Carried so the departure can tell the people waiting. Two
+          // nullable columns on a read the panel already does, rather than a
+          // second query per stop when a forty-stop route leaves the yard.
+          recipient_email: true,
+          recipient_telephone: true,
+          invoice_number: true,
+          code: true,
+          scheduled_date: true,
+          businessId: true,
         },
       },
     },

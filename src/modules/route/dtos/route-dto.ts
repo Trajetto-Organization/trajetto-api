@@ -108,6 +108,16 @@ interface RouteStopWithDelivery extends RouteStop {
     kind: string;
     status: string;
     recipient_name: string;
+
+    /** Carried so a departure can tell the people waiting. */
+    recipient_email?: string | null;
+    recipient_telephone?: string | null;
+
+    invoice_number?: string | null;
+    code?: string | null;
+
+    scheduled_date?: Date | string | null;
+    businessId?: string;
     city: string;
     uf: string;
     street: string;

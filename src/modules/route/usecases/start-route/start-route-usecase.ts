@@ -8,6 +8,15 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { sendRouteEventToBusiness } from "@/websocket";
 import { AppError } from "@/shared/errors/AppError";
 
+import database from "@/../infra/database";
+
+import { OutboxService } from "@/shared/notifications/outbox-service";
+
+import {
+  buildDeliveryCustomerPayload,
+  hasSomebodyToTell,
+} from "@/shared/delivery/customer-notice";
+
 import { canTransitionRoute } from "@/shared/route/route-rules";
 import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 
@@ -56,6 +65,8 @@ class StartRouteUseCase {
     private vehicle: IVehicleRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
 
   async execute({
@@ -123,11 +134,50 @@ class StartRouteUseCase {
     }
 
     try {
-      const started = await this.route.transitionRoute(routeId, businessId, {
-        expectedStatus: findRoute.status,
-        status: "IN_PROGRESS",
-        vehicleId: departingVehicleId,
-        started_at: new Date(),
+      // The transition and the "saiu para entrega" messages commit together.
+      // A truck that left with the customers never told is the state this
+      // exists to prevent, and a route departs once — there is no second
+      // chance to publish.
+      const started = await database.$transaction(async (tx) => {
+        const moved = await this.route.transitionRoute(
+          routeId,
+          businessId,
+          {
+            expectedStatus: findRoute.status,
+            status: "IN_PROGRESS",
+            vehicleId: departingVehicleId,
+            started_at: new Date(),
+          },
+          tx,
+        );
+
+        for (const stop of findRoute.stops) {
+          const delivery = stop.delivery;
+
+          // Most deliveries carry neither an e-mail nor a phone for the person
+          // receiving them. Checked here so no outbox row is written that
+          // could only ever expand into nothing — a forty-stop route would
+          // otherwise queue forty rows to be claimed, expanded and discarded.
+          if (!delivery || !hasSomebodyToTell(delivery)) continue;
+
+          await this.outbox.publish(tx, {
+            topic: "delivery.dispatched",
+            aggregateType: "delivery",
+            aggregateId: delivery.id,
+            businessId,
+            actorId: userId,
+            payload: buildDeliveryCustomerPayload(delivery.id, {
+              ...delivery,
+
+              // From the route, which is already scoped, rather than from the
+              // stop's select: the delivery of a route is by construction a
+              // delivery of that route's company.
+              businessId,
+            }),
+          });
+        }
+
+        return moved;
       });
 
       // The control tower is watching for exactly this. No push: nobody needs

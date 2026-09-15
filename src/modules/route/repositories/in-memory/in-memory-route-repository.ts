@@ -72,6 +72,22 @@ interface DeliveryMirror {
   kind?: string;
   status?: string;
   recipient_name?: string;
+
+  /**
+   * The contact details a departure needs to tell the person waiting.
+   *
+   * Carried here because the real repository's stop projection carries them:
+   * a fake that dropped them would let a test prove the departure notifies
+   * nobody, when in fact it notifies everybody — the one direction a fake must
+   * never be wrong in.
+   */
+  recipient_email?: string | null;
+  recipient_telephone?: string | null;
+
+  invoice_number?: string | null;
+  code?: string | null;
+
+  scheduled_date?: Date | string | null;
 }
 
 class InMemoryRouteRepository implements IRouteRepository {
@@ -182,6 +198,16 @@ class InMemoryRouteRepository implements IRouteRepository {
             kind: delivery?.kind ?? "DELIVERY",
             status: delivery?.status ?? "PENDING",
             recipient_name: delivery?.recipient_name ?? "Destinatário",
+
+            recipient_email: delivery?.recipient_email ?? null,
+            recipient_telephone: delivery?.recipient_telephone ?? null,
+
+            invoice_number: delivery?.invoice_number ?? null,
+            code: delivery?.code ?? null,
+
+            scheduled_date: delivery?.scheduled_date ?? null,
+            businessId: delivery?.businessId,
+
             city: "São Paulo",
             uf: "SP",
             street: "Rua das Entregas",
