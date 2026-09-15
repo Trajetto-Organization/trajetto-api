@@ -37,8 +37,23 @@ const verifyProofParamsSchema = z.object({
     .regex(/^[0-9a-f]{64}$/, "Código de verificação inválido."),
 });
 
+/**
+ * The same 64 hex characters, for the tracking and opt-out links.
+ *
+ * Shares the shape check with the verification token on purpose: both are 32
+ * random bytes, both are the only thing standing between a forwarded link and
+ * somebody else's delivery, and a public endpoint that forwards arbitrary
+ * strings to a lookup is one somebody will use to measure timing.
+ */
+const publicTokenParamsSchema = z.object({
+  token: z
+    .string({ required_error: "Código de acompanhamento é obrigatório!" })
+    .regex(/^[0-9a-f]{64}$/, "Código de acompanhamento inválido."),
+});
+
 export {
   proofDocumentParamsSchema,
   proofDocumentQuerySchema,
+  publicTokenParamsSchema,
   verifyProofParamsSchema,
 };

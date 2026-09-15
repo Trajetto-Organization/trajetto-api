@@ -2,12 +2,18 @@ import { FastifyInstance } from "fastify";
 
 import { VerifyProofDocumentController } from "@/modules/delivery/usecases/verify-proof-document/verify-proof-document-controller";
 
+import { TrackDeliveryController } from "@/modules/delivery/usecases/track-delivery/track-delivery-controller";
+import { OptOutTrackingController } from "@/modules/delivery/usecases/opt-out-tracking/opt-out-tracking-controller";
+
 import {
   proofDocumentSchemas,
   proofDocumentResponses,
 } from "./documentation/proof-document-documentation";
 
 const verifyProofDocumentController = new VerifyProofDocumentController();
+
+const trackDeliveryController = new TrackDeliveryController();
+const optOutTrackingController = new OptOutTrackingController();
 
 /**
  * What the product answers to somebody with no account.
@@ -52,6 +58,52 @@ async function publicRoutes(app: FastifyInstance) {
       },
     },
     verifyProofDocumentController.handle,
+  );
+  app.get(
+    "/track/:token",
+    {
+      config: {
+        rateLimit: { max: 60, timeWindow: "1 minute" },
+      },
+      schema: {
+        tags: ["public"],
+        summary: "Follow a delivery from the link the carrier sent",
+        description:
+          "Portal do destinatário. Sem login: o link é a autorização, e ele é encaminhado em grupo de família — por isso a resposta é escrita como uma SUBTRAÇÃO. Fica de fora tudo que é da operação: nome e telefone do motorista, placa, rota, outras paradas, embarcador e qualquer anotação interna. Sobra a resposta para a única pergunta que o destinatário tem, que é onde está a carga dele e quando chega. O tipo da ocorrência atravessa (\"destinatário ausente\" é o que ele precisa ouvir); a descrição livre não, porque é escrita por um motorista na rua, para o escritório.",
+        params: proofDocumentSchemas.publicTokenParams,
+        response: {
+          200: proofDocumentResponses.tracking,
+          400: proofDocumentResponses.genericError,
+          404: proofDocumentResponses.genericError,
+          429: proofDocumentResponses.genericError,
+          500: proofDocumentResponses.internalServerError,
+        },
+      },
+    },
+    trackDeliveryController.handle,
+  );
+
+  app.post(
+    "/track/:token/opt-out",
+    {
+      config: {
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      schema: {
+        tags: ["public"],
+        summary: "Stop receiving messages about this delivery",
+        description:
+          "Um clique a partir da própria mensagem, sem login — pedir que alguém se autentique para ser deixado em paz é como uma empresa ganha denúncia de spam. Responde a mesma frase com token válido ou não: uma resposta diferente transformaria isto num oráculo de quais links existem.",
+        params: proofDocumentSchemas.publicTokenParams,
+        response: {
+          200: proofDocumentResponses.optedOut,
+          400: proofDocumentResponses.genericError,
+          429: proofDocumentResponses.genericError,
+          500: proofDocumentResponses.internalServerError,
+        },
+      },
+    },
+    optOutTrackingController.handle,
   );
 }
 

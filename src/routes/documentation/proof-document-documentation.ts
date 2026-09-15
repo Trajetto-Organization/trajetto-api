@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   proofDocumentParamsSchema,
   proofDocumentQuerySchema,
+  publicTokenParamsSchema,
   verifyProofParamsSchema,
 } from "@/schemas/proof-document-schema";
 
@@ -12,6 +13,7 @@ const proofDocumentSchemas = {
   proofDocumentParams: proofDocumentParamsSchema,
   proofDocumentQuery: proofDocumentQuerySchema,
   verifyProofParams: verifyProofParamsSchema,
+  publicTokenParams: publicTokenParamsSchema,
 };
 
 const proofDocumentResponses = {
@@ -76,6 +78,44 @@ const proofDocumentResponses = {
       url: z.string().nullable(),
     }),
   }),
+
+  tracking: z.object({
+    message: z.string(),
+    data: z.object({
+      recipientName: z.string(),
+      city: z.string(),
+      uf: z.string(),
+
+      status: z.string(),
+      statusLabel: z.string(),
+
+      invoiceNumber: z.string().nullable(),
+      code: z.string().nullable(),
+
+      scheduledDate: isoDateTime.nullable(),
+      deliveredAt: isoDateTime.nullable(),
+      receivedBy: z.string().nullable(),
+
+      carrierName: z.string(),
+
+      events: z.array(
+        z.object({
+          at: isoDateTime,
+          title: z.string(),
+          detail: z.string().nullable(),
+        }),
+      ),
+
+      proofUrl: z
+        .string()
+        .nullable()
+        .describe(
+          "A página pública de verificação, não o arquivo. Uma porta só, uma história só sobre o documento ser legítimo.",
+        ),
+    }),
+  }),
+
+  optedOut: z.object({ message: z.string() }),
 
   genericError: z.object({ message: z.string() }),
   internalServerError: z.object({

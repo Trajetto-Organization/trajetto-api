@@ -339,3 +339,129 @@ describe("the page the QR code lands on", () => {
     expect(response.statusCode).toBe(400);
   });
 });
+
+
+describe("the link the customer receives", () => {
+  /**
+   * The portal, over real HTTP. The privacy rules are proven field by field in
+   * the unit suite; what only this can prove is that the endpoint is WIRED
+   * without a session — that the token really is the whole authorisation, and
+   * that nothing in the stack quietly requires a bearer.
+   */
+  async function seedRecipient(deliveryId: string): Promise<string> {
+    // Upsert with a fresh token: a delivery has at most one recipient row —
+    // the unique key is the whole point, since a second row would mean a
+    // second link and the customer's first one going dark halfway through.
+    const access_token =
+      randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+
+    const recipient = await prisma.externalRecipient.upsert({
+      where: { deliveryId },
+      create: {
+        deliveryId,
+        businessId: CARRIER,
+        name: "Maria Souza",
+        email: "maria@exemplo.com.br",
+        telephone: "11999999999",
+        access_token,
+      },
+      update: { access_token, opted_out_at: null },
+    });
+
+    return recipient.access_token;
+  }
+
+  it("opens with no login at all", async () => {
+    const token = await seedRecipient(pendingId);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/public/track/${token}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const { data } = response.json();
+
+    expect(data.recipientName).toBe("Ainda na rua");
+    expect(data.statusLabel).toBe("Pendente");
+  });
+
+  it("never carries the recipient's own contact details back out", async () => {
+    // The link is forwarded. The phone number the carrier holds on file is not
+    // the forwarder's to give away.
+    const token = await seedRecipient(pendingId);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/public/track/${token}`,
+    });
+
+    const body = JSON.stringify(response.json());
+
+    expect(body).not.toContain("11999999999");
+    expect(body).not.toContain("maria@exemplo.com.br");
+
+    expect(body).not.toContain(token);
+    expect(body).not.toContain(CARRIER);
+  });
+
+  it("answers the same 404 for a token nobody holds", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/public/track/${"c".repeat(64)}`,
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("lets somebody stop the messages without logging in", async () => {
+    // Asking a person to authenticate in order to be left alone is how a
+    // company earns a spam complaint.
+    const token = await seedRecipient(pendingId);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/public/track/${token}/opt-out`,
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const stored = await prisma.externalRecipient.findUniqueOrThrow({
+      where: { access_token: token },
+    });
+
+    expect(stored.opted_out_at).not.toBeNull();
+  });
+
+  it("answers the same sentence for a token that was never real", async () => {
+    // A different answer would turn this into an oracle for which links exist.
+    const real = await seedRecipient(pendingId);
+
+    const known = await app.inject({
+      method: "POST",
+      url: `/public/track/${real}/opt-out`,
+    });
+
+    const unknown = await app.inject({
+      method: "POST",
+      url: `/public/track/${"d".repeat(64)}/opt-out`,
+    });
+
+    expect(unknown.statusCode).toBe(known.statusCode);
+    expect(unknown.json().message).toBe(known.json().message);
+  });
+
+  it("shows the receipt link once the document exists", async () => {
+    await fetchProof(deliveredId);
+
+    const token = await seedRecipient(deliveredId);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/public/track/${token}`,
+    });
+
+    expect(response.json().data.proofUrl).toContain("/verificar/");
+  }, 60_000);
+});
