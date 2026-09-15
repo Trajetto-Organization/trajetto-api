@@ -23,6 +23,8 @@ import {
 } from "./policies/business-plan-policies";
 import { deliveryOccurrenceReportedPolicy } from "./policies/delivery-occurrence-policy";
 import { chatMessageSentPolicy } from "./policies/chat-message-policy";
+import { deliveryStatusOverriddenPolicy } from "./policies/delivery-status-policy";
+
 import {
   routeCancelledPolicy,
   routeReleasedPolicy,
@@ -66,6 +68,7 @@ const notificationPolicies: {
   "chat-message.sent": chatMessageSentPolicy,
   "route.released": routeReleasedPolicy,
   "route.cancelled": routeCancelledPolicy,
+  "delivery.status_overridden": deliveryStatusOverriddenPolicy,
 };
 
 function getNotificationPolicy(

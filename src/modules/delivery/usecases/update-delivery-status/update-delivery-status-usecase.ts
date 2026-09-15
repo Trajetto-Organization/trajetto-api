@@ -25,6 +25,10 @@ import {
 import { stopOutcomeForDelivery } from "@/shared/route/route-rules";
 
 import { announceStopSettled } from "@/shared/route/route-realtime";
+import { announceDeliveryOverride } from "@/shared/delivery/delivery-realtime";
+
+import { driverShouldHearOverride } from "@/shared/delivery/driver-worklist";
+import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { AppError } from "@/shared/errors/AppError";
 import { Delivery } from "../../dtos/delivery-dto";
@@ -65,6 +69,8 @@ class UpdateDeliveryStatusUseCase {
     private reason: IStatusChangeReasonRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
 
   async execute({
@@ -175,6 +181,45 @@ class UpdateDeliveryStatusUseCase {
           tx,
         );
 
+        // The driver loses — or gains — a stop, and their app is the last
+        // place to find out. Published in the SAME transaction as the change,
+        // because a push that survives a crash is the whole reason the outbox
+        // exists: the delivery is already cancelled in the database, and a
+        // driver who never heard is a driver standing at the address.
+        if (
+          driverShouldHearOverride({
+            from: findDelivery.status,
+            to: status,
+            driverId: findDelivery.driverId,
+          })
+        ) {
+          const driverUser = await this.user.findUserByDriverId(
+            findDelivery.driverId!,
+          );
+
+          await this.outbox.publish(tx, {
+            topic: "delivery.status_overridden",
+            aggregateType: "delivery",
+            aggregateId: deliveryId,
+            businessId,
+            actorId: userId,
+            payload: {
+              deliveryId,
+              businessId,
+              driverUserId: driverUser?.id ?? null,
+              recipientName: findDelivery.recipient_name,
+              addressLabel: [findDelivery.street, findDelivery.city]
+                .filter(Boolean)
+                .join(", "),
+              fromLabel: DELIVERY_STATUS_LABELS[findDelivery.status],
+              toLabel: DELIVERY_STATUS_LABELS[status],
+              reason: findReason.name,
+              note: note?.trim() || null,
+              removedFromWorklist: !["PENDING", "IN_TRANSIT"].includes(status),
+            },
+          });
+        }
+
         const outcome = stopOutcomeForDelivery(status, new Date());
 
         if (outcome) {
@@ -191,6 +236,30 @@ class UpdateDeliveryStatusUseCase {
 
       // The panel and the control tower are watching this stop.
       announceStopSettled(businessId, settled);
+
+      // And the driver's app, if it is open right now. Not redundant with the
+      // push above: the push reaches a phone in a pocket with the app closed,
+      // this reaches a screen the driver is looking at, in the second it
+      // happens. After the commit, always — an event about a write that rolled
+      // back is a lie the client cannot undo.
+      if (
+        driverShouldHearOverride({
+          from: findDelivery.status,
+          to: status,
+          driverId: findDelivery.driverId,
+        })
+      ) {
+        const driverUser = await this.user.findUserByDriverId(
+          findDelivery.driverId!,
+        );
+
+        announceDeliveryOverride(driverUser?.id ?? null, {
+          type: "delivery.status_overridden",
+          deliveryId,
+          status,
+          removedFromWorklist: !["PENDING", "IN_TRANSIT"].includes(status),
+        });
+      }
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

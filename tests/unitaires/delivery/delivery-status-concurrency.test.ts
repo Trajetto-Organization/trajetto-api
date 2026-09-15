@@ -8,6 +8,7 @@ import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/
 import { InMemoryStatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/in-memory/in-memory-status-change-reason-repository";
 
 import type { NotificationService } from "@/shared/services/notification-service";
+import type { OutboxService } from "@/shared/notifications/outbox-service";
 
 import type { User } from "@/modules/user/dtos/user-dto";
 import type {
@@ -63,6 +64,23 @@ function makeContext() {
     businessId: BUSINESS,
   });
 
+  /**
+   * Records instead of discarding: the outbox is the only way a use case is
+   * allowed to reach a driver's phone, so what it received IS the
+   * notification behaviour under test.
+   */
+  const published: Array<{ topic: string; payload: Record<string, unknown> }> =
+    [];
+
+  const outboxStub = {
+    publish: async (
+      _tx: unknown,
+      event: { topic: string; payload: Record<string, unknown> },
+    ) => {
+      published.push({ topic: event.topic, payload: event.payload });
+    },
+  } as unknown as OutboxService;
+
   const useCase = new UpdateDeliveryStatusUseCase(
     userRepository,
     deliveryRepository,
@@ -71,9 +89,10 @@ function makeContext() {
     {
       createActivityIfEnabled: async () => undefined,
     } as unknown as NotificationService,
+    outboxStub,
   );
 
-  return { useCase, deliveryRepository, routeRepository };
+  return { useCase, deliveryRepository, routeRepository, published };
 }
 
 /**

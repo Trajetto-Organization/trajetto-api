@@ -252,6 +252,7 @@ function makeContext() {
       routeRepository,
       reasonRepository,
       notificationService,
+      outboxStub,
     ),
 
     vehicleRepository,

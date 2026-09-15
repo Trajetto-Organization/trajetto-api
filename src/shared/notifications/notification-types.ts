@@ -309,6 +309,41 @@ interface RouteCancelledPayload {
   hadDeparted: boolean;
 }
 
+/**
+ * A dispatcher moved a delivery's status by hand, and it crossed the driver's
+ * working list.
+ *
+ * Only crossings are published — see `driverShouldHearOverride`. A move within
+ * the list changes nothing the driver can act on.
+ */
+interface DeliveryStatusOverriddenPayload {
+  deliveryId: string;
+  businessId: string;
+
+  /** Null means there is nobody to tell. */
+  driverUserId: string | null;
+
+  recipientName: string;
+
+  /** Street and city, so the driver recognises the stop without opening it. */
+  addressLabel: string;
+
+  fromLabel: string;
+  toLabel: string;
+
+  /** From the company's catalogue — always present on an override. */
+  reason: string;
+
+  /** What the operator typed at the moment of the change, when they typed. */
+  note: string | null;
+
+  /**
+   * True when the delivery LEFT the working list — the urgent case, because
+   * the driver may be on the way to an address that was just called off.
+   */
+  removedFromWorklist: boolean;
+}
+
 interface TopicPayloadMap {
   "fine.created": FineCreatedPayload;
   "vehicle-checklist.created": VehicleChecklistCreatedPayload;
@@ -331,6 +366,7 @@ interface TopicPayloadMap {
   "chat-message.sent": ChatMessageSentPayload;
   "route.released": RouteReleasedPayload;
   "route.cancelled": RouteCancelledPayload;
+  "delivery.status_overridden": DeliveryStatusOverriddenPayload;
 }
 
 type NotificationTopic = keyof TopicPayloadMap;
@@ -445,6 +481,7 @@ interface NotificationPolicyEntry<TPayload> {
 
 export type {
   RouteReleasedPayload,
+  DeliveryStatusOverriddenPayload,
   RouteCancelledPayload,
   FineCreatedPayload,
   VehicleChecklistCreatedPayload,

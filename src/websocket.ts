@@ -696,6 +696,29 @@ const sendRouteEventToDriver = (
   }
 };
 
+/**
+ * A delivery of the driver's changed under them, from the panel.
+ *
+ * Their own room only. The dispatcher's board already hears this through the
+ * route event and the listing it refetches; echoing it to the whole company
+ * would be a second frame saying what the first one said.
+ */
+const sendDeliveryEventToDriver = (
+  driverUserId: string | null,
+  event: {
+    type: "delivery.status_overridden";
+    deliveryId: string;
+    status: string;
+    removedFromWorklist: boolean;
+  },
+) => {
+  // Null is ordinary, not an error: operations register drivers before handing
+  // out phones, and that driver simply has no room to reach.
+  if (io && driverUserId) {
+    io.to(`user:${driverUserId}`).emit("deliveryEvent", event);
+  }
+};
+
 /** A read cursor advanced — the other side's checks turn double, live. */
 const sendChatReadEvent = (
   businessId: string,
@@ -801,6 +824,7 @@ export {
   sendChatReadEvent,
   sendChatDeliveredEvent,
   sendRouteEventToBusiness,
+  sendDeliveryEventToDriver,
   sendRouteEventToDriver,
   getOnlineUserIdsForBusiness,
 };

@@ -8,6 +8,7 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { InMemoryStatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/in-memory/in-memory-status-change-reason-repository";
 
 import type { NotificationService } from "@/shared/services/notification-service";
+import type { OutboxService } from "@/shared/notifications/outbox-service";
 
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps, Delivery } from "@/modules/delivery/dtos/delivery-dto";
@@ -41,6 +42,9 @@ const FOREIGN_REASON = "018f0000-0000-7000-8000-0000000000e3";
 
 const SHIPPER = "018f0000-0000-7000-8000-0000000000f1";
 
+const DRIVER = "018f0000-0000-7000-8000-0000000000d1";
+const DRIVER_USER = "018f0000-0000-7000-8000-0000000000a2";
+
 function makeContext() {
   const userRepository = new InMemoryUserRepository();
   const deliveryRepository = new InMemoryDeliveryRepository();
@@ -48,12 +52,24 @@ function makeContext() {
   const routeRepository = new InMemoryRouteRepository();
   const reasonRepository = new InMemoryStatusChangeReasonRepository();
 
-  userRepository.user.push({
-    id: OPERATOR,
-    name: "Operadora do SAC",
-    role: "BUSINESS_ADMIN",
-    businessId: BUSINESS,
-  } as User);
+  userRepository.user.push(
+    {
+      id: OPERATOR,
+      name: "Operadora do SAC",
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+    } as User,
+
+    // The person who is carrying the delivery, and whose phone is the whole
+    // point of the notification below.
+    {
+      id: DRIVER_USER,
+      name: "João Motorista",
+      role: "BUSINESS_USER",
+      businessId: BUSINESS,
+      driverId: DRIVER,
+    } as User,
+  );
 
   reasonRepository.statusChangeReasons.push(
     {
@@ -79,9 +95,30 @@ function makeContext() {
     },
   );
 
+  /**
+   * Records instead of discarding: the outbox is the only way a use case is
+   * allowed to reach a driver's phone, so what it received IS the
+   * notification behaviour under test.
+   */
+  const published: Array<{ topic: string; payload: Record<string, unknown> }> =
+    [];
+
+  const outboxStub = {
+    publish: async (
+      _tx: unknown,
+      event: { topic: string; payload: Record<string, unknown> },
+    ) => {
+      published.push({ topic: event.topic, payload: event.payload });
+    },
+  } as unknown as OutboxService;
+
   return {
+    userRepository,
     deliveryRepository,
+    routeRepository,
     reasonRepository,
+
+    published,
 
     setStatus: new UpdateDeliveryStatusUseCase(
       userRepository,
@@ -91,6 +128,7 @@ function makeContext() {
       {
         createActivityIfEnabled: async () => undefined,
       } as unknown as NotificationService,
+      outboxStub,
     ),
   };
 }
@@ -103,7 +141,9 @@ beforeEach(() => {
   context = makeContext();
 });
 
-async function seedDelivery(): Promise<Delivery & { id: string }> {
+async function seedDelivery(
+  overrides: Partial<CreateDeliveryProps> = {},
+): Promise<Delivery & { id: string }> {
   const created = await context.deliveryRepository.createDelivery({
     businessId: BUSINESS,
     shipperId: SHIPPER,
@@ -111,9 +151,17 @@ async function seedDelivery(): Promise<Delivery & { id: string }> {
     city: "São Paulo",
     uf: "SP",
     street: "Rua das Entregas",
+    ...overrides,
   } as CreateDeliveryProps);
 
   return created as Delivery & { id: string };
+}
+
+/** Everything the outbox was handed for the driver's phone. */
+function overrideNotices() {
+  return context.published.filter(
+    (event) => event.topic === "delivery.status_overridden",
+  );
 }
 
 /**
@@ -322,5 +370,147 @@ describe("what the override leaves behind", () => {
     ).rejects.toMatchObject({ code: "INVALID_STATUS_TRANSITION" });
 
     expect(context.deliveryRepository.events).toEqual([]);
+  });
+});
+
+
+describe("telling the driver their day changed", () => {
+  /**
+   * The gap this closes: the panel cancelled a delivery and the driver's app
+   * simply lost the row on the next sync. Nobody told them anything, and with
+   * a seven-day offline cache the stale row could sit on the phone for hours
+   * first. They drove to an address that had been called off.
+   */
+  it("publishes when a stop is taken off the driver's list", async () => {
+    const delivery = await seedDelivery({ driverId: DRIVER });
+
+    await context.setStatus.execute({
+      userId: OPERATOR,
+      businessId: BUSINESS,
+      deliveryId: delivery.id,
+      status: "CANCELLED",
+      reasonId: REASON,
+      note: "cliente ligou às 14h",
+    });
+
+    const [notice] = overrideNotices();
+
+    expect(notice).toBeDefined();
+
+    expect(notice.payload).toMatchObject({
+      deliveryId: delivery.id,
+      driverUserId: DRIVER_USER,
+      recipientName: "Destinatário",
+      fromLabel: "Pendente",
+      toLabel: "Cancelada",
+      reason: "Cliente cancelou por telefone",
+      note: "cliente ligou às 14h",
+      removedFromWorklist: true,
+    });
+  });
+
+  it("refuses the whole change when the driver cannot be told", async () => {
+    // The publish is AWAITED inside the transaction, not fired after it. If it
+    // were fire-and-forget, an outbox failure would leave the delivery
+    // cancelled in the database and the driver never told — which is the exact
+    // state this feature exists to prevent. Against Postgres the same throw
+    // rolls the status back; here what is proven is that it is on the critical
+    // path at all.
+    const delivery = await seedDelivery({ driverId: DRIVER });
+
+    const brittle = new UpdateDeliveryStatusUseCase(
+      context.userRepository,
+      context.deliveryRepository,
+      context.routeRepository,
+      context.reasonRepository,
+      {
+        createActivityIfEnabled: async () => undefined,
+      } as unknown as NotificationService,
+      {
+        publish: async () => {
+          throw new Error("outbox down");
+        },
+      } as unknown as OutboxService,
+    );
+
+    await expect(
+      brittle.execute({
+        userId: OPERATOR,
+        businessId: BUSINESS,
+        deliveryId: delivery.id,
+        status: "CANCELLED",
+        reasonId: REASON,
+      }),
+      // A 500 and not a 4xx: the request was well formed and allowed, the
+      // machinery failed. Asserting the status rather than a bare toThrow()
+      // matters — a use case that fell over on its way to the publish would
+      // satisfy "throws" and prove nothing.
+      //
+      // The fake cannot show the rollback (its array was already mutated);
+      // against Postgres the same throw takes the status back with it, which
+      // is the point of publishing inside the transaction.
+    ).rejects.toMatchObject({ statusCode: 500 });
+  });
+
+  it("stays quiet when the delivery has no driver", async () => {
+    const delivery = await seedDelivery();
+
+    await context.setStatus.execute({
+      userId: OPERATOR,
+      businessId: BUSINESS,
+      deliveryId: delivery.id,
+      status: "CANCELLED",
+      reasonId: REASON,
+    });
+
+    expect(overrideNotices()).toEqual([]);
+  });
+
+  it("stays quiet on a move that keeps the stop on the list", async () => {
+    // Marking a load as departed changes nothing the driver can act on, and
+    // a bell for every bookkeeping move is how a tray stops being read.
+    const delivery = await seedDelivery({ driverId: DRIVER });
+
+    await context.setStatus.execute({
+      userId: OPERATOR,
+      businessId: BUSINESS,
+      deliveryId: delivery.id,
+      status: "IN_TRANSIT",
+      reasonId: REASON,
+    });
+
+    expect(overrideNotices()).toEqual([]);
+  });
+
+  it("carries the address, so the driver recognises the stop", async () => {
+    const delivery = await seedDelivery({ driverId: DRIVER });
+
+    await context.setStatus.execute({
+      userId: OPERATOR,
+      businessId: BUSINESS,
+      deliveryId: delivery.id,
+      status: "CANCELLED",
+      reasonId: REASON,
+    });
+
+    expect(overrideNotices()[0].payload.addressLabel).toBe(
+      "Rua das Entregas, São Paulo",
+    );
+  });
+
+  it("publishes nothing when the override itself was refused", async () => {
+    const delivery = await seedDelivery({ driverId: DRIVER });
+
+    await expect(
+      context.setStatus.execute({
+        userId: OPERATOR,
+        businessId: BUSINESS,
+        deliveryId: delivery.id,
+        status: "CANCELLED",
+        reasonId: RETIRED_REASON,
+      }),
+    ).rejects.toMatchObject({ code: "STATUS_CHANGE_REASON_INACTIVE" });
+
+    expect(overrideNotices()).toEqual([]);
   });
 });
