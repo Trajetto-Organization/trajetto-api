@@ -39,6 +39,7 @@ const A = "018f0000-0000-7000-8000-00000000000a";
 const B = "018f0000-0000-7000-8000-00000000000b";
 
 const DISPATCHER_A = "018f0000-0000-7000-8000-0000000000a1";
+const DISPATCHER_B = "018f0000-0000-7000-8000-0000000000b1";
 const DRIVER_USER_A = "018f0000-0000-7000-8000-0000000000a2";
 const DRIVER_USER_B = "018f0000-0000-7000-8000-0000000000b2";
 
@@ -62,6 +63,7 @@ function makeContext() {
 
   userRepository.user.push(
     { id: DISPATCHER_A, role: "BUSINESS_ADMIN", businessId: A } as User,
+    { id: DISPATCHER_B, role: "BUSINESS_ADMIN", businessId: B } as User,
     {
       id: DRIVER_USER_A,
       role: "BUSINESS_USER",
@@ -109,6 +111,7 @@ function makeContext() {
 
     create: new CreateRouteUseCase(
       routeRepository,
+      userRepository,
       deliveryRepository,
       driverRepository,
       vehicleRepository,
@@ -116,6 +119,7 @@ function makeContext() {
     ),
     release: new ReleaseRouteUseCase(
       routeRepository,
+      userRepository,
       driverRepository,
       notificationService,
     ),
@@ -125,9 +129,10 @@ function makeContext() {
       vehicleRepository,
       notificationService,
     ),
-    cancel: new CancelRouteUseCase(routeRepository, notificationService),
+    cancel: new CancelRouteUseCase(routeRepository, userRepository, notificationService),
     update: new UpdateRouteUseCase(
       routeRepository,
+      userRepository,
       driverRepository,
       vehicleRepository,
       notificationService,
@@ -260,7 +265,7 @@ describe("acting on the other carrier's route", () => {
 
     await expect(
       context.release.execute({
-        userId: "any-user-of-b",
+        userId: DISPATCHER_B,
         businessId: B,
         routeId: route.id,
       }),
@@ -274,7 +279,7 @@ describe("acting on the other carrier's route", () => {
 
     await expect(
       context.cancel.execute({
-        userId: "any-user-of-b",
+        userId: DISPATCHER_B,
         businessId: B,
         routeId: route.id,
         reason: "sabotagem",
@@ -290,7 +295,7 @@ describe("acting on the other carrier's route", () => {
 
     await expect(
       context.update.execute({
-        userId: "any-user-of-b",
+        userId: DISPATCHER_B,
         businessId: B,
         routeId: route.id,
         name: "sequestrada",

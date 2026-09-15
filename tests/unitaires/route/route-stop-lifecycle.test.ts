@@ -163,6 +163,7 @@ function makeContext() {
 
     create: new CreateRouteUseCase(
       routeRepository,
+      userRepository,
       deliveryRepository,
       driverRepository,
       vehicleRepository,
@@ -170,6 +171,7 @@ function makeContext() {
     ),
     release: new ReleaseRouteUseCase(
       routeRepository,
+      userRepository,
       driverRepository,
       notificationService,
     ),
@@ -179,7 +181,7 @@ function makeContext() {
       vehicleRepository,
       notificationService,
     ),
-    cancel: new CancelRouteUseCase(routeRepository, notificationService),
+    cancel: new CancelRouteUseCase(routeRepository, userRepository, notificationService),
 
     arrival: new RegisterDeliveryArrivalUseCase(
       userRepository,

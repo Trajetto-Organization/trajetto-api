@@ -96,6 +96,7 @@ function makeContext() {
 
     create: new CreateRouteUseCase(
       routeRepository,
+      userRepository,
       deliveryRepository,
       driverRepository,
       vehicleRepository,
@@ -103,6 +104,7 @@ function makeContext() {
     ),
     release: new ReleaseRouteUseCase(
       routeRepository,
+      userRepository,
       driverRepository,
       notificationService,
     ),
@@ -115,11 +117,12 @@ function makeContext() {
 
     addStops: new AddRouteStopsUseCase(
       routeRepository,
+      userRepository,
       deliveryRepository,
       notificationService,
     ),
-    removeStop: new RemoveRouteStopUseCase(routeRepository, notificationService),
-    reorder: new ReorderRouteStopsUseCase(routeRepository, notificationService),
+    removeStop: new RemoveRouteStopUseCase(routeRepository, userRepository, notificationService),
+    reorder: new ReorderRouteStopsUseCase(routeRepository, userRepository, notificationService),
 
     get: new GetRouteUseCase(routeRepository, userRepository),
     list: new ListRoutesUseCase(routeRepository, userRepository),

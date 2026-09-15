@@ -29,6 +29,7 @@ import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
 import { AppError } from "@/shared/errors/AppError";
+import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { Delivery, UpdateDeliveryProps } from "../../dtos/delivery-dto";
 
 interface UpdateDeliveryRequest {
@@ -65,16 +66,8 @@ class UpdateDeliveryUseCase {
       throw new ResourceNotFoundError();
     }
 
-    // Dispatcher-only: the driver permission table opens delivery_manage so
-    // the app's own routes work, which would otherwise open management too.
-    // Creating, editing, importing and assigning belong to the dispatcher.
-    if (findUser.driverId) {
-      throw new AppError(
-        "Motoristas não gerenciam entregas: criação, edição e atribuição são do despachante.",
-        403,
-        "DRIVER_CANNOT_MANAGE_DELIVERIES",
-      );
-    }
+    // One definition, shared: see assertDispatcher.
+    assertDispatcher(findUser);
 
     const findDelivery = await this.delivery.findDeliveryById(deliveryId);
 

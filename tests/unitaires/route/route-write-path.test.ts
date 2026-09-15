@@ -99,6 +99,7 @@ function makeContext() {
 
     create: new CreateRouteUseCase(
       routeRepository,
+      userRepository,
       deliveryRepository,
       driverRepository,
       vehicleRepository,
@@ -106,6 +107,7 @@ function makeContext() {
     ),
     release: new ReleaseRouteUseCase(
       routeRepository,
+      userRepository,
       driverRepository,
       notificationService,
     ),
@@ -115,9 +117,10 @@ function makeContext() {
       vehicleRepository,
       notificationService,
     ),
-    cancel: new CancelRouteUseCase(routeRepository, notificationService),
+    cancel: new CancelRouteUseCase(routeRepository, userRepository, notificationService),
     update: new UpdateRouteUseCase(
       routeRepository,
+      userRepository,
       driverRepository,
       vehicleRepository,
       notificationService,
@@ -646,7 +649,7 @@ describe("two surfaces acting on the same route at once", () => {
       routeId: route.id,
     });
 
-    const [departure, cancellation] = await Promise.allSettled([
+    await Promise.allSettled([
       context.start.execute({
         userId: DRIVER_USER,
         businessId: BUSINESS,
@@ -660,15 +663,70 @@ describe("two surfaces acting on the same route at once", () => {
       }),
     ]);
 
-    // Whichever won, the route holds exactly one of the two outcomes — never
-    // a cancelled route stamped with a departure time.
+    const stored = context.routeRepository.routes[0];
+
+    // Deliberately NOT "exactly one of them failed". Both succeeding is a
+    // correct outcome and a real one: the driver left, and the dispatcher then
+    // cancelled the route out from under them, which the state machine allows
+    // on purpose — a truck that breaks down after leaving has to be callable
+    // off. Asserting one rejection would be asserting a particular
+    // interleaving, and a test that pins the scheduler breaks on any refactor
+    // that adds an await without changing a single rule.
+    //
+    // What must hold whatever the order is that the route lands on ONE
+    // coherent state.
+    expect(["IN_PROGRESS", "CANCELLED"]).toContain(stored.status);
+
+    if (stored.status === "CANCELLED") {
+      expect(stored.cancellation_reason).toBe("Cliente cancelou o pedido");
+    } else {
+      // A route still running was never cancelled, so it carries no reason.
+      expect(stored.cancellation_reason).toBeNull();
+      expect(stored.started_at).not.toBeNull();
+    }
+  });
+
+  it("lets exactly one of two writes from the SAME read land", async () => {
+    // The guarantee the test above cannot express, at the layer that gives it:
+    // both callers validated against RELEASED, so both send it as the expected
+    // status. The `where` matches for one of them and matches nothing for the
+    // other — one passes, one loses, and neither leaves a half-written route.
+    const delivery = await seedDelivery(context);
+    const route = await createRoute(context, [delivery]);
+
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId: route.id,
+    });
+
+    const [departure, cancellation] = await Promise.allSettled([
+      context.routeRepository.transitionRoute(route.id, BUSINESS, {
+        expectedStatus: "RELEASED",
+        status: "IN_PROGRESS",
+        started_at: new Date(),
+      }),
+      context.routeRepository.transitionRoute(route.id, BUSINESS, {
+        expectedStatus: "RELEASED",
+        status: "CANCELLED",
+        cancellation_reason: "Cliente cancelou o pedido",
+      }),
+    ]);
+
     expect([departure.status, cancellation.status].sort()).toEqual([
       "fulfilled",
       "rejected",
     ]);
 
     const stored = context.routeRepository.routes[0];
-    expect(["IN_PROGRESS", "CANCELLED"]).toContain(stored.status);
+
+    // Never a cancelled route stamped with a departure time, or the reverse.
+    if (stored.status === "IN_PROGRESS") {
+      expect(stored.cancellation_reason).toBeNull();
+    } else {
+      expect(stored.status).toBe("CANCELLED");
+      expect(stored.started_at).toBeNull();
+    }
   });
 });
 

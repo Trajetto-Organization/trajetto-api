@@ -25,6 +25,7 @@ import {
 } from "../errors/delivery-errors";
 
 import { AppError } from "@/shared/errors/AppError";
+import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 
 interface AssignDeliveriesRequest {
@@ -76,16 +77,8 @@ class AssignDeliveriesUseCase {
       throw new ResourceNotFoundError();
     }
 
-    // Dispatcher-only: the driver permission table opens delivery_manage so
-    // the app's own routes work, which would otherwise open management too.
-    // Creating, editing, importing and assigning belong to the dispatcher.
-    if (findUser.driverId) {
-      throw new AppError(
-        "Motoristas não gerenciam entregas: criação, edição e atribuição são do despachante.",
-        403,
-        "DRIVER_CANNOT_MANAGE_DELIVERIES",
-      );
-    }
+    // One definition, shared: see assertDispatcher.
+    assertDispatcher(findUser);
 
     const findDriver = await this.driver.findDriverById(driverId);
 

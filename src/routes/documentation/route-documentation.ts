@@ -24,16 +24,27 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
  * the 409s come from write preconditions that refuse rather than overwrite,
  * the 404s cover "does not exist" AND "belongs to another company" because the
  * scoped reads cannot tell them apart on purpose, and the 429 appears only on
- * the two routes that carry a rate limit. A documented status nobody can
+ * the one route that carries a rate limit. A documented status nobody can
  * trigger is worse than an undocumented one — it sends a client down a branch
  * that never runs.
  */
+
+/**
+ * Prisma hands back `Date` objects and the zod serializer validates what the
+ * handler actually passes, so a plain `z.string()` here rejects the route's
+ * own real payload with a 500 — the documentation would be describing a
+ * response the API cannot produce. Accepting both is what the wire carries:
+ * `JSON.stringify` turns a Date into an ISO-8601 string. Same shape the
+ * account-payable and driver documents already use.
+ */
+const isoDateTime = z.union([z.string(), z.date()]);
+
 const routeStopEntity = z.object({
   id: z.string(),
   sequence: z.number().describe("Ordem manual, espaçada de dez."),
   status: routeStopStatusEnum,
-  arrived_at: z.string().nullable(),
-  completed_at: z.string().nullable(),
+  arrived_at: isoDateTime.nullable(),
+  completed_at: isoDateTime.nullable(),
   deliveryId: z.string(),
   delivery: z.object({
     id: z.string(),
@@ -53,11 +64,11 @@ const routeEntity = z.object({
   code: z.number().describe("Número sequencial por empresa."),
   name: z.string().nullable(),
   status: routeStatusEnum,
-  scheduled_date: z.string(),
-  planned_departure_at: z.string().nullable(),
-  planned_arrival_at: z.string().nullable(),
-  started_at: z.string().nullable(),
-  completed_at: z.string().nullable(),
+  scheduled_date: isoDateTime,
+  planned_departure_at: isoDateTime.nullable(),
+  planned_arrival_at: isoDateTime.nullable(),
+  started_at: isoDateTime.nullable(),
+  completed_at: isoDateTime.nullable(),
   cancellation_reason: z.string().nullable(),
   driverId: z.string(),
   vehicleId: z.string().nullable(),
@@ -66,8 +77,8 @@ const routeEntity = z.object({
     .object({ id: z.string(), license_plate: z.string() })
     .nullable(),
   stops: z.array(routeStopEntity),
-  created_at: z.string(),
-  updated_at: z.string(),
+  created_at: isoDateTime,
+  updated_at: isoDateTime,
 });
 
 const routeSchemas = {
@@ -125,7 +136,7 @@ const routeResponses = {
   routeReleased: z.object({ message: z.string() }),
   routeStarted: z.object({
     message: z.string().default("Rota iniciada!"),
-    data: z.object({ id: z.string(), started_at: z.string().nullable() }),
+    data: z.object({ id: z.string(), started_at: isoDateTime.nullable() }),
   }),
   routeCancelled: z.object({ message: z.string().default("Rota cancelada.") }),
 

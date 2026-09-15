@@ -1,6 +1,9 @@
 import { inject, injectable } from "tsyringe";
 
 import { IRouteRepository } from "../../repositories/IRoute-repository";
+import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+
+import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { AppError } from "@/shared/errors/AppError";
@@ -37,6 +40,8 @@ class ReorderRouteStopsUseCase {
   constructor(
     @inject("RouteRepository")
     private route: IRouteRepository,
+    @inject("UserRepository")
+    private user: IUserRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -47,6 +52,11 @@ class ReorderRouteStopsUseCase {
     routeId,
     orderedStopIds,
   }: ReorderRouteStopsRequest): Promise<void> {
+    // Planning is the dispatcher's job, and `delivery_manage` is open to
+    // drivers so the app's own surface works — so the permission says yes
+    // and this says no.
+    await assertRouteDispatcher(this.user, userId);
+
     const findRoute = await this.route.findRouteById(routeId, businessId);
 
     if (!findRoute) throw new AppError(new RouteNotFoundError().message, 404);

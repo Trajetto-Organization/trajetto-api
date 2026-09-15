@@ -1,8 +1,11 @@
 import { inject, injectable } from "tsyringe";
 
 import { IRouteRepository } from "../../repositories/IRoute-repository";
+import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
+
+import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { AppError } from "@/shared/errors/AppError";
@@ -54,6 +57,8 @@ class UpdateRouteUseCase {
   constructor(
     @inject("RouteRepository")
     private route: IRouteRepository,
+    @inject("UserRepository")
+    private user: IUserRepository,
     @inject("DriverRepository")
     private driver: IDriverRepository,
     @inject("VehicleRepository")
@@ -70,6 +75,11 @@ class UpdateRouteUseCase {
     vehicleId,
     ...fields
   }: UpdateRouteRequest): Promise<Route> {
+    // Planning is the dispatcher's job, and `delivery_manage` is open to
+    // drivers so the app's own surface works — so the permission says yes
+    // and this says no.
+    await assertRouteDispatcher(this.user, userId);
+
     const findRoute = await this.route.findRouteById(routeId, businessId);
 
     // Scoped read: another company's route reads as absent.
