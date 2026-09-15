@@ -38,7 +38,10 @@ interface DeliveryAssignmentPatch {
 }
 
 interface IDeliveryRepository {
-  createDelivery: (deliveryData: CreateDeliveryProps) => Promise<Delivery>;
+  createDelivery: (
+    deliveryData: CreateDeliveryProps,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<Delivery>;
   listDeliveries: (props: ListDeliveriesProps) => Promise<ListDeliveriesResult>;
   findDeliveryById: (deliveryId: string) => Promise<Delivery | null>;
   countDeliveriesByStatus: (
@@ -72,6 +75,7 @@ interface IDeliveryRepository {
   assignDeliveries: (
     deliveryIds: string[],
     assignment: DeliveryAssignmentPatch,
+    tx?: Prisma.TransactionClient,
   ) => Promise<void>;
   createOccurrence: (
     occurrenceData: CreateOccurrenceProps,

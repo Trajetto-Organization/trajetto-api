@@ -40,6 +40,13 @@ function announceStopSettled(
       routeCode: settled.closedRoute.code,
     } satisfies RouteRealtimeEvent);
   }
+
+  // The customers' systems hear about the same closure through
+  // `announceRouteClosed`, which each of the four call sites invokes with its
+  // own injected fan-out service. Sockets and webhooks are different
+  // lifetimes — one is a frame nobody retries, the other a queued row that
+  // must share the caller's commit — and a function doing both would have to
+  // be async for the half that is, in a path where nothing else is.
 }
 
 export { announceStopSettled };

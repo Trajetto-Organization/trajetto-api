@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ReviewProofAuditUseCase } from "@/modules/delivery/usecases/review-proof-audit/review-proof-audit-usecase";
 import { ListProofAuditsUseCase } from "@/modules/delivery/usecases/list-proof-audits/list-proof-audits-usecase";
@@ -14,6 +14,22 @@ import type { UploadService } from "@/shared/services/upload-service";
 
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { ProofAuditSuggestion } from "@/modules/delivery/dtos/proof-audit-dto";
+
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+
+// The use cases now wrap their write and the webhook they announce in one
+// transaction. Against in-memory repositories the transaction is a plain
+// passthrough — what it proves here is that the event is queued in the same
+// unit of work, not that Postgres rolled anything back.
+vi.mock("@/../infra/database", () => ({
+  default: {
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}),
+  },
+}));
+
+
+// Nothing here asserts on webhooks; the use cases simply require one.
+const webhookStub = new InMemoryWebhookFanOutService();
 
 /**
  * A person's verdict on a receipt photo.
@@ -80,6 +96,7 @@ beforeEach(() => {
     deliveries,
     occurrenceTypes,
     notifications,
+    webhookStub.asService(),
   );
 
   list = new ListProofAuditsUseCase(users, audits, {

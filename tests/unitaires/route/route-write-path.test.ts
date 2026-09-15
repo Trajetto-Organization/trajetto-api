@@ -22,6 +22,11 @@ import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+
+// Nothing here asserts on webhooks; the use cases simply require one.
+const webhookStub = new InMemoryWebhookFanOutService();
+
 /**
  * Releasing and cancelling wrap the route write and its outbox event in one
  * database transaction — the driver's push must exist if and only if the write
@@ -139,6 +144,7 @@ function makeContext() {
       driverRepository,
       notificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
     start: new StartRouteUseCase(
       routeRepository,
@@ -146,12 +152,14 @@ function makeContext() {
       vehicleRepository,
       notificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
     cancel: new CancelRouteUseCase(
       routeRepository,
       userRepository,
       notificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
     update: new UpdateRouteUseCase(
       routeRepository,
@@ -212,6 +220,9 @@ let context: Context;
 
 beforeEach(() => {
   context = makeContext();
+
+  // Shared across the file, so a test that reads it has to start empty.
+  webhookStub.reset();
 });
 
 describe("creating a route", () => {
@@ -442,6 +453,22 @@ describe("releasing a route", () => {
     });
 
     expect(planned.status).toBe("PLANNED");
+
+    // The topic follows what happened, not the endpoint's name. This one use
+    // case does both directions, and announcing `route.released` for the
+    // pull-back would tell a customer's ERP to dispatch a load that just came
+    // off the board — with a payload claiming RELEASED over a row that says
+    // PLANNED.
+    expect(webhookStub.topics()).toEqual([
+      "route.released",
+      "route.unreleased",
+    ]);
+
+    expect(webhookStub.announced.at(-1)?.payload.status).toBe("PLANNED");
+
+    // And inside the write's own transaction, so a crash cannot leave the
+    // reversal in our database and absent from theirs.
+    expect(webhookStub.announced.at(-1)?.transactional).toBe(true);
   });
 });
 

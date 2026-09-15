@@ -32,6 +32,8 @@ import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 import type { OccurrenceType } from "@/modules/occurrence-type/dtos/occurrence-type-dto";
 
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+
 /**
  * The route and the deliveries on it, as one moving thing.
  *
@@ -117,6 +119,14 @@ function makeContext() {
       published.push({ topic: event.topic, payload: event.payload });
     },
   } as unknown as OutboxService;
+
+  /**
+   * Records too, and for a sharper reason: an integration that is told
+   * a route closed when it did not — or is never told when it did — is a
+   * customer's ERP left holding a truck that is already back at the
+   * depot. Fresh per context, so one test cannot read another's events.
+   */
+  const webhookStub = new InMemoryWebhookFanOutService();
 
   const deliveryRepository = new InMemoryDeliveryRepository();
 
@@ -210,6 +220,7 @@ function makeContext() {
 
   return {
     published,
+    webhookStub,
     routeRepository,
     deliveryRepository,
     userRepository,
@@ -229,6 +240,7 @@ function makeContext() {
       driverRepository,
       notificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
     start: new StartRouteUseCase(
       routeRepository,
@@ -236,12 +248,14 @@ function makeContext() {
       vehicleRepository,
       notificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
     cancel: new CancelRouteUseCase(
       routeRepository,
       userRepository,
       notificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
 
     arrival: new RegisterDeliveryArrivalUseCase(
@@ -249,6 +263,7 @@ function makeContext() {
       deliveryRepository,
       routeRepository,
       notificationService,
+      webhookStub.asService(),
     ),
     proof: new RegisterDeliveryProofUseCase(
       userRepository,
@@ -259,6 +274,7 @@ function makeContext() {
       proofAuditRepository,
       businessWithoutAI,
       uploadService,
+      webhookStub.asService(),
     ),
     occurrence: new ReportDeliveryOccurrenceUseCase(
       userRepository,
@@ -268,6 +284,7 @@ function makeContext() {
       notificationService,
       uploadService,
       outboxStub,
+      webhookStub.asService(),
     ),
     setStatus: new UpdateDeliveryStatusUseCase(
       userRepository,
@@ -276,6 +293,7 @@ function makeContext() {
       reasonRepository,
       notificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
 
     vehicleRepository,
@@ -294,12 +312,13 @@ function makeContext() {
       vehicleRepository,
       routeRepository,
       new StartRouteUseCase(
-      routeRepository,
-      userRepository,
-      vehicleRepository,
-      notificationService,
-      outboxStub,
-    ),
+        routeRepository,
+        userRepository,
+        vehicleRepository,
+        notificationService,
+        outboxStub,
+        webhookStub.asService(),
+      ),
       notificationService,
     ),
   };
@@ -1302,5 +1321,217 @@ describe("what the driver's phone is told, and what it is spared", () => {
     });
 
     expect(context.published[0].payload.driverUserId).toBeNull();
+  });
+});
+
+/**
+ * A route closes by ITSELF, on whichever stop happened to be last, and three
+ * different use cases can be that stop. Nobody pressed a button, so nobody is
+ * waiting for a response — which is exactly why the customer's ERP has to be
+ * told, and why "told from two of the three paths" is a bug that hides for
+ * months: the integration works, until the day a route ends on an insucesso.
+ *
+ * These assert the topic AND that it fires exactly once. A second
+ * `route.completed` for the same route is a subscriber reopening work it
+ * already closed.
+ */
+describe("what the customers' systems are told when a route ends", () => {
+  function closures() {
+    return context.webhookStub.forTopic("route.completed");
+  }
+
+  it("announces the closure when the last address is proved", async () => {
+    const delivery = await seedDelivery();
+    const route = await runningRoute([delivery]);
+
+    expect(closures()).toHaveLength(0);
+
+    await context.proof.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: delivery,
+      client_submission_id: submission(),
+      photo: "canhoto.jpg",
+    });
+
+    expect(closures()).toHaveLength(1);
+    expect(closures()[0].businessId).toBe(A);
+    expect(closures()[0].payload.route_id).toBe(route);
+
+    // The status a subscriber reads has to be the status the route ended on.
+    // Announcing the value it held before the write would have every ERP
+    // recording the truck as still out.
+    expect(closures()[0].payload.status).toBe("COMPLETED");
+    expect(closures()[0].payload.code).toBe(routeFor(route).code);
+  });
+
+  it("announces it when the last address ends in an insucesso", async () => {
+    const delivery = await seedDelivery(A, "Ausente");
+    const route = await runningRoute([delivery]);
+
+    await context.occurrence.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: delivery,
+      occurrenceTypeId: BLOCKING_TYPE,
+      description: "Ninguém atendeu",
+      client_submission_id: submission(),
+    });
+
+    expect(routeFor(route).status).toBe("COMPLETED");
+    expect(closures()).toHaveLength(1);
+    expect(closures()[0].payload.route_id).toBe(route);
+  });
+
+  it("announces it when the panel resolves the last address", async () => {
+    const delivery = await seedDelivery(A, "Desistiu");
+    const route = await runningRoute([delivery]);
+
+    await context.setStatus.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      deliveryId: delivery,
+      status: "CANCELLED",
+      reasonId: REASON,
+    });
+
+    expect(routeFor(route).status).toBe("COMPLETED");
+    expect(closures()).toHaveLength(1);
+    expect(closures()[0].payload.route_id).toBe(route);
+  });
+
+  it("says nothing while the route still has an address to work", async () => {
+    const first = await seedDelivery(A, "Cliente A");
+    const second = await seedDelivery(A, "Cliente B");
+
+    await runningRoute([first, second]);
+
+    await context.arrival.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: first,
+      client_submission_id: submission(),
+      latitude: -23.55,
+      longitude: -46.63,
+    });
+
+    await context.proof.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: first,
+      client_submission_id: submission(),
+      photo: "canhoto-1.jpg",
+    });
+
+    // One address down, one to go. A closure announced here is a truck the
+    // customer's system releases while it is still on the street.
+    expect(closures()).toHaveLength(0);
+
+    await context.proof.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: second,
+      client_submission_id: submission(),
+      photo: "canhoto-2.jpg",
+    });
+
+    expect(closures()).toHaveLength(1);
+  });
+
+  it("announces the closure once, not once per replayed submission", async () => {
+    const delivery = await seedDelivery();
+    const route = await runningRoute([delivery]);
+
+    const replayed = submission();
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await context.proof.execute({
+        userId: DRIVER_USER_A,
+        businessId: A,
+        deliveryId: delivery,
+        client_submission_id: replayed,
+        photo: "canhoto.jpg",
+      });
+    }
+
+    // The outbox on a phone with no signal resends. Idempotency has to reach
+    // the webhook too, or a customer's ERP sees three closures for one route.
+    expect(routeFor(route).status).toBe("COMPLETED");
+    expect(closures()).toHaveLength(1);
+  });
+
+  it("queues every event of a working day inside a transaction", async () => {
+    // The invariant, not one instance of it. Each site passes `tx` by hand,
+    // which means each site can forget — and the one that forgets is
+    // invisible until a replica dies between a commit and the row that was
+    // supposed to describe it. So the whole day is played and the whole
+    // ledger is checked.
+    const first = await seedDelivery(A, "Cliente A");
+    const second = await seedDelivery(A, "Ausente");
+
+    const route = await runningRoute([first, second]);
+
+    await context.arrival.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: first,
+      client_submission_id: submission(),
+      latitude: -23.55,
+      longitude: -46.63,
+    });
+
+    await context.setStatus.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      deliveryId: first,
+      status: "DELIVERED",
+      received_by: "Balcão",
+      reasonId: REASON,
+    });
+
+    await context.occurrence.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: second,
+      occurrenceTypeId: BLOCKING_TYPE,
+      description: "Ninguém atendeu",
+      client_submission_id: submission(),
+    });
+
+    expect(routeFor(route).status).toBe("COMPLETED");
+
+    // A day that announced nothing would pass an `every` over an empty list,
+    // which is the classic way this shape of test says nothing at all.
+    expect(context.webhookStub.announced.length).toBeGreaterThan(3);
+
+    const loose = context.webhookStub.announced.filter(
+      (event) => !event.transactional,
+    );
+
+    expect(
+      loose.map((event) => event.topic),
+      "Eventos enfileirados fora da transação da escrita que os originou",
+    ).toEqual([]);
+  });
+
+  it("announces the closure inside the write's transaction", async () => {
+    const delivery = await seedDelivery();
+
+    await runningRoute([delivery]);
+
+    await context.proof.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: delivery,
+      client_submission_id: submission(),
+      photo: "canhoto.jpg",
+    });
+
+    // The row that carries this event has to commit with the proof itself.
+    // Queued after the commit instead, a crash in between erases it, and the
+    // customer's ERP keeps a truck out on paper with nothing left to replay
+    // from. `WebhookFanOutService` is where that promise is kept; this is
+    // where it is checked from the outside.
+    expect(closures()[0].transactional).toBe(true);
   });
 });

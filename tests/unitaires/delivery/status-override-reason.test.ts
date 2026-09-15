@@ -13,6 +13,11 @@ import type { OutboxService } from "@/shared/notifications/outbox-service";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps, Delivery } from "@/modules/delivery/dtos/delivery-dto";
 
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+
+// Nothing here asserts on webhooks; the use cases simply require one.
+const webhookStub = new InMemoryWebhookFanOutService();
+
 /**
  * Moving a delivery by hand, and having to say why.
  *
@@ -129,6 +134,7 @@ function makeContext() {
         createActivityIfEnabled: async () => undefined,
       } as unknown as NotificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
   };
 }
@@ -431,6 +437,7 @@ describe("telling the driver their day changed", () => {
           throw new Error("outbox down");
         },
       } as unknown as OutboxService,
+      webhookStub.asService(),
     );
 
     await expect(

@@ -35,6 +35,12 @@ import { announceStopSettled } from "@/shared/route/route-realtime";
 
 import { AppError } from "@/shared/errors/AppError";
 
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import {
+  announceRouteClosed,
+  deliveryEventPayload,
+} from "@/shared/integration/announce";
+
 interface ReportOccurrenceRequest {
   userId: string;
   businessId: string;
@@ -64,6 +70,8 @@ class ReportDeliveryOccurrenceUseCase {
     private uploadService: UploadService,
     @inject("OutboxService")
     private outbox: OutboxService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -239,6 +247,28 @@ class ReportDeliveryOccurrenceUseCase {
             },
           });
         }
+
+        // The customers' systems. A typed occurrence is the one event a
+        // shipper actually asks to be told about — it is the answer to "why
+        // did my cargo not go in", and an integration that only hears about
+        // the outcome gets it hours later, from a person.
+        //
+        // In the SAME transaction as the occurrence, for the reason the outbox
+        // row above is: an event queued after the commit is an event a crash
+        // in between erases.
+        await this.webhooks.announce(
+          "occurrence.reported",
+          businessId,
+          {
+            ...deliveryEventPayload({ ...findDelivery, id: deliveryId }),
+            occurrence_type: findType.name,
+            blocks_delivery: findType.blocks_delivery,
+            description: description ?? null,
+          },
+          tx,
+        );
+
+        await announceRouteClosed(this.webhooks, businessId, settled, tx);
       });
 
       // The panel and the control tower are watching this stop.

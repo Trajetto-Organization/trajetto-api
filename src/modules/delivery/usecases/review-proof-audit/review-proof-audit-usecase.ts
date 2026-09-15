@@ -1,5 +1,7 @@
 import { inject, injectable } from "tsyringe";
 
+import database from "@/../infra/database";
+
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IProofAuditRepository } from "../../repositories/IProof-audit-repository";
 
@@ -13,6 +15,8 @@ import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { AppError } from "@/shared/errors/AppError";
+
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 
 import type { ProofAuditRecord } from "../../dtos/proof-audit-dto";
 
@@ -61,6 +65,8 @@ class ReviewProofAuditUseCase {
     private occurrenceTypes: IOccurrenceTypeRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -101,26 +107,55 @@ class ReviewProofAuditUseCase {
       );
     }
 
-    const reviewed = await this.audits.review({
-      auditId,
-      businessId,
-      reviewedById: userId,
-      status,
-      rejection_reason: status === "REJECTED" ? reason : null,
+    // The verdict and the event it announces in ONE transaction. A shipper
+    // that audits its own carrier acts on `proof.rejected`; an event queued
+    // after the commit is an event a crash in between erases, and the card
+    // then reads REJECTED here while their system still shows it accepted.
+    const reviewed = await database.$transaction(async (tx) => {
+      const settled = await this.audits.review(
+        {
+          auditId,
+          businessId,
+          reviewedById: userId,
+          status,
+          rejection_reason: status === "REJECTED" ? reason : null,
+        },
+        tx,
+      );
+
+      // 409 and not 500: the request was well formed and the caller was
+      // allowed to make it — somebody else simply got there first. Two
+      // reviewers open the same card, and the second has to be told rather
+      // than overwriting the first name on the record of who decided it.
+      if (!settled) {
+        throw new AppError(
+          "Este comprovante já foi revisado por outra pessoa.",
+          409,
+          "PROOF_AUDIT_ALREADY_REVIEWED",
+        );
+      }
+
+      // The customers' systems. A shipper auditing its own carrier is the
+      // reason this topic exists: a receipt refused here is a receipt they
+      // will be asked about, and hearing it from us beats hearing it from the
+      // customer.
+      await this.webhooks.announce(
+        status === "APPROVED" ? "proof.approved" : "proof.rejected",
+        businessId,
+        {
+          delivery_id: found.deliveryId,
+          audit_id: found.id,
+          rejection_reason: status === "REJECTED" ? reason : null,
+        },
+        tx,
+      );
+
+      return settled;
     });
 
-    // 409 and not 500: the request was well formed and the caller was allowed
-    // to make it — somebody else simply got there first. Two reviewers open
-    // the same card, and the second has to be told rather than overwriting the
-    // first name on the record of who decided it.
-    if (!reviewed) {
-      throw new AppError(
-        "Este comprovante já foi revisado por outra pessoa.",
-        409,
-        "PROOF_AUDIT_ALREADY_REVIEWED",
-      );
-    }
-
+    // After the verdict commits, and outside it on purpose: the occurrence is
+    // a trail entry for the office, and an `ensureByName` upsert on a table
+    // every tenant shares does not belong in the window that holds the card.
     if (status === "REJECTED") {
       await this.recordRejection(found.deliveryId, businessId, userId, reason!);
     }

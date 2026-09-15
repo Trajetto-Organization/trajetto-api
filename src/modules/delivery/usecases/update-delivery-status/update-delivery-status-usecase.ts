@@ -33,6 +33,12 @@ import {
   buildDeliveryCustomerPayload,
   hasSomebodyToTell,
 } from "@/shared/delivery/customer-notice";
+
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import {
+  announceRouteClosed,
+  deliveryEventPayload,
+} from "@/shared/integration/announce";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -76,6 +82,8 @@ class UpdateDeliveryStatusUseCase {
     private notificationService: NotificationService,
     @inject("OutboxService")
     private outbox: OutboxService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -261,6 +269,36 @@ class UpdateDeliveryStatusUseCase {
             tx,
           );
         }
+
+        // The customers' systems, for the outcomes the catalogue publishes.
+        // A move back to pending or to in-transit is bookkeeping, and an ERP
+        // that received an event for each would be an ERP filtering ours out.
+        //
+        // In the SAME transaction, for the reason the outbox row above is: an
+        // event queued after the commit is an event a crash in between erases,
+        // and an ERP that never heard the delivery was cancelled keeps billing
+        // for it.
+        const integrationTopic =
+          status === "DELIVERED"
+            ? ("delivery.delivered" as const)
+            : status === "FAILED"
+              ? ("delivery.failed" as const)
+              : status === "CANCELLED"
+                ? ("delivery.cancelled" as const)
+                : status === "IN_TRANSIT"
+                  ? ("delivery.in_transit" as const)
+                  : null;
+
+        if (integrationTopic) {
+          await this.webhooks.announce(
+            integrationTopic,
+            businessId,
+            deliveryEventPayload({ ...findDelivery, id: deliveryId, status }),
+            tx,
+          );
+        }
+
+        await announceRouteClosed(this.webhooks, businessId, settled, tx);
 
         return updated;
       });

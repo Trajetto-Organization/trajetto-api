@@ -19,6 +19,11 @@ import type {
 import { DeliveryStatusConflictError } from "@/modules/delivery/usecases/errors/delivery-errors";
 import { AppError } from "@/shared/errors/AppError";
 
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+
+// Nothing here asserts on webhooks; the use cases simply require one.
+const webhookStub = new InMemoryWebhookFanOutService();
+
 /**
  * Four surfaces drive the same delivery — the driver's app, the dispatcher's
  * dashboard, the admin panel and the control tower — and nothing stops two of
@@ -90,6 +95,7 @@ function makeContext() {
       createActivityIfEnabled: async () => undefined,
     } as unknown as NotificationService,
     outboxStub,
+    webhookStub.asService(),
   );
 
   return { useCase, deliveryRepository, routeRepository, published };

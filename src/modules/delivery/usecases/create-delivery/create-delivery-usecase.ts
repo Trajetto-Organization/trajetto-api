@@ -1,5 +1,7 @@
 import { inject, injectable } from "tsyringe";
 
+import database from "@/../infra/database";
+
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
@@ -29,6 +31,9 @@ import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/d
 
 import { DeliveryInvoiceKeyExistsError } from "../errors/delivery-errors";
 import { AppError } from "@/shared/errors/AppError";
+
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import { deliveryEventPayload } from "@/shared/integration/announce";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 
 import { Delivery, CreateDeliveryProps } from "../../dtos/delivery-dto";
@@ -50,6 +55,8 @@ class CreateDeliveryUseCase {
     private delivery: IDeliveryRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute(
@@ -141,9 +148,26 @@ class CreateDeliveryUseCase {
     }
 
     try {
-      const deliveryCreated = await this.delivery.createDelivery(deliveryData);
+      // One transaction for the row and the event it announces. Queued after
+      // the commit instead, a crash in between leaves the document in our
+      // database and absent from the ERP that sent it — and the ERP has no
+      // way to notice, because from its side the push succeeded.
+      const deliveryCreated = await database.$transaction(async (tx) => {
+        const created = await this.delivery.createDelivery(deliveryData, tx);
 
-      // Process activity asynchronously without blocking the main flow
+        // The customers' systems. An ERP that pushed a document to us wants
+        // our id back, which is what lets it match our events to its own rows
+        // from here on.
+        await this.webhooks.announce(
+          "delivery.created",
+          deliveryData.businessId,
+          deliveryEventPayload({ ...created, id: created.id! }),
+          tx,
+        );
+
+        return created;
+      });
+
       this.notificationService.createActivityIfEnabled({
         type: "Entrega",
         action: "create",

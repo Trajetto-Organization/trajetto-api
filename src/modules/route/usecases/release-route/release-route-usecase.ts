@@ -8,6 +8,9 @@ import database from "@/../infra/database";
 import { sendRouteEventToDriver } from "@/websocket";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import { routeEventPayload } from "@/shared/integration/announce";
+
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
 
 import { NotificationService } from "@/shared/services/notification-service";
@@ -56,6 +59,8 @@ class ReleaseRouteUseCase {
     private notificationService: NotificationService,
     @inject("OutboxService")
     private outbox: OutboxService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -151,6 +156,22 @@ class ReleaseRouteUseCase {
             },
           });
         }
+
+        // In the SAME transaction as the release, for the reason the outbox
+        // row above is: an event queued after the commit is an event a crash
+        // in between erases.
+        //
+        // And the topic follows `released`, not the endpoint's name. This use
+        // case also pulls a route BACK to planning, and announcing
+        // `route.released` for that would tell an ERP to dispatch a load that
+        // just came off the street — the payload said "RELEASED" while the row
+        // said "PLANNED".
+        await this.webhooks.announce(
+          released ? "route.released" : "route.unreleased",
+          businessId,
+          routeEventPayload({ ...findRoute, status: target }),
+          tx,
+        );
 
         return moved;
       });

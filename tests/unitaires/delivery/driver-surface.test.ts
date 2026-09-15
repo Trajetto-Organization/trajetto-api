@@ -30,6 +30,11 @@ import type { OccurrenceType } from "@/modules/occurrence-type/dtos/occurrence-t
 import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import { DeliveryNotFoundError } from "@/modules/delivery/usecases/errors/delivery-errors";
 
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+
+// Nothing here asserts on webhooks; the use cases simply require one.
+const webhookStub = new InMemoryWebhookFanOutService();
+
 const BUSINESS = "018f0000-0000-7000-8000-00000000000b";
 
 const DRIVER_USER_ID = "018f0000-0000-7000-8000-0000000000a1";
@@ -242,6 +247,7 @@ function makeStartRoute(repos: ReturnType<typeof makeRepositories>) {
       repos.vehicleRepository,
       notificationStub,
       outboxStub,
+      webhookStub.asService(),
     ),
     notificationStub,
   );
@@ -406,6 +412,7 @@ describe("driver surface: arrival", () => {
       repos.deliveryRepository,
       repos.routeRepository,
       notificationStub,
+      webhookStub.asService(),
     );
   }
 
@@ -480,6 +487,7 @@ describe("driver surface: proof", () => {
       proofAuditRepository,
       businessWithoutAI,
       uploadStub,
+      webhookStub.asService(),
     );
   }
 
@@ -552,6 +560,7 @@ describe("driver surface: occurrence photo rules", () => {
       notificationStub,
       uploadStub,
       outbox,
+      webhookStub.asService(),
     );
   }
 

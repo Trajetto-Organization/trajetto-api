@@ -22,6 +22,11 @@ import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+
+// Nothing here asserts on webhooks; the use cases simply require one.
+const webhookStub = new InMemoryWebhookFanOutService();
+
 /**
  * Releasing and cancelling wrap the route write and its outbox event in one
  * database transaction — the driver's push must exist if and only if the write
@@ -139,6 +144,7 @@ function makeContext() {
       driverRepository,
       notificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
     start: new StartRouteUseCase(
       routeRepository,
@@ -146,12 +152,14 @@ function makeContext() {
       vehicleRepository,
       notificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
     cancel: new CancelRouteUseCase(
       routeRepository,
       userRepository,
       notificationService,
       outboxStub,
+      webhookStub.asService(),
     ),
     update: new UpdateRouteUseCase(
       routeRepository,

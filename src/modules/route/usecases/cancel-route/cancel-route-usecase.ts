@@ -10,6 +10,9 @@ import {
 } from "@/websocket";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import { routeEventPayload } from "@/shared/integration/announce";
+
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
 
 import { NotificationService } from "@/shared/services/notification-service";
@@ -55,6 +58,8 @@ class CancelRouteUseCase {
     private notificationService: NotificationService,
     @inject("OutboxService")
     private outbox: OutboxService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -129,6 +134,17 @@ class CancelRouteUseCase {
             },
           });
         }
+
+        // In the SAME transaction as the cancellation, for the reason the
+        // outbox row above is: an event queued after the commit is an event a
+        // crash in between erases, and an ERP that never heard the route was
+        // called off keeps a truck out on paper.
+        await this.webhooks.announce(
+          "route.cancelled",
+          businessId,
+          routeEventPayload({ ...findRoute, status: "CANCELLED" }),
+          tx,
+        );
 
         return moved;
       });

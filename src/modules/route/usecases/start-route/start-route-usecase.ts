@@ -17,6 +17,9 @@ import {
   hasSomebodyToTell,
 } from "@/shared/delivery/customer-notice";
 
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import { routeEventPayload } from "@/shared/integration/announce";
+
 import { canTransitionRoute } from "@/shared/route/route-rules";
 import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 
@@ -67,6 +70,8 @@ class StartRouteUseCase {
     private notificationService: NotificationService,
     @inject("OutboxService")
     private outbox: OutboxService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -176,6 +181,16 @@ class StartRouteUseCase {
             }),
           });
         }
+
+        // In the SAME transaction as the departure, for the reason the outbox
+        // rows above are: an event queued after the commit is an event a crash
+        // in between erases.
+        await this.webhooks.announce(
+          "route.started",
+          businessId,
+          routeEventPayload({ ...findRoute, status: "IN_PROGRESS" }),
+          tx,
+        );
 
         return moved;
       });

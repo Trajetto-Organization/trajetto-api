@@ -108,8 +108,53 @@ async function fanOutWebhookEvent(
   return rows.length;
 }
 
+/**
+ * How often a replica looks for work.
+ *
+ * Five seconds, same as the notification pipeline. A webhook is not a chat
+ * message — nobody is watching for it — but an integration that learns about a
+ * delivery a minute late is an integration whose customer calls to ask why
+ * their ERP is behind.
+ */
+const SWEEP_INTERVAL_MS = 5_000;
+
 class WebhookDispatchService {
+  private static instance: WebhookDispatchService | null = null;
+
+  private timer: NodeJS.Timeout | null = null;
   private running = false;
+
+  static getInstance(): WebhookDispatchService {
+    WebhookDispatchService.instance ??= new WebhookDispatchService();
+
+    return WebhookDispatchService.instance;
+  }
+
+  async initialize(): Promise<void> {
+    this.timer = setInterval(() => {
+      this.processBatch().catch((error) => {
+        console.error("[WebhookDispatch] Cycle error:", error);
+      });
+    }, SWEEP_INTERVAL_MS);
+
+    // Drain whatever accumulated while the API was down, instead of making the
+    // first sweep wait a full interval.
+    void this.processBatch().catch((error) => {
+      console.error("[WebhookDispatch] Initial drain error:", error);
+    });
+
+    console.log("[WebhookDispatch] Worker iniciado");
+  }
+
+  async shutdown(): Promise<void> {
+    if (this.timer) clearInterval(this.timer);
+
+    this.timer = null;
+
+    // A batch in flight keeps its lease and is reclaimed by whoever is up
+    // next; there is nothing to wait for here that waiting would improve.
+    console.log("[WebhookDispatch] Worker encerrado");
+  }
 
   async processBatch(): Promise<number> {
     // One batch at a time in this process. Other replicas claim their own
@@ -361,7 +406,7 @@ class WebhookDispatchService {
   }
 }
 
-const webhookDispatchService = new WebhookDispatchService();
+const webhookDispatchService = WebhookDispatchService.getInstance();
 
 export { WebhookDispatchService, fanOutWebhookEvent, webhookDispatchService };
 export type { FanOutEvent };

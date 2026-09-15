@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-memory/in-memory-vehicle-repository";
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
@@ -23,6 +23,22 @@ import type { Shipper } from "@/modules/shipper/dtos/shipper-dto";
 import type { Business } from "@/modules/business/dtos/business-dto";
 import type { NotificationService } from "@/shared/services/notification-service";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
+
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+
+// The use cases now wrap their write and the webhook they announce in one
+// transaction. Against in-memory repositories the transaction is a plain
+// passthrough — what it proves here is that the event is queued in the same
+// unit of work, not that Postgres rolled anything back.
+vi.mock("@/../infra/database", () => ({
+  default: {
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}),
+  },
+}));
+
+
+// Nothing here asserts on webhooks; the use cases simply require one.
+const webhookStub = new InMemoryWebhookFanOutService();
 
 const BUSINESS = "018f0000-0000-7000-8000-00000000000b";
 const USER_ID = "018f0000-0000-7000-8000-0000000000a1";
@@ -182,6 +198,7 @@ describe("a vehicle out of operation cannot take new cargo", () => {
       driverRepository,
       deliveryRepository,
       notificationStub,
+      webhookStub.asService(),
     );
 
     return {

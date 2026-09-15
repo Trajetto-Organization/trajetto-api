@@ -1,5 +1,7 @@
 import { inject, injectable } from "tsyringe";
 
+import database from "@/../infra/database";
+
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
@@ -25,6 +27,9 @@ import {
 } from "../errors/delivery-errors";
 
 import { AppError } from "@/shared/errors/AppError";
+
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import { deliveryEventPayload } from "@/shared/integration/announce";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 
@@ -62,6 +67,8 @@ class AssignDeliveriesUseCase {
     private delivery: IDeliveryRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -141,15 +148,37 @@ class AssignDeliveriesUseCase {
     }
 
     try {
-      await this.delivery.assignDeliveries(uniqueIds, {
-        driverId,
-        vehicleId: vehicleId ?? null,
+      // The assignment and every event it announces in ONE transaction. The
+      // write is already all-or-nothing; a loop of events after the commit is
+      // not, and a crash halfway leaves a dispatcher's ERP holding twenty of
+      // the forty documents that moved.
+      await database.$transaction(async (tx) => {
+        await this.delivery.assignDeliveries(
+          uniqueIds,
+          { driverId, vehicleId: vehicleId ?? null },
+          tx,
+        );
+
+        // One event per document and not one for the batch: an integration
+        // matches on a delivery, and an event carrying forty ids is an event
+        // every subscriber has to unpack before it can do anything with it.
+        for (const delivery of deliveries) {
+          await this.webhooks.announce(
+            "delivery.assigned",
+            businessId,
+            {
+              ...deliveryEventPayload({ ...delivery, id: delivery.id! }),
+              driver_id: driverId ?? null,
+              vehicle_id: vehicleId ?? null,
+            },
+            tx,
+          );
+        }
       });
 
       const count = uniqueIds.length;
       const plural = count > 1 ? "s" : "";
 
-      // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({
         type: "Entrega",
         action: "update",

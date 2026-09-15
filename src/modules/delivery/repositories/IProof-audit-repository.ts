@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import type {
   ListProofAuditsProps,
   ListProofAuditsResult,
@@ -34,6 +36,7 @@ interface IProofAuditRepository {
   findById: (
     auditId: string,
     businessId: string,
+    tx?: Prisma.TransactionClient,
   ) => Promise<ProofAuditRecord | null>;
 
   listQueue: (props: ListProofAuditsProps) => Promise<ListProofAuditsResult>;
@@ -54,7 +57,9 @@ interface IProofAuditRepository {
     reviewedById: string;
     status: "APPROVED" | "REJECTED";
     rejection_reason: string | null;
-  }) => Promise<ProofAuditRecord | null>;
+  },
+    tx?: Prisma.TransactionClient,
+  ) => Promise<ProofAuditRecord | null>;
 }
 
 export type { IProofAuditRepository };

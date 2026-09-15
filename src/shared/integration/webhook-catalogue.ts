@@ -15,6 +15,12 @@ const WEBHOOK_API_VERSION = "v1";
 /** The route's own life: planned, handed over, departed, finished, called off. */
 const ROUTE_TOPICS = [
   "route.released",
+
+  // The pull-back. A route can go from RELEASED to PLANNED while nothing has
+  // been worked, and an ERP that was told about the release and never told
+  // about the reversal dispatches a load that is back in the yard.
+  "route.unreleased",
+
   "route.started",
   "route.completed",
   "route.cancelled",
@@ -59,6 +65,7 @@ const TOPIC_FAMILY: Record<WebhookTopic, "route" | "document"> = Object.freeze(
 /** Human descriptions, for the subscription screen and the public docs. */
 const TOPIC_DESCRIPTIONS: Record<WebhookTopic, string> = {
   "route.released": "A rota foi liberada para o motorista.",
+  "route.unreleased": "A rota voltou para o planejamento antes de sair.",
   "route.started": "O motorista saiu com a rota.",
   "route.completed": "Todas as paradas da rota foram resolvidas.",
   "route.cancelled": "A rota foi cancelada.",

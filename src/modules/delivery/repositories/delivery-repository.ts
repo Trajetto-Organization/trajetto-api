@@ -61,10 +61,13 @@ const NOT_ON_A_ROUTE: Prisma.DeliveryWhereInput = {
 class DeliveryRepository implements IDeliveryRepository {
   constructor(private prisma = database) {}
 
-  async createDelivery(deliveryData: CreateDeliveryProps): Promise<Delivery> {
+  async createDelivery(
+    deliveryData: CreateDeliveryProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Delivery> {
     const { items, ...delivery } = deliveryData;
 
-    const deliveryCreated = await this.prisma.delivery.create({
+    const deliveryCreated = await (tx ?? this.prisma).delivery.create({
       data: {
         ...delivery,
         code: delivery.code || null,
@@ -321,8 +324,9 @@ class DeliveryRepository implements IDeliveryRepository {
   async assignDeliveries(
     deliveryIds: string[],
     assignment: DeliveryAssignmentPatch,
+    outerTx?: Prisma.TransactionClient,
   ): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
+    const write = async (tx: Prisma.TransactionClient) => {
       const result = await tx.delivery.updateMany({
         // The status filter re-checks inside the transaction: a delivery
         // that left PENDING between validation and write must sink the
@@ -337,7 +341,15 @@ class DeliveryRepository implements IDeliveryRepository {
       if (result.count !== deliveryIds.length) {
         throw new DeliveryAssignmentConflictError();
       }
-    });
+    };
+
+    // Joins the caller's transaction when there is one. Opening our own
+    // inside it would not nest in Prisma — it takes a second connection and
+    // waits on rows the caller is already holding, which is a deadlock that
+    // only shows up under load.
+    if (outerTx) return write(outerTx);
+
+    await this.prisma.$transaction(write);
   }
 
   async createOccurrence(

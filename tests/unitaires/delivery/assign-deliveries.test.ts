@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AssignDeliveriesUseCase } from "@/modules/delivery/usecases/assign-deliveries/assign-deliveries-usecase";
 
@@ -26,6 +26,22 @@ import {
 } from "@/modules/delivery/usecases/errors/delivery-errors";
 
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
+
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+
+// The use cases now wrap their write and the webhook they announce in one
+// transaction. Against in-memory repositories the transaction is a plain
+// passthrough — what it proves here is that the event is queued in the same
+// unit of work, not that Postgres rolled anything back.
+vi.mock("@/../infra/database", () => ({
+  default: {
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}),
+  },
+}));
+
+
+// Nothing here asserts on webhooks; the use cases simply require one.
+const webhookStub = new InMemoryWebhookFanOutService();
 
 const BUSINESS = "018f0000-0000-7000-8000-00000000000b";
 const OTHER_BUSINESS = "018f0000-0000-7000-8000-00000000000c";
@@ -61,6 +77,7 @@ function makeContext() {
         activityLog.push(activity.description);
       },
     } as unknown as NotificationService,
+    webhookStub.asService(),
   );
 
   return {

@@ -58,8 +58,9 @@ class ProofAuditRepository implements IProofAuditRepository {
   async findById(
     auditId: string,
     businessId: string,
+    tx?: Prisma.TransactionClient,
   ): Promise<ProofAuditRecord | null> {
-    const found = await this.prisma.deliveryProofAudit.findFirst({
+    const found = await (tx ?? this.prisma).deliveryProofAudit.findFirst({
       where: { id: auditId, businessId },
     });
 
@@ -197,11 +198,13 @@ class ProofAuditRepository implements IProofAuditRepository {
     reviewedById: string;
     status: "APPROVED" | "REJECTED";
     rejection_reason: string | null;
-  }): Promise<ProofAuditRecord | null> {
+  },
+    tx?: Prisma.TransactionClient,
+  ): Promise<ProofAuditRecord | null> {
     // The precondition is in the `where`, not in a read above it: two
     // reviewers open the same card and both press approve, and the second must
     // be told rather than overwriting the first name on the record.
-    const { count } = await this.prisma.deliveryProofAudit.updateMany({
+    const { count } = await (tx ?? this.prisma).deliveryProofAudit.updateMany({
       where: { id: auditId, businessId, status: "PENDING" },
       data: {
         status,
@@ -213,7 +216,7 @@ class ProofAuditRepository implements IProofAuditRepository {
 
     if (count === 0) return null;
 
-    return this.findById(auditId, businessId);
+    return this.findById(auditId, businessId, tx);
   }
 }
 

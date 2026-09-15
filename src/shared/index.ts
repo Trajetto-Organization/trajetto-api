@@ -126,6 +126,7 @@ import { KanbanService } from "./services/kanban-service";
 
 import { UploadService } from "./services/upload-service";
 import { OutboxService } from "./notifications/outbox-service";
+import { WebhookFanOutService } from "./integration/webhook-fan-out-service";
 
 container.registerSingleton<IWhatsAppProvider>(
   "WhatsAppProvider",
@@ -152,6 +153,10 @@ container.registerSingleton<KanbanService>("KanbanService", KanbanService);
 container.registerSingleton<UploadService>("UploadService", UploadService);
 
 container.registerSingleton<OutboxService>("OutboxService", OutboxService);
+container.registerSingleton<WebhookFanOutService>(
+  "WebhookFanOutService",
+  WebhookFanOutService,
+);
 
 container.registerSingleton<IUserRepository>("UserRepository", UserRepository);
 container.registerSingleton<IUsersTokensRepository>(

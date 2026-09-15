@@ -17,6 +17,8 @@ import {
 import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
 import { arrivalStopOutcome } from "@/shared/route/route-rules";
 import { announceStopSettled } from "@/shared/route/route-realtime";
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import { announceRouteClosed } from "@/shared/integration/announce";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -46,6 +48,8 @@ class RegisterDeliveryArrivalUseCase {
     private route: IRouteRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -133,6 +137,12 @@ class RegisterDeliveryArrivalUseCase {
           arrivalStopOutcome(arrivedAt),
           tx,
         );
+
+        // An arrival does not resolve a stop, so this never fires today. It is
+        // here anyway because `settleStopForDelivery` is what decides, not
+        // this file — the day an outcome makes an arrival final, the customers'
+        // systems hear about it without anybody remembering to add a line.
+        await announceRouteClosed(this.webhooks, businessId, settled, tx);
       });
 
       // The panel and the control tower are watching this stop.

@@ -32,6 +32,12 @@ import {
 
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import {
+  announceRouteClosed,
+  deliveryEventPayload,
+} from "@/shared/integration/announce";
+
 import { IProofAuditRepository } from "../../repositories/IProof-audit-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
@@ -77,6 +83,8 @@ class RegisterDeliveryProofUseCase {
     private business: IBusinessRepository,
     @inject("UploadService")
     private uploadService: UploadService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -223,6 +231,36 @@ class RegisterDeliveryProofUseCase {
             },
           });
         }
+
+        // The customers' systems. Two topics and not one: an ERP that only
+        // tracks whether a document was delivered subscribes to
+        // `delivery.delivered`, and one that audits receipts subscribes to
+        // `proof.registered` — and neither should have to filter the other's
+        // events out.
+        //
+        // In the SAME transaction, for the reason the outbox row above is: an
+        // event queued after the commit is an event a crash in between erases,
+        // and the customer's ERP then holds a delivery that our database says
+        // is done. Nobody notices until somebody reconciles.
+        await this.webhooks.announce(
+          "proof.registered",
+          businessId,
+          deliveryEventPayload({ ...findDelivery, id: deliveryId }),
+          tx,
+        );
+
+        await this.webhooks.announce(
+          "delivery.delivered",
+          businessId,
+          deliveryEventPayload({
+            ...findDelivery,
+            id: deliveryId,
+            status: "DELIVERED",
+          }),
+          tx,
+        );
+
+        await announceRouteClosed(this.webhooks, businessId, settled, tx);
       });
 
       // The card a person will look at. Queued the moment the delivery is
