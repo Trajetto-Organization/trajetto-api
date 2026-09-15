@@ -143,7 +143,7 @@ describe("a receipt with something wrong", () => {
 
 describe("what the model is not sure about", () => {
   it("sends an uncertain reading to a person, however clean it looked", () => {
-    // "Não consigo dizer" is a real answer about a photo taken through a truck
+    // "I cannot tell" is a real answer about a photo taken through a truck
     // window in the rain. Collapsing it into "no" would reject receipts that
     // are fine — and a rejection sends a driver back to an address.
     const assessment = assessProof(reading({ dateVisible: "unknown" }));

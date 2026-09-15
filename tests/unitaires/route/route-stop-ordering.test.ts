@@ -556,8 +556,8 @@ describe("reordering the stops", () => {
     const { route, stops } = await routeOfThree();
 
     // Caught before the set comparison, which would have called this a
-    // mismatch: "você enviou a mesma parada duas vezes" is a different problem
-    // from "a rota mudou", and only one of them is fixed by refreshing.
+    // mismatch: "you sent the same stop twice" is a different problem from
+    // "the route changed", and only one of them is fixed by refreshing.
     await expect(
       context.reorder.execute({
         userId: DISPATCHER_A,

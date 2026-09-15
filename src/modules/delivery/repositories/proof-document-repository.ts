@@ -63,9 +63,9 @@ class ProofDocumentRepository implements IProofDocumentRepository {
           },
         },
         shipper: { select: { name: true, cnpj: true } },
-        // `id` junto do nome: sem ele não havia o que comparar, e a
-        // verificação de "é o motorista DESTA entrega" degenerava em "a
-        // entrega TEM um motorista" — que toda entrega atribuída tem.
+        // `id` alongside the name: without it there was nothing to compare,
+        // and the check for "is the driver OF THIS delivery" degenerated into
+        // "the delivery HAS a driver" — which every assigned one does.
         driver: { select: { id: true, name: true, cpf: true } },
 
         // The most recent proof. A delivery re-proven after a correction has

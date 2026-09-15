@@ -2,44 +2,43 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
 /**
- * Onde um webhook pode e não pode ser entregue.
+ * Where a webhook may and may not be delivered.
  *
- * Um cliente cadastra a URL do próprio sistema, e o nosso servidor faz o POST.
- * Isso é, literalmente, "peça ao servidor de vocês que busque este endereço" —
- * e sem um freio, o endereço pode ser a rede interna DA PLATAFORMA. Um admin
- * de qualquer transportadora poderia apontar um endpoint para
- * `169.254.169.254` e ler as credenciais de instância, ou varrer portas
- * internas pelo tempo de resposta.
+ * A customer registers the URL of their own system and our server does the
+ * POST. That is, literally, "ask your server to fetch this address" — and with
+ * no brake, the address can be THE PLATFORM's internal network. An
+ * administrator at any carrier could point an endpoint at `169.254.169.254`
+ * and read the instance credentials, or sweep internal ports by timing the
+ * responses.
  *
- * O que fecha o buraco, e por que cada peça é necessária:
+ * What closes the hole, and why each piece is needed:
  *
- * - Resolver o nome e olhar o IP, não o texto. `https://interno.exemplo.com`
- *   pode apontar para 10.0.0.5, e uma lista de nomes proibidos nunca alcança
- *   isso.
- * - Checar A CADA ENVIO, não só no cadastro. Um nome que resolvia para um IP
- *   público no cadastro pode passar a resolver para um privado depois — é o
- *   ataque conhecido como DNS rebinding, e uma validação só na escrita é
- *   exatamente o que ele contorna.
- * - Recusar TODOS os endereços do nome, não o primeiro. Um nome com um A
- *   público e um AAAA em `::1` passaria por qualquer verificação que olhasse
- *   só um.
- * - Não seguir redirecionamento. O `https://` do cadastro só vale para o
- *   primeiro salto; um 302 para `http://169.254.169.254` anula a regra
- *   inteira. Um receptor de webhook não tem motivo legítimo para redirecionar.
+ * - Resolve the name and look at the IP, not at the text.
+ *   `https://internal.example.com` can point at 10.0.0.5, and a list of
+ *   forbidden names never reaches that.
+ * - Check ON EVERY SEND, not only at registration. A name that resolved to a
+ *   public address when it was saved can start resolving to a private one
+ *   later — that is DNS rebinding, and validating only on write is exactly
+ *   what it walks around.
+ * - Refuse on ALL of the name's addresses, not the first. A name with a public
+ *   A record and an AAAA on `::1` would pass any check that looked at one.
+ * - Do not follow redirects. The `https://` from registration only covers the
+ *   first hop; a 302 to `http://169.254.169.254` voids the whole rule. A
+ *   webhook receiver has no legitimate reason to redirect.
  */
 interface DestinationVerdict {
   allowed: boolean;
 
-  /** A frase que o monitor mostra. Nunca o IP — ver abaixo. */
+  /** The sentence the monitor shows. Never the IP — see below. */
   reason?: string;
 }
 
 /**
- * Faixas que nunca são um cliente.
+ * Ranges that are never a customer.
  *
- * Escritas como comparação numérica e não como regex sobre texto: `010.0.0.5`,
- * `0x0A000005` e `167772161` são todas 10.0.0.5 para o resolvedor, e um
- * `startsWith("10.")` não vê nenhuma delas.
+ * Written as numeric comparisons rather than a regex over text: `010.0.0.5`,
+ * `0x0A000005` and `167772161` are all 10.0.0.5 to the resolver, and a
+ * `startsWith("10.")` sees none of them.
  */
 function isPrivateIPv4(address: string): boolean {
   const parts = address.split(".").map(Number);
@@ -54,17 +53,17 @@ function isPrivateIPv4(address: string): boolean {
   if (a === 127) return true;
   if (a === 0) return true;
 
-  // Metadados de nuvem e o resto do link-local.
+  // Cloud metadata and the rest of link-local.
   if (a === 169 && b === 254) return true;
 
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
 
-  // Compartilhado por operadora (CGNAT) e benchmark.
+  // Carrier-grade NAT and the benchmarking range.
   if (a === 100 && b >= 64 && b <= 127) return true;
   if (a === 198 && (b === 18 || b === 19)) return true;
 
-  // Multicast e reservado.
+  // Multicast and reserved.
   if (a >= 224) return true;
 
   return false;
@@ -75,14 +74,14 @@ function isPrivateIPv6(address: string): boolean {
 
   if (value === "::1" || value === "::") return true;
 
-  // Link-local, unique-local e multicast.
+  // Link-local, unique-local and multicast.
   if (value.startsWith("fe80") || value.startsWith("fc") || value.startsWith("fd")) {
     return true;
   }
 
   if (value.startsWith("ff")) return true;
 
-  // IPv4 mapeado: `::ffff:10.0.0.5` é 10.0.0.5 com outra roupa.
+  // Mapped IPv4: `::ffff:10.0.0.5` is 10.0.0.5 wearing another coat.
   const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
 
   if (mapped) return isPrivateIPv4(mapped[1]);
@@ -100,10 +99,10 @@ function isPrivateAddress(address: string): boolean {
 }
 
 /**
- * Nomes que nunca são um cliente, mesmo que resolvam para um IP público.
+ * Names that are never a customer, even when they resolve to a public address.
  *
- * A checagem de IP é a que decide; esta pega o caso em que a resolução falha
- * ou é interceptada, e diz a coisa certa no monitor.
+ * The IP check is the one that decides; this one catches the case where
+ * resolution fails or is intercepted, and says the right thing in the monitor.
  */
 const BLOCKED_HOST_SUFFIXES = [
   "localhost",
@@ -130,11 +129,12 @@ function hasBlockedName(hostname: string): boolean {
 }
 
 /**
- * Decide se este envio pode sair.
+ * Decides whether this send may leave.
  *
- * A frase de recusa nunca inclui o IP resolvido. O monitor é visível para o
- * próprio cliente, e devolver "10.0.0.5 é privado" transforma a mensagem de
- * erro no oráculo de varredura que a checagem existe para impedir.
+ * The refusal sentence never includes the resolved address. The monitor is
+ * visible to the customer themselves, and answering "10.0.0.5 is private"
+ * turns the error message into the very port-scanning oracle this check exists
+ * to prevent.
  */
 async function verifyWebhookDestination(
   url: string,
@@ -147,8 +147,8 @@ async function verifyWebhookDestination(
     return { allowed: false, reason: "A URL do endpoint é inválida." };
   }
 
-  // Também na saída, e não só no cadastro: uma linha gravada antes desta regra
-  // existir continuaria valendo para sempre.
+  // On the way out as well, not only at registration: a row saved before this
+  // rule existed would otherwise stay valid forever.
   if (parsed.protocol !== "https:") {
     return {
       allowed: false,
@@ -163,7 +163,7 @@ async function verifyWebhookDestination(
     };
   }
 
-  // Um literal já é a resposta; não há o que resolver.
+  // A literal is already the answer; there is nothing to resolve.
   if (isIP(parsed.hostname)) {
     return isPrivateAddress(parsed.hostname)
       ? {
@@ -191,8 +191,8 @@ async function verifyWebhookDestination(
     };
   }
 
-  // TODOS, não o primeiro: um nome com um A público e um AAAA em `::1`
-  // passaria por qualquer verificação que olhasse só um.
+  // ALL of them, not the first: a name with a public A record and an AAAA on
+  // `::1` would pass any check that looked at one.
   if (addresses.some((entry) => isPrivateAddress(entry.address))) {
     return {
       allowed: false,
@@ -204,14 +204,14 @@ async function verifyWebhookDestination(
 }
 
 /**
- * Cabeçalhos que o cliente não pode escrever.
+ * Headers the customer may not write.
  *
- * O mapa do cliente existe para a autenticação que o gateway DELE exige. O que
- * ele não pode fazer é sobrescrever os nossos: a assinatura é a garantia que a
- * documentação pública promete, e um cliente que a substitui por um valor
- * qualquer transforma um receptor compartilhado em alvo de replay. `Host`,
- * `Content-Length` e afins mudam para ONDE e COMO a requisição vai — que é
- * justamente o que a verificação de destino acabou de decidir.
+ * The customer's map exists for the authentication THEIR gateway requires.
+ * What it may not do is overwrite ours: the signature is the guarantee the
+ * public documentation promises, and a customer who replaces it with any value
+ * they like turns a shared receiver into a replay target. `Host`,
+ * `Content-Length` and the like change WHERE and HOW the request goes — which
+ * is exactly what the destination check just finished deciding.
  */
 const RESERVED_WEBHOOK_HEADERS = new Set([
   "host",
@@ -232,7 +232,7 @@ function reservedHeaderNames(headers: Record<string, string>): string[] {
   );
 }
 
-/** O mapa do cliente, sem o que ele não pode escrever. */
+/** The customer's map, without what they may not write. */
 function safeWebhookHeaders(
   headers: Record<string, string> | null | undefined,
 ): Record<string, string> {

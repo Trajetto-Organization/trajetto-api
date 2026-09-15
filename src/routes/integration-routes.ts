@@ -91,16 +91,16 @@ async function integrationRoutes(app: FastifyInstance) {
       config: {
         rateLimit: {
           /**
-           * O teto DA CHAVE, não um número fixo.
+           * THE KEY'S ceiling, not a fixed number.
            *
-           * `rate_limit_per_minute` era gravado na chave, editável por rota de
-           * administração e publicado no schema — e nenhum limitador o lia.
-           * Uma chave provisionada em 60/min recebia 600. Um limite que o
-           * produto promete e não aplica é pior que nenhum: alguém dimensiona
-           * a integração confiando nele.
+           * `rate_limit_per_minute` was stored on the key, editable through an
+           * administration route and published in the schema — and no limiter
+           * ever read it. A key provisioned at 60/min got 600. A limit the
+           * product promises and does not enforce is worse than none: somebody
+           * sizes their integration trusting it.
            *
-           * O fallback de 600 vale enquanto `ensureApiKey` ainda não resolveu
-           * a chave — numa recusa 401, por exemplo.
+           * The 600 fallback applies while `ensureApiKey` has not resolved the
+           * key yet — on a 401 refusal, for instance.
            */
           max: (request) => request.apiKey?.rateLimitPerMinute ?? 600,
           timeWindow: "1 minute",

@@ -140,13 +140,13 @@ class WebhookDispatchService {
   private running = false;
 
   /**
-   * Quem decide se um destino pode ser alcançado.
+   * Who decides whether a destination may be reached.
    *
-   * Injetável, e com o valor certo por padrão. A alternativa seria uma
-   * variável de ambiente que desliga a verificação em teste — e uma flag que
-   * desliga uma proteção contra SSRF é uma flag que alguém acaba ligando em
-   * produção. Aqui, quem quiser um verificador permissivo precisa construir a
-   * instância dizendo isso, no arquivo de teste, onde se lê.
+   * Injectable, and with the right value by default. The alternative would be
+   * an environment variable that turns the check off in tests — and a flag
+   * that disables an SSRF defence is a flag somebody eventually turns on in
+   * production. Here, anybody who wants a permissive verifier has to build the
+   * instance saying so, in the test file, where it can be read.
    */
   constructor(
     private verifyDestination: (
@@ -254,17 +254,17 @@ class WebhookDispatchService {
     const body = stored?.signed_body ?? JSON.stringify(stored?.payload ?? row.payload);
 
     /**
-     * Onde isto pode sair, decidido a CADA envio.
+     * Where this may go, decided on EVERY send.
      *
-     * Um cliente cadastra a URL do próprio sistema e o nosso servidor faz o
-     * POST — o que é, literalmente, "peça ao servidor de vocês que busque este
-     * endereço". Sem freio, o endereço pode ser a rede interna da plataforma:
-     * um admin de qualquer transportadora apontaria um endpoint para
-     * `169.254.169.254` e leria as credenciais da instância pelo próprio
-     * monitor, que devolve o corpo da resposta para ele.
+     * A customer registers the URL of their own system and our server does the
+     * POST — which is, literally, "ask your server to fetch this address".
+     * With no brake the address can be the platform's internal network: an
+     * administrator at any carrier would point an endpoint at
+     * `169.254.169.254` and read the instance credentials through the monitor
+     * itself, which hands them the response body.
      *
-     * A cada envio e não só no cadastro: um nome que resolvia para um IP
-     * público quando foi salvo pode passar a resolver para um privado depois.
+     * On every send and not only at registration: a name that resolved to a
+     * public address when it was saved can start resolving to a private one.
      */
     const destination = await this.verifyDestination(endpoint.url);
 
@@ -287,21 +287,21 @@ class WebhookDispatchService {
 
     try {
       const response = await fetch(endpoint.url, {
-        // Sem seguir redirecionamento. O `https://` do cadastro só vale para o
-        // primeiro salto, e um 302 para `http://169.254.169.254` anularia a
-        // verificação acima inteira. Um receptor de webhook não tem motivo
-        // legítimo para redirecionar.
+        // No redirects. The `https://` from registration only covers the
+        // first hop, and a 302 to `http://169.254.169.254` would void the
+        // whole check above. A webhook receiver has no legitimate reason to
+        // redirect.
         redirect: "manual",
 
         method: "POST",
         headers: {
-          // Os do cliente PRIMEIRO, os nossos depois.
+          // The customer's FIRST, ours after.
           //
-          // Na ordem inversa, um cliente sobrescreveria
-          // `X-Trajetto-Signature` — a garantia que a documentação pública
-          // promete — e transformaria um receptor compartilhado em alvo de
-          // replay. `safeWebhookHeaders` já tira os reservados; a ordem é a
-          // segunda tranca.
+          // The other way round, a customer would overwrite
+          // `X-Trajetto-Signature` — the guarantee the public documentation
+          // promises — and turn a shared receiver into a replay target.
+          // `safeWebhookHeaders` already strips the reserved ones; the
+          // ordering is the second lock.
           ...safeWebhookHeaders(
             endpoint.headers as Record<string, string> | null,
           ),
@@ -317,9 +317,9 @@ class WebhookDispatchService {
         signal: controller.signal,
       });
 
-      // Um 3xx com `redirect: "manual"` volta como resposta normal. Contar
-      // como sucesso seria dizer que o evento chegou a um lugar para onde ele
-      // não foi.
+      // A 3xx with `redirect: "manual"` comes back as an ordinary response.
+      // Counting it as a success would claim the event reached a place it was
+      // never sent to.
       if (response.status >= 300 && response.status < 400) {
         clearTimeout(timer);
 

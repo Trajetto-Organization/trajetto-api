@@ -86,14 +86,14 @@ class GetProofDocumentUseCase {
     }
 
     /**
-     * Um motorista alcança só o próprio trabalho, a mesma regra da listagem
-     * dele.
+     * A driver reaches only their own work, the same rule as their listing.
      *
-     * Isto comparava com `null`, o que testava se a entrega TEM um motorista —
-     * verdadeiro para toda entrega atribuída a qualquer pessoa da empresa. Um
-     * motorista lia o comprovante do colega: nome e documento do destinatário,
-     * endereço completo, GPS da entrega, foto do canhoto e assinatura. E com
-     * `?regenerate=true` também era escrita.
+     * This compared against `null`, which tests whether the delivery HAS a
+     * driver — true for every delivery assigned to anyone in the company. One
+     * driver could read a colleague's proof: the recipient's name and
+     * document, the full address, the delivery's GPS fix, the photo of the
+     * signed slip and the signature. And with `?regenerate=true` it was a
+     * write as well.
      */
     if (
       findUser.driverId &&

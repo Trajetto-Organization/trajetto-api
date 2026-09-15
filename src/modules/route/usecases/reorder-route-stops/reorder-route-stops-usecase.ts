@@ -62,8 +62,8 @@ class ReorderRouteStopsUseCase {
     if (!findRoute) throw new AppError(new RouteNotFoundError().message, 404);
 
     // Caught here rather than by the repository's set comparison, which would
-    // report a duplicate as a mismatch: "você enviou a mesma parada duas
-    // vezes" is a different problem from "a rota mudou".
+    // report a duplicate as a mismatch: "you sent the same stop twice" is a
+    // different problem from "the route changed".
     if (new Set(orderedStopIds).size !== orderedStopIds.length) {
       throw new AppError(
         "A ordem enviada repete a mesma parada. Atualize a tela e refaça a " +
