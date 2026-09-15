@@ -3,6 +3,7 @@ import { inject, injectable } from "tsyringe";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
 import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+import { IStatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/IStatus-change-reason-repository";
 
 import database from "@/../infra/database";
 
@@ -34,6 +35,21 @@ interface UpdateDeliveryStatusRequest {
   deliveryId: string;
   status: DeliveryStatus;
   received_by?: string;
+
+  /**
+   * Why. Required, from the company's own catalogue.
+   *
+   * This is the one path in the product that moves a delivery by hand rather
+   * than because something happened in the field — the driver's app goes
+   * through arrival, proof and occurrence, each of which carries its own
+   * evidence. An override has none, so the reason IS the evidence, and three
+   * days later it is the only thing support has to answer "por que essa está
+   * assim?".
+   */
+  reasonId: string;
+
+  /** The detail the catalogue cannot carry: "cliente ligou às 14h". */
+  note?: string;
 }
 
 @injectable()
@@ -45,6 +61,8 @@ class UpdateDeliveryStatusUseCase {
     private delivery: IDeliveryRepository,
     @inject("RouteRepository")
     private route: IRouteRepository,
+    @inject("StatusChangeReasonRepository")
+    private reason: IStatusChangeReasonRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -55,6 +73,8 @@ class UpdateDeliveryStatusUseCase {
     deliveryId,
     status,
     received_by,
+    reasonId,
+    note,
   }: UpdateDeliveryStatusRequest): Promise<Delivery> {
     const findUser = await this.user.findUserById(userId);
 
@@ -83,6 +103,29 @@ class UpdateDeliveryStatusUseCase {
       throw new AppError(verdict.reason!, 400, "INVALID_STATUS_TRANSITION");
     }
 
+    const findReason = await this.reason.findStatusChangeReasonById(reasonId);
+
+    // Same 404 for "does not exist" and "belongs to another company": a
+    // different refusal for the second would tell a caller which ids are real.
+    if (!findReason || findReason.businessId !== businessId) {
+      throw new AppError(
+        "Motivo não encontrado.",
+        404,
+        "STATUS_CHANGE_REASON_NOT_FOUND",
+      );
+    }
+
+    // A retired reason keeps explaining the events that already cite it and
+    // stops being offered for new ones — which is exactly what deactivating
+    // is for, and why the delete is refused once a reason has been used.
+    if (findReason.is_active === false) {
+      throw new AppError(
+        "Este motivo está desativado e não pode ser usado em novas mudanças de status.",
+        400,
+        "STATUS_CHANGE_REASON_INACTIVE",
+      );
+    }
+
     try {
       // Captured to be announced AFTER the commit: a socket event about a
       // write that rolled back is a lie the client cannot undo.
@@ -106,6 +149,28 @@ class UpdateDeliveryStatusUseCase {
             // Proof metadata only exists on the proven outcome.
             delivered_at: status === "DELIVERED" ? new Date() : null,
             received_by: status === "DELIVERED" ? (received_by ?? null) : null,
+          },
+          tx,
+        );
+
+        // The trail entry lands in the SAME transaction as the change it
+        // describes. Split apart, a crash between them leaves a delivery whose
+        // status moved with nothing saying who moved it or why — which is the
+        // precise question this whole feature exists to answer.
+        //
+        // No client_submission_id: only the driver's app resends. Two clicks
+        // on the web are two deliberate overrides, and collapsing them would
+        // hide that somebody did it twice.
+        await this.delivery.createDeliveryEvent(
+          {
+            type: "STATUS_CHANGE",
+            deliveryId,
+            reportedById: userId,
+            actor: "USER",
+            status_from: findDelivery.status,
+            status_to: status,
+            reasonId,
+            note: note?.trim() || null,
           },
           tx,
         );

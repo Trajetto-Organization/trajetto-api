@@ -31,10 +31,10 @@ type OpenApiDocument = {
 let document: OpenApiDocument;
 let close: () => Promise<void>;
 
-/** Every documented operation under the /route prefix, flattened. */
-function operations(): Array<[string, string, OpenApiOperation]> {
+/** Every documented operation under a prefix, flattened. */
+function operationsUnder(prefix: string): Array<[string, string, OpenApiOperation]> {
   return Object.entries(document.paths)
-    .filter(([path]) => path.startsWith("/route/"))
+    .filter(([path]) => path.startsWith(prefix))
     .flatMap(([path, methods]) =>
       Object.entries(methods).map(
         ([method, operation]) =>
@@ -42,6 +42,8 @@ function operations(): Array<[string, string, OpenApiOperation]> {
       ),
     );
 }
+
+const operations = () => operationsUnder("/route/");
 
 function operationFor(path: string): OpenApiOperation {
   const found = operations().find(([candidate]) => candidate === path);
@@ -245,5 +247,109 @@ describe("the shapes it publishes", () => {
     expect(schema).toContain("sequence");
     expect(schema).toContain("ARRIVED");
     expect(schema).toContain("progress");
+  });
+});
+
+describe("the status-override catalogue's published surface", () => {
+  /**
+   * The vocabulary behind "por que essa entrega está assim?".
+   *
+   * Checked here rather than in a file of its own because booting the
+   * application costs ten seconds and one document answers for both modules.
+   */
+  const catalogue = () => operationsUnder("/status-change-reason/");
+
+  it("publishes exactly the four endpoints a catalogue needs", () => {
+    expect(
+      catalogue().map(([path, method]) => `${method.toUpperCase()} ${path}`),
+    ).toEqual([
+      "POST /status-change-reason/create-status-change-reason/{businessId}",
+      "GET /status-change-reason/list-status-change-reason",
+      "PATCH /status-change-reason/update-status-change-reason/{reasonId}/business/{businessId}",
+      "DELETE /status-change-reason/delete-status-change-reason/{reasonId}/business/{businessId}",
+    ]);
+  });
+
+  it("declares a bearer token and a tag on every one of them", () => {
+    for (const [path, method, operation] of catalogue()) {
+      expect(operation.security, `${method} ${path}`).toBeTruthy();
+      expect(operation.tags, `${method} ${path}`).toEqual([
+        "statusChangeReason",
+      ]);
+    }
+  });
+
+  it("claims 409 only where a reason can be in use", () => {
+    // Deleting a reason the catalogue already spent is the one refusal here
+    // that is not the caller's fault: the request was well formed and allowed,
+    // and the reason is simply part of the record now.
+    const withConflict = catalogue()
+      .filter(([, , operation]) =>
+        Object.keys(operation.responses).includes("409"),
+      )
+      .map(([path]) => path);
+
+    expect(withConflict).toEqual([
+      "/status-change-reason/delete-status-change-reason/{reasonId}/business/{businessId}",
+    ]);
+  });
+
+  it("warns that the listing is NDJSON and not JSON", () => {
+    const listing =
+      catalogue().find(([path]) =>
+        path.endsWith("/list-status-change-reason"),
+      )?.[2].description ?? "";
+
+    expect(listing).toContain("ndjson");
+  });
+
+  it("does not publish an empty object where a schema was meant to be", () => {
+    // A zod construct the transformer cannot represent degrades to `{}`
+    // instead of failing — the quiet way documentation becomes a lie.
+    const emptied: string[] = [];
+
+    for (const [path, method, operation] of catalogue()) {
+      for (const [status, response] of Object.entries(operation.responses)) {
+        const schema = (
+          response as {
+            content?: {
+              "application/json"?: { schema?: Record<string, unknown> };
+            };
+          }
+        ).content?.["application/json"]?.schema;
+
+        if (!schema) continue;
+
+        const described =
+          schema.properties !== undefined ||
+          schema.$ref !== undefined ||
+          schema.allOf !== undefined ||
+          schema.type === "array";
+
+        if (!described) emptied.push(`${method} ${path} → ${status}`);
+      }
+    }
+
+    expect(emptied).toEqual([]);
+  });
+});
+
+describe("the delivery status override, as published", () => {
+  it("demands a reason in the body", () => {
+    // The one endpoint in the module that moves a status without something
+    // having happened in the field. Everything the driver's app does carries
+    // its own evidence; an override carries none, so the reason IS it.
+    const override = Object.entries(document.paths).find(([path]) =>
+      path.includes("/delivery/update-delivery-status/"),
+    );
+
+    expect(override).toBeDefined();
+
+    const body = JSON.stringify(
+      (override![1].patch as OpenApiOperation).requestBody ?? {},
+    );
+
+    expect(body).toContain("reasonId");
+    expect(body).toContain("required");
   });
 });

@@ -12,6 +12,7 @@ import { UpdateDeliveryStatusUseCase } from "@/modules/delivery/usecases/update-
 import { StartDriverRouteUseCase } from "@/modules/delivery/usecases/start-driver-route/start-driver-route-usecase";
 
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
+import { InMemoryStatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/in-memory/in-memory-status-change-reason-repository";
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
@@ -50,6 +51,7 @@ vi.mock("@/../infra/database", () => ({
 }));
 
 const A = "018f0000-0000-7000-8000-00000000000a";
+const REASON = "018f0000-0000-7000-8000-0000000000e9";
 const B = "018f0000-0000-7000-8000-00000000000b";
 
 const DISPATCHER_A = "018f0000-0000-7000-8000-0000000000a1";
@@ -100,11 +102,23 @@ function makeContext() {
   const deliveryRepository = new InMemoryDeliveryRepository();
 
   // One store, shared, in both directions. See the file docblock.
+  const reasonRepository = new InMemoryStatusChangeReasonRepository();
+
   const routeRepository = new InMemoryRouteRepository(
     deliveryRepository.deliveries,
   );
 
   deliveryRepository.routeStops = routeRepository.stops;
+
+  // The panel cannot move a status without saying why. One active reason is
+  // what makes these tests exercise the change rather than the refusal.
+  reasonRepository.statusChangeReasons.push({
+    id: REASON,
+    name: "Contato com o cliente",
+    description: null,
+    is_active: true,
+    businessId: A,
+  });
 
   const driverRepository = new InMemoryDriverRepository();
   const vehicleRepository = new InMemoryVehicleRepository();
@@ -236,6 +250,7 @@ function makeContext() {
       userRepository,
       deliveryRepository,
       routeRepository,
+      reasonRepository,
       notificationService,
     ),
 
@@ -577,7 +592,8 @@ describe("the panel resolving an address the driver never reached", () => {
       businessId: A,
       deliveryId: cancelled,
       status: "CANCELLED",
-    });
+        reasonId: REASON,
+  });
 
     expect(deliveryFor(cancelled).status).toBe("CANCELLED");
     expect(stopFor(cancelled)[0].status).toBe("CANCELLED");
@@ -594,6 +610,7 @@ describe("the panel resolving an address the driver never reached", () => {
       deliveryId: delivery,
       status: "DELIVERED",
       received_by: "Recebido no balcão",
+          reasonId: REASON,
     });
 
     expect(stopFor(delivery)[0].status).toBe("COMPLETED");
@@ -626,7 +643,8 @@ describe("re-delivery keeps the record of the attempt", () => {
       businessId: A,
       deliveryId: delivery,
       status: "PENDING",
-    });
+        reasonId: REASON,
+  });
 
     expect(stopFor(delivery)).toHaveLength(1);
     expect(stopFor(delivery)[0].status).toBe("FAILED");
@@ -840,7 +858,8 @@ describe("the other carrier at the moment of settlement", () => {
         businessId: B,
         deliveryId: delivery,
         status: "CANCELLED",
-      }),
+            reasonId: REASON,
+    }),
     ).rejects.toThrow();
 
     expect(stopFor(delivery)[0].status).toBe("PENDING");

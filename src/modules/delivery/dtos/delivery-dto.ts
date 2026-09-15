@@ -150,19 +150,60 @@ interface OperationSummary {
   drivers: DriverOperationRow[];
 }
 
-type DeliveryEventType = "ARRIVAL" | "PROOF";
+/**
+ * Everything that can land on a delivery's trail.
+ *
+ * ARRIVAL and PROOF come from the driver's app. STATUS_CHANGE and NOTE come
+ * from the support timeline: a status moved by hand used to be a column that
+ * changed, so "why is this one Insucesso?" had no answer three days later,
+ * and an operator's annotation had nowhere to live at all.
+ */
+type DeliveryEventType = "ARRIVAL" | "PROOF" | "STATUS_CHANGE" | "NOTE";
+
+/**
+ * Who produced an event. The timeline has to say so and cannot infer it: a
+ * status moved by a person on the web and one moved by an integration look
+ * identical in the columns.
+ */
+type DeliveryEventActor = "USER" | "DRIVER_APP" | "INTEGRATION" | "SYSTEM";
 
 interface CreateDeliveryEventProps {
   type: DeliveryEventType;
   deliveryId: string;
-  reportedById: string;
+
+  /**
+   * Absent only for an actor that is not a person — an integration or the
+   * platform itself. Every source today has one.
+   */
+  reportedById?: string | null;
+
+  actor?: DeliveryEventActor;
+
+  /** DRIVER_APP only: which phone sent it. */
+  device?: string | null;
+
   latitude?: number | null;
   longitude?: number | null;
   photo?: string | null;
   signature?: string | null;
   received_by?: string | null;
-  /** Outbox idempotency anchor — unique in the database. */
-  client_submission_id: string;
+
+  /** Required on a NOTE; optional detail alongside a STATUS_CHANGE. */
+  note?: string | null;
+
+  // STATUS_CHANGE only.
+  status_from?: DeliveryStatus | null;
+  status_to?: DeliveryStatus | null;
+  reasonId?: string | null;
+
+  /**
+   * Outbox idempotency anchor — unique in the database.
+   *
+   * Optional because only the driver's app resends: an operator clicking twice
+   * on the web makes two deliberate events, and a support timeline that
+   * collapsed them would hide that somebody did it twice.
+   */
+  client_submission_id?: string | null;
 }
 
 interface DeliveryEventRecord {
@@ -185,6 +226,7 @@ export {
   DriverOperationRow,
   OperationSummary,
   DeliveryEventType,
+  DeliveryEventActor,
   CreateDeliveryEventProps,
   DeliveryEventRecord,
 };

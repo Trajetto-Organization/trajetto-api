@@ -44,6 +44,7 @@ import { aiAnalysisRoutes } from "./ai-analysis-routes";
 
 import { shipperRoutes } from "./shipper-routes";
 import { occurrenceTypeRoutes } from "./occurrence-type-routes";
+import { statusChangeReasonRoutes } from "./status-change-reason-routes";
 
 import { deliveryRoutes } from "./delivery-routes";
 import { routeRoutes } from "./route-routes";
@@ -78,6 +79,7 @@ async function routes(app: FastifyInstance) {
   app.register(aiAnalysisRoutes, { prefix: "/ai-analysis" });
   app.register(shipperRoutes, { prefix: "/shipper" });
   app.register(occurrenceTypeRoutes, { prefix: "/occurrence-type" });
+  app.register(statusChangeReasonRoutes, { prefix: "/status-change-reason" });
   app.register(deliveryRoutes, { prefix: "/delivery" });
   app.register(routeRoutes, { prefix: "/route" });
   app.register(chatRoutes, { prefix: "/chat" });

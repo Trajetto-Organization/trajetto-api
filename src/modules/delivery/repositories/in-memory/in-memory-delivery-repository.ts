@@ -491,7 +491,10 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       id: found.id,
       type: found.type,
       deliveryId: found.deliveryId,
-      client_submission_id: found.client_submission_id,
+      // The record type says "null when there is none"; the create props say
+      // "may be absent". An event written by the web has no submission id at
+      // all, so the two shapes meet here.
+      client_submission_id: found.client_submission_id ?? null,
     };
   }
 

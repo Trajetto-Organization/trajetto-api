@@ -5,6 +5,7 @@ import { UpdateDeliveryStatusUseCase } from "@/modules/delivery/usecases/update-
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
+import { InMemoryStatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/in-memory/in-memory-status-change-reason-repository";
 
 import type { NotificationService } from "@/shared/services/notification-service";
 
@@ -35,6 +36,7 @@ vi.mock("@/../infra/database", () => ({
 }));
 
 const BUSINESS = "018f0000-0000-7000-8000-00000000000b";
+const REASON = "018f0000-0000-7000-8000-0000000000e9";
 const USER_ID = "018f0000-0000-7000-8000-0000000000aa";
 const SHIPPER_ID = "018f0000-0000-7000-8000-0000000000f1";
 
@@ -48,12 +50,24 @@ function makeContext() {
     businessId: BUSINESS,
   } as User);
 
+  const reasonRepository = new InMemoryStatusChangeReasonRepository();
   const routeRepository = new InMemoryRouteRepository();
+
+  // The panel cannot move a status without saying why. One active reason is
+  // what makes these tests exercise the change rather than the refusal.
+  reasonRepository.statusChangeReasons.push({
+    id: REASON,
+    name: "Contato com o cliente",
+    description: null,
+    is_active: true,
+    businessId: BUSINESS,
+  });
 
   const useCase = new UpdateDeliveryStatusUseCase(
     userRepository,
     deliveryRepository,
     routeRepository,
+    reasonRepository,
     {
       createActivityIfEnabled: async () => undefined,
     } as unknown as NotificationService,
@@ -93,7 +107,8 @@ const move = (
     businessId: BUSINESS,
     deliveryId,
     status,
-  });
+  reasonId: REASON,
+});
 
 describe("a transition the status machine allows", () => {
   it("still goes through", async () => {

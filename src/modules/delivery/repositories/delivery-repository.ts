@@ -703,13 +703,26 @@ class DeliveryRepository implements IDeliveryRepository {
       data: {
         type: eventData.type,
         deliveryId: eventData.deliveryId,
-        reportedById: eventData.reportedById,
+        reportedById: eventData.reportedById ?? null,
+
+        // Defaults to USER because that is what every source was until the
+        // timeline existed; the column's own default says the same, and both
+        // saying it is what keeps an older caller honest.
+        actor: eventData.actor ?? "USER",
+        device: eventData.device ?? null,
+
         latitude: eventData.latitude ?? null,
         longitude: eventData.longitude ?? null,
         photo: eventData.photo ?? null,
         signature: eventData.signature ?? null,
         received_by: eventData.received_by ?? null,
-        client_submission_id: eventData.client_submission_id,
+
+        note: eventData.note ?? null,
+        status_from: eventData.status_from ?? null,
+        status_to: eventData.status_to ?? null,
+        reasonId: eventData.reasonId ?? null,
+
+        client_submission_id: eventData.client_submission_id ?? null,
       },
     });
   }

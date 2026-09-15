@@ -20,9 +20,8 @@ class UpdateDeliveryStatusController {
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
     const { deliveryId } = updateDeleteDeliverySchema.parse(request.params);
 
-    const { status, received_by } = updateDeliveryStatusSchema.parse(
-      request.body,
-    );
+    const { status, received_by, reasonId, note } =
+      updateDeliveryStatusSchema.parse(request.body);
 
     const updateDeliveryStatusUseCase = container.resolve(
       UpdateDeliveryStatusUseCase,
@@ -35,6 +34,8 @@ class UpdateDeliveryStatusController {
         deliveryId,
         status,
         received_by,
+        reasonId,
+        note,
       });
 
       return reply
