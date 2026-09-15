@@ -193,10 +193,15 @@ class DeliveryRepository implements IDeliveryRepository {
       include: {
         ...listInclude,
         items: true,
-        // The driver's appointments: arrival and proof marks, newest first.
+        // The trail, newest first: arrivals and proofs from the app, status
+        // overrides and notes from the panel. The reason comes along because
+        // it is the sentence support is scanning for.
         events: {
           orderBy: { created_at: "desc" },
-          include: { reportedBy: { select: { id: true, name: true } } },
+          include: {
+            reportedBy: { select: { id: true, name: true } },
+            reason: { select: { id: true, name: true } },
+          },
         },
         occurrences: {
           orderBy: { created_at: "desc" },
@@ -205,6 +210,26 @@ class DeliveryRepository implements IDeliveryRepository {
               select: { id: true, name: true, blocks_delivery: true },
             },
             reportedBy: { select: { id: true, name: true } },
+          },
+        },
+
+        /**
+         * The messages that named this delivery as their context.
+         *
+         * Capped, and deliberately: a chat thread is a conversation with a
+         * driver over months, and a support screen about ONE delivery wants
+         * the exchange about that delivery, not the thread. Anyone who needs
+         * the whole conversation opens the chat, which is where it lives.
+         */
+        chatMessages: {
+          orderBy: { created_at: "desc" },
+          take: 50,
+          select: {
+            id: true,
+            kind: true,
+            body: true,
+            created_at: true,
+            sender: { select: { id: true, name: true } },
           },
         },
       },

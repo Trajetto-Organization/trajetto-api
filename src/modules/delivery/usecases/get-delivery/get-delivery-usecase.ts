@@ -5,6 +5,11 @@ import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
 
 import { UploadService } from "@/shared/services/upload-service";
 
+import {
+  buildDeliveryTimeline,
+  type TimelineSources,
+} from "@/shared/delivery/delivery-timeline";
+
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import {
   DeliveryNotFoundError,
@@ -67,6 +72,15 @@ class GetDeliveryUseCase {
               signature?: string | null;
             } & Record<string, unknown>
           >;
+          chatMessages?: Array<
+            {
+              id: string;
+              kind: string;
+              body?: string | null;
+              created_at: Date | string;
+              sender?: { name: string } | null;
+            }
+          >;
         } & Record<string, unknown>)
       | null;
 
@@ -100,7 +114,29 @@ class GetDeliveryUseCase {
       })),
     );
 
-    return { ...detail, occurrences, events };
+    /**
+     * The support timeline: everything that ever happened to this delivery,
+     * in one list, newest first.
+     *
+     * Built from the same rows the panel already receives rather than from a
+     * table of its own — an arrival, a typed occurrence and a message each
+     * have an owner, and copying them into a timeline table would make two
+     * writers for every one of them.
+     *
+     * Built AFTER the signing above, so a photo in the timeline is the same
+     * short-lived URL the detail shows and not a storage key.
+     */
+    // Cast because `findDeliveryDetailById` returns `unknown` by contract:
+    // the detail's shape evolves with the module, validated by zod at write
+    // time and passed through on read. The builder's own types are what
+    // actually constrain the merge, and they are tested directly.
+    const timeline = buildDeliveryTimeline({
+      events: events as unknown as TimelineSources["events"],
+      occurrences: occurrences as unknown as TimelineSources["occurrences"],
+      messages: detail.chatMessages as unknown as TimelineSources["messages"],
+    });
+
+    return { ...detail, occurrences, events, timeline };
   }
 }
 
