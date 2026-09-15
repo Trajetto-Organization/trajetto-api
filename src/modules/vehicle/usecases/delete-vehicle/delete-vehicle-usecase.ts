@@ -25,6 +25,11 @@ import { VehicleHasAssociatedFuelError } from "../errors/vehicle-has-associated-
 
 import { VehicleHasAssociatedChecklistsError } from "../errors/vehicle-has-associated-checklists-error";
 
+import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
+import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+
+import { VehicleHasAssociatedOperationError } from "../errors/vehicle-has-associated-operation-error";
+
 import { AppError } from "@/shared/errors/AppError";
 import { Vehicle } from "../../dtos/vehicle-dto";
 
@@ -45,6 +50,10 @@ class DeleteVehicleUseCase {
     private fuel: IFuelRepository,
     @inject("VehicleChecklistRepository")
     private vehicleChecklist: IVehicleChecklistRepository,
+    @inject("DeliveryRepository")
+    private delivery: IDeliveryRepository,
+    @inject("RouteRepository")
+    private route: IRouteRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -103,6 +112,26 @@ class DeleteVehicleUseCase {
     if (associatedChecklists.length > 0) {
       throw new VehicleHasAssociatedChecklistsError(
         associatedChecklists.length,
+      );
+    }
+
+
+    /**
+     * The operation history, which the four guards above never covered.
+     *
+     * Both relations are optional, so this delete would SUCCEED and silently
+     * erase whose work it was — see tests/E2E/delete-cascade-integrity for
+     * what the database actually does without this.
+     */
+    const [associatedDeliveries, associatedRoutes] = await Promise.all([
+      this.delivery.countDeliveriesReferencing({ vehicleId: vehicleId }),
+      this.route.countRoutesReferencing({ vehicleId: vehicleId }),
+    ]);
+
+    if (associatedDeliveries > 0 || associatedRoutes > 0) {
+      throw new VehicleHasAssociatedOperationError(
+        associatedDeliveries,
+        associatedRoutes,
       );
     }
 

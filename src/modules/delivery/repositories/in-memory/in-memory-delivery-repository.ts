@@ -495,6 +495,17 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     };
   }
 
+  async countDeliveriesReferencing(reference: {
+    driverId?: string;
+    vehicleId?: string;
+  }): Promise<number> {
+    return this.deliveries.filter(
+      (delivery) =>
+        (!reference.driverId || delivery.driverId === reference.driverId) &&
+        (!reference.vehicleId || delivery.vehicleId === reference.vehicleId),
+    ).length;
+  }
+
   async createDeliveryEvent(
     eventData: CreateDeliveryEventProps,
   ): Promise<void> {

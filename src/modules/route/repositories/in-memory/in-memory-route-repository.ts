@@ -537,6 +537,17 @@ class InMemoryRouteRepository implements IRouteRepository {
     }
   }
 
+  async countRoutesReferencing(reference: {
+    driverId?: string;
+    vehicleId?: string;
+  }): Promise<number> {
+    return this.routes.filter(
+      (route) =>
+        (!reference.driverId || route.driverId === reference.driverId) &&
+        (!reference.vehicleId || route.vehicleId === reference.vehicleId),
+    ).length;
+  }
+
   async findStopById(
     stopId: string,
     businessId: string,

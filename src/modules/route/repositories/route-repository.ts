@@ -635,6 +635,18 @@ class RouteRepository implements IRouteRepository {
     });
   }
 
+  async countRoutesReferencing(reference: {
+    driverId?: string;
+    vehicleId?: string;
+  }): Promise<number> {
+    return this.prisma.route.count({
+      where: {
+        ...(reference.driverId && { driverId: reference.driverId }),
+        ...(reference.vehicleId && { vehicleId: reference.vehicleId }),
+      },
+    });
+  }
+
   async findStopById(
     stopId: string,
     businessId: string,

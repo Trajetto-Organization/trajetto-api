@@ -104,6 +104,19 @@ interface IDeliveryRepository {
   findEventBySubmissionId: (
     clientSubmissionId: string,
   ) => Promise<DeliveryEventRecord | null>;
+  /**
+   * How many deliveries reference this driver or this vehicle, of any status.
+   *
+   * Asked before a hard delete. Both columns are optional relations, so
+   * Postgres NULLs them instead of refusing — a DELIVERED delivery with a
+   * delivered_at and nobody who delivered it. This count is what turns that
+   * silence into a refusal the operator can read.
+   */
+  countDeliveriesReferencing: (reference: {
+    driverId?: string;
+    vehicleId?: string;
+  }) => Promise<number>;
+
   createDeliveryEvent: (
     eventData: CreateDeliveryEventProps,
     tx?: Prisma.TransactionClient,

@@ -6,6 +6,11 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 import { IFineRepository } from "@/modules/fine/repositories/IFine-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
+import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
+import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+
+import { DriverHasAssociatedOperationError } from "../errors/driver-has-associated-operation-error";
+
 import { AppError } from "@/shared/errors/AppError";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
@@ -42,6 +47,10 @@ class DeleteDriverUseCase {
     private fuel: IFuelRepository,
     @inject("VehicleChecklistRepository")
     private vehicleChecklist: IVehicleChecklistRepository,
+    @inject("DeliveryRepository")
+    private delivery: IDeliveryRepository,
+    @inject("RouteRepository")
+    private route: IRouteRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -97,6 +106,26 @@ class DeleteDriverUseCase {
 
     if (associatedChecklists.length > 0) {
       throw new DriverHasAssociatedChecklistsError(associatedChecklists.length);
+    }
+
+
+    /**
+     * The operation history, which the four guards above never covered.
+     *
+     * Both relations are optional, so this delete would SUCCEED and silently
+     * erase whose work it was — see tests/E2E/delete-cascade-integrity for
+     * what the database actually does without this.
+     */
+    const [associatedDeliveries, associatedRoutes] = await Promise.all([
+      this.delivery.countDeliveriesReferencing({ driverId: driverId }),
+      this.route.countRoutesReferencing({ driverId: driverId }),
+    ]);
+
+    if (associatedDeliveries > 0 || associatedRoutes > 0) {
+      throw new DriverHasAssociatedOperationError(
+        associatedDeliveries,
+        associatedRoutes,
+      );
     }
 
     try {

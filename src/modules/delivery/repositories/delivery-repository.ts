@@ -683,6 +683,18 @@ class DeliveryRepository implements IDeliveryRepository {
     });
   }
 
+  async countDeliveriesReferencing(reference: {
+    driverId?: string;
+    vehicleId?: string;
+  }): Promise<number> {
+    return this.prisma.delivery.count({
+      where: {
+        ...(reference.driverId && { driverId: reference.driverId }),
+        ...(reference.vehicleId && { vehicleId: reference.vehicleId }),
+      },
+    });
+  }
+
   async createDeliveryEvent(
     eventData: CreateDeliveryEventProps,
     tx?: Prisma.TransactionClient,

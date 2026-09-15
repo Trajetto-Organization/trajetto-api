@@ -156,6 +156,24 @@ interface IRouteRepository {
     tx?: Prisma.TransactionClient,
   ) => Promise<{ stop: RouteStop; closedRoute: Route | null } | null>;
 
+  /**
+   * How many routes reference this driver or this vehicle, of any status.
+   *
+   * Asked before a hard delete. Deliberately counts EVERY route, not only the
+   * running ones: a completed route is the record of a day's work, and the
+   * point of the guard is precisely that deleting the person or the truck
+   * would erase whose day it was.
+   *
+   * Not scoped by tenant, on purpose and unlike everything else in this
+   * interface: the caller has already proven the driver or vehicle is theirs,
+   * and a count scoped to one company would answer zero for a reference from
+   * another — which is the one answer that must never be wrong here.
+   */
+  countRoutesReferencing: (reference: {
+    driverId?: string;
+    vehicleId?: string;
+  }) => Promise<number>;
+
   findStopById: (
     stopId: string,
     businessId: string,
