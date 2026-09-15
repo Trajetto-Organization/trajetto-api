@@ -60,6 +60,46 @@ function toErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown error";
 }
 
+/**
+ * How long a single probe may take before it counts as down.
+ *
+ * Half a second. This endpoint is what a load balancer reads, and a probe that
+ * can take four seconds is a probe that decides nothing — the balancer has
+ * already given up and drawn its own conclusion. A healthy ping is single-digit
+ * milliseconds, so the only thing this cuts off is a dependency that has
+ * stopped answering.
+ */
+const PROBE_TIMEOUT_MS = 500;
+
+async function probeService(
+  critical: boolean,
+  run: () => Promise<unknown>,
+): Promise<ServiceHealth> {
+  const startedAt = Date.now();
+
+  try {
+    await Promise.race([
+      run(),
+
+      new Promise((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error(`Probe timed out after ${PROBE_TIMEOUT_MS}ms`)),
+          PROBE_TIMEOUT_MS,
+        ),
+      ),
+    ]);
+
+    return { status: "healthy", critical, latency: Date.now() - startedAt };
+  } catch (error) {
+    return {
+      status: "unhealthy",
+      critical,
+      latency: Date.now() - startedAt,
+      error: toErrorMessage(error),
+    };
+  }
+}
+
 async function healthRoutes(app: FastifyInstance) {
   /**
    * Rich diagnosis for humans - and, today, the target of the Docker
@@ -86,44 +126,21 @@ async function healthRoutes(app: FastifyInstance) {
       },
     },
     async (_request, reply) => {
-      let databaseHealth: ServiceHealth;
-      let redisHealth: ServiceHealth;
+      // In parallel and each on a clock. Probed one after the other, a hung
+      // dependency added its whole timeout to the answer: measured at 1,03 s
+      // with Redis stopped, for a check that is otherwise 220 ms. A load
+      // balancer with a one-second timeout would then pull every replica out
+      // of rotation over a Redis blip the API had already survived — the
+      // outage the design goes out of its way not to cause.
+      const [databaseHealth, redisHealth] = await Promise.all([
+        probeService(true, () => database.$queryRaw`SELECT 1`),
 
-      try {
-        const dbStart = Date.now();
-        await database.$queryRaw`SELECT 1`;
+        probeService(false, async () => {
+          const client = await RedisConnection.getInstance().getClient();
 
-        databaseHealth = {
-          status: "healthy",
-          critical: true,
-          latency: Date.now() - dbStart,
-        };
-      } catch (error) {
-        databaseHealth = {
-          status: "unhealthy",
-          critical: true,
-          error: toErrorMessage(error),
-        };
-      }
-
-      try {
-        const redisStart = Date.now();
-        const client = await RedisConnection.getInstance().getClient();
-
-        await client.ping();
-
-        redisHealth = {
-          status: "healthy",
-          critical: false,
-          latency: Date.now() - redisStart,
-        };
-      } catch (error) {
-        redisHealth = {
-          status: "unhealthy",
-          critical: false,
-          error: toErrorMessage(error),
-        };
-      }
+          await client.ping();
+        }),
+      ]);
 
       const services = { database: databaseHealth, redis: redisHealth };
 

@@ -43,21 +43,44 @@ async function ensureAuthenticated(
     );
   }
 
-  try {
-    const payload = verify(token, auth.secret_token) as AccessTokenPayload;
+  /**
+   * The token itself, and ONLY the token, inside this try.
+   *
+   * Everything after it — the user lookup, the session check — talks to the
+   * database, and a database that is down is not an invalid token. It used to
+   * be one try around the whole function, so a Postgres restart answered 401
+   * to every request in the product; both clients read a 401 as "your session
+   * ended" and log the user out. Measured: with Postgres stopped, every
+   * authenticated route answered 401 after 4,3 s. Thirty seconds of a database
+   * blip would have logged out every driver in the field, mid-route, with no
+   * way back in until signal and credentials lined up.
+   */
+  let payload: AccessTokenPayload;
 
-    if (
-      !payload.sub ||
-      payload.tokenType !== "access" ||
-      typeof payload.sessionVersion !== "number" ||
-      !payload.familyId
-    ) {
-      throw new AppError(
-        "Token de autenticacao invalido.",
-        401,
-        "AUTH_TOKEN_INVALID",
-      );
-    }
+  try {
+    payload = verify(token, auth.secret_token) as AccessTokenPayload;
+  } catch (error) {
+    throw new AppError(
+      "Token de autenticacao invalido ou expirado.",
+      401,
+      "AUTH_TOKEN_INVALID",
+    );
+  }
+
+  if (
+    !payload.sub ||
+    payload.tokenType !== "access" ||
+    typeof payload.sessionVersion !== "number" ||
+    !payload.familyId
+  ) {
+    throw new AppError(
+      "Token de autenticacao invalido.",
+      401,
+      "AUTH_TOKEN_INVALID",
+    );
+  }
+
+  try {
 
     const userRepository = new UserRepository();
     const tokenRepository = new UserTokensRepository();
@@ -106,10 +129,21 @@ async function ensureAuthenticated(
   } catch (error) {
     if (error instanceof AppError) throw error;
 
+    /**
+     * Anything else here came from the database or from the network under it,
+     * and the honest answer is that WE are unavailable — not that the caller's
+     * session is bad.
+     *
+     * 503 and not 500 for the same reason: a client that sees 503 knows to
+     * come back, and both of ours already treat it as transient. A 401 makes
+     * them throw the session away.
+     */
+    console.error("[Auth] Falha ao verificar a sessão:", error);
+
     throw new AppError(
-      "Token de autenticacao invalido ou expirado.",
-      401,
-      "AUTH_TOKEN_INVALID",
+      "Não foi possível verificar sua sessão agora. Tente novamente.",
+      503,
+      "AUTH_SESSION_UNAVAILABLE",
     );
   }
 }

@@ -89,3 +89,42 @@ Vale registrar: a primeira execução reportou 55% de falhas com p95 de 14 ms �
 uma máquina parada enquanto o teste a chamava de sobrecarregada. Todas as
 requisições de gestor iam com o MESMO token, e o rate limit é por usuário. O
 teste passou a semear cinquenta gestores e rotacionar por VU.
+
+
+## Failure injection
+
+`bash tests/load/failure-injection.sh` derruba Redis e Postgres de verdade e
+imprime status + latência de quatro superfícies em cada estado. Não é um teste
+automatizado: cada passo para um container, e o que interessa é o
+comportamento.
+
+### O que foi encontrado
+
+**Com o Postgres fora, toda rota autenticada respondia 401.** Os dois clientes
+leem 401 como "sua sessão acabou" — o mobile chama `handleUnauthorized()`
+direto no callback de logout. Trinta segundos de banco indisponível deslogariam
+todo motorista em campo, no meio da rota, sem volta até sinal e credenciais se
+alinharem.
+
+A causa era um `try` só em volta do middleware inteiro: a verificação do token
+e as consultas ao banco dividiam o mesmo `catch`, que transformava tudo em
+AUTH_TOKEN_INVALID. Um banco fora do ar não é um token inválido. Agora é 503
+com `AUTH_SESSION_UNAVAILABLE`, e o token continua sendo 401 — com teste dos
+dois lados e mutação nas duas direções.
+
+**O `/health` levava 1,03 s com o Redis fora**, contra 220 ms normais, porque
+as sondas rodavam em sequência e a do Redis esperava o timeout inteiro. Um load
+balancer com timeout de um segundo tiraria toda réplica de rotação por causa de
+um soluço do Redis que a API já tinha sobrevivido — que é exatamente a queda
+que o desenho evita ao marcar Redis como não-crítico. Agora as sondas rodam em
+paralelo e cada uma tem relógio de 500 ms.
+
+### O que já estava certo
+
+- Redis fora: tudo continua respondendo 200. O `skipOnError: true` do rate
+  limit funciona como projetado, e agora está verificado em vez de pretendido.
+- Postgres fora: `/health` responde 503 — que é o que faz o healthcheck do
+  Docker reciclar o container — e `/health/liveness` não toca em dependência
+  nenhuma, então uma queda externa não vira laço de restart.
+- Tudo volta sozinho quando os containers voltam. Nenhum restart de processo
+  foi necessário em nenhum dos cenários.
