@@ -173,6 +173,18 @@ describe("the statuses each route claims to answer", () => {
     }
   });
 
+  it("warns that the listing is NDJSON and not JSON", () => {
+    // The one response in the module whose shape a client can get wrong in a
+    // way no status code reveals: calling response.json() on a stream throws
+    // a parse error that looks like a server fault. The wire format is proven
+    // byte by byte in the integration suite; this pins that the documentation
+    // still says so.
+    const listing = operationFor("/route/list-routes").description ?? "";
+
+    expect(listing).toContain("ndjson");
+    expect(listing).toContain("searchMeta");
+  });
+
   it("describes a real body on every route that parses one", () => {
     const withBody = [
       "/route/create-route/{businessId}",

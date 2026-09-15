@@ -112,18 +112,36 @@ const routeResponses = {
   routeUpdated: z.object({
     message: z.string().default("Rota atualizada com sucesso!"),
   }),
-  routeList: z.object({
-    data: z.array(routeEntity),
-    total: z.number(),
-    currentPage: z.number(),
-    pageSize: z.number(),
-    totalPages: z.number(),
+  /**
+   * NOT a JSON object. This endpoint streams `application/x-ndjson`, like
+   * every other offset listing in the API: one JSON value per line, the first
+   * being the envelope below and each one after it a route.
+   *
+   * Documented as the envelope because that is the only part with a fixed
+   * shape, and spelled out in the route's description because a client that
+   * calls `response.json()` on this gets a parse error — which is exactly the
+   * mistake a tidy-looking `{ data, total }` schema here would cause.
+   *
+   * Note `searchMeta`: sendAsNDJSON nests whatever the use case returned in
+   * `meta` under that key, so the status tally is NOT at the top level.
+   */
+  routeListEnvelope: z.object({
     meta: z.object({
-      statusCounts: z.record(routeStatusEnum, z.number()).describe(
-        "Contagem por status do conjunto FILTRADO, nunca da página — os cards descrevem o filtro, não a paginação.",
-      ),
+      total: z.number(),
+      page: z.number(),
+      pageSize: z.number(),
+      searchMeta: z.object({
+        statusCounts: z
+          .record(routeStatusEnum, z.number())
+          .describe(
+            "Contagem por status do conjunto FILTRADO, nunca da página — os cards descrevem o filtro, não a paginação. Todos os cinco status vêm sempre, inclusive zerados.",
+          ),
+      }),
     }),
   }),
+
+  /** One line of the stream, after the envelope. */
+  routeListRow: routeEntity,
   routeDetail: z.object({
     data: routeEntity,
     meta: z.object({

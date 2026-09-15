@@ -90,10 +90,10 @@ async function routeRoutes(app: FastifyInstance) {
         tags: ["route"],
         summary: "List routes",
         description:
-          "Paginated board, newest first, with filters by status, driver and day plus free search over the route name, the driver's name and the route code. The status tally in `meta` describes the FILTERED set, never the page. Driver users only ever see their own routes — a driverId they send is replaced, not merged. Responds as NDJSON, like every other offset listing in the API.",
+          "Responde em application/x-ndjson, NÃO em JSON: uma linha por valor. A PRIMEIRA linha é o envelope `{meta:{total,page,pageSize,searchMeta:{statusCounts}}}` e cada linha seguinte é uma rota completa, com suas paradas. Chamar response.json() nisso dá erro de parse — leia linha a linha (o front usa parseNDJSON). Quadro paginado, mais recente primeiro, com filtros por status, motorista e dia, e busca livre sobre o nome da rota, o nome do motorista e o código. A contagem por status descreve o conjunto FILTRADO, nunca a página. Usuário motorista só enxerga as próprias rotas — um driverId enviado por ele é substituído, não somado.",
         querystring: routeSchemas.listRoutes,
         response: {
-          200: routeResponses.routeList,
+          200: routeResponses.routeListEnvelope,
           400: routeResponses.genericError,
           403: routeResponses.genericError,
           500: routeResponses.internalServerError,

@@ -499,3 +499,54 @@ describe("with a driver token", () => {
     expect(response.json().code).toBe("INVALID_ROUTE_TRANSITION");
   });
 });
+
+describe("the shape the listing actually puts on the wire", () => {
+  /**
+   * The listing streams NDJSON, like every other offset list in this API: a
+   * meta envelope on the first line, then one route per line. A client that
+   * calls `response.json()` on it gets a parse error, so this is the one
+   * response in the module whose documentation has to say so out loud — and
+   * the only way to be sure the documentation is right is to read the bytes.
+   */
+  it("streams a meta envelope and then one route per line", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/route/list-routes?page=1&pageSize=10&businessId=${CARRIER_A}`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/x-ndjson");
+
+    const lines = response.body
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line));
+
+    // First line: the envelope. Note `searchMeta` — sendAsNDJSON nests
+    // whatever the use case put in `meta` under that key, so the status tally
+    // is NOT at the top level.
+    expect(lines[0]).toMatchObject({
+      meta: {
+        total: expect.any(Number),
+        page: 1,
+        pageSize: 10,
+        searchMeta: { statusCounts: expect.any(Object) },
+      },
+    });
+
+    // The cards read the tally, and every status has to be present or a
+    // company with nothing cancelled renders "undefined" instead of 0.
+    expect(Object.keys(lines[0].meta.searchMeta.statusCounts).sort()).toEqual([
+      "CANCELLED",
+      "COMPLETED",
+      "IN_PROGRESS",
+      "PLANNED",
+      "RELEASED",
+    ]);
+
+    // Then the rows, with the stops the panel draws.
+    expect(lines[1]).toMatchObject({ id: routeOfA, status: "PLANNED" });
+    expect(lines[1].stops).toHaveLength(1);
+  });
+});
