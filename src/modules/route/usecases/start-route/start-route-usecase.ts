@@ -101,20 +101,24 @@ class StartRouteUseCase {
       );
     }
 
-    if (vehicleId && vehicleId !== findRoute.vehicleId) {
-      const findVehicle = await this.vehicle.findVehicleById(vehicleId);
+    // The vehicle is checked on EVERY departure, not only when the driver
+    // swaps it. Between the dispatcher planning the route and the truck
+    // leaving the yard there is usually a night, and an administrator can
+    // block a vehicle in it — an accident, a theft, an expired licence. The
+    // guard used to run only on a swap, so the one case it was written for
+    // (a vehicle that must not take cargo) was exactly the one it missed.
+    const findVehicle = await this.vehicle.findVehicleById(departingVehicleId);
 
-      if (!findVehicle || findVehicle.businessId !== businessId) {
-        throw new AppError("Veículo não encontrado.", 404, "VEHICLE_NOT_FOUND");
-      }
+    if (!findVehicle || findVehicle.businessId !== businessId) {
+      throw new AppError("Veículo não encontrado.", 404, "VEHICLE_NOT_FOUND");
+    }
 
-      if (isVehicleOutOfOperation(findVehicle.status)) {
-        throw new AppError(
-          new RouteVehicleUnavailableError().message,
-          400,
-          "ROUTE_VEHICLE_UNAVAILABLE",
-        );
-      }
+    if (isVehicleOutOfOperation(findVehicle.status)) {
+      throw new AppError(
+        new RouteVehicleUnavailableError().message,
+        400,
+        "ROUTE_VEHICLE_UNAVAILABLE",
+      );
     }
 
     try {

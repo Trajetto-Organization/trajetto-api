@@ -128,6 +128,10 @@ function makeContext() {
     } as Driver,
   );
 
+  // The route owns Vehicle.status while the truck is out, so it has to see
+  // the same rows the vehicle fake serves.
+  routeRepository.vehicles = vehicleRepository.vehicles;
+
   vehicleRepository.vehicles.push({
     id: VEHICLE_A,
     license_plate: "AAA1A11",
@@ -211,6 +215,8 @@ function makeContext() {
       routeRepository,
       notificationService,
     ),
+
+    vehicleRepository,
 
     /** Takes the driver's truck away, for the guard that asks about one. */
     unlinkVehicleFromDriver: () => {
@@ -955,5 +961,114 @@ describe("the departure endpoint the phones already have", () => {
     // The planned route is untouched: it leaves when it is released.
     expect(deliveryFor(onRoute).status).toBe("PENDING");
     expect(routeFor(route.id).status).toBe("PLANNED");
+  });
+});
+
+describe("“Em rota” is a fact about a route, not a value somebody types", () => {
+  function vehicle() {
+    return context.vehicleRepository.vehicles.find(
+      (entry) => entry.id === VEHICLE_A,
+    )!;
+  }
+
+  it("marks the truck as out when the route leaves, and free when it ends", async () => {
+    const delivery = await seedDelivery();
+
+    expect(vehicle().status).toBe("ACTIVE");
+
+    const route = await runningRoute([delivery]);
+
+    expect(vehicle().status).toBe("IN_ROUTE");
+    expect(routeFor(route).status).toBe("IN_PROGRESS");
+
+    await context.proof.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: delivery,
+      client_submission_id: submission(),
+      photo: "canhoto.jpg",
+    });
+
+    // The route closed itself on its last stop, so the truck came back by
+    // itself too. Nobody has to remember to change a dropdown.
+    expect(routeFor(route).status).toBe("COMPLETED");
+    expect(vehicle().status).toBe("ACTIVE");
+  });
+
+  it("frees the truck when the route is cancelled mid-way", async () => {
+    const delivery = await seedDelivery();
+    const route = await runningRoute([delivery]);
+
+    expect(vehicle().status).toBe("IN_ROUTE");
+
+    await context.cancel.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route,
+      reason: "Cliente cancelou tudo",
+    });
+
+    expect(vehicle().status).toBe("ACTIVE");
+  });
+
+  it("does not reopen a truck an administrator blocked while it was out", async () => {
+    // The reason both writes are conditional. A vehicle blocked BECAUSE of
+    // something that happened on the road — a crash, a theft — must not be
+    // quietly returned to service by the route ending.
+    const delivery = await seedDelivery();
+    const route = await runningRoute([delivery]);
+
+    expect(vehicle().status).toBe("IN_ROUTE");
+
+    vehicle().status = "BLOCKED";
+
+    await context.cancel.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route,
+      reason: "Veículo apreendido",
+    });
+
+    expect(vehicle().status).toBe("BLOCKED");
+  });
+
+  it("refuses to depart on a truck blocked after the route was planned", async () => {
+    // Between planning and the yard there is usually a night, and that is
+    // where an administrator blocks a vehicle. The guard used to run only when
+    // the driver swapped the truck, so the one case it exists for was the one
+    // it missed.
+    const delivery = await seedDelivery();
+
+    const route = await context.create.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      driverId: DRIVER_A,
+      vehicleId: VEHICLE_A,
+      scheduled_date: TODAY,
+      deliveryIds: [delivery],
+    });
+
+    await context.release.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route.id,
+    });
+
+    vehicle().status = "BLOCKED";
+
+    await expect(
+      context.start.execute({
+        userId: DRIVER_USER_A,
+        businessId: A,
+        routeId: route.id,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "ROUTE_VEHICLE_UNAVAILABLE",
+    });
+
+    expect(routeFor(route.id).status).toBe("RELEASED");
+    expect(deliveryFor(delivery).status).toBe("PENDING");
+    expect(vehicle().status).toBe("BLOCKED");
   });
 });

@@ -268,6 +268,13 @@ const updateVehicleSchema = z
       .min(2, "O número de eixos deve ser pelo menos 2.")
       .max(10, "O número de eixos não pode exceder 10.")
       .optional(),
+    /**
+     * IN_ROUTE still parses here, and only here, on purpose: a form that
+     * loads a vehicle currently out and saves an unrelated field sends the
+     * status back unchanged, and refusing that would make a vehicle on the
+     * road uneditable. Setting it as a CHANGE is refused by the use case —
+     * the route owns that value.
+     */
     status: z
       .enum(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"], {
         errorMap: () => ({

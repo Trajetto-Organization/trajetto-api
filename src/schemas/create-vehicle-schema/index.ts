@@ -256,10 +256,12 @@ const createVehicleSchema = z
       .int("O número de eixos deve ser um número inteiro.")
       .min(1, "O número de eixos deve ser no mínimo 1.")
       .max(10, "O número de eixos não pode exceder 10."),
-    status: z.enum(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"], {
+    // IN_ROUTE is deliberately absent: it is a fact about a route, written by
+    // the route when it departs and cleared when it ends. A vehicle cannot be
+    // registered already out on one.
+    status: z.enum(["ACTIVE", "INACTIVE", "BLOCKED"], {
       errorMap: () => ({
-        message:
-          "Status inválido. Deve ser ACTIVE, INACTIVE, BLOCKED ou IN_ROUTE",
+        message: "Status inválido. Deve ser ACTIVE, INACTIVE ou BLOCKED.",
       }),
     }),
     vehicleTypeId: z.preprocess(

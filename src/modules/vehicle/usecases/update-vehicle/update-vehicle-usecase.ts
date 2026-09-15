@@ -101,6 +101,24 @@ class UpdateVehicleUseCase {
       throw new VehicleCurrentMileageCanNotBeUpdatedError();
     }
 
+    // "Em rota" is not a choice — it is what the route writes when the truck
+    // leaves and clears when it comes back. An echo of the current value is
+    // dropped rather than refused, because a form that loads a vehicle on the
+    // road and edits its description sends it back unchanged; asking for it as
+    // a CHANGE is a request to lie about where the truck is.
+    if (vehicleData.status === "IN_ROUTE") {
+      if (findVehicle.status !== "IN_ROUTE") {
+        throw new AppError(
+          "O status “Em rota” é definido automaticamente quando o motorista " +
+            "inicia a rota, e não pode ser atribuído manualmente.",
+          400,
+          "VEHICLE_STATUS_DERIVED",
+        );
+      }
+
+      delete vehicleData.status;
+    }
+
     // Reactivating an INACTIVE vehicle re-occupies a contracted slot, so it
     // passes the same gate as a new registration (0 = limit not configured).
     const isReactivation =

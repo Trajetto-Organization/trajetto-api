@@ -528,3 +528,100 @@ describe("the batch departure and the route, side by side", () => {
     expect(await deliveries.countPendingForDriver(CARRIER, DRIVER)).toBe(1);
   });
 });
+
+describe("“Em rota” written by the route and nothing else", () => {
+  async function statusOf(id: string) {
+    return (await prisma.vehicle.findUniqueOrThrow({ where: { id } })).status;
+  }
+
+  it("marks the truck out on departure and free when the route closes", async () => {
+    const delivery = await seedDelivery();
+    const vehicle = await seedVehicle();
+
+    expect(await statusOf(vehicle)).toBe("ACTIVE");
+
+    const routeId = await runningRoute([delivery], vehicle);
+
+    expect(await statusOf(vehicle)).toBe("IN_ROUTE");
+
+    await repository.settleStopForDelivery(delivery, CARRIER, {
+      from: ["PENDING", "ARRIVED"],
+      status: "COMPLETED",
+      completed_at: new Date(),
+    });
+
+    // The route closed on its own last stop, inside the same transaction, and
+    // the truck came back with it.
+    const closed = await prisma.route.findUniqueOrThrow({ where: { id: routeId } });
+
+    expect(closed.status).toBe("COMPLETED");
+    expect(await statusOf(vehicle)).toBe("ACTIVE");
+  });
+
+  it("frees the truck when the route is cancelled mid-way", async () => {
+    const vehicle = await seedVehicle();
+    const routeId = await runningRoute([await seedDelivery()], vehicle);
+
+    await repository.transitionRoute(routeId, CARRIER, {
+      expectedStatus: "IN_PROGRESS",
+      status: "CANCELLED",
+      cancellation_reason: "Pane elétrica",
+    });
+
+    expect(await statusOf(vehicle)).toBe("ACTIVE");
+  });
+
+  it("does not reopen a truck blocked while it was on the road", async () => {
+    // Why both writes are conditional. A vehicle blocked BECAUSE of what
+    // happened on the road must not be returned to service by the paperwork.
+    const vehicle = await seedVehicle();
+    const routeId = await runningRoute([await seedDelivery()], vehicle);
+
+    await prisma.vehicle.update({
+      where: { id: vehicle },
+      data: { status: "BLOCKED" },
+    });
+
+    await repository.transitionRoute(routeId, CARRIER, {
+      expectedStatus: "IN_PROGRESS",
+      status: "CANCELLED",
+      cancellation_reason: "Veículo apreendido",
+    });
+
+    expect(await statusOf(vehicle)).toBe("BLOCKED");
+  });
+
+  it("does not drag a blocked truck out at departure", async () => {
+    const vehicle = await seedVehicle();
+
+    await prisma.vehicle.update({
+      where: { id: vehicle },
+      data: { status: "BLOCKED" },
+    });
+
+    const route = await repository.createRoute({
+      businessId: CARRIER,
+      driverId: DRIVER,
+      vehicleId: vehicle,
+      scheduled_date: new Date(),
+      deliveryIds: [await seedDelivery()],
+    });
+
+    await repository.transitionRoute(route.id, CARRIER, {
+      expectedStatus: "PLANNED",
+      status: "RELEASED",
+    });
+
+    // The repository takes the transition it is given — the use case is what
+    // refuses a blocked vehicle, and that is tested in the unit suite. What
+    // this pins is that even if a departure DOES reach here, the vehicle write
+    // only ever moves ACTIVE and leaves BLOCKED alone.
+    await repository.transitionRoute(route.id, CARRIER, {
+      expectedStatus: "RELEASED",
+      status: "IN_PROGRESS",
+      started_at: new Date(),
+    });
+
+    expect(await statusOf(vehicle)).toBe("BLOCKED");
+  });
+});

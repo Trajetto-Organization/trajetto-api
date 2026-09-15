@@ -355,6 +355,7 @@ class RouteRepository implements IRouteRepository {
         });
 
         await this.mirrorOntoDeliveries(tx, route as unknown as Route);
+        await this.syncVehicleStatus(tx, route as unknown as Route);
 
         return route as unknown as Route;
       });
@@ -451,6 +452,52 @@ class RouteRepository implements IRouteRepository {
           status: "PENDING",
         },
         data: { status: "IN_TRANSIT" },
+      });
+    }
+  }
+
+  /**
+   * Keeps `Vehicle.status` equal to whether the vehicle is actually out.
+   *
+   * IN_ROUTE used to be a value a person typed into a form, which meant it was
+   * true only until the truck came back and nobody remembered to change it.
+   * It is a FACT about a route, so the route writes it and nothing else does —
+   * the vehicle form no longer offers it.
+   *
+   * Both writes are conditional, and that is what makes them safe to run
+   * blindly. The departure only moves ACTIVE → IN_ROUTE, so it cannot drag a
+   * vehicle out of BLOCKED; the return only moves IN_ROUTE → ACTIVE, so a
+   * vehicle blocked by an administrator WHILE it was on the road (theft, a
+   * crash) stays blocked when the route ends instead of being quietly
+   * reopened for service.
+   */
+  private async syncVehicleStatus(
+    tx: Prisma.TransactionClient | typeof database,
+    route: Route,
+  ): Promise<void> {
+    if (!route.vehicleId) return;
+
+    if (route.status === "IN_PROGRESS") {
+      await tx.vehicle.updateMany({
+        where: {
+          id: route.vehicleId,
+          businessId: route.businessId,
+          status: "ACTIVE",
+        },
+        data: { status: "IN_ROUTE" },
+      });
+
+      return;
+    }
+
+    if (route.status === "COMPLETED" || route.status === "CANCELLED") {
+      await tx.vehicle.updateMany({
+        where: {
+          id: route.vehicleId,
+          businessId: route.businessId,
+          status: "IN_ROUTE",
+        },
+        data: { status: "ACTIVE" },
       });
     }
   }
@@ -719,6 +766,9 @@ class RouteRepository implements IRouteRepository {
     if (closed.count === 0) return null;
 
     const route = await client.route.findUniqueOrThrow({ where: { id: routeId } });
+
+    // The route ended by itself, so the truck came back by itself too.
+    await this.syncVehicleStatus(client, route as unknown as Route);
 
     return route as unknown as Route;
   }

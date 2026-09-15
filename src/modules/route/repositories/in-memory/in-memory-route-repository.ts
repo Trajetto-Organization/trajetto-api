@@ -57,6 +57,13 @@ const EDITABLE_STATUSES: RouteStatus[] = ["PLANNED", "RELEASED"];
  * deliveries are one table in Postgres, and a test where they are two stores
  * can show a departure that moved nothing.
  */
+/** What this repository needs from a vehicle row: the status it owns. */
+interface VehicleMirror {
+  id?: string;
+  businessId: string;
+  status?: string;
+}
+
 interface DeliveryMirror {
   id?: string;
   businessId: string;
@@ -78,7 +85,43 @@ class InMemoryRouteRepository implements IRouteRepository {
    * A test that also drives the delivery use cases passes the delivery fake's
    * own array here, so both see one set of rows. In Postgres they always do.
    */
-  constructor(public deliveries: DeliveryMirror[] = []) {}
+  constructor(
+    public deliveries: DeliveryMirror[] = [],
+    /**
+     * The vehicle rows, for the one column this module owns on them. A test
+     * that cares about it hands over the vehicle fake's own array.
+     */
+    public vehicles: VehicleMirror[] = [],
+  ) {}
+
+  /**
+   * IN_ROUTE is a fact about a route, so the route writes it and nothing else
+   * does. Both moves are conditional exactly as the real `updateMany` is: the
+   * departure only takes ACTIVE, the return only gives back IN_ROUTE — so a
+   * vehicle an administrator blocked while it was on the road stays blocked.
+   */
+  private syncVehicleStatus(route: Route): void {
+    if (!route.vehicleId) return;
+
+    const vehicle = this.vehicles.find(
+      (entry) =>
+        entry.id === route.vehicleId && entry.businessId === route.businessId,
+    );
+
+    if (!vehicle) return;
+
+    if (route.status === "IN_PROGRESS" && vehicle.status === "ACTIVE") {
+      vehicle.status = "IN_ROUTE";
+
+      return;
+    }
+
+    const ending = route.status === "COMPLETED" || route.status === "CANCELLED";
+
+    if (ending && vehicle.status === "IN_ROUTE") {
+      vehicle.status = "ACTIVE";
+    }
+  }
 
   private stopsOf(routeId: string): RouteStop[] {
     return this.stops
@@ -376,6 +419,7 @@ class InMemoryRouteRepository implements IRouteRepository {
     route.updated_at = new Date();
 
     this.mirror(route);
+    this.syncVehicleStatus(route);
 
     return route;
   }
@@ -548,6 +592,9 @@ class InMemoryRouteRepository implements IRouteRepository {
     route.status = "COMPLETED";
     route.completed_at = new Date();
     route.updated_at = new Date();
+
+    // The route ended by itself, so the truck came back by itself too.
+    this.syncVehicleStatus(route);
 
     return { stop, closedRoute: route };
   }
