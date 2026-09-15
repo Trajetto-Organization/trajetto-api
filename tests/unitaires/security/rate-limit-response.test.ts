@@ -133,13 +133,25 @@ describe("rate limit key", () => {
     expect(clientRateLimitKey(other)).toBe("user:driver-2");
   });
 
-  it("falls back to the address when there is no session yet", () => {
+  it("falls back to the socket when there is no session yet", () => {
+    /**
+     * Este teste dizia o contrário, e essa é a história.
+     *
+     * Ele afirmava que `x-real-ip` — um cabeçalho que QUEM MANDA A REQUISIÇÃO
+     * escreve — devia decidir o balde. Era a vulnerabilidade escrita como
+     * comportamento esperado: um atacante mandava um valor novo por tentativa
+     * e os limites de 8/min do login e 4/min do 2FA não prendiam nada.
+     *
+     * Agora a fonte é configurada (`RATE_LIMIT_TRUSTED_PROXY`) e o padrão é o
+     * socket, que é o único endereço que o cliente não escreve. As variações
+     * por modo estão em `rate-limit-key.test.ts`.
+     */
     const anonymous = {
-      headers: { "x-real-ip": "200.0.0.7" },
+      headers: { "x-real-ip": "200.0.0.7", "cf-connecting-ip": "1.2.3.4" },
       socket: { remoteAddress: "10.0.0.9" },
     } as never;
 
-    expect(clientRateLimitKey(anonymous)).toBe("ip:200.0.0.7");
+    expect(clientRateLimitKey(anonymous)).toBe("ip:10.0.0.9");
   });
 
   it("never returns an empty key", () => {

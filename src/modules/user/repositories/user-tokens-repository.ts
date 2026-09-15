@@ -179,7 +179,11 @@ class UserTokensRepository implements IUsersTokensRepository {
   }: CreateTwoFactorToken): Promise<TwoFactor> {
     const upsertedTwoFactorToken = await this.prisma.twoFactorToken.upsert({
       where: { email },
-      update: { token, expires },
+      // Um código NOVO começa do zero. Sem isto, pedir outro código
+        // herdaria a contagem do anterior: o usuário legítimo ficaria
+        // travado, e um atacante que chegou ao teto pediria outro e
+        // continuaria de onde parou.
+        update: { token, expires, attempts: 0 },
       create: { email, token, expires },
     });
 
@@ -202,6 +206,16 @@ class UserTokensRepository implements IUsersTokensRepository {
         id: twoFactorId,
       },
     });
+  }
+
+  async countTwoFactorAttempt(twoFactorId: string): Promise<number> {
+    const updated = await this.prisma.twoFactorToken.update({
+      where: { id: twoFactorId },
+      data: { attempts: { increment: 1 } },
+      select: { attempts: true },
+    });
+
+    return updated.attempts;
   }
 
   async createTwoFactorConfirmation(

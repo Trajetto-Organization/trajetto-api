@@ -57,6 +57,15 @@ interface TwoFactor {
   email: string;
   token: string;
   expires: Date;
+
+  /**
+   * Palpites errados já contados neste código.
+   *
+   * No DTO e não só no banco: sem ele o fake in-memory podia aceitar o
+   * parâmetro e ignorá-lo, e o teste do limite ficaria verde com o limite
+   * quebrado.
+   */
+  attempts: number;
 }
 
 interface TwoFactorConfirmation {

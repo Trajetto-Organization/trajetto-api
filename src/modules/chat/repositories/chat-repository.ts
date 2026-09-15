@@ -624,9 +624,16 @@ class ChatRepository implements IChatRepository {
 
   async findMessageBySubmissionId(
     clientSubmissionId: string,
+    businessId: string,
   ): Promise<ChatMessage | null> {
-    return this.prisma.chatMessage.findUnique({
-      where: { client_submission_id: clientSubmissionId },
+    // `findFirst` e não `findUnique`: a chave é única globalmente, mas a
+    // pergunta é "existe ESTA mensagem NESTA empresa?", e a resposta para a
+    // chave de outra empresa tem que ser "não existe".
+    return this.prisma.chatMessage.findFirst({
+      where: {
+        client_submission_id: clientSubmissionId,
+        thread: { businessId },
+      },
     });
   }
 

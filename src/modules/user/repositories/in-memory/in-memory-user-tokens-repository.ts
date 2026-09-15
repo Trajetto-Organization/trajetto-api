@@ -136,6 +136,11 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     if (existing) {
       existing.token = token;
       existing.expires = expires;
+
+      // Um código NOVO começa do zero. Sem isto, pedir outro código herdaria a
+      // contagem do anterior e o usuário legítimo ficaria travado.
+      existing.attempts = 0;
+
       return existing;
     }
 
@@ -144,6 +149,7 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
       email,
       token,
       expires,
+      attempts: 0,
     };
 
     this.twoFactorTokens.push(twoFactorToken);
@@ -166,6 +172,19 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     this.twoFactorTokens = this.twoFactorTokens.filter(
       (item) => item.id !== twoFactorId,
     );
+  }
+
+  async countTwoFactorAttempt(twoFactorId: string): Promise<number> {
+    const token = this.twoFactorTokens.find((item) => item.id === twoFactorId);
+
+    if (!token) return 0;
+
+    // O contador de verdade fica na linha, como no banco: um fake que
+    // devolvesse um número sem guardá-lo deixaria o teste do limite passar
+    // com o limite quebrado.
+    token.attempts += 1;
+
+    return token.attempts;
   }
 
   async createTwoFactorConfirmation(

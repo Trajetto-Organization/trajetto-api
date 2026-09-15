@@ -62,6 +62,27 @@ const envSchema = z
      */
     DOCS_USER: z.string().optional(),
     DOCS_PASSWORD: z.string().optional(),
+
+    /**
+     * De onde vem o endereço do cliente nas rotas anônimas.
+     *
+     * Decide o balde do rate limit de login, 2FA e recuperação de senha — as
+     * rotas em que não há usuário ainda. A escolha é de quem opera a borda, e
+     * a resposta errada custa caro nos dois sentidos:
+     *
+     * - `none` atrás de um proxy coloca a internet inteira num balde só, e o
+     *   limite de login vira negação de serviço contra todo mundo.
+     * - Ler um cabeçalho que a borda NÃO reescreve deixa o atacante escolher
+     *   o próprio balde, que era exatamente o caso: o código lia
+     *   `cf-connecting-ip` primeiro, e o Traefik da produção não toca nesse.
+     *
+     * `xff` é o valor para Traefik e nginx (ambos ACRESCENTAM o par real no
+     * fim de `X-Forwarded-For`). `cloudflare` só se a origem for inalcançável
+     * sem passar pela Cloudflare.
+     */
+    RATE_LIMIT_TRUSTED_PROXY: z
+      .enum(["none", "xff", "cloudflare"])
+      .default("none"),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== "production") return;
@@ -73,6 +94,18 @@ const envSchema = z
         message:
           "Produção exige R2 privado; armazenamento local não é permitido para fotos sensíveis.",
       });
+    }
+
+    if (env.RATE_LIMIT_TRUSTED_PROXY === "none") {
+      // Aviso e não erro: uma implantação sem proxy nenhum é legítima, e
+      // derrubar o boot por causa disso seria pior do que o risco. Mas o caso
+      // comum é ter um proxy e não ter configurado, e aí o limite das rotas
+      // anônimas está medindo o endereço do proxy.
+      console.warn(
+        "[env] RATE_LIMIT_TRUSTED_PROXY=none em produção: o limite das rotas " +
+          "anônimas vai medir o endereço do proxy, não o do cliente. Se houver " +
+          "Traefik ou nginx na frente, use `xff`.",
+      );
     }
 
     for (const field of [

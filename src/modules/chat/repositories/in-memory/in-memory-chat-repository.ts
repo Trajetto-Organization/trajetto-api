@@ -439,12 +439,25 @@ class InMemoryChatRepository implements IChatRepository {
 
   async findMessageBySubmissionId(
     clientSubmissionId: string,
+    businessId: string,
   ): Promise<ChatMessage | null> {
-    return (
-      this.messages.find(
-        (message) => message.client_submission_id === clientSubmissionId,
-      ) ?? null
+    /**
+     * O escopo também aqui.
+     *
+     * Um fake que aceita o parâmetro e o ignora é pior que um fake que não o
+     * aceita: o TypeScript deixa passar (um método com menos parâmetros é
+     * atribuível), e o teste unitário fica verde com o furo aberto. Foi assim
+     * que a chave de idempotência do chat virou credencial e ninguém viu.
+     */
+    const message = this.messages.find(
+      (entry) => entry.client_submission_id === clientSubmissionId,
     );
+
+    if (!message) return null;
+
+    const thread = this.threads.find((entry) => entry.id === message.threadId);
+
+    return thread?.businessId === businessId ? message : null;
   }
 
   async markThreadRead(

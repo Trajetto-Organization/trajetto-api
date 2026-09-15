@@ -336,6 +336,15 @@ model TwoFactorToken {
   token   String   @unique
   expires DateTime
 
+  /// Quantos palpites errados este código já levou.
+  ///
+  /// O código tem seis dígitos e vale quinze minutos. Sem contador, um palpite
+  /// errado não consumia nada e não contava para nada — a única barreira era o
+  /// rate limit, e ele era contornável pelo cabeçalho que o cliente escreve.
+  /// Com contador, o espaço de busca deixa de ser um milhão de tentativas e
+  /// passa a ser um punhado por código.
+  attempts Int @default(0)
+
   @@unique([email, token])
   @@map("two_factor_token")
 }

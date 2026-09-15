@@ -1,5 +1,6 @@
 import { FastifyRequest } from "fastify";
 
+import { env } from "@/env";
 import { AppError } from "@/shared/errors/AppError";
 
 /**
@@ -8,6 +9,38 @@ import { AppError } from "@/shared/errors/AppError";
  * There used to be two of each — one inline in http.ts for the global limit and
  * one in the per-route helper — and they disagreed on both counts.
  */
+
+/**
+ * Qual cabeçalho, se algum, diz de onde veio a requisição.
+ *
+ * - `none`: só o endereço do socket. Correto sem proxy nenhum na frente; atrás
+ *   de um, coloca a internet inteira num balde só, e aí o limite de login vira
+ *   negação de serviço contra todo mundo por causa de um atacante.
+ * - `xff`: `X-Forwarded-For`, lendo a ÚLTIMA entrada. Um proxy confiável
+ *   ACRESCENTA o endereço do par no fim; o que o cliente escreveu fica antes.
+ *   É o valor certo para Traefik e nginx.
+ * - `cloudflare`: `CF-Connecting-IP`, que a Cloudflare SOBRESCREVE. Só vale se
+ *   a origem for inalcançável sem passar por lá.
+ */
+type TrustedProxyMode = "none" | "xff" | "cloudflare";
+
+/**
+ * Só o último salto, nunca o primeiro.
+ *
+ * O primeiro valor de `X-Forwarded-For` é o que o CLIENTE escreveu — um
+ * atacante manda `X-Forwarded-For: 1.2.3.<n>` e ganha um balde novo por
+ * requisição. O proxy confiável acrescenta o endereço real no fim, então é o
+ * fim que vale.
+ */
+function lastForwardedAddress(value: string | string[] | undefined): string | null {
+  const raw = Array.isArray(value) ? value[value.length - 1] : value;
+
+  if (!raw) return null;
+
+  const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
+
+  return parts.length > 0 ? parts[parts.length - 1] : null;
+}
 
 /**
  * Who is being limited.
@@ -20,26 +53,34 @@ import { AppError } from "@/shared/errors/AppError";
  * drivers of the same carrier, or thirty dispatchers in one room, spend the
  * same 300 requests a minute and start getting refused with no abuse at all.
  *
- * Anonymous requests (login, refresh, forgot password) have no user yet, so
- * they fall back to the address. That address is still taken from headers the
- * client can set, which is a real hole on exactly those routes — closing it
- * needs `trustProxy` plus a decision about which header the edge guarantees,
- * and that decision belongs to whoever owns the Traefik/Cloudflare config.
+ * As anônimas (login, 2FA, recuperação de senha) não têm usuário ainda e caem
+ * no endereço. Esse endereço vinha de cabeçalhos que o CLIENTE escreve, e a
+ * ordem era a pior possível: `cf-connecting-ip` primeiro, que é justamente o
+ * único que o Traefik da produção NÃO reescreve. Qualquer um mandava
+ * `Cf-Connecting-Ip: 1.2.3.<n>` e ganhava um balde novo a cada tentativa — o
+ * limite de 8/min do login e o de 4/min do 2FA não prendiam nada.
+ *
+ * Agora a fonte é explícita e configurada, e a escolha é de quem opera a
+ * borda, não de quem manda a requisição.
  */
 function clientRateLimitKey(request: FastifyRequest): string {
   if (request.user?.id) {
     return `user:${request.user.id}`;
   }
 
-  const forwardedFor = request.headers["x-forwarded-for"];
+  const mode = (env.RATE_LIMIT_TRUSTED_PROXY ?? "none") as TrustedProxyMode;
 
-  const address =
-    request.headers["cf-connecting-ip"] ||
-    request.headers["x-real-ip"] ||
-    (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor) ||
-    request.socket.remoteAddress;
+  const forwarded =
+    mode === "cloudflare"
+      ? lastForwardedAddress(request.headers["cf-connecting-ip"])
+      : mode === "xff"
+        ? lastForwardedAddress(request.headers["x-forwarded-for"])
+        : null;
 
-  return `ip:${Array.isArray(address) ? address[0] : (address ?? "unknown")}`;
+  // O socket é o último recurso e o único que ninguém escreve.
+  const address = forwarded ?? request.socket.remoteAddress ?? "unknown";
+
+  return `ip:${address}`;
 }
 
 /**
@@ -60,4 +101,9 @@ function rateLimitExceeded(message?: string): AppError {
   );
 }
 
-export { clientRateLimitKey, rateLimitExceeded };
+export {
+  clientRateLimitKey,
+  lastForwardedAddress,
+  rateLimitExceeded,
+  type TrustedProxyMode,
+};

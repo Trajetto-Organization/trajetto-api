@@ -62,6 +62,15 @@ interface IUsersTokensRepository {
     twoFactorConfirmationId: string,
   ) => Promise<void>;
   deleteTwoFactorToken: (twoFactorId: string) => Promise<void>;
+
+  /**
+   * Conta mais um palpite errado e devolve o total.
+   *
+   * O incremento é do banco (`increment`), nunca um read-then-write: duas
+   * tentativas simultâneas do mesmo código leriam o mesmo valor e gravariam o
+   * mesmo, e o contador contaria uma.
+   */
+  countTwoFactorAttempt: (twoFactorId: string) => Promise<number>;
   createForgotPasswordVerificationToken: ({
     email,
     token,

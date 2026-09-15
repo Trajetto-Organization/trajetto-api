@@ -112,8 +112,10 @@ class SendChatMessageUseCase {
     // network returns the message it already created, and rings nobody
     // again.
     if (clientSubmissionId) {
-      const existing =
-        await this.chat.findMessageBySubmissionId(clientSubmissionId);
+      const existing = await this.chat.findMessageBySubmissionId(
+        clientSubmissionId,
+        scope.businessId,
+      );
 
       if (existing) {
         const thread = await this.chat.findThreadById(existing.threadId);

@@ -40,8 +40,19 @@ interface IChatRepository {
     props: CreateChatMessageProps,
     tx?: unknown,
   ) => Promise<ChatMessage>;
+  /**
+   * A mensagem já criada por esta chave, DENTRO desta empresa.
+   *
+   * `businessId` não é enfeite aqui. A coluna é única globalmente, e sem o
+   * escopo a chave de idempotência virava credencial: quem conhecesse a chave
+   * de outra empresa recebia a mensagem dela de volta — corpo, motorista,
+   * entrega vinculada, e uma URL assinada NOVA para a foto ou o áudio.
+   * As irmãs do abastecimento e do checklist já são `@@unique([businessId,
+   * client_submission_id])`; o chat não era, e a consulta também não.
+   */
   findMessageBySubmissionId: (
     clientSubmissionId: string,
+    businessId: string,
   ) => Promise<ChatMessage | null>;
   findMessageById: (messageId: string) => Promise<ChatMessage | null>;
 
