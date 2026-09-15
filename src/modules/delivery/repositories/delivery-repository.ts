@@ -399,9 +399,16 @@ class DeliveryRepository implements IDeliveryRepository {
 
   async findOccurrenceBySubmissionId(
     clientSubmissionId: string,
+    businessId: string,
   ): Promise<{ id: string } | null> {
-    return this.prisma.deliveryOccurrence.findUnique({
-      where: { client_submission_id: clientSubmissionId },
+    // `findFirst` e nao `findUnique`: a chave e unica globalmente, mas a
+    // pergunta e "existe ESTA submissao NESTA empresa?", e a resposta para a
+    // chave de outra empresa tem que ser "nao existe".
+    return this.prisma.deliveryOccurrence.findFirst({
+      where: {
+        client_submission_id: clientSubmissionId,
+        delivery: { businessId },
+      },
       select: { id: true },
     });
   }
@@ -738,9 +745,13 @@ class DeliveryRepository implements IDeliveryRepository {
 
   async findEventBySubmissionId(
     clientSubmissionId: string,
+    businessId: string,
   ): Promise<DeliveryEventRecord | null> {
-    return this.prisma.deliveryEvent.findUnique({
-      where: { client_submission_id: clientSubmissionId },
+    return this.prisma.deliveryEvent.findFirst({
+      where: {
+        client_submission_id: clientSubmissionId,
+        delivery: { businessId },
+      },
       select: {
         id: true,
         type: true,

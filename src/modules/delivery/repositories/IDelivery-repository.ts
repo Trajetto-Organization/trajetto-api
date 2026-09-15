@@ -89,8 +89,18 @@ interface IDeliveryRepository {
     occurrenceData: CreateOccurrenceProps,
     tx?: Prisma.TransactionClient,
   ) => Promise<void>;
+  /**
+   * A submissao ja gravada por esta chave, DENTRO desta empresa.
+   *
+   * O `businessId` nao e enfeite. A coluna e unica globalmente, e a consulta
+   * acontece ANTES de qualquer checagem de posse — entao, sem escopo, a chave
+   * de outra empresa devolvia "ja existe" e o caminho de idempotencia engolia
+   * a escrita em silencio, com 200. Precisa de um UUID v4 adivinhado, o que
+   * torna o caminho improvavel; o que ele nao e e correto.
+   */
   findOccurrenceBySubmissionId: (
     clientSubmissionId: string,
+    businessId: string,
   ) => Promise<{ id: string } | null>;
   /** The manager's cross-delivery occurrence feed. */
   listOccurrences: (props: ListOccurrencesProps) => Promise<ListOccurrencesResult>;
@@ -113,8 +123,18 @@ interface IDeliveryRepository {
   ) => Promise<number>;
   /** PENDING -> IN_TRANSIT for the driver's batch; returns how many moved. */
   startDriverRoute: (businessId: string, driverId: string) => Promise<number>;
+  /**
+   * A submissao ja gravada por esta chave, DENTRO desta empresa.
+   *
+   * O `businessId` nao e enfeite. A coluna e unica globalmente, e a consulta
+   * acontece ANTES de qualquer checagem de posse — entao, sem escopo, a chave
+   * de outra empresa devolvia "ja existe" e o caminho de idempotencia engolia
+   * a escrita em silencio, com 200. Precisa de um UUID v4 adivinhado, o que
+   * torna o caminho improvavel; o que ele nao e e correto.
+   */
   findEventBySubmissionId: (
     clientSubmissionId: string,
+    businessId: string,
   ) => Promise<DeliveryEventRecord | null>;
   /**
    * How many deliveries reference this driver or this vehicle, of any status.

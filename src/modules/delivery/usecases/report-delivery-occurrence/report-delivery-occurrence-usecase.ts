@@ -96,7 +96,7 @@ class ReportDeliveryOccurrenceUseCase {
     // replayed.
     if (client_submission_id) {
       const alreadyRecorded =
-        await this.delivery.findOccurrenceBySubmissionId(client_submission_id);
+        await this.delivery.findOccurrenceBySubmissionId(client_submission_id, businessId);
 
       if (alreadyRecorded) {
         return;

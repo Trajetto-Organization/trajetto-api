@@ -242,9 +242,19 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
 
   async findOccurrenceBySubmissionId(
     clientSubmissionId: string,
+    businessId: string,
   ): Promise<{ id: string } | null> {
+    // O escopo também aqui. Um fake que aceita o parâmetro e o ignora é pior
+    // que um que não o aceita: o TypeScript deixa passar e o teste fica verde
+    // com o furo aberto.
     const found = this.occurrences.find(
-      (occurrence) => occurrence.client_submission_id === clientSubmissionId,
+      (occurrence) =>
+        occurrence.client_submission_id === clientSubmissionId &&
+        this.deliveries.some(
+          (delivery) =>
+            delivery.id === occurrence.deliveryId &&
+            delivery.businessId === businessId,
+        ),
     );
 
     return found ? { id: found.id } : null;
@@ -492,9 +502,16 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
 
   async findEventBySubmissionId(
     clientSubmissionId: string,
+    businessId: string,
   ): Promise<DeliveryEventRecord | null> {
     const found = this.events.find(
-      (event) => event.client_submission_id === clientSubmissionId,
+      (event) =>
+        event.client_submission_id === clientSubmissionId &&
+        this.deliveries.some(
+          (delivery) =>
+            delivery.id === event.deliveryId &&
+            delivery.businessId === businessId,
+        ),
     );
 
     if (!found) return null;

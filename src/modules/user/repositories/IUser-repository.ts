@@ -33,6 +33,16 @@ interface IUserRepository {
     tx?: Prisma.TransactionClient,
   ) => Promise<User>;
   deleteUser: (userId: string) => Promise<User>;
+
+  /**
+   * Apaga um MASTER, mas nunca o último.
+   *
+   * Devolve `null` quando a exclusão deixaria a plataforma sem nenhum, ou
+   * quando o alvo não é um MASTER. Contar antes e apagar depois não serve:
+   * dois pedidos simultâneos apagando MASTERs diferentes leem o mesmo total,
+   * os dois passam, e sobram zero — e MASTER é o único papel que cria outro.
+   */
+  deleteMasterUserKeepingOne: (userId: string) => Promise<User | null>;
   findUserByEmail: (email: string) => Promise<User | null>;
   findUserByEmailAndBusinessId: (
     email: string,

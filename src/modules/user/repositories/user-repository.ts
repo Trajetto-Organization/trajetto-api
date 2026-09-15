@@ -284,6 +284,37 @@ class UserRepository implements IUserRepository {
     return deletedUser;
   }
 
+  /**
+   * Apaga um MASTER sem deixar a plataforma sem nenhum.
+   *
+   * Contar e depois apagar não serve: dois pedidos simultâneos apagando
+   * MASTERS DIFERENTES leem `total = 2`, os dois passam pela porteira
+   * `masterCount <= 1`, e sobram zero. MASTER é o único papel que cria outro
+   * MASTER, então zero é a plataforma trancada por fora.
+   *
+   * Nenhuma restrição do Postgres expressa "pelo menos uma linha com
+   * role = MASTER". O que expressa é travar as linhas: `FOR UPDATE` sobre os
+   * MASTERs serializa os dois pedidos, e o segundo conta depois do primeiro
+   * ter apagado.
+   */
+  async deleteMasterUserKeepingOne(userId: string): Promise<User | null> {
+    forgetRequestCache();
+
+    return this.prisma.$transaction(async (tx) => {
+      const masters = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id" FROM "user" WHERE "role" = 'MASTER' FOR UPDATE
+      `;
+
+      if (masters.length <= 1) return null;
+
+      // O alvo tem que estar entre os travados: um id que não é MASTER, ou
+      // que já foi apagado, não é uma exclusão silenciosa.
+      if (!masters.some((master) => master.id === userId)) return null;
+
+      return tx.user.delete({ where: { id: userId } });
+    });
+  }
+
   async findUserByEmail(email: string): Promise<User | null> {
     const findUserByEmail = await this.prisma.user.findFirst({
       where: {

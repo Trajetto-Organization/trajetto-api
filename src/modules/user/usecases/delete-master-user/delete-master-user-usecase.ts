@@ -71,15 +71,19 @@ class DeleteMasterUserUseCase {
       throw new UserIsNotMasterError();
     }
 
-    // Cannot delete the last MASTER
-    const { total: masterCount } = await this.user.listMasterUsers({
-      page: 1,
-      pageSize: 1,
-    });
-
-    if (masterCount <= 1) {
-      throw new UserCannotDeleteLastMasterError();
-    }
+    /**
+     * A contagem do "último MASTER" saiu daqui.
+     *
+     * Ela vivia neste ponto — contar, decidir, e apagar trinta linhas depois,
+     * com duas consultas de dependência no meio — e isso é um
+     * read-then-write: dois pedidos simultâneos apagando MASTERs DIFERENTES
+     * liam o mesmo total, os dois passavam, e sobravam zero. MASTER é o único
+     * papel que cria outro MASTER, então zero é a plataforma trancada por
+     * fora.
+     *
+     * Agora a contagem e a exclusão acontecem na mesma transação, com as
+     * linhas travadas, dentro de `deleteMasterUserKeepingOne`.
+     */
 
     // Check for associated service orders
     const associatedServiceOrders =
@@ -106,7 +110,15 @@ class DeleteMasterUserUseCase {
     }
 
     try {
-      const deletedMaster = await this.user.deleteUser(masterUserId);
+      const deletedMaster =
+        await this.user.deleteMasterUserKeepingOne(masterUserId);
+
+      // `null` é a transação dizendo que este era o último — decidido com as
+      // linhas travadas, não com uma leitura de trinta linhas atrás.
+      if (!deletedMaster) {
+        throw new UserCannotDeleteLastMasterError();
+      }
+
       sendSecurityEventToUser(masterUserId, { reason: "access_denied" });
 
       // Register activity

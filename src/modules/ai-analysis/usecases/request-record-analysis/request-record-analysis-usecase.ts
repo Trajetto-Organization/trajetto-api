@@ -49,12 +49,19 @@ class RequestRecordAnalysisUseCase {
       throw new ResourceNotFoundError();
     }
 
-    const input = await this.buildInput(recordType, recordId, userId);
+    /**
+     * O escopo de empresa entra ANTES de qualquer outra recusa.
+     *
+     * `buildInput` rodava primeiro, e ele tem recusas próprias: "este
+     * abastecimento não tem foto do odômetro" é 400, e o registro que não
+     * existe é 404. Um chamador com o id de OUTRA empresa distinguia as duas
+     * — 400 significava que o registro existe e 404 que não — e isso é um
+     * oráculo de existência com a frase pronta.
+     */
+    const scope =
+      findUser.role === "MASTER" ? undefined : (findUser.businessId ?? "");
 
-    // Tenant guard: only MASTER reaches across companies.
-    if (findUser.role !== "MASTER" && findUser.businessId !== input.businessId) {
-      throw new AppError("Registro não encontrado!", 404);
-    }
+    const input = await this.buildInput(recordType, recordId, userId, scope);
 
     const business = await database.business.findUnique({
       where: { id: input.businessId },
@@ -95,10 +102,20 @@ class RequestRecordAnalysisUseCase {
     recordType: "fuel" | "checklist",
     recordId: string,
     requestedById: string,
+
+    /**
+     * A empresa de quem pediu, ou `undefined` para um MASTER.
+     *
+     * No `where` e não numa comparação depois: a comparação depois ainda
+     * deixa as recusas próprias deste método falarem primeiro, e "este
+     * abastecimento não tem foto" contra "não encontrado" é a diferença entre
+     * saber e não saber que o registro existe.
+     */
+    businessId?: string,
   ): Promise<AIAnalysisRequestInput> {
     if (recordType === "fuel") {
-      const fuel = await database.fuel.findUnique({
-        where: { id: recordId },
+      const fuel = await database.fuel.findFirst({
+        where: { id: recordId, ...(businessId && { businessId }) },
         select: {
           id: true,
           businessId: true,
@@ -128,8 +145,8 @@ class RequestRecordAnalysisUseCase {
       };
     }
 
-    const checklist = await database.vehicleChecklist.findUnique({
-      where: { id: recordId },
+    const checklist = await database.vehicleChecklist.findFirst({
+      where: { id: recordId, ...(businessId && { businessId }) },
     });
 
     if (!checklist) throw new AppError("Registro não encontrado!", 404);

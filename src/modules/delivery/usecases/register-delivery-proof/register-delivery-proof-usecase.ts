@@ -115,7 +115,7 @@ class RegisterDeliveryProofUseCase {
     // Outbox resend: the same submission never becomes a second proof, and
     // the delivery it proved is already DELIVERED.
     const alreadyRecorded =
-      await this.delivery.findEventBySubmissionId(client_submission_id);
+      await this.delivery.findEventBySubmissionId(client_submission_id, businessId);
 
     if (alreadyRecorded) {
       return;

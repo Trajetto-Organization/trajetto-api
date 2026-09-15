@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { VehicleRepository } from "@/modules/vehicle/repositories/vehicle-repository";
 import { AccountPayableRepository } from "@/modules/account-payable/repositories/account-payable-repository";
+import { UserRepository } from "@/modules/user/repositories/user-repository";
 
 /**
  * Duas requisições ao mesmo tempo, e só uma pode vencer.
@@ -342,5 +343,97 @@ describe("apagando uma conta que está sendo paga", () => {
     expect(
       await prisma.accountPayable.count({ where: { id: payable.id } }),
     ).toBe(1);
+  });
+});
+
+describe("apagando MASTERs ao mesmo tempo", () => {
+  /**
+   * MASTER é o único papel que cria outro MASTER.
+   *
+   * Contar e depois apagar não serve: dois pedidos simultâneos apagando
+   * MASTERs DIFERENTES leem `total = 2`, os dois passam pela porteira, e
+   * sobram zero — a plataforma trancada por fora, sem caminho de volta pela
+   * própria aplicação.
+   */
+  const masters: string[] = [];
+
+  async function seedMaster(): Promise<string> {
+    const user = await prisma.user.create({
+      data: {
+        name: "Master",
+        email: `master-corrida-${randomUUID()}@exemplo.com.br`,
+        password: "nao-usado",
+        role: "MASTER",
+      },
+    });
+
+    masters.push(user.id);
+
+    return user.id;
+  }
+
+  it("nunca deixa a plataforma sem nenhum", async () => {
+    // O estado que importa: EXATAMENTE dois. Quantos já existem no banco não
+    // é controlável aqui, então a asserção é sobre não zerar.
+    const before = await prisma.user.count({ where: { role: "MASTER" } });
+
+    const needed = Math.max(0, 2 - before);
+
+    for (let n = 0; n < needed; n += 1) await seedMaster();
+
+    const all = await prisma.user.findMany({
+      where: { role: "MASTER" },
+      select: { id: true },
+    });
+
+    // Conexões separadas, pelo mesmo motivo do limite de frota: com um
+    // cliente só as chamadas serializam por acidente.
+    const clients = all.map(() => new PrismaClient());
+
+    await Promise.all(
+      all.map((master, index) =>
+        new UserRepository(clients[index])
+          .deleteMasterUserKeepingOne(master.id)
+          .catch(() => null),
+      ),
+    );
+
+    await Promise.all(clients.map((client) => client.$disconnect()));
+
+    // Um sobra. Sempre.
+    expect(
+      await prisma.user.count({ where: { role: "MASTER" } }),
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("recusa quando só resta um", async () => {
+    const remaining = await prisma.user.findFirstOrThrow({
+      where: { role: "MASTER" },
+    });
+
+    const count = await prisma.user.count({ where: { role: "MASTER" } });
+
+    if (count === 1) {
+      expect(
+        await new UserRepository().deleteMasterUserKeepingOne(remaining.id),
+      ).toBeNull();
+    }
+  });
+
+  it("recusa um id que não é MASTER", async () => {
+    // Não é exclusão silenciosa: o alvo tem que estar entre os travados.
+    const plain = await prisma.user.findFirstOrThrow({
+      where: { businessId: CARRIER, role: "BUSINESS_ADMIN" },
+    });
+
+    expect(
+      await new UserRepository().deleteMasterUserKeepingOne(plain.id),
+    ).toBeNull();
+
+    expect(await prisma.user.count({ where: { id: plain.id } })).toBe(1);
+  });
+
+  afterAll(async () => {
+    await prisma.user.deleteMany({ where: { id: { in: masters } } });
   });
 });

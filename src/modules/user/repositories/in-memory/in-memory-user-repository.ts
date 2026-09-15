@@ -132,6 +132,18 @@ class InMemoryUserRepository implements IUserRepository {
     return deletedUser;
   }
 
+  async deleteMasterUserKeepingOne(userId: string): Promise<User | null> {
+    // A mesma decisão do repositório real, no mesmo lugar: contar e apagar
+    // juntos. Um fake que apagasse sem contar deixaria o teste do último
+    // MASTER passar com a proteção quebrada.
+    const masters = this.user.filter((entry) => entry.role === "MASTER");
+
+    if (masters.length <= 1) return null;
+    if (!masters.some((master) => master.id === userId)) return null;
+
+    return this.deleteUser(userId);
+  }
+
   async findUserByEmail(email: string): Promise<User | null> {
     const findUserByEmail = this.user.find((user) => user.email === email);
 

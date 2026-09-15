@@ -76,7 +76,7 @@ class RegisterDeliveryArrivalUseCase {
 
     // Outbox resend: the same submission never becomes a second event.
     const alreadyRecorded =
-      await this.delivery.findEventBySubmissionId(client_submission_id);
+      await this.delivery.findEventBySubmissionId(client_submission_id, businessId);
 
     if (alreadyRecorded) {
       return;
