@@ -4,6 +4,7 @@ import {
   createApiKeySchema,
   integrationIdParamSchema,
   integrationListSchema,
+  listApiUsageSchema,
   listWebhookDeliveriesSchema,
   saveWebhookEndpointSchema,
 } from "@/schemas/integration-schema";
@@ -109,6 +110,7 @@ const integrationSchemas = {
   createApiKey: createApiKeySchema,
   saveWebhookEndpoint: saveWebhookEndpointSchema,
   listWebhookDeliveries: listWebhookDeliveriesSchema,
+  listApiUsage: listApiUsageSchema,
 };
 
 const integrationResponses = {
@@ -223,6 +225,33 @@ const integrationResponses = {
           .nullable()
           .describe("Sobre as entregues nas últimas 24h."),
       }),
+    }),
+  }),
+
+  apiUsage: z.object({
+    message: z.string(),
+    data: z.object({
+      totals: z.object({
+        ok: z.number(),
+        clientError: z.number(),
+        serverError: z.number(),
+      }),
+
+      byRoute: z.array(
+        z.object({
+          method: z.string(),
+          route: z.string(),
+          ok: z.number(),
+          clientError: z.number(),
+          serverError: z.number(),
+        }),
+      ),
+
+      byDay: z.array(z.object({ day: z.string(), total: z.number() })),
+
+      keys: z.array(
+        z.object({ id: z.string(), name: z.string(), prefix: z.string() }),
+      ),
     }),
   }),
 

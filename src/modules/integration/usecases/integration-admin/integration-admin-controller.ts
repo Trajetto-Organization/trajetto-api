@@ -8,6 +8,7 @@ import { Prisma, WebhookDeliveryStatus } from "@prisma/client";
 import {
   createApiKeySchema,
   integrationIdParamSchema,
+  listApiUsageSchema,
   listWebhookDeliveriesSchema,
   saveWebhookEndpointSchema,
 } from "@/schemas/integration-schema";
@@ -266,6 +267,144 @@ class IntegrationAdminController {
   };
 
   // --------------------------------------------------------------- monitor
+  /**
+   * The other half of the monitor: what THEIR system asked of US.
+   *
+   * Read straight off the daily aggregate, so the answer costs the same
+   * whether the customer made forty calls yesterday or four hundred thousand.
+   * Grouped by route and method because that is the shape of the question —
+   * "o POST de entregas está dando 422" — and not by hour, which nobody asks.
+   */
+  listApiUsage = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void> => {
+    const query = listApiUsageSchema.parse(request.query);
+
+    const scoped = await this.scopedBusiness(
+      request,
+      query.businessId ??
+        (request.user as { businessId?: string }).businessId ??
+        "",
+    );
+
+    // Whole days, from the start of the day `days - 1` back: asking for 7 days
+    // on a Monday afternoon has to include the previous Tuesday, not start
+    // halfway through it.
+    const since = new Date();
+
+    since.setUTCHours(0, 0, 0, 0);
+    since.setUTCDate(since.getUTCDate() - (query.days - 1));
+
+    const rows = await database.apiKeyUsageDaily.findMany({
+      where: {
+        businessId: scoped,
+        day: { gte: since },
+        ...(query.apiKeyId && { apiKeyId: query.apiKeyId }),
+      },
+      select: {
+        apiKeyId: true,
+        day: true,
+        method: true,
+        route: true,
+        status_class: true,
+        count: true,
+        apiKey: { select: { id: true, name: true, prefix: true } },
+      },
+      orderBy: [{ day: "desc" }, { route: "asc" }],
+    });
+
+    // BigInt does not survive JSON. Converted here rather than at the edge so
+    // nothing downstream has to remember — a serialiser throwing on a counter
+    // is an empty screen with a 500 behind it.
+    const byRoute = new Map<
+      string,
+      {
+        method: string;
+        route: string;
+        ok: number;
+        clientError: number;
+        serverError: number;
+      }
+    >();
+
+    let ok = 0;
+    let clientError = 0;
+    let serverError = 0;
+
+    for (const row of rows) {
+      const key = `${row.method} ${row.route}`;
+
+      const entry = byRoute.get(key) ?? {
+        method: row.method,
+        route: row.route,
+        ok: 0,
+        clientError: 0,
+        serverError: 0,
+      };
+
+      const amount = Number(row.count);
+
+      if (row.status_class === 2) {
+        entry.ok += amount;
+        ok += amount;
+      } else if (row.status_class === 4) {
+        entry.clientError += amount;
+        clientError += amount;
+      } else {
+        entry.serverError += amount;
+        serverError += amount;
+      }
+
+      byRoute.set(key, entry);
+    }
+
+    // A day with no calls is a fact, and a chart that simply omits it draws a
+    // line straight over a weekend the integration was down.
+    const byDay = new Map<string, { day: string; total: number }>();
+
+    for (let offset = 0; offset < query.days; offset += 1) {
+      const at = new Date(since);
+
+      at.setUTCDate(at.getUTCDate() + offset);
+
+      const day = at.toISOString().slice(0, 10);
+
+      byDay.set(day, { day, total: 0 });
+    }
+
+    for (const row of rows) {
+      const day = row.day.toISOString().slice(0, 10);
+      const entry = byDay.get(day);
+
+      if (entry) entry.total += Number(row.count);
+    }
+
+    const keys = new Map<string, { id: string; name: string; prefix: string }>();
+
+    for (const row of rows) {
+      if (row.apiKey) keys.set(row.apiKey.id, row.apiKey);
+    }
+
+    return reply.status(200).send({
+      message: "Uso obtido com sucesso.",
+      data: {
+        totals: { ok, clientError, serverError },
+
+        byRoute: [...byRoute.values()].sort(
+          (left, right) =>
+            right.ok +
+            right.clientError +
+            right.serverError -
+            (left.ok + left.clientError + left.serverError),
+        ),
+
+        byDay: [...byDay.values()],
+        keys: [...keys.values()],
+      },
+    });
+  };
+
   listWebhookDeliveries = async (
     request: FastifyRequest,
     reply: FastifyReply,

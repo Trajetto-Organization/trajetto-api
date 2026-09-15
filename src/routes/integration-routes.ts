@@ -15,6 +15,8 @@ import {
   WEBHOOK_API_VERSION,
 } from "@/shared/integration/webhook-catalogue";
 
+import { apiUsageRecorder } from "@/shared/integration/api-usage-recorder";
+
 const readController = new IntegrationReadController();
 
 /**
@@ -36,6 +38,29 @@ const readController = new IntegrationReadController();
  * shifts when a row is inserted mid-walk.
  */
 async function integrationRoutes(app: FastifyInstance) {
+  /**
+   * Counts every answered call, for the monitor.
+   *
+   * `onResponse` and not `onSend`: the number that matters is the one the
+   * customer's system actually received, including the 401 that never reached
+   * a handler. Scoped to this plugin, so the panel's own traffic — a person in
+   * a browser — never lands in a customer's integration usage.
+   *
+   * The route PATTERN, so `/deliveries/:id` stays one bucket rather than one
+   * per document anybody looked at.
+   */
+  app.addHook("onResponse", async (request, reply) => {
+    if (!request.apiKey) return;
+
+    apiUsageRecorder.record({
+      apiKeyId: request.apiKey.id,
+      businessId: request.apiKey.businessId,
+      method: request.method,
+      route: request.routeOptions?.url ?? request.url,
+      status: reply.statusCode,
+    });
+  });
+
   app.get(
     "/catalogue",
     {

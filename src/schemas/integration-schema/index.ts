@@ -114,8 +114,27 @@ const listWebhookDeliveriesSchema = z.object({
   businessId: z.string().uuid("ID da empresa é inválido.").optional(),
 });
 
+/**
+ * The window the usage screen asks about.
+ *
+ * Days and not a free date range, because the table is aggregated by day and a
+ * range that could start mid-day would be a filter the data cannot honour —
+ * the worst kind, since it answers rather than refusing.
+ */
+const listApiUsageSchema = z.object({
+  days: z
+    .string()
+    .optional()
+    .transform((value) => Math.min(Math.max(Number(value) || 7, 1), 90))
+    .describe("De 1 a 90 dias. O padrão é 7."),
+
+  apiKeyId: z.string().uuid("ID da chave é inválido.").optional(),
+  businessId: z.string().uuid("ID da empresa é inválido.").optional(),
+});
+
 export {
   createApiKeySchema,
+  listApiUsageSchema,
   integrationIdParamSchema,
   integrationListSchema,
   listWebhookDeliveriesSchema,

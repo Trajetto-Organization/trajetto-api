@@ -424,3 +424,119 @@ describe("the public documentation portal", () => {
     expect(response.statusCode).not.toBe(401);
   });
 });
+
+/**
+ * The other half of the monitor: what the customer's system asked of US.
+ *
+ * Only an end-to-end test can prove this, because the counting happens in an
+ * `onResponse` hook on a plugin — a unit test of the recorder proves the
+ * arithmetic and nothing about whether anything ever calls it.
+ */
+describe("counting what a customer's system asked for", () => {
+  it("counts a call, its route pattern and its outcome", async () => {
+    const { apiUsageRecorder } = await import(
+      "@/shared/integration/api-usage-recorder"
+    );
+
+    await call("/deliveries?limit=1", readKey);
+    await call(`/deliveries/${ourDelivery}`, readKey);
+
+    // A refusal counts too, as long as the key is genuine. "O ERP chamou
+    // quatro mil vezes e todas deram 403" is a support conversation a counter
+    // that only saw successes could not have.
+    await call("/deliveries", writeOnlyKey);
+
+    await apiUsageRecorder.flush();
+
+    const rows = await prisma.apiKeyUsageDaily.findMany({
+      where: { businessId: CARRIER },
+      orderBy: { route: "asc" },
+    });
+
+    const routes = rows.map((row) => `${row.method} ${row.route}`);
+
+    // The PATTERN, not the URL. One bucket for every document anybody looked
+    // at is the request log this table exists to avoid.
+    expect(routes).toContain("GET /integration/v1/deliveries");
+    expect(routes).toContain("GET /integration/v1/deliveries/:id");
+
+    expect(routes.some((route) => route.includes(ourDelivery))).toBe(false);
+
+    const ok = rows.filter((row) => row.status_class === 2);
+    const refused = rows.filter((row) => row.status_class === 4);
+
+    expect(ok.length).toBeGreaterThan(0);
+    expect(refused.length).toBeGreaterThan(0);
+  });
+
+  it("cannot attribute a call made with an unknown key", async () => {
+    const { apiUsageRecorder } = await import(
+      "@/shared/integration/api-usage-recorder"
+    );
+
+    await prisma.apiKeyUsageDaily.deleteMany({});
+
+    // Drained first, so what the buffer holds after the call is what THIS
+    // call put there.
+    await apiUsageRecorder.flush();
+
+    await call("/deliveries", "tjk_live_naoexiste.segredo");
+
+    // Asserted on the buffer and not on the table, deliberately. A row
+    // charged to an invented company would be refused by the foreign key and
+    // swallowed by the recorder's own catch — so an empty table proves
+    // nothing about whether the hook counted it. The buffer does.
+    //
+    // A 401 has no company behind it: the key did not resolve. Charging it to
+    // the last key seen would be inventing somebody else's number.
+    expect(apiUsageRecorder.pending()).toBe(0);
+
+    await apiUsageRecorder.flush();
+
+    expect(await prisma.apiKeyUsageDaily.count()).toBe(0);
+  });
+
+  it("does not count the open catalogue against anybody's key", async () => {
+    const { apiUsageRecorder } = await import(
+      "@/shared/integration/api-usage-recorder"
+    );
+
+    await prisma.apiKeyUsageDaily.deleteMany({ where: { businessId: CARRIER } });
+
+    await apiUsageRecorder.flush();
+
+    // Open, so no key and no company to charge it to.
+    await call("/catalogue");
+
+    expect(apiUsageRecorder.pending()).toBe(0);
+
+    await apiUsageRecorder.flush();
+
+    expect(
+      await prisma.apiKeyUsageDaily.count({ where: { businessId: CARRIER } }),
+    ).toBe(0);
+  });
+
+  it("keeps one company out of another's counters", async () => {
+    const { apiUsageRecorder } = await import(
+      "@/shared/integration/api-usage-recorder"
+    );
+
+    await prisma.apiKeyUsageDaily.deleteMany({});
+
+    await call("/deliveries?limit=1", otherCarrierKey);
+
+    await apiUsageRecorder.flush();
+
+    const ours = await prisma.apiKeyUsageDaily.count({
+      where: { businessId: CARRIER },
+    });
+
+    const theirs = await prisma.apiKeyUsageDaily.count({
+      where: { businessId: OTHER },
+    });
+
+    expect(ours).toBe(0);
+    expect(theirs).toBeGreaterThan(0);
+  });
+});

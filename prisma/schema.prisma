@@ -145,6 +145,7 @@ model Business {
   deliveryProofAudits    DeliveryProofAudit[]
 
   apiKeys          ApiKey[]
+  apiKeyUsage      ApiKeyUsageDaily[]
   webhookEndpoints WebhookEndpoint[]
   webhookDeliveries WebhookDelivery[]
   deliveryMessageTemplates DeliveryMessageTemplate[]
@@ -1818,11 +1819,56 @@ model ApiKey {
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
+  usage ApiKeyUsageDaily[]
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@index([businessId, created_at])
   @@map("api_key")
+}
+
+/// What a customer's system asked of us, counted.
+///
+/// The inverse of `WebhookDelivery`, and the question support actually gets
+/// first: not "did you send it" but "did their ERP call, and what happened?".
+/// Without this the only answer available is `last_used_at`, which says
+/// somebody called something at some point.
+///
+/// Aggregated rather than a row per request. At five million deliveries a
+/// month a request log is tens of millions of rows a month to answer a
+/// question that is always a count.
+model ApiKeyUsageDaily {
+  id String @id @default(uuid(7))
+
+  apiKey   ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  apiKeyId String
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  /// UTC. A date and not a timestamp: the question is "how many yesterday",
+  /// never "how many at 14:32".
+  day DateTime @db.Date
+
+  method String
+
+  /// The route PATTERN, not the URL. Aggregating by literal URL would give one
+  /// row per document anybody looked at — the request log again, renamed.
+  route String
+
+  /// 2, 4 or 5: it worked, they got it wrong, or we did. Those are the three
+  /// conversations. The exact status stays in the application log.
+  status_class Int @db.SmallInt
+
+  count BigInt @default(0)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([apiKeyId, day, method, route, status_class], map: "api_key_usage_daily_bucket_key")
+  @@index([businessId, day(sort: Desc)])
+  @@map("api_key_usage_daily")
 }
 
 /// Where a customer's system wants to be told things.

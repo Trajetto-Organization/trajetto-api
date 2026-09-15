@@ -10,6 +10,7 @@ import {
 } from "@/shared/integration/api-key-rules";
 
 import { AppError } from "@/shared/errors/AppError";
+import { lastUsedThrottle } from "@/shared/integration/last-used-throttle";
 
 /**
  * How an outside system proves who it is.
@@ -39,6 +40,14 @@ declare module "fastify" {
  * existed, and a distinct "unknown key" would tell them it did not — which
  * together is an oracle for which keys are real.
  */
+function touchLastUsed(apiKeyId: string): void {
+  if (!lastUsedThrottle.shouldWrite(apiKeyId)) return;
+
+  void database.apiKey
+    .update({ where: { id: apiKeyId }, data: { last_used_at: new Date() } })
+    .catch(() => lastUsedThrottle.forget(apiKeyId));
+}
+
 function refuse(): never {
   throw new AppError(
     "Chave de API inválida.",
@@ -70,9 +79,13 @@ async function ensureApiKey(
   // Best-effort and not awaited: this is bookkeeping that answers "is this key
   // still used?" before somebody revokes it, and a write failure must never
   // cost a customer an API call.
-  void database.apiKey
-    .update({ where: { id: key.id }, data: { last_used_at: new Date() } })
-    .catch(() => undefined);
+  //
+  // And throttled. An UPDATE per request is an UPDATE per request on ONE row:
+  // at the rate limit a single key produces ten writes a second all queuing on
+  // the same lock, plus a dead tuple each, for a column whose only reader is a
+  // person deciding whether to revoke. Five minutes of staleness changes no
+  // decision anybody makes with it.
+  touchLastUsed(key.id);
 
   request.apiKey = {
     id: key.id,

@@ -232,6 +232,29 @@ async function integrationAdminRoutes(app: FastifyInstance) {
     controller.listWebhookDeliveries,
   );
 
+  app.get(
+    "/api-usage",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("integration_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["integration-admin"],
+        summary: "O outro lado do monitor: o que o sistema do cliente pediu",
+        description:
+          "`webhook_delivery` responde o que MANDAMOS; isto responde o que eles PEDIRAM — que é a pergunta que chega primeiro no suporte. Agregado por dia, método e rota: a cinco milhões de entregas por mês um log por requisição seria dezenas de milhões de linhas por mês para responder uma pergunta que é sempre contagem. A rota é o PADRÃO (`/deliveries/:id`) e não a URL, senão seria uma linha por documento consultado. As classes são 2, 4 e 5 — funcionou, o cliente errou, nós erramos. Dias sem chamada nenhuma vêm com zero em vez de faltar, porque um gráfico que pula o dia desenha uma reta por cima de um fim de semana em que a integração estava fora.",
+        querystring: integrationSchemas.listApiUsage,
+        response: {
+          200: integrationResponses.apiUsage,
+          400: integrationResponses.genericError,
+          403: integrationResponses.genericError,
+          500: integrationResponses.internalServerError,
+        },
+      },
+    },
+    controller.listApiUsage,
+  );
+
   app.post(
     "/webhook-delivery/:id/business/:businessId/resend",
     {
