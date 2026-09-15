@@ -12,6 +12,8 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
+import { SubmissionOwnerMismatchError } from "@/shared/errors/submission-owner-mismatch-error";
+import { submissionBelongsToCaller } from "@/shared/security/submission-ownership";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
@@ -106,7 +108,27 @@ class CreateFuelUseCase {
         fuelData.client_submission_id,
       );
 
-      if (existingFuel) return existingFuel;
+      if (existingFuel) {
+      /**
+       * A replay has to belong to the driver replaying it.
+       *
+       * The key is unique per `(businessId, client_submission_id)`, so the
+       * tenant is already safe — but inside one carrier this returned
+       * whatever record carried the key, and the driver-ownership check that
+       * would have caught it runs further down, after this early return. A
+       * guessed identifier therefore read back another driver's submission.
+       */
+        if (
+          !submissionBelongsToCaller(
+            findUser.driverId,
+            existingFuel.driverId,
+          )
+        ) {
+          throw new SubmissionOwnerMismatchError();
+        }
+
+        return existingFuel;
+      }
     }
 
     // Validate vehicle exists and belongs to business
@@ -339,6 +361,25 @@ class CreateFuelUseCase {
           await this.uploadService.deleteFile(uploadedPhotoPath);
         }
         uploadedPhotoPath = null;
+
+        /**
+         * The same ownership rule as the early return, for the narrower
+         * window the transaction guards.
+         *
+         * When two drivers submit the same key at the same instant, only one
+         * row is created and the other request is handed that row from inside
+         * the transaction — past the check further up, which ran against this
+         * caller and said nothing about whose record came back.
+         */
+        if (
+          !submissionBelongsToCaller(
+            findUser.driverId,
+            fuelCreated.driverId,
+          )
+        ) {
+          throw new SubmissionOwnerMismatchError();
+        }
+
         return fuelCreated;
       }
       databaseCommitted = true;

@@ -25,6 +25,8 @@ import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/b
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 
 import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
+import { SubmissionOwnerMismatchError } from "@/shared/errors/submission-owner-mismatch-error";
+import { submissionBelongsToCaller } from "@/shared/security/submission-ownership";
 import { AppError } from "@/shared/errors/AppError";
 
 import {
@@ -98,7 +100,27 @@ class CreateVehicleChecklistUseCase {
         checklistData.client_submission_id,
       );
 
-      if (existingChecklist) return existingChecklist;
+      if (existingChecklist) {
+      /**
+       * A replay has to belong to the driver replaying it.
+       *
+       * The key is unique per `(businessId, client_submission_id)`, so the
+       * tenant is already safe — but inside one carrier this returned
+       * whatever record carried the key, and the driver-ownership check that
+       * would have caught it runs further down, after this early return. A
+       * guessed identifier therefore read back another driver's submission.
+       */
+        if (
+          !submissionBelongsToCaller(
+            findUser.driverId,
+            existingChecklist.driverId,
+          )
+        ) {
+          throw new SubmissionOwnerMismatchError();
+        }
+
+        return existingChecklist;
+      }
     }
 
     // Validate vehicle exists and belongs to business
@@ -275,6 +297,25 @@ class CreateVehicleChecklistUseCase {
             this.uploadService.deleteFile(photoPath),
           ),
         );
+
+
+        /**
+         * The same ownership rule as the early return, for the narrower
+         * window the transaction guards.
+         *
+         * When two drivers submit the same key at the same instant, only one
+         * row is created and the other request is handed that row from inside
+         * the transaction — past the check further up, which ran against this
+         * caller and said nothing about whose record came back.
+         */
+        if (
+          !submissionBelongsToCaller(
+            findUser.driverId,
+            checklistCreated.driverId,
+          )
+        ) {
+          throw new SubmissionOwnerMismatchError();
+        }
 
         return checklistCreated;
       }
