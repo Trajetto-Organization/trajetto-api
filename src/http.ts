@@ -113,6 +113,23 @@ app.register(fastifySwagger, {
           scheme: "bearer",
           bearerFormat: "JWT",
         },
+
+        /**
+         * The public integration API. A different scheme from `bearerAuth`
+         * and deliberately so: a JWT is a person's session and an API key is
+         * a machine with scopes, and a document that called them the same
+         * thing would have integrators sending us the wrong credential.
+         *
+         * Referencing a scheme that is not declared here does not fail a
+         * typecheck — it fails when somebody opens /docs, which is why the
+         * contract test builds the document.
+         */
+        apiKey: {
+          type: "http",
+          scheme: "bearer",
+          description:
+            "A chave inteira, como foi entregue no cadastro: `tjk_live_<prefixo>.<segredo>`.",
+        },
       },
     },
   },

@@ -471,3 +471,131 @@ describe("the delivery exports, as published", () => {
     }
   });
 });
+
+describe("the public integration API, as published", () => {
+  /**
+   * The one surface in the product whose contract belongs to somebody else's
+   * engineering team. A route renamed here is an integration broken in
+   * production at a customer we cannot deploy for.
+   */
+  const integration = () => operationsUnder("/integration/v1/");
+
+  it("publishes the read surface a v1 promises", () => {
+    expect(
+      integration().map(([path, method]) => `${method.toUpperCase()} ${path}`),
+    ).toEqual([
+      "GET /integration/v1/catalogue",
+      "GET /integration/v1/deliveries",
+      "GET /integration/v1/deliveries/{id}",
+      "GET /integration/v1/routes",
+      "GET /integration/v1/routes/{id}",
+      "GET /integration/v1/events",
+    ]);
+  });
+
+  it("leaves the catalogue open and gates everything else on a key", () => {
+    // The catalogue is what somebody reads BEFORE integrating; requiring a key
+    // to learn what the topics are is how a first attempt stalls.
+    for (const [path, method, operation] of integration()) {
+      if (path.endsWith("/catalogue")) {
+        expect(operation.security, `${method} ${path}`).toBeUndefined();
+        continue;
+      }
+
+      expect(operation.security, `${method} ${path}`).toEqual([{ apiKey: [] }]);
+    }
+  });
+
+  it("never offers a session token where a key belongs", () => {
+    // A JWT is a person's session; an API key is a machine with scopes. A
+    // document that called them the same thing would have integrators sending
+    // the wrong credential.
+    for (const [path, method, operation] of integration()) {
+      expect(
+        JSON.stringify(operation.security ?? []),
+        `${method} ${path}`,
+      ).not.toContain("bearerAuth");
+    }
+  });
+
+  it("takes no businessId anywhere", () => {
+    // The company comes from the key and from nowhere else. A public API that
+    // accepted it as a parameter would be one where a customer can ask for
+    // another's operation — and it would pass every test written by somebody
+    // who only ever sent their own id.
+    for (const [path, method, operation] of integration()) {
+      const parameters = JSON.stringify(
+        (operation as unknown as { parameters?: unknown }).parameters ?? [],
+      );
+
+      expect(parameters, `${method} ${path}`).not.toContain("businessId");
+    }
+  });
+
+  it("documents 429 on every route that is rate limited", () => {
+    // The limit is per key. An integrator who does not know it exists writes a
+    // loop that discovers it at 3am.
+    for (const [path, method, operation] of integration()) {
+      if (path.endsWith("/catalogue")) continue;
+
+      expect(Object.keys(operation.responses), `${method} ${path}`).toContain(
+        "429",
+      );
+    }
+  });
+
+  it("publishes a cursor and never a page number", () => {
+    // `OFFSET 40000` makes Postgres count forty thousand rows to throw them
+    // away — and an offset page shifts when a row is inserted mid-walk, which
+    // is how an integration silently skips a document.
+    for (const [path, method, operation] of integration()) {
+      if (!path.endsWith("/deliveries") && !path.endsWith("/routes") && !path.endsWith("/events")) {
+        continue;
+      }
+
+      const parameters = JSON.stringify(
+        (operation as unknown as { parameters?: unknown }).parameters ?? [],
+      );
+
+      expect(parameters, `${method} ${path}`).toContain("cursor");
+      expect(parameters, `${method} ${path}`).not.toContain('"page"');
+
+      const success = JSON.stringify(operation.responses["200"] ?? {});
+
+      expect(success, `${method} ${path}`).toContain("next_cursor");
+    }
+  });
+
+  it("carries the three identifiers on every document it returns", () => {
+    // Our id, the customer's own code, and the NF-e key. An integration that
+    // can only match on one of those breaks the first time a customer's ERP
+    // changes how it numbers things.
+    const delivery = JSON.stringify(
+      integration().find(([path]) => path === "/integration/v1/deliveries")![2]
+        .responses["200"] ?? {},
+    );
+
+    expect(delivery).toContain('"id"');
+    expect(delivery).toContain('"code"');
+    expect(delivery).toContain('"invoice_key"');
+  });
+
+  it("does not leak an internal column into a published shape", () => {
+    // The shapes are written as projections, never as a spread of the row —
+    // a spread means every column added tomorrow is silently published.
+    const published = JSON.stringify(
+      integration().map(([, , operation]) => operation.responses),
+    );
+
+    for (const internal of [
+      "businessId",
+      "importId",
+      "shipperId",
+      "driverId",
+      "client_submission_id",
+      "reasonId",
+    ]) {
+      expect(published, internal).not.toContain(internal);
+    }
+  });
+});

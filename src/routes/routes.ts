@@ -39,6 +39,7 @@ import { trafficViolationCodeRoutes } from "./traffic-violation-code-routes";
 import { uploadRoutes } from "./upload-routes";
 import { healthRoutes } from "./health-routes";
 import { publicRoutes } from "./public-routes";
+import { integrationRoutes } from "./integration-routes";
 
 import { whatsappRoutes } from "./whatsapp-routes";
 import { aiAnalysisRoutes } from "./ai-analysis-routes";
@@ -88,6 +89,7 @@ async function routes(app: FastifyInstance) {
   app.register(chatRoutes, { prefix: "/chat" });
   app.register(uploadRoutes, { prefix: "/uploads" });
   app.register(publicRoutes, { prefix: "/public" });
+  app.register(integrationRoutes, { prefix: "/integration/v1" });
   app.register(healthRoutes);
 }
 
