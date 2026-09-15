@@ -5,6 +5,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
 
 import { NotificationService } from "@/shared/services/notification-service";
+import { sendRouteEventToBusiness } from "@/websocket";
 import { AppError } from "@/shared/errors/AppError";
 
 import { canTransitionRoute } from "@/shared/route/route-rules";
@@ -127,6 +128,14 @@ class StartRouteUseCase {
         status: "IN_PROGRESS",
         vehicleId: departingVehicleId,
         started_at: new Date(),
+      });
+
+      // The control tower is watching for exactly this. No push: nobody needs
+      // to be woken up because a truck left on time.
+      sendRouteEventToBusiness(businessId, {
+        type: "route.started",
+        routeId,
+        routeCode: findRoute.code,
       });
 
       this.notificationService.createActivityIfEnabled({

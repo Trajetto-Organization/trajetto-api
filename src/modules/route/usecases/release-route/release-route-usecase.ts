@@ -5,6 +5,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
 import database from "@/../infra/database";
+import { sendRouteEventToDriver } from "@/websocket";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
@@ -153,6 +154,21 @@ class ReleaseRouteUseCase {
 
         return moved;
       });
+
+      // After the commit, never inside it: an event about a write that rolled
+      // back is a lie the client cannot undo. The push (outbox) reaches a
+      // phone in a pocket; this reaches an app that is open right now.
+      if (released) {
+        const driverUser = await this.user.findUserByDriverId(
+          findRoute.driverId,
+        );
+
+        sendRouteEventToDriver(driverUser?.id ?? null, {
+          type: "route.released",
+          routeId,
+          routeCode: findRoute.code,
+        });
+      }
 
       this.notificationService.createActivityIfEnabled({
         type: "Rota",

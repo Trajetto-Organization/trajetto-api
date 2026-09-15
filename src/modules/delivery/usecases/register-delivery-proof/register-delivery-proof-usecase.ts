@@ -23,6 +23,8 @@ import {
 
 import { stopOutcomeForDelivery } from "@/shared/route/route-rules";
 
+import { announceStopSettled } from "@/shared/route/route-realtime";
+
 import { AppError } from "@/shared/errors/AppError";
 
 interface RegisterDeliveryProofRequest {
@@ -138,6 +140,12 @@ class RegisterDeliveryProofUseCase {
     }
 
     try {
+      // Captured to be announced AFTER the commit: a socket event about a
+      // write that rolled back is a lie the client cannot undo.
+      let settled: Awaited<
+        ReturnType<IRouteRepository["settleStopForDelivery"]>
+      > = null;
+
       const provenAt = new Date();
 
       // Proof, DELIVERED stamp and the route stop this resolves all commit
@@ -169,7 +177,7 @@ class RegisterDeliveryProofUseCase {
         const outcome = stopOutcomeForDelivery("DELIVERED", provenAt);
 
         if (outcome) {
-          await this.route.settleStopForDelivery(
+          settled = await this.route.settleStopForDelivery(
             deliveryId,
             businessId,
             outcome,
@@ -177,6 +185,9 @@ class RegisterDeliveryProofUseCase {
           );
         }
       });
+
+      // The panel and the control tower are watching this stop.
+      announceStopSettled(businessId, settled);
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

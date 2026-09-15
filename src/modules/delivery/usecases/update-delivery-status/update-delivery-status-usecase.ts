@@ -23,6 +23,8 @@ import {
 
 import { stopOutcomeForDelivery } from "@/shared/route/route-rules";
 
+import { announceStopSettled } from "@/shared/route/route-realtime";
+
 import { AppError } from "@/shared/errors/AppError";
 import { Delivery } from "../../dtos/delivery-dto";
 
@@ -82,6 +84,12 @@ class UpdateDeliveryStatusUseCase {
     }
 
     try {
+      // Captured to be announced AFTER the commit: a socket event about a
+      // write that rolled back is a lie the client cannot undo.
+      let settled: Awaited<
+        ReturnType<IRouteRepository["settleStopForDelivery"]>
+      > = null;
+
       // The panel can resolve a delivery the driver never touched — the
       // customer called the office, the load came back. If that delivery is a
       // stop on a running route, the stop has to learn about it in the same
@@ -105,7 +113,7 @@ class UpdateDeliveryStatusUseCase {
         const outcome = stopOutcomeForDelivery(status, new Date());
 
         if (outcome) {
-          await this.route.settleStopForDelivery(
+          settled = await this.route.settleStopForDelivery(
             deliveryId,
             businessId,
             outcome,
@@ -115,6 +123,9 @@ class UpdateDeliveryStatusUseCase {
 
         return updated;
       });
+
+      // The panel and the control tower are watching this stop.
+      announceStopSettled(businessId, settled);
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

@@ -16,6 +16,8 @@ import {
 
 import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
 import { arrivalStopOutcome } from "@/shared/route/route-rules";
+import { announceStopSettled } from "@/shared/route/route-realtime";
+
 import { AppError } from "@/shared/errors/AppError";
 
 interface RegisterDeliveryArrivalRequest {
@@ -100,6 +102,12 @@ class RegisterDeliveryArrivalUseCase {
     }
 
     try {
+      // Captured to be announced AFTER the commit: a socket event about a
+      // write that rolled back is a lie the client cannot undo.
+      let settled: Awaited<
+        ReturnType<IRouteRepository["settleStopForDelivery"]>
+      > = null;
+
       const arrivedAt = new Date();
 
       // Event and stop commit together. The stop is the route's view of this
@@ -119,13 +127,16 @@ class RegisterDeliveryArrivalUseCase {
           tx,
         );
 
-        await this.route.settleStopForDelivery(
+        settled = await this.route.settleStopForDelivery(
           deliveryId,
           businessId,
           arrivalStopOutcome(arrivedAt),
           tx,
         );
       });
+
+      // The panel and the control tower are watching this stop.
+      announceStopSettled(businessId, settled);
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

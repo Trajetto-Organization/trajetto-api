@@ -628,6 +628,74 @@ const sendChatMessageEvent = (
   }
 };
 
+/**
+ * A route moved, or one of its stops did.
+ *
+ * Two audiences, two rooms, and the split is the whole design:
+ *
+ *  - The company room gets what a PANEL is watching — a route leaving, a stop
+ *    resolving. Those screens are open and waiting; the event saves them a
+ *    poll and nothing more. If it is lost, the next refresh tells the same
+ *    story.
+ *
+ *  - The driver's own user room gets what the PERSON has to act on — the route
+ *    handed to them, the route called off. That also goes out as a push
+ *    through the outbox, and the two are not redundant: the push reaches a
+ *    phone in a pocket with the app closed, this reaches an app that is open
+ *    right now, in the second it happens.
+ *
+ * Deliberately NOT through the outbox. The outbox exists for deliveries that
+ * must survive a crash and be retried; a socket frame's entire value is being
+ * instant, and a retried one would arrive after the client had already
+ * refetched the truth. Same reasoning the chat already follows.
+ *
+ * Always called AFTER the transaction commits. An event about a write that
+ * rolled back is a lie the client cannot undo.
+ */
+interface RouteRealtimeEvent {
+  type:
+    | "route.released"
+    | "route.started"
+    | "route.cancelled"
+    | "route.completed"
+    | "route-stop.settled";
+
+  routeId: string;
+
+  /**
+   * Absent on the stop event unless that stop closed the route: the settle
+   * result carries the route's id, not its number, and the panel already has
+   * the route on screen — a second query just to label an event it can
+   * already place would be a query per stop of every route in the operation.
+   */
+  routeCode?: number;
+
+  /** Present on the stop event: which address, and how it ended. */
+  stopId?: string;
+  stopStatus?: string;
+  deliveryId?: string;
+}
+
+const sendRouteEventToBusiness = (
+  businessId: string,
+  event: RouteRealtimeEvent,
+) => {
+  if (io) {
+    io.to(`business:${businessId}`).emit("routeEvent", event);
+  }
+};
+
+const sendRouteEventToDriver = (
+  driverUserId: string | null,
+  event: RouteRealtimeEvent,
+) => {
+  // Null is ordinary, not an error: operations register drivers before handing
+  // out phones, and that driver simply has no room to reach.
+  if (io && driverUserId) {
+    io.to(`user:${driverUserId}`).emit("routeEvent", event);
+  }
+};
+
 /** A read cursor advanced — the other side's checks turn double, live. */
 const sendChatReadEvent = (
   businessId: string,
@@ -717,6 +785,8 @@ async function shutdownSocketIO(): Promise<void> {
   }
 }
 
+export type { RouteRealtimeEvent };
+
 export {
   initializeSocketIO,
   shutdownSocketIO,
@@ -730,5 +800,7 @@ export {
   sendChatMessageEvent,
   sendChatReadEvent,
   sendChatDeliveredEvent,
+  sendRouteEventToBusiness,
+  sendRouteEventToDriver,
   getOnlineUserIdsForBusiness,
 };

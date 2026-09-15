@@ -4,6 +4,10 @@ import { IRouteRepository } from "../../repositories/IRoute-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import database from "@/../infra/database";
+import {
+  sendRouteEventToBusiness,
+  sendRouteEventToDriver,
+} from "@/websocket";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
@@ -128,6 +132,26 @@ class CancelRouteUseCase {
 
         return moved;
       });
+
+      // Both audiences: the panel loses a route from its board, and the driver
+      // may be standing at an address that was just called off.
+      sendRouteEventToBusiness(businessId, {
+        type: "route.cancelled",
+        routeId,
+        routeCode: findRoute.code,
+      });
+
+      if (findRoute.status !== "PLANNED") {
+        const driverUser = await this.user.findUserByDriverId(
+          findRoute.driverId,
+        );
+
+        sendRouteEventToDriver(driverUser?.id ?? null, {
+          type: "route.cancelled",
+          routeId,
+          routeCode: findRoute.code,
+        });
+      }
 
       this.notificationService.createActivityIfEnabled({
         type: "Rota",
