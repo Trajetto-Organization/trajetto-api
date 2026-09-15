@@ -12,13 +12,13 @@ vi.mock("@/env", () => ({
 let mode = "none";
 
 /**
- * Qual balde uma requisição anônima cai.
+ * Which bucket an anonymous request falls into.
  *
- * É a única coisa entre um atacante e força bruta no login e no 2FA, e estava
- * do lado errado: o código lia `cf-connecting-ip` PRIMEIRO — o único cabeçalho
- * que o Traefik da produção não reescreve. Mandar `Cf-Connecting-Ip:
- * 1.2.3.<n>` dava um balde novo por requisição, e os limites de 8/min do login
- * e 4/min do 2FA não prendiam nada.
+ * It is the only thing between an attacker and brute force on login and on
+ * two-factor, and it was on the wrong side: the code read `cf-connecting-ip`
+ * FIRST — the one header production's Traefik does not rewrite. Sending
+ * `Cf-Connecting-Ip: 1.2.3.<n>` handed out a fresh bucket per request, and the
+ * 8/min on login and 4/min on two-factor held nothing at all.
  */
 function requestWith(
   headers: Record<string, string | string[] | undefined>,
@@ -36,10 +36,10 @@ afterEach(() => {
   mode = "none";
 });
 
-describe("uma requisição autenticada", () => {
-  it("é limitada pelo usuário, que vem de um JWT verificado", () => {
-    // A única metade da chave que o atacante não reescreve — e o que impede
-    // uma frota inteira atrás de um NAT de dividir o mesmo balde.
+describe("an authenticated request", () => {
+  it("is limited by the user, which comes from a verified JWT", () => {
+    // The one half of the key an attacker cannot rewrite — and what keeps a
+    // whole fleet behind one NAT from sharing a single bucket.
     expect(
       clientRateLimitKey(
         requestWith({ "cf-connecting-ip": "1.2.3.4" }, "10.0.0.1", {
@@ -50,8 +50,8 @@ describe("uma requisição autenticada", () => {
   });
 });
 
-describe("uma requisição anônima, sem proxy configurado", () => {
-  it("usa o socket e ignora todo cabeçalho", () => {
+describe("an anonymous request, with no proxy configured", () => {
+  it("uses the socket and ignores every header", () => {
     const key = clientRateLimitKey(
       requestWith({
         "cf-connecting-ip": "1.2.3.4",
@@ -60,11 +60,11 @@ describe("uma requisição anônima, sem proxy configurado", () => {
       }),
     );
 
-    // O socket é o único endereço que quem manda a requisição não escreve.
+    // The socket is the only address the sender does not get to write.
     expect(key).toBe("ip:10.9.9.9");
   });
 
-  it("não deixa o atacante escolher o próprio balde", () => {
+  it("does not let an attacker pick their own bucket", () => {
     const first = clientRateLimitKey(
       requestWith({ "cf-connecting-ip": "1.2.3.1" }),
     );
@@ -73,18 +73,18 @@ describe("uma requisição anônima, sem proxy configurado", () => {
       requestWith({ "cf-connecting-ip": "1.2.3.2" }),
     );
 
-    // O ataque inteiro em duas linhas: se estas chaves diferissem, cada
-    // tentativa de senha teria o próprio limite.
+    // The whole attack in two lines: if these keys differed, every password
+    // attempt would carry its own limit.
     expect(first).toBe(second);
   });
 });
 
-describe("atrás de Traefik ou nginx", () => {
-  it("lê a ÚLTIMA entrada de X-Forwarded-For", () => {
+describe("behind Traefik or nginx", () => {
+  it("reads the LAST entry of X-Forwarded-For", () => {
     mode = "xff";
 
-    // O primeiro valor é o que o cliente escreveu; o proxy confiável
-    // acrescenta o par real no fim.
+    // The first value is whatever the client wrote; the trusted proxy
+    // appends the real peer at the end.
     expect(
       clientRateLimitKey(
         requestWith({ "x-forwarded-for": "1.2.3.4, 200.160.2.3" }),
@@ -92,11 +92,11 @@ describe("atrás de Traefik ou nginx", () => {
     ).toBe("ip:200.160.2.3");
   });
 
-  it("continua ignorando o cabeçalho da Cloudflare", () => {
+  it("still ignores the Cloudflare header", () => {
     mode = "xff";
 
-    // Este era o furo: o Traefik não reescreve `cf-connecting-ip`, então lê-lo
-    // é ler o que o cliente mandou.
+    // This was the hole: Traefik does not rewrite `cf-connecting-ip`, so
+    // reading it is reading whatever the client sent.
     expect(
       clientRateLimitKey(
         requestWith({
@@ -107,15 +107,15 @@ describe("atrás de Traefik ou nginx", () => {
     ).toBe("ip:200.160.2.3");
   });
 
-  it("cai no socket quando o cabeçalho não veio", () => {
+  it("falls back to the socket when the header is absent", () => {
     mode = "xff";
 
     expect(clientRateLimitKey(requestWith({}))).toBe("ip:10.9.9.9");
   });
 });
 
-describe("atrás da Cloudflare", () => {
-  it("lê o cabeçalho que ela sobrescreve", () => {
+describe("behind Cloudflare", () => {
+  it("reads the header Cloudflare overwrites", () => {
     mode = "cloudflare";
 
     expect(
@@ -124,22 +124,22 @@ describe("atrás da Cloudflare", () => {
   });
 });
 
-describe("lendo uma cadeia de encaminhamento", () => {
-  it("devolve o último salto", () => {
+describe("reading a forwarding chain", () => {
+  it("returns the last hop", () => {
     expect(lastForwardedAddress("1.1.1.1, 2.2.2.2, 3.3.3.3")).toBe("3.3.3.3");
   });
 
-  it("aguenta espaços e entradas vazias", () => {
+  it("copes with spaces and empty entries", () => {
     expect(lastForwardedAddress("  1.1.1.1 ,  , 2.2.2.2  ")).toBe("2.2.2.2");
   });
 
-  it("aguenta o cabeçalho repetido, que chega como lista", () => {
+  it("copes with a repeated header, which arrives as a list", () => {
     expect(lastForwardedAddress(["1.1.1.1", "2.2.2.2, 3.3.3.3"])).toBe(
       "3.3.3.3",
     );
   });
 
-  it("responde nada quando não há nada", () => {
+  it("answers nothing when there is nothing", () => {
     expect(lastForwardedAddress(undefined)).toBeNull();
     expect(lastForwardedAddress("")).toBeNull();
     expect(lastForwardedAddress("  ,  ")).toBeNull();

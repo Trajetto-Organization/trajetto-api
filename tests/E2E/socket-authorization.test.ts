@@ -11,19 +11,21 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 /**
- * O socket e a permissão que mudou por baixo dele.
+ * The socket, and the permission that changed underneath it.
  *
- * `socket.data.isChatStaff` era decidido UMA vez, no handshake, e o chat da
- * empresa é uma SALA — ou seja, o próprio canal de dados. Um usuário que
- * perdeu `delivery_manage` continuava recebendo toda mensagem da empresa pelo
- * resto da conexão: corpo, motorista e URL assinada do anexo. O HTTP recusava
- * a partir da requisição seguinte; o socket, nunca.
+ * `socket.data.isChatStaff` was decided ONCE, at the handshake, and a
+ * company's chat is a ROOM — which is to say, the data channel itself. A user
+ * who lost `delivery_manage` went on receiving every message in the company
+ * for the rest of the connection: the body, the driver and the signed URL of
+ * the attachment. HTTP refused from the next request onwards; the socket,
+ * never.
  *
- * A correção NÃO é derrubar a conexão. `permissions_changed` mexe em
- * autorização, não em autenticação, e um disconnect do servidor não reconecta
- * sozinho no socket.io-client — deixaria a empresa inteira sem tempo real até
- * a próxima recarga. O certo é tirar da sala quem não pertence mais, e é isso
- * que este arquivo prova, pelo canal de verdade.
+ * The fix is NOT to drop the connection. `permissions_changed` is about
+ * authorisation, not authentication, and a server-side disconnect does not
+ * reconnect on its own in socket.io-client — it would leave the whole company
+ * without realtime until the next page load. The right move is to remove from
+ * the room whoever no longer belongs in it, and that is what this file proves,
+ * through the real channel.
  */
 const prisma = new PrismaClient();
 
@@ -45,10 +47,10 @@ let client: {
 };
 
 /**
- * O cliente mora no repositório web: a API é servidor e não o tem.
+ * The client lives in the web repository: the API is a server and has none.
  *
- * Uma dependência de teste no pacote de produção é uma dependência que alguém
- * acaba importando em produção.
+ * A test-only dependency in the production package is a dependency somebody
+ * eventually imports in production.
  */
 async function connectClient(): Promise<typeof client> {
   const entry = pathToFileURL(
@@ -87,7 +89,7 @@ async function connectClient(): Promise<typeof client> {
   });
 }
 
-/** Espera uma mensagem de chat, ou desiste. */
+/** Waits for a chat message, or gives up. */
 function waitForChat(timeoutMs = 2500): Promise<unknown | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), timeoutMs);
@@ -129,7 +131,7 @@ beforeAll(async () => {
             canRead: true,
             canWrite: false,
 
-            // `businessId` também na permissão: a chave única é
+            // `businessId` on the permission as well: the unique key is
             // (action, profileAccessId, businessId).
             businessId: CARRIER,
           },
@@ -188,9 +190,9 @@ beforeAll(async () => {
 
   client = await connectClient();
 
-  // O handler de conexão do servidor é assíncrono — ele lê o usuário, o
-  // motorista e a família do refresh antes de entrar nas salas. Medir antes
-  // disso mediria a corrida, não a regra.
+  // The server's connection handler is asynchronous — it reads the user, the
+  // driver and the refresh family before joining any room. Measuring before
+  // that would measure the race, not the rule.
   await new Promise((resolve) => setTimeout(resolve, 1500));
 }, 120_000);
 
@@ -219,8 +221,8 @@ const anyMessage = () => ({
   kind: "TEXT",
 });
 
-describe("enquanto a permissão vale", () => {
-  it("o atendente recebe o chat da empresa", async () => {
+describe("while the permission holds", () => {
+  it("the staff member receives the company chat", async () => {
     const received = waitForChat();
 
     io.sendChatMessageEvent(CARRIER, null, anyMessage() as never);
@@ -229,8 +231,8 @@ describe("enquanto a permissão vale", () => {
   });
 });
 
-describe("depois que a permissão é revogada", () => {
-  it("o atendente para de receber, sem perder a conexão", async () => {
+describe("once the permission is revoked", () => {
+  it("the staff member stops receiving, without losing the connection", async () => {
     // A revogação como o produto a faz: a permissão muda no banco e o evento
     // de segurança sai.
     await prisma.permission.updateMany({
@@ -240,41 +242,43 @@ describe("depois que a permissão é revogada", () => {
 
     io.sendSecurityEventToBusiness(CARRIER, { reason: "permissions_changed" });
 
-    // A reavaliação lê o banco por socket; um instante para ela acontecer.
+    // The re-evaluation reads the database per socket; a moment for it.
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
     const received = waitForChat();
 
     io.sendChatMessageEvent(CARRIER, null, anyMessage() as never);
 
-    // O ponto inteiro: o HTTP já recusava a partir da requisição seguinte, e
-    // o socket continuava entregando o corpo da mensagem pelo resto da
-    // conexão.
+    // The whole point: HTTP already refused from the next request onwards,
+    // and the socket went on delivering the message body for the rest of the
+    // connection.
     expect(await received).toBeNull();
   });
 
-  it("e a conexão continua de pé", async () => {
-    // Derrubar seria pior: um disconnect do servidor não reconecta sozinho, e
-    // a empresa ficaria sem tempo real até a próxima recarga de página.
+  it("and the connection is still up", async () => {
+    // Dropping it would be worse: a server-side disconnect does not reconnect
+    // on its own, and the company would be left without realtime until the
+    // next page load.
     const online = await io.getOnlineUserIdsForBusiness(CARRIER);
 
     expect(online).toContain(STAFF);
   });
 });
 
-describe("quando a reavaliação não consegue ler o banco", () => {
-  it("tira da sala mesmo assim", { timeout: 30_000 }, async () => {
+describe("when the re-evaluation cannot read the database", () => {
+  it("removes from the room anyway", { timeout: 30_000 }, async () => {
     /**
-     * O ramo que só existe para o dia ruim.
+     * The branch that only exists for the bad day.
      *
-     * Um erro de leitura não pode ser o motivo pelo qual alguém continua
-     * ouvindo o que não deveria. Na dúvida, sai da sala — recolocar custa um
-     * `chatSubscribe`, e é o próprio cliente que faz isso ao redesenhar a
-     * tela.
+     * A read error must not be the reason somebody keeps listening to what
+     * they should not. When in doubt, leave the room — getting back in costs
+     * one `chatSubscribe`, and the client does exactly that when it redraws
+     * the screen.
      */
-    // A permissão volta ANTES da conexão, senão o segundo cliente entra já
-    // sem ser atendimento e o teste passaria sem nunca ter estado na sala —
-    // que foi exatamente o que aconteceu na primeira versão deste teste.
+    // The permission is restored BEFORE connecting; otherwise the second
+    // client joins already without staff rights and the test would pass
+    // without ever having been in the room — which is exactly what happened
+    // in the first version of this test.
     await prisma.permission.updateMany({
       where: { profileAccessId, permissionKey: "delivery_manage" },
       data: { canRead: true },
@@ -284,7 +288,7 @@ describe("quando a reavaliação não consegue ler o banco", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 1200));
 
-    // E provado: ele ESTÁ na sala antes de qualquer coisa.
+    // And proven: it IS in the room before anything else happens.
     const before = new Promise((resolve) => {
       const timer = setTimeout(() => resolve(null), 2500);
 

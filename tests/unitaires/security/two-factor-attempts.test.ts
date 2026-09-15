@@ -11,13 +11,13 @@ import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memor
 import { MAX_TWO_FACTOR_ATTEMPTS } from "@/shared/security/two-factor-rules";
 
 /**
- * Quantos palpites um código de seis dígitos aguenta.
+ * How many guesses a six-digit code survives.
  *
- * O código é `randomInt(100_000, 1_000_000)` e vale quinze minutos. Antes
- * disto, um palpite errado não consumia nada e não contava para nada: a única
- * barreira era o rate limit das rotas anônimas — e ele lia um cabeçalho que o
- * próprio cliente escreve, então não era barreira nenhuma. Um milhão de
- * possibilidades com tentativas ilimitadas é um código que se adivinha.
+ * The code is `randomInt(100_000, 1_000_000)` and lives for fifteen minutes.
+ * Before this, a wrong guess consumed nothing and counted towards nothing: the
+ * only barrier was the anonymous-route rate limit — and that read a header the
+ * client writes itself, so it was no barrier at all. A million possibilities
+ * with unlimited attempts is a code that gets guessed.
  */
 const EMAIL = "gestora@exemplo.com.br";
 const CODE = "123456";
@@ -59,8 +59,8 @@ beforeEach(async () => {
 const guess = (twoFactorCode: string) =>
   useCase.execute({ twoFactorCode, email: EMAIL });
 
-describe("errando o código", () => {
-  it("é recusado, e conta", async () => {
+describe("getting the code wrong", () => {
+  it("is refused, and counts", async () => {
     await expect(guess("000000")).rejects.toThrow();
 
     const token = tokens.twoFactorTokens.find((entry) => entry.email === EMAIL);
@@ -68,38 +68,38 @@ describe("errando o código", () => {
     expect(token?.attempts).toBe(1);
   });
 
-  it("queima o código depois do teto", async () => {
+  it("burns the code once the ceiling is reached", async () => {
     for (let attempt = 0; attempt < MAX_TWO_FACTOR_ATTEMPTS; attempt += 1) {
-      await expect(guess("000000"), `palpite ${attempt}`).rejects.toThrow();
+      await expect(guess("000000"), `guess ${attempt}`).rejects.toThrow();
     }
 
-    // Queimado, não apenas travado: continuar aceitando tentativas num código
-    // morto seria um oráculo de "este e-mail tem 2FA pendente" com quinze
-    // minutos de duração.
+    // Burned, not merely locked: going on accepting attempts against a dead
+    // code would be a fifteen-minute oracle for "this address has two-factor
+    // pending".
     expect(
       tokens.twoFactorTokens.find((entry) => entry.email === EMAIL),
     ).toBeUndefined();
   });
 
-  it("recusa até o código CERTO depois do teto", async () => {
+  it("refuses even the RIGHT code once the ceiling is reached", async () => {
     for (let attempt = 0; attempt < MAX_TWO_FACTOR_ATTEMPTS; attempt += 1) {
       await expect(guess("000000")).rejects.toThrow();
     }
 
-    // O ponto inteiro: adivinhar na sexta não vale, mesmo acertando.
+    // The whole point: the sixth guess does not count, even when correct.
     await expect(guess(CODE)).rejects.toThrow();
   });
 
-  it("recusa um código que já está no teto e sobreviveu", async () => {
+  it("refuses a code that is at the ceiling and survived", async () => {
     /**
-     * O estado que a pré-verificação protege.
+     * The state the pre-check protects.
      *
-     * No caminho normal o código é APAGADO ao bater no teto, então a checagem
-     * de antes da comparação nunca dispara — e uma mutação que a removesse
-     * passaria despercebida. Mas o apagamento pode falhar: uma queda entre o
-     * incremento e o delete, ou um erro do banco, deixa a linha no teto e
-     * viva. Sem a pré-verificação, esse código volta a aceitar palpites para
-     * sempre.
+     * On the ordinary path the code is DELETED when it hits the ceiling, so
+     * the check that runs before the comparison never fires — and a mutation
+     * removing it would go unnoticed. But the delete can fail: a crash between
+     * the increment and the delete, or a database error, leaves the row at the
+     * ceiling and alive. Without the pre-check, that code goes back to
+     * accepting guesses forever.
      */
     const token = tokens.twoFactorTokens.find((entry) => entry.email === EMAIL);
 
@@ -107,15 +107,15 @@ describe("errando o código", () => {
 
     await expect(guess(CODE)).rejects.toThrow();
 
-    // E é queimado agora, para não ficar aceitando tentativas de novo.
+    // And it is burned now, so it does not start accepting attempts again.
     expect(
       tokens.twoFactorTokens.find((entry) => entry.email === EMAIL),
     ).toBeUndefined();
   });
 
-  it("recusa sempre com a mesma frase", async () => {
-    // Uma mensagem distinta para "você errou cinco vezes" contaria ao atacante
-    // que ele está no e-mail certo.
+  it("always refuses with the same sentence", async () => {
+    // A distinct message for "you got it wrong five times" would tell an
+    // attacker they are on the right address.
     const first = await guess("000000").catch((error) => error.message);
 
     for (let attempt = 1; attempt < MAX_TWO_FACTOR_ATTEMPTS; attempt += 1) {
@@ -128,10 +128,10 @@ describe("errando o código", () => {
   });
 });
 
-describe("acertando o código", () => {
-  it("funciona depois de alguns erros", async () => {
-    // Quem digitou errado duas vezes é a maioria dos casos reais, e o limite
-    // não pode custar a entrada dessa pessoa.
+describe("getting the code right", () => {
+  it("works after a few mistakes", async () => {
+    // Somebody who mistyped twice is most of the real cases, and the limit
+    // must not cost that person their way in.
     await guess("000000").catch(() => undefined);
     await guess("111111").catch(() => undefined);
 
@@ -140,7 +140,7 @@ describe("acertando o código", () => {
     expect(session.token).toBeTruthy();
   });
 
-  it("consome o código, que não serve duas vezes", async () => {
+  it("spends the code, which does not work twice", async () => {
     await guess(CODE);
 
     expect(
@@ -149,8 +149,8 @@ describe("acertando o código", () => {
   });
 });
 
-describe("pedindo um código novo", () => {
-  it("zera a contagem", async () => {
+describe("asking for a new code", () => {
+  it("resets the count", async () => {
     await guess("000000").catch(() => undefined);
     await guess("111111").catch(() => undefined);
 
@@ -162,9 +162,10 @@ describe("pedindo um código novo", () => {
 
     const token = tokens.twoFactorTokens.find((entry) => entry.email === EMAIL);
 
-    // Herdar a contagem travaria o usuário legítimo que pediu outro código.
-    // E do outro lado: sem zerar, um atacante no teto pediria outro e
-    // continuaria de onde parou — o que o e-mail ao dono da conta denuncia.
+    // Inheriting the count would lock out the legitimate user who asked for
+    // another code. And from the other side: without resetting, an attacker at
+    // the ceiling would ask for another and carry on where they left off —
+    // which the e-mail to the account's owner gives away.
     expect(token?.attempts).toBe(0);
   });
 });

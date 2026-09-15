@@ -43,16 +43,16 @@ let received: Received[] = [];
 let reply: { status: number; body: string } = { status: 200, body: "ok" };
 
 /**
- * O despachante com um verificador de destino permissivo.
+ * The dispatcher with a permissive destination verifier.
  *
- * O receptor deste arquivo roda em `127.0.0.1`, que é exatamente o que a
- * verificação de destino recusa — e ela está certa. Um verificador injetado
- * deixa os testes de ENTREGA medirem a entrega, enquanto os de RECUSA abaixo
- * usam o verificador de verdade.
+ * This file's receiver runs on `127.0.0.1`, which is exactly what the
+ * destination check refuses — and it is right to. An injected verifier lets
+ * the DELIVERY tests measure delivery, while the REFUSAL tests below use the
+ * real verifier.
  */
 const dispatcher = new WebhookDispatchService(async () => ({ allowed: true }));
 
-/** O de produção, para provar que ele recusa. */
+/** The production one, to prove that it refuses. */
 const guardedDispatcher = new WebhookDispatchService();
 
 async function seedEndpoint(options: {
@@ -484,10 +484,10 @@ describe("a retry sends the same bytes", () => {
   });
 });
 
-describe("para onde um webhook NÃO sai", () => {
-  it("recusa um endereço interno em vez de buscá-lo", async () => {
+describe("where a webhook does NOT go", () => {
+  it("refuses an internal address instead of fetching it", async () => {
     // O ataque inteiro em três linhas: o cliente cadastra o endereço de
-    // metadados da nuvem, nós buscamos, e o monitor devolve o corpo para ele.
+    // the cloud metadata, we fetch it, and the monitor hands them the body.
     const endpoint = await prisma.webhookEndpoint.create({
       data: {
         name: "Metadados",
@@ -513,19 +513,19 @@ describe("para onde um webhook NÃO sai", () => {
 
     expect(row.status).toBe("FAILED");
 
-    // E nada foi buscado: o receptor local deste arquivo não recebeu nada, e
-    // o corpo da resposta ficou vazio — que é o que impede o monitor de virar
-    // um leitor da rede interna.
+    // And nothing was fetched: this file's local receiver got nothing, and
+    // the response body stayed empty — which is what keeps the monitor from
+    // becoming a reader of the internal network.
     expect(received).toHaveLength(0);
     expect(row.response_body ?? "").toBe("");
 
-    // Permanente: repetir a varredura não pode virar uma sonda em laço.
+    // Permanent: repeating the sweep must not become a probe in a loop.
     await guardedDispatcher.processBatch();
 
     expect(received).toHaveLength(0);
   });
 
-  it("recusa localhost pelo nome", async () => {
+  it("refuses localhost by name", async () => {
     await prisma.webhookEndpoint.create({
       data: {
         name: "Interno",
@@ -548,11 +548,11 @@ describe("para onde um webhook NÃO sai", () => {
     expect(received).toHaveLength(0);
   });
 
-  it("não deixa o cliente sobrescrever a assinatura", async () => {
+  it("does not let the customer overwrite the signature", async () => {
     const endpoint = await seedEndpoint({ topics: ["delivery.delivered"] });
 
-    // O mapa é gravado direto, como uma linha anterior à regra do schema
-    // estaria: a segunda tranca é a ordem do espalhamento no despachante.
+    // The map is written straight in, as a row predating the schema rule
+    // would be: the second lock is the spread order in the dispatcher.
     await prisma.webhookEndpoint.update({
       where: { id: endpoint.id },
       data: {
@@ -573,7 +573,7 @@ describe("para onde um webhook NÃO sai", () => {
 
     expect(received).toHaveLength(1);
 
-    // A nossa assinatura, não a dele — e ela verifica.
+    // Our signature, not theirs — and it verifies.
     expect(received[0].headers["x-trajetto-signature"]).not.toBe(
       "t=1,v1=forjada",
     );

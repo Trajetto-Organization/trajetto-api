@@ -542,15 +542,15 @@ describe("counting what a customer's system asked for", () => {
 });
 
 /**
- * O teto que a chave carrega.
+ * The ceiling the key carries.
  *
- * `rate_limit_per_minute` era gravado na chave, editável pela rota de
- * administração e publicado no schema — e nenhum limitador o lia. Uma chave
- * provisionada em 60/min recebia 600. Um limite que o produto promete e não
- * aplica é pior que nenhum: alguém dimensiona a integração confiando nele.
+ * `rate_limit_per_minute` was stored on the key, editable through the
+ * administration route and published in the schema — and no limiter read it. A
+ * key provisioned at 60/min got 600. A limit the product promises and does not
+ * enforce is worse than none: somebody sizes their integration trusting it.
  */
 describe("o limite por chave", () => {
-  it("recusa quando a chave chega ao teto que foi provisionado para ela", async () => {
+  it("refuses when the key reaches the ceiling provisioned for it", async () => {
     const tight = generateApiKey();
 
     await prisma.apiKey.create({
@@ -560,7 +560,7 @@ describe("o limite por chave", () => {
         token_hash: tight.tokenHash,
         scopes: ["deliveries:read"],
 
-        // O menor que o schema aceita.
+        // The smallest the schema accepts.
         rate_limit_per_minute: 10,
         businessId: CARRIER,
       },
@@ -577,9 +577,9 @@ describe("o limite por chave", () => {
     expect(statuses).toContain(429);
   });
 
-  it("não gasta o teto de uma chave com as chamadas de outra", async () => {
-    // O balde é por chave, não por empresa nem por IP: uma integração em laço
-    // não pode derrubar a outra da mesma transportadora.
+  it("does not spend one key’s ceiling on another key’s calls", async () => {
+    // The bucket is per key, not per company nor per address: one integration
+    // stuck in a loop must not take down another at the same carrier.
     const response = await call("/deliveries?limit=1", readKey);
 
     expect(response.statusCode).toBe(200);

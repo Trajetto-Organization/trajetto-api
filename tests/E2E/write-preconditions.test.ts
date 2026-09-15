@@ -9,15 +9,15 @@ import { AccountPayableRepository } from "@/modules/account-payable/repositories
 import { UserRepository } from "@/modules/user/repositories/user-repository";
 
 /**
- * Duas requisições ao mesmo tempo, e só uma pode vencer.
+ * Two requests at the same moment, and only one may win.
  *
- * Todo teste de corrida que roda contra um fake prova o fake. Estes rodam
- * contra o Postgres e disparam as escritas DE VERDADE em paralelo — é a única
- * forma de saber se a pré-condição está no `where` ou só no comentário.
+ * Every race test that runs against a fake proves the fake. These run against
+ * Postgres and fire the REAL writes in parallel — the only way to know whether
+ * the precondition is in the `where` or only in the comment.
  *
- * Os três casos vieram de uma auditoria adversarial, e os três são
- * read-then-write num lugar onde o produto usa pré-condição em todos os
- * vizinhos.
+ * The three cases came out of an adversarial audit, and all three are
+ * read-then-write in a place where the product uses a precondition on every
+ * neighbour.
  */
 const prisma = new PrismaClient();
 
@@ -135,8 +135,8 @@ function vehicleData(suffix: string) {
   };
 }
 
-describe("editando a entrega enquanto o motorista comprova", () => {
-  it("a edição é recusada e nada é reescrito", async () => {
+describe("editing the delivery while the driver is proving it", () => {
+  it("the edit is refused and nothing is rewritten", async () => {
     const delivery = await prisma.delivery.create({
       data: {
         recipient_name: "Cliente Original",
@@ -168,15 +168,16 @@ describe("editando a entrega enquanto o motorista comprova", () => {
       where: { id: delivery.id },
     });
 
-    // O canhoto já estava assinado e o webhook já tinha saído para o ERP do
-    // cliente. Reescrever destinatário e endereço em cima disso é o defeito.
+    // The slip was already signed and the webhook had already gone out to the
+    // customer's ERP. Rewriting the recipient and the address on top of that
+    // is the defect.
     expect(after.recipient_name).toBe("Cliente Original");
     expect(after.status).toBe("DELIVERED");
   });
 
-  it("a edição passa quando o status é mesmo o esperado", async () => {
-    // A outra metade do par: sem ela o teste acima passaria para um
-    // repositório que recusa tudo.
+  it("the edit goes through when the status really is the expected one", async () => {
+    // The other half of the pair: without it the test above would pass for a
+    // repository that refuses everything.
     const delivery = await prisma.delivery.create({
       data: {
         recipient_name: "Cliente Editável",
@@ -202,8 +203,8 @@ describe("editando a entrega enquanto o motorista comprova", () => {
   });
 });
 
-describe("a frota contratada sob concorrência", () => {
-  it("não passa do limite com dez cadastros ao mesmo tempo", async () => {
+describe("the contracted fleet under concurrency", () => {
+  it("does not pass the limit with ten registrations at once", async () => {
     await prisma.vehicle.deleteMany({ where: { businessId: CARRIER } });
 
     // Nove ocupadas de dez.
@@ -212,13 +213,13 @@ describe("a frota contratada sob concorrência", () => {
     }
 
     /**
-     * Conexões SEPARADAS, uma por tentativa.
+     * SEPARATE connections, one per attempt.
      *
-     * Com um cliente Prisma só, as dez chamadas se enfileiram no mesmo pool e
-     * o interleaving acaba serializando por acidente — o teste passava até com
-     * a transação inteira removida, provando nada. Um cliente por tentativa
-     * são dez conexões de verdade disputando, que é o que acontece com dez
-     * réplicas atendendo dez requisições.
+     * With a single Prisma client the ten calls queue on one pool and the
+     * interleaving ends up serialising by accident — the test passed even with
+     * the transaction removed entirely, proving nothing. One client per
+     * attempt is ten real connections competing, which is what happens with
+     * ten replicas serving ten requests.
      */
     const clients = Array.from({ length: 10 }, () => new PrismaClient());
 
@@ -238,7 +239,7 @@ describe("a frota contratada sob concorrência", () => {
 
     const created = attempts.filter(Boolean).length;
 
-    // Exatamente uma vaga sobrava.
+    // Exactly one slot was left.
     expect(created).toBe(1);
 
     expect(
@@ -248,7 +249,7 @@ describe("a frota contratada sob concorrência", () => {
     ).toBe(10);
   });
 
-  it("deixa criar quando há vaga", async () => {
+  it("allows creating when there is a slot", async () => {
     await prisma.vehicle.deleteMany({ where: { businessId: CARRIER } });
 
     const result = await vehicles.createVehicleWithinLimit(
@@ -259,15 +260,16 @@ describe("a frota contratada sob concorrência", () => {
     expect(result.vehicle).not.toBeNull();
   });
 
-  it("ignora o limite para um veículo que não ocupa vaga", async () => {
+  it("ignores the limit for a vehicle that takes no slot", async () => {
     await prisma.vehicle.deleteMany({ where: { businessId: CARRIER } });
 
     for (let n = 0; n < 10; n += 1) {
       await prisma.vehicle.create({ data: vehicleData(`cheio${n}`) });
     }
 
-    // Cadastrar direto como INACTIVE é legítimo mesmo com a frota cheia: ele
-    // não ocupa vaga, e ativar depois passa pela porteira da reativação.
+    // Registering straight as INACTIVE is legitimate even with a full fleet:
+    // it takes no slot, and activating later goes through the reactivation
+    // gate.
     const result = await vehicles.createVehicleWithinLimit(
       { ...vehicleData("inativo"), status: "INACTIVE" },
       { max: 10, occupiesSlot: false },
@@ -277,8 +279,8 @@ describe("a frota contratada sob concorrência", () => {
   });
 });
 
-describe("apagando uma conta que está sendo paga", () => {
-  it("é recusado depois que o pagamento é carimbado", async () => {
+describe("deleting an account while it is being paid", () => {
+  it("is refused once the payment is stamped", async () => {
     const payable = await prisma.accountPayable.create({
       data: {
         businessId: CARRIER,
@@ -299,13 +301,13 @@ describe("apagando uma conta que está sendo paga", () => {
       payables.deleteAccountPayable(payable.id, CARRIER),
     ).rejects.toThrow();
 
-    // Um registro financeiro liquidado não some.
+    // A settled financial record does not disappear.
     expect(
       await prisma.accountPayable.count({ where: { id: payable.id } }),
     ).toBe(1);
   });
 
-  it("apaga uma conta que continua em aberto", async () => {
+  it("deletes an account that is still open", async () => {
     const payable = await prisma.accountPayable.create({
       data: {
         businessId: CARRIER,
@@ -324,7 +326,7 @@ describe("apagando uma conta que está sendo paga", () => {
     ).toBe(0);
   });
 
-  it("não apaga a conta de outra empresa", async () => {
+  it("does not delete another company’s account", async () => {
     const payable = await prisma.accountPayable.create({
       data: {
         businessId: CARRIER,
@@ -346,14 +348,14 @@ describe("apagando uma conta que está sendo paga", () => {
   });
 });
 
-describe("apagando MASTERs ao mesmo tempo", () => {
+describe("deleting MASTERs at the same time", () => {
   /**
-   * MASTER é o único papel que cria outro MASTER.
+   * MASTER is the only role that creates another MASTER.
    *
-   * Contar e depois apagar não serve: dois pedidos simultâneos apagando
-   * MASTERs DIFERENTES leem `total = 2`, os dois passam pela porteira, e
-   * sobram zero — a plataforma trancada por fora, sem caminho de volta pela
-   * própria aplicação.
+   * Counting and then deleting does not work: two simultaneous requests
+   * deleting DIFFERENT MASTERs both read `total = 2`, both pass the gate, and
+   * zero are left — the platform locked from the outside, with no way back in
+   * through the application itself.
    */
   const masters: string[] = [];
 
@@ -372,9 +374,10 @@ describe("apagando MASTERs ao mesmo tempo", () => {
     return user.id;
   }
 
-  it("nunca deixa a plataforma sem nenhum", async () => {
-    // O estado que importa: EXATAMENTE dois. Quantos já existem no banco não
-    // é controlável aqui, então a asserção é sobre não zerar.
+  it("never leaves the platform without one", async () => {
+    // The state that matters: EXACTLY two. How many already exist in the
+    // database is not controllable here, so the assertion is about never
+    // reaching zero.
     const before = await prisma.user.count({ where: { role: "MASTER" } });
 
     const needed = Math.max(0, 2 - before);
@@ -386,7 +389,7 @@ describe("apagando MASTERs ao mesmo tempo", () => {
       select: { id: true },
     });
 
-    // Conexões separadas, pelo mesmo motivo do limite de frota: com um
+    // Separate connections, for the same reason as the fleet limit: with a
     // cliente só as chamadas serializam por acidente.
     const clients = all.map(() => new PrismaClient());
 
@@ -406,7 +409,7 @@ describe("apagando MASTERs ao mesmo tempo", () => {
     ).toBeGreaterThanOrEqual(1);
   });
 
-  it("recusa quando só resta um", async () => {
+  it("refuses when only one is left", async () => {
     const remaining = await prisma.user.findFirstOrThrow({
       where: { role: "MASTER" },
     });
@@ -420,8 +423,8 @@ describe("apagando MASTERs ao mesmo tempo", () => {
     }
   });
 
-  it("recusa um id que não é MASTER", async () => {
-    // Não é exclusão silenciosa: o alvo tem que estar entre os travados.
+  it("refuses an id that is not a MASTER", async () => {
+    // Not a silent no-op: the target has to be among the locked rows.
     const plain = await prisma.user.findFirstOrThrow({
       where: { businessId: CARRIER, role: "BUSINESS_ADMIN" },
     });

@@ -7,20 +7,20 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 /**
- * Uma empresa tentando alcançar a outra, rota por rota.
+ * One company trying to reach another, route by route.
  *
- * Este arquivo existe porque uma auditoria adversarial encontrou SEIS rotas em
- * que o id do registro nunca era amarrado de volta ao tenant de quem chamava —
- * e a suíte inteira, 917 testes, passava igual antes e depois das correções.
- * Nenhum daqueles furos tinha teste, e é por isso que eles existiam.
+ * This file exists because an adversarial audit found SIX routes where the
+ * record's id was never tied back to the caller's tenant — and the whole
+ * suite, 917 tests, passed identically before and after the fixes. None of
+ * those holes had a test, which is why they existed.
  *
- * O padrão da casa é que o id não é controle de acesso: ele viaja em
- * exportação, em print, em chamado de suporte e em integração com ERP. Então
- * saber o id de outra empresa é premissa, não exploit — o que cada teste aqui
- * prova é que saber não basta.
+ * The house rule is that an id is not access control: it travels in exports,
+ * in screenshots, in support tickets and in ERP integrations. Knowing another
+ * company's id is therefore the premise, not the exploit — what each test here
+ * proves is that knowing is not enough.
  *
- * E a resposta é sempre 404, nunca 403: um 403 distinto confirmaria que o
- * registro existe, que é metade do que alguém varrendo ids quer saber.
+ * And the answer is always 404, never 403: a distinct 403 would confirm the
+ * record exists, which is half of what somebody sweeping ids wants to know.
  */
 const prisma = new PrismaClient();
 
@@ -62,9 +62,9 @@ async function seedBusiness(id: string, cnpj: string): Promise<void> {
     },
   });
 
-  // Os DOIS módulos. Sem FLEET, as rotas de peça, abastecimento e multa
-  // respondem 403 MODULE_NOT_ENABLED antes de chegar na regra de tenant — e o
-  // teste passaria provando que o entitlement funciona, não o isolamento.
+  // BOTH modules. Without FLEET, the part, fuel and fine routes answer 403
+  // MODULE_NOT_ENABLED before reaching the tenant rule — and the test would
+  // pass proving the entitlement works, not the isolation.
   await prisma.businessEntitlement.createMany({
     data: [
       { businessId: id, module: "DELIVERIES", enabled: true },
@@ -159,7 +159,7 @@ beforeAll(async () => {
   tokenA = await mintToken(USER_A, A, null);
   driverTokenA = await mintToken(DRIVER_USER_A, A, DRIVER_A);
 
-  // ------------------------------------------------ o que a empresa B tem
+  // ------------------------------------------------ what company B holds
   const supplier = await prisma.supplier.create({
     data: { name: "Fornecedor B", cnpj: "77222888000199", businessId: B },
   });
@@ -267,7 +267,7 @@ beforeAll(async () => {
       liters_amount: 300,
       price_per_liter: 6,
 
-      // O número que o teste procura no corpo da resposta mais abaixo.
+      // The number the test looks for in the response body further down.
       total_amount: 1800,
 
       odometer_photo: "fuel/b/odometro.jpg",
@@ -286,7 +286,7 @@ afterAll(async () => {
 
   await prisma.fine.deleteMany({ where: { businessId: { in: [A, B] } } });
 
-  // Depois das multas e dos abastecimentos, que apontam para eles.
+  // After the fines and the refuellings, which point at them.
   await prisma.vehicle.deleteMany({ where: { businessId: { in: [A, B] } } });
   await prisma.fuelType.deleteMany({ where: { businessId: { in: [A, B] } } });
 
@@ -330,16 +330,16 @@ const call = (
   });
 
 /**
- * Recusado pela REGRA, e não pelo schema.
+ * Refused by the RULE, not by the schema.
  *
- * A primeira versão deste arquivo passava com todas as correções revertidas:
- * os payloads eram inválidos, o zod recusava antes, e nove testes verdes
- * provavam que a validação de formulário funciona. Um teste de autorização que
- * nunca chega na autorização é pior do que não ter teste — ele dá a impressão
- * de cobertura exatamente onde não há.
+ * The first version of this file passed with every fix reverted: the payloads
+ * were invalid, zod refused first, and nine green tests proved that form
+ * validation works. An authorisation test that never reaches authorisation is
+ * worse than no test — it gives the impression of coverage exactly where there
+ * is none.
  *
- * Então 422/"Validation Error" é FALHA aqui: significa que a requisição não
- * chegou onde precisava chegar.
+ * So 422/"Validation Error" is a FAILURE here: it means the request never got
+ * where it needed to go.
  */
 function expectRefused(response: { statusCode: number; body: string }, what: string) {
   expect(
@@ -356,8 +356,8 @@ function expectRefused(response: { statusCode: number; body: string }, what: str
 
   expect(response.statusCode, `${what} foi recusado pelo schema`).not.toBe(422);
 
-  // Nem pelo entitlement. Uma empresa sem o módulo contratado leva 403 antes
-  // de qualquer regra de tenant, e o teste passaria provando o entitlement.
+  // Nor by the entitlement. A company without the module gets 403 before any
+  // tenant rule, and the test would pass proving the entitlement.
   expect(
     response.body,
     `${what} foi recusado pelo ENTITLEMENT, não pela regra: ${response.body.slice(0, 200)}`,
@@ -369,8 +369,8 @@ function expectRefused(response: { statusCode: number; body: string }, what: str
   ).not.toContain("não está habilitado");
 }
 
-describe("apagando a multa de outra empresa", () => {
-  it("é recusado, e a multa continua lá", async () => {
+describe("deleting another company’s fine", () => {
+  it("is refused, and the fine is still there", async () => {
     const response = await call(
       "DELETE",
       `/fines/delete-fine/${created.fineB}/business/${A}`,
@@ -379,15 +379,15 @@ describe("apagando a multa de outra empresa", () => {
 
     expectRefused(response, "delete-fine");
 
-    // O que importa não é o código: é a linha continuar existindo.
+    // What matters is not the status code: it is that the row is still there.
     expect(
       await prisma.fine.count({ where: { id: created.fineB } }),
     ).toBe(1);
   });
 
-  it("também é recusado quando o id da empresa da rota é o da vítima", async () => {
-    // `enforceRequestedTenant` responde primeiro aqui, o que já basta — mas a
-    // asserção é sobre a linha, não sobre quem recusou.
+  it("is refused too when the route carries the victim’s company id", async () => {
+    // `enforceRequestedTenant` answers first here, which is enough — but the
+    // assertion is about the row, not about who refused.
     const response = await call(
       "DELETE",
       `/fines/delete-fine/${created.fineB}/business/${B}`,
@@ -400,8 +400,8 @@ describe("apagando a multa de outra empresa", () => {
   });
 });
 
-describe("reescrevendo o motorista de outra empresa", () => {
-  it("é recusado, e o nome continua o mesmo", async () => {
+describe("rewriting another company’s driver", () => {
+  it("is refused, and the name is unchanged", async () => {
     const before = await prisma.driver.findUniqueOrThrow({
       where: { id: DRIVER_B },
     });
@@ -411,10 +411,10 @@ describe("reescrevendo o motorista de outra empresa", () => {
       `/driver/update-driver/${DRIVER_B}/business/${A}`,
       tokenA,
       {
-        // Um corpo VÁLIDO de propósito: o zod tem que deixar passar para que a
-        // regra de tenant seja quem recusa. Um payload inválido aqui faria o
-        // teste passar com a correção revertida — foi exatamente o que
-        // aconteceu na primeira versão deste arquivo.
+        // A VALID body on purpose: zod has to let it through so that the
+        // tenant rule is the one that refuses. An invalid payload here would
+        // make the test pass with the fix reverted — which is exactly what
+        // happened in the first version of this file.
         name: "Motorista Sequestrado",
         birth_date: "1990-01-01",
         cnh: "12345678901",
@@ -436,15 +436,15 @@ describe("reescrevendo o motorista de outra empresa", () => {
       where: { id: DRIVER_B },
     });
 
-    // INACTIVE é o campo que importa: o `session-eligibility` transforma isso
-    // em logout forçado do aplicativo dele no meio da rota.
+    // INACTIVE is the field that matters: `session-eligibility` turns it into
+    // a forced logout of their app in the middle of a route.
     expect(after.name).toBe(before.name);
     expect(after.status).toBe(before.status);
   });
 });
 
-describe("roubando a peça de outra empresa", () => {
-  it("é recusado mesmo mandando um businessId no corpo", async () => {
+describe("stealing another company’s part", () => {
+  it("is refused even when a businessId is sent in the body", async () => {
     // O exploit exato: a verificação de posse vivia num `else`, e mandar
     // qualquer `businessId` tomava o outro ramo e a pulava.
     const response = await call(
@@ -465,8 +465,8 @@ describe("roubando a peça de outra empresa", () => {
   });
 });
 
-describe("lendo o abastecimento de outra empresa", () => {
-  it("é recusado pelo id do veículo", async () => {
+describe("reading another company’s refuelling", () => {
+  it("is refused by the vehicle id", async () => {
     const response = await call(
       "GET",
       `/fuel/get-previous-fuel/${created.vehicleB}?date=2030-01-01&businessId=${A}`,
@@ -475,16 +475,16 @@ describe("lendo o abastecimento de outra empresa", () => {
 
     expectRefused(response, "get-previous-fuel");
 
-    // E nada vazou no corpo: litros, valor, odômetro e posto ficam do outro
+    // And nothing leaked in the body: litres, amount, odometer and station
     // lado da parede.
     expect(JSON.stringify(response.json())).not.toContain("1800");
   });
 });
 
-describe("um motorista lendo o comprovante do colega", () => {
-  it("é recusado, mesmo sendo da mesma empresa", async () => {
-    // A verificação comparava com `null` — testava se a entrega TEM motorista,
-    // verdadeiro para toda entrega atribuída a qualquer pessoa da empresa.
+describe("a driver reading a colleague’s proof", () => {
+  it("is refused, even within the same company", async () => {
+    // The check compared against `null` — it tested whether the delivery HAS
+    // a driver, true for every delivery assigned to anyone in the company.
     const shipper = await prisma.shipper.create({
       data: { name: "Embarcador A", businessId: A },
     });
@@ -498,7 +498,7 @@ describe("um motorista lendo o comprovante do colega", () => {
         businessId: A,
         shipperId: shipper.id,
 
-        // Do OUTRO motorista da MESMA empresa.
+        // Belonging to the OTHER driver of the SAME company.
         driverId: DRIVER_A2,
         status: "DELIVERED",
         delivered_at: new Date(),
@@ -520,8 +520,8 @@ describe("um motorista lendo o comprovante do colega", () => {
   });
 });
 
-describe("um motorista gerenciando o catálogo da operação", () => {
-  it("não cria embarcador", async () => {
+describe("a driver managing the operation’s catalogue", () => {
+  it("does not create a shipper", async () => {
     const response = await call("POST", `/shipper/create-shipper/${A}`, driverTokenA, {
       name: "Embarcador do motorista",
     });
@@ -535,7 +535,7 @@ describe("um motorista gerenciando o catálogo da operação", () => {
     ).toBe(0);
   });
 
-  it("não cria tipo de ocorrência", async () => {
+  it("does not create an occurrence type", async () => {
     const response = await call(
       "POST",
       `/occurrence-type/create-occurrence-type/${A}`,
@@ -547,8 +547,8 @@ describe("um motorista gerenciando o catálogo da operação", () => {
   });
 });
 
-describe("um motorista fechando a própria entrega sem comprovar", () => {
-  it("é recusado: a comprovação é que carrega a evidência", async () => {
+describe("a driver closing their own delivery without proving it", () => {
+  it("is refused: the proof is what carries the evidence", async () => {
     const shipper = await prisma.shipper.create({
       data: { name: "Embarcador A2", businessId: A },
     });
@@ -579,8 +579,8 @@ describe("um motorista fechando a própria entrega sem comprovar", () => {
 
     expectRefused(response, "override de status como motorista");
 
-    // Sem foto, sem assinatura, sem GPS: é exatamente o que
-    // `register-delivery-proof` existe para exigir, e este caminho contornava.
+    // No photo, no signature, no GPS: exactly what
+    // `register-delivery-proof` exists to require, and this path went round it.
     const after = await prisma.delivery.findUniqueOrThrow({
       where: { id: delivery.id },
     });
