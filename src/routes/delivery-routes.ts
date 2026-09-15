@@ -24,6 +24,8 @@ import { ImportDeliveryXmlController } from "@/modules/delivery/usecases/import-
 import { ExportDeliveryController } from "@/modules/delivery/usecases/export-delivery/export-delivery-controller";
 import { ExportOccurrenceController } from "@/modules/delivery/usecases/export-occurrence/export-occurrence-controller";
 
+import { GetProofDocumentController } from "@/modules/delivery/usecases/get-proof-document/get-proof-document-controller";
+
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
@@ -34,6 +36,11 @@ import {
   deliverySchemas,
   deliveryResponses,
 } from "./documentation/delivery-documentation";
+
+import {
+  proofDocumentSchemas,
+  proofDocumentResponses,
+} from "./documentation/proof-document-documentation";
 
 const createDeliveryController = new CreateDeliveryController();
 const listDeliveryController = new ListDeliveryController();
@@ -60,6 +67,8 @@ const importDeliveryXmlController = new ImportDeliveryXmlController();
 
 const exportDeliveryController = new ExportDeliveryController();
 const exportOccurrenceController = new ExportOccurrenceController();
+
+const getProofDocumentController = new GetProofDocumentController();
 
 // A batch of NF-e files is bigger than any other JSON body in the API, so
 // this route (and only it) raises the limit: 25 files of up to 512 KB.
@@ -508,6 +517,31 @@ async function deliveryRoutes(app: FastifyInstance) {
       },
     },
     exportOccurrenceController.handle,
+  );
+  app.get(
+    "/proof-document/:deliveryId/business/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["delivery"],
+        summary: "The delivery receipt (PDF), generated on first request",
+        description:
+          "Responde com um LINK para o PDF e o hash dele, não com os bytes. O documento é gerado na primeira vez que alguém pede: a imensa maioria das entregas nunca tem o comprovante aberto, e renderizar cinco milhões de PDFs por mês para que dois por cento sejam lidos é trabalho que ninguém pediu — e que ficaria no caminho da comprovação do motorista, num caminhão, em 3G. Só existe depois que a entrega termina; pedir de uma entrega em andamento responde 409. `regenerate=true` refaz o arquivo mantendo o mesmo token de verificação, para que um QR já impresso continue chegando à página; a versão é o que diz que aquela cópia não é a atual.",
+        params: proofDocumentSchemas.proofDocumentParams,
+        querystring: proofDocumentSchemas.proofDocumentQuery,
+        response: {
+          200: proofDocumentResponses.proofDocument,
+          400: proofDocumentResponses.genericError,
+          403: proofDocumentResponses.genericError,
+          404: proofDocumentResponses.genericError,
+          409: proofDocumentResponses.genericError,
+          500: proofDocumentResponses.internalServerError,
+        },
+      },
+    },
+    getProofDocumentController.handle,
   );
 }
 

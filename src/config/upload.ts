@@ -13,6 +13,13 @@ export const UPLOAD_TYPES = [
   "checklistPhotos",
   "deliveryPhotos",
   "chatAttachments",
+
+  // The one namespace the SERVER writes into. Everything above arrives from a
+  // phone or a browser through a presigned PUT; a proof document only exists
+  // here, so `putObject` is what writes it — and it still has to be a declared
+  // namespace, because `extractFilePath` refusing an undeclared prefix is what
+  // keeps a key from pointing anywhere in the bucket.
+  "deliveryProofs",
 ] as const;
 
 export type UploadType = (typeof UPLOAD_TYPES)[number];
@@ -81,6 +88,11 @@ export const uploadConfig = {
       // Chat photos. Voice notes share this namespace but take the tighter
       // audio ceiling above — the same key prefix, two different bounds.
       chatAttachments: 5 * 1024 * 1024, // 5MB
+
+      // A receipt carries a photo plus the signature, so it is the one
+      // document here that is not a single image. Ten megabytes is far past
+      // anything the renderer produces and still a ceiling.
+      deliveryProofs: 10 * 1024 * 1024, // 10MB
     };
 
     return limits[uploadType];
@@ -94,8 +106,24 @@ export const uploadConfig = {
       return [...MIME_TYPES.images, ...MIME_TYPES.audio];
     }
 
+    if (uploadType === "deliveryProofs") {
+      return ["application/pdf"];
+    }
+
     return MIME_TYPES.images;
   },
+
+  /**
+   * Namespaces no client may ever be handed a signature for.
+   *
+   * A proof document is written by the server and by nothing else. Letting a
+   * browser presign a PUT into that prefix would let somebody drop their own
+   * bytes onto a receipt's key — the verification page would catch it and say
+   * the file no longer matches its hash, which is the right answer to the
+   * wrong question. The answer to the right question is that the write must
+   * not be possible.
+   */
+  serverOnlyUploadTypes: ["deliveryProofs"] as UploadType[],
 };
 
 export type UploadConfig = typeof uploadConfig;

@@ -170,6 +170,20 @@ class UploadService {
     // useless on a phone, where localhost is the phone.
     publicBaseUrl?: string,
   ): Promise<{ key: string; uploadUrl: string; expiresIn: number }> {
+    // A namespace the server owns is never signed for a client. A receipt PDF
+    // is written by `putObject` and by nothing else; handing out a PUT into
+    // that prefix would let somebody drop their own bytes onto a proof's key.
+    // The verification page would catch it and report that the file no longer
+    // matches its hash — which is the right answer to the wrong question. The
+    // right answer is that the write must not be possible.
+    if (uploadConfig.serverOnlyUploadTypes.includes(uploadType)) {
+      throw new AppError(
+        "Este tipo de arquivo é gerado pelo sistema e não aceita envio.",
+        403,
+        "SERVER_ONLY_UPLOAD_TYPE",
+      );
+    }
+
     if (
       !uploadConfig.getAllowedMimeTypes(uploadType).includes(file.contentType)
     ) {
@@ -447,6 +461,96 @@ class UploadService {
     const extension = EXTENSION_BY_CONTENT_TYPE[contentType] ?? "bin";
 
     return `${uploadType}/${scopeId}/${timestamp}-${cleanName || "file"}-${randomId}.${extension}`;
+  }
+
+  /**
+   * Writes bytes the SERVER produced, rather than signing a URL for a client
+   * to write through.
+   *
+   * Every upload until now came from a phone or a browser: the API signed a
+   * PUT and never touched the bytes, which is what keeps a Node process out of
+   * the path of a hundred-megabyte video. A generated PDF is the opposite
+   * case — the bytes only exist here, and there is nobody to hand a signature
+   * to.
+   *
+   * The key is given by the caller and not generated, because a proof document
+   * has to be addressable from its delivery: a random key would mean two
+   * concurrent first-readers producing two objects, one of them orphaned in
+   * the bucket forever with nothing pointing at it.
+   */
+  async putObject(
+    key: string,
+    body: Buffer,
+    contentType: string,
+  ): Promise<void> {
+    const normalizedKey = this.extractFilePath(key);
+
+    if (uploadConfig.storage.type === "r2") {
+      if (!this.s3) {
+        throw new AppError("R2 não foi configurado corretamente", 500);
+      }
+
+      await this.s3.send(
+        new PutObjectCommand({
+          Bucket: uploadConfig.r2.bucket,
+          Key: normalizedKey,
+          Body: body,
+          ContentType: contentType,
+        }),
+      );
+
+      return;
+    }
+
+    const fullPath = path.join(uploadConfig.storage.localPath, normalizedKey);
+
+    await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
+    await fs.promises.writeFile(fullPath, body);
+  }
+
+  /**
+   * Reads an object back into memory.
+   *
+   * Needed to EMBED a stored photo into a generated document: the receipt
+   * picture lives in the bucket and has to end up inside the PDF, and a signed
+   * URL is no use to a renderer that needs the bytes.
+   *
+   * Returns null when the object is gone rather than throwing. A proof whose
+   * photo was purged is still a proof — the document says the photo is
+   * missing, which is a true and useful thing to print, and refusing to build
+   * the whole document over it would leave the customer with nothing.
+   */
+  async readObject(key: string): Promise<Buffer | null> {
+    const normalizedKey = this.extractFilePath(key);
+
+    try {
+      if (uploadConfig.storage.type === "r2") {
+        if (!this.s3) {
+          throw new AppError("R2 não foi configurado corretamente", 500);
+        }
+
+        const result = await this.s3.send(
+          new GetObjectCommand({
+            Bucket: uploadConfig.r2.bucket,
+            Key: normalizedKey,
+          }),
+        );
+
+        const body = result.Body as
+          | { transformToByteArray?: () => Promise<Uint8Array> }
+          | undefined;
+
+        if (!body?.transformToByteArray) return null;
+
+        return Buffer.from(await body.transformToByteArray());
+      }
+
+      return await fs.promises.readFile(
+        path.join(uploadConfig.storage.localPath, normalizedKey),
+      );
+    } catch {
+      return null;
+    }
   }
 
   async getFileUrl(filePath: string): Promise<string> {

@@ -140,6 +140,10 @@ model Business {
   imports Import[]
   deliveries      Delivery[]
 
+  externalRecipients     ExternalRecipient[]
+  deliveryProofDocuments DeliveryProofDocument[]
+  deliveryMessageTemplates DeliveryMessageTemplate[]
+
   @@map("business")
 }
 
@@ -828,7 +832,18 @@ model DomainOutboxEvent {
 model NotificationDelivery {
   id            String              @id @default(uuid(7))
   outboxEventId String
-  userId        String
+
+  /// Exactly one of these is set, and a CHECK constraint enforces it.
+  ///
+  /// The recipient of a delivery never logs in — they are a phone number and
+  /// an e-mail on a note — so the ledger had to learn to address somebody who
+  /// is not a User. One ledger and not two: the retry loop, the lease, the
+  /// dedupe key and the provider bookkeeping are the hard parts, and a
+  /// parallel table for external sends would be a second copy of all of them,
+  /// drifting.
+  userId             String?
+  externalRecipientId String?
+
   channel       NotificationChannel
 
   status         NotificationDeliveryStatus @default(PENDING)
@@ -845,14 +860,21 @@ model NotificationDelivery {
   providerMessageId String?
 
   event DomainOutboxEvent @relation(fields: [outboxEventId], references: [id], onDelete: Cascade)
-  user  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user  User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  externalRecipient ExternalRecipient? @relation(fields: [externalRecipientId], references: [id], onDelete: Cascade)
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   // One delivery per event × recipient × channel — duplication is impossible
   // by construction, whatever crashes or how many replicas run.
-  @@unique([outboxEventId, userId, channel])
+  //
+  // Now enforced by TWO PARTIAL unique indexes in raw SQL (see
+  // migrations/20260916090000_external_recipient), one per kind of recipient:
+  // a plain @@unique over a nullable column treats every NULL as distinct in
+  // Postgres, so the external rows would have had no uniqueness at all and a
+  // retried event would have sent the customer a second WhatsApp.
   // No ([status, availableAt]) index: the claim was its only reader and it now
   // runs on the partial index notification_delivery_claim_idx (raw SQL, see
   // migrations/20260908120000_harden_queue_tables). Deliveries are never
@@ -860,6 +882,7 @@ model NotificationDelivery {
   // a full-history btree here was pure write amplification on the widest table
   // in the pipeline.
   @@index([userId])
+  @@index([externalRecipientId])
   @@map("notification_delivery")
 }
 
@@ -1549,6 +1572,145 @@ enum ImportStatus {
 /// The report is stored, not only returned. "Which of the two hundred failed?"
 /// is asked hours later, by somebody who did not do the upload, and a report
 /// that lived in one HTTP response cannot answer it.
+/// Somebody a notification reaches who has no account.
+///
+/// The person waiting for a delivery is a phone number and an e-mail on a
+/// note: they never log in, have no permissions and no preferences, and the
+/// whole notion of "their profile" does not exist. They still have to be
+/// addressable by the same pipeline, with the same providers, the same retry
+/// loop and the same idempotency — so they get a row and an id, and the
+/// delivery ledger points at it.
+///
+/// One row per delivery. A contact table keyed by phone would be tempting and
+/// wrong at this size: the same number belongs to different people over time,
+/// and a correction on one delivery must never rewrite the record of a message
+/// already sent about another.
+model ExternalRecipient {
+  id String @id @default(uuid(7))
+
+  name      String?
+  email     String?
+  telephone String?
+
+  /// The link the person opens. Unguessable, and the only thing the public
+  /// page accepts — there is no login behind it.
+  access_token String @unique
+
+  /// Null means it never expires. Set when a company wants tracking links to
+  /// go dark after the delivery closes.
+  expires_at DateTime?
+
+  /// They asked to stop hearing from us. Checked before every send.
+  opted_out_at DateTime?
+
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  deliveryId String   @unique
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  deliveries NotificationDelivery[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId, created_at])
+  @@map("external_recipient")
+}
+
+/// The consolidated PDF a delivery leaves behind.
+///
+/// Generated once the delivery is proven, from the evidence already captured:
+/// the fiscal data, the route, the declared address next to the coordinates
+/// the phone actually recorded, who delivered it and on which device, the
+/// signed receipt photo with its stamp, and the outcome occurrences.
+///
+/// The hash is the point. The public page recomputes the SHA-256 of the bytes
+/// it serves and shows whether it still matches this row — which is what makes
+/// the document a document rather than a picture somebody could have edited.
+/// No ICP-Brasil signature in this slice, and the page says so: it asserts
+/// facts that were captured, and claims no legal validity.
+model DeliveryProofDocument {
+  id String @id @default(uuid(7))
+
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  /// One current document per delivery. A re-proof regenerates it, and the
+  /// old bytes are replaced — two documents for one delivery is two answers
+  /// to one question.
+  deliveryId String   @unique
+
+  /// Where the bytes live in the bucket.
+  storage_key String
+
+  /// Of the exact bytes stored, hex, lowercase.
+  sha256 String
+
+  /// What the QR code points at.
+  verification_token String @unique
+
+  size_bytes Int
+
+  /// Bumped on every regeneration, so a customer holding an older printout can
+  /// be told theirs is not the current one.
+  version Int @default(1)
+
+  generated_at DateTime @default(now())
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId, generated_at])
+  @@map("delivery_proof_document")
+}
+
+/// What a company says to the person waiting for a delivery.
+///
+/// Per company and per topic, because the voice is theirs: a carrier that
+/// addresses "prezado cliente" and one that uses the shipper's brand are both
+/// right, and a single hard-coded sentence would make the product speak over
+/// them. Rendered with the same Handlebars the transactional mails already
+/// use, over a documented variable set.
+model DeliveryMessageTemplate {
+  id String @id @default(uuid(7))
+
+  /// Which moment it speaks at.
+  topic DeliveryMessageTopic
+
+  channel NotificationChannel
+
+  /// Ignored by WhatsApp and SMS-shaped channels, which carry no subject.
+  subject String?
+
+  body String
+
+  is_active Boolean @default(true)
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  /// One template per company × moment × channel. A second one would make
+  /// which sentence goes out a matter of row order.
+  @@unique([businessId, topic, channel])
+  @@map("delivery_message_template")
+}
+
+enum DeliveryMessageTopic {
+  /// The load is on its way and here is the link to follow it.
+  DISPATCHED
+
+  /// It is done, and here is the receipt.
+  DELIVERED
+
+  /// It could not be delivered, and why.
+  FAILED
+}
+
 model Import {
   id String @id @default(uuid(7))
 
@@ -1668,6 +1830,12 @@ model Delivery {
   items        DeliveryItem[]
   occurrences  DeliveryOccurrence[]
   events       DeliveryEvent[]
+
+  /// The person waiting for it, when the company notifies them. At most one.
+  externalRecipient ExternalRecipient?
+
+  /// The consolidated PDF, once the delivery is proven. At most one.
+  proofDocument DeliveryProofDocument?
   chatMessages ChatMessage[]
 
   // N:N with Route on purpose. A failed delivery re-enters on the NEXT day's
