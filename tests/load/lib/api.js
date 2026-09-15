@@ -1,6 +1,8 @@
 import http from "k6/http";
 import { check } from "k6";
 
+import exec from "k6/execution";
+
 import { Trend, Rate } from "k6/metrics";
 
 /**
@@ -24,8 +26,47 @@ const BASE = __ENV.LOAD_BASE_URL || context.baseUrl;
 const latency = new Trend("surface_latency", true);
 const failures = new Rate("surface_failures");
 
+/**
+ * How often the server said "slow down" rather than answering.
+ *
+ * Three surfaces accept a 429 as a correct response, because it IS one: the
+ * position ingest and the public API both carry their own ceilings and
+ * refusing past them is the behaviour under test. But a request that was
+ * turned away at the limiter never reached the code the run is measuring, and
+ * counting it as a success makes a run where a third of the load bounced look
+ * exactly like a run where none of it did. Thresholded, so that stays visible.
+ */
+const throttled = new Rate("surface_throttled");
+
+/**
+ * Which part of the run a measurement belongs to.
+ *
+ * A soak exists to find what only shows up after hours — a connection opened
+ * per request and never closed, a map that only grows. All of those look like
+ * latency that CLIMBS, and a p95 over the whole run hides a climb behind a
+ * healthy start: thirty minutes at 25 ms and five at 200 ms still averages
+ * fine. Tagging the last fifth separately is what lets a threshold ask the
+ * question the soak is actually for.
+ *
+ * `currentTestRunDuration` is wall-clock since the run began, the same for
+ * every virtual user — a per-VU timer would not be, because VUs start at
+ * different moments.
+ */
+const LATE_FRACTION = 0.8;
+
+function phaseOf() {
+  const total = exec.instance.currentTestRunDuration;
+  const planned = Number(__ENV.RUN_DURATION_MS || 0);
+
+  if (!planned) return "all";
+
+  return total >= planned * LATE_FRACTION ? "late" : "early";
+}
+
 function record(surface, response, expected) {
-  latency.add(response.timings.duration, { surface });
+  const phase = phaseOf();
+
+  latency.add(response.timings.duration, { surface, phase });
 
   const ok = check(
     response,
@@ -35,7 +76,8 @@ function record(surface, response, expected) {
     { surface },
   );
 
-  failures.add(!ok, { surface });
+  failures.add(!ok, { surface, phase });
+  throttled.add(response.status === 429, { surface });
 
   return ok;
 }

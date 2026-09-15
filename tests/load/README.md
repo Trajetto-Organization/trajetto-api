@@ -83,6 +83,63 @@ redis-adapter, filas no Postgres com SKIP LOCKED). A régua: **uma réplica por
    requisição na MESMA linha, para uma coluna cujo único leitor é quem está
    decidindo revogar a chave. Agora tem limiar de cinco minutos.
 
+### Soak de 30 minutos — executado
+
+| | |
+|---|---|
+| duração | 30m02s a 60 req/s |
+| requisições | 107.859 |
+| falhas de superfície | **0** |
+| p95 geral | 36,6 ms |
+| p95 `delivery.list` | 25,2 ms |
+| p95 `route.positions` | 60,8 ms |
+| pico de latência | 2,32 s |
+| iterações descartadas | 141 (0,08%) |
+
+Nenhum sinal de vazamento: a latência do fim não difere da do começo. As 410
+requisições que o k6 contou como `http_req_failed` (0,38%) são 429 das
+superfícies que têm teto próprio e 404 de uma leitura por id sorteado — as duas
+coisas são respostas corretas, e o mix as aceita de propósito.
+
+O comando:
+
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm -i \
+  -v "C:/dev/trajetto/trajetto-api/tests/load:/load" \
+  -e LOAD_BASE_URL="http://host.docker.internal:3334" \
+  -e RUN_DURATION_MS=1800000 \
+  grafana/k6:latest run /load/soak.js
+```
+
+`RUN_DURATION_MS` não é decoração — ver abaixo.
+
+### O soak não media o que ele dizia medir
+
+O comentário no topo de `soak.js` sempre disse que o limiar que importa é a
+ÚLTIMA janela, porque um vazamento aparece como latência que SOBE e uma média
+de trinta minutos esconde a subida atrás de um começo saudável. Os limiares,
+porém, eram sobre a corrida inteira: vinte e cinco minutos a 25 ms e cinco a
+200 ms ainda fecham num p95 confortável, e a execução passaria reportando o
+oposto do que aconteceu.
+
+Agora cada medição é marcada com a fase (`early`/`late`, o último quinto) a
+partir de `exec.instance.currentTestRunDuration` — relógio global, não por VU,
+porque os VUs começam em momentos diferentes — e existe limiar separado para
+`phase:late`. Com o mesmo teto do limiar geral, e não um mais apertado: a
+afirmação é "não piorou", então um limite que o começo já cumpre só falha se o
+fim tiver degradado de verdade.
+
+Verificado que o limiar realmente casa com a sub-métrica: com `p(95)<1` no
+lugar, a execução falha com `✗ 'p(95)<1' p(95)=64.3ms`. Um erro de digitação na
+tag passaria despercebido para sempre, porque um limiar que não casa com nada
+nunca falha.
+
+Junto veio `surface_throttled`, também com limiar. Três superfícies aceitam 429
+como resposta correta — elas têm teto próprio e recusar além dele é o
+comportamento sob teste — mas uma requisição barrada no limitador não chegou ao
+código que a execução mede. Sem essa métrica, uma corrida em que um terço da
+carga quicou tem exatamente o mesmo resumo de uma em que nada quicou.
+
 ### O primeiro teste de carga mentiu
 
 Vale registrar: a primeira execução reportou 55% de falhas com p95 de 14 ms —
