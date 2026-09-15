@@ -458,7 +458,13 @@ async function deliveryRoutes(app: FastifyInstance) {
     "/export-delivery",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      // Write, not read, and deliberately: the whole operation leaving as a
+      // file somebody keeps is a heavier act than paging through it on
+      // screen, and every other export in the product is gated the same way.
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["delivery"],
@@ -480,9 +486,12 @@ async function deliveryRoutes(app: FastifyInstance) {
     "/export-occurrence",
     {
       onRequest: [ensureAuthenticated],
+      // Write, not read, for the same reason the delivery export is: a file
+      // with every occurrence in the operation leaves the building and is
+      // kept, and every other export in the product is gated this way.
       preHandler: [
         deliveriesModule,
-        verifyPermission("occurrence_manage", "read"),
+        verifyPermission("occurrence_manage", "write"),
       ],
       schema: {
         security: [{ bearerAuth: [] }],

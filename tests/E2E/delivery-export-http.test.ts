@@ -210,6 +210,45 @@ beforeAll(async () => {
     },
   });
 
+  // One occurrence on a delivery this driver carries, one on a colleague's.
+  // The export must hand the driver exactly the first.
+  const occurrenceType = await prisma.occurrenceType.create({
+    data: {
+      name: "Destinatário ausente",
+      blocks_delivery: false,
+      businessId: CARRIER,
+    },
+  });
+
+  const mine = await prisma.delivery.findFirstOrThrow({
+    where: { businessId: CARRIER, driverId: DRIVER },
+  });
+
+  const colleagues = await prisma.delivery.findFirstOrThrow({
+    where: { businessId: CARRIER, driverId: OTHER_DRIVER },
+  });
+
+  const reporter = await prisma.user.findFirstOrThrow({
+    where: { businessId: CARRIER, driverId: DRIVER },
+  });
+
+  await prisma.deliveryOccurrence.createMany({
+    data: [
+      {
+        deliveryId: mine.id,
+        occurrenceTypeId: occurrenceType.id,
+        reportedById: reporter.id,
+        description: "Ocorrencia do motorista",
+      },
+      {
+        deliveryId: colleagues.id,
+        occurrenceTypeId: occurrenceType.id,
+        reportedById: reporter.id,
+        description: "Ocorrencia do colega",
+      },
+    ],
+  });
+
   ({ app } = await import("@/http"));
   await app.ready();
 }, 90_000);
@@ -231,7 +270,10 @@ async function exportDeliveries(query = "", as = token) {
 function rowsOf(body: string): string[][] {
   const matrix = parseCsv(body);
 
-  return matrix.slice(1).filter((row) => row.some((cell) => cell !== ""));
+  return matrix
+    .slice(1)
+    .map((row) => row.map((cell) => String(cell ?? "")))
+    .filter((row) => row.some((cell) => cell !== ""));
 }
 
 describe("exporting the operation", () => {
@@ -323,20 +365,48 @@ describe("exporting the operation", () => {
   });
 });
 
+async function exportOccurrences(as = token) {
+  return app.inject({
+    method: "GET",
+    url: "/delivery/export-occurrence",
+    headers: { authorization: `Bearer ${as}` },
+  });
+}
+
 describe("exporting the occurrences", () => {
-  it("answers with a file even when there is nothing to report", async () => {
-    // An empty export is a valid answer — "nenhuma ocorrência no período" is
-    // what the embarcador asked to be shown.
-    const response = await app.inject({
-      method: "GET",
-      url: "/delivery/export-occurrence",
-      headers: { authorization: `Bearer ${token}` },
-    });
+  it("answers with a file the dispatcher can open", async () => {
+    const response = await exportOccurrences();
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("csv");
 
+    expect(rowsOf(response.body)).toHaveLength(2);
+  });
+
+  it("gives a driver only the occurrences on their own deliveries", async () => {
+    // The permission middleware lets a driver through on occurrence_manage
+    // write, so the scoping here is the ONLY thing between them and every
+    // occurrence in the company — as a file they keep.
+    const response = await exportOccurrences(driverToken);
+
+    const rows = rowsOf(response.body);
+
+    expect(rows).toHaveLength(1);
+    expect(rows.join(" ")).toContain("Ocorrencia do motorista");
+    expect(rows.join(" ")).not.toContain("Ocorrencia do colega");
+  });
+
+  it("never reaches another carrier's occurrences", async () => {
+    const response = await exportOccurrences(otherToken);
+
     expect(rowsOf(response.body)).toHaveLength(0);
+  });
+
+  it("writes whether the type blocks the delivery in words", async () => {
+    // The column is read, filtered and counted by a person in a spreadsheet.
+    const response = await exportOccurrences();
+
+    expect(rowsOf(response.body)[0]).toContain("Não");
   });
 
   it("is refused without a token", async () => {
