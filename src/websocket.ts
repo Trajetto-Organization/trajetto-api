@@ -577,6 +577,82 @@ const sendSecurityEventToSession = (
   }
 };
 
+/**
+ * Recalcula, do banco, quem ainda e da equipe de atendimento.
+ *
+ * `socket.data.isChatStaff` e decidido UMA vez, no handshake, e o chat da
+ * empresa e uma SALA — ou seja, o proprio canal de dados. Um usuario que
+ * perdeu `delivery_manage` continuava recebendo toda mensagem da empresa pelo
+ * resto da conexao: corpo, motorista e URL assinada do anexo. O HTTP ja
+ * recusava; o socket, nao.
+ *
+ * Nao e derrubar a conexao. `permissions_changed` mexe em autorizacao, nao em
+ * autenticacao, e um disconnect do servidor nao reconecta sozinho no
+ * socket.io-client — deixaria a empresa inteira sem tempo real ate a proxima
+ * recarga de pagina. O certo e tirar da SALA quem nao pertence mais.
+ *
+ * Uma leitura por socket conectado da empresa. Uma edicao de permissao afeta
+ * um punhado deles, e o custo alternativo e vazamento continuo.
+ */
+const refreshChatStaffRooms = async (businessId: string): Promise<void> => {
+  if (!io) return;
+
+  const sockets = await io.in(`business:${businessId}`).fetchSockets();
+
+  await Promise.all(
+    sockets.map(async (socket) => {
+      const userId = socket.data.userId as string | undefined;
+
+      const leaveEveryStaffRoom = () => {
+        socket.data.isChatStaff = false;
+
+        // Toda sala de atendimento, nao so a desta empresa: um MASTER
+        // rebaixado pode estar na sala de outra.
+        for (const room of socket.rooms) {
+          if (room.startsWith("chat-staff:")) socket.leave(room);
+        }
+      };
+
+      if (!userId) return;
+
+      try {
+        const user = await new UserRepository().findUserById(userId);
+
+        const permissions = user?.profileAccess?.permissions as
+          | Array<{ permissionKey: string; canRead: boolean }>
+          | undefined;
+
+        const stillStaff = Boolean(
+          user &&
+            !user.driverId &&
+            (user.role === "MASTER" ||
+              (user.businessId &&
+                (user.role === "BUSINESS_ADMIN" ||
+                  permissions?.some(
+                    (permission) =>
+                      permission.permissionKey === "delivery_manage" &&
+                      permission.canRead,
+                  )))),
+        );
+
+        if (!stillStaff) {
+          leaveEveryStaffRoom();
+
+          return;
+        }
+
+        socket.data.isChatStaff = true;
+      } catch (error) {
+        // Na duvida, tira da sala. Um erro de leitura nao pode ser o motivo
+        // pelo qual alguem continua ouvindo o que nao deveria.
+        leaveEveryStaffRoom();
+
+        console.error("[Socket] Falha ao reavaliar o atendimento:", error);
+      }
+    }),
+  );
+};
+
 // Function to send security event to all users of a company
 const sendSecurityEventToBusiness = (
   businessId: string,
@@ -587,7 +663,16 @@ const sendSecurityEventToBusiness = (
 
     if (endsSession(event.reason)) {
       io.in(`business:${businessId}`).disconnectSockets(true);
+
+      return;
     }
+
+    // A conexao fica; a autorizacao, nao. Sem isto, `permissions_changed` era
+    // o unico motivo que tirava a permissao sem tocar no canal por onde os
+    // dados saem.
+    void refreshChatStaffRooms(businessId).catch((error) =>
+      console.error("[Socket] Falha ao reavaliar as salas:", error),
+    );
   }
 };
 
@@ -860,6 +945,7 @@ export {
   sendChatMessageEvent,
   sendChatReadEvent,
   sendChatDeliveredEvent,
+  refreshChatStaffRooms,
   sendRouteEventToBusiness,
   sendDeliveryEventToDriver,
   sendDriverPositionToBusiness,
