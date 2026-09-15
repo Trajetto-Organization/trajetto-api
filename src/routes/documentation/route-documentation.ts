@@ -81,6 +81,13 @@ const routeEntity = z.object({
   updated_at: isoDateTime,
 });
 
+import {
+  controlTowerSchema,
+  driverTrailParamSchema,
+  driverTrailQuerySchema,
+  recordDriverPositionsSchema,
+} from "@/schemas/driver-position-schema";
+
 const routeSchemas = {
   businessIdParam: updateDeleteBusinessSchema,
   routeBusinessParams: updateDeleteBusinessSchema.merge(routeIdParamSchema),
@@ -98,9 +105,110 @@ const routeSchemas = {
   releaseRoute: releaseRouteSchema,
   startRoute: startRouteSchema,
   cancelRoute: cancelRouteSchema,
+
+  recordPositions: recordDriverPositionsSchema,
+  controlTower: controlTowerSchema,
+  driverTrailParams: driverTrailParamSchema,
+  driverTrailQuery: driverTrailQuerySchema,
 };
 
+const towerPosition = z.object({
+  driverId: z.string(),
+  driverName: z.string().nullable(),
+
+  routeId: z.string().nullable(),
+  routeCode: z.number().nullable(),
+
+  vehiclePlate: z.string().nullable(),
+
+  latitude: z.number(),
+  longitude: z.number(),
+
+  speed: z.number().nullable(),
+  heading: z.number().nullable(),
+  battery: z.number().nullable(),
+
+  recordedAt: z.string(),
+  fresh: z.boolean(),
+});
+
 const routeResponses = {
+  positionsRecorded: z.object({
+    message: z.string(),
+    data: z.object({
+      stored: z.number(),
+      rejected: z.number(),
+
+      tracking: z
+        .boolean()
+        .describe(
+          "Falso quando nenhuma rota do motorista está em andamento. O app PARA de rastrear ao ver isto — continuar seria gastar a bateria de alguém num mapa que ninguém está olhando.",
+        ),
+    }),
+  }),
+
+  controlTower: z.object({
+    data: z.object({
+      positions: z.array(towerPosition),
+
+      funnel: z.array(
+        z.object({
+          status: z.string(),
+          label: z.string(),
+          total: z.number(),
+        }),
+      ),
+
+      progress: z.object({
+        finished: z.number(),
+        total: z.number(),
+        rate: z.number().nullable(),
+      }),
+
+      punctuality: z.object({
+        onTime: z.number(),
+        late: z.number(),
+        notDeparted: z.number(),
+        notPlanned: z.number(),
+        rate: z.number().nullable(),
+      }),
+
+      events: z.array(
+        z.object({
+          id: z.string(),
+          type: z.string(),
+          actor: z.string(),
+          deliveryId: z.string(),
+          recipientName: z.string().nullable(),
+          driverName: z.string().nullable(),
+          occurredAt: z.string(),
+        }),
+      ),
+    }),
+  }),
+
+  driverTrail: z.object({
+    data: z.object({
+      driverId: z.string(),
+      day: z.string(),
+
+      recorded: z
+        .number()
+        .describe(
+          "Quantos pontos existem, antes do afinamento. A tela mostra os dois — quem visse só o desenhado concluiria que o telefone parou de reportar.",
+        ),
+
+      points: z.array(
+        z.object({
+          latitude: z.number(),
+          longitude: z.number(),
+          speed: z.number().nullable(),
+          recordedAt: z.string(),
+        }),
+      ),
+    }),
+  }),
+
   routeCreated: z.object({
     message: z.string().default("Rota criada com sucesso!"),
     data: z.object({

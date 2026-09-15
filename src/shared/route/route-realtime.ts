@@ -1,5 +1,7 @@
 import {
+  sendDriverPositionToBusiness,
   sendRouteEventToBusiness,
+  type DriverPositionEvent,
   type RouteRealtimeEvent,
 } from "@/websocket";
 
@@ -49,4 +51,8 @@ function announceStopSettled(
   // be async for the half that is, in a path where nothing else is.
 }
 
-export { announceStopSettled };
+export {
+  announceStopSettled,
+  sendDriverPositionToBusiness,
+  type DriverPositionEvent,
+};

@@ -697,6 +697,43 @@ const sendRouteEventToDriver = (
 };
 
 /**
+ * Where a truck is, right now.
+ *
+ * Its own event name and not a `routeEvent`, because it is a different KIND of
+ * thing: route events are facts that also live in the database and are worth
+ * refetching over, and this is a hint with a half-life of seconds. A panel
+ * that treated a position like a route event would refetch the board every
+ * time a driver moved a block.
+ *
+ * Only ever the latest point, and only to the company's room. A driver's
+ * three-hour backlog coming out of a dead zone is written to the database in
+ * full and announced here once — replaying it through the socket would redraw
+ * the same dot two hundred times for every open panel.
+ */
+interface DriverPositionEvent {
+  driverId: string;
+  routeId: string;
+
+  latitude: number;
+  longitude: number;
+
+  speed: number | null;
+  heading: number | null;
+
+  /** When the DEVICE recorded it, so a stale dot can be shown as stale. */
+  recordedAt: string;
+}
+
+const sendDriverPositionToBusiness = (
+  businessId: string,
+  event: DriverPositionEvent,
+) => {
+  if (io) {
+    io.to(`business:${businessId}`).emit("driverPosition", event);
+  }
+};
+
+/**
  * A delivery of the driver's changed under them, from the panel.
  *
  * Their own room only. The dispatcher's board already hears this through the
@@ -808,7 +845,7 @@ async function shutdownSocketIO(): Promise<void> {
   }
 }
 
-export type { RouteRealtimeEvent };
+export type { DriverPositionEvent, RouteRealtimeEvent };
 
 export {
   initializeSocketIO,
@@ -825,6 +862,7 @@ export {
   sendChatDeliveredEvent,
   sendRouteEventToBusiness,
   sendDeliveryEventToDriver,
+  sendDriverPositionToBusiness,
   sendRouteEventToDriver,
   getOnlineUserIdsForBusiness,
 };

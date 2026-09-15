@@ -69,7 +69,7 @@ afterAll(async () => {
 });
 
 describe("the route module's published surface", () => {
-  it("publishes exactly the ten endpoints the module implements", () => {
+  it("publishes exactly the thirteen endpoints the module implements", () => {
     // Listed rather than counted: a route added without documentation, or one
     // documented and never registered, both show up here as a diff instead of
     // a number that happens to match.
@@ -85,6 +85,13 @@ describe("the route module's published surface", () => {
         "POST /route/add-stops/{routeId}/business/{businessId}",
         "DELETE /route/remove-stop/{stopId}/route/{routeId}/business/{businessId}",
         "PATCH /route/reorder-stops/{routeId}/business/{businessId}",
+
+        // The control tower. The ingest is a driver surface; the other two
+        // are the manager's, and a driver token is refused rather than shown
+        // the whole operation.
+        "POST /route/positions",
+        "GET /route/control-tower",
+        "GET /route/driver-trail/{driverId}",
       ]);
   });
 
@@ -151,13 +158,16 @@ describe("the statuses each route claims to answer", () => {
 
   it("claims 429 only where a rate limit is actually configured", () => {
     // The driver's app resends from its outbox after a dead network, so the
-    // departure carries a limit. Nothing else in the module does, and saying
-    // otherwise would have the app back off from a wall that is not there.
+    // departure carries a limit — and so does the position ingest, which is
+    // the busiest route in the product by an order of magnitude. Nothing else
+    // in the module does, and saying otherwise would have the app back off
+    // from a wall that is not there.
     const limited = operations().filter(([, , operation]) =>
       Object.keys(operation.responses).includes("429"),
     );
 
-    expect(limited.map(([path]) => path)).toEqual([
+    expect(limited.map(([path]) => path).sort()).toEqual([
+      "/route/positions",
       "/route/start-route/{routeId}/business/{businessId}",
     ]);
   });

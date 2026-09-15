@@ -44,6 +44,7 @@ import { IImportRepository } from "@/modules/import/repositories/IImport-reposit
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 
 import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+import type { IDriverPositionRepository } from "@/modules/route/repositories/IDriver-position-repository";
 import { IntegrationRepository } from "@/modules/integration/repositories/integration-repository";
 import type { IIntegrationRepository } from "@/modules/integration/repositories/IIntegration-repository";
 
@@ -60,6 +61,7 @@ import { ProofDocumentRepository } from "@/modules/delivery/repositories/proof-d
 import type { IProofDocumentRepository } from "@/modules/delivery/repositories/IProof-document-repository";
 
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
+import { DriverPositionRepository } from "@/modules/route/repositories/driver-position-repository";
 import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
 
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
@@ -280,6 +282,13 @@ container.registerSingleton<IDeliveryRepository>(
 );
 
 container.registerSingleton<IRouteRepository>("RouteRepository", RouteRepository);
+
+// Separate from the route repository on purpose: a write-heavy stream
+// with one reader (a map), over a table partitioned by day.
+container.registerSingleton<IDriverPositionRepository>(
+  "DriverPositionRepository",
+  DriverPositionRepository,
+);
 
 container.registerSingleton<IProofDocumentRepository>(
   "ProofDocumentRepository",

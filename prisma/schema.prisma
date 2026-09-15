@@ -1871,6 +1871,57 @@ model ApiKeyUsageDaily {
   @@map("api_key_usage_daily")
 }
 
+/// Where a driver was, while a route of theirs was running.
+///
+/// The only table in the product that grows with TIME rather than with a
+/// business event: three hundred drivers pinging every thirty seconds is
+/// 864.000 rows a day. Partitioned by day in the database (Prisma cannot
+/// express it, the migration does), so the purge is a DROP TABLE of one
+/// partition rather than a delete of a million rows.
+///
+/// No relations to Driver or Business on purpose. A foreign key makes every
+/// INSERT check the referenced table, and this is the hottest write path in
+/// the product for data whose only reader is a map. An orphan position is a
+/// dot that does not draw, not corruption.
+model DriverPosition {
+  id String @default(uuid(7))
+
+  driverId   String
+  businessId String
+
+  /// The route that was running. Without it the trail is dots with no
+  /// context: "where was the driver" only helps next to "doing what".
+  routeId String?
+
+  latitude  Float
+  longitude Float
+
+  /// Metres, from the device's GPS. A point with a hundred metres of error
+  /// puts the truck on the wrong block, and the screen has to be able to
+  /// throw it away.
+  accuracy Float?
+
+  speed   Float?
+  heading Float?
+
+  battery Int? @db.SmallInt
+
+  /// When the DEVICE recorded it, never when it arrived. A driver crosses a
+  /// dead zone and the app flushes twenty points at once; the arrival time
+  /// would collapse half an hour of road into one instant.
+  recorded_at DateTime
+
+  created_at DateTime @default(now())
+
+  /// The partition key has to be in the primary key. Not Postgres bureaucracy:
+  /// without it the unique index could not be local to each partition, and a
+  /// global index would defeat the instant DROP.
+  @@id([id, recorded_at])
+  @@index([driverId, recorded_at(sort: Desc)])
+  @@index([businessId, recorded_at(sort: Desc)])
+  @@map("driver_position")
+}
+
 /// Where a customer's system wants to be told things.
 model WebhookEndpoint {
   id String @id @default(uuid(7))

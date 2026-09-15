@@ -14,6 +14,10 @@ import { AddRouteStopsController } from "@/modules/route/usecases/add-route-stop
 import { RemoveRouteStopController } from "@/modules/route/usecases/remove-route-stop/remove-route-stop-controller";
 import { ReorderRouteStopsController } from "@/modules/route/usecases/reorder-route-stops/reorder-route-stops-controller";
 
+import { RecordDriverPositionsController } from "@/modules/route/usecases/record-driver-positions/record-driver-positions-controller";
+import { ControlTowerController } from "@/modules/route/usecases/control-tower/control-tower-controller";
+import { DriverTrailController } from "@/modules/route/usecases/driver-trail/driver-trail-controller";
+
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
@@ -35,6 +39,10 @@ const cancelRouteController = new CancelRouteController();
 const addRouteStopsController = new AddRouteStopsController();
 const removeRouteStopController = new RemoveRouteStopController();
 const reorderRouteStopsController = new ReorderRouteStopsController();
+
+const recordDriverPositionsController = new RecordDriverPositionsController();
+const controlTowerController = new ControlTowerController();
+const driverTrailController = new DriverTrailController();
 
 /**
  * The route is how deliveries are dispatched, so it lives behind the same
@@ -351,6 +359,93 @@ async function routeRoutes(app: FastifyInstance) {
       },
     },
     reorderRouteStopsController.handle,
+  );
+
+  app.post(
+    "/positions",
+    {
+      /**
+       * The busiest route in the product, by an order of magnitude.
+       *
+       * A phone flushes every thirty seconds, and a whole fleet does it at
+       * once. The ceiling is per user (the rate limiter keys on the session),
+       * so one phone in a loop cannot spend the budget of the fleet — and 120
+       * a minute is four times the normal cadence, which leaves room for a
+       * device catching up after a dead zone without letting one run away.
+       */
+      config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+      onRequest: [ensureAuthenticated],
+      preHandler: [
+        verifyBusinessActive,
+        deliveriesModule,
+        verifyPermission("delivery_manage", "write"),
+      ],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["route"],
+        summary: "The driver's app reports where it is",
+        description:
+          "O motorista vem da SESSÃO e nunca do corpo: um driverId enviado aqui deixaria qualquer telefone escrever a trilha de qualquer pessoa, e a trilha é com o que uma disputa se resolve. Só grava enquanto uma rota do motorista está IN_PROGRESS — fora disso responde `tracking: false` e o app PARA, porque continuar é gastar a bateria de alguém num mapa que ninguém está olhando. Pontos imprecisos demais, com coordenada impossível ou com relógio adiantado são descartados silenciosamente e contados em `rejected`: o app é offline-first e reenvia, então recusar o lote faria o telefone repetir o mesmo ponto ruim para sempre. Um acúmulo de região sem sinal é aceito inteiro até o teto do lote; só o ÚLTIMO ponto vai para o websocket, senão cada painel aberto redesenharia o mesmo ponto duzentas vezes.",
+        body: routeSchemas.recordPositions,
+        response: {
+          200: routeResponses.positionsRecorded,
+          400: routeResponses.genericError,
+          403: routeResponses.genericError,
+          422: routeResponses.validationError,
+          429: routeResponses.genericError,
+          500: routeResponses.internalServerError,
+        },
+      },
+    },
+    recordDriverPositionsController.handle,
+  );
+
+  app.get(
+    "/control-tower",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["route"],
+        summary: "Everything the control tower draws, in one request",
+        description:
+          "Um endpoint e não cinco: o painel atualiza tudo junto e cinco requisições num timer são cinco vezes as conexões para uma tela que o expedidor deixa aberta o dia inteiro. Os widgets são FIXOS — sem customização — então não há nada a negociar por cliente. Superfície do gestor: um token de motorista recebe 403 em vez da operação inteira. O mapa olha doze horas para trás e não \"hoje\", senão o turno da noite veria todo caminhão sumir à meia-noite; cada ponto vem com `fresh`, que separa \"onde ele está\" de \"onde ele esteve\". A pontualidade responde `null` quando nada foi planejado — uma taxa sobre zero rotas não é 100%, é impossível de responder, e 100% seria a tela mentindo no melhor dia dela.",
+        querystring: routeSchemas.controlTower,
+        response: {
+          200: routeResponses.controlTower,
+          400: routeResponses.genericError,
+          403: routeResponses.genericError,
+          500: routeResponses.internalServerError,
+        },
+      },
+    },
+    controlTowerController.handle,
+  );
+
+  app.get(
+    "/driver-trail/:driverId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["route"],
+        summary: "Where one driver went on one day",
+        description:
+          "Pedido só quando alguém abre um motorista, nunca na atualização da torre: a torre desenha onde os caminhões ESTÃO, e buscar o dia inteiro de cada motorista a cada poucos segundos seria a consulta mais pesada do produto servindo enfeite. O resultado é afinado para no máximo quatrocentos pontos — um dia de dez horas a um ping por quinze segundos são 2.400 pontos para UM motorista, e a forma do trajeto é idêntica com um décimo deles. `recorded` diz quantos existem de verdade, porque quem visse só o desenhado concluiria que o telefone parou de reportar. Um motorista de outra empresa responde o mesmo 404 de um que não existe.",
+        params: routeSchemas.driverTrailParams,
+        querystring: routeSchemas.driverTrailQuery,
+        response: {
+          200: routeResponses.driverTrail,
+          400: routeResponses.genericError,
+          403: routeResponses.genericError,
+          404: routeResponses.genericError,
+          500: routeResponses.internalServerError,
+        },
+      },
+    },
+    driverTrailController.handle,
   );
 }
 
