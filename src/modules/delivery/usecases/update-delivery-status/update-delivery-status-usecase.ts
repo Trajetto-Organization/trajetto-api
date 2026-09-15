@@ -2,6 +2,9 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
+import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+
+import database from "@/../infra/database";
 
 import { NotificationService } from "@/shared/services/notification-service";
 
@@ -17,6 +20,8 @@ import {
   DeliveryStatus,
   DELIVERY_STATUS_LABELS,
 } from "@/shared/delivery/delivery-rules";
+
+import { stopOutcomeForDelivery } from "@/shared/route/route-rules";
 
 import { AppError } from "@/shared/errors/AppError";
 import { Delivery } from "../../dtos/delivery-dto";
@@ -36,6 +41,8 @@ class UpdateDeliveryStatusUseCase {
     private user: IUserRepository,
     @inject("DeliveryRepository")
     private delivery: IDeliveryRepository,
+    @inject("RouteRepository")
+    private route: IRouteRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -75,18 +82,39 @@ class UpdateDeliveryStatusUseCase {
     }
 
     try {
-      const updatedDelivery = await this.delivery.updateDeliveryStatus(
-        deliveryId,
-        {
-          status,
-          // What canTransitionDelivery was asked about, three lines up. The
-          // write refuses if the row no longer holds it.
-          expectedStatus: findDelivery.status,
-          // Proof metadata only exists on the proven outcome.
-          delivered_at: status === "DELIVERED" ? new Date() : null,
-          received_by: status === "DELIVERED" ? (received_by ?? null) : null,
-        },
-      );
+      // The panel can resolve a delivery the driver never touched — the
+      // customer called the office, the load came back. If that delivery is a
+      // stop on a running route, the stop has to learn about it in the same
+      // commit, or the route would wait forever for an address nobody is going
+      // to visit.
+      const updatedDelivery = await database.$transaction(async (tx) => {
+        const updated = await this.delivery.updateDeliveryStatus(
+          deliveryId,
+          {
+            status,
+            // What canTransitionDelivery was asked about, three lines up. The
+            // write refuses if the row no longer holds it.
+            expectedStatus: findDelivery.status,
+            // Proof metadata only exists on the proven outcome.
+            delivered_at: status === "DELIVERED" ? new Date() : null,
+            received_by: status === "DELIVERED" ? (received_by ?? null) : null,
+          },
+          tx,
+        );
+
+        const outcome = stopOutcomeForDelivery(status, new Date());
+
+        if (outcome) {
+          await this.route.settleStopForDelivery(
+            deliveryId,
+            businessId,
+            outcome,
+            tx,
+          );
+        }
+
+        return updated;
+      });
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

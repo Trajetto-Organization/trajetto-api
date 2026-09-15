@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { UpdateDeliveryStatusUseCase } from "@/modules/delivery/usecases/update-delivery-status/update-delivery-status-usecase";
 
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
+import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 
 import type { NotificationService } from "@/shared/services/notification-service";
 
@@ -25,6 +26,14 @@ import { AppError } from "@/shared/errors/AppError";
  * The in-memory repository mirrors the status filter the Prisma `where`
  * carries, so what is proven here is the same rule the database enforces.
  */
+// The status change and the route stop it resolves share one transaction;
+// against in-memory repositories the transaction is a plain passthrough.
+vi.mock("@/../infra/database", () => ({
+  default: {
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}),
+  },
+}));
+
 const BUSINESS = "018f0000-0000-7000-8000-00000000000b";
 const USER_ID = "018f0000-0000-7000-8000-0000000000aa";
 const SHIPPER_ID = "018f0000-0000-7000-8000-0000000000f1";
@@ -39,15 +48,18 @@ function makeContext() {
     businessId: BUSINESS,
   } as User);
 
+  const routeRepository = new InMemoryRouteRepository();
+
   const useCase = new UpdateDeliveryStatusUseCase(
     userRepository,
     deliveryRepository,
+    routeRepository,
     {
       createActivityIfEnabled: async () => undefined,
     } as unknown as NotificationService,
   );
 
-  return { useCase, deliveryRepository };
+  return { useCase, deliveryRepository, routeRepository };
 }
 
 /**

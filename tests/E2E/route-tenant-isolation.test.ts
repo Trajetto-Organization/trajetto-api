@@ -185,14 +185,6 @@ describe("carrier B reaching carrier A's route", () => {
     ).rejects.toThrow();
   });
 
-  it("cannot settle its stop", async () => {
-    await expect(
-      repository.settleStop(stopId, B, {
-        expectedStatus: "PENDING",
-        status: "COMPLETED",
-      }),
-    ).rejects.toThrow();
-  });
 });
 
 describe("after every refused attempt", () => {
@@ -257,5 +249,85 @@ describe("carrier A still operates its own route", () => {
         status: "IN_PROGRESS",
       }),
     ).rejects.toThrow();
+  });
+
+  it("starts it", async () => {
+    const started = await repository.transitionRoute(routeId, A, {
+      expectedStatus: "RELEASED",
+      status: "IN_PROGRESS",
+      started_at: new Date(),
+    });
+
+    expect(started.status).toBe("IN_PROGRESS");
+  });
+});
+
+/**
+ * Settling only means anything on a route that is running, which is why these
+ * live after the departure above. Ordered inside the block on purpose: the
+ * refusal has to be measured against a call that would otherwise have worked.
+ */
+describe("settling the stop of a running route", () => {
+  it("refuses carrier B and writes nothing", async () => {
+    // Null rather than a throw: settling is a consequence of a delivery
+    // outcome, and a route with nothing to say must not undo a proof that was
+    // already accepted. So the assertion that carries the weight is the state
+    // of the row afterwards.
+    expect(
+      await repository.settleStopForDelivery(`dlv-${A}`, B, {
+        from: ["PENDING", "ARRIVED"],
+        status: "COMPLETED",
+        completed_at: new Date(),
+      }),
+    ).toBeNull();
+
+    const stop = await prisma.routeStop.findUniqueOrThrow({
+      where: { id: stopId },
+    });
+
+    expect(stop.status).toBe("PENDING");
+    expect(stop.completed_at).toBeNull();
+  });
+
+  it("refuses a delivery id from carrier B against carrier A", async () => {
+    // The other direction of the same crafted request: a real delivery id,
+    // the caller's own company, but that delivery has no stop here.
+    expect(
+      await repository.settleStopForDelivery(`dlv-${B}`, B, {
+        from: ["PENDING", "ARRIVED"],
+        status: "COMPLETED",
+        completed_at: new Date(),
+      }),
+    ).toBeNull();
+  });
+
+  it("settles for carrier A and closes the route, since it was the last stop", async () => {
+    const settled = await repository.settleStopForDelivery(`dlv-${A}`, A, {
+      from: ["PENDING", "ARRIVED"],
+      status: "COMPLETED",
+      completed_at: new Date(),
+    });
+
+    expect(settled).not.toBeNull();
+    expect(settled!.stop.status).toBe("COMPLETED");
+
+    // Nobody pressed a button: the route ended because its last stop did.
+    expect(settled!.closedRoute?.status).toBe("COMPLETED");
+    expect(settled!.closedRoute?.completed_at).not.toBeNull();
+  });
+
+  it("is a no-op on the resend, not a second close", async () => {
+    expect(
+      await repository.settleStopForDelivery(`dlv-${A}`, A, {
+        from: ["PENDING", "ARRIVED"],
+        status: "COMPLETED",
+        completed_at: new Date(),
+      }),
+    ).toBeNull();
+
+    const stops = await prisma.routeStop.findMany({ where: { routeId } });
+
+    expect(stops).toHaveLength(1);
+    expect(stops[0].status).toBe("COMPLETED");
   });
 });

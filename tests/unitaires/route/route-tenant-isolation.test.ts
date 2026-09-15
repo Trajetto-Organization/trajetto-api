@@ -470,16 +470,32 @@ describe("the repository refuses on its own, without the use case", () => {
       routeId: route.id,
     });
 
-    const stopId = context.routeRepository.stops[0].id;
+    const deliveryId = context.routeRepository.stops[0].deliveryId;
 
-    await expect(
-      context.routeRepository.settleStop(stopId, B, {
-        expectedStatus: "PENDING",
+    // Settling answers null rather than throwing, because most deliveries are
+    // not on a route and a refusal must not sink the delivery outcome that
+    // triggered it. So the assertion that carries weight is the second one:
+    // the stop is untouched. A `where` that matched nothing wrote nothing.
+    expect(
+      await context.routeRepository.settleStopForDelivery(deliveryId, B, {
+        from: ["PENDING", "ARRIVED"],
         status: "COMPLETED",
+        completed_at: new Date(),
       }),
-    ).rejects.toThrow();
+    ).toBeNull();
 
     expect(context.routeRepository.stops[0].status).toBe("PENDING");
+    expect(context.routeRepository.stops[0].completed_at).toBeNull();
+
+    // And the same call from the right carrier does work — otherwise the null
+    // above would prove nothing but a typo.
+    expect(
+      await context.routeRepository.settleStopForDelivery(deliveryId, A, {
+        from: ["PENDING", "ARRIVED"],
+        status: "COMPLETED",
+        completed_at: new Date(),
+      }),
+    ).not.toBeNull();
   });
 
   it("does not find a stop through the wrong carrier", async () => {

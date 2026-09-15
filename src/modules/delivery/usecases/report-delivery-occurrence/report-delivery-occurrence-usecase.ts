@@ -4,6 +4,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/IOccurrence-type-repository";
 
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
+import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { UploadService } from "@/shared/services/upload-service";
@@ -28,6 +29,8 @@ import {
   DELIVERY_STATUS_LABELS,
 } from "@/shared/delivery/delivery-rules";
 
+import { stopOutcomeForDelivery } from "@/shared/route/route-rules";
+
 import { AppError } from "@/shared/errors/AppError";
 
 interface ReportOccurrenceRequest {
@@ -51,6 +54,8 @@ class ReportDeliveryOccurrenceUseCase {
     private occurrenceType: IOccurrenceTypeRepository,
     @inject("DeliveryRepository")
     private delivery: IDeliveryRepository,
+    @inject("RouteRepository")
+    private route: IRouteRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
     @inject("UploadService")
@@ -187,6 +192,21 @@ class ReportDeliveryOccurrenceUseCase {
             { status: nextStatus, expectedStatus: findDelivery.status },
             tx,
           );
+
+          // A blocking occurrence resolved this address for today. The stop
+          // closes with the same outcome, in the same commit, and the route
+          // ends by itself if that was the last one open — an insucesso is a
+          // result, not an interruption.
+          const outcome = stopOutcomeForDelivery(nextStatus, new Date());
+
+          if (outcome) {
+            await this.route.settleStopForDelivery(
+              deliveryId,
+              businessId,
+              outcome,
+              tx,
+            );
+          }
         }
 
         // Only a blocking occurrence rings the manager's bell — it changed

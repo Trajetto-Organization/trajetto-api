@@ -10,6 +10,7 @@ import { ReportDeliveryOccurrenceUseCase } from "@/modules/delivery/usecases/rep
 
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
+import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 
 import { InMemoryOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/in-memory/in-memory-occurrence-type-repository";
 import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-memory/in-memory-vehicle-repository";
@@ -66,6 +67,7 @@ function makeRepositories() {
   const deliveryRepository = new InMemoryDeliveryRepository();
   const occurrenceTypeRepository = new InMemoryOccurrenceTypeRepository();
   const vehicleRepository = new InMemoryVehicleRepository();
+  const routeRepository = new InMemoryRouteRepository();
 
   // The default driver owns a vehicle, which is the ordinary case: the tests
   // that care about the guard take it away instead of adding one.
@@ -97,6 +99,7 @@ function makeRepositories() {
     deliveryRepository,
     occurrenceTypeRepository,
     vehicleRepository,
+    routeRepository,
   };
 }
 
@@ -367,6 +370,7 @@ describe("driver surface: arrival", () => {
     return new RegisterDeliveryArrivalUseCase(
       repos.userRepository,
       repos.deliveryRepository,
+      repos.routeRepository,
       notificationStub,
     );
   }
@@ -436,6 +440,7 @@ describe("driver surface: proof", () => {
     return new RegisterDeliveryProofUseCase(
       repos.userRepository,
       repos.deliveryRepository,
+      repos.routeRepository,
       notificationStub,
       uploadStub,
     );
@@ -506,6 +511,7 @@ describe("driver surface: occurrence photo rules", () => {
       repos.userRepository,
       repos.occurrenceTypeRepository,
       repos.deliveryRepository,
+      repos.routeRepository,
       notificationStub,
       uploadStub,
       outbox,

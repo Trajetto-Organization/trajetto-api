@@ -1,3 +1,5 @@
+import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+
 /**
  * Route state machine, kept pure so it can be unit-tested.
  *
@@ -241,7 +243,83 @@ function routeProgress(stopStatuses: RouteStopStatus[]): {
   };
 }
 
+/**
+ * The stop statuses that still hold their delivery. These are exactly what the
+ * partial unique index covers, and exactly what an outcome may come FROM.
+ */
+const OPEN_STOP_STATUSES: RouteStopStatus[] = ["PENDING", "ARRIVED"];
+
+interface StopOutcome {
+  /** The statuses this outcome may legally be applied from. */
+  from: RouteStopStatus[];
+  status: RouteStopStatus;
+  arrived_at?: Date;
+  completed_at?: Date;
+}
+
+/**
+ * What a delivery outcome means for the stop that delivery occupies.
+ *
+ * The driver acts on a delivery — proved it, reported a problem — and the
+ * route only learns about it through this table. Keeping the translation in
+ * one pure function is what stops the four call sites that record delivery
+ * outcomes from each inventing their own answer; the exhaustive switch makes a
+ * new DeliveryStatus fail to compile until somebody decides what it does to a
+ * route.
+ *
+ * Null means "the route has nothing to say about this". PENDING and IN_TRANSIT
+ * are not stop outcomes: leaving for the street does not resolve a stop, and a
+ * delivery sent back to PENDING for a second attempt gets a NEW stop on a NEW
+ * route rather than reopening the one that failed — the old stop is the record
+ * of an attempt that happened.
+ *
+ * `from` is both open statuses for every outcome, including COMPLETED. A proof
+ * legitimately lands on a stop that was never marked ARRIVED: the driver
+ * worked the street with no signal and the app only ever got the proof out.
+ */
+function stopOutcomeForDelivery(
+  status: DeliveryStatus,
+  at: Date,
+): StopOutcome | null {
+  switch (status) {
+    case "DELIVERED":
+      return { from: OPEN_STOP_STATUSES, status: "COMPLETED", completed_at: at };
+
+    case "FAILED":
+      return { from: OPEN_STOP_STATUSES, status: "FAILED", completed_at: at };
+
+    case "CANCELLED":
+      // No completed_at: nothing was accomplished at this address, and
+      // `updated_at` already records when it was called off. Same shape the
+      // route's own cancellation writes onto its open stops.
+      return { from: OPEN_STOP_STATUSES, status: "CANCELLED" };
+
+    case "PENDING":
+    case "IN_TRANSIT":
+      return null;
+
+    default: {
+      // Exhaustiveness: a status added to DeliveryStatus lands here and fails
+      // to compile, instead of silently meaning "nothing happens to the stop".
+      const unreachable: never = status;
+
+      return unreachable;
+    }
+  }
+}
+
+/**
+ * Arriving is not a delivery status change — the delivery stays IN_TRANSIT —
+ * so it has its own outcome. Only from PENDING: a second arrival on a stop
+ * already marked ARRIVED must not overwrite the first timestamp, which is the
+ * one that says when the driver actually got there.
+ */
+function arrivalStopOutcome(at: Date): StopOutcome {
+  return { from: ["PENDING"], status: "ARRIVED", arrived_at: at };
+}
+
 export {
+  OPEN_STOP_STATUSES,
   ROUTE_STATUS_LABELS,
   ROUTE_STOP_STATUS_LABELS,
   ROUTE_STOP_TRANSITIONS,
@@ -252,15 +330,18 @@ export {
   canTransitionStop,
   canUnreleaseRoute,
   isRouteFinished,
+  arrivalStopOutcome,
   isStopOpen,
   isTerminalRouteStatus,
   nextSequence,
   resequence,
   routeProgress,
+  stopOutcomeForDelivery,
 };
 
 export type {
   ReleaseCandidate,
+  StopOutcome,
   RouteStatus,
   RouteStopStatus,
   TransitionVerdict,

@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import type {
   CreateRouteProps,
   ListRoutesProps,
@@ -107,24 +109,47 @@ interface IRouteRepository {
   ) => Promise<void>;
 
   /**
-   * Records the outcome of one stop, from `expectedStatus`, and closes the
-   * route when nothing is left open.
+   * Records the outcome of the stop a delivery currently occupies, and closes
+   * the route when nothing is left open.
    *
-   * One method rather than two because the two writes are one fact: a stop
-   * that resolves may be the stop that finishes the route, and a crash between
-   * them would leave a route the panel reports as running with nothing left to
-   * run. Returns the route when it closed.
+   * Addressed by DELIVERY, not by stop id, and that is the whole point: the
+   * driver acts on a delivery — arrived, proved it, reported a problem — and
+   * the stop is the route's view of that same act. An endpoint that moved a
+   * stop directly would be a second writer for one fact, and the two would
+   * drift the first time somebody used it.
+   *
+   * `from` is the set of stop statuses the outcome may legally come from. It
+   * is a set rather than one value because a proof legitimately arrives at a
+   * stop that was never marked ARRIVED: the driver worked the whole street
+   * offline and the app only ever got to send the proof.
+   *
+   * Answers null — never throws — when the delivery has no stop in `from` on
+   * an in-progress route of this company. That is the ordinary case for a
+   * delivery that is not on a route at all, and the idempotent case for an
+   * outbox resend. The delivery outcome is the fact; the stop follows it, and
+   * a route that has nothing to say must not undo a proof.
+   *
+   * At most one row can match: `route_stop_active_delivery_idx` allows a
+   * delivery exactly one open stop, and `from` only ever names open statuses.
+   *
+   * Takes the caller's transaction so the stop resolves in the same commit as
+   * the delivery outcome that caused it. Split apart, a crash in between
+   * leaves a DELIVERED delivery on a PENDING stop: the route never closes,
+   * because closing is triggered by a stop resolving and no stop resolves
+   * again — and the delivery stays locked out of every future route by the
+   * same partial unique index.
    */
-  settleStop: (
-    stopId: string,
+  settleStopForDelivery: (
+    deliveryId: string,
     businessId: string,
     outcome: {
-      expectedStatus: RouteStop["status"];
+      from: RouteStop["status"][];
       status: RouteStop["status"];
       arrived_at?: Date;
       completed_at?: Date;
     },
-  ) => Promise<{ stop: RouteStop; closedRoute: Route | null }>;
+    tx?: Prisma.TransactionClient,
+  ) => Promise<{ stop: RouteStop; closedRoute: Route | null } | null>;
 
   findStopById: (
     stopId: string,

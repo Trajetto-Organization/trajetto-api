@@ -633,8 +633,9 @@ class DeliveryRepository implements IDeliveryRepository {
 
   async createDeliveryEvent(
     eventData: CreateDeliveryEventProps,
+    tx?: Prisma.TransactionClient,
   ): Promise<void> {
-    await this.prisma.deliveryEvent.create({
+    await (tx ?? this.prisma).deliveryEvent.create({
       data: {
         type: eventData.type,
         deliveryId: eventData.deliveryId,
@@ -652,6 +653,7 @@ class DeliveryRepository implements IDeliveryRepository {
   async registerDeliveryProof(
     eventData: CreateDeliveryEventProps,
     expectedStatus: DeliveryStatus,
+    tx?: Prisma.TransactionClient,
   ): Promise<void> {
     // Event and status stamp land together or not at all: a proof without
     // the DELIVERED transition (or vice versa) would lie in the trail.
@@ -664,8 +666,13 @@ class DeliveryRepository implements IDeliveryRepository {
     // Interactive transaction rather than the array form, because the guard
     // has to read `count` and abort — the same shape as `assignDeliveries`.
     // Throwing in here rolls the event back with it.
-    await this.prisma.$transaction(async (tx) => {
-      const moved = await tx.delivery.updateMany({
+    //
+    // A caller that handed over its own transaction owns the commit boundary
+    // and is joined rather than nested: Prisma refuses a transaction opened on
+    // a transaction client, and the whole reason it passed one was to have the
+    // route stop resolve in this same commit.
+    const write = async (client: Prisma.TransactionClient) => {
+      const moved = await client.delivery.updateMany({
         where: { id: eventData.deliveryId, status: expectedStatus },
         data: {
           status: "DELIVERED",
@@ -678,7 +685,7 @@ class DeliveryRepository implements IDeliveryRepository {
         throw new DeliveryStatusConflictError();
       }
 
-      await tx.deliveryEvent.create({
+      await client.deliveryEvent.create({
         data: {
           type: "PROOF",
           deliveryId: eventData.deliveryId,
@@ -691,7 +698,14 @@ class DeliveryRepository implements IDeliveryRepository {
           client_submission_id: eventData.client_submission_id,
         },
       });
-    });
+    };
+
+    if (tx) {
+      await write(tx);
+      return;
+    }
+
+    await this.prisma.$transaction(write);
   }
 }
 

@@ -2,6 +2,9 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
+import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+
+import database from "@/../infra/database";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
@@ -12,6 +15,7 @@ import {
 } from "../errors/delivery-errors";
 
 import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
+import { arrivalStopOutcome } from "@/shared/route/route-rules";
 import { AppError } from "@/shared/errors/AppError";
 
 interface RegisterDeliveryArrivalRequest {
@@ -36,6 +40,8 @@ class RegisterDeliveryArrivalUseCase {
     private user: IUserRepository,
     @inject("DeliveryRepository")
     private delivery: IDeliveryRepository,
+    @inject("RouteRepository")
+    private route: IRouteRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -94,13 +100,31 @@ class RegisterDeliveryArrivalUseCase {
     }
 
     try {
-      await this.delivery.createDeliveryEvent({
-        type: "ARRIVAL",
-        deliveryId,
-        reportedById: userId,
-        latitude,
-        longitude,
-        client_submission_id,
+      const arrivedAt = new Date();
+
+      // Event and stop commit together. The stop is the route's view of this
+      // same act, and `settleStopForDelivery` answers null — rather than
+      // throwing — when the delivery is not on a running route, which is the
+      // ordinary case for a delivery assigned without one.
+      await database.$transaction(async (tx) => {
+        await this.delivery.createDeliveryEvent(
+          {
+            type: "ARRIVAL",
+            deliveryId,
+            reportedById: userId,
+            latitude,
+            longitude,
+            client_submission_id,
+          },
+          tx,
+        );
+
+        await this.route.settleStopForDelivery(
+          deliveryId,
+          businessId,
+          arrivalStopOutcome(arrivedAt),
+          tx,
+        );
       });
 
       // Process activity asynchronously without blocking the main flow

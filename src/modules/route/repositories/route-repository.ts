@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import database from "@/../infra/database";
 
 import {
+  OPEN_STOP_STATUSES,
   nextSequence,
   resequence,
   type RouteStopStatus,
@@ -57,8 +58,6 @@ const routeInclude = {
     },
   },
 } as const;
-
-const OPEN_STOP_STATUSES: RouteStopStatus[] = ["PENDING", "ARRIVED"];
 
 /** A route may only be edited while it has not been executed. */
 const EDITABLE_STATUSES: RouteStatus[] = ["PLANNED", "RELEASED"];
@@ -372,13 +371,19 @@ class RouteRepository implements IRouteRepository {
   }
 
   /**
-   * Keeps `Delivery.driverId/vehicleId` equal to the route that owns them.
+   * Keeps the deliveries of a route's open stops equal to the route.
    *
-   * These columns are the route's shadow, and this is their only writer. A
-   * route that ends — completed or cancelled — releases the deliveries of its
-   * stops that are still open, so they can be put on another route; the ones
-   * already resolved keep the driver who resolved them, because that is the
-   * historical fact the panels report.
+   * `Delivery.driverId`, `Delivery.vehicleId` and — at the departure — the
+   * delivery's own status are the route's shadow, and this is their only
+   * writer. A route that ends releases the deliveries of its stops that are
+   * still open, so they can go on another route; the ones already resolved
+   * keep the driver who resolved them, because that is the historical fact the
+   * panels report.
+   *
+   * The tenant is in every `where` even though the ids came from this route's
+   * own stops. These are the statements in the module that write to a table
+   * the route does not own, and that is exactly where a guard is worth
+   * repeating.
    */
   private async mirrorOntoDeliveries(
     tx: Prisma.TransactionClient | typeof database,
@@ -403,8 +408,21 @@ class RouteRepository implements IRouteRepository {
         data: { status: "CANCELLED" },
       });
 
+      // The load that left with this route and never arrived goes back to the
+      // pool it came from. Only IN_TRANSIT moves: a delivery the dispatcher
+      // had already cancelled stays cancelled, and one still PENDING never
+      // left.
       await tx.delivery.updateMany({
-        where: { id: { in: openDeliveryIds } },
+        where: {
+          id: { in: openDeliveryIds },
+          businessId: route.businessId,
+          status: "IN_TRANSIT",
+        },
+        data: { status: "PENDING" },
+      });
+
+      await tx.delivery.updateMany({
+        where: { id: { in: openDeliveryIds }, businessId: route.businessId },
         data: { driverId: null, vehicleId: null },
       });
 
@@ -412,9 +430,29 @@ class RouteRepository implements IRouteRepository {
     }
 
     await tx.delivery.updateMany({
-      where: { id: { in: openDeliveryIds } },
+      where: { id: { in: openDeliveryIds }, businessId: route.businessId },
       data: { driverId: route.driverId, vehicleId: route.vehicleId },
     });
+
+    // The departure is what puts the load on the street, and it is the same
+    // act as the route leaving — so it happens here, in the departure's own
+    // transaction, rather than in a second request the app has to remember to
+    // send. Without this the driver's next action is refused: arrival and
+    // proof both require the delivery to be IN_TRANSIT.
+    //
+    // Only PENDING moves. A delivery already resolved keeps its outcome, and
+    // the filter is what makes a re-run of the departure a no-op rather than
+    // a load dragged back onto the street.
+    if (route.status === "IN_PROGRESS") {
+      await tx.delivery.updateMany({
+        where: {
+          id: { in: openDeliveryIds },
+          businessId: route.businessId,
+          status: "PENDING",
+        },
+        data: { status: "IN_TRANSIT" },
+      });
+    }
   }
 
   async addStops(
@@ -557,71 +595,132 @@ class RouteRepository implements IRouteRepository {
   }
 
   /**
-   * Records a stop's outcome and closes the route if that was the last one.
+   * Records the outcome of the stop a delivery occupies, and closes the route
+   * if that was the last one open.
    *
-   * The two writes are one fact and share a transaction. Split apart, a crash
-   * between them leaves a route the panel reports as running with nothing left
-   * to run — and nothing would ever come back to close it, because closing is
-   * triggered by a stop resolving and no stop would resolve again.
+   * Addressed by delivery rather than by stop id: the driver acts on a
+   * delivery and the stop is the route's view of that act. One writer for one
+   * fact.
+   *
+   * Never throws for "there is nothing to settle". Most deliveries in this
+   * product are not on a route at all, and this runs on every delivery
+   * outcome — a route with nothing to say must not sink a proof that was
+   * already accepted.
    */
-  async settleStop(
-    stopId: string,
+  async settleStopForDelivery(
+    deliveryId: string,
     businessId: string,
     outcome: {
-      expectedStatus: RouteStopStatus;
+      from: RouteStopStatus[];
       status: RouteStopStatus;
       arrived_at?: Date;
       completed_at?: Date;
     },
-  ): Promise<{ stop: RouteStop; closedRoute: Route | null }> {
-    return this.prisma.$transaction(async (tx) => {
-      const settled = await tx.routeStop.updateMany({
-        where: {
-          id: stopId,
-          status: outcome.expectedStatus,
-          route: { businessId, status: "IN_PROGRESS" },
-        },
-        data: {
-          status: outcome.status,
-          ...(outcome.arrived_at && { arrived_at: outcome.arrived_at }),
-          ...(outcome.completed_at && { completed_at: outcome.completed_at }),
-        },
-      });
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ stop: RouteStop; closedRoute: Route | null } | null> {
+    const run = (client: Prisma.TransactionClient) =>
+      this.settleWithin(client, deliveryId, businessId, outcome);
 
-      if (settled.count === 0) throw new RouteStatusConflictError();
+    // Prisma refuses a transaction opened on a transaction client, and a
+    // caller that handed one over already owns the commit boundary — the
+    // whole reason it passed it was to share this commit.
+    if (tx) return run(tx);
 
-      const stop = await tx.routeStop.findUniqueOrThrow({
-        where: { id: stopId },
-      });
+    return this.prisma.$transaction(run);
+  }
 
-      const stillOpen = await tx.routeStop.count({
-        where: { routeId: stop.routeId, status: { in: OPEN_STOP_STATUSES } },
-      });
-
-      if (stillOpen > 0) {
-        return { stop: stop as unknown as RouteStop, closedRoute: null };
-      }
-
-      const closed = await tx.route.updateMany({
-        where: { id: stop.routeId, businessId, status: "IN_PROGRESS" },
-        data: { status: "COMPLETED", completed_at: new Date() },
-      });
-
-      // Idempotent: a resend finds the route already closed and answers null
-      // rather than failing.
-      if (closed.count === 0) {
-        return { stop: stop as unknown as RouteStop, closedRoute: null };
-      }
-
-      const route = await tx.route.findUniqueOrThrow({
-        where: { id: stop.routeId },
-      });
-
-      return {
-        stop: stop as unknown as RouteStop,
-        closedRoute: route as unknown as Route,
-      };
+  private async settleWithin(
+    client: Prisma.TransactionClient,
+    deliveryId: string,
+    businessId: string,
+    outcome: {
+      from: RouteStopStatus[];
+      status: RouteStopStatus;
+      arrived_at?: Date;
+      completed_at?: Date;
+    },
+  ): Promise<{ stop: RouteStop; closedRoute: Route | null } | null> {
+    // At most one row: route_stop_active_delivery_idx allows a delivery one
+    // open stop, and `from` only ever names open statuses. The tenant and the
+    // route's own status are part of the match, so a delivery id crafted from
+    // another company finds nothing rather than something it should not.
+    const target = await client.routeStop.findFirst({
+      where: {
+        deliveryId,
+        status: { in: outcome.from },
+        route: { businessId, status: "IN_PROGRESS" },
+      },
+      select: { id: true, routeId: true },
     });
+
+    if (!target) return null;
+
+    // The precondition rides in the `where` of the write, not only in the read
+    // above: between the two the stop can move, and a blind update would
+    // overwrite whatever it became.
+    //
+    // Note the tenant appears in BOTH clauses, and each makes the other
+    // redundant for behaviour — deleting either one alone changes no outcome
+    // and breaks no test, because the survivor still refuses. That is the
+    // point of defence in depth, and also its blind spot: the suite proves the
+    // PAIR, not each half. Do not remove one on the grounds that tests stay
+    // green.
+    const settled = await client.routeStop.updateMany({
+      where: {
+        id: target.id,
+        status: { in: outcome.from },
+        route: { businessId, status: "IN_PROGRESS" },
+      },
+      data: {
+        status: outcome.status,
+        ...(outcome.arrived_at && { arrived_at: outcome.arrived_at }),
+        ...(outcome.completed_at && { completed_at: outcome.completed_at }),
+      },
+    });
+
+    if (settled.count === 0) return null;
+
+    const stop = await client.routeStop.findUniqueOrThrow({
+      where: { id: target.id },
+    });
+
+    return {
+      stop: stop as unknown as RouteStop,
+      closedRoute: await this.closeIfFinished(client, target.routeId, businessId),
+    };
+  }
+
+  /**
+   * A route with nothing left open is finished, and closes itself.
+   *
+   * Not an endpoint: nobody presses "encerrar rota". The route ends because
+   * its last stop resolved, which is a consequence of the domain rather than
+   * a decision a user makes — and a button for it would let somebody close a
+   * route with work still on it.
+   */
+  private async closeIfFinished(
+    client: Prisma.TransactionClient,
+    routeId: string,
+    businessId: string,
+  ): Promise<Route | null> {
+    const stillOpen = await client.routeStop.count({
+      where: { routeId, status: { in: OPEN_STOP_STATUSES } },
+    });
+
+    if (stillOpen > 0) return null;
+
+    const closed = await client.route.updateMany({
+      where: { id: routeId, businessId, status: "IN_PROGRESS" },
+      data: { status: "COMPLETED", completed_at: new Date() },
+    });
+
+    // Idempotent: a resend finds the route already closed and answers null
+    // rather than failing.
+    if (closed.count === 0) return null;
+
+    const route = await client.route.findUniqueOrThrow({ where: { id: routeId } });
+
+    return route as unknown as Route;
   }
 }
 

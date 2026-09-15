@@ -104,15 +104,23 @@ interface IDeliveryRepository {
   findEventBySubmissionId: (
     clientSubmissionId: string,
   ) => Promise<DeliveryEventRecord | null>;
-  createDeliveryEvent: (eventData: CreateDeliveryEventProps) => Promise<void>;
+  createDeliveryEvent: (
+    eventData: CreateDeliveryEventProps,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<void>;
   /**
    * PROOF event + DELIVERED stamp in a single transaction, and only while the
    * delivery still holds `expectedStatus`. Throws DeliveryStatusConflictError
    * (writing neither) when it moved in the meantime.
+   *
+   * Takes the caller's transaction when there is one, so the route stop this
+   * proof resolves commits with it. Opens its own otherwise — the two writes
+   * here were never allowed to land apart.
    */
   registerDeliveryProof: (
     eventData: CreateDeliveryEventProps,
     expectedStatus: DeliveryStatus,
+    tx?: Prisma.TransactionClient,
   ) => Promise<void>;
 }
 

@@ -50,11 +50,18 @@ const ROUTE_STATUSES: RouteStatus[] = [
 
 const EDITABLE_STATUSES: RouteStatus[] = ["PLANNED", "RELEASED"];
 
+/**
+ * The shape this repository needs from a delivery row. Deliberately a subset,
+ * and every field optional that is optional on the real DTO, so a test can
+ * hand over the delivery fake's OWN array instead of a copy — routes and
+ * deliveries are one table in Postgres, and a test where they are two stores
+ * can show a departure that moved nothing.
+ */
 interface DeliveryMirror {
-  id: string;
+  id?: string;
   businessId: string;
-  driverId: string | null;
-  vehicleId: string | null;
+  driverId?: string | null;
+  vehicleId?: string | null;
   kind?: string;
   status?: string;
   recipient_name?: string;
@@ -67,8 +74,11 @@ class InMemoryRouteRepository implements IRouteRepository {
   /**
    * The delivery rows this repository mirrors onto. Tests seed it so the
    * mirroring is observable — it is an invariant of the module, not a detail.
+   *
+   * A test that also drives the delivery use cases passes the delivery fake's
+   * own array here, so both see one set of rows. In Postgres they always do.
    */
-  public deliveries: DeliveryMirror[] = [];
+  constructor(public deliveries: DeliveryMirror[] = []) {}
 
   private stopsOf(routeId: string): RouteStop[] {
     return this.stops
@@ -154,14 +164,30 @@ class InMemoryRouteRepository implements IRouteRepository {
     }
 
     for (const stop of open) {
+      // Scoped exactly like the real `updateMany`: the mirror never reaches a
+      // row of another company, even with a crafted id.
       const delivery = this.deliveries.find(
-        (entry) => entry.id === stop.deliveryId,
+        (entry) =>
+          entry.id === stop.deliveryId && entry.businessId === route.businessId,
       );
 
       if (!delivery) continue;
 
       delivery.driverId = ending ? null : route.driverId;
       delivery.vehicleId = ending ? null : route.vehicleId;
+
+      if (ending) {
+        // The load that left and never arrived goes back to the pool.
+        if (delivery.status === "IN_TRANSIT") delivery.status = "PENDING";
+
+        continue;
+      }
+
+      // The departure puts the load on the street, in the same act as the
+      // route leaving. Only PENDING moves — an outcome already recorded stands.
+      if (route.status === "IN_PROGRESS" && delivery.status === "PENDING") {
+        delivery.status = "IN_TRANSIT";
+      }
     }
   }
 
@@ -477,33 +503,38 @@ class InMemoryRouteRepository implements IRouteRepository {
     return { ...stop, route };
   }
 
-  async settleStop(
-    stopId: string,
+  async settleStopForDelivery(
+    deliveryId: string,
     businessId: string,
     outcome: {
-      expectedStatus: RouteStopStatus;
+      from: RouteStopStatus[];
       status: RouteStopStatus;
       arrived_at?: Date;
       completed_at?: Date;
     },
-  ): Promise<{ stop: RouteStop; closedRoute: Route | null }> {
-    const stop = this.stops.find((entry) => entry.id === stopId);
+  ): Promise<{ stop: RouteStop; closedRoute: Route | null } | null> {
+    // The real one takes a transaction client; there is nothing to join here,
+    // and pretending otherwise would be the fake claiming a guarantee it does
+    // not give. What IS mirrored is every condition of the `where`: the
+    // tenant, the route being in progress, and the stop being in `from`.
+    const stop = this.stops.find((entry) => {
+      if (entry.deliveryId !== deliveryId) return false;
+      if (!outcome.from.includes(entry.status)) return false;
 
-    const route = stop ? this.routeOf(stop.routeId, businessId) : undefined;
+      const route = this.routeOf(entry.routeId, businessId);
 
-    if (
-      !stop ||
-      !route ||
-      route.status !== "IN_PROGRESS" ||
-      stop.status !== outcome.expectedStatus
-    ) {
-      throw new RouteStatusConflictError();
-    }
+      return Boolean(route) && route!.status === "IN_PROGRESS";
+    });
+
+    // Nothing to settle is not an error: most deliveries are not on a route.
+    if (!stop) return null;
 
     stop.status = outcome.status;
     if (outcome.arrived_at) stop.arrived_at = outcome.arrived_at;
     if (outcome.completed_at) stop.completed_at = outcome.completed_at;
     stop.updated_at = new Date();
+
+    const route = this.routeOf(stop.routeId, businessId)!;
 
     const stillOpen = this.stopsOf(route.id).some((entry) =>
       isStopOpen(entry.status),
@@ -513,6 +544,7 @@ class InMemoryRouteRepository implements IRouteRepository {
 
     route.status = "COMPLETED";
     route.completed_at = new Date();
+    route.updated_at = new Date();
 
     return { stop, closedRoute: route };
   }

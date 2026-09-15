@@ -2,6 +2,9 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
+import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+
+import database from "@/../infra/database";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { UploadService } from "@/shared/services/upload-service";
@@ -17,6 +20,8 @@ import {
   canTransitionDelivery,
   DELIVERY_STATUS_LABELS,
 } from "@/shared/delivery/delivery-rules";
+
+import { stopOutcomeForDelivery } from "@/shared/route/route-rules";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -46,6 +51,8 @@ class RegisterDeliveryProofUseCase {
     private user: IUserRepository,
     @inject("DeliveryRepository")
     private delivery: IDeliveryRepository,
+    @inject("RouteRepository")
+    private route: IRouteRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
     @inject("UploadService")
@@ -131,23 +138,45 @@ class RegisterDeliveryProofUseCase {
     }
 
     try {
-      await this.delivery.registerDeliveryProof(
-        {
-          type: "PROOF",
-          deliveryId,
-          reportedById: userId,
-          latitude,
-          longitude,
-          photo: resolvedPhoto.path,
-          signature: signaturePath,
-          received_by,
-          client_submission_id,
-        },
-        // The status canTransitionDelivery was asked about. The upload of the
-        // photo sits between that check and this write, which on a phone in a
-        // basement can be minutes — the widest window in the module.
-        findDelivery.status,
-      );
+      const provenAt = new Date();
+
+      // Proof, DELIVERED stamp and the route stop this resolves all commit
+      // together. Split apart, a crash in between leaves a DELIVERED delivery
+      // on a PENDING stop: the route never closes, because closing is
+      // triggered by a stop resolving and no stop would resolve again — and
+      // the delivery stays locked out of every future route by the partial
+      // unique index that reserves it.
+      await database.$transaction(async (tx) => {
+        await this.delivery.registerDeliveryProof(
+          {
+            type: "PROOF",
+            deliveryId,
+            reportedById: userId,
+            latitude,
+            longitude,
+            photo: resolvedPhoto.path,
+            signature: signaturePath,
+            received_by,
+            client_submission_id,
+          },
+          // The status canTransitionDelivery was asked about. The upload of
+          // the photo sits between that check and this write, which on a phone
+          // in a basement can be minutes — the widest window in the module.
+          findDelivery.status,
+          tx,
+        );
+
+        const outcome = stopOutcomeForDelivery("DELIVERED", provenAt);
+
+        if (outcome) {
+          await this.route.settleStopForDelivery(
+            deliveryId,
+            businessId,
+            outcome,
+            tx,
+          );
+        }
+      });
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({
