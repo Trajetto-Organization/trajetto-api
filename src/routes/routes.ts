@@ -46,6 +46,8 @@ import { shipperRoutes } from "./shipper-routes";
 import { occurrenceTypeRoutes } from "./occurrence-type-routes";
 
 import { deliveryRoutes } from "./delivery-routes";
+import { routeRoutes } from "./route-routes";
+
 import { chatRoutes } from "./chat-routes";
 
 async function routes(app: FastifyInstance) {
@@ -77,6 +79,7 @@ async function routes(app: FastifyInstance) {
   app.register(shipperRoutes, { prefix: "/shipper" });
   app.register(occurrenceTypeRoutes, { prefix: "/occurrence-type" });
   app.register(deliveryRoutes, { prefix: "/delivery" });
+  app.register(routeRoutes, { prefix: "/route" });
   app.register(chatRoutes, { prefix: "/chat" });
   app.register(uploadRoutes, { prefix: "/uploads" });
   app.register(healthRoutes);
