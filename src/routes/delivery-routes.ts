@@ -26,6 +26,9 @@ import { ExportOccurrenceController } from "@/modules/delivery/usecases/export-o
 
 import { GetProofDocumentController } from "@/modules/delivery/usecases/get-proof-document/get-proof-document-controller";
 
+import { SaveMessageTemplateController } from "@/modules/delivery/usecases/save-message-template/save-message-template-controller";
+import { ListMessageTemplatesController } from "@/modules/delivery/usecases/list-message-templates/list-message-templates-controller";
+
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
@@ -69,6 +72,9 @@ const exportDeliveryController = new ExportDeliveryController();
 const exportOccurrenceController = new ExportOccurrenceController();
 
 const getProofDocumentController = new GetProofDocumentController();
+
+const saveMessageTemplateController = new SaveMessageTemplateController();
+const listMessageTemplatesController = new ListMessageTemplatesController();
 
 // A batch of NF-e files is bigger than any other JSON body in the API, so
 // this route (and only it) raises the limit: 25 files of up to 512 KB.
@@ -542,6 +548,58 @@ async function deliveryRoutes(app: FastifyInstance) {
       },
     },
     getProofDocumentController.handle,
+  );
+  app.get(
+    "/message-templates",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["delivery"],
+        summary: "The messages this company sends to its customers",
+        description:
+          "Responde em JSON comum, não em NDJSON: são no máximo seis (três momentos × dois canais), e um stream sobre seis linhas é maquinário em volta de uma lista que cabe numa tela.",
+        querystring: proofDocumentSchemas.listMessageTemplates,
+        response: {
+          200: proofDocumentResponses.messageTemplateList,
+          400: proofDocumentResponses.genericError,
+          403: proofDocumentResponses.genericError,
+          500: proofDocumentResponses.internalServerError,
+        },
+      },
+    },
+    listMessageTemplatesController.handle,
+  );
+
+  app.put(
+    "/message-template/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [
+        verifyBusinessActive,
+        deliveriesModule,
+        verifyPermission("delivery_manage", "write"),
+      ],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["delivery"],
+        summary: "Write what this company says at one moment, on one channel",
+        description:
+          "PUT e não POST: existe no máximo uma mensagem por empresa × momento × canal, e uma segunda faria a frase que sai depender da ordem das linhas. As variáveis são validadas AQUI, no salvamento, que é o único momento em que validá-las serve para alguma coisa — quem digitou {{motorista}} precisa descobrir no formulário, não pelo cliente recebendo uma mensagem com um vazio dias depois. Uma mensagem de WhatsApp sem {{link_descadastro}} é recusada: mensagem sem saída é denúncia de spam, e quem escreveu não é quem a Meta suspende primeiro. Sem mensagem cadastrada, NADA é enviado naquele momento — quem não escreveu não quer uma enviada em seu nome.",
+        params: proofDocumentSchemas.proofDocumentParams.pick({
+          businessId: true,
+        }),
+        body: proofDocumentSchemas.saveMessageTemplate,
+        response: {
+          200: proofDocumentResponses.messageTemplateSaved,
+          400: proofDocumentResponses.genericError,
+          403: proofDocumentResponses.genericError,
+          500: proofDocumentResponses.internalServerError,
+        },
+      },
+    },
+    saveMessageTemplateController.handle,
   );
 }
 

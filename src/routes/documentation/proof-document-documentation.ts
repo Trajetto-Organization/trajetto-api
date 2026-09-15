@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 import {
+  listDeliveryMessageTemplateSchema,
+  saveDeliveryMessageTemplateSchema,
+} from "@/schemas/delivery-message-template-schema";
+
+import {
   proofDocumentParamsSchema,
   proofDocumentQuerySchema,
   publicTokenParamsSchema,
@@ -14,6 +19,9 @@ const proofDocumentSchemas = {
   proofDocumentQuery: proofDocumentQuerySchema,
   verifyProofParams: verifyProofParamsSchema,
   publicTokenParams: publicTokenParamsSchema,
+
+  saveMessageTemplate: saveDeliveryMessageTemplateSchema,
+  listMessageTemplates: listDeliveryMessageTemplateSchema,
 };
 
 const proofDocumentResponses = {
@@ -116,6 +124,27 @@ const proofDocumentResponses = {
   }),
 
   optedOut: z.object({ message: z.string() }),
+
+  messageTemplateSaved: z.object({
+    message: z.string().default("Mensagem salva com sucesso!"),
+    data: z.object({ id: z.string() }),
+  }),
+
+  messageTemplateList: z.object({
+    message: z.string(),
+    total: z.number(),
+    data: z.array(
+      z.object({
+        id: z.string(),
+        topic: z.enum(["DISPATCHED", "DELIVERED", "FAILED"]),
+        channel: z.string(),
+        subject: z.string().nullable(),
+        body: z.string(),
+        is_active: z.boolean(),
+        businessId: z.string(),
+      }),
+    ),
+  }),
 
   genericError: z.object({ message: z.string() }),
   internalServerError: z.object({
