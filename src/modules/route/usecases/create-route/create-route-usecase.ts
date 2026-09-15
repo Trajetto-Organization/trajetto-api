@@ -11,6 +11,8 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { AppError } from "@/shared/errors/AppError";
 import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 
+import { assertDeliveriesRoutable } from "../shared/routable-deliveries";
+
 import {
   DeliveryAlreadyOnRouteError,
   RouteDriverInactiveError,
@@ -116,36 +118,9 @@ class CreateRouteUseCase {
     if (uniqueIds.length > 0) {
       const deliveries = await this.delivery.findDeliveriesByIds(uniqueIds);
 
-      if (deliveries.length !== uniqueIds.length) {
-        throw new AppError(
-          "Uma das entregas não foi encontrada.",
-          404,
-          "DELIVERY_NOT_FOUND",
-        );
-      }
-
-      if (deliveries.some((entry) => entry.businessId !== businessId)) {
-        throw new AppError(
-          "Uma das entregas não pertence à empresa informada.",
-          403,
-          "DELIVERY_NOT_BELONG_BUSINESS",
-        );
-      }
-
-      // All-or-nothing, with the offenders named: the dispatcher fixes the
-      // selection instead of hunting for what half-succeeded.
-      const blocked = deliveries.filter((entry) => entry.status !== "PENDING");
-
-      if (blocked.length > 0) {
-        throw new AppError(
-          "Só é possível montar rota com entregas pendentes: " +
-            blocked
-              .map((entry) => entry.code ?? entry.recipient_name)
-              .join(", "),
-          400,
-          "DELIVERY_NOT_ROUTABLE",
-        );
-      }
+      // Shared with add-route-stops: the same question at two moments, and two
+      // copies of it would drift the first time one learned a new status.
+      assertDeliveriesRoutable(deliveries, uniqueIds, businessId);
     }
 
     try {

@@ -38,6 +38,23 @@ const listInclude = {
   vehicle: { select: { id: true, license_plate: true } },
 } as const;
 
+/**
+ * The batch departure only ever touches deliveries that are NOT on a route.
+ *
+ * A delivery sitting on a PLANNED route already carries the driver's id — that
+ * is the route's shadow, written the moment the dispatcher built it. Without
+ * this filter one tap on the app's old "iniciar rota" would drag tomorrow's
+ * plan onto the street, a route the dispatcher never released, and the route
+ * itself would still read PLANNED with its load already in transit.
+ *
+ * A delivery that belongs to a route leaves WITH that route, through the
+ * route's own departure. This is what keeps the two dispatch models — batch
+ * assignment and routes — from writing over each other while both exist.
+ */
+const NOT_ON_A_ROUTE: Prisma.DeliveryWhereInput = {
+  stops: { none: { status: { in: ["PENDING", "ARRIVED"] } } },
+};
+
 class DeliveryRepository implements IDeliveryRepository {
   constructor(private prisma = database) {}
 
@@ -600,7 +617,7 @@ class DeliveryRepository implements IDeliveryRepository {
     driverId: string,
   ): Promise<number> {
     return this.prisma.delivery.count({
-      where: { businessId, driverId, status: "PENDING" },
+      where: { businessId, driverId, status: "PENDING", ...NOT_ON_A_ROUTE },
     });
   }
 
@@ -610,7 +627,7 @@ class DeliveryRepository implements IDeliveryRepository {
   ): Promise<number> {
     // Naturally idempotent: a resend finds nothing left to move.
     const result = await this.prisma.delivery.updateMany({
-      where: { businessId, driverId, status: "PENDING" },
+      where: { businessId, driverId, status: "PENDING", ...NOT_ON_A_ROUTE },
       data: { status: "IN_TRANSIT" },
     });
 

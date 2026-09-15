@@ -41,6 +41,25 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
   public occurrenceTypeBlocking = new Map<string, boolean>();
   public driverDirectory = new Map<string, { name: string; cnh: string }>();
 
+  /**
+   * The route stops, as the real `where` sees them.
+   *
+   * The batch departure must not touch a delivery that belongs to a route —
+   * that one leaves with its route. In Postgres that is a relation filter; here
+   * a test hands over the route fake's own array, so the two fakes see one set
+   * of stops. Empty by default, which is the truth for every test that has no
+   * routes at all.
+   */
+  public routeStops: Array<{ deliveryId: string; status: string }> = [];
+
+  private onAnOpenStop(deliveryId?: string): boolean {
+    return this.routeStops.some(
+      (stop) =>
+        stop.deliveryId === deliveryId &&
+        (stop.status === "PENDING" || stop.status === "ARRIVED"),
+    );
+  }
+
   async createDelivery(deliveryData: CreateDeliveryProps): Promise<Delivery> {
     const { items: _items, ...delivery } = deliveryData;
 
@@ -420,7 +439,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       (delivery) =>
         delivery.businessId === businessId &&
         delivery.driverId === driverId &&
-        delivery.status === "PENDING",
+        delivery.status === "PENDING" &&
+        !this.onAnOpenStop(delivery.id),
     ).length;
   }
 
@@ -432,7 +452,10 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       (delivery) =>
         delivery.businessId === businessId &&
         delivery.driverId === driverId &&
-        delivery.status === "PENDING",
+        delivery.status === "PENDING" &&
+        // A delivery on a route leaves with that route. Without this the old
+        // batch departure would drag an unreleased plan onto the street.
+        !this.onAnOpenStop(delivery.id),
     );
 
     for (const delivery of pending) {

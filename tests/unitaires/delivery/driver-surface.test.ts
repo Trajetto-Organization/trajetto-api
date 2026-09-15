@@ -8,6 +8,8 @@ import { RegisterDeliveryProofUseCase } from "@/modules/delivery/usecases/regist
 
 import { ReportDeliveryOccurrenceUseCase } from "@/modules/delivery/usecases/report-delivery-occurrence/report-delivery-occurrence-usecase";
 
+import { StartRouteUseCase } from "@/modules/route/usecases/start-route/start-route-usecase";
+
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
@@ -68,6 +70,11 @@ function makeRepositories() {
   const occurrenceTypeRepository = new InMemoryOccurrenceTypeRepository();
   const vehicleRepository = new InMemoryVehicleRepository();
   const routeRepository = new InMemoryRouteRepository();
+
+  // One set of stops between the two fakes, as in Postgres. It stays empty in
+  // this file — which is the truth for these tests: the driver surface they
+  // exercise is the batch path, with no route behind it.
+  deliveryRepository.routeStops = routeRepository.stops;
 
   // The default driver owns a vehicle, which is the ordinary case: the tests
   // that care about the guard take it away instead of adding one.
@@ -209,6 +216,13 @@ function makeStartRoute(repos: ReturnType<typeof makeRepositories>) {
     repos.userRepository,
     repos.deliveryRepository,
     repos.vehicleRepository,
+    repos.routeRepository,
+    new StartRouteUseCase(
+      repos.routeRepository,
+      repos.userRepository,
+      repos.vehicleRepository,
+      notificationStub,
+    ),
     notificationStub,
   );
 }

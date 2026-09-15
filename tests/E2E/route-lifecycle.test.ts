@@ -3,6 +3,7 @@ import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
+import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { DeliveryAlreadyOnRouteError } from "@/modules/route/usecases/errors/route-errors";
 
 /**
@@ -20,6 +21,7 @@ import { DeliveryAlreadyOnRouteError } from "@/modules/route/usecases/errors/rou
  */
 const prisma = new PrismaClient();
 const repository = new RouteRepository(prisma);
+const deliveries = new DeliveryRepository(prisma);
 
 const CARRIER = "biz-lifecycle";
 const DRIVER = "drv-lifecycle";
@@ -454,5 +456,75 @@ describe("one open stop per delivery", () => {
 
     expect(success.routeId).toBe(secondRoute);
     expect(success.status).toBe("COMPLETED");
+  });
+});
+
+describe("the batch departure and the route, side by side", () => {
+  /**
+   * Two dispatch models coexist while the app migrates: deliveries assigned in
+   * a batch, and deliveries on a route. The batch departure matches on
+   * `driverId` — and a delivery sitting on a PLANNED route already carries it,
+   * because that is the route's shadow, written when the dispatcher built it.
+   *
+   * The relation filter that keeps them apart is a Prisma `stops: { none: … }`
+   * and exists nowhere else, so this is the only place it can be proven.
+   */
+  it("leaves a planned route's load alone", async () => {
+    const planned = await seedDelivery();
+
+    const route = await repository.createRoute({
+      businessId: CARRIER,
+      driverId: DRIVER,
+      vehicleId: await seedVehicle(),
+      scheduled_date: new Date(),
+      deliveryIds: [planned],
+    });
+
+    expect((await deliveryRow(planned)).driverId).toBe(DRIVER);
+
+    // What the old endpoint would have swept up.
+    expect(await deliveries.countPendingForDriver(CARRIER, DRIVER)).toBe(0);
+    expect(await deliveries.startDriverRoute(CARRIER, DRIVER)).toBe(0);
+
+    // Still planned, still in the yard.
+    const row = await prisma.route.findUniqueOrThrow({ where: { id: route.id } });
+
+    expect(row.status).toBe("PLANNED");
+    expect((await deliveryRow(planned)).status).toBe("PENDING");
+  });
+
+  it("still moves a delivery assigned by hand", async () => {
+    // Batch assignment has not gone away, and the filter must not swallow it.
+    const loose = await seedDelivery();
+
+    await prisma.delivery.update({
+      where: { id: loose },
+      data: { driverId: DRIVER },
+    });
+
+    expect(await deliveries.countPendingForDriver(CARRIER, DRIVER)).toBe(1);
+    expect(await deliveries.startDriverRoute(CARRIER, DRIVER)).toBe(1);
+    expect((await deliveryRow(loose)).status).toBe("IN_TRANSIT");
+  });
+
+  it("stops matching a delivery once its attempt is closed", async () => {
+    // A stop that FAILED no longer reserves its delivery — neither for a new
+    // route nor for the batch. The filter asks about OPEN stops only.
+    const delivery = await seedDelivery();
+
+    await runningRoute([delivery]);
+
+    await repository.settleStopForDelivery(delivery, CARRIER, {
+      from: ["PENDING", "ARRIVED"],
+      status: "FAILED",
+      completed_at: new Date(),
+    });
+
+    await prisma.delivery.update({
+      where: { id: delivery },
+      data: { status: "PENDING", driverId: DRIVER },
+    });
+
+    expect(await deliveries.countPendingForDriver(CARRIER, DRIVER)).toBe(1);
   });
 });

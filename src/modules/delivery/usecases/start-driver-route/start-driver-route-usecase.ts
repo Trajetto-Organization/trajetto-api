@@ -3,6 +3,10 @@ import { inject, injectable } from "tsyringe";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
 import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
+import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+
+import { StartRouteUseCase } from "@/modules/route/usecases/start-route/start-route-usecase";
+import { isStopOpen } from "@/shared/route/route-rules";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
@@ -20,19 +24,34 @@ interface StartDriverRouteResult {
 }
 
 /**
- * One tap in the app moves every delivery designated to the driver from
- * PENDING to IN_TRANSIT — the dispatch reality is that the load leaves as a
- * block. Naturally idempotent: an outbox resend finds nothing left to move
- * and succeeds with started = 0.
+ * The departure, as the driver's app has always asked for it.
  *
- * A load never leaves with no vehicle behind it. Note this is a stricter rule
- * than the rest of the platform applies today: the other five vehicle guards
- * ask "is THIS vehicle yours", which only bites once a vehicle was chosen.
- * Here there is nothing to choose from yet, so the question is whether the
- * driver has one at all — and an operation that runs a shared pool, never
- * linking a vehicle to a driver, would be refused by this. Relaxing it is the
- * `if` below and nothing else. Choosing the vehicle at departure is the real
- * answer and belongs to the route entity, not here.
+ * This endpoint is now an ADAPTER, and stays one deliberately: phones in the
+ * field have queued submissions pointing at it, some of them from before the
+ * route existed, and deleting it would turn a day of collected work into
+ * permanent failures on drivers' screens. The app can migrate to
+ * `POST /routes/:routeId/start` at its own pace.
+ *
+ * Two dispatch models coexist while that happens, so the order below matters:
+ *
+ *  - The driver has a route. It is the thing that starts; delegating to
+ *    start-route gets the stop bookkeeping, the vehicle swap, the R6 index and
+ *    the mirroring for free, and there is exactly one departure in the system.
+ *
+ *  - The driver has no route, only deliveries assigned in a batch. The old
+ *    path, unchanged — except that it can no longer touch a delivery which
+ *    belongs to a route (see NOT_ON_A_ROUTE in the repository). Without that
+ *    filter this tap would drag an unreleased plan onto the street.
+ *
+ * Idempotent either way: a resend finds the route already IN_PROGRESS, or
+ * finds nothing left to move, and succeeds with started = 0.
+ *
+ * On the legacy path a load never leaves with no vehicle behind it. That is a
+ * stricter rule than the rest of the platform applies: the other vehicle
+ * guards ask "is THIS vehicle yours", which only bites once one was chosen,
+ * and here there is nothing to choose from yet. An operation running a shared
+ * pool would be refused by it. Choosing the vehicle at departure is the real
+ * answer, and it is what the route path does.
  */
 @injectable()
 class StartDriverRouteUseCase {
@@ -43,6 +62,9 @@ class StartDriverRouteUseCase {
     private delivery: IDeliveryRepository,
     @inject("VehicleRepository")
     private vehicle: IVehicleRepository,
+    @inject("RouteRepository")
+    private route: IRouteRepository,
+    private startRoute: StartRouteUseCase,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -63,6 +85,36 @@ class StartDriverRouteUseCase {
         403,
         "DRIVER_ONLY",
       );
+    }
+
+    // The route comes first, and before the "nothing to do" check below: a
+    // driver whose whole day is one released route has no loose PENDING
+    // deliveries at all, so that check would answer "nothing to start" over a
+    // route sitting right there waiting to leave.
+    const findRoute = await this.route.findDriverRoute(
+      businessId,
+      findUser.driverId,
+    );
+
+    if (findRoute) {
+      // Already out. This is the resend, and it must not be an error: the app
+      // classifies a 4xx as permanent and would park a departure that did
+      // happen on the pending screen.
+      if (findRoute.status === "IN_PROGRESS") {
+        return { started: 0 };
+      }
+
+      await this.startRoute.execute({
+        userId,
+        businessId,
+        routeId: findRoute.id,
+      });
+
+      // What the app shows on the toast: how many addresses it just took on.
+      return {
+        started: findRoute.stops.filter((stop) => isStopOpen(stop.status))
+          .length,
+      };
     }
 
     // The vehicle guard below belongs to the DEPARTURE, so nothing that is not

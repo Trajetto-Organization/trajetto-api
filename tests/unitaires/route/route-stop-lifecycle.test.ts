@@ -9,6 +9,7 @@ import { RegisterDeliveryArrivalUseCase } from "@/modules/delivery/usecases/regi
 import { RegisterDeliveryProofUseCase } from "@/modules/delivery/usecases/register-delivery-proof/register-delivery-proof-usecase";
 import { ReportDeliveryOccurrenceUseCase } from "@/modules/delivery/usecases/report-delivery-occurrence/report-delivery-occurrence-usecase";
 import { UpdateDeliveryStatusUseCase } from "@/modules/delivery/usecases/update-delivery-status/update-delivery-status-usecase";
+import { StartDriverRouteUseCase } from "@/modules/delivery/usecases/start-driver-route/start-driver-route-usecase";
 
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
@@ -82,10 +83,12 @@ const outbox = { publish: async () => undefined } as unknown as OutboxService;
 function makeContext() {
   const deliveryRepository = new InMemoryDeliveryRepository();
 
-  // One store, shared. See the file docblock.
+  // One store, shared, in both directions. See the file docblock.
   const routeRepository = new InMemoryRouteRepository(
     deliveryRepository.deliveries,
   );
+
+  deliveryRepository.routeStops = routeRepository.stops;
 
   const driverRepository = new InMemoryDriverRepository();
   const vehicleRepository = new InMemoryVehicleRepository();
@@ -130,6 +133,7 @@ function makeContext() {
     license_plate: "AAA1A11",
     status: "ACTIVE",
     businessId: A,
+    driverId: DRIVER_A,
   } as Vehicle);
 
   occurrenceTypeRepository.occurrenceTypes.push(
@@ -203,6 +207,28 @@ function makeContext() {
       userRepository,
       deliveryRepository,
       routeRepository,
+      notificationService,
+    ),
+
+    /** Takes the driver's truck away, for the guard that asks about one. */
+    unlinkVehicleFromDriver: () => {
+      for (const vehicle of vehicleRepository.vehicles) {
+        vehicle.driverId = null;
+      }
+    },
+
+    // The endpoint the phones in the field still call.
+    legacyStart: new StartDriverRouteUseCase(
+      userRepository,
+      deliveryRepository,
+      vehicleRepository,
+      routeRepository,
+      new StartRouteUseCase(
+        routeRepository,
+        userRepository,
+        vehicleRepository,
+        notificationService,
+      ),
       notificationService,
     ),
   };
@@ -788,5 +814,144 @@ describe("the other carrier at the moment of settlement", () => {
 
     expect(stopFor(delivery)[0].status).toBe("PENDING");
     expect(routeFor(route).status).toBe("IN_PROGRESS");
+  });
+});
+
+describe("the departure endpoint the phones already have", () => {
+  /**
+   * `POST /start-route/:businessId` predates the route entity. Queued
+   * submissions in the field still point at it, so it stays — as an adapter.
+   * What it must never do is become a second, competing departure.
+   */
+  it("starts the driver's released route instead of a loose batch", async () => {
+    const first = await seedDelivery(A, "Cliente A");
+    const second = await seedDelivery(A, "Cliente B");
+
+    const route = await context.create.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      driverId: DRIVER_A,
+      vehicleId: VEHICLE_A,
+      scheduled_date: TODAY,
+      deliveryIds: [first, second],
+    });
+
+    await context.release.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route.id,
+    });
+
+    const result = await context.legacyStart.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+    });
+
+    // The ROUTE started — not a batch of deliveries that happen to share a
+    // driver. One departure in the system, whichever door was used.
+    expect(routeFor(route.id).status).toBe("IN_PROGRESS");
+    expect(routeFor(route.id).started_at).not.toBeNull();
+    expect(result.started).toBe(2);
+    expect(deliveryFor(first).status).toBe("IN_TRANSIT");
+  });
+
+  it("answers started = 0 on the resend rather than failing", async () => {
+    const delivery = await seedDelivery();
+    const routeId = await runningRoute([delivery]);
+
+    // The app classifies a 4xx as permanent and would park a departure that
+    // did happen on the pending screen.
+    const result = await context.legacyStart.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+    });
+
+    expect(result.started).toBe(0);
+    expect(routeFor(routeId).status).toBe("IN_PROGRESS");
+  });
+
+  it("refuses to dispatch a route the dispatcher never released", async () => {
+    // The hazard of the two models coexisting: a delivery on a PLANNED route
+    // already carries the driver's id, because that is the route's shadow. The
+    // old batch matched on exactly that, so one tap would have put tomorrow's
+    // plan on the street with the route still reading PLANNED.
+    const delivery = await seedDelivery();
+
+    const route = await context.create.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      driverId: DRIVER_A,
+      vehicleId: VEHICLE_A,
+      scheduled_date: TODAY,
+      deliveryIds: [delivery],
+    });
+
+    const result = await context.legacyStart.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+    });
+
+    expect(result.started).toBe(0);
+    expect(routeFor(route.id).status).toBe("PLANNED");
+    expect(deliveryFor(delivery).status).toBe("PENDING");
+  });
+
+  it("does not blame a missing vehicle for a route that is merely planned", async () => {
+    // The vehicle guard sits behind a "is there anything to start" check, and
+    // that check counts PENDING deliveries. If it counted the ones sitting on
+    // a planned route, a driver with no vehicle linked to their profile would
+    // be told "Nenhum veículo vinculado ao seu perfil" — over a route that was
+    // never released and that they were never supposed to start.
+    const delivery = await seedDelivery();
+
+    await context.create.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      driverId: DRIVER_A,
+      vehicleId: VEHICLE_A,
+      scheduled_date: TODAY,
+      deliveryIds: [delivery],
+    });
+
+    // Take the truck away: nothing links this driver to a vehicle any more.
+    context.unlinkVehicleFromDriver();
+
+    const result = await context.legacyStart.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+    });
+
+    expect(result.started).toBe(0);
+    expect(deliveryFor(delivery).status).toBe("PENDING");
+  });
+
+  it("still moves loose deliveries, and only those", async () => {
+    // Batch assignment has not gone away, and a driver can legitimately have
+    // both: a route for the morning and a couple of drops added by hand.
+    const onRoute = await seedDelivery(A, "Na rota");
+    const loose = await seedDelivery(A, "Avulsa");
+
+    const route = await context.create.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      driverId: DRIVER_A,
+      vehicleId: VEHICLE_A,
+      scheduled_date: TODAY,
+      deliveryIds: [onRoute],
+    });
+
+    deliveryFor(loose).driverId = DRIVER_A;
+
+    const result = await context.legacyStart.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+    });
+
+    expect(result.started).toBe(1);
+    expect(deliveryFor(loose).status).toBe("IN_TRANSIT");
+
+    // The planned route is untouched: it leaves when it is released.
+    expect(deliveryFor(onRoute).status).toBe("PENDING");
+    expect(routeFor(route.id).status).toBe("PLANNED");
   });
 });

@@ -451,7 +451,10 @@ class InMemoryRouteRepository implements IRouteRepository {
       throw new RouteStopNotFoundError();
     }
 
-    this.stops = this.stops.filter((entry) => entry.id !== stopId);
+    // Spliced, not reassigned: a test may be holding this exact array as
+    // the delivery fake's view of the stops, and swapping it for a new one
+    // would silently disconnect the two.
+    this.stops.splice(this.stops.indexOf(stop), 1);
 
     const delivery = this.deliveries.find(
       (entry) => entry.id === stop.deliveryId && entry.businessId === businessId,
