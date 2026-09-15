@@ -253,6 +253,20 @@ async function userRoutes(app: FastifyInstance) {
   app.post(
     "/refresh-token",
     {
+      /**
+       * Anonymous route, so it needs a cap of its own.
+       *
+       * There is no `ensureAuthenticated` here — by design, since the whole
+       * point is to run when the access token has expired — which means the
+       * only limit standing in front of it was the global 300/minute, and
+       * `clientRateLimitKey` falls back to the client address for anyone
+       * without a session. A client that is behaving refreshes a couple of
+       * times a minute at most; 10 leaves room for several tabs and still
+       * turns a refresh-token guessing loop into something measured in years.
+       */
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
       schema: {
         tags: ["user"],
         summary: "Refresh authentication token",

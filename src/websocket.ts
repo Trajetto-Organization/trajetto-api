@@ -26,6 +26,17 @@ import {
 } from "@/modules/chat/usecases/shared/chat-access-rules";
 
 import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
+import {
+  HANDSHAKES_PER_ADDRESS,
+  HANDSHAKES_PER_USER,
+  addressHandshakeKey,
+  createHandshakeLimiter,
+  handshakeAddress,
+  unlimitedHandshakes,
+  userHandshakeKey,
+  type HandshakeLimiter,
+} from "@/shared/socket/handshake-rate-limit";
+import type { TrustedProxyMode } from "@/config/rate-limit";
 import { env } from "./env";
 
 import database from "@/../infra/database";
@@ -41,6 +52,16 @@ let io: SocketIOServer | null = null;
 // the client — we don't want to contaminate the main connection used in other
 // points (health check, rate-limit, etc.).
 let adapterPubClient: Redis | null = null;
+
+/**
+ * Its own connection, not the adapter's.
+ *
+ * The pub client belongs to socket.io and the sub client is blocked on
+ * subscribe; borrowing either for counters would interleave the limiter
+ * with the event bus the product runs on.
+ */
+let handshakeRedis: Redis | null = null;
+let handshakeLimiter: HandshakeLimiter = unlimitedHandshakes;
 let adapterSubClient: Redis | null = null;
 
 function socketAuthenticationError(message: string, code: string): Error {
@@ -128,9 +149,67 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     }
   }
 
+  /**
+   * The counters for the handshake limiter.
+   *
+   * Fail-fast options and no offline queue, so a Redis outage turns into an
+   * immediate error the limiter swallows — it fails open — rather than a
+   * connection attempt that hangs waiting for a counter.
+   */
+  try {
+    handshakeRedis = new Redis(env.REDIS_URL, {
+      connectionName: "trajetto-socket-handshake",
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+      lazyConnect: false,
+    });
+
+    attachRedisConnectionLog(handshakeRedis, "socket.io/handshake");
+
+    handshakeLimiter = createHandshakeLimiter(handshakeRedis);
+  } catch {
+    // Without counters the handshake still works; it is simply not capped.
+    handshakeLimiter = unlimitedHandshakes;
+  }
+
+  const trustedProxy = (env.RATE_LIMIT_TRUSTED_PROXY ??
+    "none") as TrustedProxyMode;
+
   // Authentication Middleware for Socket.IO
   io.use(async (socket, next) => {
     try {
+      /**
+       * Counted by address BEFORE anything else.
+       *
+       * Socket.IO answers `/socket.io/` before Fastify ever sees the request,
+       * so no HTTP limiter applied to a connection attempt. This one bounds
+       * the churn a caller with no token at all can cause.
+       */
+      const address = handshakeAddress(
+        {
+          address: socket.handshake.address,
+          headers: socket.handshake.headers as Record<
+            string,
+            string | string[] | undefined
+          >,
+        },
+        trustedProxy,
+      );
+
+      if (
+        !(await handshakeLimiter.allow(
+          addressHandshakeKey(address),
+          HANDSHAKES_PER_ADDRESS,
+        ))
+      ) {
+        return next(
+          socketAuthenticationError(
+            "Muitas tentativas de conexao. Tente novamente em instantes.",
+            "SOCKET_RATE_LIMITED",
+          ),
+        );
+      }
+
       const token = socket.handshake.auth.token;
 
       if (!token) {
@@ -154,6 +233,29 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       }
 
       const userId = payload.sub;
+
+      /**
+       * Counted by user before the queries start.
+       *
+       * From here the handshake costs three round trips — the user, the
+       * driver eligibility and the refresh-token family. That is the work a
+       * caller holding one valid token could ask for in a loop, and the
+       * address budget above does not bound it: the same account reconnecting
+       * from many places is many addresses.
+       */
+      if (
+        !(await handshakeLimiter.allow(
+          userHandshakeKey(userId),
+          HANDSHAKES_PER_USER,
+        ))
+      ) {
+        return next(
+          socketAuthenticationError(
+            "Muitas tentativas de conexao. Tente novamente em instantes.",
+            "SOCKET_RATE_LIMITED",
+          ),
+        );
+      }
 
       // Check if user exists
       const userRepository = new UserRepository();
@@ -922,11 +1024,14 @@ async function shutdownSocketIO(): Promise<void> {
   try {
     await adapterPubClient?.quit();
     await adapterSubClient?.quit();
+    await handshakeRedis?.quit();
   } catch {
     // Best-effort no shutdown — does not interfere with shutdown due to a quit error.
   } finally {
     adapterPubClient = null;
     adapterSubClient = null;
+    handshakeRedis = null;
+    handshakeLimiter = unlimitedHandshakes;
   }
 }
 
