@@ -19,7 +19,7 @@ predicado errado num desses crons era irreversível.
 | | |
 |---|---|
 | **RPO** | A idade do último dump. Com execução diária, até 24 h de perda. |
-| **RTO** | Medido, não estimado: ver a seção "Resultado do ensaio". |
+| **RTO** | Medido, não estimado: 10,5 s para 94 MB — ver "Segundo ensaio". |
 | **PITR** | **Não existe.** Recuperação para um instante exato exige WAL archiving, que é mudança no serviço de produção. Registrado como follow-up. |
 | **Arquivos (R2)** | **Fora deste procedimento.** Ver "O que o dump não cobre". |
 
@@ -104,6 +104,58 @@ rápido, não que a produção restaura em 2 segundos — o tempo de `pg_restore
 cresce com o volume, e a parte lenta de um restore grande é a recriação dos
 índices, não a cópia dos dados. O ensaio deve ser repetido contra um dump real
 de produção para que o RTO signifique alguma coisa.
+
+## Segundo ensaio — 15/09/2026, com volume e com a aplicação
+
+O ensaio de 14/09 parou onde `pg_restore` termina. Restaurar um schema e
+conferir que os índices existem prova que o ARQUIVO está bom; não prova que a
+aplicação sobe contra ele, nem que as telas que alguém abre às sete da manhã
+respondem. Este repete a cadeia inteira, sobre o banco de carga — 94 MB, com as
+158.920 posições de motorista e as 10.000 entregas que o soak deixou.
+
+```
+Origem     load_test, 94 MB, 36 partições de driver_position, 87 migrations
+Backup     4.351.135 bytes em 1,5 s  (custom -Fc, comprimido)
+Restore    10,5 s                    (pg_restore --exit-on-error → 0)
+Paridade   prisma migrate deploy → "No pending migrations to apply"
+Startup    API sobe, /health = healthy, latência do banco 2 ms
+Consulta   torre 351 ms · lista de entregas 316 ms · dashboard 360 ms
+Fluxo      k6 smoke, 11 superfícies, 12/12 verdes — inclusive a ESCRITA
+```
+
+Os cinco estágios que o §74 pede, executados em ordem, sem pular nenhum.
+
+### O que este ensaio acrescenta ao anterior
+
+- **RTO com significado.** Os 2 s de 14/09 eram sobre 26 linhas e mediam o
+  procedimento, não o restore. 10,5 s sobre 94 MB ainda é pequeno, mas a forma
+  da curva agora é observável: o dump comprimido tem 4,6% do tamanho do banco,
+  e a parte lenta é a recriação dos 239 índices.
+- **A aplicação sobe.** Nada garantia isso: o dump podia estar íntegro e o
+  Prisma ainda recusar por divergência de schema, ou um enum faltando, ou a
+  extensão no schema errado. Sobe, e `/health` reporta o banco saudável.
+- **As escritas funcionam.** O smoke inclui o ingest de posições, que é
+  INSERT em lote numa tabela particionada: `driver_position` saiu de 158.920
+  para 158.924. Sequências, constraints e roteamento de partição vieram no
+  dump.
+- **Os índices que o Prisma não declara sobreviveram** — os cinco em SQL cru,
+  incluindo os dois do caminho de DELETE do chat criados no mesmo dia.
+- **`pg_trgm` veio junto**, na partição pública.
+
+### Os 350 ms das consultas
+
+São de banco frio, logo após o restore: nenhum plano em cache, nenhuma página
+em `shared_buffers`. As mesmas consultas no banco quente da mesma máquina
+respondem em 12 a 25 ms. O número que importa aqui não é a latência, é o 200 —
+um sistema recém-restaurado responde às três telas que a operação abre
+primeiro. A latência normaliza sozinha conforme o cache enche.
+
+### O que este ensaio continua sem provar
+
+O mesmo de antes, e vale repetir para ninguém assumir mais: isto é um dump
+LÓGICO restaurado noutra máquina da mesma versão. Não é PITR, não cobre o
+bucket R2 (ver abaixo), e o tempo cresce com o volume — um banco de produção
+com anos de histórico não restaura em dez segundos.
 
 ## O que o dump não cobre
 
