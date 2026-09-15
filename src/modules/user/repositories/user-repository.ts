@@ -1,4 +1,9 @@
 import database from "@/../infra/database";
+
+import {
+  forgetRequestCache,
+  remember,
+} from "@/shared/http/request-context";
 import { Prisma } from "@prisma/client";
 
 import { IUserRepository } from "./IUser-repository";
@@ -36,6 +41,11 @@ class UserRepository implements IUserRepository {
     businessId,
     driverId,
   }: CreateUserProps): Promise<User> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const userCreated = await this.prisma.user.create({
       data: {
         email,
@@ -177,6 +187,11 @@ class UserRepository implements IUserRepository {
     email,
     email_verified,
   }: UpdateUserEmailVerification): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedEmailVerification = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -193,6 +208,11 @@ class UserRepository implements IUserRepository {
     { userId, userData }: UpdateUser,
     tx?: Prisma.TransactionClient,
   ): Promise<User> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     // Extract relation fields that need Prisma-specific translation
     const {
       businessId,
@@ -252,6 +272,11 @@ class UserRepository implements IUserRepository {
   }
 
   async deleteUser(userId: string): Promise<User> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const deletedUser = await this.prisma.user.delete({
       where: { id: userId },
     });
@@ -326,7 +351,27 @@ class UserRepository implements IUserRepository {
     return user;
   }
 
+  /**
+   * The session lookup, answered once per request instead of twice.
+   *
+   * `ensureAuthenticated` loads the user to decide whether the session is
+   * real, and then every use case loads it again because use cases take a
+   * `userId` and look it up themselves. With the relations this carries that
+   * is three queries, on every authenticated request in the product — 600 a
+   * second at the measured saturation point, answering a question that was
+   * answered a millisecond earlier.
+   *
+   * Memoised per REQUEST, never per process: a process-wide cache would mean
+   * somebody revoking an access profile and the next N seconds of traffic
+   * still seeing the old permissions. Inside one request the user cannot
+   * change under itself — except by that same request writing to it, and
+   * every write here calls `forgetRequestCache`.
+   */
   async findUserById(userId: string): Promise<User | null> {
+    return remember(`user:${userId}`, () => this.loadUserById(userId));
+  }
+
+  private async loadUserById(userId: string): Promise<User | null> {
     const findUserById = await this.prisma.user.findUnique({
       where: {
         id: userId,
@@ -383,6 +428,11 @@ class UserRepository implements IUserRepository {
     userId,
     password,
   }: UpdateUserPassword): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedUserPassword = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -396,6 +446,11 @@ class UserRepository implements IUserRepository {
   }
 
   async updateUserName({ userId, name }: UpdateUserName): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedUserName = await this.prisma.user.update({
       where: { id: userId },
       data: { name },
@@ -408,6 +463,11 @@ class UserRepository implements IUserRepository {
     userId,
     isTwoFactorEnabled,
   }: UpdateTwoFactorAuthentication): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedTwoFactorAuthentication = await this.prisma.user.update({
       where: { id: userId },
       data: { two_factor_enabled: isTwoFactorEnabled },
@@ -420,6 +480,11 @@ class UserRepository implements IUserRepository {
     userId,
     isAccessRevoke,
   }: UpdateUserAccessRevocation): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updateUserAccessRevocation = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -433,6 +498,11 @@ class UserRepository implements IUserRepository {
   }
 
   async invalidateUserSessions(userId: string): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     return this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -447,6 +517,11 @@ class UserRepository implements IUserRepository {
     whatsapp_notifications_enabled,
     whatsapp_phone,
   }: UpdateUserWhatsAppSettings): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedWhatsAppSettings = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -550,6 +625,11 @@ class UserRepository implements IUserRepository {
     userId: string,
     avatarPath: string | null,
   ): Promise<User | null> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const updatedUser = await this.prisma.user.update({
       where: { id: userId },
       data: { avatar: avatarPath },
@@ -564,6 +644,11 @@ class UserRepository implements IUserRepository {
     password,
   }: CreateMasterUserProps,
   tx?: Prisma.TransactionClient): Promise<User> {
+    // Anything cached for this request describes the row before this
+    // write. Kept, it would be read back by the next lookup in the
+    // same request and reported as the current state.
+    forgetRequestCache();
+
     const masterUser = await (tx ?? this.prisma).user.create({
       data: {
         name,

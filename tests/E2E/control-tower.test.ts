@@ -194,6 +194,7 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(async () => {
+  await prisma.driverLastPosition.deleteMany({ where: { businessId: CARRIER } });
   await prisma.driverPosition.deleteMany({ where: { businessId: CARRIER } });
   await prisma.routeStop.deleteMany({});
   await prisma.route.deleteMany({ where: { businessId: CARRIER } });
@@ -216,6 +217,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  await prisma.driverLastPosition.deleteMany({});
   await prisma.driverPosition.deleteMany({});
   await prisma.routeStop.deleteMany({});
   await prisma.route.deleteMany({});
@@ -473,7 +475,7 @@ describe("one company's trucks are not another's", () => {
     await post("/route/positions", driverToken, { pings: pings(2) });
 
     // Written straight into the table, as a second carrier's phone would.
-    await prisma.driverPosition.create({
+    await prisma.driverLastPosition.create({
       data: {
         driverId: OTHER_DRIVER,
         businessId: OTHER,
@@ -637,5 +639,105 @@ describe("keeping the partitions ahead of the trucks", () => {
     // And today survives. A retention job that took the live day with it
     // would be the worst possible bug in this file.
     expect(after).toContain(nameFor(0));
+  });
+});
+
+describe("where the driver IS, apart from where they have been", () => {
+  async function lastPosition() {
+    return prisma.driverLastPosition.findUnique({ where: { driverId: DRIVER } });
+  }
+
+  it("keeps one row per driver, however many pings arrive", async () => {
+    await post("/route/positions", driverToken, { pings: pings(40) });
+    await post("/route/positions", driverToken, { pings: pings(40) });
+
+    // Eighty points of history, one dot on the map. The `DISTINCT ON` this
+    // replaced scanned all eighty — and at the reference scale, 2,4 million an
+    // hour — to produce exactly this.
+    expect(
+      await prisma.driverLastPosition.count({ where: { businessId: CARRIER } }),
+    ).toBe(1);
+
+    expect(
+      await prisma.driverPosition.count({ where: { businessId: CARRIER } }),
+    ).toBe(80);
+  });
+
+  it("holds the newest point of the batch", async () => {
+    const batch = pings(10);
+
+    await post("/route/positions", driverToken, { pings: batch });
+
+    const stored = await lastPosition();
+
+    expect(stored?.recorded_at.toISOString()).toBe(
+      batch[batch.length - 1].recorded_at,
+    );
+  });
+
+  it("does not move the dot backwards for a late backlog", async () => {
+    // A phone comes out of a dead zone and flushes points that are all OLDER
+    // than a fix which arrived by another route in the meantime. Without the
+    // guard the dot jumps backwards, which on a map reads as a truck driving
+    // in reverse.
+    const recent = pings(1);
+
+    await post("/route/positions", driverToken, { pings: recent });
+
+    const afterRecent = await lastPosition();
+
+    const backlog = pings(5, {
+      at: new Date(Date.now() - 60 * 60 * 1000),
+    });
+
+    await post("/route/positions", driverToken, { pings: backlog });
+
+    const afterBacklog = await lastPosition();
+
+    expect(afterBacklog?.recorded_at.toISOString()).toBe(
+      afterRecent?.recorded_at.toISOString(),
+    );
+
+    // And the backlog IS kept as history — it is only the dot that does not
+    // move.
+    expect(
+      await prisma.driverPosition.count({ where: { businessId: CARRIER } }),
+    ).toBe(6);
+  });
+
+  it("moves the dot forward for a newer point", async () => {
+    await post("/route/positions", driverToken, {
+      pings: pings(1, { at: new Date(Date.now() - 30 * 60 * 1000) }),
+    });
+
+    const before = await lastPosition();
+
+    await post("/route/positions", driverToken, { pings: pings(1) });
+
+    const after = await lastPosition();
+
+    expect(
+      (after?.recorded_at.getTime() ?? 0) > (before?.recorded_at.getTime() ?? 0),
+    ).toBe(true);
+  });
+
+  it("is read by the tower, and reads by index", async () => {
+    await post("/route/positions", driverToken, { pings: pings(20) });
+
+    const plan = await prisma.$queryRawUnsafe<Array<{ "QUERY PLAN": string }>>(
+      `EXPLAIN SELECT * FROM "driver_last_position"
+         WHERE "businessId" = '${CARRIER}'
+           AND "recorded_at" >= now() - interval '12 hours'`,
+    );
+
+    const text = plan.map((row) => row["QUERY PLAN"]).join(" ");
+
+    // The assertion that makes the whole table worth having. A sequential
+    // scan here would mean the map is back to costing what the trail costs.
+    expect(text).not.toContain("Seq Scan");
+
+    const response = await get("/route/control-tower", managerToken);
+
+    expect(response.json().data.positions).toHaveLength(1);
   });
 });

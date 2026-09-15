@@ -146,6 +146,7 @@ model Business {
 
   apiKeys          ApiKey[]
   apiKeyUsage      ApiKeyUsageDaily[]
+  driverPositions  DriverLastPosition[]
   webhookEndpoints WebhookEndpoint[]
   webhookDeliveries WebhookDelivery[]
   deliveryMessageTemplates DeliveryMessageTemplate[]
@@ -489,6 +490,7 @@ model Driver {
   // listDrivers and the driver picker used by delivery, fine, fuel, checklist and chat.
   @@index([businessId, created_at])
   @@map("driver")
+  lastPosition DriverLastPosition?
 }
 
 model Vehicle {
@@ -1869,6 +1871,46 @@ model ApiKeyUsageDaily {
   @@unique([apiKeyId, day, method, route, status_class], map: "api_key_usage_daily_bucket_key")
   @@index([businessId, day(sort: Desc)])
   @@map("api_key_usage_daily")
+}
+
+/// Where each driver is NOW, apart from where they have been.
+///
+/// The tower used to read the latest row per driver out of `DriverPosition`
+/// with `DISTINCT ON`. Measured against one day of one tenant — 261.000 rows —
+/// that was a sequential scan plus a 14 MB on-disk sort, 408 ms in the
+/// database, to return forty rows. The cost grew with the number of PINGS
+/// rather than with the number of drivers, and the capacity ruler puts pings
+/// at 670 a second.
+///
+/// One row per driver, rewritten on each flush. The tower reads by index what
+/// it always wanted, and `DriverPosition` goes back to being what it always
+/// was: the trail.
+model DriverLastPosition {
+  /// The driver IS the key. There is no such thing as two current positions.
+  driver   Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  driverId String @id
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  routeId String?
+
+  latitude  Float
+  longitude Float
+
+  accuracy Float?
+  speed    Float?
+  heading  Float?
+
+  battery Int? @db.SmallInt
+
+  /// From the device, as in the trail.
+  recorded_at DateTime
+
+  updated_at DateTime @updatedAt
+
+  @@index([businessId, recorded_at(sort: Desc)])
+  @@map("driver_last_position")
 }
 
 /// Where a driver was, while a route of theirs was running.

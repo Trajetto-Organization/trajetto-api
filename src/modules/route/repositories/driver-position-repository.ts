@@ -45,29 +45,70 @@ class DriverPositionRepository implements IDriverPositionRepository {
       })),
     });
 
+    /**
+     * And the one row the map reads.
+     *
+     * The newest point of the batch, and only if it is newer than what is
+     * already stored. A phone coming out of a dead zone flushes a backlog
+     * whose LAST point may still be older than a fix that arrived by another
+     * route in the meantime — without the guard the dot would jump backwards,
+     * which on a map reads as a truck driving in reverse.
+     *
+     * Written with the same commit as the trail: the two disagreeing is a map
+     * that shows a driver somewhere their own history says they never were.
+     */
+    const latest = pings.reduce((newest, ping) =>
+      ping.recorded_at > newest.recorded_at ? ping : newest,
+    );
+
+    await this.prisma.$executeRaw`
+      INSERT INTO "driver_last_position" (
+        "driverId", "businessId", "routeId",
+        "latitude", "longitude",
+        "accuracy", "speed", "heading", "battery",
+        "recorded_at", "updated_at"
+      ) VALUES (
+        ${driverId}, ${businessId}, ${routeId},
+        ${latest.latitude}, ${latest.longitude},
+        ${latest.accuracy}, ${latest.speed}, ${latest.heading}, ${latest.battery},
+        ${latest.recorded_at}, now()
+      )
+      ON CONFLICT ("driverId") DO UPDATE SET
+        "businessId" = EXCLUDED."businessId",
+        "routeId" = EXCLUDED."routeId",
+        "latitude" = EXCLUDED."latitude",
+        "longitude" = EXCLUDED."longitude",
+        "accuracy" = EXCLUDED."accuracy",
+        "speed" = EXCLUDED."speed",
+        "heading" = EXCLUDED."heading",
+        "battery" = EXCLUDED."battery",
+        "recorded_at" = EXCLUDED."recorded_at",
+        "updated_at" = now()
+      WHERE "driver_last_position"."recorded_at" < EXCLUDED."recorded_at"
+    `;
+
     return count;
   }
 
   /**
-   * The latest row per driver, in one query.
+   * One row per driver, read by index.
    *
-   * `DISTINCT ON` rather than a window function or N queries: it is the one
-   * construct Postgres has that reads the index for
-   * `(driverId, recorded_at DESC)` and stops at the first row of each group.
-   * With thirty drivers on the street a query per driver would be thirty round
-   * trips on a screen that refreshes every few seconds.
+   * This used to be `DISTINCT ON` over the trail. Measured against one day of
+   * one tenant — 261.000 rows — that was a sequential scan of the partition
+   * plus a 14 MB on-disk sort, 408 ms in the database, to return forty rows:
+   * the cost grew with the number of PINGS rather than with the number of
+   * drivers, and the ruler puts pings at 670 a second.
    *
-   * The driver's name and the truck's plate come from a join rather than from
-   * a denormalised column on the position: a plate copied onto 864.000 rows a
-   * day is a plate that is wrong on all of them the moment somebody fixes a
-   * typo.
+   * The driver's name and the truck's plate still come from a join rather than
+   * from a denormalised column: a plate copied onto every position row is a
+   * plate that is wrong on all of them the moment somebody fixes a typo.
    */
   async listLatestByBusiness(
     businessId: string,
     since: Date,
   ): Promise<LivePosition[]> {
     return this.prisma.$queryRaw<LivePosition[]>(Prisma.sql`
-      SELECT DISTINCT ON (p."driverId")
+      SELECT
         p."driverId",
         p."routeId",
         p."latitude",
@@ -80,13 +121,13 @@ class DriverPositionRepository implements IDriverPositionRepository {
         d."name" AS "driverName",
         v."license_plate" AS "vehiclePlate",
         r."code" AS "routeCode"
-      FROM "driver_position" p
+      FROM "driver_last_position" p
       LEFT JOIN "driver" d ON d."id" = p."driverId"
       LEFT JOIN "route" r ON r."id" = p."routeId"
       LEFT JOIN "vehicle" v ON v."id" = r."vehicleId"
       WHERE p."businessId" = ${businessId}
         AND p."recorded_at" >= ${since}
-      ORDER BY p."driverId", p."recorded_at" DESC
+      ORDER BY p."recorded_at" DESC
     `);
   }
 

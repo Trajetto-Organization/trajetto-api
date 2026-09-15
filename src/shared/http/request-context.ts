@@ -6,6 +6,34 @@ interface RequestContext {
    * trusted (see `runWithRequestContext`).
    */
   publicBaseUrl?: string;
+
+  /**
+   * Rows already loaded in this request, by key.
+   *
+   * It exists for one measured problem: every authenticated request loads the
+   * full user TWICE. Once in `ensureAuthenticated`, to decide whether the
+   * session is real, and once again inside the use case, because use cases
+   * take a `userId` and look it up themselves. With the business, its
+   * entitlements and the profile's permissions riding along, that is three
+   * queries — on every request in the product. At the measured saturation
+   * point of ~195 requests a second that is ~600 queries a second answering a
+   * question that was answered a millisecond earlier.
+   *
+   * The obvious fix — hand the user down from the middleware — would change
+   * the signature of every use case in the product and tie them to Fastify,
+   * which is exactly what the plain `userId` argument exists to avoid. So the
+   * memory goes UNDER the repository, and every caller stays as it was.
+   *
+   * Scoped to the request and never to the process. A process-wide cache of
+   * users would be a correctness problem with a timer attached: somebody
+   * revokes an access profile and the next N seconds of traffic still see the
+   * old permissions. Within ONE request the user cannot change under itself,
+   * except by that same request writing to it — and every write forgets.
+   *
+   * `null` is a real entry: "this id does not exist" is an answer worth not
+   * asking twice, and the not-found path is the one a probing caller repeats.
+   */
+  rows?: Map<string, unknown>;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -42,5 +70,65 @@ function enterRequestContext(context: RequestContext): void {
   storage.enterWith(context);
 }
 
-export { getRequestContext, enterRequestContext };
+/**
+ * Reads through the request's memory, or loads and remembers.
+ *
+ * Outside a request — workers, cron jobs, scripts — there is no store and the
+ * loader simply runs, so the only difference between the two worlds is how
+ * many times the database is asked.
+ */
+async function remember<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const context = storage.getStore();
+
+  if (!context) return load();
+
+  const rows = (context.rows ??= new Map());
+
+  if (rows.has(key)) return rows.get(key) as T;
+
+  const value = await load();
+
+  rows.set(key, value);
+
+  return value;
+}
+
+/**
+ * Forgets everything this request had remembered.
+ *
+ * Coarse on purpose: forgetting one key would still leave a stale copy behind
+ * when the write touched a relation the cached object carries — a profile's
+ * permissions, a business's entitlements. The map holds a handful of entries
+ * for the life of one request, so throwing it away costs nothing and cannot
+ * be subtly wrong.
+ */
+function forgetRequestCache(): void {
+  storage.getStore()?.rows?.clear();
+}
+
+/**
+ * Runs something with no request scope at all.
+ *
+ * `enterWith` binds the store to the remainder of the current asynchronous
+ * branch, which is what makes it work in a Fastify hook — but it also means a
+ * branch that entered one keeps it. Anything that deliberately outlives the
+ * request it was started from should not inherit its memory.
+ */
+function withoutRequestContext<T>(run: () => T): T {
+  return storage.exit(run);
+}
+
+/** For tests: how many rows the current request is holding. */
+function requestCacheSize(): number {
+  return storage.getStore()?.rows?.size ?? 0;
+}
+
+export {
+  enterRequestContext,
+  forgetRequestCache,
+  getRequestContext,
+  remember,
+  requestCacheSize,
+  withoutRequestContext,
+};
 export type { RequestContext };

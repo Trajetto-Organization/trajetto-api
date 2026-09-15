@@ -268,20 +268,29 @@ if (uploadConfig.storage.type !== "r2") {
 }
 
 /**
- * Publishes the caller's own host to the whole request.
+ * Opens the request's own scope, and publishes the caller's host into it.
  *
- * Only local-storage mode consumes it, to build URLs back to this API's own
- * files. Production signs R2 URLs and never looks at it — which is also why
- * the header is only trusted outside production: `Host` is client-controlled,
- * and a spoofed one would otherwise hand a user a link to somebody else's
- * server. In development the trade is the right way round: the alternative is
- * every image and voice note being dead on the phone, because the API answers
- * `localhost` and on a phone `localhost` is the phone.
+ * The scope itself is entered for EVERY request, in every environment,
+ * because the repositories memoise inside it — the session lookup used to
+ * happen twice per request, three queries each time, on every authenticated
+ * call in the product. A scope that only existed outside production would put
+ * that saving exactly where it does not matter.
+ *
+ * `publicBaseUrl` is the part that stays development-only. Only local-storage
+ * mode consumes it, to build URLs back to this API's own files; production
+ * signs R2 URLs and never looks at it — which is also why the header is not
+ * trusted there: `Host` is client-controlled, and a spoofed one would
+ * otherwise hand a user a link to somebody else's server. In development the
+ * trade is the right way round: the alternative is every image and voice note
+ * being dead on the phone, because the API answers `localhost` and on a phone
+ * `localhost` is the phone.
  */
 app.addHook("onRequest", async (request) => {
-  if (env.NODE_ENV === "production") return;
-
-  enterRequestContext({ publicBaseUrl: buildPublicBaseUrl(request) });
+  enterRequestContext(
+    env.NODE_ENV === "production"
+      ? {}
+      : { publicBaseUrl: buildPublicBaseUrl(request) },
+  );
 });
 
 // Registered before the routes so it applies to every one of them. This runs

@@ -7,6 +7,9 @@ import {
   MonthlyCostsParams,
   MonthlyCostsResult,
   VehicleTypeCountResult,
+  CountByMonthParams,
+  MonthlyCountBucket,
+  MonthlyCostBucket,
 } from "../../dtos/dashboard-dto";
 
 class InMemoryDashboardRepository implements IDashboardRepository {
@@ -34,6 +37,93 @@ class InMemoryDashboardRepository implements IDashboardRepository {
     vehicleTypes: [],
     monthlyCosts: [],
   };
+
+  /**
+   * The same grouping the database does, over the same fixture rows.
+   *
+   * Written as a grouping and not as a loop of `countByDateRange` calls: a
+   * fake that answered by looping would pass even if the real query grouped by
+   * the wrong column, which is the one thing worth checking here.
+   */
+  async countByMonth(
+    params: CountByMonthParams,
+    businessId?: string,
+  ): Promise<MonthlyCountBucket[]> {
+    const entries = this.data.entityCounts[params.entity] ?? [];
+
+    const buckets = new Map<string, number>();
+
+    for (const entry of entries) {
+      const at = new Date(entry.date);
+
+      if (at < params.from || at > params.to) continue;
+
+      // `business` is the tenant itself and carries no businessId, exactly as
+      // in the real repository.
+      if (
+        businessId &&
+        params.entity !== "business" &&
+        entry.businessId !== businessId
+      ) {
+        continue;
+      }
+
+      const month = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}`;
+
+      buckets.set(month, (buckets.get(month) ?? 0) + entry.count);
+    }
+
+    return [...buckets.entries()].map(([month, count]) => ({ month, count }));
+  }
+
+  async countManyByMonth(
+    params: {
+      entities: CountByMonthParams["entity"][];
+      from: Date;
+      to: Date;
+    },
+    businessId?: string,
+  ): Promise<Record<string, MonthlyCountBucket[]>> {
+    const result: Record<string, MonthlyCountBucket[]> = {};
+
+    for (const entity of params.entities) {
+      result[entity] = await this.countByMonth(
+        { entity, from: params.from, to: params.to },
+        businessId,
+      );
+    }
+
+    return result;
+  }
+
+  async getCostsByMonth(
+    params: { from: Date; to: Date },
+    businessId?: string,
+  ): Promise<MonthlyCostBucket[]> {
+    const buckets = new Map<string, MonthlyCostBucket>();
+
+    for (const entry of this.data.monthlyCosts) {
+      const at = new Date(entry.date);
+
+      if (at < params.from || at > params.to) continue;
+      if (businessId && entry.businessId !== businessId) continue;
+
+      const month = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}`;
+
+      const bucket = buckets.get(month) ?? {
+        month,
+        preventive: 0,
+        corrective: 0,
+      };
+
+      bucket.preventive += entry.preventive;
+      bucket.corrective += entry.corrective;
+
+      buckets.set(month, bucket);
+    }
+
+    return [...buckets.values()];
+  }
 
   async countByDateRange(
     params: CountByDateRangeParams,

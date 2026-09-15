@@ -91,47 +91,15 @@ class GetDashboardOverviewUseCase {
         { key: "fine", permission: "fine_manage" },
       ];
 
-      const counts: any = {};
-
-      for (const entity of entities) {
-        // Skip businesses for BUSINESS_ADMIN
-        if (user.role === "BUSINESS_ADMIN" && entity.key === "business") {
-          counts[entity.key] = { currentMonth: 0, lastMonth: 0 };
-          continue;
-        }
-
-        // Check permissions for BUSINESS_USER
-        if (!hasPermission(entity.permission)) {
-          counts[entity.key] = { currentMonth: 0, lastMonth: 0 };
-          continue;
-        }
-
-        const [currentCount, lastCount] = await Promise.all([
-          this.dashboardRepository.countByDateRange(
-            {
-              entity: entity.key as any,
-              startDate: currentMonthStart.toISOString().split("T")[0],
-              endDate: currentMonthEnd.toISOString().split("T")[0],
-            },
-            businessId,
-          ),
-          this.dashboardRepository.countByDateRange(
-            {
-              entity: entity.key as any,
-              startDate: lastMonthStart.toISOString().split("T")[0],
-              endDate: lastMonthEnd.toISOString().split("T")[0],
-            },
-            businessId,
-          ),
-        ]);
-
-        counts[entity.key] = {
-          currentMonth: currentCount.count,
-          lastMonth: lastCount.count,
-        };
-      }
-
-      // Get activity trends for last 6 months
+      /**
+       * Every number this screen shows, for every entity, in ONE query each.
+       *
+       * It used to be a loop: nine entities × (two cards + six trend months)
+       * = 72 round trips, which made the dashboard the heaviest read in the
+       * product by an order of magnitude — 89 queries measured for one page
+       * view. The window below covers both the cards and the trend, so the
+       * same nine results answer everything.
+       */
       const monthNames = [
         "Jan",
         "Fev",
@@ -147,54 +115,70 @@ class GetDashboardOverviewUseCase {
         "Dez",
       ];
 
-      const activityTrends = [];
-
       const currentMonth = now.getMonth();
       const currentYear = now.getFullYear();
 
-      for (let i = 5; i >= 0; i--) {
-        let month = currentMonth - i;
-        let year = currentYear;
+      // Six trend months back, and the current month forward. `lastMonthStart`
+      // is inside that window, so nothing needs a second pass.
+      const windowStart = new Date(currentYear, currentMonth - 5, 1);
+      const windowEnd = currentMonthEnd;
 
-        if (month < 0) {
-          month += 12;
-          year--;
-        }
+      const visible = entities.filter(
+        (entity) =>
+          !(user.role === "BUSINESS_ADMIN" && entity.key === "business") &&
+          hasPermission(entity.permission),
+      );
 
-        const startDate = new Date(year, month, 1);
-        const endDate = new Date(year, month + 1, 0);
+      // ONE round trip for all of them. Nine in parallel was the first
+      // attempt, and it held nine connections per page view — the pool
+      // starved and the p95 of the whole API got fifteen times worse while
+      // the median improved.
+      const monthly = await this.dashboardRepository.countManyByMonth(
+        {
+          entities: visible.map((entity) => entity.key as any),
+          from: windowStart,
+          to: windowEnd,
+        },
+        businessId,
+      );
 
-        const monthData: any = {
-          month: monthNames[month],
+      /** `YYYY-MM` for a Date, in the server's timezone — the grouping basis. */
+      const monthKey = (at: Date): string =>
+        `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}`;
+
+      const byEntity = new Map<string, Map<string, number>>(
+        Object.entries(monthly).map(([key, buckets]) => [
+          key,
+          new Map(buckets.map((bucket) => [bucket.month, bucket.count])),
+        ]),
+      );
+
+      const countFor = (key: string, at: Date): number =>
+        byEntity.get(key)?.get(monthKey(at)) ?? 0;
+
+      const counts: any = {};
+
+      for (const entity of entities) {
+        counts[entity.key] = {
+          // A hidden entity answers zero rather than being absent: the card
+          // exists on the screen either way, and an absent key renders as
+          // "undefined" where a number belongs.
+          currentMonth: countFor(entity.key, currentMonthStart),
+          lastMonth: countFor(entity.key, lastMonthStart),
         };
+      }
 
-        // Get counts for each entity type for this month
-        const monthlyPromises = entities.map(async (entity) => {
-          if (
-            (user.role === "BUSINESS_ADMIN" && entity.key === "business") ||
-            !hasPermission(entity.permission)
-          ) {
-            return { key: entity.key, count: 0 };
-          }
+      // The trend, read out of the same nine results. No further queries.
+      const activityTrends = [];
 
-          const result = await this.dashboardRepository.countByDateRange(
-            {
-              entity: entity.key as any,
-              startDate: startDate.toISOString().split("T")[0],
-              endDate: endDate.toISOString().split("T")[0],
-            },
-            businessId,
-          );
+      for (let i = 5; i >= 0; i--) {
+        const at = new Date(currentYear, currentMonth - i, 1);
 
-          return { key: entity.key, count: result.count };
-        });
+        const monthData: any = { month: monthNames[at.getMonth()] };
 
-        const monthlyResults = await Promise.all(monthlyPromises);
-
-        monthlyResults.forEach(({ key, count }) => {
-          const fieldName = pluralizeFieldName(key);
-          monthData[fieldName] = count;
-        });
+        for (const entity of entities) {
+          monthData[pluralizeFieldName(entity.key)] = countFor(entity.key, at);
+        }
 
         activityTrends.push(monthData);
       }
@@ -217,30 +201,29 @@ class GetDashboardOverviewUseCase {
       const maintenanceCosts = [];
 
       if (hasPermission("service_order_manage")) {
+        // One query for the six months, summed in the database. It used to be
+        // six queries, each returning every service order row of its month to
+        // be added up here.
+        const costBuckets = await this.dashboardRepository.getCostsByMonth(
+          { from: windowStart, to: windowEnd },
+          businessId,
+        );
+
+        const costsByMonth = new Map(
+          costBuckets.map((bucket) => [bucket.month, bucket]),
+        );
+
         for (let i = 5; i >= 0; i--) {
-          let month = currentMonth - i;
-          let year = currentYear;
-
-          if (month < 0) {
-            month += 12;
-            year--;
-          }
-
-          const startDate = new Date(year, month, 1);
-          const endDate = new Date(year, month + 1, 0);
-
-          const costs = await this.dashboardRepository.getMonthlyCosts(
-            {
-              startDate: startDate.toISOString().split("T")[0],
-              endDate: endDate.toISOString().split("T")[0],
-            },
-            businessId,
-          );
+          const at = new Date(currentYear, currentMonth - i, 1);
+          const bucket = costsByMonth.get(monthKey(at));
 
           maintenanceCosts.push({
-            month: monthNames[month],
-            preventive: costs.preventive,
-            corrective: costs.corrective,
+            month: monthNames[at.getMonth()],
+
+            // Zero for a month with no work, not an absent key: the chart
+            // draws a bar either way and "undefined" is not a number.
+            preventive: bucket?.preventive ?? 0,
+            corrective: bucket?.corrective ?? 0,
           });
         }
       }
