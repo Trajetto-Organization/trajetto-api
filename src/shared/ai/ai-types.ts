@@ -18,9 +18,30 @@ interface ChecklistAnalysisInput {
   checklistData: Record<string, unknown>;
 }
 
+/**
+ * The receipt photo a driver sent back, and what it is supposed to show.
+ *
+ * The expected values travel with the request rather than being looked up at
+ * analysis time, because the analysis runs minutes later and the delivery may
+ * have been corrected in between — the model must be asked about the document
+ * that was proven, not about the row as it stands now.
+ */
+interface DeliveryProofAnalysisInput {
+  photoPath: string;
+  signaturePath: string | null;
+
+  /** What the receipt should carry, for the "confere" criterion. */
+  expectedDocument: string | null;
+  expectedRecipient: string;
+
+  /** The day it was proven, for the "data presente" criterion. */
+  provenOn: string;
+}
+
 interface AIAnalysisInputMap {
   FUEL_ODOMETER: FuelOdometerAnalysisInput;
   CHECKLIST: ChecklistAnalysisInput;
+  DELIVERY_PROOF: DeliveryProofAnalysisInput;
 }
 
 type AIAnalysisRequestInput = {
@@ -74,6 +95,7 @@ interface ProviderCallUsage {
 
 export type {
   AIAnalysisInputMap,
+  DeliveryProofAnalysisInput,
   AIAnalysisRequestInput,
   AnalysisUnitDescriptor,
   ChecklistAnalysisInput,

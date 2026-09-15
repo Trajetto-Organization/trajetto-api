@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 
 import { AIAnalysisType } from "@prisma/client";
 
+import type {
+  CriterionVerdict,
+  ProofCriteriaReading,
+} from "./proof-criteria";
+
 import {
   AIAnalysisInputMap,
   AnalysisUnitDescriptor,
@@ -20,6 +25,9 @@ const ODOMETER_MISMATCH_THRESHOLD_PERCENT = 0.05;
 
 /** The odometer unit key for FUEL_ODOMETER requests. */
 const ODOMETER_UNIT_KEY = "odometer";
+
+/** The single unit of a DELIVERY_PROOF request. */
+const PROOF_UNIT_KEY = "proof";
 
 // ============================================================================
 // Billing period
@@ -93,6 +101,28 @@ function buildAnalysisUnits<T extends AIAnalysisType>(
         unitKey: ODOMETER_UNIT_KEY,
         photoPath: fuelInput.odometerPhotoPath,
         reportedValue: fuelInput.reportedMileage,
+      },
+    ];
+  }
+
+  if (type === "DELIVERY_PROOF") {
+    const proofInput = input as AIAnalysisInputMap["DELIVERY_PROOF"];
+
+    if (!proofInput.photoPath) return [];
+
+    // One unit, one call. The four criteria are four questions in ONE prompt
+    // rather than four requests: they are all about the same photo, and
+    // charging a company four times to look at one picture would make the
+    // feature cost four times what it is worth.
+    return [
+      {
+        unitKey: PROOF_UNIT_KEY,
+        photoPath: proofInput.photoPath,
+        reportedValue: {
+          expectedDocument: proofInput.expectedDocument,
+          expectedRecipient: proofInput.expectedRecipient,
+          provenOn: proofInput.provenOn,
+        },
       },
     ];
   }
@@ -251,6 +281,67 @@ function evaluateChecklistField(
 }
 
 // ============================================================================
+// Delivery proof
+// ============================================================================
+
+/**
+ * What the model answers about a receipt photo. Portuguese keys, like the
+ * other two prompts: the model is asked in Portuguese and answers in it, and
+ * translating the keys on the way in would be a mapping that can drift.
+ */
+interface ProofProviderResponse {
+  legivel?: string;
+  tem_assinatura?: string;
+  data_presente?: string;
+  documento_confere?: string;
+
+  qualidade_foto?: number;
+  confianca?: number;
+
+  observacao?: string;
+}
+
+/**
+ * "sim" / "nao" / anything else.
+ *
+ * Anything the model did not say clearly becomes "unknown" rather than "no",
+ * and that default is the whole safety of this feature: an unparseable answer
+ * read as a failure would reject a receipt that is fine, and a rejection sends
+ * a driver back to an address.
+ */
+function toVerdict(value: string | undefined): CriterionVerdict {
+  const normalized = (value ?? "").trim().toLowerCase();
+
+  if (normalized === "sim") return "yes";
+  if (normalized === "nao" || normalized === "não") return "no";
+
+  return "unknown";
+}
+
+/** Clamps a model-reported score into the range it promised. */
+function toScore(value: number | undefined): number {
+  if (typeof value !== "number" || Number.isNaN(value)) return 0;
+
+  return Math.min(1, Math.max(0, value));
+}
+
+function readProofResponse(
+  parsed: ProofProviderResponse,
+): ProofCriteriaReading {
+  return {
+    legible: toVerdict(parsed.legivel),
+    hasSignature: toVerdict(parsed.tem_assinatura),
+    dateVisible: toVerdict(parsed.data_presente),
+    documentMatches: toVerdict(parsed.documento_confere),
+
+    photoQuality: toScore(parsed.qualidade_foto),
+    confidence: toScore(parsed.confianca),
+
+    observation: parsed.observacao?.trim() || "",
+  };
+}
+
+// ============================================================================
 // Checklist result aggregation
 // ============================================================================
 
@@ -298,6 +389,8 @@ function mergeChecklistResults(
 
 export {
   ODOMETER_UNIT_KEY,
+  PROOF_UNIT_KEY,
+  readProofResponse,
   buildAnalysisUnits,
   computeIdempotencyKey,
   evaluateChecklistField,
@@ -312,6 +405,7 @@ export {
 
 export type {
   ChecklistFieldOutcome,
+  ProofProviderResponse,
   ChecklistProviderResponse,
   OdometerProviderResponse,
 };

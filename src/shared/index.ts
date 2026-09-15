@@ -44,6 +44,9 @@ import { IImportRepository } from "@/modules/import/repositories/IImport-reposit
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 
 import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+import { ProofAuditRepository } from "@/modules/delivery/repositories/proof-audit-repository";
+import type { IProofAuditRepository } from "@/modules/delivery/repositories/IProof-audit-repository";
+
 import { DeliveryMessageTemplateRepository } from "@/modules/delivery/repositories/delivery-message-template-repository";
 import type { IDeliveryMessageTemplateRepository } from "@/modules/delivery/repositories/IDelivery-message-template-repository";
 
@@ -283,6 +286,11 @@ container.registerSingleton<IExternalRecipientRepository>(
 container.registerSingleton<IDeliveryMessageTemplateRepository>(
   "DeliveryMessageTemplateRepository",
   DeliveryMessageTemplateRepository,
+);
+
+container.registerSingleton<IProofAuditRepository>(
+  "ProofAuditRepository",
+  ProofAuditRepository,
 );
 
 container.registerSingleton<IChatRepository>("ChatRepository", ChatRepository);

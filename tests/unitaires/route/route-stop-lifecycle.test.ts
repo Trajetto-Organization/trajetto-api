@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { InMemoryProofAuditRepository } from "@/modules/delivery/repositories/in-memory/in-memory-proof-audit-repository";
+import type { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
 import { CreateRouteUseCase } from "@/modules/route/usecases/create-route/create-route-usecase";
 import { ReleaseRouteUseCase } from "@/modules/route/usecases/release-route/release-route-usecase";
@@ -80,6 +82,23 @@ const uploadService = {
     photos.map(({ key }) => ({ path: key })),
 } as unknown as UploadService;
 
+
+/**
+ * The audit queue and the company row the proof use case reaches for.
+ *
+ * The queue is a real fake: the card it writes is what the office opens, and a
+ * stub that swallowed the call would let a test prove a proof queues an audit
+ * when it queues nothing.
+ *
+ * The business answers `ai_analysis_limit: 0` — this company did not buy the
+ * AI. The card still queues, which is the behaviour that matters: a receipt
+ * whose analysis never ran must still reach a person.
+ */
+const proofAuditRepository = new InMemoryProofAuditRepository();
+
+const businessWithoutAI = {
+  findBusinessById: async () => ({ ai_analysis_limit: 0 }),
+} as unknown as IBusinessRepository;
 
 function makeContext() {
   /**
@@ -237,6 +256,8 @@ function makeContext() {
       routeRepository,
       notificationService,
       outboxStub,
+      proofAuditRepository,
+      businessWithoutAI,
       uploadService,
     ),
     occurrence: new ReportDeliveryOccurrenceUseCase(

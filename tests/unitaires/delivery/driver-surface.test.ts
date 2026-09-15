@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { InMemoryProofAuditRepository } from "@/modules/delivery/repositories/in-memory/in-memory-proof-audit-repository";
+import type { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
 import { ListMyDeliveriesUseCase } from "@/modules/delivery/usecases/list-my-deliveries/list-my-deliveries-usecase";
 import { StartDriverRouteUseCase } from "@/modules/delivery/usecases/start-driver-route/start-driver-route-usecase";
@@ -134,6 +136,23 @@ async function seedDelivery(
 
   return delivery;
 }
+
+/**
+ * The audit queue and the company row the proof use case reaches for.
+ *
+ * The queue is a real fake: the card it writes is what the office opens, and a
+ * stub that swallowed the call would let a test prove a proof queues an audit
+ * when it queues nothing.
+ *
+ * The business answers `ai_analysis_limit: 0` — this company did not buy the
+ * AI. The card still queues, which is the behaviour that matters: a receipt
+ * whose analysis never ran must still reach a person.
+ */
+const proofAuditRepository = new InMemoryProofAuditRepository();
+
+const businessWithoutAI = {
+  findBusinessById: async () => ({ ai_analysis_limit: 0 }),
+} as unknown as IBusinessRepository;
 
 describe("driver surface: my-deliveries", () => {
   it("returns only the driver's designated and in-transit deliveries", async () => {
@@ -458,6 +477,8 @@ describe("driver surface: proof", () => {
       repos.routeRepository,
       notificationStub,
       outboxStub,
+      proofAuditRepository,
+      businessWithoutAI,
       uploadStub,
     );
   }

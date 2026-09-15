@@ -12,6 +12,38 @@ import database from "@/../infra/database";
 class OccurrenceTypeRepository implements IOccurrenceTypeRepository {
   constructor(private prisma = database) {}
 
+  async ensureByName(
+    businessId: string,
+    data: {
+      name: string;
+      description: string;
+      blocks_delivery: boolean;
+      requires_photo: boolean;
+    },
+  ): Promise<{ id: string; name: string }> {
+    // Upsert on the (businessId, name) unique the table already has, so two
+    // rejections landing at the same moment cannot create two types with the
+    // same word in them.
+    //
+    // `update: {}` on purpose: a company that RENAMED or retired this type has
+    // made a decision about their own catalogue, and a system occurrence has
+    // no business undoing it on the next rejection.
+    const saved = await this.prisma.occurrenceType.upsert({
+      where: { businessId_name: { businessId, name: data.name } },
+      create: {
+        businessId,
+        name: data.name,
+        description: data.description,
+        blocks_delivery: data.blocks_delivery,
+        requires_photo: data.requires_photo,
+      },
+      update: {},
+      select: { id: true, name: true },
+    });
+
+    return saved;
+  }
+
   async createOccurrenceType(
     occurrenceTypeData: CreateOccurrenceTypeProps,
   ): Promise<OccurrenceType> {

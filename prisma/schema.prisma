@@ -142,6 +142,7 @@ model Business {
 
   externalRecipients     ExternalRecipient[]
   deliveryProofDocuments DeliveryProofDocument[]
+  deliveryProofAudits    DeliveryProofAudit[]
   deliveryMessageTemplates DeliveryMessageTemplate[]
 
   @@map("business")
@@ -208,6 +209,7 @@ model User {
   NotificationPreference NotificationPreference[]
   PushDeviceToken        PushDeviceToken[]
   Import                 Import[]
+  proofAudits            DeliveryProofAudit[]
 
   // WhatsApp fields
   whatsapp_notifications_enabled Boolean @default(false)
@@ -961,6 +963,11 @@ model ScheduledJobExecution {
 enum AIAnalysisType {
   FUEL_ODOMETER
   CHECKLIST
+
+  /// The receipt photo a driver sends back. The verdict is a SUGGESTION: a
+  /// machine reading of a photo does not close a probative cycle, and the
+  /// human queue is what does.
+  DELIVERY_PROOF
 }
 
 enum AIAnalysisRequestStatus {
@@ -1711,6 +1718,62 @@ enum DeliveryMessageTopic {
   FAILED
 }
 
+/// Where a receipt waits for a person to look at it.
+///
+/// The AI reads the photo and suggests; this row is where somebody decides.
+/// The two are deliberately separate columns: the suggestion is evidence about
+/// the photo, the verdict is a decision about the delivery, and collapsing
+/// them would make it impossible to ask afterwards how often the machine was
+/// right — which is the only way to know whether to keep paying for it.
+model DeliveryProofAudit {
+  id String @id @default(uuid(7))
+
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  /// One audit per delivery. A re-proof replaces the suggestion and reopens
+  /// the row rather than queueing a second card for the same address.
+  deliveryId String   @unique
+
+  status ProofAuditStatus @default(PENDING)
+
+  /// What the model concluded, criterion by criterion. Null until it answers —
+  /// and a null here is why the card still shows: a photo the AI could not
+  /// read is exactly the one a person has to.
+  ai_suggestion Json?
+
+  /// Between 0 and 1, from the model. Used to order the queue: the least
+  /// certain readings are the ones a person adds the most value to.
+  ai_confidence Float?
+
+  ai_analyzed_at DateTime?
+
+  reviewedBy   User?   @relation(fields: [reviewedById], references: [id], onDelete: Restrict)
+  reviewedById String?
+
+  reviewed_at DateTime?
+
+  /// Why a person rejected it. Required on a rejection by the use case: a
+  /// receipt refused with no reason is a receipt nobody can act on.
+  rejection_reason String?
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  /// The queue's only read: what is still waiting, for this company, oldest
+  /// first. Partial on PENDING would be better and Prisma cannot express it —
+  /// the raw SQL in the migration adds that one.
+  @@index([businessId, status, created_at])
+  @@map("delivery_proof_audit")
+}
+
+enum ProofAuditStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 model Import {
   id String @id @default(uuid(7))
 
@@ -1836,6 +1899,9 @@ model Delivery {
 
   /// The consolidated PDF, once the delivery is proven. At most one.
   proofDocument DeliveryProofDocument?
+
+  /// Where the receipt waits for a person to look at it. At most one.
+  proofAudit DeliveryProofAudit?
   chatMessages ChatMessage[]
 
   // N:N with Route on purpose. A failed delivery re-enters on the NEXT day's

@@ -7,6 +7,24 @@ import {
 } from "../dtos/occurrence-type-dto";
 
 interface IOccurrenceTypeRepository {
+  /**
+   * The type a system-generated occurrence needs, created on first use.
+   *
+   * Not seeded for every company: a carrier that never rejects a receipt
+   * should not carry a word it never spends, and the catalogue screen is a
+   * list of what this company actually says. Idempotent on (businessId, name),
+   * which is the unique key the table already has.
+   */
+  ensureByName: (
+    businessId: string,
+    data: {
+      name: string;
+      description: string;
+      blocks_delivery: boolean;
+      requires_photo: boolean;
+    },
+  ) => Promise<{ id: string; name: string }>;
+
   createOccurrenceType: (
     occurrenceTypeData: CreateOccurrenceTypeProps,
   ) => Promise<OccurrenceType>;

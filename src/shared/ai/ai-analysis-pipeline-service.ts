@@ -6,6 +6,8 @@ import { sendAIVerificationEvent } from "@/websocket";
 import { nextRetryDelayMs } from "@/shared/notifications/pipeline-rules";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
+import { assessProof } from "./proof-criteria";
+
 import {
   AIAnalysisProvider,
   PROVIDER_NAME,
@@ -17,11 +19,13 @@ import {
   ChecklistFieldOutcome,
   buildAnalysisUnits,
   evaluateChecklistField,
+  readProofResponse,
   evaluateOdometerReading,
   isNonRetryableProviderStatus,
   mergeChecklistResults,
 } from "./ai-rules";
 import {
+  attachProofSuggestion,
   markChecklistAnalyzing,
   markFuelAnalyzing,
   markFuelError,
@@ -203,6 +207,8 @@ class AIAnalysisPipelineService {
 
     if (request.type === "FUEL_ODOMETER") {
       await this.processFuelRequest(request, units, descriptorByKey);
+    } else if (request.type === "DELIVERY_PROOF") {
+      await this.processProofRequest(request, units, descriptorByKey);
     } else {
       await this.processChecklistRequest(request, units, descriptorByKey);
     }
@@ -301,6 +307,83 @@ class AIAnalysisPipelineService {
     console.log(
       `[AIAnalysisPipeline] Fuel ${request.recordId} verification completed: ${result.status}`,
     );
+  }
+
+  /**
+   * The receipt photo, read once and written as a SUGGESTION.
+   *
+   * Nothing here decides anything about the delivery. The card was already in
+   * the queue when the driver proved it; this only fills in what the model
+   * thinks, and a card whose model never answered still reaches a person —
+   * which is the right outcome, because a photo the machine could not read is
+   * exactly the one a human has to.
+   */
+  private async processProofRequest(
+    request: ClaimedRequest,
+    units: AIAnalysisUnit[],
+    descriptorByKey: Map<string, AnalysisUnitDescriptor>,
+  ): Promise<void> {
+    const input = request.input as AIAnalysisInputMap["DELIVERY_PROOF"];
+    const totalSteps = 3;
+
+    if (request.attempts === 1) {
+      this.emit(request, { step: "queued", stepNumber: 1, totalSteps });
+    }
+
+    this.emit(request, { step: "analyzing", stepNumber: 2, totalSteps });
+
+    const unit = units[0];
+
+    if (!unit) {
+      throw new NonRetryableRequestError("Request has no analysis unit");
+    }
+
+    if (unit.status !== "RESERVED") {
+      // A retry after the unit already settled. Nothing left to charge for.
+      await this.finalizeRequest(request, "COMPLETED");
+      return;
+    }
+
+    const descriptor = descriptorByKey.get(unit.unitKey);
+
+    if (!descriptor) {
+      throw new NonRetryableRequestError(
+        `Persisted input has no descriptor for unit "${unit.unitKey}"`,
+      );
+    }
+
+    const { parsed } = await this.callProvider(unit, () =>
+      this.provider.analyzeDeliveryProof(descriptor.photoPath, {
+        expectedDocument: input.expectedDocument,
+        expectedRecipient: input.expectedRecipient,
+        provenOn: input.provenOn,
+      }),
+    );
+
+    const reading = readProofResponse(parsed);
+    const assessment = assessProof(reading);
+
+    // The unit keeps the whole reading, so a later question — "what did the
+    // model actually say about this photo?" — has an answer that does not
+    // depend on the card still existing.
+    await this.consumeUnit(request, unit, {
+      reading,
+      assessment,
+    } as unknown as ChecklistUnitResult);
+
+    // The card a person opens. Written after the unit is consumed, so a crash
+    // in between leaves a charged call with no suggestion — recoverable — and
+    // never a suggestion nobody paid for.
+    await attachProofSuggestion(
+      request.recordId,
+      request.businessId,
+      { reading, assessment },
+      reading.confidence,
+    );
+
+    this.emit(request, { step: "completed", stepNumber: 3, totalSteps });
+
+    await this.finalizeRequest(request, "COMPLETED");
   }
 
   private async processChecklistRequest(
@@ -582,6 +665,12 @@ class AIAnalysisPipelineService {
     try {
       if (request.type === "FUEL_ODOMETER") {
         await markFuelAnalyzing(request.recordId);
+      } else if (request.type === "DELIVERY_PROOF") {
+        // Nothing to mark. A receipt's card is already in the queue the moment
+        // the driver proved the delivery — the model is late to a row that
+        // exists, and a reviewer who opens it before the answer arrives sees a
+        // photo with no suggestion, which is a true and useful state.
+        return;
       } else {
         await markChecklistAnalyzing(request.recordId);
       }

@@ -115,3 +115,29 @@ export {
   writeChecklistResults,
   writeFuelResult,
 };
+
+/**
+ * Writes what the model concluded onto the queue card a person will open.
+ *
+ * Scoped by company and conditional on the card still being PENDING: a
+ * reviewer who decided while the model was thinking must not have their verdict
+ * dragged back by a late answer. `updateMany` and not `update` is what makes
+ * that a `where` rather than a check somebody can forget.
+ */
+async function attachProofSuggestion(
+  deliveryId: string,
+  businessId: string,
+  suggestion: unknown,
+  confidence: number,
+): Promise<void> {
+  await database.deliveryProofAudit.updateMany({
+    where: { deliveryId, businessId, status: "PENDING" },
+    data: {
+      ai_suggestion: suggestion as Prisma.InputJsonValue,
+      ai_confidence: confidence,
+      ai_analyzed_at: new Date(),
+    },
+  });
+}
+
+export { attachProofSuggestion };

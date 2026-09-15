@@ -29,6 +29,9 @@ import { GetProofDocumentController } from "@/modules/delivery/usecases/get-proo
 import { SaveMessageTemplateController } from "@/modules/delivery/usecases/save-message-template/save-message-template-controller";
 import { ListMessageTemplatesController } from "@/modules/delivery/usecases/list-message-templates/list-message-templates-controller";
 
+import { ListProofAuditsController } from "@/modules/delivery/usecases/list-proof-audits/list-proof-audits-controller";
+import { ReviewProofAuditController } from "@/modules/delivery/usecases/review-proof-audit/review-proof-audit-controller";
+
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
@@ -44,6 +47,11 @@ import {
   proofDocumentSchemas,
   proofDocumentResponses,
 } from "./documentation/proof-document-documentation";
+
+import {
+  proofAuditSchemas,
+  proofAuditResponses,
+} from "./documentation/proof-audit-documentation";
 
 const createDeliveryController = new CreateDeliveryController();
 const listDeliveryController = new ListDeliveryController();
@@ -75,6 +83,9 @@ const getProofDocumentController = new GetProofDocumentController();
 
 const saveMessageTemplateController = new SaveMessageTemplateController();
 const listMessageTemplatesController = new ListMessageTemplatesController();
+
+const listProofAuditsController = new ListProofAuditsController();
+const reviewProofAuditController = new ReviewProofAuditController();
 
 // A batch of NF-e files is bigger than any other JSON body in the API, so
 // this route (and only it) raises the limit: 25 files of up to 512 KB.
@@ -600,6 +611,58 @@ async function deliveryRoutes(app: FastifyInstance) {
       },
     },
     saveMessageTemplateController.handle,
+  );
+  app.get(
+    "/proof-audits",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["delivery"],
+        summary: "The receipts waiting for a person to look at them",
+        description:
+          "Responde em application/x-ndjson, NÃO em JSON: a primeira linha é o envelope `{meta:{total,page,pageSize,searchMeta}}` e cada linha seguinte é um card. A ordem é a que faz uma pessoa render: primeiro a foto que a máquina não conseguiu ler, depois as leituras de que ela menos se convenceu, e por último as limpas e confiantes que um revisor libera num segundo. `searchMeta.agreementRate` é a taxa de concordância entre a máquina e a pessoa — o único número que responde se a IA vale o que custa.",
+        querystring: proofAuditSchemas.listProofAudits,
+        response: {
+          200: proofAuditResponses.auditQueueEnvelope,
+          400: proofAuditResponses.genericError,
+          403: proofAuditResponses.genericError,
+          500: proofAuditResponses.internalServerError,
+        },
+      },
+    },
+    listProofAuditsController.handle,
+  );
+
+  app.patch(
+    "/proof-audit/:auditId/business/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [
+        verifyBusinessActive,
+        deliveriesModule,
+        verifyPermission("delivery_manage", "write"),
+      ],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["delivery"],
+        summary: "A person's verdict on a receipt",
+        description:
+          "A metade que a máquina não faz. A auditoria registrou o motivo: um veredito de IA sem ninguém atrás não fecha o ciclo probatório, e uma entrega cujo comprovante nunca foi olhado por uma pessoa é uma entrega cujo comprovante não se sustenta quando for contestado. Rejeitar exige motivo, e o motivo não é burocracia: é o que o despachante lê para decidir se a carga volta à rua e o que o embarcador vê quando pergunta por que um canhoto foi recusado. Uma rejeição registra uma ocorrência 'Comprovante rejeitado' — que NÃO é impeditiva: se a entrega volta à rua é decisão do despachante, que pode ter uma confirmação verbal que a foto não mostra. Dois revisores no mesmo card: o segundo recebe 409.",
+        params: proofAuditSchemas.reviewProofAuditParams,
+        body: proofAuditSchemas.reviewProofAudit,
+        response: {
+          200: proofAuditResponses.auditReviewed,
+          400: proofAuditResponses.genericError,
+          403: proofAuditResponses.genericError,
+          404: proofAuditResponses.genericError,
+          409: proofAuditResponses.genericError,
+          500: proofAuditResponses.internalServerError,
+        },
+      },
+    },
+    reviewProofAuditController.handle,
   );
 }
 

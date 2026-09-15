@@ -13,6 +13,34 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
   public occurrenceTypes: OccurrenceType[] = [];
   public occurrenceCounts = new Map<string, number>();
 
+  async ensureByName(
+    businessId: string,
+    data: {
+      name: string;
+      description: string;
+      blocks_delivery: boolean;
+      requires_photo: boolean;
+    },
+  ): Promise<{ id: string; name: string }> {
+    const existing = this.occurrenceTypes.find(
+      (entry) => entry.businessId === businessId && entry.name === data.name,
+    );
+
+    // A company that renamed or retired this type made a decision about their
+    // own catalogue; a system occurrence does not undo it.
+    if (existing) return { id: existing.id!, name: existing.name };
+
+    const created = await this.createOccurrenceType({
+      businessId,
+      name: data.name,
+      description: data.description,
+      blocks_delivery: data.blocks_delivery,
+      requires_photo: data.requires_photo,
+    } as never);
+
+    return { id: created.id!, name: created.name };
+  }
+
   async createOccurrenceType(
     occurrenceTypeData: CreateOccurrenceTypeProps,
   ): Promise<OccurrenceType> {

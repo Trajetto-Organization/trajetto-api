@@ -8,6 +8,7 @@ import path from "node:path";
 
 import {
   ChecklistProviderResponse,
+  ProofProviderResponse,
   OdometerProviderResponse,
 } from "./ai-rules";
 import { ProviderCallUsage } from "./ai-types";
@@ -117,6 +118,54 @@ class AIAnalysisProvider {
       imagePath,
       promptBuilder(fieldValue),
     );
+  }
+
+  /**
+   * The four criteria, in one call.
+   *
+   * One prompt and not four: they are all about the same photo, and charging a
+   * company four times to look at one picture would make the feature cost four
+   * times what it is worth.
+   *
+   * The model is asked to answer "nao_sei" wherever it cannot tell, and the
+   * prompt says why — a photo taken through a truck window in the rain has
+   * real unanswerable questions in it, and a model pushed into yes/no invents
+   * a "no" that sends a driver back to an address for nothing.
+   */
+  public async analyzeDeliveryProof(
+    imagePath: string,
+    context: {
+      expectedDocument: string | null;
+      expectedRecipient: string;
+      provenOn: string;
+    },
+  ): Promise<ProviderCall<ProofProviderResponse>> {
+    const documentLine = context.expectedDocument
+      ? `O documento esperado no canhoto e "${context.expectedDocument}".`
+      : "Nao ha numero de documento esperado para conferir; responda \"nao_sei\" em documento_confere.";
+
+    const prompt = [
+      "Voce esta olhando a foto de um canhoto de entrega (comprovante assinado pelo destinatario).",
+      `O destinatario esperado e "${context.expectedRecipient}".`,
+      documentLine,
+      `A entrega foi comprovada em ${context.provenOn}.`,
+      "",
+      "Responda APENAS um JSON com exatamente estas chaves:",
+      "{",
+      '  "legivel": "sim" | "nao" | "nao_sei",',
+      '  "tem_assinatura": "sim" | "nao" | "nao_sei",',
+      '  "data_presente": "sim" | "nao" | "nao_sei",',
+      '  "documento_confere": "sim" | "nao" | "nao_sei",',
+      '  "qualidade_foto": 0.0 a 1.0,',
+      '  "confianca": 0.0 a 1.0,',
+      '  "observacao": "uma frase curta em portugues"',
+      "}",
+      "",
+      'Use "nao_sei" sempre que a foto nao permitir concluir. Uma foto tirada pela janela de um caminhao, na chuva, tem perguntas que nao tem resposta — e um "nao" inventado manda um motorista de volta a um endereco a toa.',
+      "Nao aprove nem reprove a entrega: voce apenas descreve o que ve.",
+    ].join("\n");
+
+    return this.callVisionModel<ProofProviderResponse>(imagePath, prompt);
   }
 
   private async callVisionModel<TParsed>(

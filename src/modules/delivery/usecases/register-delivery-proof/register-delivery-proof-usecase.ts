@@ -32,6 +32,11 @@ import {
 
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
+import { IProofAuditRepository } from "../../repositories/IProof-audit-repository";
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+
+import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
+
 import { AppError } from "@/shared/errors/AppError";
 
 interface RegisterDeliveryProofRequest {
@@ -66,6 +71,10 @@ class RegisterDeliveryProofUseCase {
     private notificationService: NotificationService,
     @inject("OutboxService")
     private outbox: OutboxService,
+    @inject("ProofAuditRepository")
+    private audits: IProofAuditRepository,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
     @inject("UploadService")
     private uploadService: UploadService,
   ) {}
@@ -216,6 +225,31 @@ class RegisterDeliveryProofUseCase {
         }
       });
 
+      // The card a person will look at. Queued the moment the delivery is
+      // proven, not when the model answers: a receipt whose analysis never ran
+      // — no quota, no key, a provider outage — still has to reach a human,
+      // and a queue that only fills on a successful AI call would silently
+      // stop auditing the day the AI stopped working.
+      //
+      // After the commit, and deliberately not inside it: the card is a
+      // convenience for the office, and a failure to write it must never cost
+      // the driver a proof they are standing in the street to record.
+      await this.audits
+        .enqueue(deliveryId, businessId)
+        .catch((error) =>
+          console.error("[ProofAudit] Failed to enqueue the receipt:", error),
+        );
+
+      await this.requestProofAnalysis(
+        deliveryId,
+        businessId,
+        userId,
+        resolvedPhoto.path,
+        signaturePath,
+        findDelivery,
+        provenAt,
+      );
+
       // The panel and the control tower are watching this stop.
       announceStopSettled(businessId, settled);
 
@@ -250,6 +284,53 @@ class RegisterDeliveryProofUseCase {
         "Houve um erro ao tentar comprovar a entrega! Por favor, tente novamente.",
         500,
       );
+    }
+  }
+  /**
+   * Asks the model to read the receipt, if this company bought that.
+   *
+   * Fire-and-forget on purpose, exactly like the checklist and the odometer:
+   * the driver is standing in the street and the answer is a suggestion on a
+   * card somebody opens later. A failure here costs the office a hint, and it
+   * must never cost the driver the proof.
+   *
+   * The expected values travel WITH the request rather than being looked up at
+   * analysis time, because the analysis runs minutes later and the delivery may
+   * have been corrected in between — the model has to be asked about the
+   * document that was proven, not about the row as it stands now.
+   */
+  private async requestProofAnalysis(
+    deliveryId: string,
+    businessId: string,
+    userId: string,
+    photoPath: string,
+    signaturePath: string | null,
+    delivery: { invoice_number?: string | null; code?: string | null; recipient_name: string },
+    provenAt: Date,
+  ): Promise<void> {
+    try {
+      const findBusiness = await this.business.findBusinessById(businessId);
+
+      // Zero is how a company says it did not buy this. The card is already in
+      // the queue; it simply arrives with no suggestion, which is exactly what
+      // a reviewer without AI should see.
+      if ((findBusiness?.ai_analysis_limit ?? 0) <= 0) return;
+
+      await AIAnalysisService.getInstance().requestAnalysis({
+        type: "DELIVERY_PROOF",
+        recordId: deliveryId,
+        businessId,
+        requestedById: userId,
+        input: {
+          photoPath,
+          signaturePath,
+          expectedDocument: delivery.invoice_number ?? delivery.code ?? null,
+          expectedRecipient: delivery.recipient_name,
+          provenOn: provenAt.toISOString().slice(0, 10),
+        },
+      });
+    } catch (error) {
+      console.error("[AI] Failed to request proof verification:", error);
     }
   }
 }
