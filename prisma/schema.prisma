@@ -143,6 +143,10 @@ model Business {
   externalRecipients     ExternalRecipient[]
   deliveryProofDocuments DeliveryProofDocument[]
   deliveryProofAudits    DeliveryProofAudit[]
+
+  apiKeys          ApiKey[]
+  webhookEndpoints WebhookEndpoint[]
+  webhookDeliveries WebhookDelivery[]
   deliveryMessageTemplates DeliveryMessageTemplate[]
 
   @@map("business")
@@ -1772,6 +1776,161 @@ enum ProofAuditStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+/// A key an outside system authenticates with.
+///
+/// The contract is OURS: a versioned public API and a versioned catalogue of
+/// webhook topics, the same for any TMS, ERP or router. Whoever connects to us
+/// adapts to our contract — a connector per customer is a connector per
+/// customer to maintain, forever, and the reference product taught that the
+/// hard way.
+model ApiKey {
+  id String @id @default(uuid(7))
+
+  /// What a person calls it when they revoke one: "ERP Protheus", "Fusion".
+  /// Without a name, revoking the right key means guessing.
+  name String
+
+  /// The visible half, shown in the list and carried in logs. The secret half
+  /// is never stored — only its hash — so a database dump does not hand
+  /// somebody the keys to every customer's operation.
+  prefix String @unique
+
+  token_hash String
+
+  /// What this key may do. Checked per route: a key an ERP uses to read routes
+  /// has no business creating deliveries, and the day that ERP is compromised
+  /// the blast radius is the scope somebody chose.
+  scopes String[]
+
+  /// Per key, not per company: one integration hammering us must not spend the
+  /// budget of another integration of the same customer.
+  rate_limit_per_minute Int @default(120)
+
+  /// Answers "is this key still used?" before somebody revokes it.
+  last_used_at DateTime?
+
+  /// Revoked, not deleted. A key that made calls is part of the answer to what
+  /// happened, and deleting it would take the trail with it.
+  revoked_at DateTime?
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId, created_at])
+  @@map("api_key")
+}
+
+/// Where a customer's system wants to be told things.
+model WebhookEndpoint {
+  id String @id @default(uuid(7))
+
+  name String
+  url  String
+
+  /// Signs every payload with HMAC-SHA256, so the receiver can prove the call
+  /// came from us and not from somebody who learnt their URL.
+  secret String
+
+  /// Reusable authentication the receiver's own gateway wants — a bearer, an
+  /// API key of theirs. Stored because the alternative is asking a customer to
+  /// paste it on every event.
+  headers Json?
+
+  /// Which topics. An endpoint that subscribed to nothing is an endpoint that
+  /// receives nothing, which is a valid and deliberate state.
+  topics String[]
+
+  is_active Boolean @default(true)
+
+  /// Turned off by us after too many consecutive failures, so a dead endpoint
+  /// stops costing every event a timeout. Distinct from `is_active`, which is
+  /// the customer's own switch.
+  disabled_at DateTime?
+
+  consecutive_failures Int @default(0)
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  deliveries WebhookDelivery[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([businessId, created_at])
+  @@map("webhook_endpoint")
+}
+
+/// One attempt to tell one endpoint about one event.
+///
+/// The payload is COPIED rather than referenced, and that is the point: the
+/// outbox is a work queue that gets purged, and a customer asking us to resend
+/// last Tuesday's event must not depend on a row we deleted on Wednesday.
+/// Separating the audit archive from the hot queue is the same decision §4.6
+/// records for the notification tables.
+model WebhookDelivery {
+  id String @id @default(uuid(7))
+
+  endpoint   WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  endpointId String
+
+  topic String
+
+  /// The outbox event this came from, for tracing one fact across both queues.
+  /// A plain column and not a relation: the outbox row is purged long before
+  /// this one, and a foreign key would either block the purge or null the
+  /// trail.
+  sourceEventId String?
+
+  payload   Json
+  signature String
+
+  status   WebhookDeliveryStatus @default(PENDING)
+  attempts Int                   @default(0)
+
+  availableAt    DateTime  @default(now())
+  leaseExpiresAt DateTime?
+
+  /// What their server said. The body is truncated — a customer debugging an
+  /// integration needs the first kilobyte, not a megabyte of their own HTML
+  /// error page multiplied by every event of the day.
+  response_status Int?
+  response_body   String?
+
+  latency_ms Int?
+
+  deliveredAt DateTime?
+  lastError   String?
+
+  /// Set when a person pressed resend. Distinguishes our retries from theirs,
+  /// which is the first question when a duplicate is reported.
+  resent_from_id String?
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  /// The monitor's read: what happened, for this company, newest first.
+  @@index([businessId, created_at])
+  @@index([endpointId, status])
+  @@map("webhook_delivery")
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  PROCESSING
+  DELIVERED
+
+  /// Retries exhausted. Still resendable by hand within the replay window —
+  /// which is why the payload lives here and not only in the outbox.
+  FAILED
 }
 
 model Import {
