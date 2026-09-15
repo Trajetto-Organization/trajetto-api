@@ -23,6 +23,16 @@ import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
 
 import {
+  basicAuthMatches,
+  docsAccessFor,
+} from "@/shared/integration/docs-access";
+import {
+  buildPublicApiDocument,
+  renderPublicDocsPage,
+  type OpenApiDocument,
+} from "@/shared/integration/public-docs";
+
+import {
   hasZodFastifySchemaValidationErrors,
   jsonSchemaTransform,
   serializerCompiler,
@@ -136,9 +146,73 @@ app.register(fastifySwagger, {
   transform: jsonSchemaTransform,
 });
 
+/**
+ * The internal reference, and who may read it.
+ *
+ * Open outside production. In production it answers 404 unless DOCS_USER and
+ * DOCS_PASSWORD are both set, and then only behind HTTP Basic: /docs describes
+ * every endpoint of the product, including the ones only a master can call,
+ * and publishing that is publishing the map.
+ *
+ * 404 and not 403, for the same reason a cross-tenant read is a 404: "there is
+ * nothing here" ends the conversation, while "you may not" confirms there is
+ * something worth coming back for.
+ */
+const docsAccess = docsAccessFor(env.NODE_ENV, {
+  user: env.DOCS_USER,
+  password: env.DOCS_PASSWORD,
+});
+
 app.register(fastifySwaggerUi, {
   routePrefix: "/docs",
+  uiHooks: {
+    onRequest: (request, reply, next) => {
+      if (docsAccess.kind === "open") return next();
+
+      if (docsAccess.kind === "disabled") {
+        return reply.status(404).send({ message: "Not found" });
+      }
+
+      if (basicAuthMatches(request.headers.authorization, docsAccess)) {
+        return next();
+      }
+
+      return reply
+        .header("WWW-Authenticate", 'Basic realm="Trajetto API"')
+        .status(401)
+        .send({ message: "Credenciais inválidas." });
+    },
+  },
 });
+
+/**
+ * The PUBLIC reference: only what a customer's API key can reach.
+ *
+ * Built by subtraction from the document the application actually serves, so
+ * an endpoint renamed internally cannot leave the portal describing a URL that
+ * no longer answers. Rate-limited like any other open route — it is the one
+ * page an integrator's CI might fetch on every build.
+ */
+app.get(
+  "/integration/docs/openapi.json",
+  { schema: { hide: true }, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+  async (_request, reply) =>
+    reply
+      .header("Cache-Control", "public, max-age=300")
+      .status(200)
+      .send(buildPublicApiDocument(app.swagger() as OpenApiDocument)),
+);
+
+app.get(
+  "/integration/docs",
+  { schema: { hide: true }, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+  async (_request, reply) =>
+    reply
+      .type("text/html; charset=utf-8")
+      .header("Cache-Control", "public, max-age=300")
+      .status(200)
+      .send(renderPublicDocsPage("/integration/docs/openapi.json")),
+);
 
 // Dedicated Redis client for rate limiting (separate from the main one).
 // Sharing the counter across replicas keeps the global limit correct when

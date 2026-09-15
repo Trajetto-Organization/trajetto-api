@@ -464,11 +464,13 @@ describe("releasing a route", () => {
       "route.unreleased",
     ]);
 
-    expect(webhookStub.announced.at(-1)?.payload.status).toBe("PLANNED");
+    const reversal = webhookStub.announced[webhookStub.announced.length - 1];
+
+    expect(reversal.payload.status).toBe("PLANNED");
 
     // And inside the write's own transaction, so a crash cannot leave the
     // reversal in our database and absent from theirs.
-    expect(webhookStub.announced.at(-1)?.transactional).toBe(true);
+    expect(reversal.transactional).toBe(true);
   });
 });
 

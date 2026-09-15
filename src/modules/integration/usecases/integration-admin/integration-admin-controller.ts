@@ -304,6 +304,12 @@ class IntegrationAdminController {
             latency_ms: true,
             lastError: true,
             deliveredAt: true,
+
+            // When we try again. A row sitting in "na fila" with no clue when
+            // is a row somebody resends by hand, which is how a receiver gets
+            // the same event twice.
+            availableAt: true,
+
             created_at: true,
             endpoint: { select: { id: true, name: true, url: true } },
           },
@@ -407,6 +413,13 @@ class IntegrationAdminController {
         topic: original.topic,
         sourceEventId: original.sourceEventId,
         payload: original.payload as Prisma.InputJsonValue,
+
+        // The same bytes and the same signature the first attempt carried.
+        // Re-signing would produce a second event a receiver cannot match to
+        // the first — which is exactly what somebody reporting a duplicate is
+        // trying to work out.
+        signed_body: original.signed_body,
+
         signature: original.signature,
         resent_from_id: original.id,
       },

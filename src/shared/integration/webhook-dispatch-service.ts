@@ -98,7 +98,18 @@ async function fanOutWebhookEvent(
       businessId: event.businessId,
       topic: event.topic,
       sourceEventId: event.sourceEventId ?? null,
+
+      // The queryable copy, for the monitor and for anybody asking what was
+      // sent. NOT what goes on the wire — see `signed_body`.
       payload: JSON.parse(body) as Prisma.InputJsonValue,
+
+      // What goes on the wire, byte for byte. JSONB is not a string: Postgres
+      // parses it, reorders the keys and drops duplicates, so re-serialising
+      // the column at send time produces a body the signature does not cover.
+      // The receiver rejects it, and nothing on our side can tell — from here
+      // the POST returned 200.
+      signed_body: body,
+
       signature: signed.header,
     };
   });
@@ -210,14 +221,18 @@ class WebhookDispatchService {
 
     const stored = await database.webhookDelivery.findUnique({
       where: { id: row.id },
-      select: { payload: true, signature: true },
+      select: { payload: true, signature: true, signed_body: true },
     });
 
-    // The bytes that were signed, re-serialised the same way. Not
-    // re-stringified from the claimed row: a retry has to post the same body
-    // the signature covers, or the receiver's verification fails on our own
-    // second attempt.
-    const body = JSON.stringify(stored?.payload ?? row.payload);
+    // The bytes that were signed, read back verbatim. A retry three hours
+    // later posts the same body with the same signature, so a receiver that
+    // logged the first attempt can prove the second is the same event.
+    //
+    // The fallback is for rows queued before `signed_body` existed, and it is
+    // wrong in the way that column was added to fix: JSONB reorders keys, so
+    // the bytes will not match the signature. Losing the event entirely would
+    // be worse.
+    const body = stored?.signed_body ?? JSON.stringify(stored?.payload ?? row.payload);
 
     const startedAt = Date.now();
 

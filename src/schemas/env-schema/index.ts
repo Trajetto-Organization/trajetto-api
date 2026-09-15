@@ -46,6 +46,22 @@ const envSchema = z
 
     // AI Verification (Claude Haiku Vision)
     ANTHROPIC_API_KEY: z.string().optional(),
+
+    /**
+     * The internal reference at /docs.
+     *
+     * That document describes EVERY endpoint of the product, including the
+     * ones only a master can call, and publishing it hands an attacker the
+     * map. Outside production it is open, because that is where it is useful.
+     * In production it opens only when both of these are set, and then behind
+     * HTTP Basic — a pair nobody sets by accident.
+     *
+     * The public integration reference is a different page entirely and stays
+     * open: it is built by subtraction and describes only what a customer's
+     * API key can reach.
+     */
+    DOCS_USER: z.string().optional(),
+    DOCS_PASSWORD: z.string().optional(),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== "production") return;

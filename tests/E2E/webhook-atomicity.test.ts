@@ -98,7 +98,11 @@ describe("a repository write joins the caller's transaction", () => {
   it("rolls the batch assignment back with the transaction around it", async () => {
     await expect(
       prisma.$transaction(async (tx) => {
-        await repository.assignDeliveries(pending, { driverId: DRIVER }, tx);
+        await repository.assignDeliveries(
+          pending,
+          { driverId: DRIVER, vehicleId: null },
+          tx,
+        );
 
         // Stands in for the webhook row failing to write: whatever goes wrong
         // after the assignment, the assignment has to go with it.
@@ -121,7 +125,11 @@ describe("a repository write joins the caller's transaction", () => {
     // The other half of the pair. Without it the test above passes for a
     // repository that simply never assigns anything.
     await prisma.$transaction(async (tx) => {
-      await repository.assignDeliveries(pending, { driverId: DRIVER }, tx);
+      await repository.assignDeliveries(
+          pending,
+          { driverId: DRIVER, vehicleId: null },
+          tx,
+        );
     });
 
     const after = await prisma.delivery.findMany({

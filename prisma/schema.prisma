@@ -1890,6 +1890,18 @@ model WebhookDelivery {
   payload   Json
   signature String
 
+  /// The exact bytes the signature covers.
+  ///
+  /// Separate from `payload` because JSONB is not a string: Postgres parses
+  /// it, reorders the keys and drops duplicates, so `JSON.stringify` of what
+  /// comes back is not what went in — and a signature over one does not verify
+  /// the other. A retry three hours later has to post the same bytes as the
+  /// first attempt, or a receiver that logged both cannot tell they are the
+  /// same event.
+  ///
+  /// Nullable only for rows written before this column existed.
+  signed_body String?
+
   status   WebhookDeliveryStatus @default(PENDING)
   attempts Int                   @default(0)
 

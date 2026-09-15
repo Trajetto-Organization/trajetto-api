@@ -361,3 +361,66 @@ describe("paging by cursor", () => {
     expect(response.json().next_cursor).toBeNull();
   });
 });
+
+/**
+ * The reference an integrator reads, served by the running application.
+ *
+ * The unit test proves the filter is a filter. Only this can prove the
+ * filtered document is built from the routes that actually exist — a rename
+ * inside the product would leave a hand-written portal describing a URL that
+ * answers 404, and nobody on our side would ever notice.
+ */
+describe("the public documentation portal", () => {
+  it("serves a page that points at the filtered document", async () => {
+    const response = await app.inject({ method: "GET", url: "/integration/docs" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+
+    expect(response.body).toContain('data-url="/integration/docs/openapi.json"');
+  });
+
+  it("publishes the integration endpoints and nothing else", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/integration/docs/openapi.json",
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const paths = Object.keys(response.json().paths);
+
+    // Real routes, read out of the live document: /catalogue is the page
+    // somebody lands on first, and deliveries is what they integrate.
+    expect(paths).toContain("/integration/v1/catalogue");
+    expect(paths).toContain("/integration/v1/deliveries");
+
+    // And nothing a session reaches. This is the assertion that matters: the
+    // portal is a promise, and a promise that accidentally includes
+    // /user/create-user is a promise we cannot keep.
+    for (const path of paths) {
+      expect(path.startsWith("/integration/v1/"), path).toBe(true);
+    }
+  });
+
+  it("offers the key scheme and not the session one", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/integration/docs/openapi.json",
+    });
+
+    const schemes = Object.keys(response.json().components.securitySchemes);
+
+    expect(schemes).toEqual(["apiKey"]);
+  });
+
+  it("needs no key of its own", async () => {
+    // It is what somebody reads BEFORE they have one.
+    const response = await app.inject({
+      method: "GET",
+      url: "/integration/docs/openapi.json",
+    });
+
+    expect(response.statusCode).not.toBe(401);
+  });
+});
