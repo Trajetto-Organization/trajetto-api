@@ -16,6 +16,10 @@ import {
 
 import { signWebhookPayload } from "./webhook-signature";
 import { endpointWantsTopic } from "./webhook-catalogue";
+import {
+  safeWebhookHeaders,
+  verifyWebhookDestination,
+} from "./webhook-destination";
 
 import { withRetryJitter } from "@/shared/notifications/pipeline-rules";
 
@@ -135,6 +139,21 @@ class WebhookDispatchService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
 
+  /**
+   * Quem decide se um destino pode ser alcançado.
+   *
+   * Injetável, e com o valor certo por padrão. A alternativa seria uma
+   * variável de ambiente que desliga a verificação em teste — e uma flag que
+   * desliga uma proteção contra SSRF é uma flag que alguém acaba ligando em
+   * produção. Aqui, quem quiser um verificador permissivo precisa construir a
+   * instância dizendo isso, no arquivo de teste, onde se lê.
+   */
+  constructor(
+    private verifyDestination: (
+      url: string,
+    ) => Promise<{ allowed: boolean; reason?: string }> = verifyWebhookDestination,
+  ) {}
+
   static getInstance(): WebhookDispatchService {
     WebhookDispatchService.instance ??= new WebhookDispatchService();
 
@@ -234,6 +253,32 @@ class WebhookDispatchService {
     // be worse.
     const body = stored?.signed_body ?? JSON.stringify(stored?.payload ?? row.payload);
 
+    /**
+     * Onde isto pode sair, decidido a CADA envio.
+     *
+     * Um cliente cadastra a URL do próprio sistema e o nosso servidor faz o
+     * POST — o que é, literalmente, "peça ao servidor de vocês que busque este
+     * endereço". Sem freio, o endereço pode ser a rede interna da plataforma:
+     * um admin de qualquer transportadora apontaria um endpoint para
+     * `169.254.169.254` e leria as credenciais da instância pelo próprio
+     * monitor, que devolve o corpo da resposta para ele.
+     *
+     * A cada envio e não só no cadastro: um nome que resolvia para um IP
+     * público quando foi salvo pode passar a resolver para um privado depois.
+     */
+    const destination = await this.verifyDestination(endpoint.url);
+
+    if (!destination.allowed) {
+      await this.markFailed(
+        row,
+        null,
+        destination.reason ?? "Destino não permitido.",
+        { permanent: true },
+      );
+
+      return;
+    }
+
     const startedAt = Date.now();
 
     const controller = new AbortController();
@@ -242,20 +287,51 @@ class WebhookDispatchService {
 
     try {
       const response = await fetch(endpoint.url, {
+        // Sem seguir redirecionamento. O `https://` do cadastro só vale para o
+        // primeiro salto, e um 302 para `http://169.254.169.254` anularia a
+        // verificação acima inteira. Um receptor de webhook não tem motivo
+        // legítimo para redirecionar.
+        redirect: "manual",
+
         method: "POST",
         headers: {
+          // Os do cliente PRIMEIRO, os nossos depois.
+          //
+          // Na ordem inversa, um cliente sobrescreveria
+          // `X-Trajetto-Signature` — a garantia que a documentação pública
+          // promete — e transformaria um receptor compartilhado em alvo de
+          // replay. `safeWebhookHeaders` já tira os reservados; a ordem é a
+          // segunda tranca.
+          ...safeWebhookHeaders(
+            endpoint.headers as Record<string, string> | null,
+          ),
+
           "Content-Type": "application/json",
           "User-Agent": "Trajetto-Webhooks/1.0",
 
           "X-Trajetto-Topic": row.topic,
           "X-Trajetto-Delivery": row.id,
           "X-Trajetto-Signature": stored?.signature ?? "",
-
-          ...((endpoint.headers as Record<string, string> | null) ?? {}),
         },
         body,
         signal: controller.signal,
       });
+
+      // Um 3xx com `redirect: "manual"` volta como resposta normal. Contar
+      // como sucesso seria dizer que o evento chegou a um lugar para onde ele
+      // não foi.
+      if (response.status >= 300 && response.status < 400) {
+        clearTimeout(timer);
+
+        await this.markFailed(
+          row,
+          { status: response.status, body: "", latency: Date.now() - startedAt },
+          "O endpoint respondeu com um redirecionamento, que não é seguido.",
+          { permanent: true },
+        );
+
+        return;
+      }
 
       const latency = Date.now() - startedAt;
 

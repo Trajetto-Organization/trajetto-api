@@ -45,7 +45,14 @@ class GetPreviousFuelUseCase {
 
     const findVehicleById = await this.vehicle.findVehicleById(vehicleId);
 
-    if (!findVehicleById) {
+    // O mesmo 404 para "não existe" e "não é seu". Sem esta linha, o id
+    // de um veículo de outra empresa devolvia o abastecimento anterior
+    // dele — litros, valor, odômetro, posto, foto — e realimentar a data
+    // devolvida percorria o histórico inteiro.
+    if (
+      !findVehicleById ||
+      findVehicleById.businessId !== findUser.businessId
+    ) {
       throw new VehicleNotFoundError();
     }
 

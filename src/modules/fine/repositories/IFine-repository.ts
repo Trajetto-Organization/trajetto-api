@@ -26,7 +26,8 @@ interface IFineRepository {
     userRole: string,
   ) => Promise<number>;
   updateFine: ({ fineData, fineId }: UpdateFine) => Promise<Fine>;
-  deleteFine: (fineId: string) => Promise<Fine>;
+  /** `businessId` no `where`, sempre: a segunda tranca da regra de tenant. */
+  deleteFine: (fineId: string, businessId: string) => Promise<Fine>;
   findFineById: (fineId: string) => Promise<Fine | null>;
   findFinesByDriverId: (driverId: string) => Promise<Fine[]>;
   findFinesByVehicleId: (vehicleId: string) => Promise<Fine[]>;

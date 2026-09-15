@@ -85,8 +85,20 @@ class GetProofDocumentUseCase {
       throw new AppError("Entrega não encontrada.", 404, "DELIVERY_NOT_FOUND");
     }
 
-    // A driver only reaches their own work, the same rule their listing obeys.
-    if (findUser.driverId && source.driver === null) {
+    /**
+     * Um motorista alcança só o próprio trabalho, a mesma regra da listagem
+     * dele.
+     *
+     * Isto comparava com `null`, o que testava se a entrega TEM um motorista —
+     * verdadeiro para toda entrega atribuída a qualquer pessoa da empresa. Um
+     * motorista lia o comprovante do colega: nome e documento do destinatário,
+     * endereço completo, GPS da entrega, foto do canhoto e assinatura. E com
+     * `?regenerate=true` também era escrita.
+     */
+    if (
+      findUser.driverId &&
+      (source.driver as { id?: string } | null)?.id !== findUser.driverId
+    ) {
       throw new AppError("Entrega não encontrada.", 404, "DELIVERY_NOT_FOUND");
     }
 

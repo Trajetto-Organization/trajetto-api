@@ -60,7 +60,12 @@ class UpdateDriverUseCase {
 
     const findDriverById = await this.driver.findDriverById(driverId);
 
-    if (!findDriverById) {
+    // O mesmo 404 para "não existe" e "não é seu". Sem esta linha,
+    // qualquer usuário com `driver_manage:write` reescrevia o motorista
+    // de outra empresa — nome, CPF, CNH — ou o marcava INACTIVE, que o
+    // `session-eligibility` transforma em logout forçado do aplicativo
+    // dele no meio da rota.
+    if (!findDriverById || findDriverById.businessId !== businessId) {
       throw new DriverNotFoundError();
     }
 

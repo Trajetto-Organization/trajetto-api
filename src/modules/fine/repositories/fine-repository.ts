@@ -370,12 +370,27 @@ class FineRepository implements IFineRepository {
     return updatedFine;
   }
 
-  async deleteFine(fineId: string): Promise<Fine> {
-    const deletedFine = await this.prisma.fine.delete({
-      where: { id: fineId },
+  async deleteFine(fineId: string, businessId: string): Promise<Fine> {
+    /**
+     * `businessId` no `where`, duplicando a checagem da use case.
+     *
+     * Não é redundância: a use case protege o caminho de que alguém lembrou, e
+     * o `where` protege os que ninguém pensou. `deleteMany` e não `delete`
+     * porque `delete` exige uma chave única e explodiria com P2025; aqui a
+     * ausência é uma resposta legítima — a multa é de outra empresa — e quem
+     * chamou já leu a linha para saber qual era.
+     */
+    const found = await this.prisma.fine.findFirst({
+      where: { id: fineId, businessId },
     });
 
-    return deletedFine;
+    if (!found) {
+      throw new Error("Multa não encontrada nesta empresa.");
+    }
+
+    await this.prisma.fine.deleteMany({ where: { id: fineId, businessId } });
+
+    return found;
   }
 
   async findFineById(fineId: string): Promise<Fine | null> {

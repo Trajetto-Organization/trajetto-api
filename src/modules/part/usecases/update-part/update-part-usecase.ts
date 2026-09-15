@@ -63,18 +63,26 @@ class UpdatePartUseCase {
       throw new PartNotFoundError();
     }
 
-    // If you are changing the company
-    if (partData.businessId) {
-      // Check if the new company exists
-      const findNewBusiness = await this.business.findBusinessById(
-        partData.businessId,
-      );
+    /**
+     * A peça tem que ser desta empresa. SEMPRE.
+     *
+     * Isto vivia dentro de um `else`: mandar qualquer `businessId` no
+     * corpo tomava o outro ramo e a comparação de posse nunca rodava —
+     * a peça de outra empresa era reparentada para a de quem chamou,
+     * junto com o preço e a descrição. Uma verificação que o próprio
+     * atacante escolhe se roda não é uma verificação.
+     */
+    if (findPartById.businessId !== currentBusinessId) {
+      throw new PartNotBelongError();
+    }
 
-      if (!findNewBusiness) {
-        throw new BusinessNotFoundError();
-      }
-    } else if (findPartById.businessId !== currentBusinessId) {
-      // If you are not changing company, check access to current company
+    // Mudar a empresa da peça não é uma operação que este endpoint
+    // oferece: mover um item de estoque entre empresas é uma decisão de
+    // negócio com histórico atrás, não um campo de formulário.
+    if (
+      partData.businessId &&
+      partData.businessId !== currentBusinessId
+    ) {
       throw new PartNotBelongError();
     }
 

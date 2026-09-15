@@ -2,6 +2,7 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
 import { updateDeleteFineSchema } from "@/schemas/update-delete-fine-schema";
+import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { DeleteFineUseCase } from "./delete-fine-usecase";
 
 import { FineNotFoundError } from "../errors/fine-not-found-error";
@@ -14,11 +15,12 @@ class DeleteFineController {
   ): Promise<Response> {
     const { id } = request.user;
     const { fineId } = updateDeleteFineSchema.parse(request.params);
+    const { businessId } = updateDeleteBusinessSchema.parse(request.params);
 
     const deleteFineUseCase = container.resolve(DeleteFineUseCase);
 
     try {
-      await deleteFineUseCase.execute(fineId, id);
+      await deleteFineUseCase.execute(fineId, id, businessId);
       return reply.status(200).send({
         message: "Multa deletada com sucesso!",
       });

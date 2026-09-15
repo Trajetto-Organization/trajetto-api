@@ -4,6 +4,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IOccurrenceTypeRepository } from "../../repositories/IOccurrence-type-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import {
   OccurrenceTypeNotFoundError,
   OccurrenceTypeNameAlreadyExistsError,
@@ -43,6 +44,13 @@ class UpdateOccurrenceTypeUseCase {
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    // O catálogo da operação é do despachante. `delivery_manage` e
+    // `occurrence_manage` são abertos ao motorista de propósito — o
+    // aplicativo dele roda nessas permissões —, então a tabela de
+    // permissões diz sim e a use case diz não. O módulo de motivos de
+    // status, na MESMA chave, já fazia isto nas três escritas.
+    assertDispatcher(findUser);
 
     const findOccurrenceType =
       await this.occurrenceType.findOccurrenceTypeById(occurrenceTypeId);

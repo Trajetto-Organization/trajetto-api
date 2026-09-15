@@ -81,7 +81,15 @@ class UpdateServiceOrderPartUseCase {
     const findServiceOrderPart =
       await this.serviceOrderPart.findServiceOrderPartById(serviceOrderPartId);
 
-    if (!findServiceOrderPart) {
+    // A linha tem que ser DESTA ordem de serviço, que já foi provada
+    // desta empresa. Sem a comparação, a linha de outra empresa era
+    // reparentada para a ordem de quem chamou: a ordem dela perdia um
+    // item e o custo total mudava dos dois lados. A irmã `delete` faz
+    // exatamente esta checagem.
+    if (
+      !findServiceOrderPart ||
+      findServiceOrderPart.serviceOrderId !== serviceOrderId
+    ) {
       throw new ServiceOrderPartNotFoundError();
     }
 

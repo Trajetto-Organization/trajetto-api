@@ -3,6 +3,7 @@ import { IFineRepository } from "../../repositories/IFine-repository";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { AppError } from "@/shared/errors/AppError";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { FineNotFoundError } from "../errors/fine-not-found-error";
@@ -21,21 +22,33 @@ class DeleteFineUseCase {
     private notificationService: NotificationService,
   ) {}
 
-  async execute(fineId: string, userId: string): Promise<Fine> {
+  async execute(
+    fineId: string,
+    userId: string,
+    businessId: string,
+  ): Promise<Fine> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const existingFine = await this.fine.findFineById(fineId);
 
-    if (!existingFine) {
+    // O mesmo 404 para "não existe" e "não é sua": um 403 distinto
+    // confirmaria que a multa existe, que é metade do que alguém
+    // varrendo ids quer saber.
+    if (!existingFine || existingFine.businessId !== businessId) {
       throw new FineNotFoundError();
     }
 
     try {
-      const deletedFine = await this.fine.deleteFine(fineId);
+      // O `businessId` também no repositório, duplicando a checagem acima:
+      // a use case protege o caminho de que alguém lembrou, e o `where`
+      // protege os que ninguém pensou.
+      const deletedFine = await this.fine.deleteFine(fineId, businessId);
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

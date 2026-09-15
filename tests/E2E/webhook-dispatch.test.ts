@@ -42,7 +42,18 @@ let received: Received[] = [];
 /** What the next request is answered with, so a test can choose the outcome. */
 let reply: { status: number; body: string } = { status: 200, body: "ok" };
 
-const dispatcher = new WebhookDispatchService();
+/**
+ * O despachante com um verificador de destino permissivo.
+ *
+ * O receptor deste arquivo roda em `127.0.0.1`, que é exatamente o que a
+ * verificação de destino recusa — e ela está certa. Um verificador injetado
+ * deixa os testes de ENTREGA medirem a entrega, enquanto os de RECUSA abaixo
+ * usam o verificador de verdade.
+ */
+const dispatcher = new WebhookDispatchService(async () => ({ allowed: true }));
+
+/** O de produção, para provar que ele recusa. */
+const guardedDispatcher = new WebhookDispatchService();
 
 async function seedEndpoint(options: {
   topics: string[];
@@ -470,5 +481,112 @@ describe("a retry sends the same bytes", () => {
         header: received[1].headers["x-trajetto-signature"] ?? "",
       }),
     ).toBe(true);
+  });
+});
+
+describe("para onde um webhook NÃO sai", () => {
+  it("recusa um endereço interno em vez de buscá-lo", async () => {
+    // O ataque inteiro em três linhas: o cliente cadastra o endereço de
+    // metadados da nuvem, nós buscamos, e o monitor devolve o corpo para ele.
+    const endpoint = await prisma.webhookEndpoint.create({
+      data: {
+        name: "Metadados",
+        url: "https://169.254.169.254/latest/meta-data/",
+        secret: "whsec_teste",
+        topics: ["delivery.delivered"],
+        businessId: CARRIER,
+        is_active: true,
+      },
+    });
+
+    await fanOutWebhookEvent({
+      topic: "delivery.delivered",
+      businessId: CARRIER,
+      payload: {},
+    });
+
+    await guardedDispatcher.processBatch();
+
+    const row = await prisma.webhookDelivery.findFirstOrThrow({
+      where: { endpointId: endpoint.id },
+    });
+
+    expect(row.status).toBe("FAILED");
+
+    // E nada foi buscado: o receptor local deste arquivo não recebeu nada, e
+    // o corpo da resposta ficou vazio — que é o que impede o monitor de virar
+    // um leitor da rede interna.
+    expect(received).toHaveLength(0);
+    expect(row.response_body ?? "").toBe("");
+
+    // Permanente: repetir a varredura não pode virar uma sonda em laço.
+    await guardedDispatcher.processBatch();
+
+    expect(received).toHaveLength(0);
+  });
+
+  it("recusa localhost pelo nome", async () => {
+    await prisma.webhookEndpoint.create({
+      data: {
+        name: "Interno",
+        url: "https://localhost:9200/_cat/indices",
+        secret: "whsec_teste",
+        topics: ["delivery.delivered"],
+        businessId: CARRIER,
+        is_active: true,
+      },
+    });
+
+    await fanOutWebhookEvent({
+      topic: "delivery.delivered",
+      businessId: CARRIER,
+      payload: {},
+    });
+
+    await guardedDispatcher.processBatch();
+
+    expect(received).toHaveLength(0);
+  });
+
+  it("não deixa o cliente sobrescrever a assinatura", async () => {
+    const endpoint = await seedEndpoint({ topics: ["delivery.delivered"] });
+
+    // O mapa é gravado direto, como uma linha anterior à regra do schema
+    // estaria: a segunda tranca é a ordem do espalhamento no despachante.
+    await prisma.webhookEndpoint.update({
+      where: { id: endpoint.id },
+      data: {
+        headers: {
+          "X-Trajetto-Signature": "t=1,v1=forjada",
+          "X-Api-Key": "a-do-cliente",
+        },
+      },
+    });
+
+    await fanOutWebhookEvent({
+      topic: "delivery.delivered",
+      businessId: CARRIER,
+      payload: {},
+    });
+
+    await dispatcher.processBatch();
+
+    expect(received).toHaveLength(1);
+
+    // A nossa assinatura, não a dele — e ela verifica.
+    expect(received[0].headers["x-trajetto-signature"]).not.toBe(
+      "t=1,v1=forjada",
+    );
+
+    expect(
+      verifyWebhookSignature({
+        secret: endpoint.secret,
+        body: received[0].body,
+        header: received[0].headers["x-trajetto-signature"] ?? "",
+      }),
+    ).toBe(true);
+
+    // E o que é dele passa.
+    expect(received[0].headers["x-api-key"]).toBe("a-do-cliente");
   });
 });

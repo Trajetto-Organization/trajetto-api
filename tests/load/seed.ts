@@ -58,9 +58,31 @@ interface LoadContext {
   routeIds: string[];
 }
 
-function tokenFor(userId: string, familyId: string): string {
+/**
+ * The same claims `issueSessionTokenPair` puts in a real access token.
+ *
+ * Not only `sub` and the session fields: the WEB reads `role`, `businessId`
+ * and `driverId` out of the token and compares them against `/user/me` on
+ * every navigation — a mismatch is treated as "your permissions changed" and
+ * logs the session out.
+ *
+ * Found by a browser test that passed against the LOGIN page: eleven widths of
+ * a screen nobody was measuring.
+ */
+function tokenFor(
+  userId: string,
+  familyId: string,
+  claims: { role: string; businessId: string | null; driverId: string | null },
+): string {
   return sign(
-    { tokenType: "access", sessionVersion: 0, familyId },
+    {
+      tokenType: "access",
+      role: claims.role,
+      businessId: claims.businessId,
+      driverId: claims.driverId,
+      sessionVersion: 0,
+      familyId,
+    },
     auth.secret_token,
     { subject: userId, expiresIn: "12h" },
   );
@@ -191,7 +213,13 @@ async function seedTenant(index: number, primary: boolean) {
         },
       });
 
-      driverTokens.push(tokenFor(userId, familyId));
+      driverTokens.push(
+        tokenFor(userId, familyId, {
+          role: "BUSINESS_USER",
+          businessId,
+          driverId: driver.id,
+        }),
+      );
     }
   }
 
@@ -259,7 +287,13 @@ async function seedTenant(index: number, primary: boolean) {
       },
     });
 
-    managerTokens.push(tokenFor(managerId, managerFamily));
+    managerTokens.push(
+      tokenFor(managerId, managerFamily, {
+        role: "BUSINESS_ADMIN",
+        businessId,
+        driverId: null,
+      }),
+    );
   }
 
   const key = generateApiKey();

@@ -132,16 +132,20 @@ async function fineRoutes(app: FastifyInstance) {
   );
 
   app.delete(
-    "/delete-fine/:fineId",
+    "/delete-fine/:fineId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fine_manage", "write")],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("fine_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fine"],
         summary: "Delete a fine",
-        description: "Permanently delete a traffic violation fine record",
-        params: fineSchemas.updateDeleteFine,
+        description:
+          "Apaga uma multa em definitivo. O `businessId` está na rota, e não por simetria: esta era a única rota de exclusão do produto sem ele, e sem ele `enforceRequestedTenant` não tem o que comparar — qualquer usuário com `fine_manage:write` apagava a multa de qualquer empresa sabendo o id. Multa de outra empresa responde o mesmo 404 de uma que não existe.",
+        params: fineSchemas.fineBusinessParams,
         response: {
           200: fineResponses.fineDeleted,
           400: fineResponses.resourceNotFound,

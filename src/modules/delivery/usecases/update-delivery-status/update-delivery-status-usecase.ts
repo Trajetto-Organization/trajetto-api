@@ -42,6 +42,7 @@ import {
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { AppError } from "@/shared/errors/AppError";
+import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { Delivery } from "../../dtos/delivery-dto";
 
 interface UpdateDeliveryStatusRequest {
@@ -111,10 +112,21 @@ class UpdateDeliveryStatusUseCase {
       throw new DeliveryNotBelongBusinessError();
     }
 
-    // Drivers only move their own deliveries.
-    if (findUser.driverId && findDelivery.driverId !== findUser.driverId) {
-      throw new DeliveryNotFoundError();
-    }
+    /**
+     * Motorista não passa por aqui.
+     *
+     * A permissão `delivery_manage:write` é aberta ao motorista de propósito —
+     * é nela que o aplicativo dele roda —, e sem esta linha ele marcava a
+     * própria entrega como DELIVERED por este endpoint: sem foto, sem
+     * assinatura, sem geolocalização, contornando `register-delivery-proof`,
+     * que existe justamente para exigir a evidência. O bloco docstring lá em
+     * cima já dizia que "o aplicativo do motorista passa por chegada,
+     * comprovação e ocorrência"; faltava a linha que faz isso ser verdade.
+     *
+     * O escopo anterior ("motorista só move a entrega dele") não era proteção:
+     * a entrega dele é exatamente a que ele quer fechar sem comprovar.
+     */
+    assertDispatcher(findUser);
 
     const verdict = canTransitionDelivery(findDelivery.status, status);
 

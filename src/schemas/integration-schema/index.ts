@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { ALL_TOPICS } from "@/shared/integration/webhook-catalogue";
 import { API_SCOPES } from "@/shared/integration/api-key-rules";
+import { reservedHeaderNames } from "@/shared/integration/webhook-destination";
 
 /**
  * Cursor paging, not offset, on every public list.
@@ -88,7 +89,17 @@ const saveWebhookEndpointSchema = z.object({
   headers: z
     .record(z.string())
     .optional()
-    .describe("Autenticação que o gateway do receptor exige."),
+    .refine(
+      (value) => !value || reservedHeaderNames(value).length === 0,
+      "Há cabeçalhos reservados neste endpoint. `X-Trajetto-Signature`, `Host` e afins são escritos por nós.",
+    )
+    .refine(
+      (value) => !value || Object.keys(value).length <= 20,
+      "No máximo 20 cabeçalhos.",
+    )
+    .describe(
+      "Autenticação que o gateway do receptor exige. Os cabeçalhos que NÓS escrevemos são reservados: a assinatura é a garantia que a documentação promete, e um cliente que a substituísse transformaria um receptor compartilhado em alvo de replay.",
+    ),
 
   is_active: z.boolean().optional().default(true),
 });
