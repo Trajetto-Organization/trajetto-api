@@ -602,9 +602,44 @@ class DeliveryRepository implements IDeliveryRepository {
       include: {
         shipper: { select: { id: true, name: true } },
         items: true,
+
+        /**
+         * The open stop, when this delivery is on a route.
+         *
+         * The dispatcher put the addresses in an order, and until now the
+         * driver could not see it: the app listed the day by date and
+         * creation, which is not the street. One stop at most — the partial
+         * unique index allows a delivery exactly one open stop — so the app
+         * reads `stops[0]` and sorts by its sequence.
+         *
+         * Carried in THIS payload rather than fetched separately because this
+         * is the one the app caches for seven days offline; a second endpoint
+         * would be a second thing to go stale, on a phone with no signal.
+         */
+        stops: {
+          where: { status: { in: ["PENDING", "ARRIVED"] } },
+          select: {
+            id: true,
+            sequence: true,
+            status: true,
+            route: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+                status: true,
+              },
+            },
+          },
+        },
       },
-      // The day's route reads top-down: dated stops first, then creation
-      // order; undated ones close the list.
+      // Unchanged: dated first, then creation order, undated last.
+      //
+      // Deliberately NOT ordered by the stop's sequence — Prisma cannot order
+      // a row by a field of a to-many relation, and the app has to sort
+      // anyway: it renders this list from its offline cache, where the order
+      // the server chose is long gone. The sequence travels in the payload and
+      // the app is what puts the street in order.
       orderBy: [
         { scheduled_date: { sort: "asc", nulls: "last" } },
         { created_at: "asc" },

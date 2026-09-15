@@ -423,12 +423,25 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     businessId: string,
     driverId: string,
   ): Promise<unknown[]> {
-    return this.deliveries.filter(
-      (delivery) =>
-        delivery.businessId === businessId &&
-        delivery.driverId === driverId &&
-        (delivery.status === "PENDING" || delivery.status === "IN_TRANSIT"),
-    );
+    return this.deliveries
+      .filter(
+        (delivery) =>
+          delivery.businessId === businessId &&
+          delivery.driverId === driverId &&
+          (delivery.status === "PENDING" || delivery.status === "IN_TRANSIT"),
+      )
+      .map((delivery) => ({
+        ...delivery,
+
+        // The open stop rides along, as the real include does: the app needs
+        // the dispatcher's order and this is the payload it caches. At most
+        // one — the partial unique index allows a delivery exactly one.
+        stops: this.routeStops.filter(
+          (stop) =>
+            stop.deliveryId === delivery.id &&
+            (stop.status === "PENDING" || stop.status === "ARRIVED"),
+        ),
+      }));
   }
 
   async countPendingForDriver(

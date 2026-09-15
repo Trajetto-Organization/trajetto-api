@@ -625,3 +625,104 @@ describe("“Em rota” written by the route and nothing else", () => {
     expect(await statusOf(vehicle)).toBe("BLOCKED");
   });
 });
+
+describe("what the driver's phone receives", () => {
+  /**
+   * The app renders the day from a seven-day offline cache, so the order the
+   * dispatcher chose has to TRAVEL with the payload — a second endpoint would
+   * be a second thing to go stale on a phone with no signal, and the sort
+   * happens on the device because by then the server's order is long gone.
+   */
+  it("carries the open stop, its sequence and the route it belongs to", async () => {
+    const first = await seedDelivery();
+    const second = await seedDelivery();
+
+    await runningRoute([first, second]);
+
+    const rows = (await deliveries.listDriverDeliveries(
+      CARRIER,
+      DRIVER,
+    )) as Array<{
+      id: string;
+      stops: Array<{
+        sequence: number;
+        status: string;
+        route: { code: number; status: string };
+      }>;
+    }>;
+
+    // Scoped to what this test created: earlier tests in the file left their
+    // own routes running for the same driver, and the driver list is the
+    // whole day by design.
+    const routed = rows.filter(
+      (row) => (row.id === first || row.id === second) && row.stops.length > 0,
+    );
+
+    expect(routed).toHaveLength(2);
+
+    // At most one stop each: the partial unique index allows a delivery
+    // exactly one open one, which is why the app reads stops[0].
+    for (const row of routed) {
+      expect(row.stops).toHaveLength(1);
+      expect(row.stops[0].route.status).toBe("IN_PROGRESS");
+    }
+
+    const sequences = routed.map((row) => row.stops[0].sequence).sort();
+
+    expect(sequences).toEqual([10, 20]);
+  });
+
+  it("stops carrying a stop once the address is resolved", async () => {
+    // The include asks for OPEN stops only. An address already worked, still
+    // arriving on the phone with a position, is a stop the driver would be
+    // told to go back to.
+    const delivery = await seedDelivery();
+
+    await runningRoute([delivery]);
+
+    const before = (await deliveries.listDriverDeliveries(
+      CARRIER,
+      DRIVER,
+    )) as Array<{ id: string; stops: unknown[] }>;
+
+    expect(before.find((row) => row.id === delivery)!.stops).toHaveLength(1);
+
+    await repository.settleStopForDelivery(delivery, CARRIER, {
+      from: ["PENDING", "ARRIVED"],
+      status: "COMPLETED",
+      completed_at: new Date(),
+    });
+
+    const after = (await deliveries.listDriverDeliveries(
+      CARRIER,
+      DRIVER,
+    )) as Array<{ id: string; stops: unknown[] }>;
+
+    // The delivery is still IN_TRANSIT here — settling a stop at the
+    // repository level does not move it; that is the delivery use case's job,
+    // and the app's own outcome does both in one commit. What matters is that
+    // the resolved stop no longer travels.
+    expect(after.find((row) => row.id === delivery)!.stops).toEqual([]);
+  });
+
+  it("sends an empty list, not a missing key, for work with no route", async () => {
+    // The app treats a missing key as "cached before this existed" and an
+    // empty array as "not on a route". They must not be confused.
+    const loose = await seedDelivery();
+
+    await prisma.delivery.update({
+      where: { id: loose },
+      data: { driverId: DRIVER },
+    });
+
+    const rows = (await deliveries.listDriverDeliveries(
+      CARRIER,
+      DRIVER,
+    )) as Array<{ id: string; stops: unknown[] }>;
+
+    const row = rows.find((entry) => entry.id === loose);
+
+    expect(row).toBeDefined();
+    expect(row!.stops).toEqual([]);
+  });
+});

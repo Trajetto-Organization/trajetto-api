@@ -322,7 +322,7 @@ async function deliveryRoutes(app: FastifyInstance) {
         tags: ["delivery"],
         summary: "Driver's working list",
         description:
-          "Deliveries of the authenticated driver (PENDING = designated, plus IN_TRANSIT) with shipper and cargo items, alongside the active occurrence types — one payload feeding the app's offline cache. Dated stops come first.",
+          "Deliveries of the authenticated driver (PENDING = designated, plus IN_TRANSIT) with shipper, cargo items and — when the delivery is on a route — its open stop carrying the sequence the dispatcher chose and the route it belongs to. One payload, because this is what the app caches for seven days offline; a second endpoint would be a second thing to go stale on a phone with no signal. Rows come back dated-first, NOT in stop order: the app sorts by sequence, since it renders from its own cache where the server's order is long gone.",
         params: deliverySchemas.businessIdParam,
         response: {
           200: deliveryResponses.myDeliveries,
