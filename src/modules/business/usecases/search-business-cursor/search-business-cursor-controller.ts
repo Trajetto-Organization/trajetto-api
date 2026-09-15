@@ -26,7 +26,18 @@ class SearchBusinessCursorController {
         search,
       });
 
-      return sendAsNDJSON({
+      /**
+       * `return await`, not `return`.
+       *
+       * A bare `return promise` inside a try/catch is not caught: an async
+       * function awaits the returned promise AFTER leaving the block, so its
+       * rejection walks past every `catch` below and lands in Fastify's
+       * generic handler as a 500. Every branch underneath was unreachable —
+       * a cross-tenant read answered "Internal server error" instead of 403,
+       * and it was logged at error level, which is where real 500s go to
+       * hide.
+       */
+      return await sendAsNDJSON({
         reply,
         dataPromise: dataPromise.then((result) => ({
           data: result.data,

@@ -133,22 +133,22 @@ model Business {
 
   entitlements BusinessEntitlement[]
 
-  shippers        Shipper[]
-  routes          Route[]
-  occurrenceTypes OccurrenceType[]
+  shippers            Shipper[]
+  routes              Route[]
+  occurrenceTypes     OccurrenceType[]
   statusChangeReasons StatusChangeReason[]
-  imports Import[]
-  deliveries      Delivery[]
+  imports             Import[]
+  deliveries          Delivery[]
 
   externalRecipients     ExternalRecipient[]
   deliveryProofDocuments DeliveryProofDocument[]
   deliveryProofAudits    DeliveryProofAudit[]
 
-  apiKeys          ApiKey[]
-  apiKeyUsage      ApiKeyUsageDaily[]
-  driverPositions  DriverLastPosition[]
-  webhookEndpoints WebhookEndpoint[]
-  webhookDeliveries WebhookDelivery[]
+  apiKeys                  ApiKey[]
+  apiKeyUsage              ApiKeyUsageDaily[]
+  driverPositions          DriverLastPosition[]
+  webhookEndpoints         WebhookEndpoint[]
+  webhookDeliveries        WebhookDelivery[]
   deliveryMessageTemplates DeliveryMessageTemplate[]
 
   @@map("business")
@@ -492,14 +492,14 @@ model Driver {
   routes           Route[]
   chatThreads      ChatThread[]
 
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
+  created_at   DateTime            @default(now())
+  updated_at   DateTime            @updatedAt
+  lastPosition DriverLastPosition?
 
   // There was no tenant index at all here, so this was a sequential scan.
   // listDrivers and the driver picker used by delivery, fine, fuel, checklist and chat.
   @@index([businessId, created_at])
   @@map("driver")
-  lastPosition DriverLastPosition?
 }
 
 model Vehicle {
@@ -721,10 +721,10 @@ model Activity {
   // a redelivery cannot write the same activity twice. Deliberately NOT a
   // foreign key: deliveries are purged on a schedule and the activity trail
   // has to outlive them — a cascade here would quietly erase history.
-  deliveryId         String?   @unique
+  deliveryId String? @unique
 
-  created_at         DateTime  @default(now())
-  updated_at         DateTime  @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
   // Both compounds replace single-column indexes of the same write cost, so
   // the sort disappears for free — and "for free" is the whole argument on a
@@ -848,7 +848,7 @@ model DomainOutboxEvent {
 }
 
 model NotificationDelivery {
-  id            String              @id @default(uuid(7))
+  id            String @id @default(uuid(7))
   outboxEventId String
 
   /// Exactly one of these is set, and a CHECK constraint enforces it.
@@ -859,10 +859,10 @@ model NotificationDelivery {
   /// dedupe key and the provider bookkeeping are the hard parts, and a
   /// parallel table for external sends would be a second copy of all of them,
   /// drifting.
-  userId             String?
+  userId              String?
   externalRecipientId String?
 
-  channel       NotificationChannel
+  channel NotificationChannel
 
   status         NotificationDeliveryStatus @default(PENDING)
   attempts       Int                        @default(0)
@@ -2209,9 +2209,9 @@ model Delivery {
   // without this field would have to be revisited later. Cheap now.
   kind DeliveryKind @default(DELIVERY)
 
-  items        DeliveryItem[]
-  occurrences  DeliveryOccurrence[]
-  events       DeliveryEvent[]
+  items       DeliveryItem[]
+  occurrences DeliveryOccurrence[]
+  events      DeliveryEvent[]
 
   /// The person waiting for it, when the company notifies them. At most one.
   externalRecipient ExternalRecipient?
@@ -2220,7 +2220,7 @@ model Delivery {
   proofDocument DeliveryProofDocument?
 
   /// Where the receipt waits for a person to look at it. At most one.
-  proofAudit DeliveryProofAudit?
+  proofAudit   DeliveryProofAudit?
   chatMessages ChatMessage[]
 
   // N:N with Route on purpose. A failed delivery re-enters on the NEXT day's
@@ -2506,6 +2506,17 @@ model ChatMessage {
   // search, which Prisma has no syntax for: `migrate dev` will offer to drop
   // it. Say no.
   @@index([threadId, created_at, senderId])
+  // The DELETE path, which the composite above cannot serve. Deleting a
+  // delivery has to find every message pointing at it (ON DELETE SET NULL) and
+  // deleting a user has to prove none does — both full scans without these.
+  // Reversing an import of 200 deliveries went from 11 s to 26 ms; the numbers
+  // are in the 20260919120000_chat_delete_path_indexes migration.
+  //
+  // That migration also creates a PARTIAL index on `deliveryId` — nine in ten
+  // messages carry no delivery — which Prisma has no syntax for and therefore
+  // cannot be declared here. Its diff engine currently leaves it in place;
+  // re-check that after a Prisma upgrade.
+  @@index([senderId])
   @@map("chat_message")
 }
 
