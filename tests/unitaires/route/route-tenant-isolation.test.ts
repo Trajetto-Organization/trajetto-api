@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CreateRouteUseCase } from "@/modules/route/usecases/create-route/create-route-usecase";
 import { ReleaseRouteUseCase } from "@/modules/route/usecases/release-route/release-route-usecase";
@@ -15,11 +15,23 @@ import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-mem
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
 import type { NotificationService } from "@/shared/services/notification-service";
+import type { OutboxService } from "@/shared/notifications/outbox-service";
 
 import type { Driver } from "@/modules/driver/dtos/driver-dto";
 import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
+
+/**
+ * Releasing and cancelling wrap the route write and its outbox event in one
+ * database transaction — the driver's push must exist if and only if the write
+ * landed. Against in-memory repositories the transaction is a passthrough.
+ */
+vi.mock("@/../infra/database", () => ({
+  default: {
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}),
+  },
+}));
 
 /**
  * Two carriers on one installation, and every way one could reach the other.
@@ -51,6 +63,10 @@ const VEHICLE_B = "018f0000-0000-7000-8000-0000000000e2";
 
 const SHIPPER = "018f0000-0000-7000-8000-0000000000f1";
 const TOMORROW = new Date("2026-09-16T08:00:00.000Z");
+
+const outboxStub = {
+  publish: async () => undefined,
+} as unknown as OutboxService;
 
 function makeContext() {
   const routeRepository = new InMemoryRouteRepository();
@@ -122,6 +138,7 @@ function makeContext() {
       userRepository,
       driverRepository,
       notificationService,
+      outboxStub,
     ),
     start: new StartRouteUseCase(
       routeRepository,
@@ -129,7 +146,12 @@ function makeContext() {
       vehicleRepository,
       notificationService,
     ),
-    cancel: new CancelRouteUseCase(routeRepository, userRepository, notificationService),
+    cancel: new CancelRouteUseCase(
+      routeRepository,
+      userRepository,
+      notificationService,
+      outboxStub,
+    ),
     update: new UpdateRouteUseCase(
       routeRepository,
       userRepository,

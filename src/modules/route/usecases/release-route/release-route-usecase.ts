@@ -4,6 +4,9 @@ import { IRouteRepository } from "../../repositories/IRoute-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
+import database from "@/../infra/database";
+import { OutboxService } from "@/shared/notifications/outbox-service";
+
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
 
 import { NotificationService } from "@/shared/services/notification-service";
@@ -50,6 +53,8 @@ class ReleaseRouteUseCase {
     private driver: IDriverRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
 
   async execute({
@@ -105,9 +110,48 @@ class ReleaseRouteUseCase {
     }
 
     try {
-      const updated = await this.route.transitionRoute(routeId, businessId, {
-        expectedStatus: findRoute.status,
-        status: target,
+      // The write and the push land together. Published with the transaction
+      // rather than after it, because the event has to exist if and only if
+      // the release committed — the alternative is a driver whose phone says
+      // the route is theirs over a write that rolled back.
+      const updated = await database.$transaction(async (tx) => {
+        const moved = await this.route.transitionRoute(
+          routeId,
+          businessId,
+          { expectedStatus: findRoute.status, status: target },
+          tx,
+        );
+
+        // Only the handover rings. Pulling a route BACK to planning is a
+        // correction of something the driver has not started, and a push
+        // saying "never mind" about work they had not looked at yet is noise.
+        if (released) {
+          const driverUser = await this.user.findUserByDriverId(
+            findRoute.driverId,
+          );
+
+          await this.outbox.publish(tx, {
+            topic: "route.released",
+            aggregateType: "route",
+            aggregateId: routeId,
+            businessId,
+            actorId: userId,
+            payload: {
+              routeId,
+              businessId,
+              driverUserId: driverUser?.id ?? null,
+              code: findRoute.code,
+              routeName: findRoute.name,
+              stopCount: findRoute.stops.length,
+              scheduledLabel: findRoute.scheduled_date.toLocaleDateString(
+                "pt-BR",
+                { day: "2-digit", month: "2-digit" },
+              ),
+            },
+          });
+        }
+
+        return moved;
       });
 
       this.notificationService.createActivityIfEnabled({

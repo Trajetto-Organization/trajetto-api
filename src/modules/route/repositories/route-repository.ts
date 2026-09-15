@@ -322,43 +322,49 @@ class RouteRepository implements IRouteRepository {
     routeId: string,
     businessId: string,
     transition: RouteTransition,
+    tx?: Prisma.TransactionClient,
   ): Promise<Route> {
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const moved = await tx.route.updateMany({
-          where: {
-            id: routeId,
-            businessId,
-            status: transition.expectedStatus,
-          },
-          data: {
-            status: transition.status,
-            ...(transition.vehicleId !== undefined && {
-              vehicleId: transition.vehicleId,
-            }),
-            ...(transition.started_at && { started_at: transition.started_at }),
-            ...(transition.completed_at && {
-              completed_at: transition.completed_at,
-            }),
-            ...(transition.cancellation_reason && {
-              cancellation_reason: transition.cancellation_reason,
-            }),
-          },
-        });
-
-        if (moved.count === 0) {
-          throw new RouteStatusConflictError();
-        }
-
-        const route = await tx.route.findUniqueOrThrow({
-          where: { id: routeId },
-        });
-
-        await this.mirrorOntoDeliveries(tx, route as unknown as Route);
-        await this.syncVehicleStatus(tx, route as unknown as Route);
-
-        return route as unknown as Route;
+    const run = async (client: Prisma.TransactionClient): Promise<Route> => {
+      const moved = await client.route.updateMany({
+        where: {
+          id: routeId,
+          businessId,
+          status: transition.expectedStatus,
+        },
+        data: {
+          status: transition.status,
+          ...(transition.vehicleId !== undefined && {
+            vehicleId: transition.vehicleId,
+          }),
+          ...(transition.started_at && { started_at: transition.started_at }),
+          ...(transition.completed_at && {
+            completed_at: transition.completed_at,
+          }),
+          ...(transition.cancellation_reason && {
+            cancellation_reason: transition.cancellation_reason,
+          }),
+        },
       });
+
+      if (moved.count === 0) {
+        throw new RouteStatusConflictError();
+      }
+
+      const route = await client.route.findUniqueOrThrow({
+        where: { id: routeId },
+      });
+
+      await this.mirrorOntoDeliveries(client, route as unknown as Route);
+      await this.syncVehicleStatus(client, route as unknown as Route);
+
+      return route as unknown as Route;
+    };
+
+    try {
+      // A caller that handed over its transaction owns the commit boundary —
+      // it is publishing a notification that must exist if and only if this
+      // write lands. Prisma also refuses a transaction opened on one.
+      return tx ? await run(tx) : await this.prisma.$transaction(run);
     } catch (error) {
       // Raised by route_active_vehicle_idx: a second departure on a vehicle
       // that is already out. Nothing was written — the whole transaction rolls

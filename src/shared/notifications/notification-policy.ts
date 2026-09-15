@@ -24,6 +24,10 @@ import {
 import { deliveryOccurrenceReportedPolicy } from "./policies/delivery-occurrence-policy";
 import { chatMessageSentPolicy } from "./policies/chat-message-policy";
 import {
+  routeCancelledPolicy,
+  routeReleasedPolicy,
+} from "./policies/route-policies";
+import {
   masterUserAccountUpdatedPolicy,
   masterUserCreatedPolicy,
   masterUserUpdatedPolicy,
@@ -60,6 +64,8 @@ const notificationPolicies: {
   "business-limit.changed": businessLimitChangedPolicy,
   "delivery-occurrence.reported": deliveryOccurrenceReportedPolicy,
   "chat-message.sent": chatMessageSentPolicy,
+  "route.released": routeReleasedPolicy,
+  "route.cancelled": routeCancelledPolicy,
 };
 
 function getNotificationPolicy(

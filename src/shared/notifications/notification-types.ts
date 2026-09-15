@@ -265,6 +265,50 @@ interface ChatMessageSentPayload {
   bodyPreview: string | null;
 }
 
+/**
+ * The two route events that have somebody to tell.
+ *
+ * Deliberately two and not four. A departure and a completion are facts the
+ * dispatcher's board already shows, and turning each into a notification means
+ * a company with thirty drivers gets sixty bells a day for things nobody has
+ * to act on — the activity trail records them, which is what a fact without an
+ * action is for. What a driver DOES have to act on is work arriving and work
+ * being called off, and neither of those is visible to someone whose phone is
+ * in their pocket.
+ */
+interface RouteReleasedPayload {
+  routeId: string;
+  businessId: string;
+
+  /**
+   * The user linked to the route's driver, captured when the event happened.
+   * Null when the driver has no login yet — a real case in operations that
+   * register drivers before handing out phones, and one that must resolve to
+   * "nobody to tell" rather than to an error in the pipeline.
+   */
+  driverUserId: string | null;
+  code: number;
+  routeName: string | null;
+  stopCount: number;
+
+  /** The day the route is for, already formatted for the phone. */
+  scheduledLabel: string;
+}
+
+interface RouteCancelledPayload {
+  routeId: string;
+  businessId: string;
+
+  /** Same as above: null means there is nobody to tell. */
+  driverUserId: string | null;
+  code: number;
+  routeName: string | null;
+  reason: string;
+
+  /** True when the driver had already left with it — the urgent case. */
+  hadDeparted: boolean;
+}
+
 interface TopicPayloadMap {
   "fine.created": FineCreatedPayload;
   "vehicle-checklist.created": VehicleChecklistCreatedPayload;
@@ -285,6 +329,8 @@ interface TopicPayloadMap {
   "delivery-occurrence.reported": DeliveryOccurrenceReportedPayload;
   "business-limit.changed": BusinessLimitChangedPayload;
   "chat-message.sent": ChatMessageSentPayload;
+  "route.released": RouteReleasedPayload;
+  "route.cancelled": RouteCancelledPayload;
 }
 
 type NotificationTopic = keyof TopicPayloadMap;
@@ -398,6 +444,8 @@ interface NotificationPolicyEntry<TPayload> {
 }
 
 export type {
+  RouteReleasedPayload,
+  RouteCancelledPayload,
   FineCreatedPayload,
   VehicleChecklistCreatedPayload,
   FuelCreatedPayload,

@@ -78,9 +78,25 @@ const uploadService = {
     photos.map(({ key }) => ({ path: key })),
 } as unknown as UploadService;
 
-const outbox = { publish: async () => undefined } as unknown as OutboxService;
 
 function makeContext() {
+  /**
+   * Records instead of discarding: the outbox is the only way a use case is
+   * allowed to reach a driver, so what it received IS the notification
+   * behaviour under test.
+   */
+  const published: Array<{ topic: string; payload: Record<string, unknown> }> =
+    [];
+
+  const outboxStub = {
+    publish: async (
+      _tx: unknown,
+      event: { topic: string; payload: Record<string, unknown> },
+    ) => {
+      published.push({ topic: event.topic, payload: event.payload });
+    },
+  } as unknown as OutboxService;
+
   const deliveryRepository = new InMemoryDeliveryRepository();
 
   // One store, shared, in both directions. See the file docblock.
@@ -160,6 +176,7 @@ function makeContext() {
   );
 
   return {
+    published,
     routeRepository,
     deliveryRepository,
     userRepository,
@@ -178,6 +195,7 @@ function makeContext() {
       userRepository,
       driverRepository,
       notificationService,
+      outboxStub,
     ),
     start: new StartRouteUseCase(
       routeRepository,
@@ -185,7 +203,12 @@ function makeContext() {
       vehicleRepository,
       notificationService,
     ),
-    cancel: new CancelRouteUseCase(routeRepository, userRepository, notificationService),
+    cancel: new CancelRouteUseCase(
+      routeRepository,
+      userRepository,
+      notificationService,
+      outboxStub,
+    ),
 
     arrival: new RegisterDeliveryArrivalUseCase(
       userRepository,
@@ -207,7 +230,7 @@ function makeContext() {
       routeRepository,
       notificationService,
       uploadService,
-      outbox,
+      outboxStub,
     ),
     setStatus: new UpdateDeliveryStatusUseCase(
       userRepository,
@@ -1070,5 +1093,170 @@ describe("“Em rota” is a fact about a route, not a value somebody types", ()
     expect(routeFor(route.id).status).toBe("RELEASED");
     expect(deliveryFor(delivery).status).toBe("PENDING");
     expect(vehicle().status).toBe("BLOCKED");
+  });
+});
+
+describe("what the driver's phone is told, and what it is spared", () => {
+  /**
+   * Two topics, not four. A departure and a completion are facts the
+   * dispatcher's board already shows the moment they happen, and both land in
+   * the activity trail; a notification for each would mean sixty bells a day
+   * at a company with thirty drivers, for things nobody has to act on. What
+   * the driver has to act on is work arriving and work being called off.
+   */
+  it("rings when the route is handed over", async () => {
+    const delivery = await seedDelivery();
+
+    const route = await context.create.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      driverId: DRIVER_A,
+      vehicleId: VEHICLE_A,
+      scheduled_date: TODAY,
+      deliveryIds: [delivery],
+    });
+
+    // Planning tells nobody: the route does not exist for the driver yet.
+    expect(context.published).toHaveLength(0);
+
+    await context.release.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route.id,
+    });
+
+    expect(context.published).toHaveLength(1);
+    expect(context.published[0].topic).toBe("route.released");
+
+    // The payload has to be self-contained: the push may render on another
+    // replica seconds later, and it must not go back to the database for what
+    // the route said at the time.
+    expect(context.published[0].payload).toMatchObject({
+      routeId: route.id,
+      businessId: A,
+      driverUserId: DRIVER_USER_A,
+      code: route.code,
+      stopCount: 1,
+    });
+  });
+
+  it("stays silent when the dispatcher pulls the route back", async () => {
+    const route = await context.create.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      driverId: DRIVER_A,
+      vehicleId: VEHICLE_A,
+      scheduled_date: TODAY,
+      deliveryIds: [await seedDelivery()],
+    });
+
+    await context.release.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route.id,
+    });
+
+    await context.release.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route.id,
+      released: false,
+    });
+
+    // "Never mind" about work the driver had not started is noise.
+    expect(context.published.map((event) => event.topic)).toEqual([
+      "route.released",
+    ]);
+  });
+
+  it("does not ring for a departure or a completion", async () => {
+    const delivery = await seedDelivery();
+    const route = await runningRoute([delivery]);
+
+    await context.proof.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: delivery,
+      client_submission_id: submission(),
+      photo: "canhoto.jpg",
+    });
+
+    expect(routeFor(route).status).toBe("COMPLETED");
+
+    // The release is the only thing that rang.
+    expect(context.published.map((event) => event.topic)).toEqual([
+      "route.released",
+    ]);
+  });
+
+  it("rings urgently when a route that already left is cancelled", async () => {
+    const route = await runningRoute([await seedDelivery()]);
+
+    await context.cancel.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route,
+      reason: "Cliente cancelou o pedido",
+    });
+
+    const cancellation =
+      context.published[context.published.length - 1];
+
+    expect(cancellation.topic).toBe("route.cancelled");
+    expect(cancellation.payload).toMatchObject({
+      driverUserId: DRIVER_USER_A,
+      reason: "Cliente cancelou o pedido",
+
+      // The driver may be standing at an address that was just called off, so
+      // the lock screen has to read differently from a cancellation in the
+      // yard.
+      hadDeparted: true,
+    });
+  });
+
+  it("says nothing when a route nobody was given is cancelled", async () => {
+    const route = await context.create.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      driverId: DRIVER_A,
+      vehicleId: VEHICLE_A,
+      scheduled_date: TODAY,
+      deliveryIds: [await seedDelivery()],
+    });
+
+    await context.cancel.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route.id,
+      reason: "Erro de planejamento",
+    });
+
+    // The driver never knew it existed.
+    expect(context.published).toHaveLength(0);
+  });
+
+  it("does not ring a driver who has no login", async () => {
+    // Operations that register drivers before handing out phones are real.
+    // The event still fires — the trail wants it — but resolves to nobody.
+    context.userRepository.user = context.userRepository.user.filter(
+      (entry) => entry.id !== DRIVER_USER_A,
+    );
+
+    const route = await context.create.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      driverId: DRIVER_A,
+      vehicleId: VEHICLE_A,
+      scheduled_date: TODAY,
+      deliveryIds: [await seedDelivery()],
+    });
+
+    await context.release.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route.id,
+    });
+
+    expect(context.published[0].payload.driverUserId).toBeNull();
   });
 });

@@ -75,12 +75,17 @@ interface IRouteRepository {
    *
    * Mirrors driverId/vehicleId onto the deliveries of the route's open stops,
    * because those columns are the route's shadow and this is their only
-   * writer.
+   * writer, and moves Vehicle.status in or out of IN_ROUTE.
+   *
+   * Takes the caller's transaction so a notification about the move can be
+   * published in the same commit: the outbox event has to exist if and only if
+   * the write landed, or a driver gets told about a release that rolled back.
    */
   transitionRoute: (
     routeId: string,
     businessId: string,
     transition: RouteTransition,
+    tx?: Prisma.TransactionClient,
   ) => Promise<Route>;
 
   /** Appends deliveries as stops at the end of the route's current order. */

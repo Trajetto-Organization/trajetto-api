@@ -3,6 +3,9 @@ import { inject, injectable } from "tsyringe";
 import { IRouteRepository } from "../../repositories/IRoute-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
+import database from "@/../infra/database";
+import { OutboxService } from "@/shared/notifications/outbox-service";
+
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
 
 import { NotificationService } from "@/shared/services/notification-service";
@@ -46,6 +49,8 @@ class CancelRouteUseCase {
     private user: IUserRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("OutboxService")
+    private outbox: OutboxService,
   ) {}
 
   async execute({
@@ -82,10 +87,46 @@ class CancelRouteUseCase {
     }
 
     try {
-      const cancelled = await this.route.transitionRoute(routeId, businessId, {
-        expectedStatus: findRoute.status,
-        status: "CANCELLED",
-        cancellation_reason: trimmedReason,
+      const cancelled = await database.$transaction(async (tx) => {
+        const moved = await this.route.transitionRoute(
+          routeId,
+          businessId,
+          {
+            expectedStatus: findRoute.status,
+            status: "CANCELLED",
+            cancellation_reason: trimmedReason,
+          },
+          tx,
+        );
+
+        // A route still in planning was never handed over, so cancelling it
+        // tells nobody anything — the driver never knew it existed. Once
+        // released, and especially once it left, the driver has to hear it:
+        // they may be standing at an address that was just called off.
+        if (findRoute.status !== "PLANNED") {
+          const driverUser = await this.user.findUserByDriverId(
+            findRoute.driverId,
+          );
+
+          await this.outbox.publish(tx, {
+            topic: "route.cancelled",
+            aggregateType: "route",
+            aggregateId: routeId,
+            businessId,
+            actorId: userId,
+            payload: {
+              routeId,
+              businessId,
+              driverUserId: driverUser?.id ?? null,
+              code: findRoute.code,
+              routeName: findRoute.name,
+              reason: trimmedReason,
+              hadDeparted: findRoute.status === "IN_PROGRESS",
+            },
+          });
+        }
+
+        return moved;
       });
 
       this.notificationService.createActivityIfEnabled({
