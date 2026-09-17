@@ -26,6 +26,72 @@ import { AppError } from "@/shared/errors/AppError";
 import { signLocalUploadToken } from "@/shared/services/local-upload-token";
 
 /**
+ * Whether storage answered "that object is not here", as opposed to not
+ * answering at all.
+ *
+ * The difference decides whether a driver keeps their proof of delivery. A
+ * missing object is final: the presigned PUT never completed, and asking again
+ * in five minutes returns the same nothing. A bucket that is timing out, a DNS
+ * failure, a 500 from R2 — those are storage being unavailable for a while,
+ * and the object is very likely sitting there intact.
+ *
+ * Collapsing both into a 400 is what the blind `catch` here used to do, and it
+ * is not a cosmetic mistake. The mobile outbox classifies a non-transient 4xx
+ * as `permanent`, marks the submission `failed` and stops retrying it: a
+ * fifteen-second R2 blip would discard a signed receipt the driver cannot
+ * produce again, because the customer has long since walked away.
+ *
+ * Read narrowly on purpose — only an explicit 404, or the SDK's own not-found
+ * error names, count as missing. Anything unrecognised is treated as an
+ * outage, because being wrong in that direction costs one retry and being
+ * wrong in the other costs the proof.
+ */
+function isObjectMissing(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+
+  const candidate = error as {
+    name?: string;
+    $metadata?: { httpStatusCode?: number };
+  };
+
+  if (candidate.$metadata?.httpStatusCode === 404) return true;
+
+  // `HeadObject` reports a missing key as `NotFound`; `GetObject` as
+  // `NoSuchKey`. Both carry the 404 above when the response was parsed, but
+  // not when the SDK short-circuits.
+  return candidate.name === "NotFound" || candidate.name === "NoSuchKey";
+}
+
+/** The same question of the filesystem, for local-storage development. */
+function isLocalFileMissing(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+
+  return (error as { code?: string }).code === "ENOENT";
+}
+
+/** Final: the object is not there and will not appear. */
+const uploadedObjectNotFound = (): AppError =>
+  new AppError(
+    "Arquivo enviado não foi encontrado no armazenamento.",
+    400,
+    "UPLOADED_FILE_NOT_FOUND",
+  );
+
+/**
+ * Temporary: storage did not answer.
+ *
+ * 503 rather than 500 because it says "come back", and every client already
+ * reads it that way — the mobile outbox retries any status at or above 500,
+ * so a submission that hits this keeps its place in the queue.
+ */
+const storageUnavailable = (): AppError =>
+  new AppError(
+    "O armazenamento de arquivos está indisponível no momento. Tente novamente em instantes.",
+    503,
+    "STORAGE_UNAVAILABLE",
+  );
+
+/**
  * The file extension each accepted content type lands under.
  *
  * A table rather than a ladder, and every allowed type is in it. The ladder
@@ -354,12 +420,13 @@ class UploadService {
 
       try {
         stats = await fs.promises.stat(fullPath);
-      } catch {
-        throw new AppError(
-          "Arquivo enviado não foi encontrado no armazenamento.",
-          400,
-          "UPLOADED_FILE_NOT_FOUND",
-        );
+      } catch (error) {
+        // ENOENT is the file not being there. EACCES, EIO, ENFILE and the
+        // rest are the machine having a problem, which says nothing about
+        // whether the upload succeeded.
+        throw isLocalFileMissing(error)
+          ? uploadedObjectNotFound()
+          : storageUnavailable();
       }
 
       this.assertUploadedObjectWithinLimits(
@@ -383,12 +450,10 @@ class UploadService {
           Key: key,
         }),
       );
-    } catch {
-      throw new AppError(
-        "Arquivo enviado não foi encontrado no armazenamento.",
-        400,
-        "UPLOADED_FILE_NOT_FOUND",
-      );
+    } catch (error) {
+      throw isObjectMissing(error)
+        ? uploadedObjectNotFound()
+        : storageUnavailable();
     }
 
     const size = head.ContentLength ?? 0;
