@@ -46,6 +46,28 @@ interface MonthlyCountBucket {
 }
 
 /**
+ * How finely a trend is cut.
+ *
+ * The overview always wants months. The trends endpoint wants days for a
+ * seven- or thirty-day window and months beyond that, and it used to get them
+ * by asking one count per bucket per entity — 30 days × 9 entities plus 30
+ * cost queries is three hundred round trips to draw one chart.
+ */
+type PeriodGranularity = "day" | "month";
+
+interface PeriodCountBucket {
+  /** `YYYY-MM-DD` for a day, `YYYY-MM` for a month. Local, never UTC. */
+  period: string;
+  count: number;
+}
+
+interface PeriodCostBucket {
+  period: string;
+  preventive: number;
+  corrective: number;
+}
+
+/**
  * Maintenance spend per month, summed in the database.
  *
  * The old shape asked one month at a time AND pulled every service order row
@@ -95,6 +117,9 @@ interface ModelWithCount {
 }
 
 export {
+  PeriodGranularity,
+  PeriodCountBucket,
+  PeriodCostBucket,
   CountByDateRangeParams,
   CountByDateRangeResult,
   CountByMonthParams,

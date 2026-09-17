@@ -3,6 +3,8 @@ import { inject, injectable } from "tsyringe";
 import { IDashboardRepository } from "../../repositories/IDashboard-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
+import { hasModule } from "@/shared/entitlements/entitlement-service";
+
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
 
@@ -23,6 +25,8 @@ interface DashboardTrendsResponse {
     serviceOrders: number;
     users: number;
     fines: number;
+    deliveries: number;
+    routes: number;
   }>;
   maintenanceCosts: Array<{
     date: string;
@@ -37,6 +41,10 @@ const pluralizeFieldName = (key: string): string => {
     branch: "branches",
     "service-order": "serviceOrders",
     fine: "fines",
+
+    // "deliverys" is what the default rule produces, and the chart keys off
+    // these names — a wrong one draws a line of undefined.
+    delivery: "deliveries",
   };
 
   if (pluralMap[key]) {
@@ -46,8 +54,47 @@ const pluralizeFieldName = (key: string): string => {
   return key + "s";
 };
 
-const formatDateToLocal = (date: Date): string => {
-  return date.toISOString().split("T")[0];
+/**
+ * The grouping key, in local wall time.
+ *
+ * Must match what the repository's `to_char(date_trunc(...))` produces, or
+ * every lookup misses and the chart draws a flat line of zeroes over a
+ * database full of rows.
+ */
+const periodKey = (at: Date, granularity: "day" | "month"): string => {
+  const year = at.getFullYear();
+  const month = String(at.getMonth() + 1).padStart(2, "0");
+
+  if (granularity === "month") return `${year}-${month}`;
+
+  return `${year}-${month}-${String(at.getDate()).padStart(2, "0")}`;
+};
+
+/**
+ * The last instant of the window's final bucket.
+ *
+ * `endDateLocal` is midnight, and the query filters `created_at <= to`, so
+ * without this every row created DURING the last day would be dropped — the
+ * day people are actually looking at.
+ *
+ * It follows the granularity, because the last bucket is a different size in
+ * each case. On a monthly chart the final point is the current month, and it
+ * has to include the rest of that month exactly as the old per-bucket loop
+ * did with `new Date(year, month + 1, 0)`.
+ */
+const endOfWindow = (
+  endDateLocal: Date,
+  granularity: "day" | "month",
+): Date => {
+  const end = new Date(endDateLocal);
+
+  if (granularity === "month") {
+    end.setMonth(end.getMonth() + 1, 0);
+  }
+
+  end.setHours(23, 59, 59, 999);
+
+  return end;
 };
 
 const getCurrentDateLocal = (): Date => {
@@ -138,151 +185,144 @@ class GetDashboardTrendsUseCase {
         { key: "service-order", permission: "service_order_manage" },
         { key: "user", permission: "user_registration_manage" },
         { key: "fine", permission: "fine_manage" },
+        { key: "delivery", permission: "delivery_manage" },
+        { key: "route", permission: "delivery_manage" },
       ];
+
+      /**
+       * Whether this company hired the deliveries module.
+       *
+       * Same rule as the overview, and for the same reason: a permission is
+       * what a PERSON may do, an entitlement is what the company bought, and
+       * a BUSINESS_ADMIN passes every permission check by definition.
+       */
+      const deliveriesEnabled = businessId
+        ? await hasModule(businessId, "DELIVERIES")
+        : true;
+
+      const visible = entities.filter((entity) => {
+        if (user.role === "BUSINESS_ADMIN" && entity.key === "business") {
+          return false;
+        }
+
+        if (
+          !deliveriesEnabled &&
+          (entity.key === "delivery" || entity.key === "route")
+        ) {
+          return false;
+        }
+
+        return hasPermission(entity.permission);
+      });
+
+      /**
+       * Every bucket of every entity, in ONE round trip. Then the costs, in a
+       * second.
+       *
+       * This used to be a loop: for each day in the window, nine counts in
+       * parallel plus one cost query. Thirty days is 300 round trips to draw
+       * one chart, and the nine-at-a-time parallelism made it worse rather
+       * than better — the overview already learned that lesson, where nine
+       * concurrent connections per page view starved the pool and made the
+       * p95 of the whole API fifteen times worse.
+       *
+       * Two queries, one connection at a time, identical numbers.
+       */
+      const buckets = await this.dashboardRepository.countManyByPeriod(
+        {
+          entities: visible.map((entity) => entity.key as any),
+          from: startDateLocal,
+          to: endOfWindow(endDateLocal, groupBy),
+          granularity: groupBy,
+        },
+        businessId,
+      );
+
+      const byEntity = new Map<string, Map<string, number>>(
+        Object.entries(buckets).map(([key, rows]) => [
+          key,
+          new Map(rows.map((row) => [row.period, row.count])),
+        ]),
+      );
+
+      const countFor = (key: string, at: Date): number =>
+        byEntity.get(key)?.get(periodKey(at, groupBy)) ?? 0;
+
+      const costBuckets = hasPermission("service_order_manage")
+        ? await this.dashboardRepository.getCostsByPeriod(
+            {
+              from: startDateLocal,
+              to: endOfWindow(endDateLocal, groupBy),
+              granularity: groupBy,
+            },
+            businessId,
+          )
+        : [];
+
+      const costsByPeriod = new Map(
+        costBuckets.map((bucket) => [bucket.period, bucket]),
+      );
 
       const activityTrends: any[] = [];
       const maintenanceCosts: any[] = [];
 
-      if (groupBy === "day") {
-        const currentDateLocal = new Date(startDateLocal);
+      const monthNames = [
+        "Jan",
+        "Fev",
+        "Mar",
+        "Abr",
+        "Mai",
+        "Jun",
+        "Jul",
+        "Ago",
+        "Set",
+        "Out",
+        "Nov",
+        "Dez",
+      ];
 
-        while (currentDateLocal <= endDateLocal) {
-          const trendData: any = {
-            date: currentDateLocal.toLocaleDateString("pt-BR", {
-              day: "2-digit",
-              month: "short",
-            }),
-          };
+      /** The label the chart puts under a point. Unchanged from before. */
+      const labelFor = (at: Date): string =>
+        groupBy === "day"
+          ? at.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })
+          : monthNames[at.getMonth()];
 
-          const dayPromises = entities.map(async (entity) => {
-            if (
-              (user.role === "BUSINESS_ADMIN" && entity.key === "business") ||
-              !hasPermission(entity.permission)
-            ) {
-              return { key: entity.key, count: 0 };
-            }
+      const cursor = new Date(startDateLocal);
 
-            const result = await this.dashboardRepository.countByDateRange(
-              {
-                entity: entity.key as any,
-                startDate: formatDateToLocal(currentDateLocal),
-                endDate: formatDateToLocal(currentDateLocal),
-              },
-              businessId,
-            );
+      // The monthly branch always started on the first of the month.
+      if (groupBy === "month") cursor.setDate(1);
 
-            return { key: entity.key, count: result.count };
-          });
+      while (cursor <= endDateLocal) {
+        const label = labelFor(cursor);
 
-          const dayResults = await Promise.all(dayPromises);
+        const trendData: any = { date: label };
 
-          dayResults.forEach(({ key, count }) => {
-            const fieldName = pluralizeFieldName(key);
-            trendData[fieldName] = count;
-          });
-
-          activityTrends.push(trendData);
-
-          if (hasPermission("service_order_manage")) {
-            const costs = await this.dashboardRepository.getMonthlyCosts(
-              {
-                startDate: formatDateToLocal(currentDateLocal),
-                endDate: formatDateToLocal(currentDateLocal),
-              },
-              businessId,
-            );
-
-            maintenanceCosts.push({
-              date: trendData.date,
-              preventive: costs.preventive,
-              corrective: costs.corrective,
-            });
-          }
-
-          currentDateLocal.setDate(currentDateLocal.getDate() + 1);
+        // EVERY entity, not only the visible ones: a hidden entity answers
+        // zero rather than being absent, because the chart draws a line for
+        // it either way and "undefined" is not a number.
+        for (const entity of entities) {
+          trendData[pluralizeFieldName(entity.key)] = countFor(
+            entity.key,
+            cursor,
+          );
         }
-      } else {
-        const monthNames = [
-          "Jan",
-          "Fev",
-          "Mar",
-          "Abr",
-          "Mai",
-          "Jun",
-          "Jul",
-          "Ago",
-          "Set",
-          "Out",
-          "Nov",
-          "Dez",
-        ];
 
-        const currentDateLocal = new Date(startDateLocal);
-        currentDateLocal.setDate(1);
+        activityTrends.push(trendData);
 
-        while (currentDateLocal <= endDateLocal) {
-          const monthStart = new Date(
-            currentDateLocal.getFullYear(),
-            currentDateLocal.getMonth(),
-            1,
-          );
+        if (hasPermission("service_order_manage")) {
+          const bucket = costsByPeriod.get(periodKey(cursor, groupBy));
 
-          const monthEnd = new Date(
-            currentDateLocal.getFullYear(),
-            currentDateLocal.getMonth() + 1,
-            0,
-          );
-
-          const trendData: any = {
-            date: monthNames[currentDateLocal.getMonth()],
-          };
-
-          const monthPromises = entities.map(async (entity) => {
-            if (
-              (user.role === "BUSINESS_ADMIN" && entity.key === "business") ||
-              !hasPermission(entity.permission)
-            ) {
-              return { key: entity.key, count: 0 };
-            }
-
-            const result = await this.dashboardRepository.countByDateRange(
-              {
-                entity: entity.key as any,
-                startDate: formatDateToLocal(monthStart),
-                endDate: formatDateToLocal(monthEnd),
-              },
-              businessId,
-            );
-
-            return { key: entity.key, count: result.count };
+          maintenanceCosts.push({
+            date: label,
+            preventive: bucket?.preventive ?? 0,
+            corrective: bucket?.corrective ?? 0,
           });
+        }
 
-          const monthResults = await Promise.all(monthPromises);
-
-          monthResults.forEach(({ key, count }) => {
-            const fieldName = pluralizeFieldName(key);
-            trendData[fieldName] = count;
-          });
-
-          activityTrends.push(trendData);
-
-          if (hasPermission("service_order_manage")) {
-            const costs = await this.dashboardRepository.getMonthlyCosts(
-              {
-                startDate: formatDateToLocal(monthStart),
-                endDate: formatDateToLocal(monthEnd),
-              },
-              businessId,
-            );
-
-            maintenanceCosts.push({
-              date: trendData.date,
-              preventive: costs.preventive,
-              corrective: costs.corrective,
-            });
-          }
-
-          currentDateLocal.setMonth(currentDateLocal.getMonth() + 1);
+        if (groupBy === "day") {
+          cursor.setDate(cursor.getDate() + 1);
+        } else {
+          cursor.setMonth(cursor.getMonth() + 1);
         }
       }
 

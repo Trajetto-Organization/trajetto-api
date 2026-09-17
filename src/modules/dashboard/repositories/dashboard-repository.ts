@@ -13,6 +13,9 @@ import {
   CountByMonthParams,
   MonthlyCountBucket,
   MonthlyCostBucket,
+  PeriodGranularity,
+  PeriodCountBucket,
+  PeriodCostBucket,
 } from "../dtos/dashboard-dto";
 
 import { IDashboardRepository } from "./IDashboard-repository";
@@ -210,6 +213,143 @@ class DashboardRepository implements IDashboardRepository {
     }
 
     return result;
+  }
+
+  /**
+   * The same union, cut by day or by month.
+   *
+   * `countManyByMonth` above answers the overview, which always wants months.
+   * The trends endpoint wants days for a seven- or thirty-day window, and it
+   * used to get them by asking one count per bucket per entity: thirty days
+   * times nine entities is 270 round trips, plus thirty more for the costs,
+   * to draw ONE chart. Every one of them held a connection.
+   *
+   * The grouping key is built in local wall time for the same reason the
+   * monthly one is — `created_at` is a UTC instant in a session that runs in
+   * UTC, so a plain `date_trunc('day')` files everything created after 21:00
+   * in São Paulo under the following day.
+   */
+  async countManyByPeriod(
+    params: {
+      entities: CountByMonthParams["entity"][];
+      from: Date;
+      to: Date;
+      granularity: PeriodGranularity;
+    },
+    businessId?: string,
+  ): Promise<Record<string, PeriodCountBucket[]>> {
+    const result: Record<string, PeriodCountBucket[]> = {};
+
+    const wanted = params.entities.filter(
+      (entity) => DashboardRepository.MONTHLY_SOURCES[entity],
+    );
+
+    for (const entity of params.entities) result[entity] = [];
+
+    if (wanted.length === 0) return result;
+
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+    const unit = params.granularity === "day" ? "day" : "month";
+    const format = params.granularity === "day" ? "YYYY-MM-DD" : "YYYY-MM";
+
+    const parts = wanted.map((entity) => {
+      const source = DashboardRepository.MONTHLY_SOURCES[entity];
+
+      const tenant =
+        businessId && entity !== "business"
+          ? Prisma.sql`AND "businessId" = ${businessId}`
+          : Prisma.empty;
+
+      return Prisma.sql`
+        SELECT
+          ${entity} AS entity,
+          to_char(
+            date_trunc(
+              ${unit},
+              ("created_at" AT TIME ZONE 'UTC') AT TIME ZONE ${zone}
+            ),
+            ${format}
+          ) AS period,
+          count(*)::bigint AS count
+        FROM ${Prisma.raw(`"public"."${source.table}"`)}
+        WHERE "created_at" >= ${params.from}
+          AND "created_at" <= ${params.to}
+          ${tenant}
+          ${source.extra ?? Prisma.empty}
+        GROUP BY 1, 2
+      `;
+    });
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{ entity: string; period: string; count: bigint }>
+    >(Prisma.join(parts, " UNION ALL "));
+
+    for (const row of rows) {
+      (result[row.entity] ??= []).push({
+        period: row.period,
+        count: Number(row.count),
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Maintenance spend per day or per month, summed in the database.
+   *
+   * Same story as the counts: the trends endpoint asked for one day at a
+   * time, and each of those answers pulled every service order row of that
+   * day back to add two numbers here.
+   */
+  async getCostsByPeriod(
+    params: { from: Date; to: Date; granularity: PeriodGranularity },
+    businessId?: string,
+  ): Promise<PeriodCostBucket[]> {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+    const tenant = businessId
+      ? Prisma.sql`AND "businessId" = ${businessId}`
+      : Prisma.empty;
+
+    const unit = params.granularity === "day" ? "day" : "month";
+    const format = params.granularity === "day" ? "YYYY-MM-DD" : "YYYY-MM";
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{ period: string; preventive: string; corrective: string }>
+    >(Prisma.sql`
+      SELECT
+        to_char(
+          date_trunc(
+            ${unit},
+            ("created_at" AT TIME ZONE 'UTC') AT TIME ZONE ${zone}
+          ),
+          ${format}
+        ) AS period,
+
+        -- INTERNAL is what the screen calls preventive, exactly as the old
+        -- JavaScript branch decided it. Everything else is corrective.
+        COALESCE(
+          SUM("total_amount") FILTER (WHERE "maintenance_type" = 'INTERNAL'),
+          0
+        )::text AS preventive,
+
+        COALESCE(
+          SUM("total_amount") FILTER (WHERE "maintenance_type" <> 'INTERNAL'),
+          0
+        )::text AS corrective
+      FROM "public"."service_order"
+      WHERE "created_at" >= ${params.from}
+        AND "created_at" <= ${params.to}
+        ${tenant}
+      GROUP BY 1
+    `);
+
+    return rows.map((row) => ({
+      period: row.period,
+      preventive: Number(row.preventive),
+      corrective: Number(row.corrective),
+    }));
   }
 
   async countByMonth(

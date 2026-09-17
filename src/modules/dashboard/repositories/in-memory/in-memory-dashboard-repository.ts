@@ -10,7 +10,20 @@ import {
   CountByMonthParams,
   MonthlyCountBucket,
   MonthlyCostBucket,
+  PeriodGranularity,
+  PeriodCountBucket,
+  PeriodCostBucket,
 } from "../../dtos/dashboard-dto";
+
+/** Local wall time, the same basis the real query truncates on. */
+function periodKey(at: Date, granularity: PeriodGranularity): string {
+  const year = at.getFullYear();
+  const month = String(at.getMonth() + 1).padStart(2, "0");
+
+  if (granularity === "month") return `${year}-${month}`;
+
+  return `${year}-${month}-${String(at.getDate()).padStart(2, "0")}`;
+}
 
 class InMemoryDashboardRepository implements IDashboardRepository {
   public data: {
@@ -94,6 +107,85 @@ class InMemoryDashboardRepository implements IDashboardRepository {
     }
 
     return result;
+  }
+
+  /**
+   * The same grouping the database does, at the same two granularities.
+   *
+   * Written as its own grouping rather than as a loop over `countByMonth`,
+   * for the reason stated above: a fake that answered by looping would agree
+   * with a real query that grouped by the wrong column.
+   */
+  async countManyByPeriod(
+    params: {
+      entities: CountByMonthParams["entity"][];
+      from: Date;
+      to: Date;
+      granularity: PeriodGranularity;
+    },
+    businessId?: string,
+  ): Promise<Record<string, PeriodCountBucket[]>> {
+    const result: Record<string, PeriodCountBucket[]> = {};
+
+    for (const entity of params.entities) {
+      const entries = this.data.entityCounts[entity] ?? [];
+      const buckets = new Map<string, number>();
+
+      for (const entry of entries) {
+        const at = new Date(entry.date);
+
+        if (at < params.from || at > params.to) continue;
+
+        if (
+          businessId &&
+          entity !== "business" &&
+          entry.businessId !== businessId
+        ) {
+          continue;
+        }
+
+        buckets.set(
+          periodKey(at, params.granularity),
+          (buckets.get(periodKey(at, params.granularity)) ?? 0) + entry.count,
+        );
+      }
+
+      result[entity] = [...buckets.entries()].map(([period, count]) => ({
+        period,
+        count,
+      }));
+    }
+
+    return result;
+  }
+
+  async getCostsByPeriod(
+    params: { from: Date; to: Date; granularity: PeriodGranularity },
+    businessId?: string,
+  ): Promise<PeriodCostBucket[]> {
+    const buckets = new Map<string, PeriodCostBucket>();
+
+    for (const entry of this.data.monthlyCosts) {
+      const at = new Date(entry.date);
+
+      if (at < params.from || at > params.to) continue;
+      if (businessId && entry.businessId !== businessId) continue;
+
+      const period = periodKey(at, params.granularity);
+
+      const bucket = buckets.get(period) ?? {
+        period,
+        preventive: 0,
+        corrective: 0,
+      };
+
+      bucket.preventive += entry.preventive;
+      bucket.corrective += entry.corrective;
+
+      buckets.set(period, bucket);
+    }
+
+    return [...buckets.values()];
   }
 
   async getCostsByMonth(

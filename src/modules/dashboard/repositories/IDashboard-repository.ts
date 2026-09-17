@@ -1,4 +1,7 @@
 import {
+  PeriodGranularity,
+  PeriodCountBucket,
+  PeriodCostBucket,
   CountByDateRangeParams,
   CountByDateRangeResult,
   CountByMonthParams,
@@ -46,6 +49,30 @@ interface IDashboardRepository {
     },
     businessId?: string,
   ) => Promise<Record<string, MonthlyCountBucket[]>>;
+  /**
+   * Every entity of a trend, every bucket, in ONE round trip — at whatever
+   * granularity the window calls for.
+   *
+   * `countManyByMonth` serves the overview, which always wants months. The
+   * trends endpoint wants days for a short window, and asking per bucket per
+   * entity is 270 queries for thirty days of nine entities.
+   */
+  countManyByPeriod: (
+    params: {
+      entities: CountByMonthParams["entity"][];
+      from: Date;
+      to: Date;
+      granularity: PeriodGranularity;
+    },
+    businessId?: string,
+  ) => Promise<Record<string, PeriodCountBucket[]>>;
+
+  /** The same spend, cut by day or by month, summed in the database. */
+  getCostsByPeriod: (
+    params: { from: Date; to: Date; granularity: PeriodGranularity },
+    businessId?: string,
+  ) => Promise<PeriodCostBucket[]>;
+
   countVehiclesByStatus: (
     businessId?: string,
   ) => Promise<VehicleStatusCountResult>;
