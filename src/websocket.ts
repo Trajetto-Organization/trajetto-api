@@ -19,6 +19,12 @@ import { SessionJwtPayload } from "@/modules/user/services/session-service";
 import { AppError } from "@/shared/errors/AppError";
 
 import {
+  canWatchOperationsOf,
+  mayReadDeliveries,
+  operationsRoom,
+} from "@/shared/socket/operations-access";
+
+import {
   canSubscribeToChatBusiness,
   canWriteInChat,
   chatStaffRoom,
@@ -306,30 +312,22 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       // on socket.data so no handler ever decides permission from a payload.
       socket.data.role = user.role;
 
-      // Chat staff = the SAC side of the driver chat: anyone who is not a
-      // driver and may read deliveries. Resolved once here (a connection is
-      // rare; a message is not) so emits can target the room without a
-      // permission lookup per event.
+      // The dispatch side of the counter: not a driver, and allowed to read
+      // deliveries. Resolved once here — a connection is rare and a message
+      // is not — so no emit needs a permission lookup of its own.
       //
-      // A MASTER belongs to no company (businessId is NULL) and works over
-      // the one picked in the interface, so company membership cannot be
-      // part of their check — requiring it is what used to leave the master
-      // out of every chat room. Their room comes from `chatSubscribe`.
-      const permissions = user.profileAccess?.permissions as
-        | Array<{ permissionKey: string; canRead: boolean }>
-        | undefined;
-
-      socket.data.isChatStaff = Boolean(
-        !user.driverId &&
-          (user.role === "MASTER" ||
-            (user.businessId &&
-              (user.role === "BUSINESS_ADMIN" ||
-                permissions?.some(
-                  (permission) =>
-                    permission.permissionKey === "delivery_manage" &&
-                    permission.canRead,
-                )))),
-      );
+      // One fact, two rooms. It decides whether this socket hears the SAC
+      // chat AND whether it hears the operation itself (route events, driver
+      // positions). Those used to be decided separately: the chat by this
+      // boolean, the operation by nothing at all.
+      socket.data.isDeliveryStaff = mayReadDeliveries({
+        role: user.role,
+        driverId: user.driverId,
+        businessId: user.businessId,
+        permissions: user.profileAccess?.permissions as
+          | Array<{ permissionKey: string; canRead: boolean }>
+          | undefined,
+      });
 
       return next();
     } catch (error) {
@@ -360,7 +358,14 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     // dedicated room lets normal logout terminate only that session.
     socket.join(`session:${socket.data.sessionId}`);
 
-    // Add to company room if applicable
+    /**
+     * The company-wide room: everyone who has a company, unconditionally.
+     *
+     * What goes out here has to reach every login of the tenant regardless of
+     * permission — a security action, a change of plan, a notification
+     * addressed at the company. Nothing operational: that moved to the room
+     * below, because this one has no permission check and cannot have one.
+     */
     if (businessId) {
       socket.join(`business:${businessId}`);
     }
@@ -369,9 +374,17 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     // company of their own is put in its room right away — that room is
     // theirs for the whole connection. A MASTER has no company here and
     // subscribes explicitly.
-    if (socket.data.isChatStaff && businessId) {
+    if (socket.data.isDeliveryStaff && businessId) {
       socket.join(chatStaffRoom(businessId));
       socket.data.chatBusinessId = businessId;
+    }
+
+    // Where the trucks are, and what the routes are doing. Same rule as the
+    // chat room, same reason: this is the manager's view of everybody, and a
+    // driver holding `delivery_manage` for their own day must not receive it.
+    if (socket.data.isDeliveryStaff && businessId) {
+      socket.join(operationsRoom(businessId));
+      socket.data.operationsBusinessId = businessId;
     }
 
     // Track connections by user
@@ -416,7 +429,9 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
           {
             role: socket.data.role,
             businessId: socket.data.businessId,
-            isChatStaff: socket.data.isChatStaff,
+
+            // The chat calls this fact `isChatStaff`; it is the same one.
+            isChatStaff: socket.data.isDeliveryStaff,
           },
           requestedBusinessId,
         );
@@ -435,6 +450,68 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         socket.data.chatBusinessId = requestedBusinessId;
       } catch {
         // A failed subscription must never bring a connection down.
+      }
+    });
+
+    /**
+     * A MASTER following a company's operation, or anyone reconnecting.
+     *
+     * Same shape as `chatSubscribe`, for the same two reasons. A master has
+     * no company of their own, so the server cannot guess which operation
+     * they are looking at; and rooms die with the connection that joined
+     * them while Socket.IO reconnects the transport by itself, so a panel
+     * that subscribed once goes quiet after any network blip.
+     *
+     * Silent on refusal: no disconnect, and no answer that would tell a
+     * caller whether a company id exists.
+     */
+    socket.on("operationsSubscribe", (payload?: unknown) => {
+      try {
+        const requestedBusinessId = readBusinessIdPayload(payload);
+
+        if (!requestedBusinessId) return;
+
+        const allowed = canWatchOperationsOf(
+          {
+            role: socket.data.role,
+            businessId: socket.data.businessId,
+            isDeliveryStaff: socket.data.isDeliveryStaff,
+          },
+          requestedBusinessId,
+        );
+
+        if (!allowed) return;
+
+        const previous = socket.data.operationsBusinessId as string | undefined;
+
+        // One socket watches exactly one operation. Stacking rooms across a
+        // company switch would put another tenant's trucks on the map.
+        if (previous && previous !== requestedBusinessId) {
+          socket.leave(operationsRoom(previous));
+        }
+
+        socket.join(operationsRoom(requestedBusinessId));
+        socket.data.operationsBusinessId = requestedBusinessId;
+      } catch {
+        // A failed subscription is never worth a dropped connection.
+      }
+    });
+
+    socket.on("operationsUnsubscribe", (payload?: unknown) => {
+      try {
+        const requestedBusinessId = readBusinessIdPayload(payload);
+
+        if (!requestedBusinessId) return;
+        if (socket.data.operationsBusinessId !== requestedBusinessId) return;
+
+        // The own-company room joined at connect stays: it is what keeps a
+        // user's own operation live from anywhere in the app.
+        if (requestedBusinessId === socket.data.businessId) return;
+
+        socket.leave(operationsRoom(requestedBusinessId));
+        socket.data.operationsBusinessId = null;
+      } catch {
+        // Same as above.
       }
     });
 
@@ -468,7 +545,7 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
           return;
         }
 
-        if (!socket.data.isChatStaff || !payload?.driverUserId) return;
+        if (!socket.data.isDeliveryStaff || !payload?.driverUserId) return;
 
         // Same rule as sending: a master's "digitando" would show up on the
         // driver's screen as the company's own counter typing. They keep
@@ -520,7 +597,7 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
             return;
           }
 
-          if (!socket.data.isChatStaff || !payload?.driverUserId) return;
+          if (!socket.data.isDeliveryStaff || !payload?.driverUserId) return;
 
           // Same rule as typing and as sending: a master's hint would read on
           // the driver's screen as his own company's counter.
@@ -680,13 +757,13 @@ const sendSecurityEventToSession = (
 };
 
 /**
- * Recalcula, do banco, quem ainda e da equipe de atendimento.
+ * Recalcula, do banco, quem ainda e da equipe de despacho.
  *
- * `socket.data.isChatStaff` e decidido UMA vez, no handshake, e o chat da
- * empresa e uma SALA — ou seja, o proprio canal de dados. Um usuario que
- * perdeu `delivery_manage` continuava recebendo toda mensagem da empresa pelo
- * resto da conexao: corpo, motorista e URL assinada do anexo. O HTTP ja
- * recusava; o socket, nao.
+ * `socket.data.isDeliveryStaff` e decidido UMA vez, no handshake, e as salas
+ * que ele governa SAO o canal de dados. Um usuario que perdeu
+ * `delivery_manage` continuava recebendo toda mensagem da empresa — corpo,
+ * motorista, URL assinada do anexo — e, desde que a sala de operacao existe,
+ * tambem a posicao de cada motorista. O HTTP ja recusava; o socket, nao.
  *
  * Nao e derrubar a conexao. `permissions_changed` mexe em autorizacao, nao em
  * autenticacao, e um disconnect do servidor nao reconecta sozinho no
@@ -696,7 +773,7 @@ const sendSecurityEventToSession = (
  * Uma leitura por socket conectado da empresa. Uma edicao de permissao afeta
  * um punhado deles, e o custo alternativo e vazamento continuo.
  */
-const refreshChatStaffRooms = async (businessId: string): Promise<void> => {
+const refreshDeliveryRooms = async (businessId: string): Promise<void> => {
   if (!io) return;
 
   const sockets = await io.in(`business:${businessId}`).fetchSockets();
@@ -705,13 +782,14 @@ const refreshChatStaffRooms = async (businessId: string): Promise<void> => {
     sockets.map(async (socket) => {
       const userId = socket.data.userId as string | undefined;
 
-      const leaveEveryStaffRoom = () => {
-        socket.data.isChatStaff = false;
+      const leaveEveryDeliveryRoom = () => {
+        socket.data.isDeliveryStaff = false;
 
-        // Toda sala de atendimento, nao so a desta empresa: um MASTER
-        // rebaixado pode estar na sala de outra.
+        // Toda sala de despacho, nao so a desta empresa: um MASTER rebaixado
+        // pode estar acompanhando a operacao de outra.
         for (const room of socket.rooms) {
           if (room.startsWith("chat-staff:")) socket.leave(room);
+          if (room.startsWith("operations:")) socket.leave(room);
         }
       };
 
@@ -720,36 +798,33 @@ const refreshChatStaffRooms = async (businessId: string): Promise<void> => {
       try {
         const user = await new UserRepository().findUserById(userId);
 
-        const permissions = user?.profileAccess?.permissions as
-          | Array<{ permissionKey: string; canRead: boolean }>
-          | undefined;
-
+        // A mesma regra do handshake, pela mesma funcao. Reimplementa-la aqui
+        // era o caminho mais curto para as duas respostas divergirem.
         const stillStaff = Boolean(
           user &&
-            !user.driverId &&
-            (user.role === "MASTER" ||
-              (user.businessId &&
-                (user.role === "BUSINESS_ADMIN" ||
-                  permissions?.some(
-                    (permission) =>
-                      permission.permissionKey === "delivery_manage" &&
-                      permission.canRead,
-                  )))),
+            mayReadDeliveries({
+              role: user.role,
+              driverId: user.driverId,
+              businessId: user.businessId,
+              permissions: user.profileAccess?.permissions as
+                | Array<{ permissionKey: string; canRead: boolean }>
+                | undefined,
+            }),
         );
 
         if (!stillStaff) {
-          leaveEveryStaffRoom();
+          leaveEveryDeliveryRoom();
 
           return;
         }
 
-        socket.data.isChatStaff = true;
+        socket.data.isDeliveryStaff = true;
       } catch (error) {
         // Na duvida, tira da sala. Um erro de leitura nao pode ser o motivo
         // pelo qual alguem continua ouvindo o que nao deveria.
-        leaveEveryStaffRoom();
+        leaveEveryDeliveryRoom();
 
-        console.error("[Socket] Falha ao reavaliar o atendimento:", error);
+        console.error("[Socket] Falha ao reavaliar o despacho:", error);
       }
     }),
   );
@@ -772,7 +847,7 @@ const sendSecurityEventToBusiness = (
     // A conexao fica; a autorizacao, nao. Sem isto, `permissions_changed` era
     // o unico motivo que tirava a permissao sem tocar no canal por onde os
     // dados saem.
-    void refreshChatStaffRooms(businessId).catch((error) =>
+    void refreshDeliveryRooms(businessId).catch((error) =>
       console.error("[Socket] Falha ao reavaliar as salas:", error),
     );
   }
@@ -868,7 +943,10 @@ const sendRouteEventToBusiness = (
   event: RouteRealtimeEvent,
 ) => {
   if (io) {
-    io.to(`business:${businessId}`).emit("routeEvent", event);
+    // The operations room, not the company room. What a route is doing is the
+    // dispatcher's view of the whole fleet; the driver's own copy goes to
+    // their user room through `sendRouteEventToDriver`.
+    io.to(operationsRoom(businessId)).emit("routeEvent", event);
   }
 };
 
@@ -892,7 +970,7 @@ const sendRouteEventToDriver = (
  * that treated a position like a route event would refetch the board every
  * time a driver moved a block.
  *
- * Only ever the latest point, and only to the company's room. A driver's
+ * Only ever the latest point, and only to the operations room. A driver's
  * three-hour backlog coming out of a dead zone is written to the database in
  * full and announced here once — replaying it through the socket would redraw
  * the same dot two hundred times for every open panel.
@@ -916,7 +994,9 @@ const sendDriverPositionToBusiness = (
   event: DriverPositionEvent,
 ) => {
   if (io) {
-    io.to(`business:${businessId}`).emit("driverPosition", event);
+    // Where a named person physically is, every few seconds, for a whole
+    // shift. It goes only to the room that has a permission check on it.
+    io.to(operationsRoom(businessId)).emit("driverPosition", event);
   }
 };
 
@@ -1050,7 +1130,7 @@ export {
   sendChatMessageEvent,
   sendChatReadEvent,
   sendChatDeliveredEvent,
-  refreshChatStaffRooms,
+  refreshDeliveryRooms,
   sendRouteEventToBusiness,
   sendDeliveryEventToDriver,
   sendDriverPositionToBusiness,
