@@ -50,6 +50,47 @@ interface DriverTrail {
 const TRAIL_POINT_LIMIT = 400;
 
 /**
+ * `YYYY-MM-DD` read as a LOCAL calendar day.
+ *
+ * `new Date("2026-09-16")` is midnight UTC, which in São Paulo is nine in the
+ * evening on the 15th — the exact off-by-one this function exists to avoid.
+ * Returns an invalid Date for anything that is not a date, so the caller's
+ * `Number.isNaN` check still does its job.
+ */
+function startOfLocalDay(day: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.trim());
+
+  if (!match) return new Date(NaN);
+
+  const [, year, month, date] = match;
+
+  return new Date(Number(year), Number(month) - 1, Number(date));
+}
+
+/**
+ * The same calendar day back out, in local wall time.
+ *
+ * `at.toISOString().slice(0, 10)` would agree with this everywhere WEST of
+ * Greenwich and be off by a day east of it, because a local midnight at UTC+9
+ * is three in the afternoon of the previous day in UTC. It is written the
+ * long way for that reason alone.
+ *
+ * Not covered by a test, and the reason is worth stating rather than hiding:
+ * proving it needs the process to run in a timezone ahead of UTC, and Node on
+ * this Windows machine ignores `TZ` — both in the runner and from the shell.
+ * A test that set it would report success while measuring the local timezone,
+ * which is worse than none. The E2E covers the window, which is where the
+ * damage was.
+ */
+function localDayString(at: Date): string {
+  const year = at.getFullYear();
+  const month = String(at.getMonth() + 1).padStart(2, "0");
+  const date = String(at.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${date}`;
+}
+
+/**
  * Where one driver went on one day.
  *
  * Asked for only when somebody opens a driver, never as part of the tower's
@@ -114,16 +155,35 @@ class DriverTrailUseCase {
       );
     }
 
-    const from = day ? new Date(`${day}T00:00:00.000Z`) : new Date();
+    /**
+     * The day is the OPERATION's day, not the UTC one.
+     *
+     * This used to read `setUTCHours(0, 0, 0, 0)`, and in São Paulo the UTC
+     * day begins at nine the previous evening. So a dispatcher who opened a
+     * driver's trail after 21:00 — which is exactly when the late routes are
+     * the ones being asked about — got a window that started an hour ago and
+     * a `recorded` count far below what the phone had actually sent. The
+     * morning was simply not there.
+     *
+     * A trail is the evidence in a dispute about where a truck was at two in
+     * the afternoon. Answering "no data" because the server's clock had
+     * already rolled over in another timezone is the worst possible way to
+     * lose that argument.
+     *
+     * `day` is therefore an ISO date in local wall time. Parsed by parts
+     * rather than by `new Date(string)`, which reads `YYYY-MM-DD` as UTC and
+     * would put the boundary back where it was.
+     */
+    const from = day ? startOfLocalDay(day) : new Date();
 
     if (Number.isNaN(from.getTime())) {
       throw new AppError("Data inválida.", 400, "INVALID_DAY");
     }
 
-    from.setUTCHours(0, 0, 0, 0);
+    from.setHours(0, 0, 0, 0);
 
     const to = new Date(from);
-    to.setUTCDate(to.getUTCDate() + 1);
+    to.setDate(to.getDate() + 1);
 
     const recorded = await this.positions.listTrail({
       businessId: resolvedBusinessId,
@@ -134,7 +194,7 @@ class DriverTrailUseCase {
 
     return {
       driverId,
-      day: from.toISOString().slice(0, 10),
+      day: localDayString(from),
 
       // The real count, alongside the thinned points. A screen that showed
       // only what it drew would have somebody conclude the phone stopped

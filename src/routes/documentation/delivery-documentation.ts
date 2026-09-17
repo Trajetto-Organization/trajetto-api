@@ -80,7 +80,11 @@ const deliveryResponses = {
   }),
   deliveriesAssigned: z.object({
     message: z.string().default("Entregas atribuídas com sucesso!"),
-    data: z.object({ assigned: z.number() }),
+    data: z.object({
+      assigned: z.number().describe("How many deliveries the route carries"),
+      routeId: z.string().describe("The route the assignment created"),
+      routeCode: z.number().describe("Its per-company number"),
+    }),
   }),
   // Deliveries carry nested items whose shape evolves with the module —
   // validated by zod at write time, passed through on read (same rule as

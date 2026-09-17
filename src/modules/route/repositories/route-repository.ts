@@ -11,6 +11,7 @@ import {
 
 import {
   DeliveryAlreadyOnRouteError,
+  RouteCodeTakenError,
   RouteReorderMismatchError,
   RouteStatusConflictError,
   RouteStopNotFoundError,
@@ -121,9 +122,26 @@ class RouteRepository implements IRouteRepository {
     return (highest._max.code ?? 0) + 1;
   }
 
-  async createRoute(data: CreateRouteProps): Promise<RouteWithStops> {
-    const attempt = async (): Promise<RouteWithStops> =>
-      this.prisma.$transaction(async (tx) => {
+  async createRoute(
+    data: CreateRouteProps,
+
+    /**
+     * The caller's transaction, when it has one.
+     *
+     * `create-route` wraps the insert and the `delivery.assigned` events it
+     * announces in one unit of work: forty documents changing hands is forty
+     * events, and a crash halfway through a loop that runs AFTER the commit
+     * leaves a subscriber's ERP holding twenty of them with no way to know.
+     *
+     * With an outer transaction the code-collision retry below cannot run —
+     * an aborted transaction cannot be continued — so the collision is
+     * reported instead and the caller re-runs the whole unit.
+     */
+    outerTx?: Prisma.TransactionClient,
+  ): Promise<RouteWithStops> {
+    const write = async (
+      tx: Prisma.TransactionClient,
+    ): Promise<RouteWithStops> => {
         const created = await tx.route.create({
           data: {
             code: await this.nextCode(tx, data.businessId),
@@ -159,8 +177,33 @@ class RouteRepository implements IRouteRepository {
           });
         }
 
-        return created as unknown as RouteWithStops;
-      });
+      return created as unknown as RouteWithStops;
+    };
+
+    const translate = (error: unknown): never => {
+      const target = violatedIndex(error);
+
+      if (target === null) throw error;
+
+      if (target.includes("deliveryId")) {
+        throw new DeliveryAlreadyOnRouteError(data.deliveryIds.length);
+      }
+
+      throw new RouteCodeTakenError();
+    };
+
+    // The caller owns the transaction: no retry here, because an aborted
+    // transaction cannot be continued. The collision travels up instead.
+    if (outerTx) {
+      try {
+        return await write(outerTx);
+      } catch (error) {
+        return translate(error);
+      }
+    }
+
+    const attempt = (): Promise<RouteWithStops> =>
+      this.prisma.$transaction((tx) => write(tx));
 
     try {
       return await attempt();
@@ -176,6 +219,67 @@ class RouteRepository implements IRouteRepository {
       // Two dispatchers took the same code. One retry, then let it surface.
       return attempt();
     }
+  }
+
+  async detachFromOpenRoutes(
+    deliveryIds: string[],
+    businessId: string,
+  ): Promise<{ detached: number; blocked: string[] }> {
+    if (deliveryIds.length === 0) return { detached: 0, blocked: [] };
+
+    return this.prisma.$transaction(async (tx) => {
+      const stops = await tx.routeStop.findMany({
+        where: {
+          deliveryId: { in: deliveryIds },
+          status: { in: OPEN_STOP_STATUSES },
+
+          // The tenant sits on the ROUTE, which is what owns the stop. A
+          // caller who guessed another company's delivery id finds nothing.
+          route: { businessId },
+        },
+        select: {
+          id: true,
+          deliveryId: true,
+          route: { select: { status: true } },
+          delivery: { select: { code: true, recipient_name: true } },
+        },
+      });
+
+      if (stops.length === 0) return { detached: 0, blocked: [] };
+
+      const blocked = stops
+        .filter((stop) => !EDITABLE_STATUSES.includes(stop.route.status))
+        .map((stop) => stop.delivery.code ?? stop.delivery.recipient_name);
+
+      // All-or-nothing: a partial detach would leave the dispatcher with half
+      // a selection moved and no way to tell which half.
+      if (blocked.length > 0) return { detached: 0, blocked };
+
+      const detachedIds = stops.map((stop) => stop.deliveryId);
+
+      await tx.routeStop.deleteMany({
+        where: { id: { in: stops.map((stop) => stop.id) } },
+      });
+
+      /**
+       * Back to the unassigned pool, exactly as `removeStop` does it: only
+       * the mirror is cleared, because leaving a route never changed the
+       * delivery's own status.
+       *
+       * The `businessId` here is redundant and stays anyway. The stops above
+       * were found through `route: { businessId }`, so these ids are already
+       * this tenant's by construction — a mutation that removes it therefore
+       * survives, and it is the one write in this method that reaches a table
+       * the route does not own. Cheap insurance against the day the query
+       * above is loosened.
+       */
+      await tx.delivery.updateMany({
+        where: { id: { in: detachedIds }, businessId },
+        data: { driverId: null, vehicleId: null },
+      });
+
+      return { detached: detachedIds.length, blocked: [] };
+    });
   }
 
   async updateRoute(
@@ -232,15 +336,35 @@ class RouteRepository implements IRouteRepository {
     businessId: string,
     driverId: string,
   ): Promise<RouteWithStops | null> {
-    // In progress wins over released: a driver who already left is working
-    // that route, whatever else is planned for them today.
+    /**
+     * In progress wins over released: a driver who already left is working
+     * that route, whatever else is planned for them today.
+     *
+     * `desc` and not `asc`, which is what this said for as long as it
+     * existed. Postgres orders an enum by its DECLARED position, and the
+     * declaration is PLANNED, RELEASED, IN_PROGRESS — so ascending put
+     * RELEASED first and the comment above described the opposite of what
+     * the query did.
+     *
+     * It cost more than a wrong screen. A driver who had departed and also
+     * had tomorrow's route released got the released one back, and
+     * `record-driver-positions` reads `status === "IN_PROGRESS"` to decide
+     * whether to store anything: every ping of that shift was answered with
+     * `tracking: false` and thrown away. The in-memory repository had always
+     * done it correctly, which is why no unit test ever noticed.
+     *
+     * The ordinal dependence is real, so `scheduled_date` cannot save it: if
+     * a status is ever inserted between RELEASED and IN_PROGRESS, this
+     * changes meaning silently. The E2E that departs and then flushes a
+     * position is what holds it.
+     */
     const found = await this.prisma.route.findFirst({
       where: {
         businessId,
         driverId,
         status: { in: ["IN_PROGRESS", "RELEASED"] },
       },
-      orderBy: [{ status: "asc" }, { scheduled_date: "asc" }],
+      orderBy: [{ status: "desc" }, { scheduled_date: "asc" }],
       include: routeInclude,
     });
 

@@ -1,37 +1,15 @@
 import { inject, injectable } from "tsyringe";
 
-import database from "@/../infra/database";
-
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
-import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
 
-import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
-import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
-
-import { NotificationService } from "@/shared/services/notification-service";
+import { CreateRouteUseCase } from "@/modules/route/usecases/create-route/create-route-usecase";
+import { ReleaseRouteUseCase } from "@/modules/route/usecases/release-route/release-route-usecase";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
-import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
-
-import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
-import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
-
-import {
-  DeliveryNotFoundError,
-  DeliveryNotBelongBusinessError,
-  DeliveryNotAssignableError,
-  DeliveryDriverInactiveError,
-  DeliveryVehicleUnavailableError,
-  DeliveryAssignmentConflictError,
-} from "../errors/delivery-errors";
-
 import { AppError } from "@/shared/errors/AppError";
 
-import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
-import { deliveryEventPayload } from "@/shared/integration/announce";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
-import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 
 interface AssignDeliveriesRequest {
   userId: string;
@@ -43,32 +21,61 @@ interface AssignDeliveriesRequest {
 
 interface AssignDeliveriesResult {
   assigned: number;
+
+  /** The route the assignment created, so the client can open it. */
+  routeId: string;
+  routeCode: number;
 }
 
 /**
- * Batch assignment over PENDING deliveries, all-or-nothing.
+ * "Assign these twelve deliveries to João" — which is the same act as
+ * "create a route for João with these twelve stops", and is now literally
+ * that.
  *
- * Assigning does not touch the status machine: a PENDING delivery with a
- * driver is presented as "Designada" (derived state) and only the driver
- * moves it to IN_TRANSIT by starting the route in the app. Reassigning a
- * designated delivery overwrites the pair — an omitted vehicle clears the
- * previous one rather than lingering.
+ * It used to be its own writer. It set `Delivery.driverId` and
+ * `Delivery.vehicleId` directly and created nothing else, and the
+ * architecture plan is explicit that those columns are the route's shadow,
+ * "escritos só pelo serviço de rota". Two writers of a shadow is how a shadow
+ * drifts, but the drift was not the expensive part.
+ *
+ * The expensive part was that a delivery dispatched this way had no route,
+ * and the product's evidence hangs off the route:
+ *
+ * - position recording refuses unless the driver has a route IN_PROGRESS, so
+ *   a day's work assigned this way produced NO GPS trail at all — and the
+ *   trail is what settles a dispute about where a truck was;
+ * - the control tower reads routes, so the operation was invisible on the
+ *   panel the dispatcher watches;
+ * - `route.released` / `route.started` never fired, so nothing downstream —
+ *   the customer's tracking page, a subscriber's ERP — learned that the load
+ *   had left.
+ *
+ * None of that showed up as an error. The assignment succeeded, the driver
+ * saw the documents, and the evidence simply did not exist.
+ *
+ * The route is created and RELEASED in one call, because that is what this
+ * shortcut always meant: after assigning, the driver could see the work
+ * immediately. A route born PLANNED would have made the shortcut stop working.
  */
 @injectable()
 class AssignDeliveriesUseCase {
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
-    @inject("DriverRepository")
-    private driver: IDriverRepository,
-    @inject("VehicleRepository")
-    private vehicle: IVehicleRepository,
-    @inject("DeliveryRepository")
-    private delivery: IDeliveryRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
-    @inject("WebhookFanOutService")
-    private webhooks: WebhookFanOutService,
+    @inject("RouteRepository")
+    private route: IRouteRepository,
+    /**
+     * Named explicitly rather than left to `design:paramtypes`.
+     *
+     * tsyringe can infer a class dependency from emitted metadata, and here it
+     * inferred `undefined` — the container built the use case with two missing
+     * collaborators and the endpoint answered 500 on the first call. Nothing
+     * in the unit suite could see it: those tests construct the class by hand.
+     */
+    @inject(CreateRouteUseCase)
+    private createRoute: CreateRouteUseCase,
+    @inject(ReleaseRouteUseCase)
+    private releaseRoute: ReleaseRouteUseCase,
   ) {}
 
   async execute({
@@ -84,130 +91,114 @@ class AssignDeliveriesUseCase {
       throw new ResourceNotFoundError();
     }
 
-    // One definition, shared: see assertDispatcher.
+    // One definition, shared: see assertDispatcher. Checked here as well as
+    // inside `create-route` so the refusal happens before anything is
+    // detached from a route below.
     assertDispatcher(findUser);
 
-    const findDriver = await this.driver.findDriverById(driverId);
-
-    if (!findDriver) {
-      throw new DriverNotFoundError();
-    }
-
-    if (findDriver.businessId !== businessId) {
-      throw new DriverNotBelongBusinessError();
-    }
-
-    if (findDriver.status !== "ACTIVE") {
-      throw new DeliveryDriverInactiveError();
-    }
-
-    let vehicleLabel: string | null = null;
-
-    if (vehicleId) {
-      const findVehicle = await this.vehicle.findVehicleById(vehicleId);
-
-      if (!findVehicle) {
-        throw new VehicleNotFoundError();
-      }
-
-      if (findVehicle.businessId !== businessId) {
-        throw new VehicleNotBelongBusinessError();
-      }
-
-      // IN_ROUTE stays assignable: tomorrow's load is dispatched while
-      // today's route is still on the street.
-      if (isVehicleOutOfOperation(findVehicle.status)) {
-        throw new DeliveryVehicleUnavailableError();
-      }
-
-      vehicleLabel = findVehicle.license_plate;
+    /**
+     * The vehicle is required now, and it was optional before.
+     *
+     * Releasing a route requires one, for a reason the product already
+     * decided: discovering at the truck that no vehicle was assigned costs a
+     * phone call and a morning. The old shortcut could hand a driver twelve
+     * documents and no plate, and nothing anywhere said so.
+     */
+    if (!vehicleId) {
+      throw new AppError(
+        "Informe o veículo: a designação libera a rota para o motorista, e uma rota liberada precisa de veículo.",
+        400,
+        "ASSIGNMENT_VEHICLE_REQUIRED",
+      );
     }
 
     // Duplicated ids in the selection are harmless — collapse them so the
-    // count checks below stay honest.
+    // count stays honest.
     const uniqueIds = [...new Set(deliveryIds)];
 
-    const deliveries = await this.delivery.findDeliveriesByIds(uniqueIds);
-
-    if (deliveries.length !== uniqueIds.length) {
-      throw new DeliveryNotFoundError();
-    }
-
-    if (deliveries.some((entry) => entry.businessId !== businessId)) {
-      throw new DeliveryNotBelongBusinessError();
-    }
-
-    // All-or-nothing with the offenders named: the dispatcher fixes the
-    // selection instead of hunting for what half-succeeded.
-    const blocked = deliveries.filter((entry) => entry.status !== "PENDING");
+    /**
+     * Reassignment, which is an ordinary morning: a driver calls in sick and
+     * twelve documents move to somebody else.
+     *
+     * A delivery may hold only one open stop at a time — the database
+     * enforces it — so moving one means releasing the stop it has. Only while
+     * that route has not left: once it is IN_PROGRESS the stop records what
+     * the driver is doing, and cancelling it silently would rewrite that.
+     */
+    const { blocked } = await this.route.detachFromOpenRoutes(
+      uniqueIds,
+      businessId,
+    );
 
     if (blocked.length > 0) {
-      throw new DeliveryNotAssignableError(
-        blocked.map((entry) => entry.code ?? entry.recipient_name),
-      );
-    }
-
-    try {
-      // The assignment and every event it announces in ONE transaction. The
-      // write is already all-or-nothing; a loop of events after the commit is
-      // not, and a crash halfway leaves a dispatcher's ERP holding twenty of
-      // the forty documents that moved.
-      await database.$transaction(async (tx) => {
-        await this.delivery.assignDeliveries(
-          uniqueIds,
-          { driverId, vehicleId: vehicleId ?? null },
-          tx,
-        );
-
-        // One event per document and not one for the batch: an integration
-        // matches on a delivery, and an event carrying forty ids is an event
-        // every subscriber has to unpack before it can do anything with it.
-        for (const delivery of deliveries) {
-          await this.webhooks.announce(
-            "delivery.assigned",
-            businessId,
-            {
-              ...deliveryEventPayload({ ...delivery, id: delivery.id! }),
-              driver_id: driverId ?? null,
-              vehicle_id: vehicleId ?? null,
-            },
-            tx,
-          );
-        }
-      });
-
-      const count = uniqueIds.length;
-      const plural = count > 1 ? "s" : "";
-
-      this.notificationService.createActivityIfEnabled({
-        type: "Entrega",
-        action: "update",
-        entityId: driverId,
-        description:
-          `${count} entrega${plural} atribuída${plural} ao motorista ` +
-          `${findDriver.name}` +
-          (vehicleLabel ? ` (veículo ${vehicleLabel})` : ""),
-        status: "Designada",
-        performedBy: userId,
-        businessId,
-      });
-
-      return { assigned: count };
-    } catch (error) {
-      if (error instanceof DeliveryAssignmentConflictError) {
-        throw new AppError(error.message, 409, "DELIVERY_ASSIGNMENT_CONFLICT");
-      }
-
-      if (error instanceof AppError) {
-        throw error;
-      }
-
       throw new AppError(
-        "Houve um erro ao tentar atribuir as entregas! Por favor, tente novamente.",
-        500,
+        "Estas entregas já estão numa rota que saiu e não podem ser redesignadas: " +
+          blocked.join(", "),
+        409,
+        "DELIVERY_ON_STARTED_ROUTE",
       );
     }
+
+    /**
+     * Everything else — the dispatcher guard, the driver being active, the
+     * vehicle being in operation and belonging to the tenant, the deliveries
+     * being routable — is `create-route`'s, and is deliberately NOT repeated
+     * here. A second copy of those checks is a second thing to keep in step
+     * with the first.
+     */
+    const created = await this.createRoute.execute({
+      userId,
+      businessId,
+      driverId,
+      vehicleId,
+      name: assignmentRouteName(),
+      scheduled_date: startOfToday(),
+      deliveryIds: uniqueIds,
+    });
+
+    await this.releaseRoute.execute({
+      userId,
+      businessId,
+      routeId: created.id,
+    });
+
+    return {
+      assigned: created.stops.length,
+      routeId: created.id,
+      routeCode: created.code,
+    };
   }
+}
+
+/**
+ * A name a dispatcher can recognise in the route list a minute later.
+ *
+ * The shortcut does not ask for one — asking would make it no longer a
+ * shortcut — so it says where the route came from and when.
+ */
+function assignmentRouteName(): string {
+  const now = new Date();
+
+  const date = now.toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+  });
+
+  const time = now.toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  return `Designação ${date} ${time}`;
+}
+
+/** Today, at local midnight — the day the route is scheduled for. */
+function startOfToday(): Date {
+  const today = new Date();
+
+  today.setHours(0, 0, 0, 0);
+
+  return today;
 }
 
 export { AssignDeliveriesUseCase };

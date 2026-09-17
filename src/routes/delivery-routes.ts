@@ -316,9 +316,9 @@ async function deliveryRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["delivery"],
-        summary: "Assign a driver (and optionally a vehicle) to deliveries",
+        summary: "Assign a driver and vehicle to deliveries, as a released route",
         description:
-          "Batch assignment over PENDING deliveries, all-or-nothing: a delivery outside PENDING, or a driver/vehicle inactive or from another business, rejects the whole batch naming the offenders. Assigning never changes status — a PENDING delivery with a driver reads as 'Designada'; the driver moves it to IN_TRANSIT by starting the route in the app.",
+          "Shortcut for 'create a route for this driver with these stops, and release it'. Batch over PENDING deliveries, all-or-nothing: a delivery outside PENDING, or a driver/vehicle inactive or from another business, rejects the whole batch naming the offenders. The vehicle is REQUIRED — a released route needs one. Assigning never changes status: a PENDING delivery with a driver reads as 'Designada', and the driver moves it to IN_TRANSIT by starting the route in the app. Reassigning moves the documents to a new route and gives up the stop they held, which answers 409 DELIVERY_ON_STARTED_ROUTE once the previous route has left. Returns the created route so the caller can open it.",
         params: deliverySchemas.businessIdParam,
         body: deliverySchemas.assignDeliveries,
         response: {

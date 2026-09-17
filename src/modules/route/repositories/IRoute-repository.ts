@@ -36,7 +36,35 @@ interface IRouteRepository {
    * stop, and writes nothing: a half-created route is worse than none, because
    * the dispatcher would have to find and undo it.
    */
-  createRoute: (data: CreateRouteProps) => Promise<RouteWithStops>;
+  createRoute: (
+    data: CreateRouteProps,
+
+    /**
+     * The caller's transaction, when it has one, so the route and the
+     * `delivery.assigned` events it announces commit together. With one, the
+     * per-company code collision is reported as RouteCodeTakenError instead
+     * of being retried — an aborted transaction cannot be continued.
+     */
+    outerTx?: Prisma.TransactionClient,
+  ) => Promise<RouteWithStops>;
+
+  /**
+   * Takes deliveries off the routes they are on, so they can join another.
+   *
+   * Reassignment is an ordinary morning: a driver calls in sick and twelve
+   * documents move to somebody else. A delivery may only hold one open stop
+   * at a time — the database enforces it — so moving one means releasing the
+   * stop it has.
+   *
+   * Only while the route has NOT left. Once it is IN_PROGRESS the stop is a
+   * record of what the driver is doing, and silently cancelling it would
+   * rewrite that; those ids come back in `blocked` for the caller to refuse
+   * by name. Nothing is written when anything is blocked.
+   */
+  detachFromOpenRoutes: (
+    deliveryIds: string[],
+    businessId: string,
+  ) => Promise<{ detached: number; blocked: string[] }>;
 
   /**
    * Throws RouteStatusConflictError when the route does not exist, belongs to

@@ -1,9 +1,17 @@
 import { z } from "zod";
 
 /**
- * Batch assignment: the whole selection succeeds or nothing is written.
- * Each call fully defines the assignment — an omitted vehicleId clears the
- * previous vehicle on reassignment instead of keeping a stale one.
+ * Batch assignment, which creates and releases a route for the selection.
+ *
+ * The whole selection succeeds or nothing is written, and each call fully
+ * defines the assignment: reassigning moves the documents to a new route and
+ * gives up the stop they held, which is only legal while the previous route
+ * has not left.
+ *
+ * The vehicle is REQUIRED, and used not to be. A released route needs one —
+ * discovering at the truck that none was assigned costs a phone call and a
+ * morning — and the old shortcut could hand a driver twelve documents and no
+ * plate without saying so anywhere.
  */
 const assignDeliveriesSchema = z.object({
   deliveryIds: z
@@ -18,11 +26,9 @@ const assignDeliveriesSchema = z.object({
     .uuid("O motorista deve ter um identificador válido.")
     .describe("Motorista ativo da mesma empresa."),
   vehicleId: z
-    .string()
+    .string({ required_error: "O veículo é obrigatório." })
     .uuid("O veículo deve ter um identificador válido.")
-    .nullable()
-    .optional()
-    .describe("Opcional; ausente limpa o veículo da atribuição anterior."),
+    .describe("Veículo em operação da mesma empresa. A rota é liberada com ele."),
 });
 
 export { assignDeliveriesSchema };

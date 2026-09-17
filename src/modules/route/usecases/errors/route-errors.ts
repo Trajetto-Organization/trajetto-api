@@ -101,7 +101,28 @@ class RouteReorderMismatchError extends Error {
   }
 }
 
+/**
+ * Two dispatchers took the same route number at the same instant.
+ *
+ * Nobody did anything wrong and nothing is broken: the per-company code is
+ * allocated by reading the highest one and adding a step, and two readers in
+ * the same millisecond read the same number. Retrying picks the next one.
+ *
+ * It exists as its own error because the retry used to live inside the
+ * repository, where it could re-run the INSERT on its own. Once the caller
+ * owns the transaction — which is what makes the route and its events
+ * atomic — the repository can no longer retry anything, so it has to say
+ * what happened and let the caller run the whole unit of work again.
+ */
+class RouteCodeTakenError extends Error {
+  constructor() {
+    super("O número da rota já foi usado. Tente novamente.");
+    this.name = "RouteCodeTakenError";
+  }
+}
+
 export {
+  RouteCodeTakenError,
   DeliveryAlreadyOnRouteError,
   RouteDriverInactiveError,
   RouteNotBelongBusinessError,

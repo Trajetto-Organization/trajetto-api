@@ -2,13 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 
 import { AssignDeliveriesUseCase } from "@/modules/delivery/usecases/assign-deliveries/assign-deliveries-usecase";
 
+import { CreateRouteUseCase } from "@/modules/route/usecases/create-route/create-route-usecase";
+import { ReleaseRouteUseCase } from "@/modules/route/usecases/release-route/release-route-usecase";
+import { StartRouteUseCase } from "@/modules/route/usecases/start-route/start-route-usecase";
+
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
+import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
 
 import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-memory/in-memory-vehicle-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+
 import type { NotificationService } from "@/shared/services/notification-service";
+import type { OutboxService } from "@/shared/notifications/outbox-service";
 
 import type { Driver } from "@/modules/driver/dtos/driver-dto";
 import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
@@ -16,77 +24,135 @@ import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 
-import {
-  DeliveryNotFoundError,
-  DeliveryNotBelongBusinessError,
-  DeliveryNotAssignableError,
-  DeliveryDriverInactiveError,
-  DeliveryVehicleUnavailableError,
-  DeliveryAssignmentConflictError,
-} from "@/modules/delivery/usecases/errors/delivery-errors";
-
-import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
-
-import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
-
-// The use cases now wrap their write and the webhook they announce in one
-// transaction. Against in-memory repositories the transaction is a plain
-// passthrough — what it proves here is that the event is queued in the same
-// unit of work, not that Postgres rolled anything back.
+/**
+ * Batch assignment, which is now a route.
+ *
+ * It used to be its own writer: it set `Delivery.driverId` and
+ * `Delivery.vehicleId` and created nothing else. The architecture plan says
+ * those columns are the route's shadow, written only by the route service,
+ * and the drift was not the expensive part — a delivery dispatched that way
+ * had no route, and the product's evidence hangs off the route. No GPS trail
+ * (position recording refuses without a route IN_PROGRESS), nothing on the
+ * control tower, no `route.released` for anyone downstream.
+ *
+ * So the tests here are no longer about columns. They are about what the
+ * assignment PRODUCES: a released route, with stops, that a driver can start
+ * and that therefore records where the truck went.
+ *
+ * The real `create-route` and `release-route` are wired in rather than
+ * stubbed. A stub would let this file agree with a delegation that never
+ * happened, which is precisely the bug it exists to prevent from coming back.
+ */
 vi.mock("@/../infra/database", () => ({
   default: {
     $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}),
   },
 }));
 
-
-// Nothing here asserts on webhooks; the use cases simply require one.
-const webhookStub = new InMemoryWebhookFanOutService();
-
 const BUSINESS = "018f0000-0000-7000-8000-00000000000b";
-const OTHER_BUSINESS = "018f0000-0000-7000-8000-00000000000c";
 
 const USER_ID = "018f0000-0000-7000-8000-0000000000aa";
 const DRIVER_ID = "018f0000-0000-7000-8000-0000000000d1";
+const OTHER_DRIVER_ID = "018f0000-0000-7000-8000-0000000000d2";
+
+const DRIVER_USER_ID = "018f0000-0000-7000-8000-0000000000ab";
 
 const VEHICLE_ID = "018f0000-0000-7000-8000-0000000000e1";
+const OTHER_VEHICLE_ID = "018f0000-0000-7000-8000-0000000000e2";
+
 const SHIPPER_ID = "018f0000-0000-7000-8000-0000000000f1";
 
 function makeContext() {
-  const userRepository = new InMemoryUserRepository();
-  const driverRepository = new InMemoryDriverRepository();
+  const published: Array<{ topic: string }> = [];
 
-  const vehicleRepository = new InMemoryVehicleRepository();
-  const deliveryRepository = new InMemoryDeliveryRepository();
+  const outboxStub = {
+    publish: async (_tx: unknown, event: { topic: string }) => {
+      published.push({ topic: event.topic });
+    },
+  } as unknown as OutboxService;
 
-  userRepository.user.push({
-    id: USER_ID,
-    role: "BUSINESS_ADMIN",
-    businessId: BUSINESS,
-  } as User);
+  const webhookStub = new InMemoryWebhookFanOutService();
 
   const activityLog: string[] = [];
 
-  const useCase = new AssignDeliveriesUseCase(
+
+  const notificationService = {
+    createActivityIfEnabled: async (activity: { description: string }) => {
+      activityLog.push(activity.description);
+    },
+  } as unknown as NotificationService;
+
+  const deliveryRepository = new InMemoryDeliveryRepository();
+
+  // One store, shared in both directions: the route repository writes the
+  // mirror onto the very rows the delivery repository hands back.
+  const routeRepository = new InMemoryRouteRepository(
+    deliveryRepository.deliveries,
+  );
+
+  deliveryRepository.routeStops = routeRepository.stops;
+
+  const driverRepository = new InMemoryDriverRepository();
+  const vehicleRepository = new InMemoryVehicleRepository();
+  const userRepository = new InMemoryUserRepository();
+
+  userRepository.user.push(
+    { id: USER_ID, role: "BUSINESS_ADMIN", businessId: BUSINESS } as User,
+    {
+      id: DRIVER_USER_ID,
+      name: "João",
+      role: "BUSINESS_USER",
+      businessId: BUSINESS,
+      driverId: DRIVER_ID,
+    } as User,
+  );
+
+  const createRoute = new CreateRouteUseCase(
+    routeRepository,
     userRepository,
+    deliveryRepository,
     driverRepository,
     vehicleRepository,
-    deliveryRepository,
-    {
-      createActivityIfEnabled: async (activity: { description: string }) => {
-        activityLog.push(activity.description);
-      },
-    } as unknown as NotificationService,
+    notificationService,
+      webhookStub.asService(),
+  );
+
+  const releaseRoute = new ReleaseRouteUseCase(
+    routeRepository,
+    userRepository,
+    driverRepository,
+    notificationService,
+    outboxStub,
     webhookStub.asService(),
+  );
+
+  const startRoute = new StartRouteUseCase(
+    routeRepository,
+    userRepository,
+    vehicleRepository,
+    notificationService,
+    outboxStub,
+    webhookStub.asService(),
+  );
+
+  const useCase = new AssignDeliveriesUseCase(
+    userRepository,
+    routeRepository,
+    createRoute,
+    releaseRoute,
   );
 
   return {
     useCase,
-    userRepository,
+    startRoute,
+    routeRepository,
+    deliveryRepository,
     driverRepository,
     vehicleRepository,
-    deliveryRepository,
+    userRepository,
     activityLog,
+    published,
+    webhookStub,
   };
 }
 
@@ -103,6 +169,7 @@ function seedDriver(
   } as Driver;
 
   repository.drivers.push(driver);
+
   return driver;
 }
 
@@ -119,6 +186,7 @@ function seedVehicle(
   } as Vehicle;
 
   repository.vehicles.push(vehicle);
+
   return vehicle;
 }
 
@@ -137,8 +205,22 @@ async function seedPendingDelivery(
   } as CreateDeliveryProps);
 }
 
-describe("assign deliveries in batch", () => {
-  it("assigns a pending batch to an active driver and vehicle", async () => {
+const assign = (
+  context: ReturnType<typeof makeContext>,
+  deliveryIds: string[],
+  overrides: { driverId?: string; vehicleId?: string | null } = {},
+) =>
+  context.useCase.execute({
+    userId: USER_ID,
+    businessId: BUSINESS,
+    deliveryIds,
+    driverId: overrides.driverId ?? DRIVER_ID,
+    vehicleId:
+      overrides.vehicleId === undefined ? VEHICLE_ID : overrides.vehicleId,
+  });
+
+describe("what an assignment produces", () => {
+  it("creates a route with the selection as its stops", async () => {
     const context = makeContext();
     seedDriver(context.driverRepository);
     seedVehicle(context.vehicleRepository);
@@ -148,85 +230,306 @@ describe("assign deliveries in batch", () => {
       recipient_name: "Cliente B",
     });
 
-    const result = await context.useCase.execute({
-      userId: USER_ID,
-      businessId: BUSINESS,
-      deliveryIds: [first.id!, second.id!],
-      driverId: DRIVER_ID,
-      vehicleId: VEHICLE_ID,
-    });
+    const result = await assign(context, [first.id!, second.id!]);
 
     expect(result.assigned).toBe(2);
+    expect(result.routeId).toBeTruthy();
 
-    for (const delivery of context.deliveryRepository.deliveries) {
-      expect(delivery.driverId).toBe(DRIVER_ID);
-      expect(delivery.vehicleId).toBe(VEHICLE_ID);
-      // Assigning never touches the status machine: "Designada" is the
-      // derived reading of PENDING + driver, not a status.
-      expect(delivery.status).toBe("PENDING");
-    }
+    // The whole point of the change: a route now exists.
+    const route = await context.routeRepository.findRouteById(
+      result.routeId,
+      BUSINESS,
+    );
 
-    expect(context.activityLog).toHaveLength(1);
-    expect(context.activityLog[0]).toContain("2 entregas");
-    expect(context.activityLog[0]).toContain("João Motorista");
-    expect(context.activityLog[0]).toContain("ABC1D23");
+    expect(route, "a designação não criou rota").not.toBeNull();
+    expect(route!.stops).toHaveLength(2);
+    expect(route!.driverId).toBe(DRIVER_ID);
+    expect(route!.vehicleId).toBe(VEHICLE_ID);
   });
 
-  it("reassignment overwrites the driver and clears an omitted vehicle", async () => {
+  it("releases it, so the driver sees the work immediately", async () => {
+    // The shortcut always meant "assign and the driver can see it". A route
+    // left PLANNED would have made it stop working.
     const context = makeContext();
     seedDriver(context.driverRepository);
     seedVehicle(context.vehicleRepository);
 
-    const otherDriverId = "018f0000-0000-7000-8000-0000000000d2";
-    seedDriver(context.driverRepository, {
-      id: otherDriverId,
-      name: "Maria Motorista",
-    });
+    const delivery = await seedPendingDelivery(context.deliveryRepository);
+
+    const result = await assign(context, [delivery.id!]);
+
+    const route = await context.routeRepository.findRouteById(
+      result.routeId,
+      BUSINESS,
+    );
+
+    expect(route!.status).toBe("RELEASED");
+    expect(context.published.map((event) => event.topic)).toContain(
+      "route.released",
+    );
+  });
+
+  it("mirrors the pair onto the deliveries, without touching their status", async () => {
+    const context = makeContext();
+    seedDriver(context.driverRepository);
+    seedVehicle(context.vehicleRepository);
 
     const delivery = await seedPendingDelivery(context.deliveryRepository);
 
-    await context.useCase.execute({
-      userId: USER_ID,
-      businessId: BUSINESS,
-      deliveryIds: [delivery.id!],
-      driverId: DRIVER_ID,
-      vehicleId: VEHICLE_ID,
-    });
-
-    await context.useCase.execute({
-      userId: USER_ID,
-      businessId: BUSINESS,
-      deliveryIds: [delivery.id!],
-      driverId: otherDriverId,
-    });
+    await assign(context, [delivery.id!]);
 
     const stored = context.deliveryRepository.deliveries[0];
-    expect(stored.driverId).toBe(otherDriverId);
 
-    // Each call fully defines the assignment — the previous vehicle must
-    // not linger under the new driver.
-    expect(stored.vehicleId).toBeNull();
+    expect(stored.driverId).toBe(DRIVER_ID);
+    expect(stored.vehicleId).toBe(VEHICLE_ID);
+
+    // "Designada" is the derived reading of PENDING + driver, not a status.
+    // Only the departure moves a delivery to IN_TRANSIT.
+    expect(stored.status).toBe("PENDING");
+  });
+
+  it("produces a route the driver can actually start", async () => {
+    /**
+     * This is the assertion the old implementation could never satisfy, and
+     * the reason the change was worth making: without a route there is
+     * nothing to start, so `record-driver-positions` answered
+     * `tracking: false` for the whole day and the trail — the thing a dispute
+     * is settled with — did not exist.
+     */
+    const context = makeContext();
+    seedDriver(context.driverRepository);
+    seedVehicle(context.vehicleRepository);
+
+    const delivery = await seedPendingDelivery(context.deliveryRepository);
+
+    const result = await assign(context, [delivery.id!]);
+
+    await context.startRoute.execute({
+      userId: DRIVER_USER_ID,
+      businessId: BUSINESS,
+      routeId: result.routeId,
+    });
+
+    const route = await context.routeRepository.findRouteById(
+      result.routeId,
+      BUSINESS,
+    );
+
+    expect(route!.status).toBe("IN_PROGRESS");
+    expect(context.deliveryRepository.deliveries[0].status).toBe("IN_TRANSIT");
+  });
+
+  it("tells the integrations, one event per document", async () => {
+    /**
+     * `delivery.assigned` used to be announced by this use case itself, which
+     * meant a subscriber heard about an assignment only when the dispatcher
+     * took the shortcut — building the same route on the Rotas screen
+     * announced nothing at all. It now comes from `create-route`, so both
+     * paths produce it.
+     *
+     * One per document and not one for the batch: a subscriber matches on a
+     * DELIVERY, and an event carrying forty ids is an event every subscriber
+     * has to unpack before it can act.
+     */
+    const context = makeContext();
+    seedDriver(context.driverRepository);
+    seedVehicle(context.vehicleRepository);
+
+    const first = await seedPendingDelivery(context.deliveryRepository);
+    const second = await seedPendingDelivery(context.deliveryRepository, {
+      recipient_name: "Cliente B",
+    });
+
+    const result = await assign(context, [first.id!, second.id!]);
+
+    const assigned = context.webhookStub.announced.filter(
+      (event) => event.topic === "delivery.assigned",
+    );
+
+    expect(assigned).toHaveLength(2);
+
+    expect(assigned.map((event) => event.payload.delivery_id).sort()).toEqual(
+      [first.id, second.id].sort(),
+    );
+
+    for (const event of assigned) {
+      expect(event.payload.driver_id).toBe(DRIVER_ID);
+      expect(event.payload.vehicle_id).toBe(VEHICLE_ID);
+      expect(event.payload.route_id).toBe(result.routeId);
+
+      // Inside the creation's own transaction. A loop of events after the
+      // commit is not all-or-nothing, and a crash halfway leaves a
+      // subscriber's ERP holding twenty of the forty documents that moved.
+      expect(event.transactional).toBe(true);
+    }
   });
 
   it("collapses duplicated ids in the selection", async () => {
     const context = makeContext();
     seedDriver(context.driverRepository);
+    seedVehicle(context.vehicleRepository);
 
     const delivery = await seedPendingDelivery(context.deliveryRepository);
 
-    const result = await context.useCase.execute({
-      userId: USER_ID,
-      businessId: BUSINESS,
-      deliveryIds: [delivery.id!, delivery.id!],
-      driverId: DRIVER_ID,
-    });
+    const result = await assign(context, [delivery.id!, delivery.id!]);
 
     expect(result.assigned).toBe(1);
   });
+});
 
-  it("rejects the whole batch naming deliveries that are not pending", async () => {
+describe("the vehicle is no longer optional", () => {
+  it("refuses an assignment with no vehicle, naming why", async () => {
+    /**
+     * Releasing a route requires a vehicle, for a reason the product already
+     * decided: discovering at the truck that none was assigned costs a phone
+     * call and a morning. The old shortcut could hand a driver twelve
+     * documents and no plate, and nothing anywhere said so.
+     */
     const context = makeContext();
     seedDriver(context.driverRepository);
+    seedVehicle(context.vehicleRepository);
+
+    const delivery = await seedPendingDelivery(context.deliveryRepository);
+
+    await expect(
+      assign(context, [delivery.id!], { vehicleId: null }),
+    ).rejects.toMatchObject({ code: "ASSIGNMENT_VEHICLE_REQUIRED" });
+
+    // Refused before anything was created.
+    expect(context.routeRepository.routes).toHaveLength(0);
+    expect(context.deliveryRepository.deliveries[0].driverId).toBeFalsy();
+  });
+});
+
+describe("reassignment", () => {
+  it("moves the delivery to the new route while the old one has not left", async () => {
+    // An ordinary morning: a driver calls in sick and the documents move.
+    const context = makeContext();
+    seedDriver(context.driverRepository);
+    seedDriver(context.driverRepository, {
+      id: OTHER_DRIVER_ID,
+      name: "Maria Motorista",
+    });
+
+    seedVehicle(context.vehicleRepository);
+    seedVehicle(context.vehicleRepository, {
+      id: OTHER_VEHICLE_ID,
+      license_plate: "XYZ9K87",
+    });
+
+    const delivery = await seedPendingDelivery(context.deliveryRepository);
+
+    const first = await assign(context, [delivery.id!]);
+
+    const second = await assign(context, [delivery.id!], {
+      driverId: OTHER_DRIVER_ID,
+      vehicleId: OTHER_VEHICLE_ID,
+    });
+
+    expect(second.routeId).not.toBe(first.routeId);
+
+    const previous = await context.routeRepository.findRouteById(
+      first.routeId,
+      BUSINESS,
+    );
+
+    // A delivery may hold only one open stop at a time, so the first route
+    // gives it up rather than keeping a stop nobody will work.
+    expect(previous!.stops).toHaveLength(0);
+
+    const current = await context.routeRepository.findRouteById(
+      second.routeId,
+      BUSINESS,
+    );
+
+    expect(current!.stops).toHaveLength(1);
+
+    const stored = context.deliveryRepository.deliveries[0];
+
+    expect(stored.driverId).toBe(OTHER_DRIVER_ID);
+    expect(stored.vehicleId).toBe(OTHER_VEHICLE_ID);
+  });
+
+  it("refuses once the route has left, naming the documents", async () => {
+    /**
+     * The stop is now a record of what the driver is doing. Cancelling it
+     * silently to move the document elsewhere would rewrite that record, and
+     * the driver would find the delivery gone from the phone mid-street.
+     */
+    const context = makeContext();
+    seedDriver(context.driverRepository);
+    seedDriver(context.driverRepository, {
+      id: OTHER_DRIVER_ID,
+      name: "Maria Motorista",
+    });
+
+    seedVehicle(context.vehicleRepository);
+    seedVehicle(context.vehicleRepository, {
+      id: OTHER_VEHICLE_ID,
+      license_plate: "XYZ9K87",
+    });
+
+    const delivery = await seedPendingDelivery(context.deliveryRepository, {
+      code: "NF-4477",
+    });
+
+    const first = await assign(context, [delivery.id!]);
+
+    await context.startRoute.execute({
+      userId: DRIVER_USER_ID,
+      businessId: BUSINESS,
+      routeId: first.routeId,
+    });
+
+    await expect(
+      assign(context, [delivery.id!], {
+        driverId: OTHER_DRIVER_ID,
+        vehicleId: OTHER_VEHICLE_ID,
+      }),
+    ).rejects.toMatchObject({
+      code: "DELIVERY_ON_STARTED_ROUTE",
+      message: expect.stringContaining("NF-4477"),
+    });
+
+    // And the route that left keeps its stop.
+    const previous = await context.routeRepository.findRouteById(
+      first.routeId,
+      BUSINESS,
+    );
+
+    expect(previous!.stops).toHaveLength(1);
+  });
+});
+
+describe("what the route path refuses on the assignment's behalf", () => {
+  it("refuses an inactive driver", async () => {
+    const context = makeContext();
+    seedDriver(context.driverRepository, { status: "INACTIVE" });
+    seedVehicle(context.vehicleRepository);
+
+    const delivery = await seedPendingDelivery(context.deliveryRepository);
+
+    await expect(assign(context, [delivery.id!])).rejects.toMatchObject({
+      code: "ROUTE_DRIVER_INACTIVE",
+    });
+  });
+
+  it("refuses a vehicle that is out of operation", async () => {
+    const context = makeContext();
+    seedDriver(context.driverRepository);
+    seedVehicle(context.vehicleRepository, { status: "BLOCKED" });
+
+    const delivery = await seedPendingDelivery(context.deliveryRepository);
+
+    await expect(assign(context, [delivery.id!])).rejects.toMatchObject({
+      code: "ROUTE_VEHICLE_UNAVAILABLE",
+    });
+  });
+
+  it("refuses the whole batch naming deliveries that are not pending", async () => {
+    const context = makeContext();
+    seedDriver(context.driverRepository);
+    seedVehicle(context.vehicleRepository);
 
     const pending = await seedPendingDelivery(context.deliveryRepository);
     const inTransit = await seedPendingDelivery(context.deliveryRepository, {
@@ -236,171 +539,28 @@ describe("assign deliveries in batch", () => {
     inTransit.status = "IN_TRANSIT";
 
     await expect(
-      context.useCase.execute({
-        userId: USER_ID,
-        businessId: BUSINESS,
-        deliveryIds: [pending.id!, inTransit.id!],
-        driverId: DRIVER_ID,
-      }),
-    ).rejects.toThrowError(
-      expect.objectContaining({
-        message: expect.stringContaining("Cliente Em Rota"),
-      }),
-    );
-
-    // All-or-nothing: the pending delivery in the same batch stays
-    // untouched.
-    expect(pending.driverId).toBeUndefined();
-    expect(context.activityLog).toHaveLength(0);
-  });
-
-  it("rejects an inactive driver", async () => {
-    const context = makeContext();
-    seedDriver(context.driverRepository, { status: "INACTIVE" });
-
-    const delivery = await seedPendingDelivery(context.deliveryRepository);
-
-    await expect(
-      context.useCase.execute({
-        userId: USER_ID,
-        businessId: BUSINESS,
-        deliveryIds: [delivery.id!],
-        driverId: DRIVER_ID,
-      }),
-    ).rejects.toBeInstanceOf(DeliveryDriverInactiveError);
-  });
-
-  it("rejects a driver from another business", async () => {
-    const context = makeContext();
-    seedDriver(context.driverRepository, { businessId: OTHER_BUSINESS });
-
-    const delivery = await seedPendingDelivery(context.deliveryRepository);
-
-    await expect(
-      context.useCase.execute({
-        userId: USER_ID,
-        businessId: BUSINESS,
-        deliveryIds: [delivery.id!],
-        driverId: DRIVER_ID,
-      }),
-    ).rejects.toBeInstanceOf(DriverNotBelongBusinessError);
-  });
-
-  it("rejects an unavailable vehicle but accepts one already in route", async () => {
-    const context = makeContext();
-    seedDriver(context.driverRepository);
-
-    const delivery = await seedPendingDelivery(context.deliveryRepository);
-
-    for (const status of ["INACTIVE", "BLOCKED"] as const) {
-      context.vehicleRepository.vehicles.length = 0;
-      seedVehicle(context.vehicleRepository, { status });
-
-      await expect(
-        context.useCase.execute({
-          userId: USER_ID,
-          businessId: BUSINESS,
-          deliveryIds: [delivery.id!],
-          driverId: DRIVER_ID,
-          vehicleId: VEHICLE_ID,
-        }),
-      ).rejects.toBeInstanceOf(DeliveryVehicleUnavailableError);
-    }
-
-    // IN_ROUTE stays assignable: tomorrow's load is dispatched while
-    // today's route is still on the street.
-    context.vehicleRepository.vehicles.length = 0;
-    seedVehicle(context.vehicleRepository, { status: "IN_ROUTE" });
-
-    const result = await context.useCase.execute({
-      userId: USER_ID,
-      businessId: BUSINESS,
-      deliveryIds: [delivery.id!],
-      driverId: DRIVER_ID,
-      vehicleId: VEHICLE_ID,
+      assign(context, [pending.id!, inTransit.id!]),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("Cliente Em Rota"),
     });
 
-    expect(result.assigned).toBe(1);
+    // All-or-nothing: the pending delivery in the same batch stays untouched
+    // and no route was created for half of it.
+    expect(pending.driverId).toBeFalsy();
+    expect(context.routeRepository.routes).toHaveLength(0);
   });
 
-  it("rejects a delivery from another business", async () => {
+  it("refuses a delivery of another company", async () => {
     const context = makeContext();
     seedDriver(context.driverRepository);
+    seedVehicle(context.vehicleRepository);
 
     const foreign = await seedPendingDelivery(context.deliveryRepository, {
-      businessId: OTHER_BUSINESS,
+      businessId: "018f0000-0000-7000-8000-00000000000c",
     });
 
-    await expect(
-      context.useCase.execute({
-        userId: USER_ID,
-        businessId: BUSINESS,
-        deliveryIds: [foreign.id!],
-        driverId: DRIVER_ID,
-      }),
-    ).rejects.toBeInstanceOf(DeliveryNotBelongBusinessError);
-  });
-
-  it("rejects when a selected delivery does not exist", async () => {
-    const context = makeContext();
-    seedDriver(context.driverRepository);
-
-    await expect(
-      context.useCase.execute({
-        userId: USER_ID,
-        businessId: BUSINESS,
-        deliveryIds: ["018f0000-0000-7000-8000-0000000000ff"],
-        driverId: DRIVER_ID,
-      }),
-    ).rejects.toBeInstanceOf(DeliveryNotFoundError);
-  });
-
-  it("refuses a driver token — dispatching belongs to the dispatcher", async () => {
-    const context = makeContext();
-    seedDriver(context.driverRepository);
-
-    const delivery = await seedPendingDelivery(context.deliveryRepository);
-
-    // The permission table opens delivery_manage for the app's own routes;
-    // the use case is what keeps a driver from assigning loads to himself.
-    const DRIVER_USER = "018f0000-0000-7000-8000-0000000000ab";
-
-    context.userRepository.user.push({
-      id: DRIVER_USER,
-      role: "BUSINESS_USER",
-      businessId: BUSINESS,
-      driverId: DRIVER_ID,
-    } as User);
-
-    await expect(
-      context.useCase.execute({
-        userId: DRIVER_USER,
-        businessId: BUSINESS,
-        deliveryIds: [delivery.id!],
-        driverId: DRIVER_ID,
-      }),
-    ).rejects.toMatchObject({ code: "DRIVER_CANNOT_MANAGE_DELIVERIES" });
-  });
-
-  it("repository writes nothing when a row left PENDING mid-flight", async () => {
-    const repository = new InMemoryDeliveryRepository();
-
-    const pending = await seedPendingDelivery(repository);
-    const moved = await seedPendingDelivery(repository, {
-      recipient_name: "Cliente Movido",
+    await expect(assign(context, [foreign.id!])).rejects.toMatchObject({
+      code: "DELIVERY_NOT_BELONG_BUSINESS",
     });
-
-    // Simulates the race the transaction guards against: a delivery moved
-    // between the use case's validation and the repository write.
-    moved.status = "IN_TRANSIT";
-
-    await expect(
-      repository.assignDeliveries([pending.id!, moved.id!], {
-        driverId: DRIVER_ID,
-        vehicleId: null,
-      }),
-    ).rejects.toBeInstanceOf(DeliveryAssignmentConflictError);
-
-    expect(pending.driverId).toBeUndefined();
   });
 });

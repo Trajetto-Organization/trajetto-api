@@ -7,9 +7,14 @@ import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-r
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
 
+import database from "@/../infra/database";
+
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
 
 import { NotificationService } from "@/shared/services/notification-service";
+
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import { deliveryEventPayload } from "@/shared/integration/announce";
 
 import { AppError } from "@/shared/errors/AppError";
 import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
@@ -18,6 +23,7 @@ import { assertDeliveriesRoutable } from "../shared/routable-deliveries";
 
 import {
   DeliveryAlreadyOnRouteError,
+  RouteCodeTakenError,
   RouteDriverInactiveError,
   RouteVehicleUnavailableError,
 } from "../errors/route-errors";
@@ -66,6 +72,8 @@ class CreateRouteUseCase {
     private vehicle: IVehicleRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -125,25 +133,87 @@ class CreateRouteUseCase {
     // checks below stay honest.
     const uniqueIds = [...new Set(deliveryIds)];
 
+    let routed: Awaited<
+      ReturnType<IDeliveryRepository["findDeliveriesByIds"]>
+    > = [];
+
     if (uniqueIds.length > 0) {
-      const deliveries = await this.delivery.findDeliveriesByIds(uniqueIds);
+      routed = await this.delivery.findDeliveriesByIds(uniqueIds);
 
       // Shared with add-route-stops: the same question at two moments, and two
       // copies of it would drift the first time one learned a new status.
-      assertDeliveriesRoutable(deliveries, uniqueIds, businessId);
+      assertDeliveriesRoutable(routed, uniqueIds, businessId);
     }
 
-    try {
-      const created = await this.route.createRoute({
-        businessId,
-        driverId,
-        vehicleId: vehicleId ?? null,
-        name: name ?? null,
-        scheduled_date,
-        planned_departure_at: planned_departure_at ?? null,
-        planned_arrival_at: planned_arrival_at ?? null,
-        deliveryIds: uniqueIds,
+    /**
+     * The route and every event it announces, in ONE unit of work.
+     *
+     * Forty documents changing hands is forty events, and a loop that runs
+     * after the commit is not all-or-nothing: a crash halfway leaves a
+     * subscriber's ERP holding twenty of the forty with no way to learn about
+     * the rest. Every other write in this module already holds that rule; the
+     * `delivery.assigned` announcement had to join it.
+     */
+    const build = () =>
+      database.$transaction(async (tx) => {
+        const route = await this.route.createRoute(
+          {
+            businessId,
+            driverId,
+            vehicleId: vehicleId ?? null,
+            name: name ?? null,
+            scheduled_date,
+            planned_departure_at: planned_departure_at ?? null,
+            planned_arrival_at: planned_arrival_at ?? null,
+            deliveryIds: uniqueIds,
+          },
+          tx,
+        );
+
+        /**
+         * One `delivery.assigned` per document, not one for the route.
+         *
+         * A subscriber matches on a DELIVERY — an ERP wants to know that
+         * order 4477 now has a driver — and an event carrying forty ids is an
+         * event every subscriber has to unpack before it can act.
+         *
+         * It used to be announced by the batch-assignment use case, which
+         * meant a subscriber heard about an assignment only when the
+         * dispatcher took the shortcut: building the same route on the Rotas
+         * screen announced nothing. Both paths come through here now, which
+         * is the only place that knows a delivery gained a driver.
+         */
+        for (const delivery of routed) {
+          await this.webhooks.announce(
+            "delivery.assigned",
+            businessId,
+            {
+              ...deliveryEventPayload({ ...delivery, id: delivery.id! }),
+              driver_id: driverId,
+              vehicle_id: vehicleId ?? null,
+              route_id: route.id,
+              route_code: route.code,
+            },
+            tx,
+          );
+        }
+
+        return route;
       });
+
+    try {
+      let created;
+
+      try {
+        created = await build();
+      } catch (error) {
+        // Two dispatchers read the same highest code in the same instant.
+        // Nobody did anything wrong; the whole unit runs again, and the
+        // second read picks the next number.
+        if (!(error instanceof RouteCodeTakenError)) throw error;
+
+        created = await build();
+      }
 
       this.notificationService.createActivityIfEnabled({
         type: "Rota",

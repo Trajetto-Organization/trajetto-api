@@ -28,6 +28,15 @@ const MANAGER = "018f9000-0000-7000-8000-0000000000a1";
 const DRIVER_USER = "018f9000-0000-7000-8000-0000000000a2";
 
 const DRIVER = "018f9000-0000-7000-8000-0000000000d1";
+
+/**
+ * A driver of its own for the day-boundary test.
+ *
+ * The trail counts everything the driver recorded, and DRIVER accumulates a
+ * thousand points earlier in this file — sharing it would make the count
+ * depend on which tests ran first.
+ */
+const TRAIL_DRIVER = "018f9000-0000-7000-8000-0000000000d3";
 const OTHER_DRIVER = "018f9000-0000-7000-8000-0000000000d2";
 
 const VEHICLE = "018f9000-0000-7000-8000-0000000000c1";
@@ -129,6 +138,7 @@ beforeAll(async () => {
   await seedBusiness(OTHER, "11222888000155");
 
   await seedDriver(DRIVER, CARRIER);
+  await seedDriver(TRAIL_DRIVER, CARRIER);
   await seedDriver(OTHER_DRIVER, OTHER);
 
   await prisma.shipper.create({
@@ -739,5 +749,110 @@ describe("where the driver IS, apart from where they have been", () => {
     const response = await get("/route/control-tower", managerToken);
 
     expect(response.json().data.positions).toHaveLength(1);
+  });
+});
+
+describe("the trail's day is the operation's day", () => {
+  /**
+   * The window used to be a UTC day, and São Paulo is three hours behind it.
+   *
+   * That made the endpoint wrong at every hour, in one direction or the
+   * other: before 21:00 local, the UTC window ends at 21:00 and anything
+   * later is missing; after 21:00 the window has already rolled to tomorrow
+   * and the whole working morning is gone. The second is the expensive one —
+   * a dispatcher asking where a truck was at two in the afternoon, at nine in
+   * the evening, was told there were no points.
+   *
+   * Two positions on the same LOCAL day, one on each side of the UTC
+   * boundary. Whatever time this test runs at, the old window could hold at
+   * most one of them.
+   */
+  /**
+   * One point in the morning and one late at night, LOCAL.
+   *
+   * 22:30 in São Paulo is already tomorrow in UTC, so the two sit on opposite
+   * sides of the UTC boundary while belonging to the same working day. A
+   * window computed in UTC can hold at most one of them, whatever hour the
+   * test runs at.
+   *
+   * Seeded per test because `beforeEach` wipes the positions — sharing state
+   * between the two below would make the second pass on the first's rows.
+   */
+  async function seedBothEndsOfTheDay(): Promise<void> {
+    const morning = new Date();
+    morning.setHours(8, 0, 0, 0);
+
+    const evening = new Date();
+    evening.setHours(22, 30, 0, 0);
+
+    await prisma.driverPosition.createMany({
+      data: [morning, evening].map((at, index) => ({
+        businessId: CARRIER,
+        driverId: TRAIL_DRIVER,
+        routeId,
+        latitude: -23.55 + index * 0.001,
+        longitude: -46.63 + index * 0.001,
+        accuracy: 10,
+        speed: 30,
+        heading: 90,
+        recorded_at: at,
+      })),
+    });
+  }
+
+  it("keeps the morning and the late evening in the same day", async () => {
+    await seedBothEndsOfTheDay();
+
+    const response = await get(
+      `/route/driver-trail/${TRAIL_DRIVER}`,
+      managerToken,
+    );
+
+    expect(response.statusCode, response.body.slice(0, 200)).toBe(200);
+
+    const trail = response.json().data;
+
+    expect(
+      trail.recorded,
+      "a trilha perdeu um lado da fronteira UTC",
+    ).toBe(2);
+
+    // And the day it reports is the local calendar day, not the UTC one.
+    const today = new Date();
+
+    const expected = [
+      today.getFullYear(),
+      String(today.getMonth() + 1).padStart(2, "0"),
+      String(today.getDate()).padStart(2, "0"),
+    ].join("-");
+
+    expect(trail.day).toBe(expected);
+  });
+
+  it("reads an explicit day as a local calendar day too", async () => {
+    // `?day=` is what the screen sends when somebody looks at yesterday.
+    // Parsed as UTC it names the evening BEFORE the day asked for, and the
+    // window then covers a day that is not the one on the label.
+    const today = new Date();
+
+    const day = [
+      today.getFullYear(),
+      String(today.getMonth() + 1).padStart(2, "0"),
+      String(today.getDate()).padStart(2, "0"),
+    ].join("-");
+
+    await seedBothEndsOfTheDay();
+
+    const response = await get(
+      `/route/driver-trail/${TRAIL_DRIVER}?day=${day}`,
+      managerToken,
+    );
+
+    expect(response.statusCode, response.body.slice(0, 200)).toBe(200);
+
+    const trail = response.json().data;
+
+    expect(trail.day).toBe(day);
+    expect(trail.recorded, "o dia pedido não é o dia lido").toBe(2);
   });
 });

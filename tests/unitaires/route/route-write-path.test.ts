@@ -137,6 +137,7 @@ function makeContext() {
       driverRepository,
       vehicleRepository,
       notificationService,
+      webhookStub.asService(),
     ),
     release: new ReleaseRouteUseCase(
       routeRepository,
@@ -459,7 +460,11 @@ describe("releasing a route", () => {
     // pull-back would tell a customer's ERP to dispatch a load that just came
     // off the board — with a payload claiming RELEASED over a row that says
     // PLANNED.
+    // `delivery.assigned` first, because building the route is what assigns
+    // its documents — the same event the batch shortcut used to announce on
+    // its own, now fired by whichever path built the route.
     expect(webhookStub.topics()).toEqual([
+      "delivery.assigned",
       "route.released",
       "route.unreleased",
     ]);

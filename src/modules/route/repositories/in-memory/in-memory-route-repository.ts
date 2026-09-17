@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { v7 as uuidV7 } from "uuid";
 
 import {
@@ -49,6 +50,9 @@ const ROUTE_STATUSES: RouteStatus[] = [
 ];
 
 const EDITABLE_STATUSES: RouteStatus[] = ["PLANNED", "RELEASED"];
+
+/** Mirrors `route-rules`: a stop nobody has finished yet. */
+const OPEN_STOP_STATUSES = ["PENDING", "ARRIVED"];
 
 /**
  * The shape this repository needs from a delivery row. Deliberately a subset,
@@ -260,7 +264,12 @@ class InMemoryRouteRepository implements IRouteRepository {
     }
   }
 
-  async createRoute(data: CreateRouteProps): Promise<RouteWithStops> {
+  async createRoute(
+    data: CreateRouteProps,
+
+    // Accepted and ignored: there is no transaction to join here.
+    _outerTx?: Prisma.TransactionClient,
+  ): Promise<RouteWithStops> {
     this.assertDeliveriesFree(data.deliveryIds);
 
     const highest = this.routes
@@ -316,6 +325,62 @@ class InMemoryRouteRepository implements IRouteRepository {
     });
 
     return this.hydrate(route);
+  }
+
+  /**
+   * The same rule the real repository enforces, over the fixture rows.
+   *
+   * Written as its own check rather than by calling `removeStop` in a loop: a
+   * fake that answered by looping would report a partial detach as success,
+   * which is exactly the behaviour the real one refuses.
+   */
+  async detachFromOpenRoutes(
+    deliveryIds: string[],
+    businessId: string,
+  ): Promise<{ detached: number; blocked: string[] }> {
+    if (deliveryIds.length === 0) return { detached: 0, blocked: [] };
+
+    const open = this.stops.filter((stop) => {
+      if (!deliveryIds.includes(stop.deliveryId)) return false;
+      if (!OPEN_STOP_STATUSES.includes(stop.status)) return false;
+
+      const route = this.routes.find((entry) => entry.id === stop.routeId);
+
+      return Boolean(route && route.businessId === businessId);
+    });
+
+    if (open.length === 0) return { detached: 0, blocked: [] };
+
+    const blocked = open
+      .filter((stop) => {
+        const route = this.routes.find((entry) => entry.id === stop.routeId);
+
+        return !route || !EDITABLE_STATUSES.includes(route.status);
+      })
+      .map((stop) => {
+        const delivery = this.deliveries.find(
+          (entry) => entry.id === stop.deliveryId,
+        );
+
+        return delivery?.code ?? delivery?.recipient_name ?? stop.deliveryId;
+      });
+
+    if (blocked.length > 0) return { detached: 0, blocked };
+
+    for (const stop of open) {
+      this.stops = this.stops.filter((entry) => entry.id !== stop.id);
+
+      const delivery = this.deliveries.find(
+        (entry) => entry.id === stop.deliveryId && entry.businessId === businessId,
+      );
+
+      if (delivery) {
+        delivery.driverId = null;
+        delivery.vehicleId = null;
+      }
+    }
+
+    return { detached: open.length, blocked: [] };
   }
 
   async updateRoute(

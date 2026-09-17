@@ -33,17 +33,21 @@ class AssignDeliveriesController {
     const assignDeliveriesUseCase = container.resolve(AssignDeliveriesUseCase);
 
     try {
-      const { assigned } = await assignDeliveriesUseCase.execute({
-        userId: id,
-        businessId,
-        deliveryIds,
-        driverId,
-        vehicleId,
-      });
+      const { assigned, routeId, routeCode } =
+        await assignDeliveriesUseCase.execute({
+          userId: id,
+          businessId,
+          deliveryIds,
+          driverId,
+          vehicleId,
+        });
 
+      // The route id travels back so the client can offer to open what it
+      // just created — the assignment is no longer a column change with
+      // nothing to look at.
       return reply.status(200).send({
-        message: "Entregas atribuídas com sucesso!",
-        data: { assigned },
+        message: `Rota ${routeCode} criada e liberada com ${assigned} entrega${assigned > 1 ? "s" : ""}.`,
+        data: { assigned, routeId, routeCode },
       });
     } catch (error) {
       if (

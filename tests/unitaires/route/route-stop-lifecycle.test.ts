@@ -233,6 +233,7 @@ function makeContext() {
       driverRepository,
       vehicleRepository,
       notificationService,
+      webhookStub.asService(),
     ),
     release: new ReleaseRouteUseCase(
       routeRepository,
