@@ -5,10 +5,12 @@ import { parseNFeXml, NFeParseError } from "@/shared/delivery/nfe-parser";
 const ACCESS_KEY = "35240612345678000199550010000012341000012345";
 
 /** Same layout the Sefaz portal hands out: nfeProc wrapping NFe + protNFe. */
-const buildNFe = (overrides: { det?: string; dest?: string } = {}) => `<?xml version="1.0" encoding="UTF-8"?>
+const buildNFe = (
+  overrides: { det?: string; dest?: string; id?: string; prot?: string } = {},
+) => `<?xml version="1.0" encoding="UTF-8"?>
 <nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
   <NFe>
-    <infNFe Id="NFe${ACCESS_KEY}1" versao="4.00">
+    <infNFe Id="${overrides.id ?? `NFe${ACCESS_KEY}1`}" versao="4.00">
       <ide>
         <nNF>1234</nNF>
         <dhEmi>2026-08-18T09:30:00-03:00</dhEmi>
@@ -48,11 +50,14 @@ const buildNFe = (overrides: { det?: string; dest?: string } = {}) => `<?xml ver
       }
     </infNFe>
   </NFe>
-  <protNFe>
+  ${
+    overrides.prot ??
+    `<protNFe>
     <infProt>
       <chNFe>${ACCESS_KEY}</chNFe>
     </infProt>
-  </protNFe>
+  </protNFe>`
+  }
 </nfeProc>`;
 
 describe("NF-e parser", () => {
@@ -168,6 +173,38 @@ describe("NF-e parser rejections", () => {
     const notAnInvoice = `<procEventoNFe><evento><infEvento><chNFe>${ACCESS_KEY}</chNFe></infEvento></evento></procEventoNFe>`;
 
     expect(() => parseNFeXml(notAnInvoice)).toThrow(/não parece ser uma NF-e/);
+  });
+
+  it("rejects an invoice with no access key anywhere", () => {
+    /**
+     * The key is not a field among fields: it is the IDENTITY of the note and
+     * the anchor the import deduplicates on. A note that parses without one
+     * produces a delivery whose `invoice_key` is null — and in Postgres nulls
+     * do not collide, so `@@unique([businessId, invoice_key])` stops
+     * protecting anything. Upload the same file twice and the operation gets
+     * the same delivery twice, on two different routes, and somebody drives to
+     * the same address in the morning and in the afternoon.
+     *
+     * Found by mutation: removing the guard from the parser left all 1.098
+     * unit tests green.
+     */
+    const withoutKey = buildNFe({
+      id: "NFe000",
+      prot: "<protNFe><infProt></infProt></protNFe>",
+    });
+
+    expect(() => parseNFeXml(withoutKey)).toThrow(NFeParseError);
+  });
+
+  it("and one whose key is not 44 digits", () => {
+    // A truncated key is worse than a missing one: it looks like an identity
+    // and is not.
+    const shortKey = buildNFe({
+      id: "NFe3524061234567800019955001",
+      prot: "<protNFe><infProt><chNFe>3524061234</chNFe></infProt></protNFe>",
+    });
+
+    expect(() => parseNFeXml(shortKey)).toThrow(NFeParseError);
   });
 
   it("rejects an invoice without a recipient", () => {

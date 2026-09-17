@@ -215,6 +215,58 @@ describe("preference layering", () => {
   });
 
   /**
+   * The defaults, when the row has said nothing at all.
+   *
+   * Every other fixture here sets the three toggles explicitly, so the
+   * fallbacks were never reached by a test — and the fallbacks are where the
+   * rule actually lives. They are deliberately ASYMMETRIC, and the asymmetry
+   * is the product decision:
+   *
+   * - in-app and e-mail default ON, because they are inside the product the
+   *   person signed up for. Silence there means "I have not thought about
+   *   it", and defaulting them off would deliver a system that notifies
+   *   nobody until every user visits a settings screen;
+   * - **WhatsApp defaults OFF**, because it is not our channel. Meta governs
+   *   it and requires opt-in; sending to somebody who never opted in costs
+   *   the number its quality rating and can get it blocked outright — and
+   *   under the LGPD it is a message to a personal channel with no basis.
+   *   Silence there has to mean no.
+   *
+   * Found by mutation: flipping `?? false` to `?? true` on the WhatsApp
+   * fallback left all 1.100 unit tests green.
+   */
+  it("defaults in-app and e-mail ON, and WhatsApp OFF, for a silent row", () => {
+    const flags = resolveRecipientChannelFlags({}, undefined);
+
+    expect(flags.activityNotificationsEnabled).toBe(true);
+    expect(flags.emailNotificationsEnabled).toBe(true);
+
+    expect(
+      flags.whatsappNotificationsEnabled,
+      "WhatsApp sem opt-in explícito: a régua é da Meta, não nossa",
+    ).toBe(false);
+  });
+
+  it("and a silent row gets no WhatsApp even carrying a number", () => {
+    /**
+     * The two gates are separate on purpose, and this pins which one refuses.
+     * A recipient whose phone came in from the registration form has a number
+     * and has still never agreed to be messaged on it — the number is a
+     * contact detail, not consent.
+     */
+    const flags = resolveRecipientChannelFlags(
+      { whatsapp_phone: "24999999999" },
+      undefined,
+    );
+
+    expect(flags.hasWhatsAppPhone).toBe(true);
+
+    expect(
+      channelsForRecipient(flags, fullContent),
+    ).not.toContain(NotificationChannel.WHATSAPP);
+  });
+
+  /**
    * A preference can want WhatsApp all it likes — without a configured
    * number there is nowhere to send, and the phone gate stays in charge.
    */
