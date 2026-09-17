@@ -1,6 +1,11 @@
 import { FastifyInstance } from "fastify";
 import { NotificationChannel } from "@prisma/client";
 
+import {
+  connectionUsagePercent,
+  deadTuplePercent,
+} from "@/shared/health/metrics-math";
+
 import { z } from "zod";
 
 import database from "@/../infra/database";
@@ -406,7 +411,7 @@ async function healthRoutes(app: FastifyInstance) {
           table,
           n_live_tup: live,
           n_dead_tup: dead,
-          dead_tuple_percent: total > 0 ? Math.round((dead / total) * 100) : 0,
+          dead_tuple_percent: deadTuplePercent(live, dead),
           last_autovacuum: row?.last_autovacuum
             ? row.last_autovacuum.toISOString()
             : null,
@@ -423,10 +428,10 @@ async function healthRoutes(app: FastifyInstance) {
         database: {
           active_connections: activeConnections,
           max_connections: maxConnections,
-          connection_usage_percent:
-            maxConnections > 0
-              ? Math.round((activeConnections / maxConnections) * 100)
-              : 0,
+          connection_usage_percent: connectionUsagePercent(
+            activeConnections,
+            maxConnections,
+          ),
         },
         outbox: {
           pending: outboxPending,
