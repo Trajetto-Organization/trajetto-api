@@ -917,6 +917,12 @@ const sendChatMessageEvent = (
 interface RouteRealtimeEvent {
   type:
     | "route.released"
+
+    // A route pulled BACK to planning. It leaves the driver's phone, so the
+    // board has to say so — and the type has to name it, or the emit would
+    // have to lie and call it a release.
+    | "route.unreleased"
+
     | "route.started"
     | "route.cancelled"
     | "route.completed"

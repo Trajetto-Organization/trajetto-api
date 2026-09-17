@@ -675,6 +675,87 @@ describe("the departure", () => {
   });
 });
 
+describe("the offline queue resending a departure", () => {
+  /**
+   * A resend is not a race, and the two need different answers.
+   *
+   * The test below this one fires two departures CONCURRENTLY: both read
+   * RELEASED, both pass the state machine, and the write precondition picks a
+   * winner — a 409 is the honest answer to the loser, because two people
+   * really did try to start the same route.
+   *
+   * A resend is the same request arriving twice, minutes apart, because the
+   * first answer was lost in a dead zone. The app's outbox reads a
+   * non-transient 4xx as the API refusing on the merits and marks the
+   * submission `failed`, so answering 409 here showed the driver an error for
+   * a departure that had actually happened — with the truck already moving.
+   */
+  it("answers the second attempt with the route, not with a conflict", async () => {
+    const delivery = await seedDelivery(context);
+    const route = await createRoute(context, [delivery]);
+
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId: route.id,
+    });
+
+    const depart = () =>
+      context.start.execute({
+        userId: DRIVER_USER,
+        businessId: BUSINESS,
+        routeId: route.id,
+      });
+
+    const first = await depart();
+    const again = await depart();
+
+    expect(first.status).toBe("IN_PROGRESS");
+    expect(again.id).toBe(route.id);
+    expect(again.status).toBe("IN_PROGRESS");
+
+    // And it is the SAME departure, not a second one: the timestamp the first
+    // wrote is still there.
+    expect(again.started_at?.getTime()).toBe(first.started_at?.getTime());
+  });
+
+  it("still refuses a resend that names a different truck", async () => {
+    // Not a resend at all: somebody is swapping vehicles on a route that is
+    // already on the street, and that has to be refused rather than silently
+    // accepted as "already done".
+    const delivery = await seedDelivery(context);
+    const route = await createRoute(context, [delivery]);
+
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId: route.id,
+    });
+
+    await context.start.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      routeId: route.id,
+    });
+
+    context.vehicleRepository.vehicles.push({
+      id: "outro-caminhao",
+      license_plate: "QQQ7R77",
+      status: "ACTIVE",
+      businessId: BUSINESS,
+    } as Vehicle);
+
+    await expect(
+      context.start.execute({
+        userId: DRIVER_USER,
+        businessId: BUSINESS,
+        routeId: route.id,
+        vehicleId: "outro-caminhao",
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_ROUTE_TRANSITION" });
+  });
+});
+
 describe("two surfaces acting on the same route at once", () => {
   it("lets the first departure land and refuses the second with 409", async () => {
     // The driver taps twice, or the offline queue resends. Both read RELEASED,

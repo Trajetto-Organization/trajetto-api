@@ -53,9 +53,14 @@ interface StartRouteRequest {
  * IN_TRANSIT, with nothing to consult afterwards. The route is the thing that
  * starts; the deliveries follow from it.
  *
- * Naturally idempotent for the offline queue: a resend finds the route already
- * IN_PROGRESS, the precondition refuses, and the caller gets a conflict rather
- * than a second departure.
+ * Idempotent for the offline queue, and that had to be made true rather than
+ * asserted. A resend finds the route already IN_PROGRESS and now gets the
+ * route back with a 200 — see the check below. It used to get a 409, which is
+ * the correct answer to a person pressing the button twice and the WRONG one
+ * to a queue: the app's outbox reads a non-transient 4xx as the API refusing
+ * on the merits and marks the submission `failed`, so a departure that
+ * actually happened in a dead zone showed up on the driver's phone as an
+ * error they could do nothing about.
  */
 @injectable()
 class StartRouteUseCase {
@@ -97,6 +102,27 @@ class StartRouteUseCase {
     // refusal.
     if (!findRoute || findRoute.driverId !== findUser.driverId) {
       throw new AppError(new RouteNotFoundError().message, 404);
+    }
+
+    /**
+     * The resend, answered as success rather than as a conflict.
+     *
+     * Only when nothing would change: no vehicle asked for, or the same one
+     * the route already left with. A second departure naming a DIFFERENT
+     * truck is a real conflict — somebody swapped vehicles after the route
+     * was already on the street — and it still refuses below.
+     *
+     * This is what makes the offline queue safe. The app sends the departure
+     * through the same outbox as everything else, and an outbox resends after
+     * a dead network: without this, the second attempt is a 4xx, the item is
+     * marked `failed`, and the driver is shown an error for something that
+     * worked.
+     */
+    if (
+      findRoute.status === "IN_PROGRESS" &&
+      (!vehicleId || vehicleId === findRoute.vehicleId)
+    ) {
+      return findRoute;
     }
 
     const verdict = canTransitionRoute(findRoute.status, "IN_PROGRESS");

@@ -101,6 +101,42 @@ function waitForChat(timeoutMs = 2500): Promise<unknown | null> {
   });
 }
 
+/**
+ * Waits until the socket really has stopped receiving, rather than for a
+ * number of milliseconds somebody guessed.
+ *
+ * The re-evaluation reads the database once per connected socket, and how
+ * long that takes depends on what else is running: this file was written with
+ * a flat 1.5-second sleep and passed alone for weeks, then failed the first
+ * time the whole E2E directory ran in parallel against one Postgres.
+ *
+ * A fixed sleep is the wrong shape for the question anyway. What the test
+ * wants to know is "has the room been left yet", and the only way to observe
+ * that from outside is to send something and see whether it arrives — so it
+ * asks repeatedly, with a short window each time, until the answer changes or
+ * the budget runs out. A socket that is still listening after the whole
+ * budget is a real failure and still reported as one.
+ */
+async function waitUntilSilent(budgetMs = 15_000): Promise<unknown | null> {
+  const deadline = Date.now() + budgetMs;
+
+  let last: unknown | null = null;
+
+  while (Date.now() < deadline) {
+    client.removeAllListeners("chatMessage");
+
+    const received = waitForChat(700);
+
+    io.sendChatMessageEvent(CARRIER, null, anyMessage() as never);
+
+    last = await received;
+
+    if (last === null) return null;
+  }
+
+  return last;
+}
+
 beforeAll(async () => {
   await prisma.business.create({
     data: {
@@ -242,17 +278,10 @@ describe("once the permission is revoked", () => {
 
     io.sendSecurityEventToBusiness(CARRIER, { reason: "permissions_changed" });
 
-    // The re-evaluation reads the database per socket; a moment for it.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    const received = waitForChat();
-
-    io.sendChatMessageEvent(CARRIER, null, anyMessage() as never);
-
     // The whole point: HTTP already refused from the next request onwards,
     // and the socket went on delivering the message body for the rest of the
     // connection.
-    expect(await received).toBeNull();
+    expect(await waitUntilSilent()).toBeNull();
   });
 
   it("and the connection is still up", async () => {

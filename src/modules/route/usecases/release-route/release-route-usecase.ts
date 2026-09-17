@@ -5,7 +5,10 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
 import database from "@/../infra/database";
-import { sendRouteEventToDriver } from "@/websocket";
+import {
+  sendRouteEventToBusiness,
+  sendRouteEventToDriver,
+} from "@/websocket";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
@@ -190,6 +193,25 @@ class ReleaseRouteUseCase {
           routeCode: findRoute.code,
         });
       }
+
+      /**
+       * And the dispatcher's board, which was the one surface this never
+       * reached.
+       *
+       * `start-route` and `cancel-route` have announced to the company since
+       * they existed; the release did not, so the moment a route stopped
+       * being a draft — arguably the one the board cares about most — was
+       * visible only to the driver and to a webhook subscriber. A dispatcher
+       * with the Rotas tab open saw PLANNED until they pressed Atualizar.
+       *
+       * Both directions, because pulling a route back to planning takes it
+       * off the driver's phone and the board has to say so.
+       */
+      sendRouteEventToBusiness(businessId, {
+        type: released ? "route.released" : "route.unreleased",
+        routeId,
+        routeCode: findRoute.code,
+      });
 
       this.notificationService.createActivityIfEnabled({
         type: "Rota",
