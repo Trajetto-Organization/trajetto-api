@@ -164,6 +164,9 @@ async function waitForActivity(
 describe("issuing a key", () => {
   let keyId = "";
 
+  /** The full token, which the API shows exactly once, at creation. */
+  let token = "";
+
   it("is written to the trail, with the prefix and the scopes", async () => {
     const response = await call("POST", `/integrations/api-key/${CARRIER}`, {
       name: "ERP da Auditoria",
@@ -173,6 +176,7 @@ describe("issuing a key", () => {
     expect(response.statusCode, response.body).toBe(201);
 
     keyId = response.json().data.id;
+    token = response.json().data.token;
 
     const entry = await waitForActivity((description) =>
       description.includes("ERP da Auditoria"),
@@ -224,6 +228,30 @@ describe("issuing a key", () => {
     }
   });
 
+  it("and the key that came back actually opens the door", async () => {
+    /**
+     * The half of a revocation that a seeded row cannot prove.
+     *
+     * A key inserted into the database already revoked shows that the
+     * middleware reads the column. It says nothing about whether REVOKING
+     * takes effect on a key that is currently working — which is the thing an
+     * operator is actually doing when something leaks. A cached lookup, a
+     * `findUnique` whose result is memoised, a connection pool holding a
+     * prepared read: any of them would leave a revoked credential alive until
+     * the next deploy, and every test in this repository would still pass.
+     *
+     * So: use it, revoke it, use it again. In that order, over HTTP, with the
+     * token the API handed back.
+     */
+    const response = await app.inject({
+      method: "GET",
+      url: "/integration/v1/deliveries",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+  });
+
   it("and revoking it is written too", async () => {
     const response = await call(
       "DELETE",
@@ -243,6 +271,31 @@ describe("issuing a key", () => {
 
     expect(entry!.action).toBe("delete");
     expect(entry!.status).toBe("Revogada");
+  });
+
+  it("and the door closes on the NEXT request, not on the next deploy", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/integration/v1/deliveries",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(
+      response.statusCode,
+      "a chave revogada continuou funcionando",
+    ).toBe(401);
+
+    // And the refusal says nothing about WHY. A distinct answer for "revoked"
+    // and "never existed" is, together, an oracle for which keys are real.
+    const forged = await app.inject({
+      method: "GET",
+      url: "/integration/v1/deliveries",
+      headers: {
+        authorization: `Bearer tjk_live_deadbeef.${"a".repeat(64)}`,
+      },
+    });
+
+    expect(response.json().message).toBe(forged.json().message);
   });
 });
 
