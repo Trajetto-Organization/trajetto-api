@@ -30,6 +30,16 @@ MSYS_NO_PATHCONV=1 docker run --rm -i \
   grafana/k6:latest run /load/smoke.js
 ```
 
+As quatro cenas, em ordem de utilidade:
+
+| arquivo | pergunta |
+|---|---|
+| `smoke.js` | as outras três estão medindo alguma coisa real? |
+| `load.js` | uma hora movimentada cabe? |
+| `spike.js` | a frota inteira chegando de uma vez quebra ou enfileira? |
+| `stress.js` | onde é o teto, e o que estoura primeiro? |
+| `soak.js` | trinta minutos depois ainda está de pé? |
+
 `smoke.js` primeiro, sempre: um teste de estresse contra uma URL que responde
 404 reporta um p95 lindo, e essa é a forma mais comum de uma suíte de carga
 mentir.
@@ -147,6 +157,73 @@ uma máquina parada enquanto o teste a chamava de sobrecarregada. Todas as
 requisições de gestor iam com o MESMO token, e o rate limit é por usuário. O
 teste passou a semear cinquenta gestores e rotacionar por VU.
 
+
+### O pico — executado
+
+`spike.js`, novo. As outras três cenas fazem a carga SUBIR; esta pergunta outra
+coisa, e é a que se parece com o uso real: a carga não rampa. A frota inteira de
+uma transportadora começa a manhã dentro dos mesmos dez minutos, todo telefone
+descarrega o buffer da noite no instante em que pega sinal no pátio, e uma
+notificação põe todas as abas abertas na mesma tela no mesmo segundo.
+
+Duas paredes de propósito: a primeira também paga por tudo o que estava frio, e
+um sistema que só sobrevive porque a segunda encontrou tudo quente não se
+recuperou — foi carregado.
+
+Vinte por segundo em repouso, 400/s em cinco segundos, trinta segundos de
+parede, e de volta. Duas vezes.
+
+```
+surface_failures ... 0,00%   (0 de 28.329)
+surface_throttled .. 11,95%  (3.386 de 28.329 — 429, que é uma resposta)
+surface_latency .... med=2,74s  p90=5,57s  p95=6,55s  max=10,56s
+http_reqs .......... 131,5/s
+```
+
+**A leitura é a taxa de falha, sempre primeiro.** Zero falhas de produto em
+vinte e oito mil requisições, com 12% recusadas pelo limitador, é exatamente o
+formato que esta cena existe para confirmar: sob vinte vezes a taxa estável o
+sistema **enfileira e recusa — e não quebra**. Uma parede que devolve 500 por
+trinta segundos e volta é saudável; uma que fica quebrada depois que o tráfego
+foi embora tem fila, lock ou vazamento, e a diferença só aparece na descida.
+
+O limiar do `route.positions` foi **medido, não desejado**: a primeira versão
+deste arquivo pedia p99 < 8 s e cruzava em uma rodada de cada duas — o pior tipo
+de limiar, o que reprova por causa do tempo. Doze segundos fica acima do teto
+medido com folga para a máquina ocupada e continua reprovando se a fila parar
+de drenar.
+
+**O que esta cena NÃO mede:** quanto tempo a fila leva para drenar depois da
+parede. A mediana agregada não responde isso — 400/s durante setenta segundos
+contra 20/s no resto significa que praticamente todo o tráfego É a parede, e a
+mediana descreve a parede. Medir a recuperação precisa de série temporal
+(`--out json`) e de uma máquina que não esteja rodando também o Postgres, o
+Redis, o Next em dev e uma suíte de navegador.
+
+### O chat não estava em cena nenhuma
+
+A lista de conversas é a leitura mais pesada do chat — uma linha por conversa
+com a última mensagem, a contagem de não lidas e a entrega por trás — e o
+escritório de uma transportadora a deixa aberta ao lado do quadro o dia inteiro.
+Não aparecia em nenhuma mistura de carga, então a única superfície onde um
+escritório inteiro fica parado-mas-conectado nunca entrou numa medição. Entrou
+(`chat.threads`, peso 4; `chat.messages`, peso 3) e a carga estável não se
+mexeu: p95 de 25 ms a 116 req/s.
+
+### A chave de API do fixture estava revogada
+
+O `smoke.js` existe porque um teste de estresse contra uma URL que responde 404
+reporta um p95 lindo. Ele ganhou o salário: a chave do `load-context.json` tinha
+sido revogada em algum momento, então **toda rodada reportava 8% de falha na
+superfície de integração** — um número que mandaria alguém procurar um defeito
+no produto. Foi reemitida.
+
+E o limiar `http_req_failed` foi trocado por `surface_throttled`: a métrica do
+próprio k6 conta qualquer não-2xx, então um limitador fazendo o trabalho dele
+empurrava uma rodada perfeitamente saudável para o vermelho — zero falhas de
+produto, p95 de 25 ms, e uma violação causada inteiramente pelos 429 que o
+produto deve mesmo enviar. Uma suíte que reprova numa rodada boa é uma suíte que
+as pessoas param de ler.
 
 ## Failure injection
 

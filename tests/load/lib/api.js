@@ -248,6 +248,38 @@ const surfaces = {
     return record("dashboard.overview", response, [200]);
   },
 
+  /**
+   * The dispatcher's chat list.
+   *
+   * Left open all day beside the board, and it is the heaviest READ the chat
+   * has: one row per conversation with the last message, the unread count and
+   * the delivery behind it. It was absent from every load scenario — so the
+   * one surface where a carrier's whole office sits idle-but-connected never
+   * appeared in a measurement.
+   */
+  chatThreads() {
+    const response = http.get(
+      `${BASE}/chat/list-threads?page=1&pageSize=20&businessId=${context.businessId}`,
+      { headers: managerHeaders(), tags: { surface: "chat.threads" } },
+    );
+
+    return record("chat.threads", response, [200]);
+  },
+
+  /** A conversation opened: the messages page the panel loads first. */
+  chatMessages(vu) {
+    const driverId = context.driverIds[vu % context.driverIds.length];
+
+    const response = http.get(
+      `${BASE}/chat/list-messages?page=1&pageSize=30&businessId=${context.businessId}&driverId=${driverId}`,
+      { headers: managerHeaders(), tags: { surface: "chat.messages" } },
+    );
+
+    // 404 is a correct answer for a driver with no conversation yet, and the
+    // seed does not create one for every driver.
+    return record("chat.messages", response, [200, 404]);
+  },
+
   health() {
     const response = http.get(`${BASE}/health`, {
       tags: { surface: "system.health" },

@@ -36,7 +36,21 @@ export const options = {
     "surface_latency{surface:route.positions}": ["p(95)<800"],
 
     surface_failures: ["rate<0.01"],
-    http_req_failed: ["rate<0.02"],
+
+    /**
+     * Throttling is an ANSWER, not a failure.
+     *
+     * `http_req_failed` is k6's own metric and it counts any non-2xx, so a
+     * rate limiter doing its job pushed a perfectly healthy run into the red:
+     * zero product failures, a p95 of 25ms, and a threshold breach caused
+     * entirely by the 429s the product is supposed to send. A suite that
+     * reports red on a good run is a suite people stop reading.
+     *
+     * The ceiling stays, because a flood of 429s IS worth knowing about — it
+     * says the mix is asking for more than a real client would. It is just
+     * measured with the metric that knows the difference.
+     */
+    surface_throttled: ["rate<0.10"],
   },
 };
 

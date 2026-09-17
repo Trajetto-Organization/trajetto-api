@@ -18,6 +18,8 @@ import { surfaces } from "./api.js";
  * - The dispatcher's board and the tower are opened by a handful of people per
  *   carrier and then left open, refreshing.
  * - The public API is a machine walking pages, steady and unattended.
+ * - The chat's thread list is opened once and left there; a conversation is
+ *   opened whenever somebody writes.
  */
 const MIX = [
   { weight: 34, run: (vu) => surfaces.recordPositions(vu) },
@@ -33,6 +35,15 @@ const MIX = [
   { weight: 5, run: () => surfaces.integrationDeliveries() },
   { weight: 4, run: () => surfaces.unreadCount() },
   { weight: 3, run: () => surfaces.dashboardOverview() },
+
+  /*
+    The chat, which was in no scenario at all. A carrier's office leaves the
+    thread list open beside the board and opens a conversation whenever a
+    driver writes — heavy reads from people who are idle, which is exactly the
+    shape that hides in a mix built only from the busy surfaces.
+  */
+  { weight: 4, run: () => surfaces.chatThreads() },
+  { weight: 3, run: (vu) => surfaces.chatMessages(vu) },
 
   { weight: 2, run: () => surfaces.catalogue() },
 ];
