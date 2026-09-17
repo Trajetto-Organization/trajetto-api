@@ -25,6 +25,47 @@ import { AppError } from "@/shared/errors/AppError";
 
 import { sendAsNDJSON } from "@/config/stream-utils";
 
+import { container } from "tsyringe";
+import type { NotificationService } from "@/shared/services/notification-service";
+
+/**
+ * The audit trail for the credentials of an integration.
+ *
+ * Issuing a key hands a system standing access to a company's deliveries;
+ * revoking one stops somebody's ERP mid-sentence; pointing a webhook somewhere
+ * sends every event of the operation to an address chosen by a person. Sixty-
+ * eight actions across twenty modules were recorded in the activity feed, and
+ * none of these four were — so the one decision an auditor would look for
+ * first left no trace at all.
+ *
+ * The secret never goes in: the description names the key by its prefix, which
+ * is what the screen shows and what a support conversation quotes.
+ */
+function audit(entry: {
+  action: "create" | "update" | "delete";
+  entityId: string;
+  description: string;
+  status: string;
+  performedBy: string;
+  businessId: string;
+}): void {
+  const notifications =
+    container.resolve<NotificationService>("NotificationService");
+
+  // Deliberately not awaited, like every other call site: the audit entry
+  // rides the outbox, and a feed that is momentarily behind is better than a
+  // revoke that fails because the trail could not be written.
+  void notifications.createActivityIfEnabled({
+    type: "Integração",
+    ...entry,
+  });
+}
+
+/** Who is doing it, for the trail. */
+function actorOf(request: FastifyRequest): string {
+  return (request.user as { id: string }).id;
+}
+
 /**
  * The screens a customer's own administrator uses: issue a key, point a
  * webhook somewhere, look at what happened.
@@ -75,6 +116,15 @@ class IntegrationAdminController {
         businessId,
       },
       select: { id: true, prefix: true },
+    });
+
+    audit({
+      action: "create",
+      entityId: created.id,
+      description: `Chave de API "${body.name}" emitida (${created.prefix}) com os escopos ${body.scopes.join(", ")}`,
+      status: "Ativa",
+      performedBy: actorOf(request),
+      businessId,
     });
 
     // The token is in this response and nowhere else, ever. A key a dashboard
@@ -141,6 +191,15 @@ class IntegrationAdminController {
       );
     }
 
+    audit({
+      action: "delete",
+      entityId: id,
+      description: `Chave de API revogada — o sistema que a usava perde o acesso imediatamente`,
+      status: "Revogada",
+      performedBy: actorOf(request),
+      businessId,
+    });
+
     return reply.status(200).send({ message: "Chave revogada." });
   };
 
@@ -181,6 +240,18 @@ class IntegrationAdminController {
         );
       }
 
+      audit({
+        action: "update",
+        entityId: params.id,
+        description:
+          `Webhook "${body.name}" apontado para ${body.url} ` +
+          `nos eventos ${body.topics.join(", ")}` +
+          (body.is_active ? "" : " (desativado)"),
+        status: body.is_active ? "Ativo" : "Desativado",
+        performedBy: actorOf(request),
+        businessId,
+      });
+
       return reply.status(200).send({
         message: "Endpoint atualizado.",
         data: { id: params.id, secret: null },
@@ -200,6 +271,17 @@ class IntegrationAdminController {
         businessId,
       },
       select: { id: true },
+    });
+
+    audit({
+      action: "create",
+      entityId: created.id,
+      description:
+        `Webhook "${body.name}" criado para ${body.url} ` +
+        `nos eventos ${body.topics.join(", ")}`,
+      status: body.is_active ? "Ativo" : "Desativado",
+      performedBy: actorOf(request),
+      businessId,
     });
 
     // Like the API key: shown once. A secret a dashboard can re-display is a
@@ -262,6 +344,16 @@ class IntegrationAdminController {
         "WEBHOOK_ENDPOINT_NOT_FOUND",
       );
     }
+
+    audit({
+      action: "delete",
+      entityId: id,
+      description:
+        "Webhook removido — o sistema do cliente deixa de receber os eventos da operação",
+      status: "Removido",
+      performedBy: actorOf(request),
+      businessId,
+    });
 
     return reply.status(200).send({ message: "Endpoint removido." });
   };
