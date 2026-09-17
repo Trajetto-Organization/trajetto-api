@@ -185,34 +185,6 @@ app.register(fastifySwaggerUi, {
   },
 });
 
-/**
- * The PUBLIC reference: only what a customer's API key can reach.
- *
- * Built by subtraction from the document the application actually serves, so
- * an endpoint renamed internally cannot leave the portal describing a URL that
- * no longer answers. Rate-limited like any other open route — it is the one
- * page an integrator's CI might fetch on every build.
- */
-app.get(
-  "/integration/docs/openapi.json",
-  { schema: { hide: true }, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
-  async (_request, reply) =>
-    reply
-      .header("Cache-Control", "public, max-age=300")
-      .status(200)
-      .send(buildPublicApiDocument(app.swagger() as OpenApiDocument)),
-);
-
-app.get(
-  "/integration/docs",
-  { schema: { hide: true }, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
-  async (_request, reply) =>
-    reply
-      .type("text/html; charset=utf-8")
-      .header("Cache-Control", "public, max-age=300")
-      .status(200)
-      .send(renderPublicDocsPage("/integration/docs/openapi.json")),
-);
 
 // Dedicated Redis client for rate limiting (separate from the main one).
 // Sharing the counter across replicas keeps the global limit correct when
@@ -242,6 +214,61 @@ app.register(fastifyRateLimit, {
     "x-ratelimit-reset": true, // Add X-RateLimit-Reset header
     "retry-after": true, // Adds Retry-After header
   },
+});
+
+/*
+  Inside a `register`, and that is the whole point.
+
+  Both of these routes carry `config: { rateLimit: { max: 30 } }`, and neither
+  was limited by anything. `app.get()` on the root instance runs immediately;
+  `app.register()` is deferred to the boot phase — so every root-level route
+  is in the router BEFORE the rate-limit plugin loads, whatever order the
+  source is written in, and none of them gets its `onRequest`. Moving the two
+  routes below the plugin changed nothing at all, which is how this was found:
+  measured, not reasoned about. They answered with no `x-ratelimit-*` headers
+  and never refused a 45th request, while `/health` — which lives inside the
+  `routes` plugin, itself a deferred register — carried all three headers.
+
+  Wrapping them in a register of their own puts them in the same boot phase as
+  everything else that is protected.
+
+  They are the only unauthenticated, cacheable, CI-fetched endpoints the
+  product has, which is what makes an unlimited bucket cost most here.
+*/
+app.register(async (instance) => {
+  /**
+   * The PUBLIC reference: only what a customer's API key can reach.
+   *
+   * Built by subtraction from the document the application actually serves, so
+   * an endpoint renamed internally cannot leave the portal describing a URL
+   * that no longer answers.
+   */
+  instance.get(
+    "/integration/docs/openapi.json",
+    {
+      schema: { hide: true },
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    },
+    async (_request, reply) =>
+      reply
+        .header("Cache-Control", "public, max-age=300")
+        .status(200)
+        .send(buildPublicApiDocument(app.swagger() as OpenApiDocument)),
+  );
+
+  instance.get(
+    "/integration/docs",
+    {
+      schema: { hide: true },
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    },
+    async (_request, reply) =>
+      reply
+        .type("text/html; charset=utf-8")
+        .header("Cache-Control", "public, max-age=300")
+        .status(200)
+        .send(renderPublicDocsPage("/integration/docs/openapi.json")),
+  );
 });
 
 /**

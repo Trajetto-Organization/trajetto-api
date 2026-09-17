@@ -119,8 +119,12 @@ async function seedDriver(id: string, businessId: string): Promise<void> {
 }
 
 /** Points the app would have buffered, oldest first. */
-function pings(count: number, options: { at?: Date; accuracy?: number } = {}) {
+function pings(
+  count: number,
+  options: { at?: Date; accuracy?: number; everyMs?: number } = {},
+) {
   const at = options.at ?? new Date();
+  const everyMs = options.everyMs ?? 15_000;
 
   return Array.from({ length: count }, (_, index) => ({
     latitude: -23.55 + index * 0.0001,
@@ -129,8 +133,41 @@ function pings(count: number, options: { at?: Date; accuracy?: number } = {}) {
     speed: 30,
     heading: 90,
     battery: 80,
-    recorded_at: new Date(at.getTime() - (count - index) * 15_000).toISOString(),
+    recorded_at: new Date(at.getTime() - (count - index) * everyMs).toISOString(),
   }));
+}
+
+/**
+ * The widest spacing that keeps `total` pings inside TODAY, locally.
+ *
+ * The trail is a day's worth of a driver's movement, and the day it means is
+ * the OPERATION's day — local midnight to local midnight, not UTC. The fixture
+ * used to walk backwards from `now` at fifteen seconds a point, so a thousand
+ * points reached four hours and ten minutes into the past. Run in the
+ * afternoon that is all today; run at 02:45 it crosses midnight, and a third
+ * of the pings land on yesterday. The test then reports 658 of 1000 and reads
+ * as a product bug.
+ *
+ * It was one: a test that only passes during office hours says nothing about
+ * the code at 3am, which is when a night shift's trail is drawn.
+ */
+function spacingWithinToday(total: number): number {
+  const now = new Date();
+
+  const midnight = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    0,
+    0,
+    0,
+    0,
+  );
+
+  // A minute of head room: the oldest ping must be after midnight, not on it.
+  const room = now.getTime() - midnight.getTime() - 60_000;
+
+  return Math.max(200, Math.min(15_000, Math.floor(room / total)));
 }
 
 beforeAll(async () => {
@@ -516,10 +553,19 @@ describe("one company's trucks are not another's", () => {
 
 describe("the trail of one driver", () => {
   it("thins the day down and says how many there really were", async () => {
-    // Two full batches: more points than the trail will draw.
-    await post("/route/positions", driverToken, { pings: pings(500) });
+    // Two full batches: more points than the trail will draw, and all of them
+    // inside the local day whatever time the suite runs at.
+    const everyMs = spacingWithinToday(1000);
+
     await post("/route/positions", driverToken, {
-      pings: pings(500, { at: new Date(Date.now() - 500 * 15_000) }),
+      pings: pings(500, { everyMs }),
+    });
+
+    await post("/route/positions", driverToken, {
+      pings: pings(500, {
+        at: new Date(Date.now() - 500 * everyMs),
+        everyMs,
+      }),
     });
 
     const response = await get(`/route/driver-trail/${DRIVER}`, managerToken);
