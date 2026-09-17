@@ -10,7 +10,13 @@ interface CountByDateRangeParams {
     | "supplier"
     | "service-order"
     | "user"
-    | "fine";
+    | "fine"
+
+    // The deliveries module. Gated twice on the way in — by the company
+    // having hired it and by the caller holding `delivery_manage` — because
+    // the overview is the one screen every login opens.
+    | "delivery"
+    | "route";
 }
 
 interface CountByDateRangeResult {

@@ -9,6 +9,9 @@ import {
   DashboardOverviewResponse,
 } from "./dtos/get-dashboard-overview-dto";
 
+import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
+import { hasModule } from "@/shared/entitlements/entitlement-service";
+
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
 
@@ -18,6 +21,10 @@ const pluralizeFieldName = (key: string): string => {
     branch: "branches",
     "service-order": "serviceOrders",
     fine: "fines",
+
+    // "deliverys" is what the default rule produces, and the trend chart keys
+    // off these names — a wrong one draws a line of undefined.
+    delivery: "deliveries",
   };
 
   // If it exists in the mapping, use the mapped value.
@@ -38,6 +45,8 @@ class GetDashboardOverviewUseCase {
     private dashboardRepository: IDashboardRepository,
     @inject("ActivityRepository")
     private activityRepository: IActivityRepository,
+    @inject("DeliveryRepository")
+    private deliveryRepository: IDeliveryRepository,
   ) {}
 
   async execute({
@@ -89,6 +98,8 @@ class GetDashboardOverviewUseCase {
         { key: "service-order", permission: "service_order_manage" },
         { key: "user", permission: "user_registration_manage" },
         { key: "fine", permission: "fine_manage" },
+        { key: "delivery", permission: "delivery_manage" },
+        { key: "route", permission: "delivery_manage" },
       ];
 
       /**
@@ -123,11 +134,36 @@ class GetDashboardOverviewUseCase {
       const windowStart = new Date(currentYear, currentMonth - 5, 1);
       const windowEnd = currentMonthEnd;
 
-      const visible = entities.filter(
-        (entity) =>
-          !(user.role === "BUSINESS_ADMIN" && entity.key === "business") &&
-          hasPermission(entity.permission),
-      );
+      /**
+       * Whether this company hired the deliveries module.
+       *
+       * A permission is what a PERSON may do; an entitlement is what the
+       * company bought. Both have to hold, and they are genuinely different
+       * answers: a BUSINESS_ADMIN passes every permission check by definition
+       * and would otherwise be shown delivery cards for a module their
+       * company never contracted.
+       *
+       * A MASTER has no single company, so there is nothing to ask — their
+       * counts are global and stay that way.
+       */
+      const deliveriesEnabled = businessId
+        ? await hasModule(businessId, "DELIVERIES")
+        : true;
+
+      const visible = entities.filter((entity) => {
+        if (user.role === "BUSINESS_ADMIN" && entity.key === "business") {
+          return false;
+        }
+
+        if (
+          !deliveriesEnabled &&
+          (entity.key === "delivery" || entity.key === "route")
+        ) {
+          return false;
+        }
+
+        return hasPermission(entity.permission);
+      });
 
       // ONE round trip for all of them. Nine in parallel was the first
       // attempt, and it held nine connections per page view — the pool
@@ -228,6 +264,34 @@ class GetDashboardOverviewUseCase {
         }
       }
 
+      /**
+       * The operation as it stands, for the company this user works in.
+       *
+       * Deliberately the same repository call the monitoring panel makes,
+       * rather than a second set of counts written here: two queries that are
+       * supposed to agree and are written twice eventually disagree, and the
+       * one people trust is whichever screen they happened to open.
+       *
+       * Null in three cases, each for its own reason — no company to
+       * summarise (MASTER), the module was never hired, or this profile may
+       * not read deliveries. A driver never reaches here: the route is a
+       * manager surface.
+       */
+      let deliveryOperation: DashboardOverviewResponse["deliveryOperation"] =
+        null;
+
+      if (
+        businessId &&
+        deliveriesEnabled &&
+        !user.driverId &&
+        hasPermission("delivery_manage")
+      ) {
+        const summary =
+          await this.deliveryRepository.operationSummary(businessId);
+
+        deliveryOperation = summary.totals;
+      }
+
       // Get recent activities
       const recentActivityData =
         await this.activityRepository.listRecentActivities({
@@ -250,10 +314,13 @@ class GetDashboardOverviewUseCase {
           serviceOrders: counts["service-order"],
           users: counts.user,
           fines: counts.fine,
+          deliveries: counts.delivery,
+          routes: counts.route,
         },
         vehicleStatus,
         activityTrends,
         maintenanceStats,
+        deliveryOperation,
         recentActivity: recentActivityData.data,
         vehiclesByType: vehiclesByType.data || [],
         maintenanceCosts,

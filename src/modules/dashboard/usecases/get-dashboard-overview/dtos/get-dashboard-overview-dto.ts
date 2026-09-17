@@ -18,6 +18,8 @@ interface DashboardOverviewResponse {
     serviceOrders: EntityCount;
     users: EntityCount;
     fines: EntityCount;
+    deliveries: EntityCount;
+    routes: EntityCount;
   };
   vehicleStatus: {
     ACTIVE: number;
@@ -36,12 +38,37 @@ interface DashboardOverviewResponse {
     serviceOrders: number;
     users: number;
     fines: number;
+    deliveries: number;
+    routes: number;
   }>;
   maintenanceStats: {
     pending: number;
     recent: number;
     overdue: number;
   };
+
+  /**
+   * What the operation is doing right now, as opposed to how much of it was
+   * created this month.
+   *
+   * The counts above answer "how big is this"; a dispatcher opening the
+   * overview at seven in the morning is asking "what is not on a route yet"
+   * and "what failed yesterday". Same numbers the monitoring panel draws,
+   * from the same query, so the two screens cannot disagree.
+   *
+   * Null rather than zeroes when there is nothing to say: a MASTER has no
+   * single company to summarise, a company that did not hire the module has
+   * no operation, and a profile without `delivery_manage` must not be shown
+   * one. Zeroes would read as "a quiet day".
+   */
+  deliveryOperation: {
+    unassigned: number;
+    designated: number;
+    inRoute: number;
+    deliveredToday: number;
+    failedToday: number;
+    occurrencesToday: number;
+  } | null;
   recentActivity: Array<{
     id: string;
     type: string;

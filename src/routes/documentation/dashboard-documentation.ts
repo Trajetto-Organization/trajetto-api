@@ -95,6 +95,22 @@ const dashboardResponses = {
           .describe("Number of fines created in current month"),
         lastMonth: z.number().describe("Number of fines created in last month"),
       }),
+      deliveries: z.object({
+        currentMonth: z
+          .number()
+          .describe("Number of deliveries created in current month"),
+        lastMonth: z
+          .number()
+          .describe("Number of deliveries created in last month"),
+      }),
+      routes: z.object({
+        currentMonth: z
+          .number()
+          .describe("Number of routes created in current month"),
+        lastMonth: z
+          .number()
+          .describe("Number of routes created in last month"),
+      }),
     }),
     vehicleStatus: z.object({
       ACTIVE: z.number().describe("Number of active vehicles"),
@@ -114,6 +130,8 @@ const dashboardResponses = {
         serviceOrders: z.number().describe("Number of service orders"),
         users: z.number().describe("Number of users"),
         fines: z.number().describe("Number of fines"),
+        deliveries: z.number().describe("Number of deliveries"),
+        routes: z.number().describe("Number of routes"),
       }),
     ),
     maintenanceStats: z.object({
@@ -121,6 +139,21 @@ const dashboardResponses = {
       recent: z.number().describe("Number of recent maintenances"),
       overdue: z.number().describe("Number of overdue maintenances"),
     }),
+    deliveryOperation: z
+      .object({
+        unassigned: z
+          .number()
+          .describe("Deliveries still owed a route: PENDING with no driver"),
+        designated: z.number().describe("Assigned, not started"),
+        inRoute: z.number().describe("On the street right now"),
+        deliveredToday: z.number().describe("Completed today"),
+        failedToday: z.number().describe("Failed today"),
+        occurrencesToday: z.number().describe("Occurrences reported today"),
+      })
+      .nullable()
+      .describe(
+        "Null for a MASTER (no single company), for a company that did not hire the deliveries module, and for a profile without delivery_manage.",
+      ),
     recentActivity: z.array(
       z.object({
         id: z.string().describe("Activity ID"),
@@ -203,6 +236,8 @@ const dashboardResponses = {
         serviceOrders: z.number().describe("Number of service orders"),
         users: z.number().describe("Number of users"),
         fines: z.number().describe("Number of fines"),
+        deliveries: z.number().describe("Number of deliveries"),
+        routes: z.number().describe("Number of routes"),
       }),
     ),
     maintenanceCosts: z.array(

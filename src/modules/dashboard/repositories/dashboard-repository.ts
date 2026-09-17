@@ -125,6 +125,14 @@ class DashboardRepository implements IDashboardRepository {
     "service-order": { table: "service_order" },
     user: { table: "user", extra: Prisma.sql`AND "role" <> 'MASTER'` },
     fine: { table: "fine" },
+
+    // Both carry `businessId` and `created_at` directly, so they scope and
+    // group exactly like the rest. `delivery_occurrence` deliberately does
+    // not appear: it reaches its tenant through the delivery, and a join here
+    // would make one of the union's arms cost an order of magnitude more than
+    // the others on the busiest screen in the product.
+    delivery: { table: "delivery" },
+    route: { table: "route" },
   };
 
 /**
