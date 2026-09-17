@@ -666,19 +666,31 @@ class RouteRepository implements IRouteRepository {
           _max: { sequence: true },
         });
 
+        /**
+         * One INSERT, not one per stop.
+         *
+         * The sequences are arithmetic — spaced by ten from the highest one
+         * already on the route — so nothing here needs a round trip to decide
+         * the next value. It used to make one anyway, inside the transaction:
+         * adding the forty stops of a morning's route meant forty round trips
+         * with the row locks held the whole time, and a dispatcher adding a
+         * spreadsheet's worth felt every one of them.
+         *
+         * `createManyAndReturn` gives back the rows, which is why this could
+         * not simply be `createMany` — the caller answers with the stops it
+         * created.
+         */
         let sequence = highest._max.sequence;
 
-        const created: RouteStop[] = [];
-
-        for (const deliveryId of deliveryIds) {
+        const rows = deliveryIds.map((deliveryId) => {
           sequence = nextSequence(sequence);
 
-          const stop = await tx.routeStop.create({
-            data: { routeId, deliveryId, sequence },
-          });
+          return { routeId, deliveryId, sequence };
+        });
 
-          created.push(stop as unknown as RouteStop);
-        }
+        const created = (await tx.routeStop.createManyAndReturn({
+          data: rows,
+        })) as unknown as RouteStop[];
 
         await tx.delivery.updateMany({
           where: { id: { in: deliveryIds }, businessId },

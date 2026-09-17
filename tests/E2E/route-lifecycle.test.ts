@@ -428,6 +428,78 @@ describe("one open stop per delivery", () => {
     expect(await stopsOf(delivery)).toHaveLength(1);
   });
 
+  it("refuses a duplicate inside a BATCH, and adds none of it", async () => {
+    /**
+     * `addStops` writes every stop in one INSERT now, and that changes what a
+     * duplicate does.
+     *
+     * It used to insert them one at a time in a loop — forty round trips with
+     * the row locks held for a forty-stop morning — so a duplicate in the
+     * middle of a batch failed on its own statement with the earlier ones
+     * already written, and the transaction rolled them back. One statement
+     * fails as one statement, and the rollback has to still leave the route
+     * exactly as it was: a dispatcher who pasted a list with one address
+     * already routed must not end up with half of it added.
+     */
+    const route = await repository.createRoute({
+      businessId: CARRIER,
+      driverId: DRIVER,
+      scheduled_date: new Date(),
+      deliveryIds: [],
+    });
+
+    const taken = await seedDelivery();
+    const fresh = await seedDelivery();
+    const alsoFresh = await seedDelivery();
+
+    await repository.addStops(route.id, CARRIER, [taken]);
+
+    await expect(
+      repository.addStops(route.id, CARRIER, [fresh, taken, alsoFresh]),
+    ).rejects.toBeInstanceOf(DeliveryAlreadyOnRouteError);
+
+    // Neither of the good ones landed: all of it, or none of it.
+    expect(await stopsOf(fresh)).toHaveLength(0);
+    expect(await stopsOf(alsoFresh)).toHaveLength(0);
+
+    // And the one that was already there is still there, once.
+    expect(await stopsOf(taken)).toHaveLength(1);
+  });
+
+  it("and numbers a batch in the order it was given", async () => {
+    /**
+     * The sequences are what the driver's screen follows, and they are now
+     * computed in JavaScript before a single row is written rather than read
+     * back after each insert. Spaced by ten, continuing from whatever the
+     * route already had.
+     */
+    const route = await repository.createRoute({
+      businessId: CARRIER,
+      driverId: DRIVER,
+      scheduled_date: new Date(),
+      deliveryIds: [],
+    });
+
+    const first = await seedDelivery();
+    const second = await seedDelivery();
+    const third = await seedDelivery();
+
+    await repository.addStops(route.id, CARRIER, [first]);
+
+    const added = await repository.addStops(route.id, CARRIER, [second, third]);
+
+    expect(added.map((stop) => stop.deliveryId)).toEqual([second, third]);
+
+    const sequences = added.map((stop) => stop.sequence);
+
+    expect(sequences[1]).toBeGreaterThan(sequences[0]);
+
+    // Continuing from the existing stop, not restarting.
+    const existing = (await stopsOf(first))[0];
+
+    expect(sequences[0]).toBeGreaterThan(existing.sequence);
+  });
+
   it("lets a failed attempt be re-delivered, and keeps the attempt", async () => {
     const delivery = await seedDelivery();
     const firstRoute = await runningRoute([delivery]);
