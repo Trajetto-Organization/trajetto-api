@@ -244,6 +244,42 @@ app.register(fastifyRateLimit, {
   },
 });
 
+/**
+ * An empty body that claims to be JSON.
+ *
+ * Fastify's default JSON parser refuses it — `FST_ERR_CTP_EMPTY_JSON_BODY` —
+ * and that refusal is pedantic in the one case it fires most: a DELETE with
+ * no body sent by a client that sets `Content-Type` on every request. Our own
+ * web actions do exactly that, so revoking an API key answered an error and
+ * never revoked anything. An integrator's HTTP library will do the same.
+ *
+ * An empty body is `undefined`, which is what a route with no body schema
+ * expects and what a route WITH one will fail validation on — as it should,
+ * with a 400 that names the missing fields, instead of a parser error.
+ *
+ * Anything that is not empty goes to the real parser, so malformed JSON is
+ * still malformed and still refused.
+ */
+app.addContentTypeParser(
+  "application/json",
+  { parseAs: "string" },
+  (_request, body, done) => {
+    const text = typeof body === "string" ? body.trim() : "";
+
+    if (text.length === 0) return done(null, undefined);
+
+    try {
+      done(null, JSON.parse(text));
+    } catch (error) {
+      // Keeps Fastify's own shape: a 400 with the parser's message, not a
+      // 500 from an exception nobody caught.
+      (error as Error & { statusCode?: number }).statusCode = 400;
+
+      done(error as Error, undefined);
+    }
+  },
+);
+
 // Development only: the local upload route stands in for the storage bucket
 // and receives raw image bytes, which no other route does. The cap matches the
 // largest single file any upload type allows, so an oversized body is refused
@@ -310,13 +346,43 @@ app.setErrorHandler((error, request, reply) => {
 
   const isAppError = error instanceof AppError;
 
+  /**
+   * Somebody already decided this was the caller's fault. Respect it.
+   *
+   * Fastify attaches a 4xx `statusCode` to the errors it raises before any
+   * handler runs: a body that is not the JSON it claims to be, a content type
+   * nothing is registered for, a route that does not exist. Every one of them
+   * used to fall through to the 500 at the bottom of this function, because
+   * the branches above only recognised Zod and AppError — so a request the
+   * server merely could not parse was reported as the server breaking, and
+   * logged at error level among real failures.
+   *
+   * That was not theoretical. Every DELETE the web sent carried
+   * `Content-Type: application/json` with no body, which Fastify's default
+   * parser refuses: revoking an API key answered "Internal server error", the
+   * panel showed a red toast, and the key stayed live. (The parser above now
+   * accepts an empty body as well, so that particular request no longer
+   * arrives here at all — this is the floor under everything like it.)
+   *
+   * Checked last of the three so the branches with a richer shape win.
+   */
+  const isClientError =
+    !isAppError &&
+    !isValidationError &&
+    !isBodyTooLarge &&
+    typeof error.statusCode === "number" &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500;
+
   const statusCode = isBodyTooLarge
     ? 413
     : isValidationError
       ? 400
       : isAppError
         ? error.statusCode
-        : 500;
+        : isClientError
+          ? (error.statusCode as number)
+          : 500;
 
   // This custom handler REPLACES the one Fastify installs by default, and the
   // default is what logs errors out of the box. Without an explicit log here
@@ -371,6 +437,18 @@ app.setErrorHandler((error, request, reply) => {
         code: error.code,
         message: error.message,
       });
+  }
+
+  if (isClientError) {
+    return reply.status(statusCode).send({
+      code: "MALFORMED_REQUEST",
+
+      // Fastify's own sentence, which names the actual problem — "Body cannot
+      // be empty when content-type is set to 'application/json'", or the
+      // position where the JSON broke. A generic "requisição inválida" would
+      // leave whoever is integrating with nothing to act on.
+      message: error.message,
+    });
   }
 
   // The stack stays in the log and never in the body: an unhandled exception
