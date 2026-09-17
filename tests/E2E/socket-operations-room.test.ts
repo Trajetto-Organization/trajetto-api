@@ -513,4 +513,87 @@ describe("when the dispatcher loses the permission mid-connection", () => {
     const online = await io.getOnlineUserIdsForBusiness(CARRIER);
     expect(online).toContain(DISPATCHER);
   }, 30_000);
+
+  it("and route events go quiet too, not only positions", async () => {
+    /**
+     * Two different emitters go into the same room, and the first version of
+     * this file only asked about one of them.
+     *
+     * `sendDriverPositionToBusiness` and `sendRouteEventToBusiness` both
+     * address `operations:${businessId}`, so leaving the room silences both —
+     * but that is an argument, not a measurement. A room left for positions
+     * and not for routes would have looked exactly like this test passing.
+     */
+    const received = waitFor(dispatcher, "routeEvent");
+
+    io.sendRouteEventToBusiness(CARRIER, {
+      type: "route.released",
+      routeId: ROUTE,
+      businessId: CARRIER,
+      driverId: DRIVER,
+    } as never);
+
+    expect(await received).toBeNull();
+  }, 30_000);
+});
+
+describe("when a MASTER is demoted mid-connection", () => {
+  it("loses the connection, and with it the company it was following", async () => {
+    /**
+     * The one the company-scoped re-evaluation cannot reach.
+     *
+     * `refreshDeliveryRooms` walks `business:${businessId}` — and a MASTER has
+     * no company, so it never joins that room and the sweep never sees it. A
+     * MASTER watching a carrier's operation is therefore NOT re-evaluated by a
+     * permission change in that carrier, which is correct: their authority
+     * does not come from there.
+     *
+     * What does reach them is a change to their OWN user. Every security field
+     * — role, company, profile, driver link — fires `user_updated`, and that
+     * reason is not on the authorization-only list, so the session ends and
+     * the sockets are dropped. This is the test that says the door that
+     * exists is the door that closes.
+     */
+    master.emit("operationsSubscribe", { businessId: CARRIER });
+
+    // The subscription is a round trip: the server checks the role before
+    // joining anything.
+    await new Promise((done) => setTimeout(done, 1200));
+
+    const before = waitFor(master, "routeEvent");
+
+    io.sendRouteEventToBusiness(CARRIER, {
+      type: "route.released",
+      routeId: ROUTE,
+      businessId: CARRIER,
+      driverId: DRIVER,
+    } as never);
+
+    expect(
+      await before,
+      "o MASTER não estava ouvindo; o teste mediria silêncio de graça",
+    ).not.toBeNull();
+
+    // The demotion, as the product does it: any security field changing on the
+    // user fires this.
+    io.sendSecurityEventToUser(MASTER, { reason: "user_updated" });
+
+    await new Promise((done) => setTimeout(done, 1500));
+
+    expect(
+      master.connected,
+      "o MASTER rebaixado continuou conectado",
+    ).toBe(false);
+
+    const after = waitFor(master, "routeEvent");
+
+    io.sendRouteEventToBusiness(CARRIER, {
+      type: "route.released",
+      routeId: ROUTE,
+      businessId: CARRIER,
+      driverId: DRIVER,
+    } as never);
+
+    expect(await after).toBeNull();
+  }, 30_000);
 });
