@@ -20,7 +20,10 @@ const proofDocumentQuerySchema = z.object({
   regenerate: z
     .enum(["true", "false"])
     .optional()
-    .transform((value) => value === "true"),
+    .transform((value) => value === "true")
+    .describe(
+      "`true` gera o documento de novo em vez de devolver o guardado. É escrita: exige `delivery_manage` com escrita (somente leitura recebe 403 PERMISSION_DENIED) e empresa ativa (403 TENANT_INACTIVE).",
+    ),
 });
 
 /**

@@ -4,9 +4,14 @@ import { IRouteRepository } from "../../repositories/IRoute-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
+import {
+  announcePlanChange,
+  planWriteFailure,
+} from "../shared/route-plan-change";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { AppError } from "@/shared/errors/AppError";
+import { ROUTE_STATUS_LABELS } from "@/shared/route/route-rules";
 
 import {
   RouteNotFoundError,
@@ -21,6 +26,9 @@ interface ReorderRouteStopsRequest {
 
   /** The COMPLETE order, not a move. See the docblock. */
   orderedStopIds: string[];
+
+  /** The plan the dispatcher is looking at (decision 14.7, D5). */
+  expectedPlanVersion?: number;
 }
 
 /**
@@ -51,15 +59,16 @@ class ReorderRouteStopsUseCase {
     businessId,
     routeId,
     orderedStopIds,
-  }: ReorderRouteStopsRequest): Promise<void> {
+    expectedPlanVersion,
+  }: ReorderRouteStopsRequest): Promise<{ planVersion: number }> {
     // Planning is the dispatcher's job, and `delivery_manage` is open to
     // drivers so the app's own surface works — so the permission says yes
     // and this says no.
-    await assertRouteDispatcher(this.user, userId);
+    await assertRouteDispatcher(this.user, userId, businessId);
 
     const findRoute = await this.route.findRouteById(routeId, businessId);
 
-    if (!findRoute) throw new AppError(new RouteNotFoundError().message, 404);
+    if (!findRoute) throw new RouteNotFoundError();
 
     // Caught here rather than by the repository's set comparison, which would
     // report a duplicate as a mismatch: "you sent the same stop twice" is a
@@ -74,18 +83,42 @@ class ReorderRouteStopsUseCase {
     }
 
     try {
-      await this.route.reorderStops(routeId, businessId, orderedStopIds);
+      const result = await this.route.reorderStops(
+        routeId,
+        businessId,
+        orderedStopIds,
+        { expectedPlanVersion, actorId: userId },
+      );
+
+      // The order it already had: nothing moved, nobody is told.
+      if (!result.changed) return { planVersion: result.planVersion };
+
+      await announcePlanChange(this.user, {
+        businessId,
+        routeId,
+        routeCode: result.code,
+        planVersion: result.planVersion,
+        status: result.status,
+        driverId: result.driverId,
+      });
 
       this.notificationService.createActivityIfEnabled({
         type: "Rota",
         action: "update",
         entityId: routeId,
         description: `Rota ${findRoute.code}: ordem das paradas alterada`,
-        status: findRoute.status,
+        // The label, never the enum (the Activities list shows it as stored).
+        status: ROUTE_STATUS_LABELS[findRoute.status],
         performedBy: userId,
         businessId,
       });
+
+      return { planVersion: result.planVersion };
     } catch (error) {
+      const planFailure = planWriteFailure(error);
+
+      if (planFailure) throw planFailure;
+
       // The list does not describe this route's current stops: somebody added
       // or removed one while this screen was open. 409, because the request
       // was correct for the route the dispatcher was looking at.

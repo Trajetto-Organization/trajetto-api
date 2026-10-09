@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 import { updateNotificationPreferencesSchema } from "@/schemas/notification-preferences-schema";
+import { errorResponse } from "./common-responses";
+import { cursorMeta } from "./ndjson";
 
 const preferenceRow = z.object({
   category: z
@@ -28,25 +30,6 @@ const notificationSchemas = {
   removePushToken: z.object({
     token: z.string().min(1).max(4096).describe("Expo push token a remover"),
   }),
-  createNotification: z.object({
-    userId: z.string().uuid().describe("ID do usuário destinatário"),
-    type: z.string().describe("Tipo de notificação"),
-    title: z.string().describe("Título da notificação"),
-    message: z.string().describe("Conteúdo da notificação"),
-    link: z.string().optional().describe("Link opcional para redirecionar"),
-    entityId: z.string().optional().describe("ID da entidade relacionada"),
-    shouldSendEmail: z.boolean().optional().describe("Se deve enviar email"),
-  }),
-  listNotificationsQuery: z.object({
-    limit: z
-      .string()
-      .optional()
-      .describe("Número máximo de notificações a retornar"),
-    includeRead: z
-      .string()
-      .optional()
-      .describe("Se deve incluir notificações já lidas"),
-  }),
   listNotificationsCursorQuery: z.object({
     limit: z
       .string()
@@ -68,28 +51,28 @@ const notificationSchemas = {
 };
 
 const notificationResponses = {
-  notificationCreated: z.object({
-    message: z.string().default("Notificação criada com sucesso"),
-    notification: z.object({
-      id: z.string(),
-      userId: z.string(),
-      type: z.string(),
-      title: z.string(),
-      message: z.string(),
-      link: z.string().optional(),
-      read: z.boolean(),
-      entityId: z.string().optional(),
-      businessId: z.string(),
-      created_at: z.union([z.string(), z.date()]),
-      updated_at: z.union([z.string(), z.date()]),
-    }),
-  }),
-  notificationsStreamDescription: z.object({
-    description: z
-      .string()
-      .default(
-        "NDJSON stream. First line contains meta object with {total, unread, nextCursor, hasMore}. Subsequent lines are notification objects.",
-      ),
+  // The bell's first line: a real total (not the cursor feeds' zero) and the
+  // unread count next to the cursor.
+  notificationStreamMeta: cursorMeta(
+    {
+      unread: z.number().int().describe("Não lidas do usuário, para o badge."),
+    },
+    z.number().int().describe("Total de notificações do filtro."),
+  ),
+  /** One line of the bell's stream: the row as stored, no relations. */
+  notificationStreamRow: z.object({
+    id: z.string(),
+    type: z.string().describe("Origem: service-order, vehicle, delivery…"),
+    title: z.string(),
+    message: z.string(),
+    link: z.string().nullable(),
+    read: z.boolean(),
+    entityId: z.string().nullable(),
+    businessId: z.string().nullable(),
+    userId: z.string(),
+    deliveryId: z.string().nullable(),
+    created_at: z.union([z.string(), z.date()]),
+    updated_at: z.union([z.string(), z.date()]),
   }),
   notificationMarkedAsRead: z.object({
     message: z.string().default("Notificação marcada como lida!"),
@@ -108,44 +91,17 @@ const notificationResponses = {
     message: z.string().default("Internal server error"),
   }),
 
-  // Error responses for list routes (status 400)
-  listNotificationsErrors: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-
-  // Error responses for mark as read (status 400)
-  markAsReadErrors: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-
-  // Error responses for mark as read (status 403)
-  markAsReadForbiddenError: z.object({
-    message: z.string().default("Acesso não autorizado à esta notificação!"),
-  }),
-
-  // Error responses for mark as read (status 404)
-  markAsReadNotFoundError: z.object({
-    message: z
-      .string()
-      .default("Notificação não encontrada! Por favor, tente novamente."),
-  }),
-
-  // Error responses for delete (status 400)
-  deleteNotificationErrors: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-
-  // Error responses for delete (status 403)
-  deleteNotificationForbiddenError: z.object({
-    message: z.string().default("Acesso não autorizado à esta notificação!"),
-  }),
-
-  // Error responses for delete (status 404)
-  deleteNotificationNotFoundError: z.object({
-    message: z
-      .string()
-      .default("Notificação não encontrada! Por favor, tente novamente."),
-  }),
+  // Every refusal carries `code` (decision 11.3); the session user who no
+  // longer exists is 404 USER_NOT_FOUND, never a 400.
+  validationError: errorResponse.describe(
+    "VALIDATION_ERROR: parâmetro, consulta ou corpo recusado (issues diz qual).",
+  ),
+  sessionUserNotFound: errorResponse.describe(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
+  notificationNotFound: errorResponse.describe(
+    "NOTIFICATION_NOT_FOUND (inexistente ou de outra pessoa — a mesma resposta) ou USER_NOT_FOUND (o usuário da sessão não existe mais).",
+  ),
 };
 
 const allNotificationResponses = {
@@ -160,6 +116,10 @@ const allNotificationResponses = {
   }),
   preferencesRetrieved: z.object({
     preferences: z.array(preferenceRow),
+    // Decision 14.6: the web's operations alert sound, per person.
+    opsAlert: z.object({
+      sound: z.boolean().describe("Tocar som nos alertas da operação (balão flutuante)."),
+    }),
   }),
   preferencesUpdated: z.object({
     message: z.string().default("Preferências de notificação atualizadas!"),

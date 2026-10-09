@@ -1,32 +1,28 @@
 import {
+  DashboardEntity,
   PeriodGranularity,
   PeriodCountBucket,
   PeriodCostBucket,
-  CountByDateRangeParams,
-  CountByDateRangeResult,
   CountByMonthParams,
   MonthlyCountBucket,
   MonthlyCostBucket,
   VehicleStatusCountResult,
+  MaintenanceStatsParams,
   MaintenanceStatsResult,
-  MonthlyCostsParams,
-  MonthlyCostsResult,
   VehicleTypeCountResult,
+  EntityTotal,
 } from "../dtos/dashboard-dto";
 
+/**
+ * Every window here is [from, to) in UTC instants and every bucket is a civil
+ * day or month in `timeZone` — the company's zone, never the server's.
+ */
 interface IDashboardRepository {
-  countByDateRange: (
-    params: CountByDateRangeParams,
-    businessId?: string,
-  ) => Promise<CountByDateRangeResult>;
-
   /**
    * The same count, for every month of a window, in ONE query.
    *
    * The overview draws eight months of nine entities. Asked one month at a
-   * time that is 72 round trips; grouped in the database it is one, and the
-   * numbers are identical because the grouping is the same `created_at`
-   * window the single count uses.
+   * time that is 72 round trips; grouped in the database it is one.
    */
   countByMonth: (
     params: CountByMonthParams,
@@ -43,44 +39,62 @@ interface IDashboardRepository {
    */
   countManyByMonth: (
     params: {
-      entities: CountByMonthParams["entity"][];
+      entities: DashboardEntity[];
       from: Date;
       to: Date;
+      timeZone: string;
     },
     businessId?: string,
   ) => Promise<Record<string, MonthlyCountBucket[]>>;
+
   /**
    * Every entity of a trend, every bucket, in ONE round trip — at whatever
    * granularity the window calls for.
-   *
-   * `countManyByMonth` serves the overview, which always wants months. The
-   * trends endpoint wants days for a short window, and asking per bucket per
-   * entity is 270 queries for thirty days of nine entities.
    */
   countManyByPeriod: (
     params: {
-      entities: CountByMonthParams["entity"][];
+      entities: DashboardEntity[];
       from: Date;
       to: Date;
       granularity: PeriodGranularity;
+      timeZone: string;
     },
     businessId?: string,
   ) => Promise<Record<string, PeriodCountBucket[]>>;
 
+  /**
+   * Every catalogue of the overview as a stock, in ONE round trip: how many
+   * rows exist now and how many were created before `before` (the company's
+   * month start). The cards showed only what was created this month.
+   */
+  countManyTotals: (
+    params: { entities: DashboardEntity[]; before: Date },
+    businessId?: string,
+  ) => Promise<Record<string, EntityTotal>>;
+
   /** The same spend, cut by day or by month, summed in the database. */
   getCostsByPeriod: (
-    params: { from: Date; to: Date; granularity: PeriodGranularity },
+    params: {
+      from: Date;
+      to: Date;
+      granularity: PeriodGranularity;
+      timeZone: string;
+    },
     businessId?: string,
   ) => Promise<PeriodCostBucket[]>;
 
   countVehiclesByStatus: (
     businessId?: string,
   ) => Promise<VehicleStatusCountResult>;
-  getMaintenanceStats: (businessId?: string) => Promise<MaintenanceStatsResult>;
-  getMonthlyCosts: (
-    params: MonthlyCostsParams,
+
+  /**
+   * The maintenance card, against the company's today and zone. The caller
+   * reads the clock; the repository never does.
+   */
+  getMaintenanceStats: (
+    params: MaintenanceStatsParams,
     businessId?: string,
-  ) => Promise<MonthlyCostsResult>;
+  ) => Promise<MaintenanceStatsResult>;
 
   /**
    * The same spend, for every month of a window, summed in the database.
@@ -89,7 +103,7 @@ interface IDashboardRepository {
    * order row of half a year.
    */
   getCostsByMonth: (
-    params: { from: Date; to: Date },
+    params: { from: Date; to: Date; timeZone: string },
     businessId?: string,
   ) => Promise<MonthlyCostBucket[]>;
   countVehiclesByType: (businessId?: string) => Promise<VehicleTypeCountResult>;

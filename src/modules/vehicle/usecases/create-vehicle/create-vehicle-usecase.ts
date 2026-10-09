@@ -13,6 +13,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { VehicleAlreadyExistsError } from "../errors/vehicle-already-exists-error";
 
 import { VehicleTypeNotFoundError } from "@/modules/vehicle-type/usecases/errors/vehicle-type-not-found-error";
@@ -40,6 +41,17 @@ import { Vehicle, CreateVehicleProps } from "../../dtos/vehicle-dto";
 import { VehicleModelYearError } from "../errors/vehicle-model-year-error";
 
 import { FuelTypeNotBelongBusinessError } from "@/modules/fuel-type/usecases/errors/fuel-type-not-belong-business-error";
+
+import { vehicleUniqueFieldOf } from "@/shared/vehicle/vehicle-conflicts";
+import {
+  isModelYearCoherent,
+  vehicleYearOf,
+  withVehicleDates,
+} from "@/shared/vehicle/vehicle-years";
+import { logger } from "@/shared/logging/logger";
+import { sendCatalogChangedEvent } from "@/websocket";
+
+const log = logger.child({ component: "vehicle" });
 
 @injectable()
 class CreateVehicleUseCase {
@@ -72,6 +84,10 @@ class CreateVehicleUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The caller's own company, not only the route guard: a job or another
+    // use case reaches this without the HTTP tenant check.
+    assertTenantAccess(findUser, vehicleData.businessId);
+
     const findBusiness = await this.business.findBusinessById(
       vehicleData.businessId,
     );
@@ -80,39 +96,30 @@ class CreateVehicleUseCase {
       throw new BusinessNotFoundError();
     }
 
-    // Contracted fleet size (entitlement): 0 = not configured, no block.
-    /**
-     * A contagem do limite saiu daqui.
-     *
-     * Ela vivia neste ponto — contar, decidir, e criar oitenta linhas depois —
-     * e isso é um read-then-write sobre um controle de COBRANÇA: com nove
-     * veículos num contrato de dez, N requisições simultâneas liam nove, todas
-     * passavam, e a empresa terminava com 9+N. Agora a contagem e a inserção
-     * acontecem na mesma transação, com a empresa travada, dentro de
-     * `createVehicleWithinLimit`.
-     *
-     * O que fica aqui é só o que não depende de concorrência: quais status
-     * ocupam vaga, e a mensagem que a recusa usa.
-     */
+    // Uppercased by the schema too; repeated here because the use case is
+    // also reached without it (the spreadsheet import, the tests).
+    const licensePlate = vehicleData.license_plate.trim().toUpperCase();
 
-    // Check if the board already exists
-    const findVehicleByLicensePlate =
-      await this.vehicle.findVehicleByLicensePlate(vehicleData.license_plate);
+    // Per company, like the unique index (decision 8.1): a lookup across
+    // companies refused a truck another carrier also runs, and said so.
+    const findVehicleByLicensePlate = await this.vehicle.findVehicleByLicensePlate(
+      licensePlate,
+      vehicleData.businessId,
+    );
 
     if (findVehicleByLicensePlate) {
       throw new VehicleAlreadyExistsError();
     }
 
-    // Check if RENAVAM already exists
     const findVehicleByRenavam = await this.vehicle.findVehicleByRenavam(
       vehicleData.renavam,
+      vehicleData.businessId,
     );
 
     if (findVehicleByRenavam) {
       throw new VehicleRenavamExistsError();
     }
 
-    // Additional checks for relationships
     if (vehicleData.vehicleTypeId) {
       const findVehicleType = await this.vehicleType.findVehicleTypeById(
         vehicleData.vehicleTypeId,
@@ -140,17 +147,15 @@ class CreateVehicleUseCase {
       throw new FuelTypeNotBelongBusinessError();
     }
 
-    const manufacturingDate = new Date(vehicleData.manufacturing_year);
-    const modelDate = new Date(vehicleData.model_year);
-
-    const manufacturingYear = manufacturingDate.getFullYear();
-    const modelYear = modelDate.getFullYear();
-
-    if (modelYear < manufacturingYear || modelYear > manufacturingYear + 1) {
+    if (
+      !isModelYearCoherent(
+        vehicleYearOf(vehicleData.manufacturing_year),
+        vehicleYearOf(vehicleData.model_year),
+      )
+    ) {
       throw new VehicleModelYearError();
     }
 
-    // Driver is optional
     if (vehicleData.driverId) {
       const findDriver = await this.driver.findDriverById(vehicleData.driverId);
 
@@ -163,7 +168,6 @@ class CreateVehicleUseCase {
       }
     }
 
-    // Branch is optional
     if (vehicleData.branchId) {
       const findBranch = await this.branch.findBranchById(vehicleData.branchId);
 
@@ -176,48 +180,66 @@ class CreateVehicleUseCase {
       }
     }
 
+    let created: Vehicle | null;
+    let activeCount: number;
+
     try {
-      const { vehicle: created, activeCount } =
-        await this.vehicle.createVehicleWithinLimit(vehicleData, {
-          max: findBusiness.vehicle_limit ?? 0,
-          occupiesSlot: occupiesFleetSlot(vehicleData.status),
-        });
-
-      if (!created) {
-        // A frase vem da mesma regra de sempre, agora com a contagem que a
-        // transação realmente viu.
-        const verdict = canRegisterVehicle(
-          activeCount,
-          findBusiness.vehicle_limit ?? 0,
-        );
-
-        throw new AppError(
-          verdict.reason ?? "Limite de veículos contratado atingido.",
-          400,
-          "VEHICLE_LIMIT_REACHED",
-        );
-      }
-
-      const vehicleCreated = created;
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Veículo",
-        action: "create",
-        entityId: vehicleCreated.id,
-        description: `Veículo ${vehicleCreated.license_plate} criado | ID: ${vehicleCreated.id}`,
-        status: translateVehicleStatus(vehicleCreated.status),
-        performedBy: userId,
-        businessId: vehicleData.businessId,
-      });
-
-      return vehicleCreated;
+      ({ vehicle: created, activeCount } =
+        await this.vehicle.createVehicleWithinLimit(
+          withVehicleDates({ ...vehicleData, license_plate: licensePlate }),
+          {
+            max: findBusiness.vehicle_limit ?? 0,
+            occupiesSlot: occupiesFleetSlot(vehicleData.status),
+          },
+        ));
     } catch (error) {
+      // Two requests for the same plate can both pass the lookup above; the
+      // second one meets the per-company index. Only the column is read, so
+      // nothing of the conflicting row is disclosed.
+      const conflict = vehicleUniqueFieldOf(error);
+
+      if (conflict === "license_plate") throw new VehicleAlreadyExistsError();
+      if (conflict === "renavam") throw new VehicleRenavamExistsError();
+
+      // The cause stays in the log; the client gets a sentence it can show.
+      log.error({ err: error }, "vehicle_create_failed");
+
       throw new AppError(
         "Houve um erro ao tentar criar o veículo! Por favor, tente novamente.",
         500,
       );
     }
+
+    // Outside the try on purpose (FLEET-VEH-1): the refusal used to be
+    // thrown inside it, and the generic catch turned "Limite de veículos
+    // contratados atingido (9/10)" into a 500 "Houve um erro".
+    if (!created) {
+      const verdict = canRegisterVehicle(
+        activeCount,
+        findBusiness.vehicle_limit ?? 0,
+      );
+
+      throw new AppError(
+        verdict.reason ?? "Limite de veículos contratados atingido.",
+        409,
+        "VEHICLE_LIMIT_REACHED",
+      );
+    }
+
+    // After the commit: pickers open in other sessions refetch (decision 2.3).
+    sendCatalogChangedEvent(vehicleData.businessId, "vehicle");
+
+    this.notificationService.createActivityIfEnabled({
+      type: "Veículo",
+      action: "create",
+      entityId: created.id,
+      description: `Veículo ${created.license_plate} criado | ID: ${created.id}`,
+      status: translateVehicleStatus(created.status),
+      performedBy: userId,
+      businessId: vehicleData.businessId,
+    });
+
+    return created;
   }
 }
 

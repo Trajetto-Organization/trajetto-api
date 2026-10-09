@@ -6,7 +6,21 @@ import { UploadService } from "@/shared/services/upload-service";
 import { createHash } from "node:crypto";
 
 import { AppError } from "@/shared/errors/AppError";
+import { resolveTimeZone } from "@/shared/time/business-day";
+import { env } from "@/env";
 import type { PublicProofSummary } from "../../dtos/proof-document-dto";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Whether a document generated at `generatedAt` is past its public life. */
+function isPastRetention(generatedAt: Date | string): boolean {
+  const generated = new Date(generatedAt).getTime();
+
+  // A date that cannot be read is not a reason to hide a receipt.
+  if (!Number.isFinite(generated)) return false;
+
+  return Date.now() - generated > env.PROOF_VERIFICATION_TTL_DAYS * DAY_MS;
+}
 
 interface VerifyProofDocumentRequest {
   token: string;
@@ -60,7 +74,13 @@ class VerifyProofDocumentUseCase {
 
     // 404 and nothing else. A distinct "this token expired" or "this token is
     // malformed" would let somebody probe the space.
-    if (!found) {
+    //
+    // Expired counts as missing (GAP1-8). The token is printed on the paper
+    // and needs no login, so whoever photographs a receipt holds its PDF —
+    // recipient document and GPS included, because those are the evidence.
+    // Past the retention period nobody needs the check any more, and the
+    // link stops being a standing window on somebody's personal data.
+    if (!found || isPastRetention(found.generated_at)) {
       throw new AppError(
         "Comprovante não encontrado.",
         404,
@@ -75,7 +95,11 @@ class VerifyProofDocumentUseCase {
       invoice_number: string | null;
       delivered_at: Date | string | null;
       received_by: string | null;
-      business: { corporate_reason: string; fantasy_name: string | null };
+      business: {
+        corporate_reason: string;
+        fantasy_name: string | null;
+        timezone?: string | null;
+      };
     } | null;
 
     const bytes = await this.uploads.readObject(found.storage_key);
@@ -106,6 +130,20 @@ class VerifyProofDocumentUseCase {
         sha256: found.sha256,
         generatedAt: found.generated_at,
         version: found.version,
+
+        // Resolved like the PDF's (proof-document formatMoment): the page and
+        // the paper show the same clock for the same moment.
+        timeZone: resolveTimeZone(delivery?.business.timezone),
+
+        // What WE recorded about the signature (decision 14.8). Legal
+        // validity is the ITI validator's to say, on the file itself.
+        signature: {
+          status: found.signature_status ?? "UNSIGNED",
+          profile: found.signature_profile ?? null,
+          signerName: found.signer_name ?? null,
+          certNotAfter: found.cert_not_after ?? null,
+          signedAt: found.signed_at ?? null,
+        },
       },
 
       url: bytes ? await this.uploads.getFileUrl(found.storage_key) : null,

@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import { assertCallerRole } from "../errors/business-role-guard";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
@@ -16,11 +17,11 @@ import { BusinessErpCodeAlreadyExistsError } from "../errors/business-erp-code-a
 import { BusinessCorporateReasonAlreadyExistsError } from "../errors/business-corporate-reason-already-exists-error";
 import { BusinessCnpjAlreadyExistsError } from "../errors/business-cnpj-already-exists-error";
 
-import { BranchNameAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-name-already-exists-error";
 import { BranchCnpjAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-cnpj-already-exists-error";
+import { businessUniqueViolation } from "../errors/business-unique-violation";
+import { branchUniqueViolation } from "@/modules/branch/usecases/errors/branch-unique-violation";
 
-import { BranchErpCodeAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-erp-code-already-exists-error";
-import { BranchEmailAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-email-already-exists-error";
+import database from "@/../infra/database";
 
 @injectable()
 class CreateBusinessUseCase {
@@ -44,6 +45,9 @@ class CreateBusinessUseCase {
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    // MASTER-only, like the route: see assertCallerRole.
+    assertCallerRole(findUser, ["MASTER"]);
 
     const findBusinessByCnpj = await this.business.findBusinessByCnpj(
       businessData.cnpj,
@@ -88,41 +92,34 @@ class CreateBusinessUseCase {
       throw new BranchCnpjAlreadyExistsError();
     }
 
-    const findBranchByCorporateReason =
-      await this.branch.findBranchByCorporateReason(
-        businessData.corporate_reason,
-      );
-
-    if (findBranchByCorporateReason) {
-      throw new BranchNameAlreadyExistsError();
-    }
-
-    if (businessData.erp_code) {
-      const findBranchByErpCode = await this.branch.findBranchByErpCode(
-        businessData.erp_code,
-      );
-
-      if (findBranchByErpCode) {
-        throw new BranchErpCodeAlreadyExistsError();
-      }
-    }
-
-    const findBranchByEmail = await this.branch.findBranchByEmail(
-      businessData.email,
-    );
-
-    if (findBranchByEmail) {
-      throw new BranchEmailAlreadyExistsError();
-    }
+    // No branch name, e-mail or ERP-code check: those are unique per
+    // company (decision 8.1), and a company being created has no branches
+    // yet. Looked up globally, another carrier's branch blocked this
+    // onboarding and told the MASTER a stranger's data.
 
     try {
-      const businessCreated = await this.business.createBusiness(businessData);
-      const branchData = {
-        ...businessData,
-        businessId: businessCreated.id as string,
-      };
+      // The company and its head office are one fact: they commit together,
+      // or a failed head office leaves a company without one.
+      const businessCreated = await database.$transaction(async (tx) => {
+        const created = await this.business
+          .createBusiness(businessData, tx)
+          .catch((error: unknown) => {
+            // Another create took the value after the lookups above: a 409.
+            throw businessUniqueViolation(error) ?? error;
+          });
 
-      await this.branch.createBranch(branchData);
+        // The head office is a branch of the same data; the zone belongs to
+        // the company alone (the branch table has no such column).
+        const { timezone: _timezone, ...headOffice } = businessData;
+
+        await this.branch
+          .createBranch({ ...headOffice, businessId: created.id as string }, tx)
+          .catch((error: unknown) => {
+            throw branchUniqueViolation(error) ?? error;
+          });
+
+        return created;
+      });
 
       this.notificationService.createActivityIfEnabled({
         type: "Empresa",
@@ -136,6 +133,8 @@ class CreateBusinessUseCase {
 
       return businessCreated;
     } catch (error) {
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
         "Houve um erro ao tentar criar a empresa! Por favor, tente novamente.",
         500,

@@ -20,6 +20,12 @@ interface FineCreatedPayload {
   points: number | null;
   /** ISO string — Json columns don't round-trip Date objects. */
   violationDate: string;
+  /**
+   * The company's zone (Business.timezone), captured with the event so the
+   * render prints the infraction's day without a query. Optional: events
+   * published before it existed read in the default zone.
+   */
+  timeZone?: string;
   location: string | null;
   observation: string | null;
   vehiclePlate: string;
@@ -65,6 +71,28 @@ interface AIVerificationIssuePayload {
   vehicleDescription: string | null;
   overallStatus: string;
   details: string | null;
+}
+
+/**
+ * A receipt the AI reading flagged (decision 6.9) — one that looks wrong, or
+ * a photo too poor to read — for the driver who sent it. A suggestion: the
+ * office still decides.
+ */
+interface DeliveryProofAIFlaggedPayload {
+  businessId: string;
+  deliveryId: string;
+  driverUserId: string;
+  recipientName: string;
+
+  /**
+   * What is wrong, in pt-BR and lower case (driverFeedbackFor): one phrase
+   * per failed criterion, most damning first, or the one phrase for a photo
+   * too poor to read.
+   */
+  problems: string[];
+
+  /** The card's sentence (describeAssessment). */
+  summary: string;
 }
 
 interface ServiceOrderCreatedPayload {
@@ -118,6 +146,8 @@ interface KanbanCardCreatedPayload {
   description: string | null;
   priority: string;
   dueDate: string | null;
+  /** The company's zone the due day is printed in; absent on older events. */
+  timeZone?: string;
   isCompleted: boolean;
 
   /** Null = nobody assigned; the event only feeds the activity trail. */
@@ -134,6 +164,8 @@ interface KanbanCardUpdatedPayload {
   description: string | null;
   priority: string;
   dueDate: string | null;
+  /** The company's zone the due day is printed in; absent on older events. */
+  timeZone?: string;
   isCompleted: boolean;
 
   /**
@@ -243,6 +275,80 @@ interface DeliveryOccurrenceReportedPayload {
 }
 
 /**
+ * A driver's report waits for the tower (decision 6.3): the operators must
+ * read it and decide while the driver waits at the address. The answers go
+ * already labelled and formatted, so the notice reads the form as it was.
+ */
+interface DeliveryOccurrenceAuthorizationRequestedPayload {
+  occurrenceId: string;
+  deliveryId: string;
+  businessId: string;
+  recipientName: string;
+  occurrenceTypeName: string;
+  blocksDelivery: boolean;
+  description: string | null;
+  reporterName: string;
+  /**
+   * A driver waiting at the address (true), or a request filed from the
+   * panel by a profile that cannot decide it (false). Absent on rows written
+   * before the field existed, which were all drivers'.
+   */
+  fromDriver?: boolean;
+  photosCount: number;
+  /** The form's answers, in the form's order: "Rótulo: valor". */
+  answers: Array<{ label: string; value: string }>;
+  /** ISO — when the tower was asked. */
+  requestedAt: string;
+  /**
+   * Decision 14.3: DELIVERED asks to PROVE the delivery ("Entrega aguardando
+   * autorização"). Absent on rows queued before it existed: NOT_DELIVERED.
+   */
+  category?: "DELIVERED" | "NOT_DELIVERED";
+}
+
+/** Nobody decided within the window: the company's administrators hear it. */
+interface DeliveryOccurrenceAuthorizationEscalatedPayload
+  extends DeliveryOccurrenceAuthorizationRequestedPayload {
+  /** Whole minutes the request had waited when it was escalated. */
+  waitingMinutes: number;
+}
+
+/** The tower's answer, for the driver who asked (push, mandatory). */
+interface DeliveryOccurrenceAuthorizationDecidedPayload {
+  occurrenceId: string;
+  deliveryId: string;
+  businessId: string;
+
+  /** The reporter's user — the driver waiting for the answer. */
+  driverUserId: string | null;
+
+  recipientName: string;
+  occurrenceTypeName: string;
+  decision: "APPROVED" | "DENIED";
+
+  /** Why (required on a denial). */
+  note: string | null;
+
+  deciderName: string;
+
+  /** pt-BR label of the delivery's status after the decision. */
+  deliveryStatusAfter: string;
+
+  /**
+   * The same status as its code (FAILED, IN_TRANSIT...), for the app to tell
+   * an approval that ended the delivery from one that keeps it open. Absent
+   * on rows queued before it was published.
+   */
+  deliveryStatus?: string;
+
+  /** Decision 14.3: "Entrega autorizada" vs "Ocorrência autorizada". Absent: NOT_DELIVERED. */
+  category?: "DELIVERED" | "NOT_DELIVERED";
+
+  /** The occurrence's support ticket, closed by this decision (design §5.4). */
+  ticketId?: string | null;
+}
+
+/**
  * A SAC message headed for a driver whose app may be closed. Push-only on
  * purpose: a conversation is not a notice board — it must reach the phone's
  * tray, but a row per message in the notifications feed would bury the
@@ -263,6 +369,15 @@ interface ChatMessageSentPayload {
 
   /** First characters of the text (or caption), already trimmed. */
   bodyPreview: string | null;
+
+  /**
+   * The support ticket the message landed in (decision 14.5), so the tap
+   * opens the chat on that subject. Absent on a mass notice and on rows
+   * queued before tickets existed.
+   */
+  ticketId?: string;
+  ticketNumber?: number;
+  ticketSubject?: string;
 }
 
 /**
@@ -293,6 +408,21 @@ interface RouteReleasedPayload {
 
   /** The day the route is for, already formatted for the phone. */
   scheduledLabel: string;
+}
+
+/**
+ * The dispatcher changed the stops of a route already released to the driver
+ * (decision 14.7, design §7.2). One per plan version: the event key is
+ * route:{routeId}:plan:{planVersion}.
+ */
+interface RoutePlanChangedPayload {
+  routeId: string;
+  businessId: string;
+
+  /** Null means there is nobody to tell. */
+  driverUserId: string | null;
+  code: number;
+  planVersion: number;
 }
 
 interface RouteCancelledPayload {
@@ -377,6 +507,23 @@ interface DeliveryCustomerPayload {
   receivedBy: string | null;
 }
 
+/**
+ * Our breaker, a 410 or a destination refused for good switched a customer's
+ * webhook endpoint off. Its events are being held, not lost, and somebody at
+ * the company has to know — it used to happen in silence.
+ */
+interface WebhookEndpointDisabledPayload {
+  businessId: string;
+  endpointId: string;
+  endpointName: string;
+  url: string;
+
+  /** A full sentence, in pt-BR, as the monitor shows it. */
+  reason: string;
+
+  disabledAt: string;
+}
+
 interface TopicPayloadMap {
   "fine.created": FineCreatedPayload;
   "vehicle-checklist.created": VehicleChecklistCreatedPayload;
@@ -395,16 +542,28 @@ interface TopicPayloadMap {
   "master-user.account-updated": MasterUserAccountUpdatedPayload;
   "business-module.changed": BusinessModuleChangedPayload;
   "delivery-occurrence.reported": DeliveryOccurrenceReportedPayload;
+  // Decision 6.3: the tower's authorization of a driver's report.
+  "delivery-occurrence.authorization_requested": DeliveryOccurrenceAuthorizationRequestedPayload;
+  "delivery-occurrence.authorization_escalated": DeliveryOccurrenceAuthorizationEscalatedPayload;
+  "delivery-occurrence.authorization_decided": DeliveryOccurrenceAuthorizationDecidedPayload;
   "business-limit.changed": BusinessLimitChangedPayload;
   "chat-message.sent": ChatMessageSentPayload;
   "route.released": RouteReleasedPayload;
   "route.cancelled": RouteCancelledPayload;
+  "route.plan_changed": RoutePlanChangedPayload;
   "delivery.status_overridden": DeliveryStatusOverriddenPayload;
 
   // The three moments a carrier tells the person waiting for their delivery.
   "delivery.dispatched": DeliveryCustomerPayload;
+  // The driver is heading to this address now (decision 6.4).
+  "delivery.on_the_way": DeliveryCustomerPayload;
   "delivery.delivered": DeliveryCustomerPayload;
   "delivery.failed": DeliveryCustomerPayload;
+
+  "webhook-endpoint.disabled": WebhookEndpointDisabledPayload;
+
+  // The driver hears that the receipt they sent looks wrong (decision 6.9).
+  "delivery-proof.ai-flagged": DeliveryProofAIFlaggedPayload;
 }
 
 type NotificationTopic = keyof TopicPayloadMap;
@@ -499,6 +658,12 @@ interface PolicyDeps {
   externalRecipientRepository?: unknown;
   messageTemplateRepository?: unknown;
   businessRepository?: unknown;
+
+  /**
+   * The tower's requests (decision 6.3): whether one still waits, so a
+   * notice about a request already decided or superseded is not sent.
+   */
+  occurrenceAuthorizationRepository?: unknown;
 }
 
 /**
@@ -541,6 +706,19 @@ interface NotificationPolicyEntry<TPayload> {
     deps: PolicyDeps,
     channel: string,
   ): Promise<RenderedExternalMessage | null>;
+
+  /**
+   * Why this message is no longer worth sending, or null to send it. Asked
+   * on EVERY attempt, right before the send, of an outsider's message and of
+   * a user's e-mail, WhatsApp or push (never the in-app row, the inbox's
+   * record): the three customer messages are separate events retried on
+   * their own schedules, so a "saiu para entrega" in backoff could otherwise
+   * land after the "entregue" that followed it; a tower request decided
+   * while its rows waited must not ring an operator. A reason fails the row
+   * as non-retryable, with the reason as its lastError — the same way an
+   * opt-out does.
+   */
+  supersededReason?(payload: TPayload, deps: PolicyDeps): Promise<string | null>;
 
   /**
    * Which preference row governs this topic. The recipient's per-category
@@ -597,10 +775,12 @@ export type {
   RouteReleasedPayload,
   DeliveryStatusOverriddenPayload,
   RouteCancelledPayload,
+  RoutePlanChangedPayload,
   FineCreatedPayload,
   VehicleChecklistCreatedPayload,
   FuelCreatedPayload,
   AIVerificationIssuePayload,
+  DeliveryProofAIFlaggedPayload,
   ServiceOrderCreatedPayload,
   ServiceOrderUpdatedPayload,
   AccountPayableCreatedPayload,
@@ -616,6 +796,9 @@ export type {
   BusinessLimitChangedPayload,
   TopicPayloadMap,
   DeliveryOccurrenceReportedPayload,
+  DeliveryOccurrenceAuthorizationRequestedPayload,
+  DeliveryOccurrenceAuthorizationEscalatedPayload,
+  DeliveryOccurrenceAuthorizationDecidedPayload,
   ChatMessageSentPayload,
   NotificationTopic,
   RenderContext,
@@ -625,4 +808,5 @@ export type {
   RenderedPush,
   PolicyDeps,
   NotificationPolicyEntry,
+  WebhookEndpointDisabledPayload,
 };

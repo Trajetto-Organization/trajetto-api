@@ -1,4 +1,5 @@
 import { DELIVERY_STATUS_LABELS, type DeliveryStatus } from "./delivery-rules";
+import { resolveTimeZone } from "@/shared/time/business-day";
 
 import type { TrackingSource } from "@/modules/delivery/repositories/IExternal-recipient-repository";
 import type { PublicTrackingView } from "@/modules/delivery/dtos/external-recipient-dto";
@@ -76,6 +77,8 @@ function buildTrackingView(
     carrierName:
       delivery.business.fantasy_name?.trim() ||
       delivery.business.corporate_reason,
+
+    timeZone: resolveTimeZone(delivery.business.timezone),
 
     events,
 

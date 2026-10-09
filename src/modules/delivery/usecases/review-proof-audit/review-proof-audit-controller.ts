@@ -8,8 +8,6 @@ import {
   reviewProofAuditSchema,
 } from "@/schemas/proof-audit-schema";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-
 class ReviewProofAuditController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
@@ -24,28 +22,22 @@ class ReviewProofAuditController {
 
     const useCase = container.resolve(ReviewProofAuditUseCase);
 
-    try {
-      await useCase.execute({
-        userId: id,
-        businessId,
-        auditId,
-        status,
-        rejection_reason,
-      });
+    // Refusals are AppErrors with their code (a user row gone is 404
+    // USER_NOT_FOUND), answered by the global handler.
+    await useCase.execute({
+      userId: id,
+      businessId,
+      auditId,
+      status,
+      rejection_reason,
+    });
 
-      return reply.status(200).send({
-        message:
-          status === "APPROVED"
-            ? "Comprovante aprovado."
-            : "Comprovante rejeitado e ocorrência registrada.",
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(200).send({
+      message:
+        status === "APPROVED"
+          ? "Comprovante aprovado."
+          : "Comprovante rejeitado e ocorrência registrada.",
+    });
   }
 }
 

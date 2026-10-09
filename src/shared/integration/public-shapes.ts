@@ -58,6 +58,9 @@ interface PublicRoute {
   status: string;
 
   scheduled_date: string;
+  destination: string | null;
+  planned_departure_at: string | null;
+  planned_arrival_at: string | null;
   started_at: string | null;
   completed_at: string | null;
 
@@ -166,6 +169,9 @@ function toPublicRoute(route: {
   name: string | null;
   status: string;
   scheduled_date: Date | string;
+  destination?: string | null;
+  planned_departure_at?: Date | string | null;
+  planned_arrival_at?: Date | string | null;
   started_at: Date | string | null;
   completed_at: Date | string | null;
   created_at: Date | string;
@@ -185,6 +191,13 @@ function toPublicRoute(route: {
     status: route.status,
 
     scheduled_date: toIso(route.scheduled_date)!,
+
+    // Decision 6.5: where it goes and the planned window, so an ERP planning
+    // its dock does not have to ask a person.
+    destination: route.destination ?? null,
+    planned_departure_at: toIso(route.planned_departure_at ?? null),
+    planned_arrival_at: toIso(route.planned_arrival_at ?? null),
+
     started_at: toIso(route.started_at),
     completed_at: toIso(route.completed_at),
 

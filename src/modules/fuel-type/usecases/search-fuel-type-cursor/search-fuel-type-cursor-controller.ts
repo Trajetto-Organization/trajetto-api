@@ -4,8 +4,7 @@ import { container } from "tsyringe";
 import { SearchFuelTypeCursorUseCase } from "./search-fuel-type-cursor-usecase";
 import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+import { replyFuelTypeError } from "../errors/fuel-type-http-errors";
 
 import { sendAsNDJSON } from "@/config/stream-utils";
 
@@ -51,13 +50,7 @@ class SearchFuelTypeCursorController {
         })),
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      if (replyFuelTypeError(reply, error)) return;
 
       throw error;
     }

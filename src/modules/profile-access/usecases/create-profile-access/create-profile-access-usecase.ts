@@ -17,6 +17,10 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
+import database from "@/../infra/database";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { sendCatalogChangedEvent } from "@/websocket";
+
 @injectable()
 class CreateProfileAccessUseCase {
   constructor(
@@ -40,6 +44,10 @@ class CreateProfileAccessUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // Not only the request hook: a profile is what grants access in a
+    // company, so its tenant is checked where it is written.
+    assertTenantAccess(findUser, businessId);
+
     const findBusinessById = await this.business.findBusinessById(businessId);
 
     if (!findBusinessById) {
@@ -56,32 +64,42 @@ class CreateProfileAccessUseCase {
       throw new ProfileAccessAlreadyExistsError();
     }
 
+    let profileAccessCreated: ProfileAccess;
+
     try {
-      const profileAccessCreated = await this.profileAccess.createProfileAccess(
-        {
-          name,
-          businessId,
-        },
-      );
+      // The profile and its audit entry commit together (OUTBOX-10).
+      profileAccessCreated = await database.$transaction(async (tx) => {
+        const created = await this.profileAccess.createProfileAccess(
+          { name, businessId },
+          tx,
+        );
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Perfil de acesso",
-        action: "create",
-        entityId: profileAccessCreated.id,
-        description: `Perfil de acesso criado com sucesso: ${profileAccessCreated.name} | ID: ${profileAccessCreated.id}`,
-        status: "Completo",
-        performedBy: userId,
-        businessId: businessId,
+        await this.notificationService.createActivityIfEnabled(
+          {
+            type: "Perfil de acesso",
+            action: "create",
+            entityId: created.id,
+            description: `Perfil de acesso criado com sucesso: ${created.name} | ID: ${created.id}`,
+            status: "Completo",
+            performedBy: userId,
+            businessId: businessId,
+          },
+          tx,
+        );
+
+        return created;
       });
-
-      return profileAccessCreated;
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar criar o perfil de acesso! Por favor, tente novamente.",
         500,
       );
     }
+
+    // After the commit: pickers open in other tabs refetch (decision 2.3).
+    sendCatalogChangedEvent(businessId, "profile_access");
+
+    return profileAccessCreated;
   }
 }
 

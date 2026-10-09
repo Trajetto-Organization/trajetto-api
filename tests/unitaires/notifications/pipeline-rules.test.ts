@@ -5,13 +5,56 @@ import {
   assertDeliveryLeaseInvariant,
   channelsForRecipient,
   DELIVERY_CONCURRENCY,
+  DELIVERY_LANES,
   DELIVERY_LEASE_SECONDS,
+  DELIVERY_MAX_ATTEMPTS,
   DELIVERY_RETRY_DELAYS_MS,
+  honourRetryAfter,
+  laneOf,
   nextRetryDelayMs,
   PER_DELIVERY_TIMEOUT_MS,
   resolveRecipientChannelFlags,
   withRetryJitter,
 } from "@/shared/notifications/pipeline-rules";
+
+describe("a provider asking us to wait", () => {
+  it("is honoured when it asks for longer than our backoff", () => {
+    expect(honourRetryAfter(30_000, 600_000)).toBe(600_000);
+  });
+
+  it("never brings a retry sooner than our backoff", () => {
+    expect(honourRetryAfter(120_000, 5_000)).toBe(120_000);
+  });
+
+  it("is capped at an hour, whatever it asks", () => {
+    expect(honourRetryAfter(30_000, 24 * 60 * 60_000)).toBe(60 * 60_000);
+  });
+
+  it("is ignored when absent or nonsense", () => {
+    expect(honourRetryAfter(30_000, undefined)).toBe(30_000);
+    expect(honourRetryAfter(30_000, Number.NaN)).toBe(30_000);
+    expect(honourRetryAfter(30_000, -5)).toBe(30_000);
+  });
+});
+
+describe("delivery lanes", () => {
+  it("keeps the providers that can hang away from the bell and the phone", () => {
+    expect(laneOf(NotificationChannel.EMAIL)).toBe("external");
+    expect(laneOf(NotificationChannel.WHATSAPP)).toBe("external");
+
+    expect(laneOf(NotificationChannel.IN_APP)).toBe("internal");
+    expect(laneOf(NotificationChannel.PUSH)).toBe("internal");
+    expect(laneOf(NotificationChannel.ACTIVITY)).toBe("internal");
+  });
+
+  it("covers every channel exactly once", () => {
+    const covered = [...DELIVERY_LANES.internal, ...DELIVERY_LANES.external];
+
+    expect([...covered].sort()).toEqual(
+      Object.values(NotificationChannel).sort(),
+    );
+  });
+});
 
 const allEnabled = {
   activityNotificationsEnabled: true,
@@ -60,11 +103,30 @@ describe("push channel", () => {
 
 describe("retry backoff", () => {
   it("waits longer after each failed attempt", () => {
-    const delays = [1, 2, 3, 4].map((attempt) =>
-      nextRetryDelayMs(attempt, DELIVERY_RETRY_DELAYS_MS),
+    const delays = DELIVERY_RETRY_DELAYS_MS.map((_, index) =>
+      nextRetryDelayMs(index + 1, DELIVERY_RETRY_DELAYS_MS),
     );
 
     expect(delays).toEqual(DELIVERY_RETRY_DELAYS_MS);
+
+    for (let index = 1; index < delays.length; index += 1) {
+      expect(delays[index]!).toBeGreaterThan(delays[index - 1]!);
+    }
+  });
+
+  /**
+   * An hour-long provider outage used to outlast the whole schedule (~42
+   * minutes), turning every message of its first twenty minutes into a
+   * permanent failure.
+   */
+  it("outlasts a provider outage of a few hours", () => {
+    const total = DELIVERY_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
+
+    expect(total).toBeGreaterThan(4 * 60 * 60_000);
+  });
+
+  it("caps attempts, and reclaims, one past the schedule", () => {
+    expect(DELIVERY_MAX_ATTEMPTS).toBe(DELIVERY_RETRY_DELAYS_MS.length + 1);
   });
 
   /**

@@ -3,17 +3,29 @@ import { inject, injectable } from "tsyringe";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IImportRepository } from "../../repositories/IImport-repository";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { AppError } from "@/shared/errors/AppError";
-import type { ListImportsResult } from "../../dtos/import-dto";
+import type { SortOrder } from "@/shared/pagination/list-query";
+
+import type {
+  ImportSource,
+  ImportStatus,
+  ListImportsResult,
+} from "../../dtos/import-dto";
+import { summarizeImportList, type ImportSortKey } from "./import-list";
 
 interface ListImportsRequest {
   userId: string;
   businessId?: string;
   page: number;
   pageSize: number;
+  includeReport?: boolean;
+  sort?: ImportSortKey;
+  order?: SortOrder;
+  statuses?: ImportStatus[];
+  sources?: ImportSource[];
 }
 
 /**
@@ -37,10 +49,15 @@ class ListImportsUseCase {
     businessId,
     page,
     pageSize,
+    includeReport,
+    sort,
+    order,
+    statuses,
+    sources,
   }: ListImportsRequest): Promise<ListImportsResult> {
     const findUser = await this.user.findUserById(userId);
 
-    if (!findUser) throw new ResourceNotFoundError();
+    if (!findUser) throw callerNotFound();
 
     const resolvedBusinessId = businessId ?? findUser.businessId;
 
@@ -54,11 +71,24 @@ class ListImportsUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
-    return this.importRepository.listImports({
+    const { data, groups } = await this.importRepository.listImports({
       businessId: resolvedBusinessId,
       page,
       pageSize,
+      includeReport,
+      sort,
+      order,
+      statuses,
+      sources,
     });
+
+    // The filter counts over the whole company (decision 8.8).
+    const { total, searchMeta } = summarizeImportList(groups, {
+      statuses,
+      sources,
+    });
+
+    return { data, total, meta: searchMeta };
   }
 }
 

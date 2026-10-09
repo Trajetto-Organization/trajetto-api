@@ -23,8 +23,11 @@ type TimelineKind =
   | "PROOF"
   | "STATUS_CHANGE"
   | "NOTE"
+  | "ON_THE_WAY"
   | "OCCURRENCE"
-  | "MESSAGE";
+  | "MESSAGE"
+  | "ROUTE_ADDED"
+  | "ROUTE_REMOVED";
 
 interface TimelineAuthor {
   /** Who produced it. MESSAGE and OCCURRENCE are always people today. */
@@ -65,6 +68,9 @@ interface EventSource {
   type: DeliveryEventType;
   created_at: Date | string;
 
+  /** When it happened, for an action the app sent later. Wins over created_at. */
+  occurred_at?: Date | string | null;
+
   actor?: DeliveryEventActor | null;
   device?: string | null;
 
@@ -81,11 +87,15 @@ interface EventSource {
 
   reason?: { name: string } | null;
   reportedBy?: { name: string } | null;
+
+  /** OCCURRENCE (TWR-6): the occurrence row this event records. */
+  occurrenceId?: string | null;
 }
 
 interface OccurrenceSource {
   id: string;
   created_at: Date | string;
+  occurred_at?: Date | string | null;
   description?: string | null;
 
   latitude?: number | null;
@@ -152,6 +162,22 @@ function titleForEvent(event: EventSource): string {
     case "NOTE":
       return "Apontamento";
 
+    // The two event types the final phase added (6.4 and TWR-6): named, so
+    // the trail never shows a bare "Evento" for them.
+    case "ON_THE_WAY":
+      return "Motorista a caminho do endereço";
+
+    case "OCCURRENCE":
+      return "Ocorrência registrada";
+
+    // Decision 14.7: the route plan changed. The note names the route and
+    // stays as the detail.
+    case "ROUTE_ADDED":
+      return "Adicionada à rota";
+
+    case "ROUTE_REMOVED":
+      return "Retirada da rota";
+
     default:
       return "Evento";
   }
@@ -165,7 +191,9 @@ function fromEvent(event: EventSource): TimelineEntry {
   return {
     id: event.id,
     kind: event.type as TimelineKind,
-    at: toDate(event.created_at),
+    // A proof signed at 10:05 and uploaded at 13:40 belongs at 10:05 in the
+    // trail — before the call the office logged at noon (MOB-08).
+    at: toDate(event.occurred_at ?? event.created_at),
 
     title: titleForEvent(event),
     detail: event.note ?? null,
@@ -192,7 +220,7 @@ function fromOccurrence(occurrence: OccurrenceSource): TimelineEntry {
   return {
     id: occurrence.id,
     kind: "OCCURRENCE",
-    at: toDate(occurrence.created_at),
+    at: toDate(occurrence.occurred_at ?? occurrence.created_at),
 
     title: occurrence.occurrenceType?.name ?? "Ocorrência",
     detail: occurrence.description ?? null,
@@ -250,9 +278,34 @@ function fromMessage(message: MessageSource): TimelineEntry {
  * trusts.
  */
 function buildDeliveryTimeline(sources: TimelineSources): TimelineEntry[] {
+  // Every report now also writes an OCCURRENCE event (TWR-6, for the tower's
+  // feed). Here the occurrence's own row already tells it, richer — type,
+  // description, photos — so its event would print the same fact twice.
+  const occurrenceIds = new Set((sources.occurrences ?? []).map(({ id }) => id));
+
+  const events = (sources.events ?? []).filter(
+    (event) =>
+      !(
+        event.type === "OCCURRENCE" &&
+        event.occurrenceId &&
+        occurrenceIds.has(event.occurrenceId)
+      ),
+  );
+
+  // Decision 14.3: a proven delivery is a DELIVERED occurrence whose PROOF
+  // event names it. The PROOF entry tells that fact (receipt, signature, who
+  // received); the occurrence row would print it a second time.
+  const proven = new Set(
+    events
+      .filter((event) => event.type === "PROOF" && event.occurrenceId)
+      .map((event) => event.occurrenceId),
+  );
+
   const entries: TimelineEntry[] = [
-    ...(sources.events ?? []).map(fromEvent),
-    ...(sources.occurrences ?? []).map(fromOccurrence),
+    ...events.map(fromEvent),
+    ...(sources.occurrences ?? [])
+      .filter((occurrence) => !proven.has(occurrence.id))
+      .map(fromOccurrence),
     ...(sources.messages ?? []).map(fromMessage),
   ];
 

@@ -1,15 +1,19 @@
 import { inject, injectable } from "tsyringe";
 
-import database from "@/../infra/database";
-
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverPositionRepository } from "../../repositories/IDriver-position-repository";
+import type { IOperationDayRepository } from "../../repositories/IOperation-day-repository";
+import type { IRouteRepository } from "../../repositories/IRoute-repository";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import {
+  TOWER_DRIVER_REFUSAL,
+  resolveOperationsBusiness,
+} from "../control-tower/operations-viewer";
 
 import { AppError } from "@/shared/errors/AppError";
+import { RouteNotFoundError } from "../errors/route-errors";
 import { downsample } from "@/shared/route/driver-position-rules";
+import { operationDay } from "@/shared/route/operation-day-rules";
 
 interface DriverTrailRequest {
   userId: string;
@@ -17,8 +21,17 @@ interface DriverTrailRequest {
 
   businessId?: string;
 
-  /** ISO day. Defaults to today. */
+  /** "YYYY-MM-DD" in the company's zone. Defaults to the company's today. */
   day?: string;
+
+  /**
+   * Only the points recorded during this route, from its departure to its
+   * end (decision 14.7: the route page draws THIS route, not the day).
+   */
+  routeId?: string;
+
+  /** The clock. Only tests pass it. */
+  now?: Date;
 }
 
 interface TrailPoint {
@@ -50,53 +63,18 @@ interface DriverTrail {
 const TRAIL_POINT_LIMIT = 400;
 
 /**
- * `YYYY-MM-DD` read as a LOCAL calendar day.
- *
- * `new Date("2026-09-16")` is midnight UTC, which in São Paulo is nine in the
- * evening on the 15th — the exact off-by-one this function exists to avoid.
- * Returns an invalid Date for anything that is not a date, so the caller's
- * `Number.isNaN` check still does its job.
- */
-function startOfLocalDay(day: string): Date {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.trim());
-
-  if (!match) return new Date(NaN);
-
-  const [, year, month, date] = match;
-
-  return new Date(Number(year), Number(month) - 1, Number(date));
-}
-
-/**
- * The same calendar day back out, in local wall time.
- *
- * `at.toISOString().slice(0, 10)` would agree with this everywhere WEST of
- * Greenwich and be off by a day east of it, because a local midnight at UTC+9
- * is three in the afternoon of the previous day in UTC. It is written the
- * long way for that reason alone.
- *
- * Not covered by a test, and the reason is worth stating rather than hiding:
- * proving it needs the process to run in a timezone ahead of UTC, and Node on
- * this Windows machine ignores `TZ` — both in the runner and from the shell.
- * A test that set it would report success while measuring the local timezone,
- * which is worse than none. The E2E covers the window, which is where the
- * damage was.
- */
-function localDayString(at: Date): string {
-  const year = at.getFullYear();
-  const month = String(at.getMonth() + 1).padStart(2, "0");
-  const date = String(at.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${date}`;
-}
-
-/**
  * Where one driver went on one day.
  *
  * Asked for only when somebody opens a driver, never as part of the tower's
  * refresh: the tower draws where trucks ARE, and a screen that fetched every
  * driver's whole day every few seconds would be the heaviest query in the
  * product serving decoration.
+ *
+ * The day is the COMPANY's, in its own zone (decision 1.1). It used to be the
+ * process's local day, which in a UTC container is the UTC day: opened after
+ * 21:00 in São Paulo, the trail started at 21:00 and the working morning — the
+ * evidence in a dispute about where a truck was at two in the afternoon — was
+ * simply not there.
  */
 @injectable()
 class DriverTrailUseCase {
@@ -105,6 +83,10 @@ class DriverTrailUseCase {
     private user: IUserRepository,
     @inject("DriverPositionRepository")
     private positions: IDriverPositionRepository,
+    @inject("OperationDayRepository")
+    private operation: IOperationDayRepository,
+    @inject("RouteRepository")
+    private routes: IRouteRepository,
   ) {}
 
   async execute({
@@ -112,89 +94,89 @@ class DriverTrailUseCase {
     driverId,
     businessId,
     day,
+    routeId,
+    now = new Date(),
   }: DriverTrailRequest): Promise<DriverTrail> {
-    const findUser = await this.user.findUserById(userId);
-
-    if (!findUser) {
-      throw new ResourceNotFoundError();
-    }
-
-    if (findUser.driverId) {
-      throw new AppError(
-        "A torre de controle é superfície do gestor.",
-        403,
-        "DRIVER_CANNOT_VIEW_PANELS",
-      );
-    }
-
-    const resolvedBusinessId = businessId ?? findUser.businessId;
-
-    if (!resolvedBusinessId) {
-      throw new AppError(
-        "Empresa não identificada. Selecione uma empresa para continuar.",
-        400,
-        "BUSINESS_NOT_IDENTIFIED",
-      );
-    }
-
-    assertTenantAccess(findUser, resolvedBusinessId);
-
-    // The driver has to be theirs. Without this the trail of anybody's driver
-    // is one id away — and a trail is where a person was, all day.
-    const driver = await database.driver.findFirst({
-      where: { id: driverId, businessId: resolvedBusinessId },
-      select: { id: true },
+    const resolvedBusinessId = await resolveOperationsBusiness(this.user, {
+      userId,
+      businessId,
+      driverRefusal: TOWER_DRIVER_REFUSAL,
     });
 
-    // The same 404 for "does not exist" and "is not yours".
-    if (!driver) {
-      throw new AppError(
-        "Motorista não encontrado.",
-        404,
-        "DRIVER_NOT_FOUND",
-      );
+    // The driver has to be theirs. Without this the trail of anybody's driver
+    // is one id away — and a trail is where a person was, all day. The same
+    // 404 for "does not exist" and "is not yours".
+    if (!(await this.positions.hasDriver(resolvedBusinessId, driverId))) {
+      throw new AppError("Motorista não encontrado.", 404, "DRIVER_NOT_FOUND");
     }
 
-    /**
-     * The day is the OPERATION's day, not the UTC one.
-     *
-     * This used to read `setUTCHours(0, 0, 0, 0)`, and in São Paulo the UTC
-     * day begins at nine the previous evening. So a dispatcher who opened a
-     * driver's trail after 21:00 — which is exactly when the late routes are
-     * the ones being asked about — got a window that started an hour ago and
-     * a `recorded` count far below what the phone had actually sent. The
-     * morning was simply not there.
-     *
-     * A trail is the evidence in a dispute about where a truck was at two in
-     * the afternoon. Answering "no data" because the server's clock had
-     * already rolled over in another timezone is the worst possible way to
-     * lose that argument.
-     *
-     * `day` is therefore an ISO date in local wall time. Parsed by parts
-     * rather than by `new Date(string)`, which reads `YYYY-MM-DD` as UTC and
-     * would put the boundary back where it was.
-     */
-    const from = day ? startOfLocalDay(day) : new Date();
+    const timeZone = await this.operation.timeZoneOf(resolvedBusinessId);
 
-    if (Number.isNaN(from.getTime())) {
+    if (routeId) {
+      return this.routeTrail(resolvedBusinessId, driverId, routeId, timeZone, now);
+    }
+
+    let window;
+
+    try {
+      window = operationDay(timeZone, now, day);
+    } catch {
+      // 2026-02-30 passes the schema's pattern and is still not a day.
       throw new AppError("Data inválida.", 400, "INVALID_DAY");
     }
-
-    from.setHours(0, 0, 0, 0);
-
-    const to = new Date(from);
-    to.setDate(to.getDate() + 1);
 
     const recorded = await this.positions.listTrail({
       businessId: resolvedBusinessId,
       driverId,
-      from,
-      to,
+      from: window.start,
+      to: window.end,
     });
 
+    return this.shape(driverId, window.date, recorded);
+  }
+
+  /**
+   * The route's own window, departure to end: a route can cross midnight and
+   * the day's window would cut it. A route not yet departed has no trail.
+   * Another company's route, or another driver's, is the same 404.
+   */
+  private async routeTrail(
+    businessId: string,
+    driverId: string,
+    routeId: string,
+    timeZone: Parameters<typeof operationDay>[0],
+    now: Date,
+  ): Promise<DriverTrail> {
+    const route = await this.routes.findRouteById(routeId, businessId);
+
+    if (!route || route.driverId !== driverId) {
+      throw new RouteNotFoundError();
+    }
+
+    const date = operationDay(timeZone, route.started_at ?? now).date;
+
+    if (!route.started_at) return this.shape(driverId, date, []);
+
+    const recorded = await this.positions.listTrail({
+      businessId,
+      driverId,
+      routeId,
+      from: route.started_at,
+      // Half-open: one millisecond past the end keeps the last point.
+      to: new Date((route.completed_at ?? now).getTime() + 1),
+    });
+
+    return this.shape(driverId, date, recorded);
+  }
+
+  private shape(
+    driverId: string,
+    day: string,
+    recorded: Awaited<ReturnType<IDriverPositionRepository["listTrail"]>>,
+  ): DriverTrail {
     return {
       driverId,
-      day: localDayString(from),
+      day,
 
       // The real count, alongside the thinned points. A screen that showed
       // only what it drew would have somebody conclude the phone stopped

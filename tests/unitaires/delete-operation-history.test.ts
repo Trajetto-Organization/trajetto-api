@@ -19,6 +19,7 @@ import type { Driver } from "@/modules/driver/dtos/driver-dto";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { Business } from "@/modules/business/dtos/business-dto";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
+import { BUSINESS_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
 
 /**
  * What a hard delete would take with it, refused before it takes it.
@@ -58,6 +59,7 @@ function makeContext() {
   } as User);
 
   businessRepository.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
     id: BUSINESS,
     corporate_reason: "Transportadora",
   } as Business);

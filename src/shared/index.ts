@@ -1,4 +1,8 @@
 import { container } from "tsyringe";
+import {
+  socketTicketStore,
+  type ISocketTicketStore,
+} from "@/shared/socket/socket-ticket";
 
 import { env } from "@/env";
 
@@ -51,6 +55,9 @@ import type { IIntegrationRepository } from "@/modules/integration/repositories/
 import { ProofAuditRepository } from "@/modules/delivery/repositories/proof-audit-repository";
 import type { IProofAuditRepository } from "@/modules/delivery/repositories/IProof-audit-repository";
 
+import { OccurrenceAuthorizationRepository } from "@/modules/delivery/repositories/occurrence-authorization-repository";
+import type { IOccurrenceAuthorizationRepository } from "@/modules/delivery/repositories/IOccurrence-authorization-repository";
+
 import { DeliveryMessageTemplateRepository } from "@/modules/delivery/repositories/delivery-message-template-repository";
 import type { IDeliveryMessageTemplateRepository } from "@/modules/delivery/repositories/IDelivery-message-template-repository";
 
@@ -62,10 +69,17 @@ import type { IProofDocumentRepository } from "@/modules/delivery/repositories/I
 
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import { DriverPositionRepository } from "@/modules/route/repositories/driver-position-repository";
+import { OperationDayRepository } from "@/modules/route/repositories/operation-day-repository";
+import type { IOperationDayRepository } from "@/modules/route/repositories/IOperation-day-repository";
 import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
 
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
 import { IChatRepository } from "@/modules/chat/repositories/IChat-repository";
+import { SupportTicketRepository } from "@/modules/chat/repositories/support-ticket-repository";
+import type { ISupportTicketRepository } from "@/modules/chat/repositories/ISupport-ticket-repository";
+import { OccurrenceTicketService } from "@/modules/chat/usecases/shared/ticket-operations";
+import { OpsAlertPreferenceRepository } from "@/modules/chat/repositories/ops-alert-preference-repository";
+import type { IOpsAlertPreferenceRepository } from "@/modules/chat/repositories/IOps-alert-preference-repository";
 
 import { FuelRepository } from "@/modules/fuel/repositories/fuel-repository";
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
@@ -290,6 +304,13 @@ container.registerSingleton<IDriverPositionRepository>(
   DriverPositionRepository,
 );
 
+// The operation of one company's day: the one definition of "hoje" the
+// tower, the monitoring board and the dashboard share (decision 7.1).
+container.registerSingleton<IOperationDayRepository>(
+  "OperationDayRepository",
+  OperationDayRepository,
+);
+
 container.registerSingleton<IProofDocumentRepository>(
   "ProofDocumentRepository",
   ProofDocumentRepository,
@@ -310,9 +331,33 @@ container.registerSingleton<IProofAuditRepository>(
   ProofAuditRepository,
 );
 
+// The tower's authorization of a driver's occurrence (decision 6.3).
+container.registerSingleton<IOccurrenceAuthorizationRepository>(
+  "OccurrenceAuthorizationRepository",
+  OccurrenceAuthorizationRepository,
+);
+
 container.registerSingleton<IIntegrationRepository>(
   "IntegrationRepository",
   IntegrationRepository,
 );
 
 container.registerSingleton<IChatRepository>("ChatRepository", ChatRepository);
+
+// Decision 14.5: support tickets, and the one service the delivery flows use
+// to open and close them inside their own transactions.
+container.registerSingleton<ISupportTicketRepository>(
+  "SupportTicketRepository",
+  SupportTicketRepository,
+);
+container.registerSingleton("OccurrenceTicketService", OccurrenceTicketService);
+container.registerSingleton<IOpsAlertPreferenceRepository>(
+  "OpsAlertPreferenceRepository",
+  OpsAlertPreferenceRepository,
+);
+
+// A factory, not a class: the store's Redis connection is the process-wide
+// one the socket handshake redeems from (shared/socket/socket-ticket.ts).
+container.register<ISocketTicketStore>("SocketTicketStore", {
+  useFactory: () => socketTicketStore(),
+});

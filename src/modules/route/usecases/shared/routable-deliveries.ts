@@ -14,30 +14,24 @@ import type { Delivery } from "@/modules/delivery/dtos/delivery-dto";
  * deliveries and got "uma delas não pode" would have to find which one by
  * bisecting the selection; what they need is the list.
  *
- * Existence, ownership and status are three different refusals on purpose:
- * 404 for an id that is not a delivery, 403 for one that belongs to somebody
- * else, 400 for one that is real and yours and simply not available. Only the
- * last is something the dispatcher can act on, and it is the only one a
- * correct client can ever produce.
+ * Two refusals: 404 for an id that is not a delivery OF THIS COMPANY — missing
+ * and another company's answer the same, so nobody can probe which ids exist
+ * (decision 11.3) — and 400 for one that is real and yours and simply not
+ * available. Only the second is something the dispatcher can act on.
  */
 function assertDeliveriesRoutable(
   deliveries: Delivery[],
   requestedIds: string[],
   businessId: string,
 ): void {
-  if (deliveries.length !== requestedIds.length) {
+  if (
+    deliveries.length !== requestedIds.length ||
+    deliveries.some((entry) => entry.businessId !== businessId)
+  ) {
     throw new AppError(
       "Uma das entregas não foi encontrada.",
       404,
       "DELIVERY_NOT_FOUND",
-    );
-  }
-
-  if (deliveries.some((entry) => entry.businessId !== businessId)) {
-    throw new AppError(
-      "Uma das entregas não pertence à empresa informada.",
-      403,
-      "DELIVERY_NOT_BELONG_BUSINESS",
     );
   }
 

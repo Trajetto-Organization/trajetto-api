@@ -5,10 +5,11 @@ import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+
+import { socketClientEntry } from "./support/socket-client";
 
 /**
  * An event crossing from one replica to another, and to a third.
@@ -56,14 +57,18 @@ let dispatcherProfile = "";
 let strangerProfile = "";
 
 /**
- * A Redis database of its own for the adapter's channels.
+ * A channel prefix of its own for the adapter.
  *
  * Those channels are global to the Redis instance, and this machine also runs
  * the dev API and other suites against the same one. Without the separation a
  * passing run could be a message that arrived from something else entirely,
  * which would make the test say yes for a reason that is not the reason.
+ *
+ * A database number (`/7`) does NOT separate them: Pub/Sub ignores it, and a
+ * publish on db 7 reaches subscribers on db 0. The prefix is what does.
  */
-const REPLICA_REDIS = `${process.env.REDIS_URL ?? "redis://localhost:6379"}/7`;
+const REPLICA_REDIS = process.env.REDIS_URL ?? "redis://localhost:6379";
+const REPLICA_ADAPTER_KEY = `socket.io-e2e-${randomUUID()}`;
 
 interface Replica {
   process: ChildProcessWithoutNullStreams;
@@ -120,6 +125,7 @@ async function startReplica(businessId: string): Promise<Replica> {
         */
         DATABASE_URL: process.env.DATABASE_URL,
         REDIS_URL: REPLICA_REDIS,
+        SOCKET_ADAPTER_KEY: REPLICA_ADAPTER_KEY,
         PORT: String(port),
       },
       stdio: ["pipe", "pipe", "pipe"],
@@ -189,18 +195,7 @@ interface TestSocket {
 let connect: (url: string, options: unknown) => TestSocket;
 
 async function loadClient(): Promise<void> {
-  const entry = pathToFileURL(
-    resolve(
-      process.cwd(),
-      "..",
-      "trajetto-fleet-manager-ui",
-      "node_modules",
-      "socket.io-client",
-      "build",
-      "esm",
-      "index.js",
-    ),
-  ).href;
+  const entry = socketClientEntry();
 
   ({ io: connect } = await import(/* @vite-ignore */ entry));
 }
@@ -428,7 +423,7 @@ afterAll(async () => {
 });
 
 describe("node 1 -> event -> node 2", () => {
-  it("a rota liberada na réplica 1 chega a quem está na réplica 2", async () => {
+  it("a route released on replica 1 reaches whoever is on replica 2", async () => {
     const heard = waitFor(onTwo, "routeEvent");
 
     await replicas[0].emit("routeEvent", {
@@ -448,7 +443,7 @@ describe("node 1 -> event -> node 2", () => {
     expect(event!.routeCode).toBe(41);
   });
 
-  it("e chega igualmente a quem está na réplica 3", async () => {
+  it("and reaches whoever is on replica 3 just the same", async () => {
     // The same emit, a different node: the adapter reaches every peer, not
     // just the next one.
     const heard = waitFor(onThree, "routeEvent");
@@ -471,7 +466,7 @@ describe("node 1 -> event -> node 2", () => {
 });
 
 describe("node 2 -> event -> node 3", () => {
-  it("a posição emitida na réplica 2 chega a quem está na réplica 3", async () => {
+  it("a position emitted on replica 2 reaches whoever is on replica 3", async () => {
     /**
      * The direction that matters most in practice, and the one that fails
      * silently: the driver's app posts to whichever replica answered, the
@@ -500,7 +495,7 @@ describe("node 2 -> event -> node 3", () => {
     expect(event!.latitude).toBe(-23.55);
   });
 
-  it("e quem está na réplica emissora ouve uma vez, não duas", async () => {
+  it("and whoever is on the emitting replica hears it once, not twice", async () => {
     /**
      * An emit reaches local sockets AND remote ones, by two different paths.
      * An adapter that also handed the publisher its own message back would
@@ -528,12 +523,12 @@ describe("node 2 -> event -> node 3", () => {
   });
 });
 
-describe("e o alcance continua sendo o da transportadora", () => {
-  it("nada atravessa para uma transportadora que não é a do evento", async () => {
+describe("and the reach is still the carrier's", () => {
+  it("nothing crosses to a carrier that is not the event's", async () => {
     /**
      * The adapter's whole job is to widen the reach of an emit, and widening
      * reach is exactly how a tenant boundary gets crossed by accident. The
-     * room is `business:${id}`, so the isolation has to survive the trip — and
+     * room is `operations:${id}`, so the isolation has to survive the trip — and
      * this is what says it did, rather than assuming it.
      */
     const heard = waitFor(stranger, "routeEvent");

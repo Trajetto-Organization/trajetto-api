@@ -19,6 +19,9 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { formatCurrency } from "@/shared/utils/format-values";
 
 import { AppError } from "@/shared/errors/AppError";
+import { isUniqueViolation } from "@/shared/http/idempotency-key";
+
+import { sendCatalogChangedEvent } from "@/websocket";
 
 @injectable()
 class CreatePartUseCase {
@@ -73,27 +76,36 @@ class CreatePartUseCase {
       throw new PartAlreadyExistsError();
     }
 
+    let partCreated: Part;
+
     try {
-      const partCreated = await this.part.createPart(partData);
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Peça",
-        action: "create",
-        entityId: partCreated.id,
-        description: `Peça criada com sucesso: ${partCreated.description} | Preço: ${formatCurrency(Number(partCreated.unit_price))} | ID: ${partCreated.id}`,
-        status: "Completo",
-        performedBy: userId,
-        businessId: partData.businessId,
-      });
-
-      return partCreated;
+      partCreated = await this.part.createPart(partData);
     } catch (error) {
+      // Two saves of the same description at once: the unique index planned
+      // in FLEET-DUP-1 answers the second, and it is the same conflict.
+      if (isUniqueViolation(error)) throw new PartAlreadyExistsError();
+
       throw new AppError(
         "Houve um erro ao tentar criar a peça! Por favor, tente novamente.",
         500,
       );
     }
+
+    // After the write: every open picker of the company refetches (2.3).
+    sendCatalogChangedEvent(partData.businessId, "part");
+
+    // Process activity asynchronously without blocking the main flow
+    this.notificationService.createActivityIfEnabled({
+      type: "Peça",
+      action: "create",
+      entityId: partCreated.id,
+      description: `Peça criada com sucesso: ${partCreated.description} | Preço: ${formatCurrency(Number(partCreated.unit_price))} | ID: ${partCreated.id}`,
+      status: "Completo",
+      performedBy: userId,
+      businessId: partData.businessId,
+    });
+
+    return partCreated;
   }
 }
 

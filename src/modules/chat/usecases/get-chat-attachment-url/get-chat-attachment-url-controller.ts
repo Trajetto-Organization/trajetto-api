@@ -4,12 +4,6 @@ import { z } from "zod";
 
 import { GetChatAttachmentUrlUseCase } from "./get-chat-attachment-url-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import {
-  ChatMessageNotFoundError,
-  ChatThreadNotFoundError,
-} from "../errors/chat-errors";
-
 import { getChatAttachmentUrlSchema } from "@/schemas/get-chat-attachment-url-schema";
 
 class GetChatAttachmentUrlController {
@@ -26,25 +20,15 @@ class GetChatAttachmentUrlController {
       GetChatAttachmentUrlUseCase,
     );
 
-    try {
-      const result = await getChatAttachmentUrlUseCase.execute({
-        userId: id,
-        messageId,
-        businessId,
-      });
+    // ChatMessageNotFoundError is an AppError: 404 CHAT_MESSAGE_NOT_FOUND,
+    // the same for a random id and for another company's message.
+    const result = await getChatAttachmentUrlUseCase.execute({
+      userId: id,
+      messageId,
+      businessId,
+    });
 
-      return reply.status(200).send(result);
-    } catch (error) {
-      if (
-        error instanceof ResourceNotFoundError ||
-        error instanceof ChatMessageNotFoundError ||
-        error instanceof ChatThreadNotFoundError
-      ) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(200).send(result);
   }
 }
 

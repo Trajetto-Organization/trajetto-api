@@ -10,48 +10,94 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IWhatsAppProvider } from "@/shared/providers/whatsapp-provider/IWhatsApp-provider";
 
 import { sendNotificationToUser } from "@/websocket";
+import { withoutRequestContext } from "@/shared/http/request-context";
+import { logger } from "@/shared/logging/logger";
+import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 
 import { IMailProvider } from "@/shared/providers/mail-provider/IMail-provider";
 import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-delivery-error";
+import { InvalidMessageTemplateError } from "@/shared/delivery/message-template";
 
 import { getNotificationPolicy } from "./notification-policy";
 import { sendExpoPushMessages } from "./push-provider";
+import { recordExpoTickets } from "./provider-receipts";
+import {
+  formatDeliveryError,
+  providerDetailOf,
+  suppressedChannels,
+  type ProviderErrorDetail,
+} from "./delivery-diagnostics";
 import {
   NotificationPolicyEntry,
   NotificationTopic,
   TopicPayloadMap,
+  type PolicyDeps,
 } from "./notification-types";
 
 import {
   DELIVERY_CONCURRENCY,
+  DELIVERY_LANES,
   DELIVERY_LEASE_SECONDS,
+  DELIVERY_MAX_ATTEMPTS,
   DELIVERY_RETRY_DELAYS_MS,
   OUTBOX_LEASE_SECONDS,
+  OUTBOX_MAX_ATTEMPTS,
   OUTBOX_RETRY_DELAYS_MS,
   PER_DELIVERY_TIMEOUT_MS,
+  UNKNOWN_TOPIC_PATIENCE_MS,
+  UNKNOWN_TOPIC_RECHECK_MS,
   assertDeliveryLeaseInvariant,
   channelsForRecipient,
+  honourRetryAfter,
   nextRetryDelayMs,
   resolveRecipientChannelFlags,
   withRetryJitter,
+  type DeliveryLane,
 } from "./pipeline-rules";
+import {
+  recordAcceptedOutcome,
+  recordDeadline,
+} from "@/shared/resilience/record-accepted-outcome";
 
 /**
  * The interval is a background sweep, not the primary trigger: publishing an
  * event calls `wake()` and gets processed within milliseconds. The sweep only
  * exists for what a wake can't cover — scheduled retries, leases orphaned by
  * a dead replica, and events published by another replica — so it can be
- * slow, keeping idle instances (and dev query logs) quiet.
+ * slow, keeping idle instances (and dev query logs) quiet. A dedicated worker
+ * replica (WORKERS_ENABLED) is woken by nobody and polls faster.
  */
-const SWEEP_INTERVAL_MS = 30_000;
+const SWEEP_INTERVAL_MS = env.PIPELINE_SWEEP_INTERVAL_MS;
 
 const OUTBOX_BATCH_SIZE = 10;
 const DELIVERY_BATCH_SIZE = 20;
+
+/** Entries of the "channels suppressed" debug line; the total is logged too. */
+const SUPPRESSED_LOG_LIMIT = 50;
+
+/**
+ * Structured lines, one per delivery outcome, each carrying the ids that
+ * find it: delivery, event, the request that caused it (`correlationId`),
+ * topic, tenant, channel, attempt (OBS-06).
+ */
+const log = logger.child({ component: "notification-pipeline" });
 
 // Fails at import time if batch/concurrency/timeout ever outgrow the lease.
 // Silently breaking this invariant means a second replica reclaiming rows
 // that are still being sent - a duplicate WhatsApp, not a slow one.
 assertDeliveryLeaseInvariant(DELIVERY_BATCH_SIZE);
+
+
+/**
+ * A user's channels that leave the product: the ones a policy's
+ * `supersededReason` stops once the fact went stale. The in-app row stays —
+ * the inbox is the record of what was asked, and it rings nobody's phone.
+ */
+const OUT_OF_PRODUCT_CHANNELS: ReadonlySet<NotificationChannel> = new Set([
+  NotificationChannel.EMAIL,
+  NotificationChannel.WHATSAPP,
+  NotificationChannel.PUSH,
+]);
 
 /** The e-mail body the pipeline renders for every channel EMAIL delivery. */
 const NOTIFICATION_TEMPLATE_MODULE = "notification";
@@ -67,7 +113,20 @@ interface ClaimedEvent {
   businessId: string | null;
   actorId: string | null;
   attempts: number;
+  created_at: Date;
+  correlationId: string | null;
 }
+
+/**
+ * The user lookups of the batch in flight, keyed by user id.
+ *
+ * One event fans out to the same person across in-app, e-mail, WhatsApp and
+ * push - four deliveries that used to cost four multi-join user queries.
+ * Promises are cached, not values, so concurrent workers share one in-flight
+ * lookup instead of racing three more. One map per batch, carried by the
+ * batch's rows: the two lanes run at the same time and must not share one.
+ */
+type RecipientCache = Map<string, Promise<RecipientUser>>;
 
 interface ClaimedDelivery {
   id: string;
@@ -78,7 +137,23 @@ interface ClaimedDelivery {
   externalRecipientId: string | null;
 
   channel: NotificationChannel;
+
+  /**
+   * The count AFTER this claim. It doubles as the fencing token: every write
+   * that settles the row requires it to still be the one this worker claimed.
+   */
   attempts: number;
+
+  recipientCache?: RecipientCache;
+
+  /** Its event, set with the batch: what its log lines are found by. */
+  event?: ClaimedEventRow;
+
+  /**
+   * Local clock taken BEFORE the claim statement: the lease the database
+   * granted ends no earlier than this plus DELIVERY_LEASE_SECONDS.
+   */
+  claimStartedAtMs?: number;
 }
 
 /** The slice of an outbox row a delivery needs to render itself. */
@@ -86,6 +161,8 @@ interface ClaimedEventRow {
   topic: string;
   payload: unknown;
   businessId: string | null;
+  created_at: Date;
+  correlationId?: string | null;
 }
 
 /**
@@ -97,38 +174,91 @@ type RecipientUser = NonNullable<
   Awaited<ReturnType<IUserRepository["findUserById"]>>
 >;
 
-/** A failure that retrying can never fix (recipient deleted, no policy). */
-class NonRetryableDeliveryError extends Error {}
+/**
+ * A failure that retrying can never fix (recipient deleted, no policy). A
+ * provider's refusal carries its codes in `detail`, which recordDeliveryFailure
+ * writes into lastError (OBS-08).
+ */
+class NonRetryableDeliveryError extends Error {
+  constructor(
+    message: string,
+    readonly detail?: ProviderErrorDetail,
+  ) {
+    super(message);
+  }
+}
+
+/** A failure worth another attempt, when the provider said how long to wait. */
+class RetryableDeliveryError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterMs?: number,
+    readonly detail?: ProviderErrorDetail,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Not this build's to handle: a topic or channel it does not know yet. The row
+ * goes back untouched — no attempt spent — for a newer replica to take.
+ */
+class DeferredDeliveryError extends Error {}
+
+/**
+ * The pipeline stopped WAITING on a send; the send itself is still in flight
+ * and may yet be accepted. Not an outcome of the delivery — see
+ * `runOneDelivery` for what happens instead of a retry.
+ */
+class DeliveryBackstopTimeoutError extends Error {}
 
 /**
  * Consumes the transactional outbox and executes notification deliveries.
  *
  * Runs inside every API replica. Coordination is entirely in Postgres: each
  * claim is an UPDATE over a `FOR UPDATE SKIP LOCKED` subselect that also
- * takes over rows whose lease expired — so N replicas never process the same
- * row twice, and a replica dying mid-batch only delays its rows by one lease.
- * Retries are persisted (`availableAt` + backoff), never held in memory.
+ * takes over rows whose lease expired — so a row is held by one replica while
+ * its lease lasts, and a replica dying mid-batch only delays its rows by one
+ * lease. A worker that outlives its lease can still be running when another
+ * replica reclaims the row: every settling write is fenced by the claim (see
+ * `fenced()`), so its late writes change nothing, but its SEND may already
+ * have happened. Retries are persisted (`availableAt` + backoff), never held
+ * in memory.
+ *
+ * What it does NOT guarantee, and cannot: a channel that talks to a provider
+ * is at-least-once. A replica that dies after the provider accepted a message
+ * and before DELIVERED was recorded leaves a row that another replica sends
+ * again once the lease expires. E-mail closes that gap at the provider (an
+ * idempotency key per delivery); WhatsApp and Expo have no such thing — there
+ * the receipts ledger (provider-receipts.ts) makes a second send visible
+ * after the fact, which is all that can be had. The Socket.IO emit of an
+ * in-app notification is at-most-once; the bell is the truth (ADR 0003).
  */
 class NotificationPipelineService {
   private static instance: NotificationPipelineService;
 
   private outboxTimer: NodeJS.Timeout | null = null;
-  private deliveryTimer: NodeJS.Timeout | null = null;
+  private deliveryTimers: NodeJS.Timeout[] = [];
 
   private outboxRunning = false;
-  private deliveryRunning = false;
+  private deliveryRunning: Record<DeliveryLane, boolean> = {
+    internal: false,
+    external: false,
+  };
 
   /**
-   * Recipients looked up during the batch in flight, keyed by user id.
-   *
-   * One event fans out to the same person across in-app, e-mail, WhatsApp
-   * and push - four deliveries that used to cost four multi-join user
-   * queries. The map is per batch (set on claim, cleared in `finally`) and
-   * safe because `deliveryRunning` already guarantees a single batch per
-   * replica at a time. Promises are cached, not values, so concurrent
-   * workers share one in-flight lookup instead of racing three more.
+   * Set when the replica starts going away. The drain loops check it between
+   * batches and `wake()` stops starting new ones: shutdown used to only clear
+   * the timers, while a draining loop kept claiming batch after batch until
+   * the process exited under it — with rows still in flight.
    */
-  private recipientCache: Map<string, Promise<RecipientUser>> | null = null;
+  private stopping = false;
+
+  /**
+   * Success records still retrying after the batch moved on (the database
+   * was away when the provider accepted). Shutdown waits for them.
+   */
+  private readonly pendingRecords = new Set<Promise<void>>();
 
   private constructor() {}
 
@@ -141,79 +271,137 @@ class NotificationPipelineService {
   }
 
   public async initialize(): Promise<void> {
+    this.stopping = false;
+
     this.outboxTimer = setInterval(() => {
       this.runOutboxCycle().catch((error) => {
-        console.error("[NotificationPipeline] Outbox cycle error:", error);
+        log.error({ err: error }, "outbox cycle failed");
       });
     }, SWEEP_INTERVAL_MS);
 
-    this.deliveryTimer = setInterval(() => {
-      this.runDeliveryCycle().catch((error) => {
-        console.error("[NotificationPipeline] Delivery cycle error:", error);
-      });
-    }, SWEEP_INTERVAL_MS);
+    for (const lane of Object.keys(DELIVERY_LANES) as DeliveryLane[]) {
+      this.deliveryTimers.push(
+        setInterval(() => {
+          this.runDeliveryCycle(lane).catch((error) => {
+            log.error({ err: error, lane }, "delivery cycle failed");
+          });
+        }, SWEEP_INTERVAL_MS),
+      );
+    }
 
-    // Drain whatever accumulated while the API was down (or is owed a retry)
-    // now, instead of making the first sweep wait a full interval.
-    this.wake();
+    // No drain here. What accumulated while the API was down is drained by
+    // the boot once Socket.IO is up (shared/lifecycle/startup.ts): drained
+    // now, every in-app row in the backlog reached the bell with no toast,
+    // because `io` did not exist yet (OUTBOX-19).
 
-    console.log("[NotificationPipeline] Pipeline de notificações iniciado");
+    log.info("notification pipeline started");
   }
 
   /**
    * Processes pending work now instead of waiting for the sweep. Called right
-   * after an outbox publish commits; expansion chains into a delivery cycle,
-   * so a freshly created fine notifies within milliseconds. Safe to call at
-   * any time — cycles are reentrancy-guarded and idempotent.
+   * after an outbox publish commits; expansion chains into both delivery
+   * lanes, so a freshly created fine notifies within milliseconds. Safe to
+   * call at any time — cycles are reentrancy-guarded and idempotent.
+   *
+   * Outside the request that published: `wake` is scheduled from inside a
+   * request, and the timer inherits its AsyncLocalStorage — the pipeline then
+   * read users through that request's memoised cache for as long as the
+   * drain lasted.
    */
   public wake(): void {
-    this.runOutboxCycle()
-      .then((expandedAny) => {
-        if (expandedAny) return this.runDeliveryCycle();
-      })
-      .catch((error) => {
-        console.error("[NotificationPipeline] Wake error:", error);
-      });
+    // On an HTTP-only replica (WORKERS_ENABLED=false) a publish drains
+    // nothing: the worker service's sweep picks the event up (GAP2-3).
+    if (this.stopping || !env.WORKERS_ENABLED) return;
+
+    withoutRequestContext(() => {
+      this.runOutboxCycle()
+        .then(() =>
+          Promise.all(
+            (Object.keys(DELIVERY_LANES) as DeliveryLane[]).map((lane) =>
+              this.runDeliveryCycle(lane),
+            ),
+          ),
+        )
+        .catch((error) => {
+          log.error({ err: error }, "pipeline wake failed");
+        });
+    });
   }
 
   public async shutdown(): Promise<void> {
+    this.stopping = true;
+
     if (this.outboxTimer) clearInterval(this.outboxTimer);
-    if (this.deliveryTimer) clearInterval(this.deliveryTimer);
+    for (const timer of this.deliveryTimers) clearInterval(timer);
 
     this.outboxTimer = null;
-    this.deliveryTimer = null;
+    this.deliveryTimers = [];
 
-    // Let an in-flight cycle finish; leases cover anything interrupted.
+    // Let the batch in flight finish; the loops take no new one. Leases cover
+    // anything cut off by the deadline.
     const deadline = Date.now() + 10_000;
 
     while (
-      (this.outboxRunning || this.deliveryRunning) &&
+      (this.isBusy() || this.pendingRecords.size > 0) &&
       Date.now() < deadline
     ) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
-    console.log("[NotificationPipeline] Pipeline de notificações encerrado");
+    log.info("notification pipeline stopped");
+  }
+
+  private isBusy(): boolean {
+    return (
+      this.outboxRunning ||
+      this.deliveryRunning.internal ||
+      this.deliveryRunning.external
+    );
   }
 
   // ==========================================================================
   // Outbox: event → deliveries
   // ==========================================================================
 
-  private async runOutboxCycle(): Promise<boolean> {
+  /** Public so a test can drive one cycle against a real database. */
+  public async runOutboxCycle(): Promise<boolean> {
     if (this.outboxRunning) return false;
     this.outboxRunning = true;
+
+    // A hung await here keeps the flag set forever; the beats make that
+    // visible on /health/metrics (OBS-10).
+    workerHeartbeat.beginCycle("notification-outbox");
 
     let processedAny = false;
 
     try {
       // Drain: a full batch means there is probably more behind it.
-      for (;;) {
+      while (!this.stopping) {
         const events = await this.claimEvents();
         processedAny = processedAny || events.length > 0;
 
+        workerHeartbeat.progress("notification-outbox");
+
         for (const event of events) {
           try {
+            // One lease covers the whole batch, and the batch is expanded
+            // event after event. Under a saturated pool the tail used to
+            // start after the lease ran out, when another replica had
+            // already reclaimed it — and both expanded it (OUTBOX-21).
+            if (!(await this.renewEventLease(event))) {
+              log.warn(
+                {
+                  outboxEventId: event.id,
+                  correlationId: event.correlationId ?? null,
+                  topic: event.topic,
+                  attempt: event.attempts,
+                },
+                "notification event reclaimed by another replica before its expansion; left to it",
+              );
+
+              continue;
+            }
+
             await this.expandEvent(event);
           } catch (error) {
             await this.recordEventFailure(event, error);
@@ -224,12 +412,44 @@ class NotificationPipelineService {
       }
     } finally {
       this.outboxRunning = false;
+      workerHeartbeat.endCycle("notification-outbox");
     }
 
     return processedAny;
   }
 
+  /**
+   * A fresh lease for one event, right before it is expanded, and proof that
+   * it is still this worker's. Fenced like every settling write: an event
+   * another replica reclaimed has moved `attempts` on, the update matches
+   * nothing, and this worker leaves it to its new owner instead of expanding
+   * it a second time. The database clock, like the claim.
+   */
+  private async renewEventLease(event: ClaimedEvent): Promise<boolean> {
+    const renewed = await database.$executeRaw`
+      UPDATE "domain_outbox_event" SET
+        "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS})
+      WHERE "id" = ${event.id}
+        AND "status" = 'PROCESSING'
+        AND "attempts" = ${event.attempts}
+    `;
+
+    return renewed === 1;
+  }
+
   private async claimEvents(): Promise<ClaimedEvent[]> {
+    // A row whose last allowed attempt died with the process is closed, with
+    // the reason, instead of being claimed again — see OUTBOX_MAX_ATTEMPTS.
+    await database.$executeRaw`
+      UPDATE "domain_outbox_event" SET
+        "status" = 'FAILED',
+        "leaseExpiresAt" = NULL,
+        "lastError" = 'O processo foi interrompido durante a última tentativa permitida.'
+      WHERE "status" = 'PROCESSING'
+        AND "leaseExpiresAt" < now()
+        AND "attempts" >= ${OUTBOX_MAX_ATTEMPTS}
+    `;
+
     return database.$queryRaw<ClaimedEvent[]>`
       UPDATE "domain_outbox_event" SET
         "status" = 'PROCESSING',
@@ -238,26 +458,49 @@ class NotificationPipelineService {
       WHERE "id" IN (
         SELECT "id" FROM "domain_outbox_event"
         WHERE ("status" = 'PENDING' AND "availableAt" <= now())
-           OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now())
+           OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
+               AND "attempts" < ${OUTBOX_MAX_ATTEMPTS})
         ORDER BY "created_at"
         LIMIT ${OUTBOX_BATCH_SIZE}
         FOR UPDATE SKIP LOCKED
       )
-      RETURNING "id", "topic", "payload", "businessId", "actorId", "attempts"
+      RETURNING "id", "topic", "payload", "businessId", "actorId", "attempts", "created_at", "correlationId"
     `;
+  }
+
+  /**
+   * The row as this worker claimed it. Every write that settles an event or a
+   * delivery is conditioned on this: if the lease ran out and another replica
+   * claimed the row, `attempts` moved on, the write matches nothing, and the
+   * late worker can no longer overwrite what the new owner decided — a
+   * DELIVERED turned back into PENDING was a third copy of the message.
+   */
+  private fenced(row: { id: string; attempts: number }) {
+    return { id: row.id, status: "PROCESSING" as const, attempts: row.attempts };
+  }
+
+  /**
+   * The one write that settles a delivery — success, retry, failure or
+   * deferral — always fenced to the claim this worker holds.
+   */
+  private settleDelivery(
+    delivery: ClaimedDelivery,
+    data: Prisma.NotificationDeliveryUpdateManyMutationInput,
+  ): Promise<Prisma.BatchPayload> {
+    return database.notificationDelivery.updateMany({
+      where: this.fenced(delivery),
+      data,
+    });
   }
 
   private async expandEvent(event: ClaimedEvent): Promise<void> {
     const policy = getNotificationPolicy(event.topic);
 
     if (!policy) {
-      await database.domainOutboxEvent.update({
-        where: { id: event.id },
-        data: {
-          status: "FAILED",
-          lastError: `No notification policy registered for topic "${event.topic}"`,
-        },
-      });
+      await this.deferOrFailEvent(
+        event,
+        `No notification policy registered for topic "${event.topic}"`,
+      );
 
       return;
     }
@@ -277,6 +520,9 @@ class NotificationPipelineService {
         "DeliveryMessageTemplateRepository",
       ),
       businessRepository: container.resolve("BusinessRepository"),
+      occurrenceAuthorizationRepository: container.resolve(
+        "OccurrenceAuthorizationRepository",
+      ),
     };
 
     const recipients = await policy.resolveRecipients(payload, policyDeps);
@@ -319,24 +565,38 @@ class NotificationPipelineService {
 
     const rows: Prisma.NotificationDeliveryCreateManyInput[] = [];
 
+    // What was left out and why (OBS-08): no row is created for a suppressed
+    // channel, so without this "she never gets WhatsApp" had nothing to show.
+    const suppressed: Array<{
+      userId?: string;
+      externalRecipientId?: string;
+      channel: NotificationChannel;
+      reason: string;
+    }> = [];
+
     for (const recipient of recipients) {
-      const channels = channelsForRecipient(
-        resolveRecipientChannelFlags(
-          recipient,
-          preferenceByUser.get(recipient.id),
-        ),
-        {
-          hasInAppContent: Boolean(policy.renderInApp),
-          hasEmailContent: Boolean(policy.renderInApp) && !policy.suppressEmail,
-          hasWhatsAppContent: Boolean(policy.renderWhatsApp),
-          isMandatory: Boolean(policy.mandatory),
-          hasPushDevice: pushOwners.has(recipient.id),
-          hasStandalonePushContent: Boolean(policy.renderPush),
-        },
+      const flags = resolveRecipientChannelFlags(
+        recipient,
+        preferenceByUser.get(recipient.id),
       );
+
+      const options = {
+        hasInAppContent: Boolean(policy.renderInApp),
+        hasEmailContent: Boolean(policy.renderInApp) && !policy.suppressEmail,
+        hasWhatsAppContent: Boolean(policy.renderWhatsApp),
+        isMandatory: Boolean(policy.mandatory),
+        hasPushDevice: pushOwners.has(recipient.id),
+        hasStandalonePushContent: Boolean(policy.renderPush),
+      };
+
+      const channels = channelsForRecipient(flags, options);
 
       for (const channel of channels) {
         rows.push({ outboxEventId: event.id, userId: recipient.id, channel });
+      }
+
+      for (const left of suppressedChannels(flags, options)) {
+        suppressed.push({ userId: recipient.id, ...left });
       }
     }
 
@@ -344,7 +604,36 @@ class NotificationPipelineService {
       // Somebody who asked to stop hearing from us. Checked here rather than
       // at send time so no row is even created — a queued message that is
       // then skipped is a message that shows as failed in every report.
-      if (external.opted_out_at) continue;
+      if (external.opted_out_at) {
+        suppressed.push({
+          externalRecipientId: external.id,
+          channel: NotificationChannel.EMAIL,
+          reason: "opted_out",
+        });
+        suppressed.push({
+          externalRecipientId: external.id,
+          channel: NotificationChannel.WHATSAPP,
+          reason: "opted_out",
+        });
+
+        continue;
+      }
+
+      if (!external.email) {
+        suppressed.push({
+          externalRecipientId: external.id,
+          channel: NotificationChannel.EMAIL,
+          reason: "no_contact",
+        });
+      }
+
+      if (!external.telephone) {
+        suppressed.push({
+          externalRecipientId: external.id,
+          channel: NotificationChannel.WHATSAPP,
+          reason: "no_contact",
+        });
+      }
 
       // The channels follow the contact details we actually hold. No in-app,
       // no push: there is no app and no inbox. No preferences either — an
@@ -379,21 +668,71 @@ class NotificationPipelineService {
     }
 
     // skipDuplicates + the (event, user, channel) unique key make a re-run
-    // after a crash a no-op instead of a second batch of notifications.
+    // after a crash a no-op instead of a second batch of notifications. The
+    // PUBLISHED mark is fenced: if this worker lost the row to another replica
+    // the rows above were a no-op and so is the mark.
     await database.$transaction([
       database.notificationDelivery.createMany({
         data: rows,
         skipDuplicates: true,
       }),
-      database.domainOutboxEvent.update({
-        where: { id: event.id },
+      database.domainOutboxEvent.updateMany({
+        where: this.fenced(event),
         data: {
           status: "PUBLISHED",
           processedAt: new Date(),
+          leaseExpiresAt: null,
           lastError: null,
         },
       }),
     ]);
+
+    // Debug, not info: a web-only user has no push device on every event.
+    // LOG_LEVEL=debug answers "why did she never get it?" (OBS-08).
+    if (suppressed.length > 0) {
+      log.debug(
+        {
+          outboxEventId: event.id,
+          topic: event.topic,
+          businessId: event.businessId,
+          suppressed: suppressed.slice(0, SUPPRESSED_LOG_LIMIT),
+          suppressedTotal: suppressed.length,
+        },
+        "notification channels suppressed",
+      );
+    }
+  }
+
+  /**
+   * An event under a topic this build does not know: put back for a build
+   * that does, without spending an attempt — unless it has waited a day,
+   * which is no longer a deploy in progress.
+   */
+  private async deferOrFailEvent(
+    event: ClaimedEvent,
+    reason: string,
+  ): Promise<void> {
+    const age = Date.now() - new Date(event.created_at).getTime();
+
+    const data =
+      age < UNKNOWN_TOPIC_PATIENCE_MS
+        ? {
+            status: "PENDING" as const,
+            attempts: { decrement: 1 },
+            availableAt: new Date(Date.now() + UNKNOWN_TOPIC_RECHECK_MS),
+            leaseExpiresAt: null,
+            lastError: `${reason} (aguardando uma versão que conheça o tópico)`,
+          }
+        : {
+            status: "FAILED" as const,
+            leaseExpiresAt: null,
+            lastError: reason,
+          };
+
+    await database.domainOutboxEvent.updateMany({
+      where: this.fenced(event),
+      data,
+    });
   }
 
   private async recordEventFailure(
@@ -405,44 +744,64 @@ class NotificationPipelineService {
     const baseDelay = nextRetryDelayMs(event.attempts, OUTBOX_RETRY_DELAYS_MS);
     const delay = baseDelay === null ? null : withRetryJitter(baseDelay);
 
-    console.error(
-      `[NotificationPipeline] Falha ao expandir evento ${event.id} (tentativa ${event.attempts}):`,
-      message,
-    );
+    const fields = {
+      outboxEventId: event.id,
+      correlationId: event.correlationId ?? null,
+      topic: event.topic,
+      businessId: event.businessId,
+      attempt: event.attempts,
+      willRetry: delay !== null,
+      error: message,
+    };
+
+    if (delay === null) {
+      log.error(fields, "notification event failed");
+    } else {
+      log.warn(fields, "notification event failed");
+    }
 
     await database.domainOutboxEvent
-      .update({
-        where: { id: event.id },
+      .updateMany({
+        where: this.fenced(event),
         data:
           delay === null
-            ? { status: "FAILED", lastError: message }
+            ? { status: "FAILED", leaseExpiresAt: null, lastError: message }
             : {
                 status: "PENDING",
                 availableAt: new Date(Date.now() + delay),
+                leaseExpiresAt: null,
                 lastError: message,
               },
       })
       .catch((updateError) => {
         // The lease recovers the row if even this update fails.
-        console.error(
-          `[NotificationPipeline] Falha ao registrar erro do evento ${event.id}:`,
-          updateError,
+        log.error(
+          { err: updateError, outboxEventId: event.id },
+          "notification event failure could not be recorded",
         );
       });
   }
 
   // ==========================================================================
-  // Deliveries: one row = one recipient × one channel
+  // Deliveries: one row = one recipient × one channel, in two lanes
   // ==========================================================================
 
-  private async runDeliveryCycle(): Promise<void> {
-    if (this.deliveryRunning) return;
-    this.deliveryRunning = true;
+  /** Public so a test can drive one cycle against a real database. */
+  public async runDeliveryCycle(lane: DeliveryLane): Promise<void> {
+    if (this.deliveryRunning[lane]) return;
+    this.deliveryRunning[lane] = true;
+
+    const beatName = `notification-delivery-${lane}`;
+
+    workerHeartbeat.beginCycle(beatName);
 
     try {
       // Drain: a full batch means there is probably more behind it.
-      for (;;) {
-        const deliveries = await this.claimDeliveries();
+      while (!this.stopping) {
+        const deliveries = await this.claimDeliveries(lane);
+
+        workerHeartbeat.progress(beatName);
+
         if (deliveries.length === 0) return;
 
         const events = await database.domainOutboxEvent.findMany({
@@ -451,49 +810,67 @@ class NotificationPipelineService {
 
         const eventsById = new Map(events.map((event) => [event.id, event]));
 
-        this.recipientCache = new Map();
+        const recipientCache: RecipientCache = new Map();
 
-        try {
-          // Bounded concurrency instead of one-at-a-time: a batch used to
-          // cost the SUM of every provider round-trip, so one slow WhatsApp
-          // held the in-app notifications behind it. A shared cursor (rather
-          // than fixed slices) keeps every worker busy when the durations
-          // are uneven, which across channels they always are.
-          let cursor = 0;
-
-          const worker = async (): Promise<void> => {
-            while (cursor < deliveries.length) {
-              const delivery = deliveries[cursor++];
-
-              await this.runOneDelivery(delivery, eventsById);
-            }
-          };
-
-          await Promise.all(
-            Array.from(
-              { length: Math.min(DELIVERY_CONCURRENCY, deliveries.length) },
-              worker,
-            ),
-          );
-        } finally {
-          this.recipientCache = null;
+        for (const delivery of deliveries) {
+          delivery.recipientCache = recipientCache;
+          delivery.event = eventsById.get(delivery.outboxEventId);
         }
+
+        // Bounded concurrency instead of one-at-a-time: a batch used to
+        // cost the SUM of every provider round-trip. A shared cursor (rather
+        // than fixed slices) keeps every worker busy when the durations are
+        // uneven, which across channels they always are.
+        let cursor = 0;
+
+        const worker = async (): Promise<void> => {
+          while (cursor < deliveries.length) {
+            const delivery = deliveries[cursor++];
+
+            await this.runOneDelivery(delivery, eventsById);
+          }
+        };
+
+        await Promise.all(
+          Array.from(
+            { length: Math.min(DELIVERY_CONCURRENCY, deliveries.length) },
+            worker,
+          ),
+        );
 
         if (deliveries.length < DELIVERY_BATCH_SIZE) break;
       }
     } finally {
-      this.deliveryRunning = false;
+      this.deliveryRunning[lane] = false;
+      workerHeartbeat.endCycle(beatName);
     }
   }
 
   /**
    * One delivery, start to finish, never throwing: a failure here is a row
    * update, not an exception that would abort its sibling workers.
+   *
+   * SENDING and RECORDING are two steps with two failure paths. A send that
+   * failed is retried on the schedule. A send the provider ACCEPTED whose
+   * DELIVERED mark then failed is not a failed send — treating it as one put
+   * the message on the wire a second time half a minute later.
+   *
+   * A send that outlived PER_DELIVERY_TIMEOUT_MS is neither. The worker stops
+   * waiting for it, but the call is still on the wire and the provider may
+   * yet accept it: recording a failure there put the row back in PENDING for
+   * ~30s and the retry sent a second copy. The row stays PROCESSING under
+   * this claim's lease instead, and the outcome is recorded when the call
+   * settles — through the same fenced writes, so if the lease ran out first
+   * and another replica took the row, the late write matches nothing. A call
+   * that never settles is reclaimed when the lease expires, as before.
    */
   private async runOneDelivery(
     delivery: ClaimedDelivery,
     eventsById: Map<string, ClaimedEventRow>,
   ): Promise<void> {
+    let providerMessageId: string | undefined;
+    let work: Promise<string | undefined> | undefined;
+
     try {
       const event = eventsById.get(delivery.outboxEventId);
 
@@ -501,37 +878,116 @@ class NotificationPipelineService {
         throw new NonRetryableDeliveryError("Outbox event no longer exists");
       }
 
-      const providerMessageId = await this.withDeliveryTimeout(
-        this.executeDelivery(delivery, {
-          topic: event.topic,
-          payload: event.payload as unknown as AnyPayload,
-          businessId: event.businessId,
-        }),
+      work = this.executeDelivery(delivery, {
+        topic: event.topic,
+        payload: event.payload as unknown as AnyPayload,
+        businessId: event.businessId,
+        created_at: event.created_at,
+      });
+
+      providerMessageId = await this.withDeliveryTimeout(
+        work,
         `${delivery.channel} delivery ${delivery.id}`,
       );
+    } catch (error) {
+      if (error instanceof DeliveryBackstopTimeoutError && work) {
+        log.warn(
+          { ...this.deliveryLogFields(delivery), error: error.message },
+          "notification delivery overran its budget; its outcome is recorded when the provider answers",
+        );
 
-      await database.notificationDelivery.update({
-        where: { id: delivery.id },
-        data: {
+        void work
+          .then(
+            (lateMessageId) =>
+              this.recordDeliverySuccess(delivery, lateMessageId),
+            (sendError) => this.recordDeliveryFailure(delivery, sendError),
+          )
+          .catch((settleError) => {
+            // Still PROCESSING: the lease hands it to another replica.
+            log.error(
+              { ...this.deliveryLogFields(delivery), err: settleError },
+              "late notification delivery outcome could not be recorded",
+            );
+          });
+
+        return;
+      }
+
+      await this.recordDeliveryFailure(delivery, error);
+      return;
+    }
+
+    await this.recordDeliverySuccess(delivery, providerMessageId);
+  }
+
+  /**
+   * Records DELIVERED for a send the provider ACCEPTED. A database outage at
+   * that instant must not turn into a second WhatsApp: the write is retried
+   * (detached once the quick retries run out) until shortly before this
+   * claim's lease ends — see shared/resilience/record-accepted-outcome.ts.
+   */
+  private async recordDeliverySuccess(
+    delivery: ClaimedDelivery,
+    providerMessageId: string | undefined,
+  ): Promise<void> {
+    const fields = () => ({
+      ...this.deliveryLogFields(delivery),
+      providerMessageId: providerMessageId ?? null,
+    });
+
+    await recordAcceptedOutcome({
+      deadline: recordDeadline(
+        delivery.claimStartedAtMs ?? Date.now(),
+        DELIVERY_LEASE_SECONDS,
+      ),
+      write: async () => {
+        const settled = await this.settleDelivery(delivery, {
           status: "DELIVERED",
           deliveredAt: new Date(),
+          leaseExpiresAt: null,
           lastError: null,
           // Only the channels that talk to an external provider return one.
           // It is what makes a duplicate report answerable after the fact:
           // which message, under which provider id, accepted when.
           ...(providerMessageId ? { providerMessageId } : {}),
-        },
-      });
-    } catch (error) {
-      await this.recordDeliveryFailure(delivery, error);
-    }
+        });
+
+        // "Did it go out?" had no answer in the logs: success wrote nothing.
+        // `superseded` marks a claim another replica had already taken over —
+        // the message went out from here too, so the recipient may have two.
+        log.info(
+          { ...fields(), ...(settled.count === 0 ? { superseded: true } : {}) },
+          "notification delivery accepted",
+        );
+      },
+      onDetached: (error) => {
+        log.warn(
+          { ...fields(), err: error },
+          "notification delivery accepted but not yet recorded; retrying the record until the lease is about to end",
+        );
+      },
+      onGiveUp: (error) => {
+        // Still PROCESSING: the lease hands it to another replica, which
+        // sends it again under the same delivery id.
+        log.error(
+          { ...fields(), err: error },
+          "notification delivery accepted by the provider but not recorded; it will be sent again when the lease expires",
+        );
+      },
+      track: (pending) => {
+        this.pendingRecords.add(pending);
+        void pending.finally(() => this.pendingRecords.delete(pending));
+      },
+    });
   }
 
   /**
    * Stops WAITING on a delivery that overran its budget - it cannot cancel
    * the work already in flight (each provider owns its own request timeout),
-   * but it keeps one hung await from holding the row past its lease, which
-   * is what would let another replica send the same message again.
+   * but it keeps one hung await from holding the rest of the batch past its
+   * lease, which is what would let another replica send those messages
+   * again. The rejection is a DeliveryBackstopTimeoutError, never a failed
+   * send: the caller keeps following the work it stopped waiting for.
    */
   private async withDeliveryTimeout<T>(
     work: Promise<T>,
@@ -546,8 +1002,8 @@ class NotificationPipelineService {
           timer = setTimeout(
             () =>
               reject(
-                new Error(
-                  `${label} excedeu ${PER_DELIVERY_TIMEOUT_MS}ms e foi abandonada`,
+                new DeliveryBackstopTimeoutError(
+                  `${label} excedeu ${PER_DELIVERY_TIMEOUT_MS}ms sem resposta do provedor`,
                 ),
               ),
             PER_DELIVERY_TIMEOUT_MS,
@@ -559,22 +1015,77 @@ class NotificationPipelineService {
     }
   }
 
-  private async claimDeliveries(): Promise<ClaimedDelivery[]> {
-    return database.$queryRaw<ClaimedDelivery[]>`
+  /**
+   * One lane's batch. Each lane has its own partial index (see migration
+   * 20260923120000_notification_delivery_lanes), so the internal lane never
+   * walks past a backlog of e-mails to find the next bell.
+   *
+   * The index is keyed on availableAt (20260924091000), and the claim writes
+   * the lease end into availableAt as well as leaseExpiresAt. One range on
+   * the key then covers both halves of the queue — a PENDING row is due when
+   * its backoff is over, a PROCESSING row when its lease is — so the scan
+   * starts at the oldest due row and stops at now(). It used to order by
+   * created_at under an OR, and a WhatsApp outage parked tens of thousands of
+   * retrying rows at the head of the lane that every e-mail claim then read
+   * through in the heap.
+   *
+   * The explicit lease check stays for rows an older release claimed without
+   * moving availableAt: during a rolling deploy those still carry the due
+   * time they were claimed at, and must not be taken while their lease lives.
+   */
+  private async claimDeliveries(
+    lane: DeliveryLane,
+  ): Promise<ClaimedDelivery[]> {
+    // Literals, not parameters: with bound values the planner cannot prove
+    // a partial index predicate in a generic plan and falls back to a scan.
+    // Safe to inline — the list is DELIVERY_LANES, constants of this module,
+    // never input.
+    const channels = Prisma.raw(
+      DELIVERY_LANES[lane].map((channel) => `'${channel}'`).join(", "),
+    );
+
+    // A row whose last allowed attempt died with the process is closed, with
+    // the reason, instead of being claimed again — see DELIVERY_MAX_ATTEMPTS.
+    await database.$executeRaw`
+      UPDATE "notification_delivery" SET
+        "status" = 'FAILED',
+        "leaseExpiresAt" = NULL,
+        "lastError" = 'O processo foi interrompido durante a última tentativa permitida.'
+      WHERE "status" = 'PROCESSING'
+        AND "channel" IN (${channels})
+        AND "availableAt" <= now()
+        AND "leaseExpiresAt" < now()
+        AND "attempts" >= ${DELIVERY_MAX_ATTEMPTS}
+    `;
+
+    const claimStartedAtMs = Date.now();
+
+    // availableAt and leaseExpiresAt get the same expression in the same
+    // statement, so they are equal: now() does not move within a statement.
+    const claimed = await database.$queryRaw<ClaimedDelivery[]>`
       UPDATE "notification_delivery" SET
         "status" = 'PROCESSING',
         "leaseExpiresAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
         "attempts" = "attempts" + 1
       WHERE "id" IN (
         SELECT "id" FROM "notification_delivery"
-        WHERE ("status" = 'PENDING' AND "availableAt" <= now())
-           OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now())
-        ORDER BY "created_at"
+        WHERE "channel" IN (${channels})
+          AND "status" IN ('PENDING', 'PROCESSING')
+          AND "availableAt" <= now()
+          AND ("status" = 'PENDING'
+            OR ("leaseExpiresAt" < now()
+                AND "attempts" < ${DELIVERY_MAX_ATTEMPTS}))
+        ORDER BY "availableAt"
         LIMIT ${DELIVERY_BATCH_SIZE}
         FOR UPDATE SKIP LOCKED
       )
       RETURNING "id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"
     `;
+
+    for (const delivery of claimed) delivery.claimStartedAtMs = claimStartedAtMs;
+
+    return claimed;
   }
 
   private async executeDelivery(
@@ -583,14 +1094,34 @@ class NotificationPipelineService {
       topic: string;
       payload: AnyPayload;
       businessId: string | null;
+      created_at: Date;
     },
   ): Promise<string | undefined> {
     const policy = getNotificationPolicy(event.topic) as AnyPolicy | null;
 
     if (!policy) {
-      throw new NonRetryableDeliveryError(
+      throw this.unknownToThisBuild(
+        event.created_at,
         `No notification policy registered for topic "${event.topic}"`,
       );
+    }
+
+    // A user's e-mail, WhatsApp or push about a fact that stopped being true
+    // (a tower request decided or superseded while its rows waited, or were
+    // retried) is not sent. Asked on every attempt, like an outsider's
+    // message (loadExternalMessage); only policies that define it pay the
+    // lookup.
+    if (
+      delivery.userId &&
+      policy.supersededReason &&
+      OUT_OF_PRODUCT_CHANNELS.has(delivery.channel)
+    ) {
+      const superseded = await policy.supersededReason(
+        event.payload,
+        this.supersedeDeps(),
+      );
+
+      if (superseded) throw new NonRetryableDeliveryError(superseded);
     }
 
     switch (delivery.channel) {
@@ -605,9 +1136,48 @@ class NotificationPipelineService {
       case NotificationChannel.ACTIVITY:
         return this.deliverActivity(delivery, event.payload, policy, event);
       default:
-        throw new NonRetryableDeliveryError(
+        throw this.unknownToThisBuild(
+          event.created_at,
           `Unknown delivery channel "${delivery.channel}"`,
         );
+    }
+  }
+
+  /**
+   * What an older build says about work a newer one created: not yet mine,
+   * within the patience window; a real failure after it.
+   */
+  private supersedeDeps(): PolicyDeps {
+    return {
+      userRepository: container.resolve<IUserRepository>("UserRepository"),
+      externalRecipientRepository: container.resolve("ExternalRecipientRepository"),
+      messageTemplateRepository: container.resolve("DeliveryMessageTemplateRepository"),
+      businessRepository: container.resolve("BusinessRepository"),
+      occurrenceAuthorizationRepository: container.resolve(
+        "OccurrenceAuthorizationRepository",
+      ),
+    };
+  }
+
+  private unknownToThisBuild(createdAt: Date, reason: string): Error {
+    const age = Date.now() - new Date(createdAt).getTime();
+
+    return age < UNKNOWN_TOPIC_PATIENCE_MS
+      ? new DeferredDeliveryError(reason)
+      : new NonRetryableDeliveryError(reason);
+  }
+
+  /**
+   * Somebody whose access was revoked keeps no channel outside the product.
+   * The in-app row is harmless — they cannot sign in to read it — but an
+   * e-mail, a WhatsApp or a push carries the tenant's data to a person the
+   * tenant removed.
+   */
+  private assertStillReachable(user: RecipientUser): void {
+    if ((user as { access_revoked?: boolean }).access_revoked) {
+      throw new NonRetryableDeliveryError(
+        "Recipient's access was revoked; nothing is sent outside the product",
+      );
     }
   }
 
@@ -631,7 +1201,9 @@ class NotificationPipelineService {
 
     const userId = this.requireUserId(delivery);
 
-    const user = await this.findRecipient(userId);
+    const user = await this.findRecipient(userId, delivery.recipientCache);
+    this.assertStillReachable(user);
+
     const recipient = { id: user.id, role: user.role, driverId: user.driverId };
 
     const content = policy.renderPush
@@ -672,9 +1244,11 @@ class NotificationPipelineService {
       );
     }
 
-    const { deliveredAny, invalidTokens } = await sendExpoPushMessages(
+    const { deliveredAny, invalidTokens, tickets } = await sendExpoPushMessages(
       devices.map((device) => device.token),
-      content,
+      // The delivery id rides along: the app can tell a repeated tray message
+      // apart, and support can trace one back.
+      { ...content, data: { ...content.data, deliveryId: delivery.id } },
     );
 
     if (invalidTokens.length > 0) {
@@ -695,10 +1269,18 @@ class NotificationPipelineService {
       throw new Error("Expo não aceitou nenhum ticket de push");
     }
 
-    // No provider id recorded. Expo answers with one ticket PER DEVICE, and a
-    // recipient can have several — there is no single id for "this delivery".
-    // Turning tickets into receipts is Expo's own second call and belongs in
-    // its own piece of work, not here.
+    // No single provider id: Expo answers with one ticket PER DEVICE. Each
+    // goes to the receipts ledger instead, where check-push-receipts-job
+    // turns it into FCM/APNs' verdict and prunes the devices that are gone.
+    // Best effort: the push already went out, and failing the delivery here
+    // would only send it again.
+    await recordExpoTickets(delivery.id, tickets).catch((error) => {
+      log.warn(
+        { ...this.deliveryLogFields(delivery), err: error },
+        "push tickets could not be recorded",
+      );
+    });
+
     return undefined;
   }
 
@@ -715,7 +1297,7 @@ class NotificationPipelineService {
     }
 
     const userId = this.requireUserId(delivery);
-    const user = await this.findRecipient(userId);
+    const user = await this.findRecipient(userId, delivery.recipientCache);
 
     const rendered = policy.renderInApp(
       payload,
@@ -750,7 +1332,9 @@ class NotificationPipelineService {
       });
     } catch (error) {
       // Unique deliveryId hit: a previous attempt already created the row
-      // (crash before the DELIVERED mark). Done — and no duplicate emit.
+      // (crash before the DELIVERED mark). Done — and no duplicate emit. If
+      // that attempt died before ITS emit, the toast is lost: the emit is
+      // at-most-once by design, the bell is the truth (ADR 0003).
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
@@ -762,6 +1346,13 @@ class NotificationPipelineService {
     }
   }
 
+  /**
+   * E-mail is the one external channel whose provider can deduplicate: the
+   * delivery id travels as Resend's idempotency key (see ResendMailProvider),
+   * so a retry of a message Resend already accepted — after a crash, a lost
+   * answer or an abandoned wait — is recognised there and not sent twice, for
+   * 24 hours. The whole retry schedule fits inside that window.
+   */
   private async deliverEmail(
     delivery: ClaimedDelivery,
     payload: AnyPayload,
@@ -779,7 +1370,12 @@ class NotificationPipelineService {
       );
     }
 
-    const user = await this.findRecipient(this.requireUserId(delivery));
+    const user = await this.findRecipient(
+      this.requireUserId(delivery),
+      delivery.recipientCache,
+    );
+
+    this.assertStillReachable(user);
 
     const rendered = policy.renderInApp(
       payload,
@@ -802,34 +1398,54 @@ class NotificationPipelineService {
 
     const [firstName] = user.name?.split(" ") ?? ["Usuario"];
 
-    try {
-      // Awaited on purpose: this row only becomes DELIVERED when the
-      // transport actually accepted the message. Handing it to another queue
-      // and reporting success is what made a failed e-mail invisible.
-      const sent = await mailProvider.sendMail({
-        to: user.email,
-        subject: `Trajetto - ${rendered.title}`,
-        path: templatePath,
-        // The delivery id is unique per (event, recipient, channel), so it
-        // is exactly the reference a mail provider needs to tell two
-        // notifications apart - and to recognise our own retry.
-        referenceId: delivery.id,
-        variables: {
-          name: firstName,
-          year: new Date().getFullYear(),
-          title: rendered.title,
-          message: rendered.message,
-          link: rendered.link || `${env.HTTP_REQUEST}/notifications`,
-          logo: env.CLOUDINARY_LOGO_IMAGE,
-        },
-      });
+    return this.sendMailClassified(mailProvider, {
+      to: user.email,
+      subject: `Trajetto - ${rendered.title}`,
+      path: templatePath,
+      // The delivery id is unique per (event, recipient, channel), so it
+      // is exactly the reference a mail provider needs to tell two
+      // notifications apart - and to recognise our own retry.
+      referenceId: delivery.id,
+      variables: {
+        name: firstName,
+        year: new Date().getFullYear(),
+        title: rendered.title,
+        message: rendered.message,
+        link: rendered.link || `${env.HTTP_REQUEST}/notifications`,
+        logo: env.CLOUDINARY_LOGO_IMAGE,
+      },
+    });
+  }
 
-      return sent.messageId;
+  /**
+   * Awaited on purpose: the row only becomes DELIVERED when the transport
+   * actually accepted the message. A permanent refusal (invalid recipient,
+   * bad credentials, missing template) must not burn the retry budget — on
+   * either path: the external one used to retry an SMTP 5xx five times.
+   */
+  private async sendMailClassified(
+    mailProvider: IMailProvider,
+    message: Parameters<IMailProvider["sendMail"]>[0],
+  ): Promise<string | undefined> {
+    try {
+      const sent = await mailProvider.sendMail(message);
+
+      return sent?.messageId;
     } catch (error) {
-      // A permanent refusal (invalid recipient, bad credentials, missing
-      // template) must not burn the retry budget.
-      if (error instanceof MailDeliveryError && !error.retryable) {
-        throw new NonRetryableDeliveryError(error.message);
+      if (error instanceof MailDeliveryError) {
+        // The SMTP code and reply go with it into lastError (OBS-08): EAUTH or
+        // a 535 is a credential to fix, a 550 is one mailbox.
+        const detail: ProviderErrorDetail = {
+          provider: "email",
+          smtpCode: error.code,
+          smtpReply: error.responseCode,
+        };
+
+        if (!error.retryable) {
+          throw new NonRetryableDeliveryError(error.message, detail);
+        }
+
+        throw new RetryableDeliveryError(error.message, undefined, detail);
       }
 
       throw error;
@@ -851,7 +1467,12 @@ class NotificationPipelineService {
       );
     }
 
-    const user = await this.findRecipient(this.requireUserId(delivery));
+    const user = await this.findRecipient(
+      this.requireUserId(delivery),
+      delivery.recipientCache,
+    );
+
+    this.assertStillReachable(user);
 
     if (!user.whatsapp_phone) {
       throw new NonRetryableDeliveryError(
@@ -865,23 +1486,51 @@ class NotificationPipelineService {
     const result = await whatsAppProvider.sendMessage({
       phoneNumber: user.whatsapp_phone,
       message: policy.renderWhatsApp(payload),
+      // Comes back on Meta's status callbacks: every wamid of this delivery,
+      // a resend after a crash included, lands in the receipts ledger.
+      referenceId: delivery.id,
     });
 
-    // Meta's wamid, so a later status webhook can be matched back to this
-    // delivery — and so a duplicate report can be traced to one send or two.
+    return this.whatsAppOutcome(result);
+  }
+
+  /**
+   * Meta's wamid on success, so a duplicate report can be traced to one send
+   * or two. On failure the provider's own classification decides: a rejected
+   * template or a number without WhatsApp can never succeed, and retrying it
+   * only spends the account's quality rating; a throttled send comes back no
+   * sooner than Meta asked.
+   */
+  private whatsAppOutcome(result: {
+    success: boolean;
+    messageId?: string;
+    message?: string;
+    retryable?: boolean;
+    retryAfterSeconds?: number;
+    httpStatus?: number;
+    errorCode?: number;
+  }): string | undefined {
     if (result.success) return result.messageId;
 
     const reason = result.message || "Falha ao enviar WhatsApp";
 
-    // The provider classifies Meta's answer: a rejected template or a number
-    // without WhatsApp can never succeed, and retrying it four times only
-    // spends the account quality rating. `retryable !== false` keeps the old
-    // behaviour for anything the provider chose not to classify.
+    // Meta's status and code go into lastError with the sentence (OBS-08):
+    // 190 is an expired token, 131026 a number without WhatsApp.
+    const detail: ProviderErrorDetail = {
+      provider: "whatsapp",
+      httpStatus: result.httpStatus,
+      errorCode: result.errorCode,
+    };
+
     if (result.retryable === false) {
-      throw new NonRetryableDeliveryError(reason);
+      throw new NonRetryableDeliveryError(reason, detail);
     }
 
-    throw new Error(reason);
+    throw new RetryableDeliveryError(
+      reason,
+      result.retryAfterSeconds ? result.retryAfterSeconds * 1000 : undefined,
+      detail,
+    );
   }
 
   /**
@@ -911,6 +1560,15 @@ class NotificationPipelineService {
       "ExternalRecipientRepository",
     );
 
+    const deps = {
+      userRepository: container.resolve<IUserRepository>("UserRepository"),
+      externalRecipientRepository,
+      messageTemplateRepository: container.resolve(
+        "DeliveryMessageTemplateRepository",
+      ),
+      businessRepository: container.resolve("BusinessRepository"),
+    };
+
     const external = await database.externalRecipient.findUnique({
       where: { id: delivery.externalRecipientId! },
     });
@@ -930,19 +1588,28 @@ class NotificationPipelineService {
       );
     }
 
-    const rendered = await policy.renderExternal(
-      payload,
-      external,
-      {
-        userRepository: container.resolve<IUserRepository>("UserRepository"),
-        externalRecipientRepository,
-        messageTemplateRepository: container.resolve(
-          "DeliveryMessageTemplateRepository",
-        ),
-        businessRepository: container.resolve("BusinessRepository"),
-      },
-      channel,
-    );
+    // The three customer messages are separate events on separate retry
+    // schedules: a "saiu para entrega" in backoff used to land after the
+    // "entregue" that overtook it. Asked on every attempt, so a message still
+    // waiting stops the moment the delivery moves past it (GAP2-5).
+    const superseded = await policy.supersededReason?.(payload, deps);
+
+    if (superseded) throw new NonRetryableDeliveryError(superseded);
+
+    // A company template that cannot render fails the same way on every
+    // attempt: retrying it only delays the dead letter by half an hour while
+    // the customer hears nothing. It is the company's to fix, so it fails now.
+    const rendered = await policy
+      .renderExternal(payload, external, deps, channel)
+      .catch((error: unknown) => {
+        if (error instanceof InvalidMessageTemplateError) {
+          throw new NonRetryableDeliveryError(
+            `Company ${channel} template cannot be rendered: ${error.message}`,
+          );
+        }
+
+        throw error;
+      });
 
     if (!rendered) {
       throw new NonRetryableDeliveryError(
@@ -984,7 +1651,7 @@ class NotificationPipelineService {
 
     const [firstName] = external.name?.split(" ") ?? ["Cliente"];
 
-    const sent = await mailProvider.sendMail({
+    return this.sendMailClassified(mailProvider, {
       to: external.email,
       subject: rendered.subject,
       path: templatePath,
@@ -998,8 +1665,6 @@ class NotificationPipelineService {
         logo: env.CLOUDINARY_LOGO_IMAGE,
       },
     });
-
-    return sent?.messageId;
   }
 
   private async deliverExternalWhatsApp(
@@ -1026,17 +1691,13 @@ class NotificationPipelineService {
     const result = await whatsAppProvider.sendMessage({
       phoneNumber: external.telephone,
       message: rendered.body,
+      referenceId: delivery.id,
+      // The customer template, when configured: a spam report on a carrier's
+      // message must not pause the template every driver depends on.
+      audience: "customer",
     });
 
-    if (result.success) return result.messageId;
-
-    const reason = result.message || "Falha ao enviar WhatsApp";
-
-    if (result.retryable === false) {
-      throw new NonRetryableDeliveryError(reason);
-    }
-
-    throw new Error(reason);
+    return this.whatsAppOutcome(result);
   }
 
   private async deliverActivity(
@@ -1102,8 +1763,11 @@ class NotificationPipelineService {
     return delivery.userId;
   }
 
-  private async findRecipient(userId: string): Promise<RecipientUser> {
-    const cached = this.recipientCache?.get(userId);
+  private async findRecipient(
+    userId: string,
+    cache: RecipientCache | undefined,
+  ): Promise<RecipientUser> {
+    const cached = cache?.get(userId);
     if (cached) return cached;
 
     const lookup = (async (): Promise<RecipientUser> => {
@@ -1122,9 +1786,9 @@ class NotificationPipelineService {
     // Cached before the await so two workers on the same recipient share one
     // query. A rejected lookup is evicted: the next delivery of this batch
     // deserves a real attempt instead of a memoised failure.
-    this.recipientCache?.set(userId, lookup);
+    cache?.set(userId, lookup);
 
-    lookup.catch(() => this.recipientCache?.delete(userId));
+    lookup.catch(() => cache?.delete(userId));
 
     return lookup;
   }
@@ -1135,37 +1799,97 @@ class NotificationPipelineService {
   ): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
 
+    if (error instanceof DeferredDeliveryError) {
+      // Not ours yet: back to the queue as it was, without spending one of
+      // its attempts, for a replica that knows this topic.
+      await this.settleDelivery(delivery, {
+          status: "PENDING",
+          attempts: { decrement: 1 },
+          availableAt: new Date(Date.now() + UNKNOWN_TOPIC_RECHECK_MS),
+          leaseExpiresAt: null,
+          lastError: `${message} (aguardando uma versão que conheça o tópico)`,
+        })
+        .catch((updateError) => {
+          log.error(
+            { ...this.deliveryLogFields(delivery), err: updateError },
+            "deferred notification delivery could not be put back",
+          );
+        });
+
+      return;
+    }
+
+    // From here on, lastError and the log line carry the provider's codes in
+    // a bracket other code keys on: `[whatsapp http=401 code=190] ...`
+    // (OBS-08; the ops alerting reads it for credential failures).
+    const stored = formatDeliveryError(
+      message,
+      providerDetailOf(error, delivery.channel),
+    );
+
     const baseDelay =
       error instanceof NonRetryableDeliveryError
         ? null
         : nextRetryDelayMs(delivery.attempts, DELIVERY_RETRY_DELAYS_MS);
 
-    // Jitter keeps a rate-limited batch from marching back in lockstep.
-    const delay = baseDelay === null ? null : withRetryJitter(baseDelay);
+    // Jitter keeps a rate-limited batch from marching back in lockstep; a
+    // provider's Retry-After, when it gave one, sets the floor.
+    const delay =
+      baseDelay === null
+        ? null
+        : honourRetryAfter(
+            withRetryJitter(baseDelay),
+            error instanceof RetryableDeliveryError
+              ? error.retryAfterMs
+              : undefined,
+          );
 
-    console.error(
-      `[NotificationPipeline] Falha na entrega ${delivery.id} (${delivery.channel}, tentativa ${delivery.attempts}):`,
-      message,
-    );
+    const fields = {
+      ...this.deliveryLogFields(delivery),
+      willRetry: delay !== null,
+      nextAttemptAt:
+        delay === null ? null : new Date(Date.now() + delay).toISOString(),
+      error: stored,
+    };
 
-    await database.notificationDelivery
-      .update({
-        where: { id: delivery.id },
-        data:
-          delay === null
-            ? { status: "FAILED", lastError: message }
-            : {
-                status: "PENDING",
-                availableAt: new Date(Date.now() + delay),
-                lastError: message,
-              },
-      })
+    // A retry is expected traffic (warn); a delivery that gave up is a
+    // message somebody will never get (error).
+    if (delay === null) {
+      log.error(fields, "notification delivery failed");
+    } else {
+      log.warn(fields, "notification delivery failed");
+    }
+
+    await this.settleDelivery(
+      delivery,
+      delay === null
+        ? { status: "FAILED", leaseExpiresAt: null, lastError: stored }
+        : {
+            status: "PENDING",
+            availableAt: new Date(Date.now() + delay),
+            leaseExpiresAt: null,
+            lastError: stored,
+          },
+    )
       .catch((updateError) => {
-        console.error(
-          `[NotificationPipeline] Falha ao registrar erro da entrega ${delivery.id}:`,
-          updateError,
+        log.error(
+          { ...this.deliveryLogFields(delivery), err: updateError },
+          "notification delivery failure could not be recorded",
         );
       });
+  }
+
+  /** The ids a delivery's log lines are found by (OBS-06). */
+  private deliveryLogFields(delivery: ClaimedDelivery) {
+    return {
+      deliveryId: delivery.id,
+      outboxEventId: delivery.outboxEventId,
+      correlationId: delivery.event?.correlationId ?? null,
+      topic: delivery.event?.topic ?? null,
+      businessId: delivery.event?.businessId ?? null,
+      channel: delivery.channel,
+      attempt: delivery.attempts,
+    };
   }
 }
 

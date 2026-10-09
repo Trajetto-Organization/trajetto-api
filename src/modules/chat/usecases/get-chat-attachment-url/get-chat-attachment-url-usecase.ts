@@ -7,10 +7,7 @@ import { UploadService } from "@/shared/services/upload-service";
 
 import { resolveChatScope } from "../shared/chat-scope";
 
-import {
-  ChatMessageNotFoundError,
-  ChatThreadNotFoundError,
-} from "../errors/chat-errors";
+import { ChatMessageNotFoundError } from "../errors/chat-errors";
 
 interface GetChatAttachmentUrlRequest {
   userId: string;
@@ -62,14 +59,15 @@ class GetChatAttachmentUrlUseCase {
     const thread = await this.chat.findThreadById(message.threadId);
 
     // Same non-leak rule as everywhere else in the module: a message of
-    // another company, or of another driver's thread, answers "not found" —
-    // never "not yours", which would confirm it exists.
+    // another company, or of another driver's thread, answers exactly like a
+    // message that does not exist. It used to answer "conversa não
+    // encontrada" instead, which told a caller the id was real elsewhere.
     if (
       !thread ||
       thread.businessId !== scope.businessId ||
       (scope.driverId && thread.driverId !== scope.driverId)
     ) {
-      throw new ChatThreadNotFoundError();
+      throw new ChatMessageNotFoundError();
     }
 
     // A text message has nothing to sign. Null rather than an error: asking

@@ -1,5 +1,5 @@
 import { inject, injectable } from "tsyringe";
-import { hash } from "bcrypt";
+import { hashSecret } from "@/shared/security/bcrypt-gate";
 
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 import { UserInvalidTokenError } from "../errors/user-invalid-token-error";
@@ -46,7 +46,7 @@ class ResetUserPasswordUseCase {
       throw new ResourceNotFoundError();
     }
 
-    const hashedPassword = await hash(password, 10);
+    const hashedPassword = await hashSecret(password, 10);
 
     /**
      * The token is spent BEFORE the password changes, and losing means stop.

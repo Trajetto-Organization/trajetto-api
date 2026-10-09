@@ -1,7 +1,8 @@
 import { inject, injectable } from "tsyringe";
+import { assertCallerRole } from "../errors/business-role-guard";
 
 import crypto from "node:crypto";
-import { hash } from "bcrypt";
+import { hashSecret } from "@/shared/security/bcrypt-gate";
 
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
@@ -43,6 +44,9 @@ class RequestBusinessDeletionUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // MASTER-only, like the route: see assertCallerRole.
+    assertCallerRole(findUser, ["MASTER"]);
+
     const existingBusiness = await this.business.findBusinessById(businessId);
 
     if (!existingBusiness) {
@@ -73,7 +77,7 @@ class RequestBusinessDeletionUseCase {
 
     const code = crypto.randomInt(100_000, 1_000_000).toString();
 
-    const codeHash = await hash(code, 10);
+    const codeHash = await hashSecret(code, 10);
     const expires = new Date(Date.now() + CODE_EXPIRATION_MINUTES * 60 * 1000);
 
     try {

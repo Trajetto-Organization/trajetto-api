@@ -1,5 +1,21 @@
+import { recordNotFound } from "@/shared/in-memory/prisma-errors";
 import { v7 as uuidV7 } from "uuid";
-import { IVehicleChecklistRepository } from "../IVehicle-checklist-repository";
+import { VEHICLE_CHECKLIST_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
+import {
+  IVehicleChecklistRepository,
+  type ChecklistMileageUpdate,
+  type ChecklistPlacement,
+} from "../IVehicle-checklist-repository";
+import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
+import { editedReadingRefusal } from "@/modules/vehicle/usecases/errors/vehicle-mileage-out-of-order-error";
+import { VehicleChecklistBusinessNotFoundError } from "../../usecases/errors/vehicle-checklist-business-not-found-error";
+import {
+  END_OF_TIME,
+  type OdometerNeighbours,
+  type OdometerTimeline,
+} from "@/shared/vehicle/odometer-timeline";
+import { placeReading } from "@/modules/fuel/usecases/fuel-rules";
+import { businessDayRange, resolveTimeZone } from "@/shared/time/business-day";
 
 import {
   VehicleChecklist,
@@ -8,18 +24,226 @@ import {
   ListVehicleChecklistByBusinessIdProps,
   UpdateVehicleChecklist,
   GetVehicleChecklistByIdAndBusinessProps,
-  VehicleChecklistWithRelations,
 } from "../../dtos/vehicle-checklist-dto";
+
+import type { SortOrder } from "@/shared/pagination/list-query";
+import {
+  CHECKLIST_CONDITIONS,
+  CHECKLIST_SORT_FALLBACK,
+  tallyConditions,
+  type ChecklistFacet,
+  type ChecklistListFilters,
+  type ChecklistSortKey,
+  type NamedCount,
+} from "../../usecases/list-vehicle-checklist/checklist-list";
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type Comparable = string | number | null | undefined;
+
+/** Postgres order: NULLS LAST ascending, NULLS FIRST descending. */
+function compareNullable(
+  a: Comparable,
+  b: Comparable,
+  order: SortOrder,
+): number {
+  const aNull = a === null || a === undefined;
+  const bNull = b === null || b === undefined;
+
+  if (aNull || bNull) {
+    if (aNull && bNull) return 0;
+    const nullsGreater = aNull ? 1 : -1;
+    return order === "asc" ? nullsGreater : -nullsGreater;
+  }
+
+  const base = a < b ? -1 : a > b ? 1 : 0;
+
+  return order === "asc" ? base : -base;
+}
 
 class InMemoryVehicleChecklistRepository
   implements IVehicleChecklistRepository
 {
   public checklists: VehicleChecklist[] = [];
 
+  /**
+   * The rows behind the relations the real query joins, seeded by the tests
+   * (the twin has no other tables). A missing entry reads as the NULL a LEFT
+   * JOIN gives.
+   */
+  public vehicleInfo: Record<
+    string,
+    {
+      license_plate: string;
+      description: string;
+      brand?: string;
+      model?: string;
+    }
+  > = {};
+  public driverNames: Record<string, string> = {};
+  public branchNames: Record<string, string> = {};
+
+  /**
+   * The vehicles' odometers, seeded by the tests that exercise the mileage
+   * rule (the twin has no vehicle table). An unseeded vehicle is not checked.
+   * Fuelings live in another twin, so only this twin's checklists bound a
+   * reading on the timeline.
+   */
+  public vehicleMileage: Record<string, number> = {};
+
+  /** Vehicles' last maintenance km (Vehicle.last_maintenance_mileage). */
+  public vehicleMaintenanceMileage: Record<string, number> = {};
+
+  /** odometerNeighbours over this twin's checklists, one left out. */
+  private neighboursOf(
+    { businessId, vehicleId }: { businessId: string; vehicleId: string },
+    at: Date,
+    excludeChecklistId?: string,
+  ): OdometerNeighbours {
+    const around = this.checklists.filter(
+      (checklist) =>
+        checklist.businessId === businessId &&
+        checklist.vehicleId === vehicleId &&
+        checklist.id !== excludeChecklistId,
+    );
+    const instant = at.getTime();
+    const before = around
+      .filter(
+        (checklist) => new Date(checklist.checklist_date).getTime() <= instant,
+      )
+      .map((checklist) => checklist.current_mileage);
+    const after = around
+      .filter(
+        (checklist) => new Date(checklist.checklist_date).getTime() > instant,
+      )
+      .map((checklist) => checklist.current_mileage);
+
+    return {
+      before: before.length > 0 ? Math.max(...before) : null,
+      after: after.length > 0 ? Math.min(...after) : null,
+    };
+  }
+
+  /** odometerTimeline over this twin's checklists. */
+  private timelineOf(
+    update: ChecklistMileageUpdate,
+    excludeChecklistId?: string,
+  ): OdometerTimeline {
+    const neighbours = this.neighboursOf(update, update.at, excludeChecklistId);
+    const timeZone = resolveTimeZone(update.timeZone);
+    const endOfDay = new Date(
+      businessDayRange(update.at, timeZone).end.getTime() - 1,
+    );
+    const restOfDay = this.neighboursOf(update, endOfDay, excludeChecklistId);
+
+    return {
+      neighbours,
+      laterDay: neighbours.after === null ? null : restOfDay.after,
+      highest: this.neighboursOf(update, END_OF_TIME, excludeChecklistId)
+        .before,
+    };
+  }
+
+  /**
+   * The create's transaction: the repository's placeReading, by date first.
+   * Between the readings around `at` the vehicle stays; as the newest
+   * reading it moves forward; above a later day's reading it is refused.
+   */
+  private applyMileage(update: ChecklistMileageUpdate): void {
+    const current = this.vehicleMileage[update.vehicleId];
+
+    if (current === undefined) return;
+
+    const placed = placeReading({
+      mileage: update.currentMileage,
+      ...this.timelineOf(update),
+      odometer: current,
+      maintenanceFloor: this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
+      previousMileage: null,
+    });
+
+    if (!placed.fits) throw new VehicleMileageInvalidError();
+
+    if (placed.odometer !== null) {
+      this.vehicleMileage[update.vehicleId] = placed.odometer;
+    }
+  }
+
+  /** The edit's transaction: the same placeReading as the repository. */
+  private applyEditedMileage(
+    update: ChecklistMileageUpdate,
+    checklistId: string,
+  ): void {
+    const stored = this.checklists.find(
+      (checklist) =>
+        checklist.id === checklistId &&
+        checklist.businessId === update.businessId,
+    );
+
+    if (!stored) throw new VehicleChecklistBusinessNotFoundError();
+
+    const odometer = this.vehicleMileage[update.vehicleId];
+
+    if (odometer !== undefined) {
+      const timeline = this.timelineOf(
+        update,
+        update.checklistId ?? checklistId,
+      );
+      const previousMileage =
+        stored.vehicleId === update.vehicleId ? stored.current_mileage : null;
+
+      const placement = placeReading({
+        mileage: update.currentMileage,
+        ...timeline,
+        odometer,
+        maintenanceFloor:
+          this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
+        previousMileage,
+      });
+
+      if (!placement.fits) {
+        throw editedReadingRefusal(
+          previousMileage !== null,
+          timeline,
+        );
+      }
+
+      const nextOdometer =
+        update.readingChanged === false ? null : placement.odometer;
+
+      if (nextOdometer !== null)
+        this.vehicleMileage[update.vehicleId] = nextOdometer;
+    }
+
+    if (stored.vehicleId !== update.vehicleId) {
+      this.release(stored, checklistId);
+    }
+  }
+
+  /** The repository's releaseOdometer, over this twin's checklists. */
+  private release(leaving: VehicleChecklist, excludeChecklistId: string): void {
+    const odometer = this.vehicleMileage[leaving.vehicleId];
+
+    if (odometer === undefined || odometer !== leaving.current_mileage) return;
+
+    const known = [
+      this.neighboursOf(leaving, END_OF_TIME, excludeChecklistId).before,
+      this.vehicleMaintenanceMileage[leaving.vehicleId] ?? null,
+    ].filter((value): value is number => value !== null);
+
+    if (known.length === 0) return;
+
+    const next = Math.max(...known);
+
+    if (next < odometer) this.vehicleMileage[leaving.vehicleId] = next;
+  }
+
   async createVehicleChecklist(
     checklistData: CreateVehicleChecklistProps,
   ): Promise<VehicleChecklist> {
     const checklist: VehicleChecklist = {
+      ...VEHICLE_CHECKLIST_COLUMN_DEFAULTS,
       id: uuidV7(),
       client_submission_id: checklistData.client_submission_id ?? null,
       current_mileage: checklistData.current_mileage,
@@ -79,6 +303,8 @@ class InMemoryVehicleChecklistRepository
 
   async createVehicleChecklistWithMileage(
     checklistData: CreateVehicleChecklistProps,
+    _afterCreate?: unknown,
+    placement?: ChecklistPlacement,
   ): Promise<{ checklist: VehicleChecklist; created: boolean }> {
     if (checklistData.client_submission_id) {
       const existing = await this.findBySubmissionId(
@@ -88,79 +314,189 @@ class InMemoryVehicleChecklistRepository
       if (existing) return { checklist: existing, created: false };
     }
 
+    this.applyMileage({
+      businessId: checklistData.businessId,
+      vehicleId: checklistData.vehicleId,
+      currentMileage: checklistData.current_mileage,
+      at: checklistData.checklist_date
+        ? new Date(checklistData.checklist_date)
+        : new Date(),
+      timeZone: placement?.timeZone,
+    });
+
     return {
       checklist: await this.createVehicleChecklist(checklistData),
       created: true,
     };
   }
 
+  /** The same conditions as checklistListWhere, over the array. */
+  private matches(
+    checklist: VehicleChecklist,
+    filters: ChecklistListFilters,
+    except?: ChecklistFacet,
+  ): boolean {
+    if (checklist.businessId !== filters.businessId) return false;
+    if (filters.driverId && checklist.driverId !== filters.driverId)
+      return false;
+
+    if (
+      except !== "condition" &&
+      filters.conditions?.length &&
+      !(filters.conditions as string[]).includes(checklist.overall_condition)
+    ) {
+      return false;
+    }
+
+    if (
+      except !== "branch" &&
+      filters.branchIds?.length &&
+      !filters.branchIds.includes(checklist.branchId)
+    ) {
+      return false;
+    }
+
+    if (
+      except !== "vehicle" &&
+      filters.vehicleIds?.length &&
+      !filters.vehicleIds.includes(checklist.vehicleId)
+    ) {
+      return false;
+    }
+
+    const term = filters.search?.trim().toLowerCase() ?? "";
+
+    if (!term) return true;
+
+    if (UUID_PATTERN.test(term) && checklist.id.toLowerCase() === term) {
+      return true;
+    }
+
+    const vehicle = this.vehicleInfo[checklist.vehicleId];
+
+    return [
+      checklist.notes,
+      vehicle?.description,
+      vehicle?.license_plate,
+      vehicle?.brand,
+      vehicle?.model,
+      this.driverNames[checklist.driverId],
+      this.branchNames[checklist.branchId],
+    ].some((value) => (value ?? "").toLowerCase().includes(term));
+  }
+
+  private sortValue(
+    checklist: VehicleChecklist,
+    key: ChecklistSortKey,
+  ): Comparable {
+    switch (key) {
+      case "created_at":
+      case "checklist_date":
+        return new Date(checklist[key]).getTime();
+      case "vehicle_license_plate":
+        return this.vehicleInfo[checklist.vehicleId]?.license_plate;
+      case "vehicle_description":
+        return this.vehicleInfo[checklist.vehicleId]?.description;
+      case "driver_name":
+        return this.driverNames[checklist.driverId];
+      case "branchName":
+        return this.branchNames[checklist.branchId];
+      default:
+        return checklist[key];
+    }
+  }
+
+  private namedCounts(
+    base: VehicleChecklist[],
+    idOf: (checklist: VehicleChecklist) => string,
+    selected: string[] | undefined,
+    nameOf: (id: string) => string | undefined,
+  ): NamedCount[] {
+    const ids = new Set<string>(selected ?? []);
+
+    for (const checklist of base) ids.add(idOf(checklist));
+
+    // Only names this company knows (the seeds), like the real lookup by id
+    // AND businessId.
+    return [...ids]
+      .filter((id) => nameOf(id) !== undefined)
+      .map((id) => ({
+        id,
+        name: nameOf(id) as string,
+        count: base.filter((checklist) => idOf(checklist) === id).length,
+      }));
+  }
+
   async listVehicleChecklists({
     page,
     pageSize,
-    businessId,
-    currentUserRole,
-    search,
-    vehicleId,
-    driverId,
-    overall_condition,
-    startDate,
-    endDate,
+    sort,
+    order,
+    ...filters
   }: ListVehicleChecklistByBusinessIdProps): Promise<ListVehicleChecklistProps> {
-    let filteredChecklists =
-      currentUserRole === "MASTER"
-        ? [...this.checklists]
-        : this.checklists.filter(
-            (checklist) => checklist.businessId === businessId,
-          );
+    const key = sort ?? CHECKLIST_SORT_FALLBACK.sort;
+    const direction = order ?? (sort ? "asc" : CHECKLIST_SORT_FALLBACK.order);
 
-    if (search) {
-      const searchLower = search.toLowerCase();
-      filteredChecklists = filteredChecklists.filter(
-        (checklist) =>
-          checklist.notes?.toLowerCase().includes(searchLower) ||
-          checklist.overall_condition.toLowerCase().includes(searchLower),
+    const rows = this.checklists
+      .filter((checklist) => this.matches(checklist, filters))
+      .sort(
+        (a, b) =>
+          compareNullable(
+            this.sortValue(a, key),
+            this.sortValue(b, key),
+            direction,
+          ) ||
+          compareNullable(
+            new Date(a.created_at).getTime(),
+            new Date(b.created_at).getTime(),
+            "desc",
+          ) ||
+          compareNullable(a.id, b.id, "desc"),
       );
-    }
 
-    if (vehicleId) {
-      filteredChecklists = filteredChecklists.filter(
-        (checklist) => checklist.vehicleId === vehicleId,
-      );
-    }
-
-    if (driverId) {
-      filteredChecklists = filteredChecklists.filter(
-        (checklist) => checklist.driverId === driverId,
-      );
-    }
-
-    if (overall_condition) {
-      filteredChecklists = filteredChecklists.filter(
-        (checklist) => checklist.overall_condition === overall_condition,
-      );
-    }
-
-    if (startDate) {
-      filteredChecklists = filteredChecklists.filter(
-        (checklist) =>
-          new Date(checklist.checklist_date) >= new Date(startDate),
-      );
-    }
-
-    if (endDate) {
-      filteredChecklists = filteredChecklists.filter(
-        (checklist) => new Date(checklist.checklist_date) <= new Date(endDate),
-      );
-    }
-
-    const total = filteredChecklists.length;
     const skip = (page - 1) * pageSize;
 
-    const paginatedChecklists = filteredChecklists.slice(skip, skip + pageSize);
+    const conditionBase = this.checklists.filter((checklist) =>
+      this.matches(checklist, filters, "condition"),
+    );
+
+    const conditionCounts = tallyConditions(
+      CHECKLIST_CONDITIONS.map((condition) => ({
+        overall_condition: condition,
+        _count: {
+          _all: conditionBase.filter(
+            (checklist) => checklist.overall_condition === condition,
+          ).length,
+        },
+      })),
+    );
+
+    const vehicleLabel = (id: string) => {
+      const vehicle = this.vehicleInfo[id];
+      return vehicle
+        ? `${vehicle.license_plate} — ${vehicle.description}`
+        : undefined;
+    };
 
     return {
-      data: paginatedChecklists,
-      total,
+      data: rows.slice(skip, skip + pageSize),
+      conditionCounts,
+      branchCounts: this.namedCounts(
+        this.checklists.filter((checklist) =>
+          this.matches(checklist, filters, "branch"),
+        ),
+        (checklist) => checklist.branchId,
+        filters.branchIds,
+        (id) => this.branchNames[id],
+      ),
+      vehicleCounts: this.namedCounts(
+        this.checklists.filter((checklist) =>
+          this.matches(checklist, filters, "vehicle"),
+        ),
+        (checklist) => checklist.vehicleId,
+        filters.vehicleIds,
+        vehicleLabel,
+      ),
     };
   }
 
@@ -173,13 +509,13 @@ class InMemoryVehicleChecklistRepository
     );
 
     if (index === -1) {
-      throw new Error("Checklist not found");
+      throw recordNotFound("update");
     }
 
+    // Only undefined means "not sent", as in the Prisma update: a null (the
+    // schema's cleared note) is written.
     const filteredData = Object.fromEntries(
-      Object.entries(checklistData).filter(
-        ([, value]) => value !== undefined && value !== null && value !== "",
-      ),
+      Object.entries(checklistData).filter(([, value]) => value !== undefined),
     );
 
     const updatedChecklist: VehicleChecklist = {
@@ -194,7 +530,17 @@ class InMemoryVehicleChecklistRepository
 
   async updateVehicleChecklistAndMileage(
     update: UpdateVehicleChecklist,
+    mileageUpdate?: ChecklistMileageUpdate,
   ): Promise<VehicleChecklist> {
+    if (
+      !this.checklists.some((checklist) => checklist.id === update.checklistId)
+    ) {
+      throw new Error("Checklist not found");
+    }
+
+    if (mileageUpdate)
+      this.applyEditedMileage(mileageUpdate, update.checklistId);
+
     return this.updateVehicleChecklist(update);
   }
 
@@ -208,6 +554,10 @@ class InMemoryVehicleChecklistRepository
     }
 
     const deletedChecklist = this.checklists.splice(index, 1)[0];
+
+    // The repository releases the odometer the row set, in the same transaction.
+    this.release(deletedChecklist, deletedChecklist.id);
+
     return deletedChecklist;
   }
 
@@ -219,49 +569,6 @@ class InMemoryVehicleChecklistRepository
     );
 
     return found || null;
-  }
-
-  async findVehicleChecklistByIdWithRelations(
-    checklistId: string,
-  ): Promise<VehicleChecklistWithRelations | null> {
-    const found = this.checklists.find(
-      (checklist) => checklist.id === checklistId,
-    );
-
-    if (!found) {
-      return null;
-    }
-
-    // Mock relations for testing
-    return {
-      ...found,
-      checklist_date: new Date(found.checklist_date).toISOString(),
-      created_at: new Date(found.created_at).toISOString(),
-      updated_at: new Date(found.updated_at).toISOString(),
-      business: {
-        id: found.businessId,
-        corporate_reason: "Test Business",
-        fantasy_name: "Test Business Fantasy",
-      },
-      branch: {
-        id: found.branchId,
-        corporate_reason: "Test Branch",
-        fantasy_name: "Test Branch Fantasy",
-      },
-      vehicle: {
-        id: found.vehicleId,
-        description: "Test Vehicle",
-        license_plate: "ABC-1234",
-        brand: "Test Brand",
-        model: "Test Model",
-        current_mileage: found.current_mileage,
-      },
-      driver: {
-        id: found.driverId,
-        name: "Test Driver",
-        cnh: "12345678901",
-      },
-    };
   }
 
   async getVehicleChecklistByIdAndBusiness({
@@ -276,98 +583,30 @@ class InMemoryVehicleChecklistRepository
     return found || null;
   }
 
-  async getVehicleChecklistByIdAndBusinessWithRelations({
-    businessId,
-    checklistId,
-  }: GetVehicleChecklistByIdAndBusinessProps): Promise<VehicleChecklistWithRelations | null> {
-    const found = this.checklists.find(
-      (checklist) =>
-        checklist.id === checklistId && checklist.businessId === businessId,
-    );
-
-    if (!found) {
-      return null;
-    }
-
-    // Mock relations for testing
-    return {
-      ...found,
-      checklist_date: new Date(found.checklist_date).toISOString(),
-      created_at: new Date(found.created_at).toISOString(),
-      updated_at: new Date(found.updated_at).toISOString(),
-      business: {
-        id: found.businessId,
-        corporate_reason: "Test Business",
-        fantasy_name: "Test Business Fantasy",
-      },
-      branch: {
-        id: found.branchId,
-        corporate_reason: "Test Branch",
-        fantasy_name: "Test Branch Fantasy",
-      },
-      vehicle: {
-        id: found.vehicleId,
-        description: "Test Vehicle",
-        license_plate: "ABC-1234",
-        brand: "Test Brand",
-        model: "Test Model",
-        current_mileage: found.current_mileage,
-      },
-      driver: {
-        id: found.driverId,
-        name: "Test Driver",
-        cnh: "12345678901",
-      },
-    };
-  }
-
-  async findVehicleChecklistsByVehicleId(
-    vehicleId: string,
-  ): Promise<VehicleChecklist[]> {
-    return this.checklists.filter(
-      (checklist) => checklist.vehicleId === vehicleId,
-    );
-  }
-
-  async findVehicleChecklistsByDriverId(
-    driverId: string,
-  ): Promise<VehicleChecklist[]> {
+  async countVehicleChecklistsByDriverId(driverId: string): Promise<number> {
     return this.checklists.filter(
       (checklist) => checklist.driverId === driverId,
-    );
+    ).length;
   }
 
   async *streamChecklistsForExport(
-    businessId: string,
-    userRole: string,
-    search?: string,
-  ): AsyncGenerator<any> {
-    let filtered =
-      userRole === "MASTER"
-        ? [...this.checklists]
-        : this.checklists.filter(
-            (checklist) => checklist.businessId === businessId,
-          );
+    filters: ChecklistListFilters,
+  ): AsyncGenerator<Record<string, unknown>> {
+    const rows = this.checklists
+      .filter((checklist) => this.matches(checklist, filters))
+      .sort((a, b) => compareNullable(a.id, b.id, "asc"));
 
-    if (search) {
-      const searchTerm = search.toLowerCase();
-      filtered = filtered.filter(
-        (checklist) =>
-          checklist.id.toLowerCase().includes(searchTerm) ||
-          checklist.notes?.toLowerCase().includes(searchTerm) ||
-          checklist.overall_condition.toLowerCase().includes(searchTerm),
-      );
-    }
+    for (const checklist of rows) {
+      const vehicle = this.vehicleInfo[checklist.vehicleId];
 
-    for (const checklist of filtered) {
       yield {
         id: checklist.id,
-        vehicleLicensePlate: null,
-        vehicleDescription: null,
-        vehicleBrand: null,
-        vehicleModel: null,
+        vehicleLicensePlate: vehicle?.license_plate ?? null,
+        vehicleDescription: vehicle?.description ?? null,
+        vehicleBrand: vehicle?.brand ?? null,
+        vehicleModel: vehicle?.model ?? null,
         vehicleCurrentMileage: null,
-        driverName: null,
+        driverName: this.driverNames[checklist.driverId] ?? null,
         driverCnh: null,
         checklist_date: checklist.checklist_date,
         current_mileage: checklist.current_mileage,
@@ -397,8 +636,7 @@ class InMemoryVehicleChecklistRepository
         spare_tire_condition: checklist.spare_tire_condition,
         overall_condition: checklist.overall_condition,
         notes: checklist.notes,
-        branchName: null,
-        ...(userRole === "MASTER" ? { businessName: null } : {}),
+        branchName: this.branchNames[checklist.branchId] ?? null,
         created_at: checklist.created_at,
         updated_at: checklist.updated_at,
       };
@@ -406,17 +644,11 @@ class InMemoryVehicleChecklistRepository
   }
 
   async countChecklistForExport(
-    businessId: string,
-    userRole: string,
+    filters: ChecklistListFilters,
   ): Promise<number> {
-    const filteredChecklists =
-      userRole === "MASTER"
-        ? this.checklists
-        : this.checklists.filter(
-            (checklist) => checklist.businessId === businessId,
-          );
-
-    return filteredChecklists.length;
+    return this.checklists.filter((checklist) =>
+      this.matches(checklist, filters),
+    ).length;
   }
 }
 

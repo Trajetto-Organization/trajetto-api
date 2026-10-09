@@ -18,6 +18,14 @@ const SIGNATURE_VERSION = "v1";
 /** Older than this and a replayed call is refused by a correct receiver. */
 const SIGNATURE_TOLERANCE_SECONDS = 300;
 
+/**
+ * How long the secret a rotation replaced keeps signing beside the new one.
+ * A day: long enough for somebody to deploy the new secret on the receiving
+ * side during business hours, short enough that a leaked secret stops being
+ * accepted by the next morning.
+ */
+const WEBHOOK_SECRET_ROTATION_GRACE_MS = 24 * 60 * 60 * 1000;
+
 interface SignedPayload {
   /** Goes in the `X-Trajetto-Signature` header. */
   header: string;
@@ -28,19 +36,31 @@ interface SignedPayload {
   signature: string;
 }
 
+/**
+ * `extraSecrets` is a rotation's grace period: the secret being replaced
+ * signs too, as a second `v1` after the new one (Stripe's convention), so a
+ * receiver still holding the old secret keeps verifying until it switches.
+ * `signature` is always the one made with `secret`.
+ */
 function signWebhookPayload(
   secret: string,
   body: string,
   now: Date = new Date(),
+  extraSecrets: string[] = [],
 ): SignedPayload {
   const timestamp = Math.floor(now.getTime() / 1000);
 
-  const signature = createHmac("sha256", secret)
-    .update(`${timestamp}.${body}`)
-    .digest("hex");
+  const sign = (key: string) =>
+    createHmac("sha256", key).update(`${timestamp}.${body}`).digest("hex");
+
+  const signature = sign(secret);
+
+  const values = [signature, ...extraSecrets.map(sign)]
+    .map((value) => `${SIGNATURE_VERSION}=${value}`)
+    .join(",");
 
   return {
-    header: `t=${timestamp},${SIGNATURE_VERSION}=${signature}`,
+    header: `t=${timestamp},${values}`,
     timestamp,
     signature,
   };
@@ -61,21 +81,21 @@ function verifyWebhookSignature(props: {
   now?: Date;
   toleranceSeconds?: number;
 }): boolean {
-  const parts = props.header.split(",").reduce<Record<string, string>>(
-    (map, entry) => {
-      const [key, value] = entry.split("=");
+  // Every `v1`, not the last one: during a rotation the header carries one
+  // per secret, and the one this receiver holds may be either.
+  let timestamp = Number.NaN;
+  const candidates: string[] = [];
 
-      if (key && value) map[key.trim()] = value.trim();
+  for (const entry of props.header.split(",")) {
+    const [key, value] = entry.split("=");
 
-      return map;
-    },
-    {},
-  );
+    if (!key || !value) continue;
 
-  const timestamp = Number(parts.t);
-  const provided = parts[SIGNATURE_VERSION];
+    if (key.trim() === "t") timestamp = Number(value.trim());
+    if (key.trim() === SIGNATURE_VERSION) candidates.push(value.trim());
+  }
 
-  if (!Number.isFinite(timestamp) || !provided) return false;
+  if (!Number.isFinite(timestamp) || candidates.length === 0) return false;
 
   const now = props.now ?? new Date();
 
@@ -93,13 +113,22 @@ function verifyWebhookSignature(props: {
     .digest("hex");
 
   const expectedBuffer = Buffer.from(expected, "hex");
-  const providedBuffer = Buffer.from(provided, "hex");
 
-  // timingSafeEqual throws on a length mismatch, which is itself a leak if it
-  // is allowed to surface as a different error.
-  if (expectedBuffer.length !== providedBuffer.length) return false;
+  // Every candidate is compared, match or not, so how many there are and
+  // which one matched does not show in the timing either.
+  let matched = false;
 
-  return timingSafeEqual(expectedBuffer, providedBuffer);
+  for (const provided of candidates) {
+    const providedBuffer = Buffer.from(provided, "hex");
+
+    // timingSafeEqual throws on a length mismatch, which is itself a leak if
+    // it is allowed to surface as a different error.
+    if (expectedBuffer.length !== providedBuffer.length) continue;
+
+    if (timingSafeEqual(expectedBuffer, providedBuffer)) matched = true;
+  }
+
+  return matched;
 }
 
 /**
@@ -116,6 +145,7 @@ function newWebhookSecret(): string {
 export {
   SIGNATURE_TOLERANCE_SECONDS,
   SIGNATURE_VERSION,
+  WEBHOOK_SECRET_ROTATION_GRACE_MS,
   newWebhookSecret,
   signWebhookPayload,
   verifyWebhookSignature,

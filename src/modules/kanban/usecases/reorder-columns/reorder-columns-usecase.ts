@@ -37,17 +37,15 @@ class ReorderKanbanColumnsUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The named board first, before anything about it is looked up.
+    if (findUser.role !== "MASTER" && findUser.businessId !== data.businessId) {
+      throw new KanbanNotAllowedReorderColumnBusinessError();
+    }
+
     const findBusiness = await this.business.findBusinessById(data.businessId);
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
-    }
-
-    // Verify user permissions
-    if (findUser.role !== "MASTER") {
-      if (findUser.businessId !== data.businessId) {
-        throw new KanbanNotAllowedReorderColumnBusinessError();
-      }
     }
 
     // Validate positions
@@ -69,6 +67,9 @@ class ReorderKanbanColumnsUseCase {
     try {
       await this.kanban.reorderColumns(data);
     } catch (error) {
+      // A column deleted meanwhile: the repository says "not found".
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
         "Houve um erro ao tentar reordenar as colunas! Por favor, tente novamente.",
         500,

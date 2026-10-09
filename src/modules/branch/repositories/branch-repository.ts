@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import { IBranchRepository } from "./IBranch-repository";
 import {
   Branch,
@@ -12,6 +14,14 @@ import {
 import database from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+import { insensitiveEquals } from "@/shared/utils/like-pattern";
+
+import {
+  BRANCH_SORT,
+  branchListWhere,
+} from "../usecases/list-branch/branch-list";
+import { blankOptionalsToNull } from "./branch-columns";
 
 class BranchRepository implements IBranchRepository {
   constructor(private prisma = database) {}
@@ -32,132 +42,91 @@ class BranchRepository implements IBranchRepository {
     });
   }
 
-  async createBranch(branchData: CreateBranchProps): Promise<Branch> {
-    const branchCreated = await this.prisma.branch.create({
+  async createBranch(
+    branchData: CreateBranchProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Branch> {
+    const branchCreated = await (tx ?? this.prisma).branch.create({
       data: {
         ...branchData,
-        erp_code: branchData.erp_code || null,
-        complement: branchData.complement || null,
+        ...blankOptionalsToNull(branchData),
       },
     });
 
     return branchCreated;
   }
 
+  /**
+   * One company's page ‖ the (is_active, uf) breakdown, then the trade-name
+   * count: at most two connections at a time (connection-fan-out budget).
+   */
   async listAllBranches({
     page,
     pageSize,
-    currentUserRole,
     businessId,
     search,
+    statuses,
+    ufs,
+    sort,
+    order,
   }: ListAllBranchesProps): Promise<ListBranchProps> {
-    const skip = (page - 1) * pageSize;
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
+    const filters = { businessId, search, statuses, ufs };
 
-    const digitSearch = normalizedSearch.replace(/\D/g, "");
-    let digitSearchPhone = digitSearch;
-
-    if (digitSearchPhone.startsWith("55") && digitSearchPhone.length > 10) {
-      digitSearchPhone = digitSearchPhone.substring(2);
-    }
-
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        {
-          corporate_reason: { contains: normalizedSearch, mode: "insensitive" },
-        },
-        { fantasy_name: { contains: normalizedSearch, mode: "insensitive" } },
-        { street: { contains: normalizedSearch, mode: "insensitive" } },
-        { address_number: { contains: normalizedSearch, mode: "insensitive" } },
-        { city: { contains: normalizedSearch, mode: "insensitive" } },
-        { uf: { contains: normalizedSearch, mode: "insensitive" } },
-        { complement: { contains: normalizedSearch, mode: "insensitive" } },
-        { cnae: { contains: normalizedSearch, mode: "insensitive" } },
-        { erp_code: { contains: normalizedSearch, mode: "insensitive" } },
-        {
-          responsible_name: { contains: normalizedSearch, mode: "insensitive" },
-        },
-        { email: { contains: normalizedSearch, mode: "insensitive" } },
-        ...(digitSearch
-          ? [
-              { cep: { contains: digitSearch, mode: "insensitive" } },
-              {
-                telephone: { contains: digitSearchPhone, mode: "insensitive" },
-              },
-              { cnpj: { contains: digitSearch, mode: "insensitive" } },
-            ]
-          : []),
-        {
-          ...(currentUserRole === "MASTER"
-            ? {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
-              }
-            : {}),
-        },
-        {
-          ...(currentUserRole === "MASTER"
-            ? {
-                business: {
-                  corporate_reason: {
-                    contains: normalizedSearch,
-                    mode: "insensitive",
-                  },
-                },
-              }
-            : {}),
-        },
-      );
-    }
-
-    // Adds filtering by businessId if the user is not MASTER
-    const whereCondition = {
-      ...(currentUserRole !== "MASTER" && { businessId }),
-      ...buildSearchOr(orConditions),
-    };
-
-    const [branchData, total] = await Promise.all([
-      // Include business data only if user is MASTER
+    const [data, grouped] = await Promise.all([
       this.prisma.branch.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
-        ...(currentUserRole === "MASTER" && {
-          include: {
-            business: {
-              select: {
-                corporate_reason: true,
-              },
-            },
-          },
-        }),
-        orderBy: {
-          created_at: "desc",
-        },
+        where: branchListWhere(filters),
+        orderBy: resolveOrderBy(BRANCH_SORT, { sort, order }),
       }),
-      this.prisma.branch.count({
-        where: whereCondition,
+      this.prisma.branch.groupBy({
+        by: ["is_active", "uf"],
+        where: branchListWhere(filters, { except: "facets" }),
+        _count: { _all: true, erp_code: true },
       }),
     ]);
 
-    return { data: branchData, total };
+    // A blank trade name is not a trade name; a GROUP BY count cannot tell.
+    const withFantasyName = await this.prisma.branch.count({
+      where: {
+        AND: [
+          branchListWhere(filters),
+          { fantasy_name: { not: null } },
+          { NOT: { fantasy_name: "" } },
+        ],
+      },
+    });
+
+    return {
+      data,
+      groups: grouped.map((group) => ({
+        is_active: group.is_active,
+        uf: group.uf,
+        count: group._count._all,
+        withErpCode: group._count.erp_code,
+      })),
+      withFantasyName,
+    };
   }
 
-  async updateBranch({ branchData, branchId }: UpdateBranch): Promise<Branch> {
+  async updateBranch(
+    { branchData, branchId }: UpdateBranch,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Branch> {
+    // Only what the caller sent: a partial update used to write
+    // `erp_code: null` and `complement: null` whenever those keys were
+    // absent, silently erasing them.
     const filteredData = Object.fromEntries(
       Object.entries(branchData).filter(([_, value]) => value !== undefined),
     );
 
-    const updatedBranch = await this.prisma.branch.update({
+    const updatedBranch = await (tx ?? this.prisma).branch.update({
       where: {
         id: branchId,
       },
       data: {
         ...filteredData,
-        erp_code: filteredData.erp_code || null,
-        complement: filteredData.complement || null,
+        ...blankOptionalsToNull(filteredData),
       },
     });
 
@@ -174,9 +143,18 @@ class BranchRepository implements IBranchRepository {
     return branch;
   }
 
-  async findBranchByErpCode(erp_code: string): Promise<Branch | null> {
+  /**
+   * Inside ONE company. The ERP code is the customer's own numbering ("001",
+   * "MATRIZ"), unique per company since 20260924090400_tenant_scoped_uniques;
+   * looked up globally, the first carrier to type "001" blocked every other.
+   */
+  async findBranchByErpCode(
+    businessId: string,
+    erp_code: string,
+  ): Promise<Branch | null> {
     const branch = await this.prisma.branch.findFirst({
       where: {
+        businessId,
         erp_code,
       },
     });
@@ -184,10 +162,15 @@ class BranchRepository implements IBranchRepository {
     return branch;
   }
 
-  async findBranchByEmail(email: string): Promise<Branch | null> {
+  async findBranchByEmail(
+    businessId: string,
+    email: string,
+  ): Promise<Branch | null> {
     const branch = await this.prisma.branch.findFirst({
       where: {
-        email,
+        businessId,
+        // Escaped: the value is an ILIKE pattern underneath (like-pattern.ts).
+        email: insensitiveEquals(email),
       },
     });
 
@@ -205,14 +188,14 @@ class BranchRepository implements IBranchRepository {
   }
 
   async findBranchByCorporateReason(
+    businessId: string,
     corporate_reason: string,
   ): Promise<Branch | null> {
     const branch = await this.prisma.branch.findFirst({
       where: {
-        corporate_reason: {
-          equals: corporate_reason,
-          mode: "insensitive",
-        },
+        businessId,
+        // Escaped: the value is an ILIKE pattern underneath (like-pattern.ts).
+        corporate_reason: insensitiveEquals(corporate_reason),
       },
     });
 
@@ -239,25 +222,24 @@ class BranchRepository implements IBranchRepository {
       where: {
         businessId,
         is_active: true,
-        ...(search && {
-          OR: [
+        ...(search &&
+          buildSearchOr([
             { corporate_reason: { contains: search, mode: "insensitive" } },
             { fantasy_name: { contains: search, mode: "insensitive" } },
             { cnpj: { contains: search, mode: "insensitive" } },
             { city: { contains: search, mode: "insensitive" } },
             { uf: { contains: search, mode: "insensitive" } },
             { email: { contains: search, mode: "insensitive" } },
-          ],
-        }),
+          ])),
       },
       take: limit + 1,
       ...(cursor && {
         cursor: { id: cursor },
         skip: 1,
       }),
-      orderBy: {
-        created_at: "desc",
-      },
+      // The id breaks created_at ties: a cursor over an unstable order skips
+      // or repeats rows between pages.
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     });
 
     const hasMore = items.length > limit;
@@ -271,32 +253,31 @@ class BranchRepository implements IBranchRepository {
   async countBranchDependencies(
     branchId: string,
   ): Promise<Record<string, number>> {
-    const [
-      vehicles,
-      drivers,
-      serviceOrders,
-      accountsPayable,
-      fines,
-      fuels,
-      vehicleChecklists,
-    ] = await Promise.all([
-      this.prisma.vehicle.count({ where: { branchId } }),
-      this.prisma.driver.count({ where: { branchId } }),
-      this.prisma.serviceOrder.count({ where: { branchId } }),
-      this.prisma.accountPayable.count({ where: { branchId } }),
-      this.prisma.fine.count({ where: { branchId } }),
-      this.prisma.fuel.count({ where: { branchId } }),
-      this.prisma.vehicleChecklist.count({ where: { branchId } }),
-    ]);
+    // One statement, seven scalar sub-selects: one connection and one round
+    // trip. Seven parallel counts held seven of the replica's ten connections
+    // (tests/E2E/query-plans-connections.test.ts); seven sequential ones paid
+    // seven round trips. Each sub-select is an index probe on branchId.
+    const [row] = await this.prisma.$queryRaw<
+      Array<Record<"vehicles" | "drivers" | "serviceOrders" | "accountsPayable" | "fines" | "fuels" | "vehicleChecklists", bigint>>
+    >`
+      SELECT
+        (SELECT count(*) FROM "vehicle" WHERE "branchId" = ${branchId}) AS "vehicles",
+        (SELECT count(*) FROM "driver" WHERE "branchId" = ${branchId}) AS "drivers",
+        (SELECT count(*) FROM "service_order" WHERE "branchId" = ${branchId}) AS "serviceOrders",
+        (SELECT count(*) FROM "account_payable" WHERE "branchId" = ${branchId}) AS "accountsPayable",
+        (SELECT count(*) FROM "fine" WHERE "branchId" = ${branchId}) AS "fines",
+        (SELECT count(*) FROM "fuel" WHERE "branchId" = ${branchId}) AS "fuels",
+        (SELECT count(*) FROM "vehicle_checklist" WHERE "branchId" = ${branchId}) AS "vehicleChecklists"
+    `;
 
     return {
-      vehicles,
-      drivers,
-      serviceOrders,
-      accountsPayable,
-      fines,
-      fuels,
-      vehicleChecklists,
+      vehicles: Number(row.vehicles),
+      drivers: Number(row.drivers),
+      serviceOrders: Number(row.serviceOrders),
+      accountsPayable: Number(row.accountsPayable),
+      fines: Number(row.fines),
+      fuels: Number(row.fuels),
+      vehicleChecklists: Number(row.vehicleChecklists),
     };
   }
 }

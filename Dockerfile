@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 # ================================
 # Stage: Base
@@ -8,7 +8,10 @@
 # Alpine uses musl instead of glibc, which means the `binaryTargets` in
 # prisma/schema.prisma must include `linux-musl-openssl-3.0.x` — the Debian
 # engine does NOT run here. Revert that along with the base image if switching.
-FROM node:22.21.1-alpine AS base
+#
+# Pinned by digest too (INFRA-16): a tag can be re-pushed, a digest cannot.
+# Dependabot (docker ecosystem) moves the tag and the digest together.
+FROM node:22.21.1-alpine@sha256:0340fa682d72068edf603c305bfbc10e23219fb0e40df58d9ea4d6f33a9798bf AS base
 
 RUN apk add --no-cache \
     openssl \
@@ -88,6 +91,12 @@ ENV NODE_ENV=production
 ENV PORT=3333
 ENV HOSTNAME="0.0.0.0"
 
+# libuv's threadpool (default 4) serves bcrypt, gzip for every compressed
+# response, fs and dns.lookup. bcrypt is capped at two concurrent operations
+# per process (src/shared/security/bcrypt-gate.ts); eight threads leave six for
+# the rest, so a login burst cannot delay DNS, gzip or file reads by seconds.
+ENV UV_THREADPOOL_SIZE=8
+
 COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules
 
 # The Prisma client is generated (`prisma generate`) and resides in node_modules/.prisma.
@@ -99,9 +108,17 @@ COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=nodejs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nodejs:nodejs /app/build/src/modules ./src/modules
 
-# Excel file with traffic violation codes — read at startup by the
-# `seed:infringement:production` script from the working directory.
+# Excel file with traffic violation codes — read by build/import-violation-codes.js
+# (docker-entrypoint.sh, on boot or in the `migrate` release step) from the
+# working directory.
 COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-xlsx.xlsx ./tabela-codigo-infracoes-renainf-xlsx.xlsx
+
+# The boot script. Line endings are normalised here because a Windows
+# checkout (core.autocrlf) hands it over with CRLF, and `/bin/sh\r` is not an
+# interpreter. infra/ is not in the image, so package.json's `start` and
+# `migrate:release` fall back to this copy.
+COPY --from=builder --chown=nodejs:nodejs /app/infra/scripts/docker-entrypoint.sh ./docker-entrypoint.sh
+RUN sed -i "s/\r$//" ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 
 RUN mkdir -p /home/nodejs/.cache/yarn /home/nodejs/.yarn \
     && chown -R nodejs:nodejs /home/nodejs/.cache /home/nodejs/.yarn
@@ -119,9 +136,15 @@ EXPOSE 3333
 # default matters on its own because anything running it outside the stack —
 # a debug run, a one-off task, another orchestrator — inherits this and used
 # to get the more aggressive `/health` with retries=3.
+# busybox wget rather than `node -e`: measured in this base image, ~1 MB and
+# ~1 ms per probe against ~52 MB and ~54 ms for a Node process, inside the
+# container's memory limit. 127.0.0.1: busybox tries only the first address.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:3333/health/liveness', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+    CMD wget -q -O /dev/null http://127.0.0.1:3333/health/liveness
 
 ENTRYPOINT ["dumb-init", "--"]
 
-CMD ["yarn", "start"]
+# Node, not Yarn, as the long-lived process: the script prepares the database
+# and then `exec`s the server, so dumb-init delivers SIGTERM straight to it and
+# the graceful shutdown in src/server.ts actually runs. See the script.
+CMD ["./docker-entrypoint.sh"]

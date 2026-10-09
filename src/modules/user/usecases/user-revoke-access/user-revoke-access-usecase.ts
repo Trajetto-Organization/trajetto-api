@@ -2,14 +2,16 @@ import { inject, injectable } from "tsyringe";
 import { IUserRepository } from "../../repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
-import { AppError } from "@/shared/errors/AppError";
 import { ToggleConflictError } from "@/modules/business/usecases/errors/toggle-conflict-error";
 
 import { UserRole } from "../../dtos/user-dto";
 import { UserCannotBeRevokeByHimselfError } from "../errors/user-cannot-be-revoke-access-by-himself-error";
 
 import { sendSecurityEventToUser } from "@/websocket";
-import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { permissionDenied } from "@/shared/errors/access-errors";
+
+import { announceDriverLoginChange } from "../../services/driver-login-catalog";
+import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 interface UserRevokeAccessProps {
   userId: string;
@@ -52,27 +54,22 @@ class UserRevokeAccessUseCase {
       throw new ResourceNotFoundError();
     }
 
-    if (!findRevokedUser.businessId && findUser.role !== "MASTER") {
-      throw new AppError(
-        "Acesso negado ao usuario informado.",
-        403,
-        "TENANT_ACCESS_DENIED",
-      );
-    }
+    // Another company's user (or a MASTER) answers like a missing id.
+    assertTenantAccessToRecord(
+      findUser,
+      findRevokedUser.businessId,
+      () => new ResourceNotFoundError(),
+    );
 
-    if (findRevokedUser.businessId) {
-      assertTenantAccess(findUser, findRevokedUser.businessId);
-    }
-
+    // A role above the actor's is a permission refusal (decision 4.1), and
+    // this act is revoking, not deleting.
     if (!this.allowedDeletion[findUser.role].includes(findRevokedUser.role)) {
-      throw new AppError(
+      throw permissionDenied(
         `Usuários com o nível de acesso "${
           this.roleDisplayName[findUser.role]
-        }" não podem deletar usuários com o nível de acesso ${
+        }" não podem revogar ou restaurar o acesso de usuários com o nível de acesso ${
           this.roleDisplayName[findRevokedUser.role]
         }.`,
-        403,
-        "USER_ROLE_ACTION_FORBIDDEN",
       );
     }
 
@@ -101,6 +98,12 @@ class UserRevokeAccessUseCase {
     sendSecurityEventToUser(userId, {
       reason: wasRevoked ? "access_restored" : "access_revoked",
     });
+
+    // A driver's app login went dark (or came back): the "com o app" split
+    // of the company's chat pickers changed.
+    if (findRevokedUser.driverId) {
+      announceDriverLoginChange(findRevokedUser.businessId);
+    }
   }
 }
 

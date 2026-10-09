@@ -2,16 +2,18 @@ import { z } from "zod";
 
 import { updateWhatsAppSettingsSchema } from "@/schemas/phone-validation-schema";
 
+import { errorResponse } from "./common-responses";
+
 const whatsappSettingsData = z.object({
-  enabled: z.boolean().describe("Whether WhatsApp notifications are enabled"),
+  enabled: z.boolean().describe("Se os avisos por WhatsApp estão ligados"),
   phoneNumber: z
     .string()
     .optional()
-    .describe("Phone number that receives the notifications"),
+    .describe("Telefone que recebe os avisos"),
   serviceConfigured: z
     .boolean()
     .describe(
-      "Whether the server has Meta Cloud API credentials — false means saved preferences take effect only after the service is configured",
+      "Se o servidor tem as credenciais da Meta Cloud API — false quer dizer que a preferência salva só vale depois que o serviço for configurado",
     ),
 });
 
@@ -28,30 +30,19 @@ const whatsappResponses = {
 
   settingsUpdated: z.object({
     success: z.boolean().default(true),
-    message: z.string().describe("Update success message"),
+    message: z.string().describe("Mensagem de sucesso"),
     data: whatsappSettingsData,
   }),
 
-  // Error responses
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
+  // Every refusal carries `code` (decision 11.3); the session user who no
+  // longer exists is 404 USER_NOT_FOUND.
+  sessionUserNotFound: errorResponse.describe(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
-  settingsErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("O número de telefone é obrigatório para habilitar WhatsApp"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este número já está sendo utilizado por outro usuário"),
-    }),
-  ]),
+  settingsErrors: errorResponse.describe(
+    "VALIDATION_ERROR (corpo recusado; issues diz qual) ou WHATSAPP_NUMBER_REQUIRED (ligar os avisos sem informar o telefone).",
+  ),
 
   internalServerError: z.object({
     message: z.string().default("Internal server error"),

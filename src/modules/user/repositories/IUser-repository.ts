@@ -6,7 +6,7 @@ import {
   UpdateUserPassword,
   UpdateUserName,
   UpdateTwoFactorAuthentication,
-  ListUsers,
+  ListUsersPage,
   UpdateUser,
   ListUsersByRoleAndBusinessProps,
   UpdateUserEmailVerification,
@@ -22,7 +22,7 @@ interface IUserRepository {
   createUser: ({ email, password, name }: CreateUserProps) => Promise<User>;
   listUsers: (
     listUsersProps: ListUsersByRoleAndBusinessProps,
-  ) => Promise<ListUsers>;
+  ) => Promise<ListUsersPage>;
   updateEmailVerification: ({
     email,
     email_verified,
@@ -32,17 +32,24 @@ interface IUserRepository {
     update: UpdateUser,
     tx?: Prisma.TransactionClient,
   ) => Promise<User>;
-  deleteUser: (userId: string) => Promise<User>;
+  // `tx`: the deletion and its audit entry commit together (OUTBOX-10).
+  deleteUser: (userId: string, tx?: Prisma.TransactionClient) => Promise<User>;
 
   /**
-   * Apaga um MASTER, mas nunca o último.
+   * Deletes a MASTER, never the last one.
    *
-   * Devolve `null` quando a exclusão deixaria a plataforma sem nenhum, ou
-   * quando o alvo não é um MASTER. Contar antes e apagar depois não serve:
-   * dois pedidos simultâneos apagando MASTERs diferentes leem o mesmo total,
-   * os dois passam, e sobram zero — e MASTER é o único papel que cria outro.
+   * `null` when the deletion would leave the platform without one, or the
+   * target is not a MASTER. Count-then-delete is not enough: two concurrent
+   * deletions of different MASTERs read the same total and both pass — and
+   * only a MASTER can create another.
+   *
+   * With `tx`, it runs inside the caller's transaction (the audit entry
+   * joins it, OUTBOX-10).
    */
-  deleteMasterUserKeepingOne: (userId: string) => Promise<User | null>;
+  deleteMasterUserKeepingOne: (
+    userId: string,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<User | null>;
   findUserByEmail: (email: string) => Promise<User | null>;
   findUserByEmailAndBusinessId: (
     email: string,
@@ -50,10 +57,27 @@ interface IUserRepository {
   ) => Promise<User | null>;
   findUserById: (userId: string) => Promise<User | null>;
   findUsersByBusiness: (businessId: string) => Promise<User[]>;
+
+  /** How many users an access profile is linked to (the delete guard). */
+  countUsersWithProfile: (profileAccessId: string) => Promise<number>;
   updateUserPassword: ({
     userId,
     password,
   }: UpdateUserPassword) => Promise<User | null>;
+
+  /**
+   * Counts one wrong password, and locks the account when that reaches the
+   * ceiling — in one statement, so concurrent guesses are all counted.
+   * See shared/security/login-lockout-rules.
+   */
+  registerFailedLogin: (userId: string, now: Date) => Promise<void>;
+
+  /**
+   * Clears the count after a right password, unless the account is locked
+   * right now. Returns false when it is: a lock that landed while this
+   * password was being checked still refuses it.
+   */
+  clearFailedLogins: (userId: string, now: Date) => Promise<boolean>;
   updateUserName: ({ userId, name }: UpdateUserName) => Promise<User | null>;
   updateTwoFactorAuthentication: ({
     userId,
@@ -82,12 +106,32 @@ interface IUserRepository {
     isAccessRevoke,
   }: UpdateUserAccessRevocation) => Promise<User | null>;
   invalidateUserSessions: (userId: string) => Promise<User | null>;
+
+  /**
+   * What a change of role, company or driver link does to the person
+   * (decision 4.6): every session ends (session_version bumps, refresh tokens
+   * and push devices go) and the inbox is emptied — its notifications were
+   * addressed to the role or company they no longer have, with links that no
+   * longer open. Activities stay: they are the audit trail.
+   *
+   * Takes the caller's transaction so it commits with the change itself.
+   */
+  endSessionsAndClearInbox: (
+    userId: string,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<void>;
   updateWhatsAppSettings: ({
     userId,
     whatsapp_notifications_enabled,
     whatsapp_phone,
   }: UpdateUserWhatsAppSettings) => Promise<User | null>;
   findBusinessAdminsByBusinessId: (businessId: string) => Promise<User[]>;
+  /**
+   * Who runs the company's deliveries (DLVP-NOTIF-1): its administrators plus
+   * every BUSINESS_USER whose profile writes `delivery_manage` — the tower's
+   * operators. Never a driver account, never a revoked one. Oldest first.
+   */
+  findDeliveryOperators: (businessId: string) => Promise<User[]>;
   findOtherMasters: (excludeUserId: string) => Promise<User[]>;
   findUserWithWhatsAppByPhone: (
     phoneNumber: string,
@@ -102,7 +146,7 @@ interface IUserRepository {
     data: CreateMasterUserProps,
     tx?: Prisma.TransactionClient,
   ) => Promise<User>;
-  listMasterUsers: (props: ListMasterUsersProps) => Promise<ListUsers>;
+  listMasterUsers: (props: ListMasterUsersProps) => Promise<ListUsersPage>;
   searchUserWithCursor: (
     props: SearchUserWithCursorProps,
   ) => Promise<CursorPaginatedUser>;

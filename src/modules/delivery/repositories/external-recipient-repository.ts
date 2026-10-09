@@ -2,7 +2,10 @@ import database from "@/../infra/database";
 
 import { randomBytes } from "node:crypto";
 
+import { PUBLIC_AUTHORIZATION_STATUSES } from "@/shared/delivery/public-occurrence";
+
 import type {
+  DeliveryContactState,
   IExternalRecipientRepository,
   TrackingSource,
 } from "./IExternal-recipient-repository";
@@ -61,7 +64,7 @@ class ExternalRecipientRepository implements IExternalRecipientRepository {
             delivered_at: true,
             received_by: true,
             business: {
-              select: { corporate_reason: true, fantasy_name: true },
+              select: { corporate_reason: true, fantasy_name: true, timezone: true },
             },
 
             // Only the moments a customer can act on. No status overrides,
@@ -69,13 +72,31 @@ class ExternalRecipientRepository implements IExternalRecipientRepository {
             events: {
               where: { type: { in: ["ARRIVAL", "PROOF"] } },
               orderBy: { created_at: "desc" },
-              select: { created_at: true, type: true, note: true },
+              select: {
+                created_at: true,
+                occurred_at: true,
+                type: true,
+                note: true,
+              },
             },
 
             occurrences: {
+              // The platform's own types ("Comprovante rejeitado", from the
+              // proof audit) are the office talking to itself: they never
+              // reach the person waiting for the delivery. Nor a DELIVERED
+              // occurrence (decision 14.3): the delivery already shows as
+              // delivered through its PROOF, and a second line would repeat it.
+              // Only what happened: a request the tower has not approved is
+              // not a fact about the delivery (decision 6.3).
+              where: {
+                occurrenceType: { is_system: false },
+                category: "NOT_DELIVERED",
+                authorization_status: { in: PUBLIC_AUTHORIZATION_STATUSES },
+              },
               orderBy: { created_at: "desc" },
               select: {
                 created_at: true,
+                occurred_at: true,
                 description: true,
                 occurrenceType: { select: { name: true } },
               },
@@ -108,14 +129,17 @@ class ExternalRecipientRepository implements IExternalRecipientRepository {
         business: delivery.business,
       },
 
+      // When it happened, for what the driver's app sent later: the person
+      // waiting was told "entregue às 13:40" for a receipt signed at 10:05
+      // (MOB-08). The view sorts by this, so it has to be the fact's time.
       events: delivery.events.map((event) => ({
-        created_at: event.created_at,
+        created_at: event.occurred_at ?? event.created_at,
         type: event.type,
         note: event.note,
       })),
 
       occurrences: delivery.occurrences.map((occurrence) => ({
-        created_at: occurrence.created_at,
+        created_at: occurrence.occurred_at ?? occurrence.created_at,
         typeName: occurrence.occurrenceType?.name ?? "Ocorrência",
         description: occurrence.description,
       })),
@@ -133,6 +157,29 @@ class ExternalRecipientRepository implements IExternalRecipientRepository {
     });
 
     return count > 0;
+  }
+
+  async findDeliveryState(
+    deliveryId: string,
+  ): Promise<DeliveryContactState | null> {
+    const delivery = await this.prisma.delivery.findUnique({
+      where: { id: deliveryId },
+      select: {
+        status: true,
+        recipient_name: true,
+        recipient_email: true,
+        recipient_telephone: true,
+      },
+    });
+
+    if (!delivery) return null;
+
+    return {
+      status: delivery.status,
+      name: delivery.recipient_name,
+      email: delivery.recipient_email,
+      telephone: delivery.recipient_telephone,
+    };
   }
 }
 

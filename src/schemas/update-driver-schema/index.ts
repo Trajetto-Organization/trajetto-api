@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -6,29 +7,15 @@ import {
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
 
-const isAdult = (date: Date) => {
-  const today = new Date();
-  const birthDate = new Date(date);
-
-  const age = today.getFullYear() - birthDate.getFullYear();
-  const monthDifference = today.getMonth() - birthDate.getMonth();
-
-  if (
-    monthDifference < 0 ||
-    (monthDifference === 0 && today.getDate() < birthDate.getDate())
-  ) {
-    return age - 1 >= 18;
-  }
-
-  return age >= 18;
-};
-
-const isValidDateString = (value: string): boolean => {
-  const date = new Date(value);
-  return !isNaN(date.getTime());
-};
+import { birthDateField } from "@/schemas/driver-birth-date-field";
+import {
+  cnhCategoryField,
+  cnhExpiresAtField,
+  cnhNumberField,
+} from "@/schemas/driver-cnh-fields";
 
 const updateDriverSchema = z.object({
+  ...tenantLockedShape,
   name: z
     .string()
     .min(3, "O nome deve ter no mínimo 3 caracteres.")
@@ -79,33 +66,10 @@ const updateDriverSchema = z.object({
       }
     })
     .optional(),
-  birth_date: z
-    .string()
-    .min(1, "A data de nascimento é obrigatória.")
-    .superRefine((val, ctx) => {
-      if (!isValidDateString(val)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "Data de nascimento inválida.",
-        });
-
-        return;
-      }
-
-      const date = new Date(val);
-
-      if (!isAdult(date)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "O motorista deve ter pelo menos 18 anos.",
-        });
-      }
-    }),
-  cnh: z
-    .string()
-    .min(1, "O número da CNH é obrigatório.")
-    .max(20, "O número da CNH deve ter no máximo 20 caracteres.")
-    .optional(),
+  birth_date: birthDateField,
+  cnh: cnhNumberField.optional(),
+  cnh_category: cnhCategoryField,
+  cnh_expires_at: cnhExpiresAtField,
   cpf: z.preprocess(
     (val) => {
       if (typeof val === "string") {

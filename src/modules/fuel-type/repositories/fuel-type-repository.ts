@@ -7,11 +7,21 @@ import {
   UpdateFuelType,
   SearchFuelTypeWithCursorProps,
   CursorPaginatedFuelType,
+  FuelTypeUsage,
 } from "../dtos/fuel-type-dto";
 
 import database from "@/../infra/database";
 
-import { buildSearchOr } from "@/shared/pagination/search-or";
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+
+import {
+  FUEL_TYPE_SORT,
+  fuelTypeListWhere,
+} from "../usecases/list-fuel-type/fuel-type-list";
+import {
+  escapeLikePattern,
+  insensitiveEquals,
+} from "@/shared/utils/like-pattern";
 
 class FuelTypeRepository implements IFuelTypeRepository {
   constructor(private prisma = database) {}
@@ -34,67 +44,57 @@ class FuelTypeRepository implements IFuelTypeRepository {
   async listFuelTypes({
     page,
     pageSize,
-    businessId,
-    currentUserRole,
-    search,
+    sort,
+    order,
+    refuelWindow,
+    ...filters
   }: ListFuelTypeByBusinessIdProps): Promise<ListFuelTypeProps> {
-    const skip = (page - 1) * pageSize;
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
+    const where = fuelTypeListWhere(filters);
 
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { description: { contains: normalizedSearch, mode: "insensitive" } },
-        // Business ID and name (MASTER only)
-        ...(currentUserRole === "MASTER"
-          ? [
-              {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
-              },
-              {
-                business: {
-                  corporate_reason: {
-                    contains: normalizedSearch,
-                    mode: "insensitive",
-                  },
-                },
-              },
-            ]
-          : []),
-      );
-    }
-
-    const whereCondition = {
-      ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...buildSearchOr(orConditions),
-    };
-
-    const [fuelTypeData, total] = await Promise.all([
+    const [fuelTypeData, usage, refuelings] = await Promise.all([
       this.prisma.fuelType.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
-        include: {
-          business: {
-            select: {
-              corporate_reason: true,
+        where,
+        orderBy: resolveOrderBy(FUEL_TYPE_SORT, { sort, order }),
+      }),
+      // One vehicle count per type of the whole search (at most eight per
+      // company), which also answers the pager total.
+      this.prisma.fuelType.findMany({
+        where,
+        select: { id: true, description: true, _count: { select: { vehicles: true } } },
+      }),
+      refuelWindow
+        ? this.prisma.fuel.groupBy({
+            by: ["fuelTypeId"],
+            where: {
+              // Tenant on the refuelling itself as well: the type filter
+              // already pins it, this keeps it true if that ever changes.
+              businessId: filters.businessId,
+              refueling_date: { gte: refuelWindow.start, lt: refuelWindow.end },
+              fuelType: where,
             },
-          },
-        },
-        orderBy: {
-          created_at: "desc",
-        },
-      }),
-      this.prisma.fuelType.count({
-        where: whereCondition,
-      }),
+            _count: { _all: true },
+            _sum: { liters_amount: true, total_amount: true },
+          })
+        : null,
     ]);
 
     return {
       data: fuelTypeData,
-      total,
+      total: usage.length,
+      usage: usage.map(({ id, description, _count }) => ({
+        id,
+        label: description,
+        count: _count.vehicles,
+      })),
+      refuelings:
+        refuelings?.map((row) => ({
+          fuelTypeId: row.fuelTypeId,
+          refuelings: row._count._all,
+          liters: Number(row._sum.liters_amount ?? 0),
+          amount: Number(row._sum.total_amount ?? 0),
+        })) ?? null,
     };
   }
 
@@ -102,11 +102,14 @@ class FuelTypeRepository implements IFuelTypeRepository {
     fuelTypeData,
     fuelTypeId,
   }: UpdateFuelType): Promise<FuelType> {
-    const filteredData = Object.fromEntries(
-      Object.entries(fuelTypeData).filter(
-        ([_, value]) => value !== undefined && value !== null && value !== "",
-      ),
-    );
+    // Only the description: a fuel type never changes company (its vehicles
+    // and refuelings would point across tenants).
+    const filteredData =
+      fuelTypeData.description !== undefined &&
+      fuelTypeData.description !== null &&
+      fuelTypeData.description !== ""
+        ? { description: fuelTypeData.description }
+        : {};
 
     const updateFuelType = await this.prisma.fuelType.update({
       where: {
@@ -142,7 +145,9 @@ class FuelTypeRepository implements IFuelTypeRepository {
     fuelTypeId: string,
     businessId: string,
   ): Promise<FuelType | null> {
-    const findFuelTypeById = await this.prisma.fuelType.findUnique({
+    // findFirst: `findUnique` with an undefined businessId matched the id
+    // alone, handing another company's fuel type to the caller.
+    const findFuelTypeById = await this.prisma.fuelType.findFirst({
       where: {
         id: fuelTypeId,
         businessId,
@@ -158,10 +163,8 @@ class FuelTypeRepository implements IFuelTypeRepository {
   ): Promise<FuelType | null> {
     const findFuelTypeByDescription = await this.prisma.fuelType.findFirst({
       where: {
-        description: {
-          equals: description,
-          mode: "insensitive",
-        },
+        // Escaped: the value is an ILIKE pattern underneath (like-pattern.ts).
+        description: insensitiveEquals(description),
         businessId: businessId,
       },
     });
@@ -179,7 +182,10 @@ class FuelTypeRepository implements IFuelTypeRepository {
       where: {
         businessId,
         ...(search && {
-          description: { contains: search, mode: "insensitive" },
+          description: {
+            contains: escapeLikePattern(search),
+            mode: "insensitive",
+          },
         }),
       },
       take: limit + 1,
@@ -187,9 +193,7 @@ class FuelTypeRepository implements IFuelTypeRepository {
         cursor: { id: cursor },
         skip: 1,
       }),
-      orderBy: {
-        created_at: "desc",
-      },
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     });
 
     const hasMore = items.length > limit;
@@ -198,6 +202,18 @@ class FuelTypeRepository implements IFuelTypeRepository {
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };
+  }
+
+  async countFuelTypeUsage(fuelTypeId: string): Promise<FuelTypeUsage> {
+    const counted = await this.prisma.fuelType.findUnique({
+      where: { id: fuelTypeId },
+      select: { _count: { select: { vehicles: true, fuels: true } } },
+    });
+
+    return {
+      vehicles: counted?._count.vehicles ?? 0,
+      fuels: counted?._count.fuels ?? 0,
+    };
   }
 }
 

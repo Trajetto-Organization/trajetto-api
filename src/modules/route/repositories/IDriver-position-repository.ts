@@ -16,6 +16,15 @@ interface StoredPosition {
   recorded_at: Date;
 }
 
+/** What one flush left in the trail. */
+interface RecordedBatch {
+  /** New rows; a point already stored (a resend) is neither stored nor dropped. */
+  stored: number;
+
+  /** Points no partition can ever hold, dropped so the rest could be written. */
+  dropped: number;
+}
+
 interface LivePosition extends StoredPosition {
   driverName: string | null;
   vehiclePlate: string | null;
@@ -38,13 +47,23 @@ interface IDriverPositionRepository {
    * `createMany` and not a loop: a phone coming out of a dead zone sends
    * hundreds of points, and hundreds of round trips for one flush is how the
    * ingest endpoint becomes the slowest route in the product.
+   *
+   * The trail and the driver's last position commit together, and a point no
+   * partition can ever hold is dropped on its own instead of failing the
+   * flush (INV-14).
    */
   recordBatch: (props: {
     driverId: string;
     businessId: string;
     routeId: string | null;
+    /**
+     * The running route's departure. A point recorded before it is stored
+     * without the route (routeOfPing): a backlog is not credited to a route
+     * that had not left yet.
+     */
+    routeStartedAt?: Date | null;
     pings: AcceptedPing[];
-  }) => Promise<number>;
+  }) => Promise<RecordedBatch>;
 
   /**
    * The latest position of every driver who reported today.
@@ -57,13 +76,48 @@ interface IDriverPositionRepository {
     since: Date,
   ) => Promise<LivePosition[]>;
 
-  /** Every point of one driver in a window, oldest first, for the trail. */
+  /**
+   * When each of these drivers last reported, however long ago.
+   *
+   * The map only looks twelve hours back; a running route whose phone went
+   * quiet before that is not "sem posição desde a saída" — it has a last
+   * signal, just an old one. Read by primary key, only for those drivers.
+   */
+  listLastSignals: (
+    businessId: string,
+    driverIds: string[],
+  ) => Promise<Array<{ driverId: string; recorded_at: Date }>>;
+
+  /** Every point of one driver in [from, to), oldest first, for the trail. */
   listTrail: (props: {
     businessId: string;
     driverId: string;
     from: Date;
     to: Date;
+
+    /** Only the points recorded on this route (decision 14.7). */
+    routeId?: string;
   }) => Promise<StoredPosition[]>;
+
+  /**
+   * Whether the driver is one of this company's. The trail asks before
+   * reading anything: without it, anybody's day is one id away.
+   */
+  /**
+   * The driver's last known point (driver_last_position), within the
+   * company. The route page reads it once; the socket keeps it live.
+   */
+  findLast: (
+    businessId: string,
+    driverId: string,
+  ) => Promise<StoredPosition | null>;
+
+  hasDriver: (businessId: string, driverId: string) => Promise<boolean>;
 }
 
-export type { IDriverPositionRepository, LivePosition, StoredPosition };
+export type {
+  IDriverPositionRepository,
+  LivePosition,
+  RecordedBatch,
+  StoredPosition,
+};

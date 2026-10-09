@@ -51,6 +51,10 @@
         font-size: 14px;
         margin-bottom: 15px;
       }
+      .link {
+        text-decoration: underline;
+        color: #d50057;
+      }
     </style>
   </head>
   <body>
@@ -72,18 +76,17 @@
           sucesso! 🥳🎉
         </p>
         <p class="paragraph">
-          Por segurança, recomendamos que você altere a sua senha no primeiro
-          acesso.
+          Para entrar, defina a sua senha pelo link abaixo. Ele vale por 72
+          horas e só pode ser usado uma vez:
+          <a href="{{url}}" class="link">Definir minha senha</a>
         </p>
         <p class="paragraph">
-          <p style="margin-bottom: 3px;">
-            Abaixo, seguem os seus dados de acesso:
-          </p>
-          <br />
-          <strong>E-mail:</strong>
-          {{email}}<br />
-          <strong>Senha:</strong>
-          {{password}}
+          <strong>E-mail de acesso:</strong>
+          {{email}}
+        </p>
+        <p class="paragraph">
+          Se o link expirar, use a opção "Esqueci minha senha" na tela de
+          login. Nenhuma senha é enviada por e-mail.
         </p>
         <p class="paragraph">
           Obrigado,<br />

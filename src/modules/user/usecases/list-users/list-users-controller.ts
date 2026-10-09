@@ -1,57 +1,56 @@
 import { FastifyReply, FastifyRequest } from "fastify";
-
 import { container } from "tsyringe";
 import { z } from "zod";
-
 import { ListUsersUseCase } from "./list-users-usecase";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-
-import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
+import { listUserSchema } from "@/schemas/list-user-schema";
 
 class ListUsersController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // The route already validated AND transformed the querystring (page is a
+    // number, each facet a list): re-parsing it against the wire schema would
+    // reject its own output.
+    const {
+      businessId,
+      page,
+      pageSize,
+      search,
+      sort,
+      order,
+      role,
+      access,
+      two_factor,
+      profileAccessId,
+    } = request.query as z.infer<typeof listUserSchema>;
 
     const listUsersUseCase = container.resolve(ListUsersUseCase);
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        // Try to decode, but catch errors
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        // If it fails, use the value without decoding.
-        decodedSearch = search;
-      }
-    }
-
-    try {
-      const listUsers = listUsersUseCase.execute(
-        id,
-        page,
-        pageSize,
-        decodedSearch,
-      );
-
-      await sendAsNDJSON({
-        reply,
-        dataPromise: listUsers,
-        page,
-        pageSize,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await sendAsNDJSON({
+      reply,
+      page,
+      pageSize,
+      dataPromise: listUsersUseCase
+        .execute({
+          userId: id,
+          businessId,
+          page,
+          pageSize,
+          search: search?.trim() || undefined,
+          sort,
+          order,
+          roles: role,
+          access,
+          twoFactor: two_factor,
+          profileAccessIds: profileAccessId,
+        })
+        .then((result) => ({
+          data: result.data,
+          total: result.total,
+          meta: result.searchMeta,
+        })),
+    });
   }
 }
 

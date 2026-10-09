@@ -10,6 +10,7 @@ import {
   activitySchemas,
   activityResponses,
 } from "./documentation/activity-documentation";
+import { ndjsonCursor, ndjsonList } from "./documentation/ndjson";
 
 const listAllActivitiesController = new ListAllActivitiesController();
 const getActivitySummaryController = new GetActivitySummaryController();
@@ -24,13 +25,14 @@ async function activityRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["activity"],
-        summary: "List all activities",
+        summary: "Lista o registro de atividades (tabela)",
         description:
-          "Lists all system activities with paging and search. MASTER sees all activities for all companies. BUSINESS_ADMIN sees only their company's activities (except actions performed by MASTER users).",
+          "O registro de atividades em páginas, mais recentes primeiro (`order=asc` inverte). Filtra no servidor, sobre o registro inteiro e não sobre a página: `status`, `type`, `action` e `role` (um ou mais valores do catálogo, separados por vírgula). O status filtrado também encontra as grafias antigas do mesmo status. `role=DRIVER` são as ações do motorista pelo aplicativo; `PLATFORM`/`MASTER`, as da equipe Trajetto. O MASTER vê todas as empresas ou uma (`businessId`); o administrador vê a própria empresa, sem as ações do MASTER exceto as mudanças do plano dela.",
         querystring: activitySchemas.listAllActivitiesQuery,
         response: {
-          200: activityResponses.activityList,
-          400: activityResponses.resourceNotFound,
+          200: ndjsonList(activityResponses.activityRow),
+          400: activityResponses.listActivitiesErrors,
+          403: activityResponses.activityForbidden,
           500: activityResponses.internalServerError,
         },
       },
@@ -46,13 +48,17 @@ async function activityRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["activity"],
-        summary: "Activity timeline feed (cursor paginated, NDJSON)",
+        summary: "Linha do tempo de atividades (cursor, NDJSON)",
         description:
-          "Feed for the timeline view, newest first. Uses keyset pagination instead of offsets because the audit log is written to continuously — with offsets, new rows shift everything down and a second page repeats what the first already showed. The `period` window is part of the cursor contract: changing it is a different result set, so the client must drop the cursor and start over. Scope follows the listing rule — MASTER sees everything (or one company via businessId), BUSINESS_ADMIN sees their company minus MASTER actions, except its own plan changes.",
+          "Feed da linha do tempo, mais recentes primeiro, paginado por cursor (o registro é escrito o tempo todo: com páginas por posição, a segunda repetiria linhas da primeira). A janela `period` (7d ou 30d) conta dias civis no fuso da empresa, hoje incluído, e faz parte do contrato do cursor: ao trocá-la, descarte o cursor e recomece. O escopo é o da tabela — o MASTER vê tudo ou uma empresa (`businessId`); o administrador, a própria empresa sem as ações do MASTER, exceto as mudanças do plano dela.",
         querystring: activitySchemas.listActivitiesCursorQuery,
         response: {
-          200: activityResponses.activityCursorStreamDescription,
+          200: ndjsonCursor(
+            activityResponses.activityRow,
+            activityResponses.activityCursorMeta,
+          ),
           400: activityResponses.resourceNotFound,
+          403: activityResponses.activityForbidden,
           500: activityResponses.internalServerError,
         },
       },
@@ -68,13 +74,14 @@ async function activityRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["activity"],
-        summary: "Aggregated activity counters for the period",
+        summary: "Resumo das atividades do período",
         description:
-          "Totals for the whole window (never a page): actions by type, deletions, distinct users and the busiest module. Scope follows the listing rule — MASTER sees everything (or one company when businessId is sent), BUSINESS_ADMIN sees their company minus MASTER actions.",
+          "Totais da janela inteira (nunca de uma página): ações por tipo, exclusões, pessoas que agiram (ações de sistema, sem autor, não contam) e o módulo mais movimentado. A janela conta dias civis no fuso da empresa, hoje incluído. O escopo é o da tabela — o MASTER vê tudo ou uma empresa (`businessId`); o administrador, a própria empresa sem as ações do MASTER.",
         querystring: activitySchemas.activitySummaryQuery,
         response: {
           200: activityResponses.activitySummary,
           400: activityResponses.resourceNotFound,
+          403: activityResponses.activityForbidden,
           500: activityResponses.internalServerError,
         },
       },

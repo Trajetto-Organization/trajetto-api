@@ -70,14 +70,8 @@ const createUserSchema = z
         });
       }
     }),
-    password: z
-      .string()
-      .min(7, "A senha deve ter pelo menos 7 caracteres.")
-      .max(100, "A senha deve ter no máximo 100 caracteres.")
-      .refine((value) => !/\s/.test(value), {
-        message: "A senha não deve conter espaços.",
-      })
-      .optional(),
+    // No password here (decision 4.9): the new user receives a single-use
+    // link to set their own, and no password is ever mailed.
     role: roleEnum,
     businessId: z
       .string({ required_error: "ID da empresa é obrigatório!" })

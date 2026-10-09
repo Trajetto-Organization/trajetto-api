@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+import { legacyProofUseCase, businessWithoutAI as reportsWithoutAI } from "../../support/delivery-proof-usecases";
 import { InMemoryProofAuditRepository } from "@/modules/delivery/repositories/in-memory/in-memory-proof-audit-repository";
 import type { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
+import { InMemoryDriverPauseRepository } from "@/modules/driver-pause/repositories/in-memory/in-memory-driver-pause-repository";
 import { ListMyDeliveriesUseCase } from "@/modules/delivery/usecases/list-my-deliveries/list-my-deliveries-usecase";
 import { StartDriverRouteUseCase } from "@/modules/delivery/usecases/start-driver-route/start-driver-route-usecase";
 
 import { RegisterDeliveryArrivalUseCase } from "@/modules/delivery/usecases/register-delivery-arrival/register-delivery-arrival-usecase";
-import { RegisterDeliveryProofUseCase } from "@/modules/delivery/usecases/register-delivery-proof/register-delivery-proof-usecase";
 
 import { ReportDeliveryOccurrenceUseCase } from "@/modules/delivery/usecases/report-delivery-occurrence/report-delivery-occurrence-usecase";
 
-import { StartRouteUseCase } from "@/modules/route/usecases/start-route/start-route-usecase";
-
+import { InMemoryOccurrenceAuthorizationRepository } from "@/modules/delivery/repositories/in-memory/in-memory-occurrence-authorization-repository";
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
@@ -160,10 +160,34 @@ const businessWithoutAI = {
 } as unknown as IBusinessRepository;
 
 describe("driver surface: my-deliveries", () => {
-  it("returns only the driver's designated and in-transit deliveries", async () => {
+  it("returns only the driver's released and in-transit deliveries", async () => {
     const repos = makeRepositories();
 
     const designated = await seedDelivery(repos.deliveryRepository);
+
+    // D8 (decision 14.7): a PENDING delivery reaches the phone only on a
+    // RELEASED or IN_PROGRESS route.
+    repos.deliveryRepository.routeStops.push({
+      deliveryId: designated.id!,
+      status: "PENDING",
+      routeId: "route-released",
+      routeStatus: "RELEASED",
+    });
+
+    const onDraft = await seedDelivery(repos.deliveryRepository, {
+      recipient_name: "Rota em planejamento",
+    });
+
+    repos.deliveryRepository.routeStops.push({
+      deliveryId: onDraft.id!,
+      status: "PENDING",
+      routeId: "route-planned",
+      routeStatus: "PLANNED",
+    });
+
+    await seedDelivery(repos.deliveryRepository, {
+      recipient_name: "Designada sem rota",
+    });
     const inTransit = await seedDelivery(repos.deliveryRepository, {
       recipient_name: "Cliente B",
       status: "IN_TRANSIT",
@@ -201,6 +225,7 @@ describe("driver surface: my-deliveries", () => {
       repos.userRepository,
       repos.deliveryRepository,
       repos.occurrenceTypeRepository,
+      new InMemoryDriverPauseRepository([], [], [], [{ id: BUSINESS, timezone: "America/Sao_Paulo" }]),
     );
 
     const result = await useCase.execute({
@@ -227,6 +252,7 @@ describe("driver surface: my-deliveries", () => {
       repos.userRepository,
       repos.deliveryRepository,
       repos.occurrenceTypeRepository,
+      new InMemoryDriverPauseRepository([], [], [], [{ id: BUSINESS, timezone: "America/Sao_Paulo" }]),
     );
 
     await expect(
@@ -236,19 +262,12 @@ describe("driver surface: my-deliveries", () => {
 });
 
 function makeStartRoute(repos: ReturnType<typeof makeRepositories>) {
+  // No route or start-route: the legacy departure moves loose deliveries
+  // only and never starts a route (IDEMP-17).
   return new StartDriverRouteUseCase(
     repos.userRepository,
     repos.deliveryRepository,
     repos.vehicleRepository,
-    repos.routeRepository,
-    new StartRouteUseCase(
-      repos.routeRepository,
-      repos.userRepository,
-      repos.vehicleRepository,
-      notificationStub,
-      outboxStub,
-      webhookStub.asService(),
-    ),
     notificationStub,
   );
 }
@@ -478,7 +497,7 @@ describe("driver surface: arrival", () => {
 
 describe("driver surface: proof", () => {
   function makeUseCase(repos: ReturnType<typeof makeRepositories>) {
-    return new RegisterDeliveryProofUseCase(
+    return legacyProofUseCase(
       repos.userRepository,
       repos.deliveryRepository,
       repos.routeRepository,
@@ -561,6 +580,13 @@ describe("driver surface: occurrence photo rules", () => {
       uploadStub,
       outbox,
       webhookStub.asService(),
+      new InMemoryOccurrenceAuthorizationRepository(
+        repos.deliveryRepository,
+        repos.occurrenceTypeRepository,
+        repos.userRepository,
+      ),
+      new InMemoryProofAuditRepository(),
+      reportsWithoutAI,
     );
   }
 
@@ -648,6 +674,45 @@ describe("driver surface: occurrence photo rules", () => {
     await makeUseCase(repos).execute(request);
 
     expect(repos.deliveryRepository.occurrences).toHaveLength(1);
+  });
+
+  it("does not ring when a blocking report changes nothing", async () => {
+    const repos = makeRepositories();
+
+    repos.occurrenceTypeRepository.occurrenceTypes.push({
+      id: "type-blocking",
+      name: "Recusa da mercadoria",
+      businessId: BUSINESS,
+      is_active: true,
+      requires_photo: false,
+      blocks_delivery: true,
+    } as OccurrenceType);
+
+    // Already delivered: the report is kept, the delivery stays delivered.
+    const delivery = await seedDelivery(repos.deliveryRepository, {
+      status: "DELIVERED",
+    });
+
+    const publishedTopics: string[] = [];
+
+    const recorder = {
+      publish: async (_tx: unknown, event: { topic: string }) => {
+        publishedTopics.push(event.topic);
+      },
+    } as unknown as OutboxService;
+
+    await makeUseCase(repos, recorder).execute({
+      userId: WEB_USER_ID,
+      businessId: BUSINESS,
+      deliveryId: delivery.id!,
+      occurrenceTypeId: "type-blocking",
+    });
+
+    expect(repos.deliveryRepository.occurrences).toHaveLength(1);
+
+    // Before: "Entrega com insucesso!" to every administrator — WhatsApp
+    // included — about a delivery that still read "Entregue".
+    expect(publishedTopics).toHaveLength(0);
   });
 
   it("rings the manager's bell only for a blocking type", async () => {

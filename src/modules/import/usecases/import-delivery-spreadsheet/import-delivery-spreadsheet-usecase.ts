@@ -14,9 +14,6 @@ import { IImportRepository } from "../../repositories/IImport-repository";
 
 import { NotificationService } from "@/shared/services/notification-service";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 
 import { readSpreadsheet } from "@/shared/delivery/spreadsheet-reader";
@@ -32,6 +29,22 @@ import type {
   ImportReport,
   ImportRowResult,
 } from "../../dtos/import-dto";
+
+import {
+  businessNotFound,
+  callerNotFound,
+} from "@/shared/delivery/caller-not-found";
+import database from "@/../infra/database";
+import { businessToday, resolveTimeZone } from "@/shared/time/business-day";
+import { Prisma } from "@prisma/client";
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import { RouteCodeTakenError } from "@/modules/route/usecases/errors/route-errors";
+import { ShipperInactiveError } from "@/modules/shipper/usecases/errors/shipper-errors";
+import { logger } from "@/shared/logging/logger";
+import {
+  deliveryAssignedPayload,
+  deliveryEventPayload,
+} from "@/shared/integration/announce";
 
 interface ImportDeliverySpreadsheetRequest {
   userId: string;
@@ -51,6 +64,22 @@ interface ImportDeliverySpreadsheetRequest {
    * shippers is two uploads.
    */
   shipperId: string;
+}
+
+/**
+ * How often a running upload proves it is alive.
+ *
+ * Far inside the sweep's staleness window (close-abandoned-imports-job): even
+ * a slow database decides twenty-five rows in seconds, not minutes.
+ */
+const HEARTBEAT_EVERY_ROWS = 25;
+
+/** What an upload has decided so far — readable when it is interrupted. */
+interface ImportProgress {
+  rows: ImportRowResult[];
+
+  /** The sheet line being processed; null once every row is decided. */
+  line: number | null;
 }
 
 /** What the rows of one route group have in common. */
@@ -105,6 +134,8 @@ class ImportDeliverySpreadsheetUseCase {
     private importRepository: IImportRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -116,14 +147,14 @@ class ImportDeliverySpreadsheetUseCase {
   }: ImportDeliverySpreadsheetRequest): Promise<ImportRecord> {
     const findUser = await this.user.findUserById(userId);
 
-    if (!findUser) throw new ResourceNotFoundError();
+    if (!findUser) throw callerNotFound();
 
     // Loading the company's day is the dispatcher's job.
     assertDispatcher(findUser);
 
     const findBusiness = await this.business.findBusinessById(businessId);
 
-    if (!findBusiness) throw new BusinessNotFoundError();
+    if (!findBusiness) throw businessNotFound();
 
     const findShipper = await this.shipper.findShipperById(shipperId);
 
@@ -132,11 +163,26 @@ class ImportDeliverySpreadsheetUseCase {
       throw new AppError("Embarcador não encontrado.", 404, "SHIPPER_NOT_FOUND");
     }
 
+    // A deactivated shipper takes no new deliveries through any door
+    // (decision 5.7); the whole upload is its load, so it is refused whole.
+    if (findShipper.is_active === false) {
+      throw new ShipperInactiveError(findShipper.name);
+    }
+
+    // The company's zone: a route row without a date is scheduled for the
+    // company's today, not the server's (decision 1.1).
+    const timeZone = resolveTimeZone(
+      (findBusiness as { timezone?: string | null }).timezone,
+    );
+
     let matrix: unknown[][];
 
     try {
       matrix = await readSpreadsheet(filename, content);
     } catch (error) {
+      // Refused on purpose, with its own sentence (too many rows, too large).
+      if (error instanceof AppError) throw error;
+
       // A corrupt file, or an .xlsx that is not one. The operator needs to
       // know it was the FILE and not their data.
       throw new AppError(
@@ -150,8 +196,9 @@ class ImportDeliverySpreadsheetUseCase {
 
     // The record exists before a single row does, so everything created below
     // carries its id from birth. A process that dies halfway then leaves an
-    // upload the operator can still undo; stamping the rows at the end would
-    // leave orphans no undo could ever group again.
+    // upload the operator can still undo — once it is closed, by the catch
+    // below or by the close-abandoned-imports sweep; stamping the rows at the
+    // end would leave orphans no undo could ever group again.
     const record = await this.importRepository.createImport({
       source: "SPREADSHEET",
       filename,
@@ -159,17 +206,64 @@ class ImportDeliverySpreadsheetUseCase {
       performedById: userId,
     });
 
-    const rows: ImportRowResult[] = parsed.errors.map((error) => ({
-      line: error.line,
-      outcome: "invalid" as const,
-      recipient_name: null,
-      reference: error.column,
-      message: error.message,
-    }));
+    const progress: ImportProgress = { rows: [], line: null };
+
+    try {
+      return await this.importRows(record, parsed, progress, {
+        userId,
+        businessId,
+        shipperId,
+        filename,
+        timeZone,
+      });
+    } catch (error) {
+      // A failure the process survives — a pool timeout on a lookup, the
+      // database dropping the connection — used to leave the upload
+      // IN_PROGRESS for good, and the undo refuses a running upload: the rows
+      // it had created could never be taken back (IDEMP-10). It is closed
+      // here with what it did, and the line it stopped at.
+      await this.closeInterrupted(record.id, businessId, parsed, progress);
+
+      throw error;
+    }
+  }
+
+  /** The rows, the routes and the closing of the record, in that order. */
+  private async importRows(
+    record: ImportRecord,
+    parsed: ReturnType<typeof parseDeliverySpreadsheet>,
+    progress: ImportProgress,
+    {
+      userId,
+      businessId,
+      shipperId,
+      filename,
+      timeZone,
+    }: Omit<ImportDeliverySpreadsheetRequest, "content"> & { timeZone: string },
+  ): Promise<ImportRecord> {
+    const rows = progress.rows;
+
+    rows.push(
+      ...parsed.errors.map((error) => ({
+        line: error.line,
+        outcome: "invalid" as const,
+        recipient_name: null,
+        reference: error.column,
+        message: error.message,
+      })),
+    );
 
     const createdDeliveryIdByLine = new Map<number, string>();
 
-    for (const row of parsed.rows) {
+    for (const [index, row] of parsed.rows.entries()) {
+      progress.line = row.line;
+
+      // The heartbeat: what tells a long upload that is alive from one whose
+      // process died, for the close-abandoned-imports sweep.
+      if (index > 0 && index % HEARTBEAT_EVERY_ROWS === 0) {
+        await this.importRepository.touchImport(record.id, businessId);
+      }
+
       const duplicate = await this.findDuplicate(businessId, shipperId, row);
 
       if (duplicate) {
@@ -184,43 +278,101 @@ class ImportDeliverySpreadsheetUseCase {
         continue;
       }
 
+      // Identified by the order alone: no unique index stands behind the pair
+      // (ADR 0006), so the check above is repeated under a lock inside the
+      // insert's transaction.
+      const orderOnly = !row.invoice_key && row.code ? row.code : null;
+
       try {
-        const created = await this.delivery.createDelivery({
-          businessId,
-          shipperId,
-          importId: record.id,
+        // The row and its `delivery.created` in one commit, per row — one bad
+        // row still never sinks the batch. The spreadsheet used to announce
+        // nothing, and the company's ERP never learned these documents'
+        // ids.
+        const created = await database.$transaction(async (tx) => {
+          if (orderOnly) {
+            // Two uploads of the same sheet both pass the check above before
+            // either commits. The lock makes the second wait for the first's
+            // commit, and the re-read then sees its row.
+            await this.delivery.lockOrderIdentity(
+              businessId,
+              shipperId,
+              orderOnly,
+              tx,
+            );
 
-          recipient_name: row.recipient_name,
-          recipient_document: row.recipient_document,
-          recipient_telephone: row.recipient_telephone,
-          recipient_email: row.recipient_email,
+            const existing = await this.delivery.findDeliveryByShipperAndCode(
+              businessId,
+              shipperId,
+              orderOnly,
+              tx,
+            );
 
-          cep: row.cep,
-          city: row.city,
-          uf: row.uf,
-          street: row.street,
-          address_number: row.address_number,
-          complement: row.complement,
-          neighborhood: row.neighborhood,
+            if (existing) return null;
+          }
 
-          invoice_key: row.invoice_key,
-          invoice_number: row.invoice_number,
-          code: row.code,
+          const delivery = await this.delivery.createDelivery(
+            {
+              businessId,
+              shipperId,
+              importId: record.id,
 
-          scheduled_date: row.scheduled_date,
-          notes: row.notes,
+              recipient_name: row.recipient_name,
+              recipient_document: row.recipient_document,
+              recipient_telephone: row.recipient_telephone,
+              recipient_email: row.recipient_email,
 
-          ...(row.item && {
-            items: [
-              {
-                description: row.item.description,
-                quantity: row.item.quantity,
-                unit: row.item.unit,
-                unit_value: row.item.unit_value,
-              },
-            ],
-          }),
+              cep: row.cep,
+              city: row.city,
+              uf: row.uf,
+              street: row.street,
+              address_number: row.address_number,
+              complement: row.complement,
+              neighborhood: row.neighborhood,
+
+              invoice_key: row.invoice_key,
+              invoice_number: row.invoice_number,
+              code: row.code,
+
+              scheduled_date: row.scheduled_date,
+              notes: row.notes,
+
+              ...(row.item && {
+                items: [
+                  {
+                    description: row.item.description,
+                    quantity: row.item.quantity,
+                    unit: row.item.unit,
+                    unit_value: row.item.unit_value,
+                  },
+                ],
+              }),
+            },
+            tx,
+          );
+
+          await this.webhooks.announce(
+            "delivery.created",
+            businessId,
+            deliveryEventPayload({ ...delivery, id: delivery.id! }),
+            tx,
+          );
+
+          return delivery;
         });
+
+        if (!created) {
+          // Another upload won this order. Left out of createdDeliveryIdByLine,
+          // so the route below does not stop at it a second time.
+          rows.push({
+            line: row.line,
+            outcome: "duplicated",
+            recipient_name: row.recipient_name,
+            reference: row.code,
+            message: "Este pedido já havia sido importado para este embarcador.",
+          });
+
+          continue;
+        }
 
         createdDeliveryIdByLine.set(row.line, created.id!);
 
@@ -232,11 +384,14 @@ class ImportDeliverySpreadsheetUseCase {
           message: null,
         });
       } catch (error) {
-        // The unique index on (businessId, invoice_key) is the real guard:
-        // two operators importing the same file at the same moment collide
-        // in the database, not in the check above.
+        // For a row with an access key, the unique index on (businessId,
+        // invoice_key) is the real guard: two operators importing the same
+        // file at the same moment collide in the database, not in the check
+        // above. Order-only rows are guarded by the lock instead, and never
+        // land here as duplicates.
         const isDuplicateKey =
-          error instanceof Error && error.message.includes("Unique constraint");
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002";
 
         rows.push({
           line: row.line,
@@ -244,11 +399,16 @@ class ImportDeliverySpreadsheetUseCase {
           recipient_name: row.recipient_name,
           reference: row.invoice_key ?? row.code,
           message: isDuplicateKey
-            ? "Esta nota já havia sido importada."
+            ? row.invoice_key
+              ? "Esta nota já havia sido importada."
+              : "Este pedido já havia sido importado para este embarcador."
             : "Não foi possível criar esta entrega.",
         });
       }
     }
+
+    // Every row is decided; what can still fail now is the routes.
+    progress.line = null;
 
     const routes = await this.buildRoutes(
       businessId,
@@ -256,6 +416,7 @@ class ImportDeliverySpreadsheetUseCase {
       parsed.rows,
       createdDeliveryIdByLine,
       rows,
+      timeZone,
     );
 
     const report: ImportReport = {
@@ -294,6 +455,76 @@ class ImportDeliverySpreadsheetUseCase {
     });
 
     return { ...finished, report };
+  }
+
+  /**
+   * Closes an upload whose processing threw, with what it had done.
+   *
+   * The record becomes COMPLETED with the rows decided so far and one line
+   * naming where it stopped — which is what the undo accepts. finishImport
+   * only closes a record still IN_PROGRESS, so a failure after the record was
+   * already closed changes nothing. When even this write fails (the database
+   * is gone), the upload stays IN_PROGRESS and close-abandoned-imports closes
+   * it once its heartbeat is stale.
+   */
+  private async closeInterrupted(
+    importId: string,
+    businessId: string,
+    parsed: ReturnType<typeof parseDeliverySpreadsheet>,
+    progress: ImportProgress,
+  ): Promise<void> {
+    const interruption: ImportRowResult =
+      progress.line !== null
+        ? {
+            line: progress.line,
+            outcome: "invalid",
+            recipient_name: null,
+            reference: null,
+            message:
+              "Importação interrompida por uma falha do servidor nesta linha: " +
+              "ela e as seguintes não foram processadas. Estorne esta " +
+              "importação e envie o arquivo de novo.",
+          }
+        : {
+            // Every row was decided; the routes were being built. Line 1,
+            // where sheet-level problems go.
+            line: 1,
+            outcome: "invalid",
+            recipient_name: null,
+            reference: null,
+            message:
+              "Importação interrompida por uma falha do servidor ao montar as " +
+              "rotas: as entregas foram criadas, mas podem ter ficado sem " +
+              "rota. Estorne esta importação e envie o arquivo de novo.",
+          };
+
+    const rows = [...progress.rows, interruption].sort(
+      (left, right) => left.line - right.line,
+    );
+
+    const count = (outcome: ImportRowResult["outcome"]) =>
+      rows.filter((row) => row.outcome === outcome).length;
+
+    await this.importRepository
+      .finishImport(importId, businessId, {
+        imported: count("imported"),
+        duplicated: count("duplicated"),
+        invalid: count("invalid"),
+        report: {
+          imported: count("imported"),
+          duplicated: count("duplicated"),
+          invalid: count("invalid"),
+          unknownHeaders: parsed.unknownHeaders,
+          rows,
+          routes: [],
+        },
+      })
+      .catch((error) => {
+        logger.error(
+          { err: error, importId },
+          "could not close an interrupted import; the abandoned-import sweep will",
+        );
+      });
   }
 
   /**
@@ -349,6 +580,7 @@ class ImportDeliverySpreadsheetUseCase {
     parsedRows: ParsedRow[],
     createdDeliveryIdByLine: Map<number, string>,
     rows: ImportRowResult[],
+    timeZone: string,
   ): Promise<ImportReport["routes"]> {
     const groups = new Map<string, ParsedRow[]>();
 
@@ -372,14 +604,20 @@ class ImportDeliverySpreadsheetUseCase {
     };
 
     for (const group of groups.values()) {
+      // Still alive, for the abandoned-import sweep: a sheet with many route
+      // groups spends a while here after its last row.
+      await this.importRepository.touchImport(importId, businessId);
+
       const [first] = group;
       const route = first.route!;
 
+      // Scoped to the company: the CNH is unique per company (decision 8.1),
+      // so a global lookup could answer with another carrier's driver.
       const findDriver = route.driverCnh
-        ? await this.driver.findDriverByDriverLicense(route.driverCnh)
+        ? await this.driver.findDriverByCnh(route.driverCnh, businessId)
         : null;
 
-      if (!findDriver || findDriver.businessId !== businessId) {
+      if (!findDriver) {
         for (const row of group) {
           note(
             row.line,
@@ -393,11 +631,13 @@ class ImportDeliverySpreadsheetUseCase {
       let vehicleId: string | null = null;
 
       if (route.vehiclePlate) {
+        // Same reason as the driver: plates are unique per company.
         const findVehicle = await this.vehicle.findVehicleByLicensePlate(
           route.vehiclePlate,
+          businessId,
         );
 
-        if (!findVehicle || findVehicle.businessId !== businessId) {
+        if (!findVehicle) {
           for (const row of group) {
             note(
               row.line,
@@ -409,18 +649,52 @@ class ImportDeliverySpreadsheetUseCase {
         }
       }
 
-      try {
-        const createdRoute = await this.route.createRoute({
-          businessId,
-          importId,
-          driverId: findDriver.id!,
-          vehicleId,
-          name: route.name,
-          scheduled_date: route.date ?? first.scheduled_date ?? new Date(),
-          deliveryIds: group.map(
-            (row) => createdDeliveryIdByLine.get(row.line)!,
-          ),
+      /**
+       * The route and a `delivery.assigned` per stop, in one commit — the same
+       * unit create-route builds. With the caller's transaction the repository
+       * reports a code collision instead of retrying, so the whole unit runs
+       * again once, as create-route does.
+       */
+      const build = () =>
+        database.$transaction(async (tx) => {
+          const built = await this.route.createRoute(
+            {
+              businessId,
+              importId,
+              driverId: findDriver.id!,
+              vehicleId,
+              name: route.name,
+              scheduled_date:
+                route.date ?? first.scheduled_date ?? businessToday(timeZone),
+              deliveryIds: group.map(
+                (row) => createdDeliveryIdByLine.get(row.line)!,
+              ),
+            },
+            tx,
+          );
+
+          for (const stop of built.stops) {
+            await this.webhooks.announce(
+              "delivery.assigned",
+              businessId,
+              deliveryAssignedPayload(stop.delivery, built),
+              tx,
+            );
+          }
+
+          return built;
         });
+
+      try {
+        let createdRoute;
+
+        try {
+          createdRoute = await build();
+        } catch (error) {
+          if (!(error instanceof RouteCodeTakenError)) throw error;
+
+          createdRoute = await build();
+        }
 
         created.push({
           id: createdRoute.id,

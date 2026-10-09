@@ -1,15 +1,8 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
-
 import { listKanbanQuerySchema } from "@/schemas/list-kanban-query-schema";
-
 import { ListKanbanUseCase } from "./list-kanban-usecase";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { KanbanNotAllowedPermissionViewBusinessBoardError } from "../errors/kanban-not-allowed-permission-view-business-board-error";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListKanbanController {
@@ -33,36 +26,20 @@ class ListKanbanController {
       }
     }
 
-    try {
-      const kanban = listKanbanUseCase.execute({
-        businessId,
-        userId: id,
-        page,
-        pageSize,
-        search: decodedSearch,
-      });
+    const kanban = listKanbanUseCase.execute({
+      businessId,
+      userId: id,
+      page,
+      pageSize,
+      search: decodedSearch,
+    });
 
-      await sendAsNDJSON({
-        reply,
-        dataPromise: kanban,
-        page: page || 1,
-        pageSize: pageSize || 10,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof KanbanNotAllowedPermissionViewBusinessBoardError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await sendAsNDJSON({
+      reply,
+      dataPromise: kanban,
+      page: page || 1,
+      pageSize: pageSize || 10,
+    });
   }
 }
 

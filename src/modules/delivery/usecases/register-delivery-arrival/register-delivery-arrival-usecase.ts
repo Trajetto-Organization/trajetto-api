@@ -11,7 +11,6 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 
 import {
   DeliveryNotFoundError,
-  DeliveryNotBelongBusinessError,
 } from "../errors/delivery-errors";
 
 import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
@@ -21,6 +20,7 @@ import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-servi
 import { announceRouteClosed } from "@/shared/integration/announce";
 
 import { AppError } from "@/shared/errors/AppError";
+import { isUniqueViolation } from "@/shared/http/idempotency-key";
 
 interface RegisterDeliveryArrivalRequest {
   userId: string;
@@ -29,6 +29,12 @@ interface RegisterDeliveryArrivalRequest {
   client_submission_id: string;
   latitude: number;
   longitude: number;
+
+  /**
+   * When the driver tapped "cheguei", for an arrival the app sent later
+   * (resolveOccurredAt). Absent means now.
+   */
+  occurredAt?: Date | null;
 }
 
 /**
@@ -59,6 +65,7 @@ class RegisterDeliveryArrivalUseCase {
     client_submission_id,
     latitude,
     longitude,
+    occurredAt,
   }: RegisterDeliveryArrivalRequest): Promise<void> {
     const findUser = await this.user.findUserById(userId);
 
@@ -84,12 +91,11 @@ class RegisterDeliveryArrivalUseCase {
 
     const findDelivery = await this.delivery.findDeliveryById(deliveryId);
 
-    if (!findDelivery) {
+    // Another company's delivery answers exactly like a missing one
+    // (decision 11.3): a separate "not yours" told a driver token which ids
+    // exist at other carriers.
+    if (!findDelivery || findDelivery.businessId !== businessId) {
       throw new DeliveryNotFoundError();
-    }
-
-    if (findDelivery.businessId !== businessId) {
-      throw new DeliveryNotBelongBusinessError();
     }
 
     // Drivers only report on their own deliveries.
@@ -112,7 +118,9 @@ class RegisterDeliveryArrivalUseCase {
         ReturnType<IRouteRepository["settleStopForDelivery"]>
       > = null;
 
-      const arrivedAt = new Date();
+      // The moment of the tap when the app queued it in a dead zone, not the
+      // moment the signal came back (MOB-08).
+      const arrivedAt = occurredAt ?? new Date();
 
       // Event and stop commit together. The stop is the route's view of this
       // same act, and `settleStopForDelivery` answers null — rather than
@@ -127,6 +135,7 @@ class RegisterDeliveryArrivalUseCase {
             latitude,
             longitude,
             client_submission_id,
+            occurred_at: occurredAt ?? null,
           },
           tx,
         );
@@ -163,6 +172,18 @@ class RegisterDeliveryArrivalUseCase {
     } catch (error) {
       if (error instanceof AppError) {
         throw error;
+      }
+
+      // A copy of this submission committed between the replay check and the
+      // insert (the outbox flushing the same arrival twice on a flaky
+      // network): the unique client_submission_id refused this one, and the
+      // twin IS the answer. It used to surface as a 500, which told the
+      // driver an arrival that worked had failed.
+      if (
+        isUniqueViolation(error) &&
+        (await this.delivery.findEventBySubmissionId(client_submission_id, businessId))
+      ) {
+        return;
       }
 
       throw new AppError(

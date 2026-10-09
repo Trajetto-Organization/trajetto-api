@@ -1,4 +1,4 @@
-import { hash } from "bcrypt";
+import { hashSecret } from "@/shared/security/bcrypt-gate";
 import { inject, injectable } from "tsyringe";
 
 import { v4 as uuidV4 } from "uuid";
@@ -12,13 +12,22 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
 import database from "@/../infra/database";
 
 import { AppError } from "@/shared/errors/AppError";
-import { CreateMasterUserProps, User } from "../../dtos/user-dto";
+import { User } from "../../dtos/user-dto";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UserCannotCreateMasterUserError } from "../errors/user-cannot-create-master-user-error";
 
 import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
+import { logger } from "@/shared/logging/logger";
 import { env } from "@/env";
+
+import {
+  NEW_ACCOUNT_LINK_TTL_MS,
+  issuePasswordSetupLink,
+  unusablePassword,
+} from "../../services/password-setup-link";
+
+const log = logger.child({ component: "user" });
 
 @injectable()
 class CreateMasterUserUseCase {
@@ -35,24 +44,28 @@ class CreateMasterUserUseCase {
   ) {}
 
   /**
-   * Credential and verification e-mails stay here rather than in the
-   * notification pipeline: the first one carries the plain password, which
-   * must never sit in a persisted outbox payload.
+   * The welcome and verification e-mails stay here rather than in the
+   * notification pipeline: they carry single-use secrets (the set-password
+   * link, the verification link), which must never sit in a persisted outbox
+   * payload. No password is mailed (decision 4.9).
    */
-  private async sendCredentialEmails(
-    masterCreated: User,
-    rawPassword: string,
-  ): Promise<void> {
+  private async sendCredentialEmails(masterCreated: User): Promise<void> {
     try {
       const token = uuidV4();
       const expires = new Date(new Date().getTime() + 3600 * 1000); // 1 hour
 
-      const verificationToken =
-        await this.usersTokens.createEmailVerificationToken({
-          email: masterCreated.email,
-          token,
-          expires,
-        });
+      // The link carries the local token: the row only holds its hash.
+      await this.usersTokens.createEmailVerificationToken({
+        email: masterCreated.email,
+        token,
+        expires,
+      });
+
+      const setupUrl = await issuePasswordSetupLink(
+        this.usersTokens,
+        masterCreated.email,
+        NEW_ACCOUNT_LINK_TTL_MS,
+      );
 
       await Promise.all([
         sendTransactionalMail({
@@ -63,7 +76,7 @@ class CreateMasterUserUseCase {
           moduleName: "user",
           additionalVariablesProperties: {
             email: masterCreated.email,
-            password: rawPassword,
+            url: setupUrl,
             logo: this.cloudinaryLogo,
           },
         }),
@@ -74,18 +87,21 @@ class CreateMasterUserUseCase {
           templateName: "email-verification.hbs",
           moduleName: "user",
           additionalVariablesProperties: {
-            url: `${this.http_request}/new-verification?token=${verificationToken.token}`,
+            url: `${this.http_request}/new-verification?token=${token}`,
             logo: this.cloudinaryLogo,
           },
         }),
       ]);
     } catch (error) {
-      console.error("[Usuário Master] Erro ao enviar e-mails:", error);
+      log.error(
+        { err: error, userId: masterCreated.id },
+        "master user credential e-mails could not be sent",
+      );
     }
   }
 
   async execute(
-    { name, email, password }: CreateMasterUserProps,
+    { name, email }: { name: string; email: string },
     performedById: string,
   ): Promise<User> {
     // Validate the performing user exists and is MASTER
@@ -106,7 +122,8 @@ class CreateMasterUserUseCase {
       throw new UserAlreadyExistsError();
     }
 
-    const hashedPassword = await hash(password, 10);
+    // Nobody knows it: the new master sets theirs through the e-mailed link.
+    const hashedPassword = await hashSecret(unusablePassword(), 10);
 
     try {
       // Two audiences, two events: the performer hears "you created X", the
@@ -145,9 +162,8 @@ class CreateMasterUserUseCase {
         return created;
       });
 
-      // Fire-and-forget as before; the plain password must not block nor
-      // outlive this request in any persisted form.
-      void this.sendCredentialEmails(masterCreated, password);
+      // Fire-and-forget as before: a slow provider must not hold the answer.
+      void this.sendCredentialEmails(masterCreated);
 
       return masterCreated;
     } catch (error) {

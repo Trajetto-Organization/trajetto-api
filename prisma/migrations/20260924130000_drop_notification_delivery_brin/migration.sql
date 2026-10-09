@@ -1,0 +1,11 @@
+-- The BRIN on notification_delivery.created_at (created by
+-- 20260924091100_notification_delivery_observability) does not hold up on
+-- this table: every claim and settle moves `status`, so no UPDATE is HOT, new
+-- row versions land in pages the nightly purge freed, and a BRIN range only
+-- widens. The planner still picked it over a btree, and a one-day window read
+-- every page. /health/metrics reads a range of the uuid v7 primary key
+-- instead (src/shared/health/metrics-queries.ts), so nothing uses it.
+--
+-- Both migrations ship in the same release: in production the table is still
+-- empty when this runs.
+DROP INDEX IF EXISTS "notification_delivery_created_at_brin_idx";

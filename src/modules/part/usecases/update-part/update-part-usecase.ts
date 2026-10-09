@@ -7,6 +7,9 @@ import { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-r
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { AppError } from "@/shared/errors/AppError";
+import { isUniqueViolation } from "@/shared/http/idempotency-key";
+
+import { sendCatalogChangedEvent } from "@/websocket";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
@@ -15,7 +18,7 @@ import { PartNotFoundError } from "../errors/part-not-found-error";
 import { PartAlreadyExistsError } from "../errors/part-already-exists-error";
 
 import { SupplierNotBelongBusinessError } from "@/modules/supplier/usecases/errors/supplier-not-belong-business-error";
-import { PartNotBelongError } from "../errors/part-not-belong-error";
+import { PartBusinessReadOnlyError } from "../errors/part-business-read-only-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { formatCurrency } from "@/shared/utils/format-values";
@@ -59,31 +62,26 @@ class UpdatePartUseCase {
 
     const findPartById = await this.part.findPartById(partId);
 
-    if (!findPartById) {
+    /**
+     * The part must be this company's, ALWAYS, and another company's part
+     * answers like a missing one (decision 11.3).
+     *
+     * This used to live inside an `else`: any `businessId` in the body
+     * took the other branch and the ownership check never ran, so another
+     * company's part was moved onto the caller's. A check the caller can
+     * switch off is not a check.
+     */
+    if (!findPartById || findPartById.businessId !== currentBusinessId) {
       throw new PartNotFoundError();
     }
 
-    /**
-     * A peça tem que ser desta empresa. SEMPRE.
-     *
-     * Isto vivia dentro de um `else`: mandar qualquer `businessId` no
-     * corpo tomava o outro ramo e a comparação de posse nunca rodava —
-     * a peça de outra empresa era reparentada para a de quem chamou,
-     * junto com o preço e a descrição. Uma verificação que o próprio
-     * atacante escolhe se roda não é uma verificação.
-     */
-    if (findPartById.businessId !== currentBusinessId) {
-      throw new PartNotBelongError();
-    }
-
-    // Mudar a empresa da peça não é uma operação que este endpoint
-    // oferece: mover um item de estoque entre empresas é uma decisão de
-    // negócio com histórico atrás, não um campo de formulário.
+    // Moving a part between companies is a business decision with history
+    // behind it, not a form field: refused, with the part left as it was.
     if (
       partData.businessId &&
       partData.businessId !== currentBusinessId
     ) {
-      throw new PartNotBelongError();
+      throw new PartBusinessReadOnlyError();
     }
 
     // Check supplier
@@ -96,55 +94,56 @@ class UpdatePartUseCase {
         throw new SupplierNotFoundError();
       }
 
-      // Check whether the supplier belongs to the new company (if any) or the current company
-      const targetBusinessId = partData.businessId || currentBusinessId;
-
-      if (findSupplier.businessId !== targetBusinessId) {
+      if (findSupplier.businessId !== currentBusinessId) {
         throw new SupplierNotBelongBusinessError();
       }
     }
 
-    // Check duplicate description
-    if (
-      partData.description &&
-      partData.description !== findPartById.description
-    ) {
-      // Check with the destination company or the current one
-      const targetBusinessId = partData.businessId || currentBusinessId;
-      const findPartByDescription = await this.part.findPartByDescription(
+    // Another part of this company with the same description. The part
+    // itself is left out: "filtro" → "Filtro" found the part being edited
+    // and refused its own rename.
+    if (partData.description) {
+      const duplicate = await this.part.findPartByDescription(
         partData.description,
-        targetBusinessId,
+        currentBusinessId,
+        partId,
       );
 
-      if (findPartByDescription) {
+      if (duplicate) {
         throw new PartAlreadyExistsError();
       }
     }
 
+    let partUpdated: Part;
+
     try {
-      const partUpdated = await this.part.updatePart({
+      partUpdated = await this.part.updatePart({
         partData,
         partId,
       });
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Peça",
-        action: "update",
-        entityId: partUpdated.id,
-        description: `Peça atualizada com sucesso: ${partUpdated.description} | Preço: ${formatCurrency(Number(partUpdated.unit_price))} | ID: ${partUpdated.id}`,
-        status: "Atualizado",
-        performedBy: userId,
-        businessId: currentBusinessId,
-      });
-
-      return partUpdated;
     } catch (error) {
+      if (isUniqueViolation(error)) throw new PartAlreadyExistsError();
+
       throw new AppError(
         "Houve um erro ao tentar atualizar a peça! Por favor, tente novamente.",
         500,
       );
     }
+
+    sendCatalogChangedEvent(currentBusinessId, "part");
+
+    // Process activity asynchronously without blocking the main flow
+    this.notificationService.createActivityIfEnabled({
+      type: "Peça",
+      action: "update",
+      entityId: partUpdated.id,
+      description: `Peça atualizada com sucesso: ${partUpdated.description} | Preço: ${formatCurrency(Number(partUpdated.unit_price))} | ID: ${partUpdated.id}`,
+      status: "Atualizado",
+      performedBy: userId,
+      businessId: currentBusinessId,
+    });
+
+    return partUpdated;
   }
 }
 

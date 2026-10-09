@@ -1,3 +1,5 @@
+import { literalContains } from "@/shared/utils/like-pattern";
+
 /**
  * Assembles the `OR` of a list search, dropping conditions that say nothing.
  *
@@ -30,6 +32,12 @@
  * — in AND with this `OR`, never a member of it — so a tautological `OR` has
  * never been able to widen a query past the caller's own carrier. The bug is
  * search being ignored, not data leaking.
+ *
+ * It is also where the term stops being a pattern. `{ contains: term }` is
+ * `LIKE '%' || term || '%'` and Prisma does not escape it, so searching for
+ * "50%" listed every row with a "50" in it and "%" or "_" alone listed them
+ * all. Every `contains` / `startsWith` / `endsWith` that goes through here is
+ * escaped (see literalContains), so conditions are written with the RAW term.
  */
 function buildSearchOr<TCondition extends object>(
   conditions: TCondition[],
@@ -38,7 +46,7 @@ function buildSearchOr<TCondition extends object>(
     (condition) => Object.keys(condition).length > 0,
   );
 
-  return meaningful.length > 0 ? { OR: meaningful } : {};
+  return meaningful.length > 0 ? { OR: literalContains(meaningful) } : {};
 }
 
 export { buildSearchOr };

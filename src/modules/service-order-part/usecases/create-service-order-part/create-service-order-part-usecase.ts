@@ -16,8 +16,6 @@ import { PartNotFoundError } from "@/modules/part/usecases/errors/part-not-found
 
 import { ServiceOrderPartAlreadyExistsError } from "../errors/service-order-part-already-exists-error";
 
-import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
-import { PartNotBelongServiceOrderError } from "@/modules/part/usecases/errors/part-not-belong-service-order-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 
@@ -27,6 +25,7 @@ import { AppError } from "@/shared/errors/AppError";
 import {
   ServiceOrderPart,
   CreateServiceOrderPartProps,
+  ServiceOrderTotals,
 } from "../../dtos/service-order-part-dto";
 
 @injectable()
@@ -49,7 +48,7 @@ class CreateServiceOrderPartUseCase {
   async execute(
     serviceOrderPartData: CreateServiceOrderPartProps,
     userId: string,
-  ): Promise<ServiceOrderPart> {
+  ): Promise<{ line: ServiceOrderPart; totals: ServiceOrderTotals | null }> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -69,23 +68,18 @@ class CreateServiceOrderPartUseCase {
       serviceOrderPartData.serviceOrderId,
     );
 
-    if (!findServiceOrder) {
+    // Another company's order is not found from here either: a distinct
+    // answer confirmed the id exists elsewhere (decision 11.3).
+    if (!findServiceOrder || findServiceOrder.businessId !== serviceOrderPartData.businessId) {
       throw new ServiceOrderNotFoundError();
-    }
-
-    if (findServiceOrder.businessId !== serviceOrderPartData.businessId) {
-      throw new ServiceOrderNotBelongBusinessError();
     }
 
     // Check if the part exists and belongs to the company
     const findPart = await this.part.findPartById(serviceOrderPartData.partId);
 
-    if (!findPart) {
+    // Another company's part is not found either (decision 11.3).
+    if (!findPart || findPart.businessId !== serviceOrderPartData.businessId) {
       throw new PartNotFoundError();
-    }
-
-    if (findPart.businessId !== serviceOrderPartData.businessId) {
-      throw new PartNotBelongServiceOrderError();
     }
 
     // Check if the part has already been added to the work order
@@ -121,7 +115,14 @@ class CreateServiceOrderPartUseCase {
         businessId: serviceOrderPartData.businessId,
       });
 
-      return serviceOrderPartCreated;
+      // The order's total is typed (labour + parts) and stays so; the answer
+      // carries both figures so the screen can warn when the parts alone
+      // already pass it (FLEET-SO-2).
+      const totals = await this.serviceOrderPart.serviceOrderTotals(
+        serviceOrderPartData.serviceOrderId,
+      );
+
+      return { line: serviceOrderPartCreated, totals };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar adicionar a peça à ordem de serviço! Por favor, tente novamente.",

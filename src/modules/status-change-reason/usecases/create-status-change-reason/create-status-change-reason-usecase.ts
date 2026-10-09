@@ -5,11 +5,9 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 
 import { IStatusChangeReasonRepository } from "../../repositories/IStatus-change-reason-repository";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { StatusChangeReasonNameAlreadyExistsError } from "../errors/status-change-reason-errors";
+import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -17,6 +15,12 @@ import {
   StatusChangeReason,
   CreateStatusChangeReasonProps,
 } from "../../dtos/status-change-reason-dto";
+
+import {
+  businessNotFound,
+  callerNotFound,
+} from "@/shared/delivery/caller-not-found";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 /**
  * A word the company adds to its own vocabulary for overriding a status.
@@ -42,7 +46,7 @@ class CreateStatusChangeReasonUseCase {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
-      throw new ResourceNotFoundError();
+      throw callerNotFound();
     }
 
     // Vocabulary is the dispatcher's to define, not the driver's.
@@ -53,7 +57,7 @@ class CreateStatusChangeReasonUseCase {
     );
 
     if (!findBusiness) {
-      throw new BusinessNotFoundError();
+      throw businessNotFound();
     }
 
     const findByName = await this.reason.findStatusChangeReasonByName(
@@ -65,14 +69,29 @@ class CreateStatusChangeReasonUseCase {
       throw new StatusChangeReasonNameAlreadyExistsError();
     }
 
+    let created: Awaited<
+      ReturnType<IStatusChangeReasonRepository["createStatusChangeReason"]>
+    >;
+
     try {
-      return await this.reason.createStatusChangeReason(reasonData);
+      created = await this.reason.createStatusChangeReason(reasonData);
     } catch (error) {
+      // A twin request committed between the check and the write: the unique
+      // index decided, and the answer is the check's 409.
+      if (violatesUniqueOn(error, "name")) {
+        throw new StatusChangeReasonNameAlreadyExistsError();
+      }
+
       throw new AppError(
         "Houve um erro ao tentar criar o motivo! Por favor, tente novamente.",
         500,
       );
     }
+
+    // After the write: open "Mudar status" pickers refetch.
+    sendCatalogChangedEvent(reasonData.businessId, "status_reason");
+
+    return created;
   }
 }
 

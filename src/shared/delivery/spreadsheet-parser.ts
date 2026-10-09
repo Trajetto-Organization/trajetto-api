@@ -4,6 +4,7 @@ import {
   TEMPLATE_COLUMNS,
   normalizeHeader,
 } from "./spreadsheet-template";
+import { dateOnlyFromKey } from "@/shared/time/business-day";
 
 /**
  * Turning a spreadsheet into deliveries, decided here and nowhere else.
@@ -113,20 +114,25 @@ function parseDate(raw: string): Date | "invalid" | null {
 
   const brazilian = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
 
-  if (brazilian) {
-    const [, day, month, year] = brazilian;
-    const parsed = new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+  // Both forms name a civil DAY, and the columns fed from here are date-only
+  // (decision 1.3): the day written is the day stored, as UTC midnight. A
+  // datetime ("2026-09-16T21:00:00-03:00", or an Excel date cell, which
+  // exceljs hands over at UTC midnight) keeps the date it spells — reading it
+  // as an instant would move a late-evening time to the next day. Impossible
+  // days (31/02) are refused, never rolled over into March.
+  const key = brazilian
+    ? `${brazilian[3]}-${brazilian[2]}-${brazilian[1]}`
+    : /^\d{4}-\d{2}-\d{2}/.test(raw)
+      ? raw.slice(0, 10)
+      : null;
 
-    return Number.isNaN(parsed.getTime()) ? "invalid" : parsed;
+  if (!key) return "invalid";
+
+  try {
+    return dateOnlyFromKey(key);
+  } catch {
+    return "invalid";
   }
-
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
-    const parsed = new Date(raw.length === 10 ? `${raw}T00:00:00.000Z` : raw);
-
-    return Number.isNaN(parsed.getTime()) ? "invalid" : parsed;
-  }
-
-  return "invalid";
 }
 
 /** "45,90" and "45.90" are the same number; "1.234,56" is too. */

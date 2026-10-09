@@ -10,11 +10,11 @@ import { Supplier, CreateSupplierProps } from "../../dtos/supplier-dto";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 import { NotificationService } from "@/shared/services/notification-service";
 
-import { SupplierNameAlreadyExistsError } from "../errors/supplier-name-already-exists-error";
-import { SupplierCnpjAlreadyExistsError } from "../errors/supplier-cnpj-already-exists-error";
-
-import { SupplierEmailAlreadyExistsError } from "../errors/supplier-email-already-exists-error";
 import { AppError } from "@/shared/errors/AppError";
+import { isUniqueViolation } from "@/shared/http/idempotency-key";
+import { sendCatalogChangedEvent } from "@/websocket";
+
+import { assertSupplierIsUnique } from "../supplier-uniqueness";
 
 @injectable()
 class CreateSupplierUseCase {
@@ -47,57 +47,50 @@ class CreateSupplierUseCase {
       throw new BusinessNotFoundError();
     }
 
-    const findSupplierByName =
-      await this.supplier.findSupplierByNameAndBusinessId(
-        supplierData.name,
-        supplierData.businessId,
-      );
+    await assertSupplierIsUnique(this.supplier, {
+      businessId: supplierData.businessId,
+      name: supplierData.name,
+      cnpj: supplierData.cnpj,
+      email: supplierData.email,
+    });
 
-    if (findSupplierByName) {
-      throw new SupplierNameAlreadyExistsError();
-    }
-
-    const findSupplierByCnpj =
-      await this.supplier.findSupplierByCnpjAndBusinessId(
-        supplierData.cnpj,
-        supplierData.businessId,
-      );
-
-    if (findSupplierByCnpj) {
-      throw new SupplierCnpjAlreadyExistsError();
-    }
-
-    if (supplierData.email) {
-      const findSupplierByEmail = await this.supplier.findSupplierByEmail(
-        supplierData.email,
-      );
-
-      if (findSupplierByEmail) {
-        throw new SupplierEmailAlreadyExistsError();
-      }
-    }
+    let supplierCreated: Supplier;
 
     try {
-      const supplierCreated = await this.supplier.createSupplier(supplierData);
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Fornecedor",
-        action: "create",
-        entityId: supplierCreated.id,
-        description: `Fornecedor criado com sucesso: ${supplierCreated.name} | CNPJ: ${supplierCreated.cnpj} | ID: ${supplierCreated.id}`,
-        status: "Completo",
-        performedBy: userId,
-        businessId: supplierData.businessId,
-      });
-
-      return supplierCreated;
+      supplierCreated = await this.supplier.createSupplier(supplierData);
     } catch (error) {
+      // A unique index on the table (FLEET-DUP-1) answers the race the
+      // lookups above cannot: two identical submissions at once.
+      if (isUniqueViolation(error)) {
+        await assertSupplierIsUnique(this.supplier, {
+          businessId: supplierData.businessId,
+          name: supplierData.name,
+          cnpj: supplierData.cnpj,
+          email: supplierData.email,
+        });
+      }
+
       throw new AppError(
         "Houve um erro ao tentar criar o fornecedor! Por favor, tente novamente.",
         500,
       );
     }
+
+    // After the row is committed: other open screens refresh their pickers.
+    sendCatalogChangedEvent(supplierData.businessId, "supplier");
+
+    // Process activity asynchronously without blocking the main flow
+    this.notificationService.createActivityIfEnabled({
+      type: "Fornecedor",
+      action: "create",
+      entityId: supplierCreated.id,
+      description: `Fornecedor criado com sucesso: ${supplierCreated.name} | CNPJ: ${supplierCreated.cnpj} | ID: ${supplierCreated.id}`,
+      status: "Completo",
+      performedBy: userId,
+      businessId: supplierData.businessId,
+    });
+
+    return supplierCreated;
   }
 }
 

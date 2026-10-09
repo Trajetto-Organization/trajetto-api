@@ -1,6 +1,23 @@
 interface SendMessageProps {
   phoneNumber: string;
   message: string;
+
+  /**
+   * The notification delivery this send belongs to. Travels to Meta as
+   * `biz_opaque_callback_data` and comes back on every status callback, so
+   * each wamid can be traced to its delivery — including the one whose send
+   * succeeded right before a crash and was never recorded here, which is the
+   * only way a duplicate becomes visible (Meta has no idempotency key).
+   */
+  referenceId?: string;
+
+  /**
+   * Who reads it. `customer` is a carrier writing to its own customer, which
+   * goes out under the customer template when one is configured, so a spam
+   * report there cannot pause the template the internal notices use.
+   * Absent means `internal`.
+   */
+  audience?: "internal" | "customer";
 }
 
 /**

@@ -1,7 +1,15 @@
-class BranchNameAlreadyExistsError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/**
+ * The corporate name is unique per company (decision 8.1): two carriers may
+ * both have a "Filial Campinas". The message speaks only of THIS company.
+ */
+class BranchNameAlreadyExistsError extends AppError {
   constructor() {
     super(
-      "Esta razão social não está disponível para cadastro. As razões sociais de filiais devem ser únicas em todo o sistema.",
+      "Já existe uma filial com esta razão social nesta empresa. Procure-a na listagem.",
+      409,
+      "BRANCH_NAME_TAKEN",
     );
   }
 }

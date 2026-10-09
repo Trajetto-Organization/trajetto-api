@@ -6,9 +6,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
  * The rules this endpoint has to keep are not obvious, and each one exists
  * because the opposite causes a worse outage than the one it reports:
  *
- * - Only the DATABASE decides the status code. A Redis hiccup that recycled
- *   every replica would turn a degraded dependency into a full outage, and the
- *   Docker healthcheck restarts the container on a 503.
+ * - Only the DATABASE decides the status code. Monitors and people read it,
+ *   and a Redis hiccup the API survives must not read as an outage. (No
+ *   container is restarted on it any more: the Docker healthcheck uses
+ *   /health/liveness, and Traefik reads /health/readiness.)
  * - Every probe is on a clock. Measured before the timeout existed: 1,03 s
  *   with Redis stopped, for a check that is otherwise 220 ms — long enough for
  *   a balancer with a one-second timeout to pull out a replica that was fine.
@@ -100,7 +101,9 @@ describe("when a dependency stops answering", () => {
     }
   });
 
-  it("recovers on the next call, with no restart", async () => {
+  it("answers 200 again once the stub is gone", async () => {
+    // This only proves the stub above was undone. Recovery from connections
+    // Postgres really dropped is proved in database-reconnect.test.ts.
     expect((await health()).statusCode).toBe(200);
   });
 });

@@ -4,6 +4,8 @@ import {
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
+import { dateOnlyField } from "@/shared/delivery/date-only-field";
+import { optionalMultilineText } from "@/shared/delivery/text-rules";
 
 const requiredTextField = (label: string, min: number, max: number) =>
   z
@@ -77,12 +79,23 @@ const optionalDigits = (label: string, pattern: RegExp, message: string) =>
     z.string().regex(pattern, message).nullable().optional(),
   );
 
+/** The smallest quantity numeric(10, 3), rounding half up, keeps above 0. */
+const MIN_STORED_QUANTITY = 0.0005;
+
 const deliveryItemSchema = z.object({
   description: requiredTextField("A descrição do item", 2, 200),
   quantity: z.coerce
     .number()
     .positive("A quantidade deve ser maior que zero.")
     .max(999999, "A quantidade não pode exceder 999.999.")
+    // Judged on what numeric(10, 3) will hold: 0.0004 passes `.positive()`
+    // and is stored as 0.000. Postgres reads a float at 15 significant digits
+    // and rounds half up, so the smallest quantity it keeps above zero is
+    // 0.0005. A non-positive value is already reported above.
+    .refine(
+      (value) => value <= 0 || Number(value.toPrecision(15)) >= MIN_STORED_QUANTITY,
+      "A quantidade deve ser maior que zero.",
+    )
     .default(1),
   unit: optionalTextField("A unidade", 20),
   unit_value: z.coerce
@@ -155,19 +168,15 @@ const createDeliverySchema = z.object({
   address_number: optionalTextField("O número do endereço", 10),
   complement: optionalTextField("O complemento", 50),
   neighborhood: optionalTextField("O bairro", 100),
-  scheduled_date: z.preprocess(
-    (val) => (val === "" || val === null ? null : val),
-    z.coerce.date().nullable().optional(),
+  // A day, not an instant (decision 1.3): "YYYY-MM-DD", stored as UTC midnight.
+  scheduled_date: dateOnlyField("A data prevista").describe(
+    "Data prevista (AAAA-MM-DD), sem hora.",
   ),
-  notes: optionalTextField("As observações", 500),
-  vehicleId: z.preprocess(
-    (val) => (val === "" ? null : val),
-    z.string().nullable().optional(),
-  ),
-  driverId: z.preprocess(
-    (val) => (val === "" ? null : val),
-    z.string().nullable().optional(),
-  ),
+  // Multiline: blank lines between paragraphs are allowed (decision 5.5).
+  notes: optionalMultilineText("As observações", 500),
+  // No driverId/vehicleId (DLV-EDIT-4): putting a delivery in a driver's
+  // hands is an assignment, which builds the route and its stop
+  // (assign-deliveries). A field on this form bypassed both.
   // A list is cleared by sending it empty, not by sending null — nullable
   // here only exists for the scalar fields the edit form can blank out.
   items: z

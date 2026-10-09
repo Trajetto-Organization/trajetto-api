@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
+import { CnhCategory } from "@prisma/client";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -6,6 +8,7 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateVehicleTypeSchema = z.object({
+  ...tenantLockedShape,
   description: z.preprocess(
     emptyStringToNull,
     z
@@ -59,6 +62,19 @@ const updateVehicleTypeSchema = z.object({
     .min(1, "O número de eixos deve ser no mínimo 1.")
     .max(10, "O número de eixos deve ser no máximo 10.")
     .optional(),
+  // The licence a driver needs for this kind of vehicle (decision 8.5);
+  // null or absent = not configured, and the assignment checks nothing.
+  required_cnh_category: z.preprocess(
+    (value) => (value === "" ? null : value),
+    z
+      .nativeEnum(CnhCategory, {
+        errorMap: () => ({
+          message: "Categoria de CNH inválida. Use A, B, C, D, E, AB, AC, AD ou AE.",
+        }),
+      })
+      .nullable()
+      .optional(),
+  ),
 });
 
 export { updateVehicleTypeSchema };

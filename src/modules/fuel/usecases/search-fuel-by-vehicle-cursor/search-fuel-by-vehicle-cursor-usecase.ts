@@ -22,6 +22,8 @@ interface SearchFuelByVehicleCursorRequest {
   vehicleId: string;
   limit?: number;
   cursor?: string;
+  /** The typed term, matched like the list's search (fuel-list.ts). */
+  search?: string;
 }
 
 @injectable()
@@ -44,6 +46,7 @@ class SearchFuelByVehicleCursorUseCase {
     vehicleId,
     limit = 10,
     cursor,
+    search,
   }: SearchFuelByVehicleCursorRequest): Promise<CursorPaginatedFuel> {
     const findUser = await this.user.findUserById(userId);
 
@@ -57,13 +60,28 @@ class SearchFuelByVehicleCursorUseCase {
       throw new VehicleNotFoundError();
     }
 
-    // Verify vehicle belongs to user's business
+    // The caller's own company only (a MASTER has none and names none here,
+    // so the module gate could not vouch for the vehicle's company). The
+    // controller answers this exactly like a missing vehicle.
     if (findVehicle.businessId !== findUser.businessId) {
       throw new VehicleNotBelongBusinessError();
     }
 
-    if (findUser.driverId && findVehicle.driverId !== findUser.driverId) {
-      throw new VehicleNotAssignedToDriverError();
+    // A driver reads the history of a vehicle they may operate — the one
+    // they are responsible for or the one of their released or running
+    // route (FLEET-ASSIGN-1, decision 8.2) — the same rule that lets them
+    // fuel it. Comparing only the responsible driver hid the history from
+    // the substitute who fuels it today.
+    if (findUser.driverId) {
+      const allowed = await this.vehicle.canDriverOperateVehicle({
+        vehicleId,
+        driverId: findUser.driverId,
+        businessId: findVehicle.businessId,
+      });
+
+      if (!allowed) {
+        throw new VehicleNotAssignedToDriverError();
+      }
     }
 
     const findBusiness = await this.business.findBusinessById(
@@ -80,6 +98,11 @@ class SearchFuelByVehicleCursorUseCase {
         cursor,
         vehicleId,
         businessId: findUser.businessId as string,
+        search,
+        // Operating the vehicle opens its history, not the colleagues'
+        // refuelings and CNH numbers in it (decision 4.4): a driver reads
+        // their own, as on /fuel/list-fuel.
+        driverId: findUser.driverId ?? undefined,
       });
 
       return {

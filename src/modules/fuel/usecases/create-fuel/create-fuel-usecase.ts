@@ -38,12 +38,24 @@ import { FuelRegistrationsMobileLocationRequiredError } from "../errors/fuel-reg
 import { FuelVehicleInvalidStatusForFuelError } from "../errors/fuel-vehicle-invalid-status-for-fuel-error";
 
 import { AppError } from "@/shared/errors/AppError";
+import { aiProviderConfigured } from "@/shared/ai/ai-provider";
+import { acceptDevicePrecheck } from "@/shared/ai-precheck/device-precheck";
 import { Fuel, CreateFuelProps } from "../../dtos/fuel-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
+import { assertRefuelingNotInTheFuture, businessTimeZone } from "../fuel-rules";
+
+import { pickedDateFromInput } from "@/shared/vehicle/record-dates";
 
 import { calculateDistance } from "@/shared/utils/geolocation";
+import { logger } from "@/shared/logging/logger";
 import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
+import {
+  isFinalRejection,
+  unreferencedKeys,
+} from "@/shared/services/presigned-ownership";
+
+const log = logger.child({ component: "fuel" });
 
 @injectable()
 class CreateFuelUseCase {
@@ -68,14 +80,55 @@ class CreateFuelUseCase {
     private uploadService: UploadService,
   ) {}
 
+  /**
+   * The fueling an earlier attempt already recorded under this key, if any.
+   *
+   * Called by `execute` and, before any body validation, by the controller:
+   * an outbox resend of a record that exists is answered with it even when
+   * the frozen body would no longer pass today's schema (see
+   * `submissionKeyOf`). The tenant was checked by the route's guards before
+   * either caller gets here, and the key is unique per business.
+   */
+  async findReplay(
+    businessId: string,
+    submissionId: string,
+    callerDriverId: string | null | undefined,
+  ): Promise<Fuel | null> {
+    const existingFuel = await this.fuel.findBySubmissionId(
+      businessId,
+      submissionId,
+    );
+
+    if (!existingFuel) return null;
+
+    /**
+     * A replay has to belong to the driver replaying it.
+     *
+     * The key is unique per `(businessId, client_submission_id)`, so the
+     * tenant is already safe — but inside one carrier this returned whatever
+     * record carried the key, and the driver-ownership check that would have
+     * caught it runs further down `execute`, after the early return. A guessed
+     * identifier therefore read back another driver's submission.
+     */
+    if (!submissionBelongsToCaller(callerDriverId, existingFuel.driverId)) {
+      throw new SubmissionOwnerMismatchError();
+    }
+
+    return existingFuel;
+  }
+
   async execute(
-    fuelData: CreateFuelProps,
+    input: CreateFuelProps,
     userId: string,
 
     // The odometer photo, already in storage. Mandatory on create — the
     // controller refuses the request without it.
     presignedPhoto?: { key: string },
   ): Promise<Fuel> {
+    // The phone's check of the odometer photo (decision 14.2) is not a field
+    // of the row as sent: it lands in its own column, if at all.
+    const { device_precheck: devicePrecheck, ...fuelData } = input;
+
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -102,34 +155,26 @@ class CreateFuelUseCase {
       );
     }
 
+    // A replay answers first (below), even from a client whose clock moved:
+    // the record exists and resending it must not turn into a refusal.
     if (fuelData.client_submission_id) {
-      const existingFuel = await this.fuel.findBySubmissionId(
+      const existingFuel = await this.findReplay(
         fuelData.businessId,
         fuelData.client_submission_id,
+        findUser.driverId,
       );
 
-      if (existingFuel) {
-      /**
-       * A replay has to belong to the driver replaying it.
-       *
-       * The key is unique per `(businessId, client_submission_id)`, so the
-       * tenant is already safe — but inside one carrier this returned
-       * whatever record carried the key, and the driver-ownership check that
-       * would have caught it runs further down, after this early return. A
-       * guessed identifier therefore read back another driver's submission.
-       */
-        if (
-          !submissionBelongsToCaller(
-            findUser.driverId,
-            existingFuel.driverId,
-          )
-        ) {
-          throw new SubmissionOwnerMismatchError();
-        }
-
-        return existingFuel;
-      }
+      if (existingFuel) return existingFuel;
     }
+
+    assertRefuelingNotInTheFuture(fuelData.refueling_date, findBusiness);
+
+    // A bare day becomes the instant it starts in the company's zone: as a
+    // string it reached Prisma and answered 500.
+    fuelData.refueling_date = pickedDateFromInput(
+      fuelData.refueling_date,
+      businessTimeZone(findBusiness),
+    );
 
     // Validate vehicle exists and belongs to business
     const findVehicle = await this.vehicle.findVehicleById(fuelData.vehicleId);
@@ -142,9 +187,17 @@ class CreateFuelUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
-    // Security: If user is a driver, verify vehicle belongs to them
+    // A driver fuels only a vehicle they may operate: the responsible one,
+    // or the one of their released or running route (FLEET-ASSIGN-1,
+    // decision 8.2; the rule lives in shared/vehicle/driver-vehicle-access).
     if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
-      if (findVehicle.driverId !== findUser.driverId) {
+      const allowed = await this.vehicle.canDriverOperateVehicle({
+        vehicleId: findVehicle.id,
+        driverId: findUser.driverId,
+        businessId: fuelData.businessId,
+      });
+
+      if (!allowed) {
         throw new VehicleNotAssignedToDriverError();
       }
     }
@@ -170,10 +223,12 @@ class CreateFuelUseCase {
       throw new FuelVehicleInvalidStatusForFuelError();
     }
 
-    // Validate mileage (must be strictly greater than current vehicle mileage)
-    if (fuelData.current_mileage <= findVehicle.current_mileage) {
-      throw new VehicleMileageInvalidError();
-    }
+    // The mileage is decided inside the repository's transaction, not here:
+    // ahead of the vehicle's odometer as before, OR — for a fueling that
+    // arrives after later records, like one the app queued offline — between
+    // the readings around its own date (shared/vehicle/odometer-timeline).
+    // Compared with the vehicle as it is now, that late fueling could never
+    // be entered at all.
 
     // Validate driver exists and belongs to business (if driverId is provided)
     if (fuelData.driverId) {
@@ -189,7 +244,7 @@ class CreateFuelUseCase {
 
       if (findDriver.status !== "ACTIVE") {
         throw new AppError(
-          "O motorista selecionado esta inativo.",
+          "O motorista selecionado está inativo.",
           422,
           "DRIVER_INACTIVE",
         );
@@ -270,21 +325,30 @@ class CreateFuelUseCase {
         );
 
         if (distance > 500) {
+          // The service order's code for the same refusal (decision 11.3).
           throw new AppError(
             `A localização editada está ${Math.round(distance)}m distante da capturada pelo GPS. Máximo permitido: 500m. Possível inconsistência detectada.`,
             400,
+            "LOCATION_ADJUSTMENT_TOO_FAR",
           );
         }
 
-        // Log de auditoria (opcional)
-        console.log(
-          `[AUDIT] GPS ajustado por ${userId} no fuel: ${Math.round(distance)}m de distância`,
+        // A structured line, so it can be filtered by event and user (OBS-14).
+        // Persisting it in the activity trail is a separate decision.
+        logger.info(
+          {
+            event: "audit.gps_adjusted",
+            entity: "fuel",
+            userId,
+            distanceMeters: Math.round(distance),
+          },
+          "GPS location adjusted by the user",
         );
       } else if (!fuelData.location_source) {
-        // Se não tem source, é GPS automático
+        // No source: the point came from the GPS untouched, so the final
+        // location is also the original one.
         fuelData.location_source = "GPS_AUTO";
 
-        // Copia localização final para original (não foi editada)
         fuelData.latitude_original = fuelData.latitude;
         fuelData.longitude_original = fuelData.longitude;
       }
@@ -314,9 +378,20 @@ class CreateFuelUseCase {
       }
 
       // Prepare fuel data with photo and geolocation audit fields
+      // Kept with the record, once (a replay never gets here), and only for
+      // a company that bought the reading. It never moves the verification.
+      const odometerPrecheck = uploadedPhotoPath
+        ? acceptDevicePrecheck(devicePrecheck, {
+            kind: "odometer",
+            aiAnalysisLimit: findBusiness.ai_analysis_limit,
+            providerConfigured: aiProviderConfigured(),
+          })
+        : null;
+
       const fuelDataWithPhoto: any = {
         ...fuelData,
         odometer_photo: uploadedPhotoPath,
+        ...(odometerPrecheck && { odometer_device_precheck: odometerPrecheck }),
       };
 
       // Add audit fields for web dashboard manual location
@@ -351,15 +426,23 @@ class CreateFuelUseCase {
               origin: fuelData.created_from,
             },
           }),
+        // The company's day decides which readings are "after" a web date.
+        { timeZone: businessTimeZone(findBusiness) },
       );
 
       if (!created) {
-        // Only delete what this request put there. On the presigned path the
-        // object was uploaded by the client, but it is still orphaned if the
-        // row was not created, so it is removed either way.
-        if (uploadedPhotoPath) {
-          await this.uploadService.deleteFile(uploadedPhotoPath);
-        }
+        // An idempotent replay. The app resends the key it already uploaded,
+        // so the existing fueling usually points at the very object this
+        // attempt attached — deleting it deleted that record's odometer
+        // evidence. Only a key it does not reference belongs to nothing.
+        const orphans = uploadedPhotoPath
+          ? unreferencedKeys([uploadedPhotoPath], [fuelCreated.odometer_photo])
+          : [];
+
+        await Promise.allSettled(
+          orphans.map((photoPath) => this.uploadService.deleteFile(photoPath)),
+        );
+
         uploadedPhotoPath = null;
 
         /**
@@ -399,17 +482,32 @@ class CreateFuelUseCase {
             },
           })
           .catch((err) =>
-            console.error("[AI] Failed to request fuel verification:", err),
+            log.error(
+              { err, fuelId: fuelCreated.id, businessId: fuelData.businessId },
+              "AI fuel verification could not be requested",
+            ),
           );
       }
 
       return fuelCreated;
     } catch (error) {
-      if (uploadedPhotoPath && !databaseCommitted) {
+      // Only on a verdict the retry cannot change: the app retries a
+      // transient failure with this same key, and a deleted object turned
+      // that retry into a permanent UPLOADED_FILE_NOT_FOUND.
+      if (
+        uploadedPhotoPath &&
+        !databaseCommitted &&
+        isFinalRejection(error, [VehicleMileageInvalidError])
+      ) {
         await this.uploadService.deleteFile(uploadedPhotoPath);
       }
 
-      if (error instanceof VehicleMileageInvalidError) {
+      // The vehicle removed while the refueling was being placed: its own
+      // answer, not a 500.
+      if (
+        error instanceof VehicleMileageInvalidError ||
+        error instanceof VehicleNotFoundError
+      ) {
         throw error;
       }
 
@@ -417,7 +515,7 @@ class CreateFuelUseCase {
         throw error;
       }
 
-      console.error("[CreateFuelUseCase] Failed to create fuel:", error);
+      log.error({ err: error }, "fuel record could not be created");
       throw new AppError(
         "Houve um erro ao tentar criar o abastecimento! Por favor, tente novamente.",
         500,

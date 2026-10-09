@@ -1,7 +1,12 @@
-class PartAlreadyExistsError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/** Same description in this company, ignoring case and edge spaces. */
+class PartAlreadyExistsError extends AppError {
   constructor() {
     super(
-      "Esta peça não está disponível para cadastro. Já existe uma peça com este nome.",
+      "Já existe uma peça com esta descrição nesta empresa.",
+      409,
+      "PART_ALREADY_EXISTS",
     );
   }
 }

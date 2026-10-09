@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import { nameField } from "@/schemas/create-status-change-reason-schema";
 
 const updateStatusChangeReasonSchema = z
   .object({
+    ...tenantLockedShape,
     name: nameField.optional(),
     description: z.preprocess(
       (value) => (value === "" ? null : value),

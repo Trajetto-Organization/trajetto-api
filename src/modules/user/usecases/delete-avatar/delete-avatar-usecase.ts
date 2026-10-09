@@ -31,10 +31,9 @@ class DeleteAvatarUseCase {
     }
 
     try {
-      // Delete avatar file from storage
-      await this.uploadService.deleteFile(findUser.avatar);
-
-      // Update user avatar to null
+      // The row first, the file after: deleting the file first left a failed
+      // update pointing at a file that no longer existed (a broken avatar).
+      // A file left behind by a failed delete is only an orphan.
       const updatedUser = await this.user.updateAvatar(userId, null);
 
       if (!updatedUser) {
@@ -43,6 +42,8 @@ class DeleteAvatarUseCase {
           500,
         );
       }
+
+      await this.uploadService.deleteFile(findUser.avatar);
 
       return updatedUser;
     } catch (error) {

@@ -1,4 +1,6 @@
 import { z } from "zod";
+
+import { isPickedDateInput } from "@/shared/vehicle/record-dates";
 import { RecordOrigin } from "@prisma/client";
 
 import {
@@ -6,14 +8,17 @@ import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
-  isValidDateString,
 } from "@/shared/utils/zod-schema-helpers";
+import { devicePrecheckField } from "@/shared/ai-precheck/device-precheck";
 
 const createVehicleChecklistSchema = z.object({
   client_submission_id: z
     .string()
     .uuid("A chave de idempotência do envio é inválida.")
-    .optional(),
+    .optional()
+    .describe(
+      "Chave de idempotência do envio (UUID), gerada uma vez pelo app e repetida em cada retentativa; o header Idempotency-Key preenche este campo quando ele vem vazio. Repetir a chave devolve o checklist já criado em vez de duplicar.",
+    ),
   current_mileage: z.preprocess(
     (val) => {
       if (typeof val === "string") {
@@ -38,31 +43,15 @@ const createVehicleChecklistSchema = z.object({
     .string()
     .min(1, "A data do checklist é obrigatória.")
     .optional()
+    // "Not in the future" is the company's day, not the server's: the use
+    // case checks it with Business.timezone (checklist-rules), because this
+    // schema cannot know the company.
     .superRefine((val, ctx) => {
-      if (val && !isValidDateString(val)) {
+      if (val && !isPickedDateInput(val)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "Data do checklist inválida.",
         });
-
-        return;
-      }
-
-      if (val) {
-        // Validation: checklist date cannot be in the future
-        const checklistDate = new Date(val);
-        const today = new Date();
-
-        today.setHours(23, 59, 59, 999); // End of today
-
-        if (checklistDate > today) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "A data do checklist não pode ser no futuro.",
-          });
-
-          return;
-        }
       }
     }),
   tires_condition: z.enum(["good", "bad", "needs_attention"], {
@@ -237,6 +226,10 @@ const createVehicleChecklistSchema = z.object({
     })
     .optional()
     .describe("Origem do cadastro (MOBILE_APP ou WEB_DASHBOARD)."),
+
+  // Decision 14.2: the phone's offline check of the "Foto do Odômetro"
+  // (field current_mileage). Dropped without that photo.
+  device_precheck: devicePrecheckField,
 });
 
 // Photos are validated by `presignedPhotosSchema`: they never reach this API

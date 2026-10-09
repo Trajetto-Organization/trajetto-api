@@ -41,6 +41,9 @@ beforeEach(async () => {
     role: "BUSINESS_ADMIN",
     businessId: "business-1",
     session_version: 0,
+    // Only an account with two-factor on is ever sent a code, and the
+    // verification step refuses codes for any other.
+    two_factor_enabled: true,
   } as never);
 
   await tokens.createTwoFactorToken({

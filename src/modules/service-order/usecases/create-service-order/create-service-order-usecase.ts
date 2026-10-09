@@ -42,6 +42,14 @@ import {
 import { AppError } from "@/shared/errors/AppError";
 
 import { calculateDistance } from "@/shared/utils/geolocation";
+import {
+  assertMileageNotBehind,
+  recordMaintenanceMileage,
+} from "../service-order-mileage";
+import { logger } from "@/shared/logging/logger";
+import { isUniqueViolation } from "@/shared/http/idempotency-key";
+import { timeZoneOfBusiness } from "@/shared/time/business-time-zone";
+import { pickedDateFromInput } from "@/shared/vehicle/record-dates";
 import database from "@/../infra/database";
 
 @injectable()
@@ -82,6 +90,13 @@ class CreateServiceOrderUseCase {
     if (!findBusiness) {
       throw new BusinessNotFoundError();
     }
+
+    // The same form sent twice — a lost answer, a second click — is the order
+    // it already created: no second card, no second notification, and the
+    // odometer is not asked to move twice (IDEMP-14).
+    const replay = await this.replayOf(serviceOrderData);
+
+    if (replay) return replay;
 
     // Check if the vehicle exists and belongs to the company
     const findVehicle = await this.vehicle.findVehicleById(
@@ -143,6 +158,16 @@ class CreateServiceOrderUseCase {
       }
     }
 
+    // A bare day starts in the company's zone: as a string it reached
+    // Prisma (500), and as 00:00 UTC it was the evening before in Brazil.
+    const zone = timeZoneOfBusiness(findBusiness);
+
+    serviceOrderData.date = pickedDateFromInput(serviceOrderData.date, zone);
+    serviceOrderData.completion_date = pickedDateFromInput(
+      serviceOrderData.completion_date,
+      zone,
+    );
+
     if (serviceOrderData.completion_date && serviceOrderData.date) {
       const orderDate = new Date(serviceOrderData.date);
       const completionDate = new Date(serviceOrderData.completion_date);
@@ -160,21 +185,22 @@ class CreateServiceOrderUseCase {
       throw new ServiceOrderNewMileageRequireOrderFinalizedError();
     }
 
-    // 🔧 VALIDATION: New mileage must be > current vehicle mileage (strictly greater)
+    // The new mileage may equal the current one: a vehicle that stood in the
+    // workshop did not move, and closing its order used to need a made-up
+    // +0.1 km (FLEET-SO-4). Only a reading behind the odometer is refused.
     if (serviceOrderData.new_mileage_after_service) {
-      if (
-        serviceOrderData.new_mileage_after_service <=
-        findVehicle.current_mileage
-      ) {
-        throw new AppError(
-          `A nova quilometragem (${serviceOrderData.new_mileage_after_service} km) deve ser maior que a quilometragem atual do veículo (${findVehicle.current_mileage} km)`,
-          400,
-        );
-      }
+      assertMileageNotBehind(
+        serviceOrderData.new_mileage_after_service,
+        findVehicle.current_mileage,
+      );
     }
 
     // 🔒 PERMISSION CHECK: Only MASTER can modify snapshot values
     let vehicleSnapshot;
+
+    // A MASTER's edit of the vehicle, written in the order's transaction
+    // below: it used to land before the order, and stay when the order failed.
+    const vehicleUpdateData: any = {};
 
     if (findUser.role === "MASTER") {
       // MASTER can provide custom snapshot values
@@ -188,8 +214,6 @@ class CreateServiceOrderUseCase {
 
       // If MASTER is creating OS without completion date but with modified values, update vehicle
       if (!serviceOrderData.completion_date) {
-        const vehicleUpdateData: any = {};
-
         if (
           serviceOrderData.current_mileage_at_service !==
           findVehicle.current_mileage
@@ -213,13 +237,6 @@ class CreateServiceOrderUseCase {
           vehicleUpdateData.last_maintenance_mileage =
             serviceOrderData.last_maintenance_mileage_at_service;
         }
-
-        if (Object.keys(vehicleUpdateData).length > 0) {
-          await this.vehicle.updateVehicle({
-            vehicleData: vehicleUpdateData,
-            vehicleId: serviceOrderData.vehicleId,
-          });
-        }
       }
     } else {
       // Non-MASTER users get automatic snapshot from vehicle
@@ -240,7 +257,7 @@ class CreateServiceOrderUseCase {
 
       // 🆕 VALIDATE DISTANCE IF GPS_MANUAL (manual adjustment)
       if (serviceOrderData.location_source === "GPS_MANUAL") {
-        // Verifica se temos a localização original
+        // The GPS reading is needed to judge how far the pin was moved.
         if (
           !serviceOrderData.latitude_original ||
           !serviceOrderData.longitude_original
@@ -248,7 +265,7 @@ class CreateServiceOrderUseCase {
           throw new ServiceOrderLocationNotProvidedAdjustmentValidationError();
         }
 
-        // Calcula e valida a distância
+        // A pin moved too far from the GPS reading is refused as suspect.
         const distance = calculateDistance(
           serviceOrderData.latitude_original,
           serviceOrderData.longitude_original,
@@ -256,20 +273,31 @@ class CreateServiceOrderUseCase {
           serviceOrderData.longitude,
         );
 
+        // A code of its own, so the app can tell it from a bad field.
         if (distance > 500) {
           throw new AppError(
             `A localização editada está ${Math.round(distance)}m distante da capturada pelo GPS. Máximo permitido: 500m. Possível inconsistência detectada.`,
             400,
+            "LOCATION_ADJUSTMENT_TOO_FAR",
           );
         }
 
-        // Log de auditoria (opcional)
-        console.log(`[AUDIT] GPS ajustado por ${userId} na ordem de serviço`);
+        // A structured line, so it can be filtered by event and user (OBS-14).
+        // Persisting it in the activity trail is a separate decision.
+        logger.info(
+          {
+            event: "audit.gps_adjusted",
+            entity: "service_order",
+            userId,
+            distanceMeters: Math.round(distance),
+          },
+          "GPS location adjusted by the user",
+        );
       } else if (!serviceOrderData.location_source) {
-        // Se não tem source, é GPS automático
+        // No source means the GPS reading was kept as captured.
         serviceOrderData.location_source = "GPS_AUTO";
 
-        // Copia localização final para original (não foi editada)
+        // Unedited: the original is the final location.
         serviceOrderData.latitude_original = serviceOrderData.latitude;
         serviceOrderData.longitude_original = serviceOrderData.longitude;
       }
@@ -296,6 +324,40 @@ class CreateServiceOrderUseCase {
       // Order and outbox event commit together; the pipeline notifies the
       // responsible user and records the activity after the commit.
       const serviceOrderCreated = await database.$transaction(async (tx) => {
+        // A MASTER's deliberate override of the vehicle: unconditional, but
+        // now atomic with the order it came with.
+        if (Object.keys(vehicleUpdateData).length > 0) {
+          await this.vehicle.updateVehicle(
+            {
+              vehicleData: vehicleUpdateData,
+              vehicleId: serviceOrderData.vehicleId,
+            },
+            tx,
+          );
+        }
+
+        // Created already finished: the odometer moves with the order, in
+        // the same commit, and only forward (IDEMP-15). It used to be a plain
+        // update after the commit, judged against the read at the top — a
+        // refuelling with a higher reading committed in between was written
+        // over, and the counter ran backwards.
+        if (
+          serviceOrderData.completion_date &&
+          serviceOrderData.new_mileage_after_service
+        ) {
+          await recordMaintenanceMileage(
+            this.vehicle,
+            {
+              vehicleId: serviceOrderData.vehicleId,
+              businessId: serviceOrderData.businessId,
+              mileage: serviceOrderData.new_mileage_after_service,
+              currentMileage: findVehicle.current_mileage,
+              maintenanceDate: serviceOrderData.completion_date,
+            },
+            tx,
+          );
+        }
+
         const created = await this.serviceOrder.createServiceOrder(
           {
             ...serviceOrderData,
@@ -329,25 +391,10 @@ class CreateServiceOrderUseCase {
         return created;
       });
 
-      // 🔄 UPDATE: If the OS was created and already completed, update the vehicle
-      if (
-        serviceOrderData.completion_date &&
-        serviceOrderData.new_mileage_after_service
-      ) {
-        await this.vehicle.updateVehicle({
-          vehicleData: {
-            current_mileage: serviceOrderData.new_mileage_after_service,
-            last_maintenance_date: serviceOrderData.completion_date,
-            last_maintenance_mileage:
-              serviceOrderData.new_mileage_after_service,
-          },
-          vehicleId: serviceOrderData.vehicleId,
-        });
-      }
-
       // Create kanban card asynchronously without blocking the main flow
-      console.log(
-        `[ServiceOrder] Criando card no kanban para ordem ${serviceOrderCreated.id}`,
+      logger.debug(
+        { component: "service-order", serviceOrderId: serviceOrderCreated.id },
+        "creating the kanban card for a service order",
       );
       this.kanbanService.createCardFromServiceOrder({
         serviceOrderId: serviceOrderCreated.id,
@@ -359,15 +406,41 @@ class CreateServiceOrderUseCase {
         responsibleUserId: serviceOrderData.responsibleUserId,
         businessId: serviceOrderData.businessId,
         createdByUserId: userId,
+        timeZone: timeZoneOfBusiness(findBusiness),
       });
 
       return serviceOrderCreated;
     } catch (error) {
+      // The twin of this submission committed after the replay check: the
+      // insert met the unique key — or, for an order created finished, the
+      // odometer guard met the mileage the twin had just written — and the
+      // twin's order is the answer, not a refusal of an order that exists.
+      if (isUniqueViolation(error) || error instanceof AppError) {
+        const replay = await this.replayOf(serviceOrderData);
+
+        if (replay) return replay;
+      }
+
+      // The refusal of a mileage that fell behind the odometer is the
+      // user's to read, not a server fault.
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
         "Houve um erro ao tentar criar a ordem de serviço! Por favor, tente novamente.",
         500,
       );
     }
+  }
+
+  private async replayOf(
+    serviceOrderData: CreateServiceOrderProps,
+  ): Promise<ServiceOrder | null> {
+    if (!serviceOrderData.client_submission_id) return null;
+
+    return this.serviceOrder.findServiceOrderBySubmissionId(
+      serviceOrderData.businessId,
+      serviceOrderData.client_submission_id,
+    );
   }
 }
 

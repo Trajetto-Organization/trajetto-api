@@ -12,6 +12,10 @@ const twoFactorUserSchema = z.object({
       /^\d{6}$/,
       "O código de verificação deve conter exatamente 6 dígitos numéricos.",
     ),
+  // What the password step returned (twoFactorChallenge). Optional because
+  // app builds from before it cannot send it; see
+  // TWO_FACTOR_CHALLENGE_REQUIRED.
+  challenge: z.string().min(1).max(2048).optional(),
 });
 
 export { twoFactorUserSchema };

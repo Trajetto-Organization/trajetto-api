@@ -1,6 +1,7 @@
 import { inject, injectable } from "tsyringe";
 
-import { compare } from "bcrypt";
+import { verifyOneTimeCode } from "@/shared/security/one-time-code";
+import { mayUseTwoFactorStep } from "../../services/two-factor-challenge";
 
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
@@ -15,11 +16,16 @@ import { AppError } from "@/shared/errors/AppError";
 import { MAX_TWO_FACTOR_ATTEMPTS } from "@/shared/security/two-factor-rules";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { assertSessionEligible } from "../../services/session-eligibility";
-import { createUserSession } from "../../services/session-service";
+import {
+  SessionClient,
+  createUserSession,
+} from "../../services/session-service";
 
 interface TwoFactorVerificationQueryProps {
   twoFactorCode: string;
   email: string;
+  /** What the password step returned; see services/two-factor-challenge. */
+  challenge?: string;
 }
 
 interface TwoFactorVerificationProps {
@@ -39,10 +45,10 @@ class TwoFactorVerificationUseCase {
     private driver: IDriverRepository,
   ) {}
 
-  async execute({
-    twoFactorCode,
-    email,
-  }: TwoFactorVerificationQueryProps): Promise<TwoFactorVerificationProps> {
+  async execute(
+    { twoFactorCode, email, challenge }: TwoFactorVerificationQueryProps,
+    client: SessionClient = "web",
+  ): Promise<TwoFactorVerificationProps> {
     if (!email) throw new ResourceNotFoundError();
 
     // Find 2FA token using email
@@ -57,23 +63,29 @@ class TwoFactorVerificationUseCase {
     /* c8 ignore next */
     if (user.email !== email) throw new UserInvalidCodeForUserError();
 
+    // A code is a SECOND factor. One left pending by an account that has
+    // since turned two-factor off is not a way in on its own: a password
+    // login no longer deletes pending codes on the way through, since it no
+    // longer touches two-factor state at all when two-factor is off.
+    if (!user.two_factor_enabled) throw new UserInvalidTwoFactorCodeError();
+
+    // Only next to proof that THIS account's password was just verified
+    // (WEB-07). Checked before the attempt counter on purpose: a caller
+    // without the password must not be able to burn the owner's guesses.
+    if (!mayUseTwoFactorStep(challenge, user)) {
+      throw new UserInvalidTwoFactorCodeError();
+    }
+
     /**
-     * Quantas vezes já tentaram ESTE código.
-     *
-     * Sem contador, um palpite errado não consumia nada e não contava para
-     * nada: o código tem seis dígitos, vale quinze minutos, e a única barreira
-     * era o rate limit — que era contornável pelo cabeçalho que o cliente
-     * escreve. Um milhão de possibilidades com tentativas ilimitadas é um
-     * código que se adivinha.
-     *
-     * O limite é verificado ANTES da comparação, para que o palpite de número
-     * seis não seja nem comparado; e o incremento vem do banco, nunca de um
-     * read-then-write, senão duas tentativas simultâneas contariam uma.
+     * Attempts on THIS code. Six digits valid for fifteen minutes is
+     * guessable with unlimited tries, so the rate limit is not the only
+     * barrier. Checked BEFORE comparing, so the guess past the ceiling is not
+     * even compared; the database increments, so concurrent guesses all count.
      */
     if (twoFactorToken.attempts >= MAX_TWO_FACTOR_ATTEMPTS) {
-      // Apagado: passar do teto queima o código. Continuar aceitando
-      // tentativas num código travado seria um oráculo de "este e-mail tem
-      // 2FA pendente" que dura quinze minutos.
+      // Past the ceiling the code is burned: accepting guesses on a locked
+      // code would be a fifteen-minute oracle for "this e-mail has a pending
+      // 2FA".
       // `consume` and not `delete`: burning a code that a parallel request
       // has already burned is a no-op, not a 500.
       await this.usersTokens.consumeTwoFactorToken(twoFactorToken.id);
@@ -82,7 +94,10 @@ class TwoFactorVerificationUseCase {
     }
 
     // Checks if the provided code matches the stored code
-    const isCodeValid = await compare(twoFactorCode, twoFactorToken.token);
+    const isCodeValid = await verifyOneTimeCode(
+      twoFactorCode,
+      twoFactorToken.token,
+    );
 
     if (!isCodeValid) {
       const attempts = await this.usersTokens.countTwoFactorAttempt(
@@ -93,9 +108,8 @@ class TwoFactorVerificationUseCase {
         await this.usersTokens.consumeTwoFactorToken(twoFactorToken.id);
       }
 
-      // A MESMA recusa de um código inexistente ou queimado. Uma mensagem
-      // distinta para "você errou cinco vezes" contaria ao atacante que ele
-      // estava no e-mail certo.
+      // The SAME refusal as a missing or burned code: a distinct "too many
+      // attempts" would tell an attacker the e-mail was right.
       throw new UserInvalidTwoFactorCodeError();
     }
 
@@ -140,7 +154,7 @@ class TwoFactorVerificationUseCase {
       );
     }
 
-    const session = await createUserSession(user, this.usersTokens);
+    const session = await createUserSession(user, this.usersTokens, client);
 
     return { ...session, role: user.role };
   }

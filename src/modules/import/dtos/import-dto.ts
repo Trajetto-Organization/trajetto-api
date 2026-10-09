@@ -1,3 +1,10 @@
+import type { SortOrder } from "@/shared/pagination/list-query";
+import type {
+  ImportGroup,
+  ImportListSearchMeta,
+  ImportSortKey,
+} from "../usecases/list-imports/import-list";
+
 type ImportSource = "SPREADSHEET" | "NFE_XML";
 type ImportStatus = "IN_PROGRESS" | "COMPLETED" | "REVERSED";
 
@@ -86,11 +93,38 @@ interface ListImportsProps {
   businessId: string;
   page: number;
   pageSize: number;
+  /**
+   * Whether each row carries its per-row report. Defaults to true, which is
+   * what the web already in production expects; the current web asks for
+   * false and reads one report at a time through `findImportById`.
+   */
+  includeReport?: boolean;
+  sort?: ImportSortKey;
+  order?: SortOrder;
+  /** The Status and Origem filters; none keeps every upload. */
+  statuses?: ImportStatus[];
+  sources?: ImportSource[];
+}
+
+/**
+ * An upload as the history table shows it: the counters, without the report.
+ *
+ * The report is one entry per spreadsheet line and is only ever read for one
+ * upload at a time, when the operator opens it.
+ */
+type ImportSummary = Omit<ImportRecord, "report"> & { report?: ImportReport };
+
+/** The page and the per-status-and-origin counts the filters are built from. */
+interface ListImportsPage {
+  data: ImportSummary[];
+  groups: ImportGroup[];
 }
 
 interface ListImportsResult {
-  data: ImportRecord[];
+  data: ImportSummary[];
   total: number;
+  /** Rides along in the NDJSON meta line: the filter counts. */
+  meta: ImportListSearchMeta;
 }
 
 /**
@@ -111,7 +145,22 @@ interface ReversalResult {
   keptRoutes: Array<{ id: string; code: number; reason: string }>;
 }
 
+/**
+ * A delivery the reversal removed, with what a webhook subscriber matches on
+ * (our id, their code, the NF-e key).
+ */
+interface RemovedDelivery {
+  id: string;
+  code: string | null;
+  invoice_key: string | null;
+  invoice_number: string | null;
+  recipient_name: string;
+  city: string;
+  uf: string;
+}
+
 export type {
+  RemovedDelivery,
   CreateImportProps,
   FinishImportProps,
   ImportRecord,
@@ -119,7 +168,9 @@ export type {
   ImportRowResult,
   ImportSource,
   ImportStatus,
+  ImportSummary,
   ListImportsProps,
+  ListImportsPage,
   ListImportsResult,
   ReversalResult,
   RowOutcome,

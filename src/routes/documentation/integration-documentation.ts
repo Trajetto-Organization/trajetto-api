@@ -2,8 +2,10 @@ import { z } from "zod";
 
 import {
   createApiKeySchema,
+  integrationDeliveryListSchema,
+  integrationEventListSchema,
   integrationIdParamSchema,
-  integrationListSchema,
+  integrationRouteListSchema,
   listApiUsageSchema,
   listWebhookDeliveriesSchema,
   saveWebhookEndpointSchema,
@@ -11,10 +13,15 @@ import {
 
 import {
   ALL_TOPICS,
+  FAMILY_WILDCARDS,
   TOPIC_DESCRIPTIONS,
 } from "@/shared/integration/webhook-catalogue";
 
-import { API_SCOPES, SCOPE_DESCRIPTIONS } from "@/shared/integration/api-key-rules";
+import {
+  API_SCOPES,
+  RESERVED_API_SCOPES,
+  SCOPE_DESCRIPTIONS,
+} from "@/shared/integration/api-key-rules";
 
 const isoDateTime = z.union([z.string(), z.date()]);
 
@@ -51,7 +58,13 @@ const publicDelivery = z.object({
     address: publicAddress,
   }),
 
-  scheduled_date: isoDateTime.nullable(),
+  // A civil date stored as UTC midnight (decision 1.3). An integrator that
+  // converts it to local time reads the day before in Brazil.
+  scheduled_date: isoDateTime
+    .nullable()
+    .describe(
+      "Data prevista, SEM hora: vem como meia-noite UTC do dia (`2026-09-17T00:00:00.000Z` é o dia 17). Leia a parte da data (os 10 primeiros caracteres) ou converta em UTC; convertida para o fuso do Brasil ela vira o dia anterior.",
+    ),
   delivered_at: isoDateTime.nullable(),
   received_by: z.string().nullable(),
 
@@ -68,7 +81,19 @@ const publicRoute = z.object({
 
   status: z.string(),
 
-  scheduled_date: isoDateTime,
+  scheduled_date: isoDateTime.describe(
+    "Dia da rota, SEM hora: vem como meia-noite UTC do dia (`2026-09-17T00:00:00.000Z` é o dia 17). Leia a parte da data ou converta em UTC; convertida para o fuso do Brasil ela vira o dia anterior.",
+  ),
+  destination: z
+    .string()
+    .nullable()
+    .describe("Destino da rota, texto livre, quando foi informado."),
+  planned_departure_at: isoDateTime
+    .nullable()
+    .describe("Saída prevista (instante em UTC). Nulo quando não foi planejada."),
+  planned_arrival_at: isoDateTime
+    .nullable()
+    .describe("Retorno previsto (instante em UTC). Nulo quando não foi planejado."),
   started_at: isoDateTime.nullable(),
   completed_at: isoDateTime.nullable(),
 
@@ -103,8 +128,22 @@ const cursorPage = <T extends z.ZodTypeAny>(item: T) =>
       ),
   });
 
+/** `?businessId=`, which only a MASTER sends; the tenant check refuses others. */
+const businessQuery = z.object({
+  businessId: z
+    .string()
+    .uuid("ID da empresa é inválido.")
+    .optional()
+    .describe("Só o MASTER envia; ausente, a empresa do usuário."),
+});
+
 const integrationSchemas = {
-  list: integrationListSchema,
+  businessQuery,
+
+  // One per resource: each status filter is checked against its own enum.
+  listDeliveries: integrationDeliveryListSchema,
+  listRoutes: integrationRouteListSchema,
+  listEvents: integrationEventListSchema,
   idParam: integrationIdParamSchema,
 
   createApiKey: createApiKeySchema,
@@ -124,7 +163,11 @@ const integrationResponses = {
     z.object({
       id: z.string(),
       topic: z.string(),
-      occurred_at: isoDateTime,
+      // The fact's time since MOB-08, no longer the write's: an integrator
+      // who treats it as monotonic drops exactly the offline proofs.
+      occurred_at: isoDateTime.describe(
+        "Quando o fato aconteceu. Para o que o aplicativo do motorista enviou depois, sem sinal, é a hora registrada no aparelho (corrigida pelo relógio do servidor) e pode ser ANTERIOR a eventos já devolvidos em consultas anteriores. `updated_since` filtra pela hora em que o evento chegou ao Trajetto, não por este campo: não descarte um evento por ter `occurred_at` menor que o último visto.",
+      ),
       delivery: z.object({
         id: z.string(),
         code: z.string().nullable(),
@@ -145,8 +188,25 @@ const integrationResponses = {
       }),
     ),
 
+    families: z
+      .array(
+        z.object({
+          family: z.enum(["route", "document"]),
+          wildcards: z.array(z.string()),
+        }),
+      )
+      .describe(
+        "O que \"todos os eventos\" de cada família assina: os curingas de um nível que cobrem os tópicos dela. Documentos são `delivery.*`, `occurrence.*` e `proof.*` — `document.*` não é um curinga válido.",
+      ),
+
     scopes: z.array(
-      z.object({ scope: z.string(), description: z.string() }),
+      z.object({
+        scope: z.string(),
+        description: z.string(),
+        reserved: z
+          .boolean()
+          .describe("Nenhum endpoint da v1 exige este escopo ainda."),
+      }),
     ),
   }),
 
@@ -188,8 +248,21 @@ const integrationResponses = {
         .string()
         .nullable()
         .describe(
-          "Só no cadastro, e só uma vez. Depois disso o segredo não é mais legível por ninguém.",
+          "Só no cadastro e na troca de segredo (`rotate-secret`), uma vez em cada. Nenhuma outra resposta o devolve; na edição vem null.",
         ),
+    }),
+  }),
+
+  webhookEndpointReactivated: z.object({
+    message: z.string(),
+    data: z.object({
+      id: z.string(),
+      reactivated: z
+        .boolean()
+        .describe("false quando o endpoint não estava desligado por falhas."),
+      released: z
+        .number()
+        .describe("Quantos eventos retidos voltaram para a fila agora."),
     }),
   }),
 
@@ -216,16 +289,53 @@ const integrationResponses = {
       pageSize: z.number(),
 
       searchMeta: z.object({
-        delivered: z.number(),
-        failed: z.number(),
-        pending: z.number(),
+        window: z
+          .enum(["24h", "7d", "30d"])
+          .describe("O período que a lista e os contadores cobrem."),
+        totalCapped: z
+          .boolean()
+          .describe(
+            "true quando a lista passou do limite de contagem: `total` é então o limite, não a contagem exata. Os contadores abaixo continuam exatos.",
+          ),
+        delivered: z
+          .number()
+          .describe("Eventos do período entregues."),
+        failed: z.number().describe("Eventos do período que falharam."),
+        pending: z
+          .number()
+          .describe(
+            "A fila inteira (PENDING e PROCESSING), qualquer que seja a idade — o que `status=QUEUED` lista.",
+          ),
 
         p95LatencyMs: z
           .number()
           .nullable()
-          .describe("Sobre as entregues nas últimas 24h."),
+          .describe(
+            "Tempo de resposta do receptor no percentil 95 (nearest-rank) das entregas contadas em `delivered`. Não inclui tempo de fila nem falhas; null quando nada foi entregue no período.",
+          ),
       }),
     }),
+  }),
+
+  /** One line of that stream, after the envelope: the admin controller's select. */
+  webhookDeliveryRow: z.object({
+    id: z.string(),
+    topic: z.string(),
+    status: z.enum(["PENDING", "PROCESSING", "DELIVERED", "FAILED"]),
+    attempts: z.number(),
+    response_status: z.number().nullable(),
+    response_body: z.string().nullable(),
+    latency_ms: z.number().nullable(),
+    lastError: z.string().nullable(),
+    deliveredAt: isoDateTime.nullable(),
+    availableAt: isoDateTime.describe("Quando tentamos de novo."),
+    leaseExpiresAt: isoDateTime
+      .nullable()
+      .describe(
+        "Só numa entrega em envio (PROCESSING): até quando a tentativa atual vale. Já vencido, a tentativa morreu com o processo e o despachante vai retomá-la.",
+      ),
+    created_at: isoDateTime,
+    endpoint: z.object({ id: z.string(), name: z.string(), url: z.string() }),
   }),
 
   apiUsage: z.object({
@@ -252,10 +362,25 @@ const integrationResponses = {
       keys: z.array(
         z.object({ id: z.string(), name: z.string(), prefix: z.string() }),
       ),
+
+      timeZone: z
+        .string()
+        .describe(
+          "O fuso da empresa (IANA): os dias de `byDay` e o \"hoje\" são os do calendário dela.",
+        ),
     }),
   }),
 
   resent: z.object({ message: z.string() }),
+
+  resendScheduled: z.object({
+    message: z.string(),
+    data: z.object({
+      id: z
+        .string()
+        .describe("A linha NOVA criada pelo reenvio; a original fica intacta."),
+    }),
+  }),
 
   genericError: z.object({ message: z.string() }),
   internalServerError: z.object({
@@ -271,9 +396,14 @@ const buildCatalogue = (version: string, family: Record<string, string>) => ({
     family: family[topic] as "route" | "document",
     description: TOPIC_DESCRIPTIONS[topic],
   })),
+  families: (["route", "document"] as const).map((name) => ({
+    family: name,
+    wildcards: FAMILY_WILDCARDS[name],
+  })),
   scopes: API_SCOPES.map((scope) => ({
     scope,
     description: SCOPE_DESCRIPTIONS[scope],
+    reserved: RESERVED_API_SCOPES.includes(scope),
   })),
 });
 

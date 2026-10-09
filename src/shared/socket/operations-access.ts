@@ -106,5 +106,38 @@ function canWatchOperationsOf(
   );
 }
 
-export { operationsRoom, mayReadDeliveries, canWatchOperationsOf };
+/** The shape of every company id this product issues (uuid v4/v7). */
+const BUSINESS_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A uuid is 36 characters; anything much longer is not worth trimming. */
+const MAX_BUSINESS_ID_PAYLOAD = 64;
+
+/**
+ * The company an operations subscription names — a uuid, or nothing (RT-1).
+ *
+ * It becomes part of a room name, and a room name is published through Redis
+ * with every emit. The shared reader accepted any string up to the frame
+ * ceiling (16 KB), so a MASTER socket could join `operations:<anything>`.
+ * Lower-cased because the rooms are named from database ids, which are.
+ */
+function readOperationsBusinessId(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+
+  const { businessId } = payload as { businessId?: unknown };
+
+  if (typeof businessId !== "string") return null;
+  if (businessId.length > MAX_BUSINESS_ID_PAYLOAD) return null;
+
+  const trimmed = businessId.trim();
+
+  return BUSINESS_ID_PATTERN.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+export {
+  operationsRoom,
+  mayReadDeliveries,
+  canWatchOperationsOf,
+  readOperationsBusinessId,
+};
 export type { DeliveryPrincipal, OperationsSubscriber };

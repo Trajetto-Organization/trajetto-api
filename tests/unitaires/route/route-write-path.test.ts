@@ -168,6 +168,7 @@ function makeContext() {
       driverRepository,
       vehicleRepository,
       notificationService,
+      webhookStub.asService(),
     ),
   };
 }
@@ -376,7 +377,7 @@ describe("releasing a route", () => {
     const delivery = await seedDelivery(context);
     const route = await createRoute(context, [delivery]);
 
-    const released = await context.release.execute({
+    const { route: released } = await context.release.execute({
       userId: DISPATCHER,
       businessId: BUSINESS,
       routeId: route.id,
@@ -424,13 +425,25 @@ describe("releasing a route", () => {
     const delivery = await seedDelivery(context);
     const route = await createRoute(context, [delivery]);
 
+    // The route becomes another company's; the dispatcher asks in their own.
+    context.routeRepository.routes[0].businessId = OTHER_BUSINESS;
+
+    await expect(
+      context.release.execute({
+        userId: DISPATCHER,
+        businessId: BUSINESS,
+        routeId: route.id,
+      }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+
+    // Naming the other company itself is a tenant refusal, as at the HTTP edge.
     await expect(
       context.release.execute({
         userId: DISPATCHER,
         businessId: OTHER_BUSINESS,
         routeId: route.id,
       }),
-    ).rejects.toMatchObject({ statusCode: 404 });
+    ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
 
     // And it really did not act: the route is untouched.
     expect(context.routeRepository.routes[0].status).toBe("PLANNED");
@@ -446,7 +459,7 @@ describe("releasing a route", () => {
       routeId: route.id,
     });
 
-    const planned = await context.release.execute({
+    const { route: planned } = await context.release.execute({
       userId: DISPATCHER,
       businessId: BUSINESS,
       routeId: route.id,
@@ -757,10 +770,13 @@ describe("the offline queue resending a departure", () => {
 });
 
 describe("two surfaces acting on the same route at once", () => {
-  it("lets the first departure land and refuses the second with 409", async () => {
+  it("lets the first departure land and answers the second with the same route", async () => {
     // The driver taps twice, or the offline queue resends. Both read RELEASED,
     // both pass the state machine, and one of them is about to start a route
-    // that already left.
+    // that already left. The write guard stops it; the loser then finds the
+    // route out with this driver on this truck — the departure it asked for —
+    // and answers success. A 409 here was marked `failed` by the app's outbox
+    // for a departure that happened (MOB-13).
     const delivery = await seedDelivery(context);
     const route = await createRoute(context, [delivery]);
 
@@ -779,19 +795,11 @@ describe("two surfaces acting on the same route at once", () => {
 
     const [first, second] = await Promise.allSettled([depart(), depart()]);
 
-    expect([first.status, second.status].sort()).toEqual([
-      "fulfilled",
-      "rejected",
-    ]);
+    expect([first.status, second.status]).toEqual(["fulfilled", "fulfilled"]);
+    expect(context.routeRepository.routes[0].status).toBe("IN_PROGRESS");
 
-    const loser = [first, second].find(
-      (result) => result.status === "rejected",
-    ) as PromiseRejectedResult;
-
-    expect(loser.reason).toMatchObject({
-      statusCode: 409,
-      code: "ROUTE_STATUS_CONFLICT",
-    });
+    // Departed once: one announcement, not one per request.
+    expect(webhookStub.forTopic("route.started")).toHaveLength(1);
   });
 
   it("refuses the dispatcher cancelling while the driver departs", async () => {

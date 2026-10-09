@@ -17,18 +17,23 @@ class ReorderRouteStopsController {
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
     const { routeId } = routeIdParamSchema.parse(request.params);
 
-    const { orderedStopIds } = reorderRouteStopsSchema.parse(request.body);
+    const { orderedStopIds, expectedPlanVersion } =
+      reorderRouteStopsSchema.parse(request.body);
 
     const reorderRouteStopsUseCase = container.resolve(ReorderRouteStopsUseCase);
 
-    await reorderRouteStopsUseCase.execute({
+    const { planVersion } = await reorderRouteStopsUseCase.execute({
       userId: id,
       businessId,
       routeId,
       orderedStopIds,
+      expectedPlanVersion,
     });
 
-    return reply.status(200).send({ message: "Ordem das paradas atualizada." });
+    return reply.status(200).send({
+      message: "Ordem das paradas atualizada.",
+      data: { planVersion },
+    });
   }
 }
 

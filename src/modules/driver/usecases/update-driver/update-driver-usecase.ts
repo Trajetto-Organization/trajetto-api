@@ -15,13 +15,15 @@ import { DriverNotFoundError } from "../errors/driver-not-found-error";
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
 
 import { DriverCpfAlreadyExistsError } from "../errors/driver-cpf-already-exists-error";
-import { DriverRgAlreadyExistsError } from "../errors/driver-rg-already-exists-error";
-
 import { DriverLicenseAlreadyExistsError } from "../errors/driver-license-already-exists-error";
+
 import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
+import { driverUniqueViolation } from "../errors/driver-unique-violation";
 
 import { NotificationService } from "@/shared/services/notification-service";
-import { sendSecurityEventToUser } from "@/websocket";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+
+import { sendCatalogChangedEvent, sendSecurityEventToUser } from "@/websocket";
 
 import { Driver, UpdateDriverProps } from "../../dtos/driver-dto";
 
@@ -52,6 +54,8 @@ class UpdateDriverUseCase {
       throw new ResourceNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
@@ -60,11 +64,10 @@ class UpdateDriverUseCase {
 
     const findDriverById = await this.driver.findDriverById(driverId);
 
-    // O mesmo 404 para "não existe" e "não é seu". Sem esta linha,
-    // qualquer usuário com `driver_manage:write` reescrevia o motorista
-    // de outra empresa — nome, CPF, CNH — ou o marcava INACTIVE, que o
-    // `session-eligibility` transforma em logout forçado do aplicativo
-    // dele no meio da rota.
+    // One 404 for "does not exist" and "is not yours". Without this line,
+    // anyone holding `driver_manage:write` rewrote another company's driver
+    // (name, CPF, CNH) or marked them INACTIVE, which session-eligibility
+    // turns into a forced logout of their app in the middle of a route.
     if (!findDriverById || findDriverById.businessId !== businessId) {
       throw new DriverNotFoundError();
     }
@@ -81,72 +84,78 @@ class UpdateDriverUseCase {
       }
     }
 
+    // Per company (decision 8.1), and never the driver being edited.
     if (driverData.cpf) {
-      // Check if there is already a driver with the same CPF
-      const findDriverByCpf = await this.driver.findDriverByCpf(driverData.cpf);
+      const sameCpf = await this.driver.findDriverByCpf(driverData.cpf, businessId);
 
-      if (findDriverByCpf && findDriverByCpf.id !== driverId) {
+      if (sameCpf && sameCpf.id !== driverId) {
         throw new DriverCpfAlreadyExistsError();
       }
     }
 
-    if (driverData.rg) {
-      // Check if there is already a driver with the same RG
-      const findDriverByRG = await this.driver.findDriverByRg(driverData.rg);
-
-      if (findDriverByRG && findDriverByRG.id !== driverId) {
-        throw new DriverRgAlreadyExistsError();
-      }
-    }
+    // No RG check: an RG repeats across states and was never an identity
+    // (the CPF is); see create-driver.
 
     if (driverData.cnh) {
-      // Check if there is already a driver with the same driver's license
-      const findDriverByDriverLicense =
-        await this.driver.findDriverByDriverLicense(driverData.cnh);
+      const sameCnh = await this.driver.findDriverByCnh(driverData.cnh, businessId);
 
-      if (
-        findDriverByDriverLicense &&
-        findDriverByDriverLicense.id !== driverId
-      ) {
+      if (sameCnh && sameCnh.id !== driverId) {
         throw new DriverLicenseAlreadyExistsError();
       }
     }
 
+    // A driver never moves between companies: the path names the company,
+    // and the body cannot rewrite it.
+    const { businessId: _ignored, ...changes } = driverData;
+
+    let driverUpdated: Driver;
+
     try {
-      const driverUpdated = await this.driver.updateDriver({
-        driverData,
+      // Deactivation with open routes is refused inside, under the driver
+      // row's lock (DriverHasOpenRoutesError, decision 8.3).
+      driverUpdated = await this.driver.updateDriver({
+        driverData: changes,
         driverId,
       });
-
-      // If the driver was just deactivated, notify the linked user in real-time
-      if (
-        driverData.status === "INACTIVE" &&
-        findDriverById.status !== "INACTIVE"
-      ) {
-        const driverUser = await this.user.findUserByDriverId(driverId);
-        if (driverUser) {
-          sendSecurityEventToUser(driverUser.id, { reason: "driver_inactive" });
-        }
-      }
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Motorista",
-        action: "update",
-        entityId: driverUpdated.id,
-        description: `Motorista atualizado com sucesso: ${driverUpdated.name} | CNH: ${driverUpdated.cnh} | ID: ${driverUpdated.id}`,
-        status: "Atualizado",
-        performedBy: userId,
-        businessId: businessId,
-      });
-
-      return driverUpdated;
     } catch (error) {
+      if (error instanceof AppError) throw error;
+
+      const duplicate = driverUniqueViolation(error);
+
+      if (duplicate) throw duplicate;
+
       throw new AppError(
         "Houve um erro ao tentar atualizar o motorista! Por favor, tente novamente.",
         500,
       );
     }
+
+    sendCatalogChangedEvent(businessId, "driver");
+
+    // If the driver was just deactivated, notify the linked user in real-time
+    if (
+      changes.status === "INACTIVE" &&
+      findDriverById.status !== "INACTIVE"
+    ) {
+      const driverUser = await this.user.findUserByDriverId(driverId);
+
+      if (driverUser) {
+        sendSecurityEventToUser(driverUser.id, { reason: "driver_inactive" });
+      }
+    }
+
+    // Process activity asynchronously without blocking the main flow
+    this.notificationService.createActivityIfEnabled({
+      type: "Motorista",
+      action: "update",
+      entityId: driverUpdated.id,
+      description: `Motorista atualizado com sucesso: ${driverUpdated.name} | CNH: ${driverUpdated.cnh} | ID: ${driverUpdated.id}`,
+      status: "Atualizado",
+      performedBy: userId,
+      businessId: businessId,
+    });
+
+    return driverUpdated;
   }
 }
 

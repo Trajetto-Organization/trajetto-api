@@ -9,8 +9,6 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { KanbanCardNotFoundError } from "../errors/kanban-card-not-found-error";
 import { KanbanCardColumnNotFoundError } from "../errors/kanban-card-column-not-found-error";
 
-import { KanbanNotAllowedDeleteCardBusinessError } from "../errors/kanban-not-allowed-delete-card-business-error";
-
 import { AppError } from "@/shared/errors/AppError";
 import { NotificationService } from "@/shared/services/notification-service";
 
@@ -44,11 +42,12 @@ class DeleteKanbanCardUseCase {
       throw new KanbanCardColumnNotFoundError();
     }
 
-    // Verify user permissions
-    if (findUser.role !== "MASTER") {
-      if (findUser.businessId !== findColumn.businessId) {
-        throw new KanbanNotAllowedDeleteCardBusinessError();
-      }
+    // Another company's card answers as a missing one (decision 11.3).
+    if (
+      findUser.role !== "MASTER" &&
+      findUser.businessId !== findColumn.businessId
+    ) {
+      throw new KanbanCardNotFoundError();
     }
 
     try {
@@ -67,8 +66,11 @@ class DeleteKanbanCardUseCase {
 
       return deletedCard;
     } catch (error) {
+      // Deleted meanwhile: the repository says "not found".
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
-        "Houve um erro ao tentar deletar o card! Por favor, tente novamente.",
+        "Houve um erro ao tentar excluir o card! Por favor, tente novamente.",
         500,
       );
     }

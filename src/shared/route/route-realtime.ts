@@ -31,6 +31,11 @@ function announceStopSettled(
     stopId: settled.stop.id,
     stopStatus: settled.stop.status,
     deliveryId: settled.stop.deliveryId,
+    // The board patches its dot from this frame: without the instant it lost
+    // "às HH:mm" until its next refetch.
+    completedAt: settled.stop.completed_at
+      ? new Date(settled.stop.completed_at).toISOString()
+      : null,
   } satisfies RouteRealtimeEvent);
 
   // The route ended on this stop. Nobody pressed a button, so nobody is

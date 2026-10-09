@@ -29,6 +29,8 @@ interface KanbanCardContent {
   description: string | null;
   priority: string;
   dueDate: string | null;
+  /** The company's zone the due day is read in; absent on older events. */
+  timeZone?: string;
 }
 
 function priorityInfo(priority: string): { emoji: string; text: string } {
@@ -65,7 +67,7 @@ function kanbanCardWhatsAppBody(
     card.description && `Descrição: ${card.description}`,
     `Prioridade: ${priority.emoji} *${priority.text}*`,
     card.dueDate &&
-      `Data de vencimento: *${formatDate(new Date(card.dueDate), "pt-BR")}*`,
+      `Data de vencimento: *${formatDate(card.dueDate, card.timeZone)}*`,
     `Identificador do card: *${card.cardId}*`,
     `Para mais detalhes, acesse o sistema.`,
   ]

@@ -19,8 +19,10 @@ import { InMemoryActivityRepository } from "@/modules/activity/repositories/in-m
  * written to keep the difference honest rather than to claim exactly-once:
  *
  *   IN_APP, ACTIVITY  our own tables — a duplicate is preventable outright.
- *   EMAIL             SMTP has no idempotency key; Message-ID is a mitigation.
- *   PUSH, WHATSAPP    no key exists at that layer. Only auditable.
+ *   EMAIL             deduplicated by Resend for 24 h (Resend-Idempotency-Key
+ *                     = delivery id); Message-ID is the fallback mitigation.
+ *   PUSH, WHATSAPP    no key exists at that layer. Only auditable — through
+ *                     the provider receipts ledger.
  */
 
 const DELIVERY_A = "018f0000-0000-7000-8000-0000000000a1";

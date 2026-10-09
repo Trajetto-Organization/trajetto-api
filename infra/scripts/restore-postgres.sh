@@ -9,7 +9,7 @@
 # Usage:
 #   ./infra/scripts/restore-postgres.sh <dump-file> [container-name] [port]
 #
-# See docs/runbook-restore.md for the full drill, including the verification
+# See docs/deploy.md (Backup e restauração) for the full drill, including the verification
 # that turns "pg_restore exited 0" into "this is the database the application
 # expects".
 #
@@ -27,16 +27,25 @@ if [ ! -f "$DUMP_FILE" ]; then
   exit 1
 fi
 
-# The guard that matters. This script exists to rehearse, and a rehearsal that
-# can reach production is not a rehearsal — it is the accident it was meant to
-# prevent. It only ever creates its own container, so there is no argument
-# that points it at a real host; the check below is here so that stays true
-# if someone later adds one.
-if [ "${ALLOW_NON_LOCAL_RESTORE:-}" = "true" ]; then
-  echo "Refusing to run: this script restores into a disposable local" >&2
-  echo "container by design. Restoring into a real environment is a" >&2
-  echo "deliberate, supervised operation — follow docs/runbook-restore.md." >&2
-  exit 1
+# This script only ever talks to the disposable container it creates below:
+# there is no argument that points it at a real host, and none may be added.
+# Restoring into a real environment is a supervised operation that follows
+# docs/deploy.md (Backup e restauração). (It used to carry an ALLOW_NON_LOCAL_RESTORE check
+# that refused only when the variable said "allow" — a guard that guarded
+# nothing, removed rather than kept as false comfort.)
+
+# A dump copied from the backup bucket or another host is checked against the
+# checksum written next to it, before anything is started. A damaged copy
+# fails here in a second instead of halfway through a restore.
+if [ -f "${DUMP_FILE}.sha256" ]; then
+  echo "Verifying ${DUMP_FILE}.sha256..."
+
+  if ! (cd "$(dirname "$DUMP_FILE")" && sha256sum -c "$(basename "$DUMP_FILE").sha256"); then
+    echo "Checksum mismatch: this file is not the dump that was written." >&2
+    exit 1
+  fi
+else
+  echo "No ${DUMP_FILE}.sha256 next to the dump — integrity not verified."
 fi
 
 cleanup() {
@@ -51,9 +60,12 @@ fi
 
 echo "Starting disposable Postgres (${CONTAINER}) on port ${PORT}..."
 
-# postgres:16-alpine, matching PRODUCTION — not the bitnami image the dev
-# compose uses. A drill against a different image and a different data layout
-# does not prove anything about the database being restored.
+# The image PRODUCTION runs: POSTGRES_IMAGE, the same variable that pins it in
+# compose.production.yaml (export the digest you set there), falling back to
+# the same default. A drill on a different image or data layout does not
+# prove anything about the database being restored.
+IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
+
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 
 docker run --rm -d \
@@ -62,7 +74,7 @@ docker run --rm -d \
   -e POSTGRES_PASSWORD="$DB_PASSWORD" \
   -e POSTGRES_DB="$DB_NAME" \
   -p "${PORT}:5432" \
-  postgres:16-alpine >/dev/null
+  "$IMAGE" >/dev/null
 
 echo -n "Waiting for it to accept connections"
 
@@ -95,11 +107,27 @@ echo
 echo "Restored. Verifying against the schema the application expects..."
 
 # THE verification. pg_restore exiting 0 only says the file was readable;
-# `migrate deploy` reporting nothing pending says the restored database is
-# structurally the one this codebase runs against. It costs nothing, because
-# Prisma is already a dependency.
-DATABASE_URL="postgresql://postgres:${DB_PASSWORD}@localhost:${PORT}/${DB_NAME}?schema=public" \
-  npx prisma migrate deploy
+# `migrate status` reporting the schema up to date says the restored database
+# is structurally the one this codebase runs against.
+#
+# `status`, never `deploy`. Deploy APPLIES whatever is pending and then
+# reports "No pending migrations": a dump older than the code came out of the
+# drill looking current, hiding the one gap the drill exists to show. Nothing
+# here changes the restored database.
+set +e
+STATUS="$(DATABASE_URL="postgresql://postgres:${DB_PASSWORD}@localhost:${PORT}/${DB_NAME}?schema=public" \
+  npx prisma migrate status 2>&1)"
+STATUS_EXIT=$?
+set -e
+
+echo "$STATUS"
+
+if [ "$STATUS_EXIT" -ne 0 ] || ! printf '%s' "$STATUS" | grep -q "Database schema is up to date"; then
+  echo >&2
+  echo "Dump anterior ao código: há migrations pendentes (ou o status falhou) — nada foi aplicado." >&2
+  echo "Restaurar este dump exige aplicar as migrations acima de propósito, com o runbook." >&2
+  exit 1
+fi
 
 echo
 echo "Row counts:"

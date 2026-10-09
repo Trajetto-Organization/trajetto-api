@@ -2,6 +2,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 interface RequestContext {
   /**
+   * The request's id (a uuid v7, or the caller's well-formed x-request-id).
+   * The outbox stamps it on every event the request publishes, so a delivery
+   * can be traced back to the request that caused it (OBS-06).
+   */
+  requestId?: string;
+
+  /**
    * Scheme + host the client actually used to reach this API, when it can be
    * trusted (see `runWithRequestContext`).
    */
@@ -34,6 +41,12 @@ interface RequestContext {
    * asking twice, and the not-found path is the one a probing caller repeats.
    */
   rows?: Map<string, unknown>;
+
+  /**
+   * Set once the response is over (see `endRequestContext`). An ended context
+   * reads as no context at all.
+   */
+  ended?: boolean;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -55,7 +68,9 @@ const storage = new AsyncLocalStorage<RequestContext>();
  * belongs in the arguments, where it can be seen and tested.
  */
 function getRequestContext(): RequestContext | undefined {
-  return storage.getStore();
+  const context = storage.getStore();
+
+  return context && !context.ended ? context : undefined;
 }
 
 /**
@@ -71,6 +86,22 @@ function enterRequestContext(context: RequestContext): void {
 }
 
 /**
+ * Ends a request's context once its response is over.
+ *
+ * `enterWith` also binds the store to every async resource created during the
+ * request — a Redis or database connection opened lazily by the first
+ * request, a timer — and those outlive it. Whatever later ran through them (a
+ * Socket.IO handshake, a socket event, a worker tick) found that first
+ * request's store and its memoised user: after a session_version bump every
+ * handshake compared the token against the old row and was refused. Ending
+ * the context makes a leaked store inert, wherever it went.
+ */
+function endRequestContext(context: RequestContext): void {
+  context.ended = true;
+  context.rows = undefined;
+}
+
+/**
  * Reads through the request's memory, or loads and remembers.
  *
  * Outside a request — workers, cron jobs, scripts — there is no store and the
@@ -78,7 +109,7 @@ function enterRequestContext(context: RequestContext): void {
  * many times the database is asked.
  */
 async function remember<T>(key: string, load: () => Promise<T>): Promise<T> {
-  const context = storage.getStore();
+  const context = getRequestContext();
 
   if (!context) return load();
 
@@ -103,7 +134,7 @@ async function remember<T>(key: string, load: () => Promise<T>): Promise<T> {
  * be subtly wrong.
  */
 function forgetRequestCache(): void {
-  storage.getStore()?.rows?.clear();
+  getRequestContext()?.rows?.clear();
 }
 
 /**
@@ -120,10 +151,11 @@ function withoutRequestContext<T>(run: () => T): T {
 
 /** For tests: how many rows the current request is holding. */
 function requestCacheSize(): number {
-  return storage.getStore()?.rows?.size ?? 0;
+  return getRequestContext()?.rows?.size ?? 0;
 }
 
 export {
+  endRequestContext,
   enterRequestContext,
   forgetRequestCache,
   getRequestContext,

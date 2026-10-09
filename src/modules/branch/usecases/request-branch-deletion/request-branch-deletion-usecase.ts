@@ -1,7 +1,7 @@
 import { inject, injectable } from "tsyringe";
 
 import crypto from "node:crypto";
-import { hash } from "bcrypt";
+import { hashSecret } from "@/shared/security/bcrypt-gate";
 
 import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
@@ -13,7 +13,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "../errors/branch-not-found-error";
-import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { BranchHasChildrenError } from "../errors/branch-has-children-error";
 
@@ -66,14 +66,13 @@ class RequestBranchDeletionUseCase {
       throw new BusinessNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const findBranch = await this.branch.findBranchById(branchId);
 
-    if (!findBranch) {
+    // Another company's branch answers like a missing one (decision 11.3).
+    if (!findBranch || findBranch.businessId !== businessId) {
       throw new BranchNotFoundError();
-    }
-
-    if (findBranch.businessId !== businessId) {
-      throw new BranchNotBelongBusinessError();
     }
 
     // Fail fast: don't bother sending code if branch can't be deleted anyway
@@ -92,7 +91,7 @@ class RequestBranchDeletionUseCase {
     }
 
     const code = crypto.randomInt(100_000, 1_000_000).toString();
-    const codeHash = await hash(code, 10);
+    const codeHash = await hashSecret(code, 10);
 
     const expires = new Date(Date.now() + CODE_EXPIRATION_MINUTES * 60 * 1000);
 

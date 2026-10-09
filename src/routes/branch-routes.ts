@@ -19,6 +19,7 @@ import {
   branchResponses,
   branchSchemas,
 } from "./documentation/branch-documentation";
+import { ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
 
 const createBranchController = new CreateBranchController();
 const deleteBranchController = new DeleteBranchController();
@@ -43,14 +44,16 @@ async function branchRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
-        summary: "Create a new branch",
+        summary: "Cadastra uma filial",
         description:
-          "Register a new business branch location with address, contact information, and operational details",
+          "Cadastra uma filial da empresa do caminho. Razão social (sem diferenciar maiúsculas), e-mail e código ERP são únicos DENTRO da empresa — outra transportadora pode ter uma filial igual, e a resposta nunca a cita. O CNPJ é único na plataforma (identidade nacional) e o conflito responde com mensagem neutra. Avisa as outras telas abertas pelo evento `catalogChanged` (entidade `branch`).",
         params: branchSchemas.businessIdParam,
         body: branchSchemas.createBranch,
         response: {
           201: branchResponses.branchCreated,
           400: branchResponses.createBranchErrors,
+          403: branchResponses.branchForbidden,
+          409: branchResponses.branchConflict,
           500: branchResponses.internalServerError,
         },
       },
@@ -66,13 +69,17 @@ async function branchRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
-        summary: "List branches",
+        summary: "Lista as filiais da empresa",
         description:
-          "Retrieve a paginated list of business branch locations with optional search and filtering capabilities",
+          "Filiais de uma empresa numa tabela paginada. Ordena no servidor (`sort`/`order`) e filtra por situação (`status`: active, inactive) e UF (um ou mais valores separados por vírgula), além da busca livre (ID, razão social, nome fantasia, endereço, CNAE, código ERP, responsável, e-mail e os dígitos de CNPJ, CEP e telefone). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões (total, ativas, com código ERP, com nome fantasia) e as opções dos filtros com as contagens — calculados sobre a empresa inteira, nunca sobre a página. O MASTER informa `businessId`.",
         querystring: branchSchemas.listBranch,
         response: {
-          200: branchResponses.branchList,
+          200: ndjsonList(
+            branchResponses.branchRow,
+            offsetMetaWith(branchResponses.branchListSearchMeta),
+          ),
           400: branchResponses.listBranchErrors,
+          403: branchResponses.branchForbidden,
           500: branchResponses.internalServerError,
         },
       },
@@ -88,16 +95,14 @@ async function branchRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
-        summary: "Search branches by business (cursor-based)",
+        summary: "Busca filiais ativas da empresa (cursor)",
         description:
-          "Retrieve branches as NDJSON stream with cursor-based pagination. " +
-          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
-          "Subsequent lines are individual branch objects. " +
-          "Use nextCursor value as cursor parameter for the next page.",
+          "As filiais ativas de uma empresa para os seletores, em NDJSON paginado por cursor, mais recentes primeiro. `search` filtra no servidor por razão social, nome fantasia, CNPJ, cidade, UF ou e-mail. A primeira linha traz `meta.searchMeta.{nextCursor, hasMore}`; passe `nextCursor` como `cursor` para a próxima página.",
         querystring: branchSchemas.searchBranchCursor,
         response: {
-          200: branchResponses.searchBranchStreamDescription,
-          400: branchResponses.listBranchBusinessErrors,
+          200: ndjsonCursor(branchResponses.branchRow),
+          400: branchResponses.searchBranchErrors,
+          403: branchResponses.branchForbidden,
           500: branchResponses.internalServerError,
         },
       },
@@ -116,16 +121,17 @@ async function branchRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
-        summary: "Update a branch",
+        summary: "Atualiza uma filial",
         description:
-          "Update existing branch information including location details, contact information, and operational settings",
+          "Atualiza só os campos enviados (um campo ausente fica como está). A filial precisa ser da empresa do caminho — filial não muda de empresa, nem pelo MASTER; a de outra empresa responde 404. As regras de unicidade são as do cadastro. Avisa as outras telas pelo evento `catalogChanged`.",
         params: branchSchemas.updateDeleteBranch,
         body: branchSchemas.updateBranch,
         response: {
           200: branchResponses.branchUpdated,
           400: branchResponses.updateBranchErrors,
-          403: branchResponses.updateBranchForbidden,
-          404: branchResponses.updateBranchNotFound,
+          403: branchResponses.branchForbidden,
+          404: branchResponses.branchNotFound,
+          409: branchResponses.branchConflict,
           500: branchResponses.internalServerError,
         },
       },
@@ -141,16 +147,16 @@ async function branchRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
-        summary: "Request branch deletion (sends confirmation code)",
+        summary: "Pede a exclusão de uma filial (envia o código)",
         description:
-          "First step of the two-step branch deletion flow. Validates that the branch can be deleted (no dependencies) and sends a 6-digit confirmation code to the requesting user's email. The code expires in 5 minutes. Use the DELETE endpoint with the code to actually delete the branch.",
+          "Primeiro passo da exclusão em duas etapas. Confere que a filial pode ser excluída (sem vínculos) e envia um código de 6 dígitos ao e-mail de quem pediu, válido por 5 minutos. Use a rota DELETE com o código para excluir.",
         params: branchSchemas.updateDeleteBranch,
         response: {
           200: branchResponses.branchDeletionCodeSent,
           400: branchResponses.requestBranchDeletionErrors,
-          403: branchResponses.deleteBranchForbidden,
-          404: branchResponses.deleteBranchNotFound,
-          409: branchResponses.branchHasChildrenConflict,
+          403: branchResponses.branchForbidden,
+          404: branchResponses.branchOrBusinessNotFound,
+          409: branchResponses.branchInUse,
           500: branchResponses.internalServerError,
         },
       },
@@ -166,17 +172,17 @@ async function branchRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
-        summary: "Confirm branch deletion (with confirmation code)",
+        summary: "Confirma a exclusão de uma filial (com o código)",
         description:
-          "Second step of the two-step branch deletion flow. Validates the 6-digit confirmation code received by email, then permanently removes the branch. After deletion, all other business admins (excluding the deleter) receive an audit notification by email.",
+          "Segundo passo da exclusão. Valida o código de 6 dígitos recebido por e-mail e exclui a filial. Depois, os demais administradores da empresa recebem um aviso por e-mail, com a hora no fuso da empresa. Avisa as outras telas pelo evento `catalogChanged`.",
         params: branchSchemas.updateDeleteBranch,
         body: branchSchemas.confirmDeletionCode,
         response: {
           200: branchResponses.branchDeleted,
           400: branchResponses.confirmBranchDeletionErrors,
-          403: branchResponses.deleteBranchForbidden,
-          404: branchResponses.deleteBranchNotFound,
-          409: branchResponses.branchHasChildrenConflict,
+          403: branchResponses.branchForbidden,
+          404: branchResponses.branchOrBusinessNotFound,
+          409: branchResponses.branchDeletionConflict,
           500: branchResponses.internalServerError,
         },
       },
@@ -195,15 +201,16 @@ async function branchRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["branch"],
-        summary: "Toggle branch active status",
+        summary: "Ativa ou inativa uma filial",
         description:
-          "Activate or deactivate a branch. Inactive branches block operations for associated users.",
+          "Inverte a situação da filial. Filial inativa sai dos seletores. Se o status mudou enquanto a tela estava aberta, nada é gravado (409 TOGGLE_CONFLICT). Avisa as outras telas pelo evento `catalogChanged`.",
         params: branchSchemas.updateDeleteBranch,
         response: {
           200: branchResponses.branchToggled,
-          400: branchResponses.deleteBranchErrors,
-          403: branchResponses.deleteBranchForbidden,
-          404: branchResponses.deleteBranchNotFound,
+          400: branchResponses.toggleBranchErrors,
+          403: branchResponses.branchForbidden,
+          404: branchResponses.branchNotFound,
+          409: branchResponses.branchConflict,
           500: branchResponses.internalServerError,
         },
       },

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { UserRepository } from "@/modules/user/repositories/user-repository";
 
 import {
+  endRequestContext,
   enterRequestContext,
+  getRequestContext,
   requestCacheSize,
   withoutRequestContext,
 } from "@/shared/http/request-context";
@@ -204,6 +206,50 @@ describe("the boundaries of the memory", () => {
       await repository.findUserById("user-2");
 
       expect(requestCacheSize()).toBe(2);
+    });
+  });
+});
+
+describe("after the response is over", () => {
+  it("a branch still carrying the store reads the database again", async () => {
+    // `enterWith` leaves the store on resources the request created (a lazily
+    // opened connection) and on whatever later runs through them, such as a
+    // Socket.IO handshake. Once the request ends, that store must be inert.
+    const calls: string[] = [];
+    const repository = repositoryOver(calls);
+    const branch = new AsyncLocalStorage<number>();
+
+    await branch.run(1, async () => {
+      const context = { requestId: "first-request" };
+
+      enterRequestContext(context);
+      await repository.findUserById("user-1");
+      expect(requestCacheSize()).toBe(1);
+
+      endRequestContext(context);
+
+      expect(getRequestContext()).toBeUndefined();
+      expect(requestCacheSize()).toBe(0);
+      await repository.findUserById("user-1");
+      await repository.findUserById("user-1");
+    });
+
+    expect(calls).toEqual(["user-1", "user-1", "user-1"]);
+  });
+
+  it("does not hand its request id to later work either", async () => {
+    // The outbox stamps getRequestContext()?.requestId as the correlation id;
+    // an event raised from a socket must not be traced to a stale request.
+    const branch = new AsyncLocalStorage<number>();
+
+    await branch.run(1, async () => {
+      const context = { requestId: "first-request" };
+
+      enterRequestContext(context);
+      expect(getRequestContext()?.requestId).toBe("first-request");
+
+      endRequestContext(context);
+      expect(getRequestContext()?.requestId).toBeUndefined();
     });
   });
 });

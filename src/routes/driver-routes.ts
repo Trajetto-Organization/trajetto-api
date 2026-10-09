@@ -8,6 +8,7 @@ import { DeleteDriverController } from "@/modules/driver/usecases/delete-driver/
 
 import { ExportDriverController } from "@/modules/driver/usecases/export-driver/export-driver-controller";
 import { SearchDriverCursorController } from "@/modules/driver/usecases/search-driver-cursor/search-driver-cursor-controller";
+import { verifyDriverPickerAccess } from "@/modules/driver/usecases/search-driver-cursor/driver-picker-access";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
@@ -17,6 +18,12 @@ import {
   driverSchemas,
   driverResponses,
 } from "./documentation/driver-documentation";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
+import { exportFileResponse } from "./documentation/doc-only-responses";
 
 const createDriverController = new CreateDriverController();
 const listDriverController = new ListDriverController();
@@ -39,15 +46,17 @@ async function driverRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        summary: "Create a new driver",
+        summary: "Cadastra um motorista",
         description:
-          "Register a new driver in the fleet management system with personal information, license details, and business association",
+          "Cadastra um motorista na empresa do caminho: dados pessoais, endereço, CNH (número, categoria e validade — as duas últimas opcionais, a validade como data civil AAAA-MM-DD) e, opcionalmente, a filial. CPF e CNH são únicos POR EMPRESA (decisão 8.1): o mesmo motorista autônomo pode trabalhar para duas transportadoras, e o 409 nunca revela cadastro de outra. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).",
         params: driverSchemas.businessIdParam,
         body: driverSchemas.createDriver,
         response: {
           201: driverResponses.driverCreated,
-          400: driverResponses.createDriverErrors,
-          403: driverResponses.createDriverForbiddenErrors,
+          400: driverResponses.validationErrors,
+          403: driverResponses.writeForbidden,
+          404: driverResponses.notFound,
+          409: driverResponses.writeConflicts,
           500: driverResponses.internalServerError,
         },
       },
@@ -63,13 +72,18 @@ async function driverRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        summary: "List drivers",
+        summary: "Lista os motoristas de uma empresa",
         description:
-          "Retrieve a paginated list of drivers with optional search functionality and filtering capabilities",
+          "Os motoristas de UMA empresa, paginados. O MASTER informa `businessId` (sem ele, 400 BUSINESS_NOT_IDENTIFIED); os demais usam a própria empresa. Ordena no servidor (`sort`/`order`) e filtra por situação, tipo de contrato, categoria da CNH e filial, cada filtro com um ou mais valores separados por vírgula, além da busca livre (nome, CNH, CPF, RG, CEP, endereço ou IDs). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões e as opções dos filtros com as contagens, calculados sobre a empresa inteira. Cada motorista traz `cnh_status`, a situação da CNH no dia de negócio da empresa.",
         querystring: driverSchemas.listDriver,
         response: {
-          200: driverResponses.driverList,
-          400: driverResponses.listDriverErrors,
+          200: ndjsonList(
+            driverResponses.driverListItem,
+            offsetMetaWith(driverResponses.driverListSearchMeta),
+          ),
+          400: driverResponses.validationErrors,
+          403: driverResponses.forbidden,
+          404: driverResponses.notFound,
           500: driverResponses.internalServerError,
         },
       },
@@ -80,17 +94,23 @@ async function driverRoutes(app: FastifyInstance) {
   app.get(
     "/export-driver",
     {
+      // A whole company's records as one streamed file: heavy on the
+      // database and on memory, and never needed ten times a minute.
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
       onRequest: [ensureAuthenticated],
       preHandler: [verifyPermission("driver_manage", "write")],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        summary: "Export driver records (CSV or Excel)",
+        summary: "Exporta os motoristas (CSV ou Excel)",
         description:
-          "Export driver records to CSV or Excel. Use query param `format=csv|excel` and optional `search` to filter.",
+          "Exporta os motoristas de UMA empresa com a mesma busca, os mesmos filtros e a mesma ordem da listagem (decisão 5.8). `format=csv|excel`. O MASTER informa `businessId`. O nome do arquivo leva o dia de negócio da empresa.",
         querystring: driverSchemas.exportDriverQuery,
         response: {
-          400: driverResponses.exportDriverErrors,
+          200: exportFileResponse("relatorio-motoristas-<AAAA-MM-DD>"),
+          400: driverResponses.exportErrors,
+          403: driverResponses.forbidden,
+          404: driverResponses.notFound,
           500: driverResponses.internalServerError,
         },
       },
@@ -102,20 +122,19 @@ async function driverRoutes(app: FastifyInstance) {
     "/search-driver-business",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("driver_manage", "read")],
+      preHandler: [verifyDriverPickerAccess],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        summary: "Search drivers by business (cursor-based)",
+        summary: "Busca motoristas ativos para seleção (cursor)",
         description:
-          "Retrieve drivers as NDJSON stream with cursor-based pagination. " +
-          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
-          "Subsequent lines are individual driver objects. " +
-          "Use nextCursor value as cursor parameter for the next page.",
+          "Os motoristas ATIVOS de uma empresa para os seletores, em ordem alfabética, por cursor (`meta.searchMeta.nextCursor`/`hasMore`), com busca pelo nome (e pela CNH, para quem lê o cadastro). Aceita `driver_manage` (leitura) OU `delivery_manage` (escrita): o despachante escolhe o motorista da rota sem ler o cadastro de motoristas (decisão 4.7) e recebe só os campos da escolha — nome, situação, categoria e validade da CNH —, sem documentos. Token de motorista é recusado.",
         querystring: driverSchemas.searchDriverCursor,
         response: {
-          200: driverResponses.searchDriverStreamDescription,
-          400: driverResponses.listDriverBusinessErrors,
+          200: ndjsonCursor(driverResponses.driverPickerItem),
+          400: driverResponses.validationErrors,
+          403: driverResponses.forbidden,
+          404: driverResponses.notFound,
           500: driverResponses.internalServerError,
         },
       },
@@ -134,15 +153,17 @@ async function driverRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        summary: "Update a driver",
+        summary: "Edita um motorista",
         description:
-          "Update existing driver information including personal details, contact information, and license data",
+          "Edita os dados do motorista da empresa do caminho. Inativar um motorista com rota planejada, liberada ou em andamento é recusado com 409 DRIVER_HAS_OPEN_ROUTES e a contagem (decisão 8.3): a rota em andamento precisa terminar ou ser cancelada, e as outras, ir para outro motorista ou ser canceladas. Motorista de outra empresa responde 404, como um inexistente. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).",
         params: driverSchemas.driverBusinessParams,
         body: driverSchemas.updateDriver,
         response: {
           200: driverResponses.driverUpdated,
-          400: driverResponses.updateDriverErrors,
-          403: driverResponses.updateDriverForbiddenErrors,
+          400: driverResponses.validationErrors,
+          403: driverResponses.writeForbidden,
+          404: driverResponses.notFound,
+          409: driverResponses.writeConflicts,
           500: driverResponses.internalServerError,
         },
       },
@@ -154,18 +175,25 @@ async function driverRoutes(app: FastifyInstance) {
     "/delete-driver/:driverId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("driver_manage", "write")],
+      // Same guard as create and update: a deactivated company is read-only,
+      // for the MASTER too (403 TENANT_INACTIVE).
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("driver_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver"],
-        summary: "Delete a driver",
+        summary: "Exclui um motorista",
         description:
-          "Permanently remove a driver record from the fleet management system",
+          "Exclui de vez um motorista SEM histórico. Com usuário vinculado, multas, abastecimentos, checklists, entregas, rotas ou pausas registradas, responde 409 com o código do primeiro motivo encontrado e a quantidade dele: inative o motorista em vez de excluir. As conversas do chat com ele, se houver, são apagadas junto. Motorista de outra empresa responde 404, como um inexistente. Empresa desativada responde 403 TENANT_INACTIVE.",
         params: driverSchemas.driverBusinessParams,
         response: {
           200: driverResponses.driverDeleted,
-          400: driverResponses.deleteDriverErrors,
-          403: driverResponses.deleteDriverForbiddenErrors,
+          400: driverResponses.validationErrors,
+          403: driverResponses.writeForbidden,
+          404: driverResponses.notFound,
+          409: driverResponses.deleteConflicts,
           500: driverResponses.internalServerError,
         },
       },

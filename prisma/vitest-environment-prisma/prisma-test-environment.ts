@@ -1,10 +1,19 @@
-import "dotenv/config";
-
 import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
 
 import { Environment } from "vitest";
 import { PrismaClient } from "@prisma/client";
+
+import {
+  adminConnection,
+  connectionFor,
+  loadTestEnv,
+  testDatabaseUrl,
+} from "./database-url";
+
+// dotenv + dotenv-expand, as src/env does: `.env` writes DATABASE_URL with
+// `${VAR}` placeholders.
+loadTestEnv();
 
 /**
  * An isolated database per test file, created and dropped around it.
@@ -28,55 +37,36 @@ import { PrismaClient } from "@prisma/client";
  * The cost is one CREATE DATABASE per file. `migrate deploy` was already being
  * paid for, and it dominates.
  */
-function connectionFor(database: string): string {
-  if (!process.env.DATABASE_URL) {
-    throw new Error("Please provide a DATABASE_URL environment variable");
-  }
-
-  const url = new URL(process.env.DATABASE_URL);
-
-  // The path is `/<database>`; the schema stays public, which is where a fresh
-  // database puts the extension anyway.
-  url.pathname = `/${database}`;
-  url.searchParams.set("schema", "public");
-
-  return url.toString();
-}
-
-/**
- * A connection to the server rather than to the test database, since you
- * cannot create or drop a database while connected to it.
- */
-function adminClient(): PrismaClient {
-  const url = new URL(process.env.DATABASE_URL as string);
-  url.pathname = "/postgres";
-  url.searchParams.delete("schema");
-
-  return new PrismaClient({ datasources: { db: { url: url.toString() } } });
+function adminClient(baseUrl: string): PrismaClient {
+  return new PrismaClient({
+    datasources: { db: { url: adminConnection(baseUrl) } },
+  });
 }
 
 export default <Environment>{
   name: "prisma",
   transformMode: "ssr",
   async setup() {
-    const originalUrl = process.env.DATABASE_URL as string;
+    const originalUrl = process.env.DATABASE_URL;
+    const baseUrl = testDatabaseUrl();
 
     // Quoted everywhere it appears: a UUID starts with a digit often enough,
     // and an unquoted identifier that does is a syntax error.
     const database = `trajetto_test_${randomUUID().replace(/-/g, "")}`;
 
-    const admin = adminClient();
+    const admin = adminClient(baseUrl);
     await admin.$executeRawUnsafe(`CREATE DATABASE "${database}"`);
     await admin.$disconnect();
 
-    process.env.DATABASE_URL = connectionFor(database);
+    process.env.DATABASE_URL = connectionFor(baseUrl, database);
     execSync("yarn prisma migrate deploy", { stdio: "pipe" });
 
     return {
       async teardown() {
-        process.env.DATABASE_URL = originalUrl;
+        if (originalUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = originalUrl;
 
-        const cleanup = adminClient();
+        const cleanup = adminClient(baseUrl);
 
         try {
           // WITH (FORCE) terminates connections the test left open; without it

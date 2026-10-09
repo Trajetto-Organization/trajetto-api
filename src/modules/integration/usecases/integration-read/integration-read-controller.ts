@@ -29,7 +29,11 @@ class IntegrationReadController {
       throw new AppError("Chave de API inválida.", 401, "INVALID_API_KEY");
     }
 
-    const query = request.query as z.infer<typeof integrationListSchema>;
+    // `status` is already one of its resource's enum values: each route
+    // validates it against its own schema before this runs.
+    const query = request.query as z.infer<typeof integrationListSchema> & {
+      status?: string;
+    };
 
     return {
       businessId: key.businessId,

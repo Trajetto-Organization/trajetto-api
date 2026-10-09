@@ -90,13 +90,77 @@ const API_SCOPES = [
 
 type ApiScope = (typeof API_SCOPES)[number];
 
+/**
+ * Scopes a key can carry that no v1 endpoint requires yet.
+ *
+ * Kept in API_SCOPES so the catalogue can list them as reserved. A scope with
+ * nothing behind it is a promise of an endpoint that is not there: customers
+ * created write keys to push orders from their ERP and found nothing to push
+ * them to. Webhooks are managed from the panel, with a session, not by key.
+ *
+ * And they cannot be ISSUED (createApiKeySchema refuses them; migration
+ * 20260924120900 took them off keys issued before): a key granted one today
+ * would gain access in silence the day a route starts requiring it. When that
+ * route ships, take the scope out of this list — `deliveries:write` left it
+ * with POST /integration/v1/deliveries (decision 5.10). Safe to lift because
+ * that migration emptied it from every older key: nobody gains write today
+ * without somebody granting it today.
+ */
+const RESERVED_API_SCOPES: readonly ApiScope[] = ["webhooks:manage"];
+
 const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   "routes:read": "Ler rotas e suas paradas.",
   "deliveries:read": "Ler entregas e o histórico delas.",
-  "deliveries:write": "Criar e atualizar entregas.",
+  "deliveries:write":
+    "Criar entregas (POST /integration/v1/deliveries), com Idempotency-Key obrigatória. Não inclui a leitura: para consultar, conceda também deliveries:read.",
   "events:read": "Ler o feed de eventos da operação.",
-  "webhooks:manage": "Cadastrar e alterar endpoints de webhook.",
+  "webhooks:manage":
+    "Reservado para gerir webhooks por chave: nenhum endpoint da v1 exige este escopo ainda. Hoje os webhooks são geridos pelo painel.",
 };
+
+/**
+ * "O escopo `x` está reservado" / "Os escopos `x` e `y` estão reservados".
+ *
+ * One sentence for every place that says it (the issue refusal, its schema
+ * description, the public reference), with the number agreeing: the list
+ * shrinks as routes ship, and "Os escopos webhooks:manage estão" was the
+ * first thing the last removal would have printed.
+ */
+function reservedScopesPhrase(
+  format: (scope: string) => string = (scope) => scope,
+): string {
+  const names = RESERVED_API_SCOPES.map(format);
+
+  if (names.length === 0) return "";
+
+  if (names.length === 1) return `O escopo ${names[0]} está reservado`;
+
+  return `Os escopos ${names.slice(0, -1).join(", ")} e ${names[names.length - 1]} estão reservados`;
+}
+
+/**
+ * The ceilings of the public API, and who sets them.
+ *
+ * The per-key rate used to be whatever the company's own administrator typed,
+ * up to 6,000 a minute, on as many keys as they liked: twenty keys were
+ * 120,000 calls a minute from one company, on the pool every tenant shares.
+ * The protection sat in the hands of the party it exists to contain. So:
+ *
+ * - a company administrator provisions a key up to TENANT_API_KEY_RATE_CEILING;
+ *   above it, only the platform (MASTER), up to PLATFORM_API_KEY_RATE_CEILING;
+ * - a company holds at most MAX_ACTIVE_API_KEYS_PER_BUSINESS unrevoked keys —
+ *   one per integrated system is the intended use;
+ * - all of a company's keys share BUSINESS_API_RATE_PER_MINUTE, whatever each
+ *   key's own ceiling says. That is the number that bounds one company's share
+ *   of the database; the other two keep it from being reached by accident.
+ *
+ * Commercial numbers, not physics: they become per-plan columns the day plans
+ * differ.
+ */
+const TENANT_API_KEY_RATE_CEILING = 600;
+const PLATFORM_API_KEY_RATE_CEILING = 6000;
+const MAX_ACTIVE_API_KEYS_PER_BUSINESS = 10;
+const BUSINESS_API_RATE_PER_MINUTE = 6000;
 
 function isApiScope(value: string): value is ApiScope {
   return (API_SCOPES as readonly string[]).includes(value);
@@ -116,13 +180,19 @@ function hasScope(scopes: string[], required: ApiScope): boolean {
 
 export {
   API_SCOPES,
+  BUSINESS_API_RATE_PER_MINUTE,
   KEY_NAMESPACE,
+  MAX_ACTIVE_API_KEYS_PER_BUSINESS,
+  PLATFORM_API_KEY_RATE_CEILING,
+  RESERVED_API_SCOPES,
   SCOPE_DESCRIPTIONS,
+  TENANT_API_KEY_RATE_CEILING,
   apiKeySecretMatches,
   generateApiKey,
   hasScope,
   hashApiKeySecret,
   isApiScope,
   parseApiKey,
+  reservedScopesPhrase,
 };
 export type { ApiScope, GeneratedApiKey };

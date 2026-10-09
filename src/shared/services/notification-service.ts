@@ -1,7 +1,33 @@
+import { Prisma } from "@prisma/client";
 import { inject, injectable } from "tsyringe";
-import { container } from "tsyringe";
 
-import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+import type { IActivityRepository } from "@/modules/activity/repositories/IActivity-repository";
+import { logger } from "@/shared/logging/logger";
+
+/** How long the one retry waits for the pool or the server to come back. */
+const AUDIT_RETRY_DELAY_MS = 200;
+
+/**
+ * Failures where the INSERT certainly never ran: no connection could be
+ * taken or opened. P1017/P1008 are left out on purpose — a connection that
+ * dies after the COMMIT reached Postgres reports P1017 too, and retrying
+ * that would write the entry twice. A trail that double-counts is worse than
+ * one that is merely incomplete.
+ */
+function neverReachedTheDatabase(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientInitializationError) return true;
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (["P1001", "P2024", "P2037"].includes(error.code)) return true;
+
+    return (
+      error.code === "P2028" &&
+      /unable to start a transaction/i.test(error.message)
+    );
+  }
+
+  return false;
+}
 
 interface CreateActivityProps {
   type: string;
@@ -9,7 +35,8 @@ interface CreateActivityProps {
   entityId: string;
   description: string;
   status: string;
-  performedBy: string;
+  // Null when no person acted: a delivery created through an API key.
+  performedBy: string | null;
   businessId: string | null;
   tenantName?: string | null;
   visibilityLevel?: string;
@@ -17,63 +44,78 @@ interface CreateActivityProps {
 }
 
 /**
- * Legacy façade over the notification pipeline.
+ * The audit-trail entry point of the use cases.
  *
- * Only the audit-trail entry point remains: the dozens of use cases that call
- * `createActivityIfEnabled` ride the outbox through it without having been
- * edited. User-facing notifications no longer pass through here at all —
- * use cases publish their own topics via `OutboxService.publish` inside the
- * business transaction, and the pipeline's policies do the rest.
+ * User-facing notifications do not pass through here: use cases publish
+ * their own topics via `OutboxService.publish` inside the business
+ * transaction, and the pipeline's policies do the rest.
+ *
+ * The entry is written straight to the activity table (GAP2-4). It used to
+ * ride the outbox as `activity.recorded` — an event, then an ACTIVITY
+ * delivery, then the row: three rows and two updates for one insert, queued
+ * behind WhatsApp and e-mail. The event was published after the business
+ * commit, outside its transaction, so the queue bought no guarantee the
+ * insert does not already have. Hierarchical visibility is handled at query
+ * time in ActivityRepository.
  */
 @injectable()
 class NotificationService {
   constructor(
-    @inject("UserRepository")
-    private userRepository: IUserRepository,
+    @inject("ActivityRepository")
+    private activityRepository: IActivityRepository,
   ) {}
 
+  /**
+   * Records an audit entry.
+   *
+   * With `tx` — the sensitive sites: permissions, users, profiles, the
+   * company itself — the entry joins the write's transaction, and its failure
+   * propagates: the operation rolls back rather than happening unaudited.
+   * That inversion is deliberate (OUTBOX-10).
+   *
+   * Without `tx` it is written right after the operation, at most once: one
+   * retry when no connection could be had, then a structured error line
+   * (`audit_trail_write_failed`) an alert can match, and the operation is
+   * never failed for it.
+   */
   async createActivityIfEnabled(
     activityData: CreateActivityProps,
+    tx?: Prisma.TransactionClient,
   ): Promise<void> {
+    if (tx) {
+      await this.activityRepository.createActivity(activityData, tx);
+      return;
+    }
+
     try {
-      const user = await this.userRepository.findUserById(
-        activityData.performedBy,
-      );
-
-      if (!user) {
-        return;
-      }
-
-      // Publishes the generic audit topic instead of writing the activity
-      // inline. Every legacy call site rides the pipeline through this one
-      // method — retried, idempotent per delivery — without being edited.
-      // Hierarchical visibility is handled at query time in ActivityRepository.
-      const { OutboxService } = await import(
-        "@/shared/notifications/outbox-service"
-      );
-
-      const outbox =
-        container.resolve<InstanceType<typeof OutboxService>>("OutboxService");
-
-      await outbox.publishAfterCommit({
-        topic: "activity.recorded",
-        aggregateType: "activity",
-        aggregateId: activityData.entityId,
-        businessId: activityData.businessId,
-        actorId: activityData.performedBy,
-        payload: {
+      await this.writeWithOneRetry(activityData);
+    } catch (error) {
+      logger.error(
+        {
+          event: "audit_trail_write_failed",
           type: activityData.type,
           action: activityData.action,
           entityId: activityData.entityId,
-          description: activityData.description,
-          status: activityData.status,
-          tenantName: activityData.tenantName,
-          visibilityLevel: activityData.visibilityLevel,
-          performingUserRole: activityData.performingUserRole,
+          businessId: activityData.businessId,
+          performedBy: activityData.performedBy,
+          err: error,
         },
-      });
+        "an audit trail entry could not be written and is lost",
+      );
+    }
+  }
+
+  private async writeWithOneRetry(
+    activityData: CreateActivityProps,
+  ): Promise<void> {
+    try {
+      await this.activityRepository.createActivity(activityData);
     } catch (error) {
-      console.warn("Erro ao criar activity:", error);
+      if (!neverReachedTheDatabase(error)) throw error;
+
+      await new Promise((resolve) => setTimeout(resolve, AUDIT_RETRY_DELAY_MS));
+
+      await this.activityRepository.createActivity(activityData);
     }
   }
 }

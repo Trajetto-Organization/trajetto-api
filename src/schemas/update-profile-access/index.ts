@@ -4,6 +4,7 @@ import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 const updateProfileAccessSchema = z.object({
   name: z.preprocess(
@@ -64,9 +65,8 @@ const updateProfileAccessSchema = z.object({
       .optional()
       .nullable(),
   ),
-  businessId: z
-    .string({ required_error: "ID da empresa é obrigatório!" })
-    .uuid("ID da empresa é inválido."),
+  // A profile stays in its company (decision 16.100).
+  ...tenantLockedShape,
 });
 
 export { updateProfileAccessSchema };

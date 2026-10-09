@@ -16,6 +16,8 @@ import {
   statusChangeReasonSchemas,
   statusChangeReasonResponses,
 } from "./documentation/status-change-reason-documentation";
+import { ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import { statusReasonListSearchMetaDoc } from "@/modules/status-change-reason/usecases/list-status-change-reason/list-status-change-reason-documentation";
 
 const createStatusChangeReasonController =
   new CreateStatusChangeReasonController();
@@ -47,16 +49,18 @@ async function statusChangeReasonRoutes(app: FastifyInstance) {
       ],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["statusChangeReason"],
-        summary: "Add a reason to the status-override catalogue",
+        tags: ["status-change-reason"],
+        summary: "Cria um motivo de mudança de status",
         description:
-          "The words the company uses to explain why a delivery's status was moved by hand. Short on purpose — this appears in a picker and in a timeline row, and a sentence there is a sentence nobody can group or count; the detail belongs in the note the operator types at the moment of the change. Names are unique per company.",
+          "As palavras que a empresa usa para explicar por que o status de uma entrega foi mudado à mão. Curto de propósito: aparece num seletor e numa linha do histórico; o detalhe vai na anotação digitada na hora. Nome único na empresa (409 STATUS_CHANGE_REASON_NAME_TAKEN). Emite `catalogChanged` (status_reason).",
         params: statusChangeReasonSchemas.businessIdParam,
         body: statusChangeReasonSchemas.createStatusChangeReason,
         response: {
           201: statusChangeReasonResponses.reasonCreated,
-          400: statusChangeReasonResponses.genericError,
-          403: statusChangeReasonResponses.genericError,
+          400: statusChangeReasonResponses.codedError,
+          403: statusChangeReasonResponses.codedError,
+          404: statusChangeReasonResponses.lookupNotFound,
+          409: statusChangeReasonResponses.codedError,
           500: statusChangeReasonResponses.internalServerError,
         },
       },
@@ -70,19 +74,25 @@ async function statusChangeReasonRoutes(app: FastifyInstance) {
       onRequest: [ensureAuthenticated],
       preHandler: [
         deliveriesModule,
-        verifyPermission("delivery_manage", "read"),
+        // The override catalogue is the panel's; drivers never move a
+        // status by hand (decision 4.4).
+        verifyPermission("delivery_manage", "read", { allowDriver: false }),
       ],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["statusChangeReason"],
-        summary: "List the status-override catalogue",
+        tags: ["status-change-reason"],
+        summary: "Lista os motivos de mudança de status",
         description:
-          "Responde em application/x-ndjson, NÃO em JSON: a primeira linha é o envelope `{meta:{total,page,pageSize,searchMeta}}` e cada linha seguinte é um motivo. Chamar response.json() nisso dá erro de parse — leia linha a linha. `searchMeta.used` conta quantos motivos já explicam alguma mudança no histórico, que é o que separa o vocabulário real do que foi digitado uma vez e esquecido.",
+          "Token de motorista recebe 403 PERMISSION_DENIED (o motorista não muda status à mão). Tabela paginada no servidor: ordena por `sort`/`order` (name, created_at, updated_at) e filtra por `status` (active, inactive), além da busca por id, nome ou descrição. Responde em application/x-ndjson, NÃO em JSON: a primeira linha é o envelope `{meta:{total,page,pageSize,searchMeta}}` (total do filtro; cartões com a busca, sem o filtro de status; opções do filtro com as contagens) e cada linha seguinte é um motivo. Chamar response.json() nisso dá erro de parse — leia linha a linha. `searchMeta.used` conta quantos motivos já explicam alguma mudança no histórico, que é o que separa o vocabulário real do que foi digitado uma vez e esquecido.",
         querystring: statusChangeReasonSchemas.listStatusChangeReasons,
         response: {
-          200: statusChangeReasonResponses.reasonListEnvelope,
-          400: statusChangeReasonResponses.genericError,
-          403: statusChangeReasonResponses.genericError,
+          200: ndjsonList(
+            statusChangeReasonResponses.reasonListRow,
+            offsetMetaWith(statusReasonListSearchMetaDoc),
+          ),
+          400: statusChangeReasonResponses.codedError,
+          403: statusChangeReasonResponses.codedError,
+          404: statusChangeReasonResponses.lookupNotFound,
           500: statusChangeReasonResponses.internalServerError,
         },
       },
@@ -101,16 +111,18 @@ async function statusChangeReasonRoutes(app: FastifyInstance) {
       ],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["statusChangeReason"],
-        summary: "Edit or retire a reason",
+        tags: ["status-change-reason"],
+        summary: "Edita ou desativa um motivo",
         description:
-          "`is_active: false` retires a reason: it keeps explaining the events that already cite it and stops being offered for new changes. That is how a reason leaves the vocabulary — deleting one that has been used is refused outright, because the trail would stop naming a decision somebody made.",
+          "`is_active: false` desativa o motivo: ele continua explicando os eventos que já o citam e deixa de ser oferecido para novas mudanças. Excluir um motivo já usado é recusado. Motivo inexistente ou de outra empresa → 404 STATUS_CHANGE_REASON_NOT_FOUND (a mesma resposta nos dois casos); nome de outro motivo da empresa → 409 STATUS_CHANGE_REASON_NAME_TAKEN. Emite `catalogChanged` (status_reason).",
         params: statusChangeReasonSchemas.reasonBusinessParams,
         body: statusChangeReasonSchemas.updateStatusChangeReason,
         response: {
           200: statusChangeReasonResponses.reasonUpdated,
-          400: statusChangeReasonResponses.genericError,
-          403: statusChangeReasonResponses.genericError,
+          400: statusChangeReasonResponses.codedError,
+          403: statusChangeReasonResponses.codedError,
+          404: statusChangeReasonResponses.reasonNotFound,
+          409: statusChangeReasonResponses.codedError,
           500: statusChangeReasonResponses.internalServerError,
         },
       },
@@ -129,16 +141,17 @@ async function statusChangeReasonRoutes(app: FastifyInstance) {
       ],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["statusChangeReason"],
-        summary: "Remove a reason nobody ever used",
+        tags: ["status-change-reason"],
+        summary: "Exclui um motivo nunca usado",
         description:
-          "Only a word the catalogue never spent. A reason already cited by an event is part of the answer support gives about a decision somebody made, so removing it answers 409 naming how many events depend on it — and points at retiring it instead. The foreign key refuses too; this exists so the refusal is a sentence rather than a 500.",
+          "Só um motivo que nenhum evento cita. Um motivo já usado responde 409 STATUS_CHANGE_REASON_IN_USE com quantos eventos dependem dele e sugere desativá-lo. Motivo inexistente ou de outra empresa → 404 STATUS_CHANGE_REASON_NOT_FOUND. Emite `catalogChanged` (status_reason).",
         params: statusChangeReasonSchemas.reasonBusinessParams,
         response: {
           200: statusChangeReasonResponses.reasonDeleted,
-          400: statusChangeReasonResponses.genericError,
-          403: statusChangeReasonResponses.genericError,
-          409: statusChangeReasonResponses.genericError,
+          400: statusChangeReasonResponses.codedError,
+          403: statusChangeReasonResponses.codedError,
+          404: statusChangeReasonResponses.reasonNotFound,
+          409: statusChangeReasonResponses.codedError,
           500: statusChangeReasonResponses.internalServerError,
         },
       },

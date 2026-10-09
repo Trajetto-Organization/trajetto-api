@@ -1,19 +1,22 @@
 import { Prisma } from "@prisma/client";
 
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 import {
   Delivery,
   CreateDeliveryProps,
   UpdateDeliveryProps,
   ListDeliveriesProps,
-  ListDeliveriesResult,
+  ListDeliveriesPage,
   CreateOccurrenceProps,
   CreateDeliveryEventProps,
   DeliveryEventRecord,
   ListOccurrencesProps,
   ListOccurrencesResult,
-  OperationSummary,
+  OccurrenceAuthorizationStatus,
 } from "../dtos/delivery-dto";
+import type { DeliveryListFilters } from "../usecases/list-delivery/delivery-list";
+import type { OccurrenceFeedFilters } from "../usecases/list-occurrences/occurrence-feed";
 
 interface DeliveryStatusPatch {
   status: DeliveryStatus;
@@ -37,34 +40,62 @@ interface DeliveryAssignmentPatch {
   vehicleId: string | null;
 }
 
+/** What the operation summary reads outside the tower's day (see below). */
+interface OperationBacklog {
+  /** PENDING without a driver, of any date: the "Sem rota" backlog. */
+  unassigned: number;
+
+  /** Reports by a driver's account that happened in the day. */
+  occurrencesToday: number;
+}
+
 interface IDeliveryRepository {
   createDelivery: (
     deliveryData: CreateDeliveryProps,
     tx?: Prisma.TransactionClient,
   ) => Promise<Delivery>;
-  listDeliveries: (props: ListDeliveriesProps) => Promise<ListDeliveriesResult>;
-  findDeliveryById: (deliveryId: string) => Promise<Delivery | null>;
-  countDeliveriesByStatus: (
+  /** The delivery a submission with this key already created, in this company. */
+  findDeliveryBySubmissionId: (
     businessId: string,
-    driverId?: string,
-  ) => Promise<Record<string, number>>;
+    clientSubmissionId: string,
+  ) => Promise<Delivery | null>;
+  /**
+   * The page (ordered by the list's sort spec) and the grouped counts of the
+   * cards and filters, with at most two queries in flight at once.
+   */
+  listDeliveries: (props: ListDeliveriesProps) => Promise<ListDeliveriesPage>;
+  findDeliveryById: (deliveryId: string) => Promise<Delivery | null>;
   findDeliveryDetailById: (deliveryId: string) => Promise<unknown | null>;
   findDeliveryByInvoiceKey: (
     businessId: string,
     invoiceKey: string,
   ) => Promise<Delivery | null>;
   /**
-   * Edita, mas só a partir do status esperado.
-   *
-   * `expectedStatus` não é opcional por comodidade: uma chamada sem ele é um
-   * read-then-write, e a janela entre a leitura e a escrita é onde o motorista
-   * comprova a entrega que o painel está editando.
+   * Edits only from the expected status. Without `expectedStatus` this is a
+   * read-then-write, and the window between them is where the driver proves
+   * the delivery the panel is editing.
    */
   updateDelivery: (
     deliveryId: string,
     deliveryData: UpdateDeliveryProps,
     expectedStatus?: DeliveryStatus,
   ) => Promise<Delivery>;
+  /**
+   * Where the delivery came from: the source of the upload that created it,
+   * or null for one typed in the panel (or whose upload was reversed).
+   * Decides whether its items are the NF-e's (locked) or the dispatcher's.
+   */
+  findDeliveryImportSource: (
+    deliveryId: string,
+  ) => Promise<"SPREADSHEET" | "NFE_XML" | null>;
+  /**
+   * The route holding the delivery's open stop (PENDING or ARRIVED), or null
+   * when it is on no route. At most one open stop exists per delivery
+   * (partial unique index).
+   */
+  findOpenStopRoute: (
+    deliveryId: string,
+  ) => Promise<{ routeId: string; status: string } | null>;
   /**
    * Moves a delivery, but only from `patch.expectedStatus`. Throws
    * DeliveryStatusConflictError (writing nothing) when the row already moved.
@@ -85,53 +116,68 @@ interface IDeliveryRepository {
     assignment: DeliveryAssignmentPatch,
     tx?: Prisma.TransactionClient,
   ) => Promise<void>;
+  /** Returns the new row's id: the OCCURRENCE event points at it (TWR-6). */
   createOccurrence: (
     occurrenceData: CreateOccurrenceProps,
     tx?: Prisma.TransactionClient,
-  ) => Promise<void>;
+  ) => Promise<{ id: string }>;
   /**
-   * A submissao ja gravada por esta chave, DENTRO desta empresa.
-   *
-   * O `businessId` nao e enfeite. A coluna e unica globalmente, e a consulta
-   * acontece ANTES de qualquer checagem de posse — entao, sem escopo, a chave
-   * de outra empresa devolvia "ja existe" e o caminho de idempotencia engolia
-   * a escrita em silencio, com 200. Precisa de um UUID v4 adivinhado, o que
-   * torna o caminho improvavel; o que ele nao e e correto.
+   * The submission already stored with this key, WITHIN this company. The
+   * column is globally unique and this runs before any ownership check:
+   * unscoped, another company's key would read as "already exists" and the
+   * idempotent path would swallow the write with a 200.
    */
   findOccurrenceBySubmissionId: (
     clientSubmissionId: string,
     businessId: string,
-  ) => Promise<{ id: string } | null>;
-  /** The manager's cross-delivery occurrence feed. */
+  ) => Promise<{
+    id: string;
+    /** A replay answers with where the first submission stands (6.3). */
+    authorization_status: OccurrenceAuthorizationStatus;
+    /** Decision 14.3: a delivered replay also answers the delivery's status. */
+    category: "DELIVERED" | "NOT_DELIVERED" | "PAUSE";
+  } | null>;
+  /**
+   * The manager's cross-delivery occurrence feed: one page in the requested
+   * order, plus the per-type counts its cards, filters and pager come from.
+   */
   listOccurrences: (props: ListOccurrencesProps) => Promise<ListOccurrencesResult>;
-  /** Whole-company numbers for the stats cards, ignoring page filters. */
-  countOccurrencesSummary: (
+  /**
+   * The two numbers of the monitoring panel and the dashboard's "Operação de
+   * hoje" that are not the tower's day: the backlog without a driver (any
+   * date) and the driver's reports of `day`. The day's documents themselves
+   * come from OperationDayRepository.countDayDeliveries (decision 7.1), read
+   * by readOperationSummary. The caller picks the day; the repository never
+   * reads the server's clock.
+   */
+  operationBacklog: (
     businessId: string,
-    driverId?: string,
-  ) => Promise<{ total: number; blocking: number }>;
-  /** Aggregates behind the monitoring panel: totals + per-driver board. */
-  operationSummary: (businessId: string) => Promise<OperationSummary>;
+    day: OperationDay,
+  ) => Promise<OperationBacklog>;
   /** The driver's working list: own PENDING (designated) + IN_TRANSIT. */
   listDriverDeliveries: (
     businessId: string,
     driverId: string,
   ) => Promise<unknown[]>;
-  /** How many of the driver's deliveries are still waiting to leave. */
+  /**
+   * How many of the driver's deliveries are still waiting to leave.
+   * `createdUpTo` bounds it to what existed at a tap sent late (MOB-08).
+   */
   countPendingForDriver: (
     businessId: string,
     driverId: string,
+    createdUpTo?: Date,
   ) => Promise<number>;
-  /** PENDING -> IN_TRANSIT for the driver's batch; returns how many moved. */
-  startDriverRoute: (businessId: string, driverId: string) => Promise<number>;
   /**
-   * A submissao ja gravada por esta chave, DENTRO desta empresa.
-   *
-   * O `businessId` nao e enfeite. A coluna e unica globalmente, e a consulta
-   * acontece ANTES de qualquer checagem de posse — entao, sem escopo, a chave
-   * de outra empresa devolvia "ja existe" e o caminho de idempotencia engolia
-   * a escrita em silencio, com 200. Precisa de um UUID v4 adivinhado, o que
-   * torna o caminho improvavel; o que ele nao e e correto.
+   * PENDING -> IN_TRANSIT for the driver's batch; returns how many moved.
+   * `createdUpTo`: only deliveries created at or before it (the tap).
    */
+  startDriverRoute: (
+    businessId: string,
+    driverId: string,
+    createdUpTo?: Date,
+  ) => Promise<number>;
+  /** Same scoping, and the same reason, as `findOccurrenceBySubmissionId`. */
   findEventBySubmissionId: (
     clientSubmissionId: string,
     businessId: string,
@@ -151,12 +197,33 @@ interface IDeliveryRepository {
    * has a unique index. One that works from order numbers has neither, so the
    * import asks here — (shipper, pedido) is the pair that means "the same
    * job" for them.
+   *
+   * With `tx`, the read runs inside the caller's transaction: after
+   * `lockOrderIdentity` it sees whatever a concurrent writer of the same
+   * order committed while this one waited.
    */
   findDeliveryByShipperAndCode: (
     businessId: string,
     shipperId: string,
     code: string,
+    tx?: Prisma.TransactionClient,
   ) => Promise<Delivery | null>;
+  /**
+   * Serialises the writers of one (company, shipper, order) until `tx` ends.
+   *
+   * The order pair has no unique index on purpose — two manual deliveries
+   * with the same order code can be legitimate (ADR 0006) — so the import's
+   * "is this order already here?" is only a guarantee while nobody else can
+   * insert the same order between the question and the insert. A
+   * transaction-scoped advisory lock gives exactly that, and different orders
+   * never wait on each other.
+   */
+  lockOrderIdentity: (
+    businessId: string,
+    shipperId: string,
+    code: string,
+    tx: Prisma.TransactionClient,
+  ) => Promise<void>;
 
   /**
    * The operation, one batch at a time.
@@ -166,18 +233,15 @@ interface IDeliveryRepository {
    * difference between a cursor loop and a `findMany` is the difference
    * between a download and a dead replica.
    */
-  streamDeliveriesForExport: (props: {
-    businessId: string;
-    driverId?: string;
-    search?: string;
-    status?: string;
-  }) => AsyncGenerator<Record<string, unknown>>;
+  /** The listing's rows (same `where` as the screen, decision 5.8), in batches. */
+  streamDeliveriesForExport: (
+    filters: DeliveryListFilters,
+  ) => AsyncGenerator<Record<string, unknown>>;
 
-  streamOccurrencesForExport: (props: {
-    businessId: string;
-    driverId?: string;
-    search?: string;
-  }) => AsyncGenerator<Record<string, unknown>>;
+  /** The occurrence feed's rows (same `where` as its screen), in batches. */
+  streamOccurrencesForExport: (
+    filters: OccurrenceFeedFilters,
+  ) => AsyncGenerator<Record<string, unknown>>;
 
   countDeliveriesReferencing: (reference: {
     driverId?: string;
@@ -196,12 +260,22 @@ interface IDeliveryRepository {
    * Takes the caller's transaction when there is one, so the route stop this
    * proof resolves commits with it. Opens its own otherwise — the two writes
    * here were never allowed to land apart.
+   *
+   * In the same write, every occurrence of the delivery still PENDING the
+   * tower's authorization becomes SUPERSEDED (decision 6.3): the proof won,
+   * and a later approval must not fail a delivered delivery.
    */
+  /** Resolves to the requests it superseded (decision 6.3), by occurrence id. */
   registerDeliveryProof: (
     eventData: CreateDeliveryEventProps,
     expectedStatus: DeliveryStatus,
     tx?: Prisma.TransactionClient,
-  ) => Promise<void>;
+  ) => Promise<string[]>;
 }
 
-export { IDeliveryRepository, DeliveryStatusPatch, DeliveryAssignmentPatch };
+export {
+  IDeliveryRepository,
+  DeliveryStatusPatch,
+  DeliveryAssignmentPatch,
+  type OperationBacklog,
+};

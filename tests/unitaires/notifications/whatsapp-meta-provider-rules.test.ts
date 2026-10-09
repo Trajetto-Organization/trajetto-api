@@ -129,7 +129,31 @@ describe("classifyMetaError", () => {
     ).toBe(true);
     // ...and a permanent template error wrapped in a 500 must not be.
     expect(
-      classifyMetaError({ httpStatus: 500, errorCode: 132015 }).retryable,
+      classifyMetaError({ httpStatus: 500, errorCode: 132016 }).retryable,
+    ).toBe(false);
+  });
+
+  /**
+   * A paused template (132015) is Meta's temporary state — 3 h the first time,
+   * 6 h the second — not a verdict on the message. Failing each delivery on
+   * it lost every WhatsApp of every tenant sent during the pause.
+   */
+  it("retries a paused template, and says it is a pause", () => {
+    const classification = classifyMetaError({
+      httpStatus: 400,
+      errorCode: 132015,
+    });
+
+    expect(classification.retryable).toBe(true);
+    expect(classification.paused).toBe(true);
+  });
+
+  it("keeps a disabled template (132016) and a restricted account (131031) terminal", () => {
+    expect(
+      classifyMetaError({ httpStatus: 400, errorCode: 132016 }).retryable,
+    ).toBe(false);
+    expect(
+      classifyMetaError({ httpStatus: 400, errorCode: 131031 }).retryable,
     ).toBe(false);
   });
 

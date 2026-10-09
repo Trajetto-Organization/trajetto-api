@@ -47,35 +47,17 @@ const statusChangeReasonResponses = {
     message: z.string().default("Motivo excluído com sucesso!"),
   }),
 
-  /**
-   * NOT a JSON object: this endpoint streams `application/x-ndjson`, like
-   * every other offset listing in the API — an envelope line, then one reason
-   * per line. Calling `response.json()` on it throws.
-   *
-   * `searchMeta` is where the tally lands: sendAsNDJSON nests whatever the use
-   * case returned in `meta` under that key.
-   */
-  reasonListEnvelope: z.object({
-    meta: z.object({
-      total: z.number(),
-      page: z.number(),
-      pageSize: z.number(),
-      searchMeta: z.object({
-        total: z.number(),
-        active: z.number(),
-        used: z
-          .number()
-          .describe(
-            "Quantos motivos já explicam alguma mudança no histórico — separa o vocabulário real do que foi digitado uma vez e esquecido.",
-          ),
-      }),
-    }),
-  }),
-
   /** One line of the stream, after the envelope. */
   reasonListRow: statusChangeReasonEntity,
 
-  genericError: z.object({ message: z.string() }),
+  // Not found (caller or company): 404 with a code (decision 11.3).
+  lookupNotFound: z
+    .object({ code: z.string().describe("USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."), message: z.string() })
+    .describe("USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."),
+  reasonNotFound: z
+    .object({ code: z.string().describe("STATUS_CHANGE_REASON_NOT_FOUND (o motivo não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."), message: z.string() })
+    .describe("STATUS_CHANGE_REASON_NOT_FOUND (o motivo não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."),
+  codedError: z.object({ code: z.string(), message: z.string() }),
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
   }),

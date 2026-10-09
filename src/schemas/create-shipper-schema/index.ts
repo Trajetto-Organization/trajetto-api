@@ -4,6 +4,7 @@ import {
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
+import { isValidCnpj } from "@/shared/delivery/cnpj";
 
 const shipperNameSchema = z
   .string()
@@ -50,6 +51,9 @@ const shipperCnpjSchema = z.preprocess(
     .string()
     .length(14, "O CNPJ deve ter exatamente 14 dígitos.")
     .regex(/^\d{14}$/, "O CNPJ deve conter apenas números.")
+    // The check digits (decision 5.7): the NF-e import matches issuers by
+    // this CNPJ, so a typo would block the real one or duplicate the shipper.
+    .refine(isValidCnpj, "O CNPJ informado não é válido.")
     .nullable()
     .optional(),
 );
@@ -83,8 +87,30 @@ const shipperEmailSchema = z.preprocess(
     .optional(),
 );
 
+/**
+ * "Razão social" (decision 14.8): printed on the proof document as the
+ * issuer's legal name. Optional; an empty field means none, and the PDF then
+ * prints the shipper's name.
+ */
+const shipperCorporateReasonSchema = z.preprocess(
+  (val) => {
+    if (typeof val !== "string") return val;
+
+    const trimmed = val.trim();
+
+    return trimmed === "" ? null : trimmed;
+  },
+  z
+    .string()
+    .max(150, "A razão social deve ter no máximo 150 caracteres.")
+    .nullable()
+    .optional()
+    .describe("Razão social do embarcador, impressa no comprovante. Opcional."),
+);
+
 const createShipperSchema = z.object({
   name: shipperNameSchema,
+  corporate_reason: shipperCorporateReasonSchema,
   cnpj: shipperCnpjSchema,
   email: shipperEmailSchema,
   telephone: shipperTelephoneSchema,
@@ -92,6 +118,7 @@ const createShipperSchema = z.object({
 
 export {
   createShipperSchema,
+  shipperCorporateReasonSchema,
   shipperNameSchema,
   shipperCnpjSchema,
   shipperEmailSchema,

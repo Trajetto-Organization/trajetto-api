@@ -42,10 +42,22 @@ describe("which address a handshake is charged to", () => {
     );
   });
 
-  it("uses the Cloudflare header only in Cloudflare mode", () => {
+  it("uses the Cloudflare header only in Cloudflare mode, from a Cloudflare peer", () => {
+    // 172.70.1.1 is a Cloudflare edge (172.64.0.0/13). With the non-Cloudflare
+    // peer of `headers` (9.9.9.9) the header is somebody's own writing.
+    expect(
+      handshakeAddress(
+        {
+          address: "10.0.0.1",
+          headers: { "x-forwarded-for": "172.70.1.1", "cf-connecting-ip": "5.5.5.5" },
+        },
+        "cloudflare",
+      ),
+    ).toBe("5.5.5.5");
+
     expect(
       handshakeAddress({ address: "10.0.0.1", headers }, "cloudflare"),
-    ).toBe("5.5.5.5");
+    ).toBe("9.9.9.9");
   });
 
   it("falls back to the socket address when the header is absent", () => {
@@ -86,25 +98,37 @@ describe("which address a handshake is charged to", () => {
   });
 });
 
-/** A Redis stand-in that records what was asked of it. */
+/**
+ * A Redis stand-in that records what was asked of it.
+ *
+ * The limiter sends one script (INCR, then EXPIRE when the key has no TTL);
+ * this double applies those semantics. The script itself runs against a real
+ * Redis in tests/E2E/socket-handshake-window.test.ts.
+ */
 function redisDouble() {
   const counters = new Map<string, number>();
+  const armed = new Set<string>();
   const expiries: Array<{ key: string; seconds: number }> = [];
 
   return {
     counters,
     expiries,
     client: {
-      incr: async (key: string) => {
+      eval: async (
+        _script: string,
+        _numberOfKeys: number,
+        key: string,
+        seconds: number,
+      ) => {
         const next = (counters.get(key) ?? 0) + 1;
         counters.set(key, next);
 
-        return next;
-      },
-      expire: async (key: string, seconds: number) => {
-        expiries.push({ key, seconds });
+        if (!armed.has(key)) {
+          armed.add(key);
+          expiries.push({ key, seconds });
+        }
 
-        return 1;
+        return next;
       },
     },
   };
@@ -149,10 +173,9 @@ describe("the counter", () => {
 
   it("fails open when Redis is unreachable", async () => {
     const limiter = createHandshakeLimiter({
-      incr: async () => {
+      eval: async () => {
         throw new Error("sem redis");
       },
-      expire: async () => 1,
     } as never);
 
     // The limiter bounds abuse; it is not a second dependency the product

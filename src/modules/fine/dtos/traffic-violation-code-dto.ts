@@ -33,6 +33,8 @@ interface ListTrafficViolationCodeByBusinessIdProps {
 interface SearchTrafficViolationCodeWithCursorProps {
   limit: number;
   cursor?: string;
+  /** Code ("745", "745-50") or words of the description. */
+  search?: string;
 }
 
 interface CursorPaginatedTrafficViolationCode {

@@ -9,19 +9,11 @@
  *   node tests/load/socket-across-replicas.mjs
  */
 import { readFileSync } from "node:fs";
-/**
- * O cliente vem do repositório web.
- *
- * A API é um servidor: ela não tem — nem deveria ter — `socket.io-client`
- * entre as dependências. Uma dependência de teste no pacote de produção é uma
- * dependência que alguém acaba importando em produção.
- */
-const clientEntry = new URL(
-  "../../../trajetto-fleet-manager-ui/node_modules/socket.io-client/build/esm/index.js",
-  import.meta.url,
-);
 
-const { io } = await import(clientEntry.href);
+import { loadSocketClient } from "./lib/socket-client.mjs";
+
+// O cliente vem do repositório web, ao lado (ver lib/socket-client.mjs).
+const io = await loadSocketClient();
 
 const context = JSON.parse(
   readFileSync(new URL("./fixtures/load-context.json", import.meta.url), "utf8"),

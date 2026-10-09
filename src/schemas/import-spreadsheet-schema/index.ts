@@ -1,5 +1,14 @@
 import { z } from "zod";
 
+import { facetField, sortFields } from "@/shared/pagination/list-query";
+import { pageField, pageSizeField } from "@/shared/pagination/page-size";
+import {
+  IMPORT_SORT_FALLBACK,
+  IMPORT_SORT_KEYS,
+  IMPORT_SOURCES,
+  IMPORT_STATUSES,
+} from "@/modules/import/usecases/list-imports/import-list";
+
 /**
  * One file per request, and a cap that is not arbitrary.
  *
@@ -38,18 +47,27 @@ const importSpreadsheetSchema = z.object({
 });
 
 const listImportsSchema = z.object({
-  page: z
+  page: pageField(),
+  pageSize: pageSizeField(10),
+  businessId: z
     .string()
-    .transform((value) => Number(value) || 1)
-    .refine((value) => value >= 1, "A página é obrigatória!"),
-  pageSize: z
-    .string()
-    .transform((value) => Number(value) || 10)
-    .refine(
-      (value) => value >= 1 && value <= 100,
-      "A quantidade de itens por página deve estar entre 1 e 100.",
+    .uuid("ID da empresa é inválido.")
+    .optional()
+    .describe("Só o MASTER envia; ausente, a empresa do usuário."),
+
+  // Optional and true by default: the web already in production reads the
+  // report from the list row, and must keep finding it there.
+  includeReport: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => value !== "false")
+    .describe(
+      "false deixa o relatório por linha fora de cada item (só os contadores); o relatório de uma importação vem de GET /import/get-import/:importId/business/:businessId. Ausente, o relatório continua em cada item.",
     ),
-  businessId: z.string().uuid("ID da empresa é inválido.").optional(),
+
+  ...sortFields(IMPORT_SORT_KEYS, IMPORT_SORT_FALLBACK),
+  status: facetField(IMPORT_STATUSES, "Status da importação."),
+  source: facetField(IMPORT_SOURCES, "Origem: planilha ou XML da NF-e."),
 });
 
 const importIdParamSchema = z.object({

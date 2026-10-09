@@ -1,6 +1,22 @@
-class RouteNotFoundError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/**
+ * A delivery route that does not exist, or belongs to another company or
+ * another driver (same answer, so an id cannot be probed across tenants).
+ *
+ * Not ROUTE_NOT_FOUND: that code is the unknown-endpoint 404 (http.ts), which
+ * the mobile outbox reads as "this app build is outdated" and replays after
+ * every upgrade. A queued departure on a route that was taken away must fail
+ * on the merits instead.
+ */
+class RouteNotFoundError extends AppError {
   constructor() {
-    super("Rota não encontrada! Por favor, tente novamente.");
+    super(
+      "Rota não encontrada! Por favor, tente novamente.",
+      404,
+      "DELIVERY_ROUTE_NOT_FOUND",
+    );
+    this.name = "RouteNotFoundError";
   }
 }
 
@@ -45,6 +61,27 @@ class RouteVehicleBusyError extends Error {
 }
 
 /**
+ * The driver already has another route IN_PROGRESS (FLEET-ASSIGN-3).
+ *
+ * The person, like the truck, is on one road. Planning and releasing several
+ * routes for one driver stays allowed — tomorrow's route is released while
+ * today's is still out — what is refused is the second departure. Checked
+ * under a per-driver lock in the departure's transaction, so two taps on two
+ * released routes cannot both win.
+ */
+class RouteDriverBusyError extends Error {
+  constructor(public readonly runningCode: number | null = null) {
+    super(
+      (runningCode
+        ? `Você já está com a Rota ${runningCode} em andamento. `
+        : "Você já está com outra rota em andamento. ") +
+        "Conclua essa rota (ou peça ao despachante para cancelá-la) antes de iniciar outra.",
+    );
+    this.name = "RouteDriverBusyError";
+  }
+}
+
+/**
  * Raised by the partial unique index `route_stop_active_delivery_idx`.
  *
  * The message names the situation rather than the constraint, because the
@@ -60,6 +97,26 @@ class DeliveryAlreadyOnRouteError extends Error {
         : `${count} das entregas já estão em outra rota em andamento. ` +
             "Atualize a lista e tente novamente.",
     );
+  }
+}
+
+/**
+ * A delivery stopped being PENDING between the use case's check and the write
+ * that puts it on a route — cancelled on the panel, or sent out by hand, in
+ * the same instant.
+ *
+ * Raised by the write itself: the mirror onto the deliveries only matches
+ * PENDING rows, and a count short of the selection means one of them moved.
+ * The whole route write rolls back, so no open stop is left pointing at an
+ * address nobody will visit (a route that can never close).
+ */
+class DeliveryNoLongerRoutableError extends Error {
+  constructor() {
+    super(
+      "Uma das entregas mudou de status enquanto a rota era montada. " +
+        "Atualize a tela e tente novamente.",
+    );
+    this.name = "DeliveryNoLongerRoutableError";
   }
 }
 
@@ -121,9 +178,35 @@ class RouteCodeTakenError extends Error {
   }
 }
 
+/**
+ * The dispatcher edited a plan that changed since they read it (decision
+ * 14.7, D5). Carries the version the route is at now, for the caller.
+ */
+class RoutePlanStaleError extends Error {
+  constructor(public readonly currentPlanVersion: number) {
+    super(
+      "Outra pessoa alterou esta rota enquanto você editava. Recarregamos a " +
+        "rota: confira e refaça a alteração.",
+    );
+    this.name = "RoutePlanStaleError";
+  }
+}
+
+/** The route would hold more open stops than ROUTE_MAX_STOPS. */
+class RouteStopsLimitError extends Error {
+  constructor(max: number) {
+    super(`Uma rota tem no máximo ${max} paradas abertas.`);
+    this.name = "RouteStopsLimitError";
+  }
+}
+
 export {
+  RoutePlanStaleError,
+  RouteStopsLimitError,
   RouteCodeTakenError,
   DeliveryAlreadyOnRouteError,
+  DeliveryNoLongerRoutableError,
+  RouteDriverBusyError,
   RouteDriverInactiveError,
   RouteNotBelongBusinessError,
   RouteNotFoundError,

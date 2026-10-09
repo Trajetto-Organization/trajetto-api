@@ -2,16 +2,16 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IShipperRepository } from "../../repositories/IShipper-repository";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import {
   ShipperNotFoundError,
-  ShipperNotBelongBusinessError,
   ShipperHasDeliveriesError,
 } from "../errors/shipper-errors";
 
 import { AppError } from "@/shared/errors/AppError";
+
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 interface DeleteShipperRequest {
   userId: string;
@@ -36,24 +36,20 @@ class DeleteShipperUseCase {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
-      throw new ResourceNotFoundError();
+      throw callerNotFound();
     }
 
-    // O catálogo da operação é do despachante. `delivery_manage` e
-    // `occurrence_manage` são abertos ao motorista de propósito — o
-    // aplicativo dele roda nessas permissões —, então a tabela de
-    // permissões diz sim e a use case diz não. O módulo de motivos de
-    // status, na MESMA chave, já fazia isto nas três escritas.
+    // The operation's catalogue belongs to the dispatcher. `delivery_manage`
+    // and `occurrence_manage` are open to the driver on purpose (the app runs
+    // on them), so the permission table says yes and the use case says no.
     assertDispatcher(findUser);
 
     const findShipper = await this.shipper.findShipperById(shipperId);
 
-    if (!findShipper) {
+    // Another company's id reads as absent (decision 11.3): a separate
+    // "not yours" answer told a caller which ids exist elsewhere.
+    if (!findShipper || findShipper.businessId !== businessId) {
       throw new ShipperNotFoundError();
-    }
-
-    if (findShipper.businessId !== businessId) {
-      throw new ShipperNotBelongBusinessError();
     }
 
     // Deliveries carry the shipper's history — a shipper with deliveries is
@@ -75,6 +71,8 @@ class DeleteShipperUseCase {
         500,
       );
     }
+
+    sendCatalogChangedEvent(businessId, "shipper");
   }
 }
 

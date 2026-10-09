@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 const updateVehicleLimitSchema = z.object({
+  ...tenantLockedShape,
   vehicle_limit: z
     .number()
     .int("O limite deve ser um número inteiro.")

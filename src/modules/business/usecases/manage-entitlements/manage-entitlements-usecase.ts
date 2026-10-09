@@ -8,6 +8,8 @@ import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repo
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+import { assertCallerRole } from "@/modules/business/usecases/errors/business-role-guard";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import {
   getBusinessEntitlements,
@@ -18,6 +20,8 @@ import {
 
 import { sendEntitlementsChangedEvent } from "@/websocket";
 import { OutboxService } from "@/shared/notifications/outbox-service";
+
+import database from "@/../infra/database";
 
 
 interface GetEntitlementsRequest {
@@ -48,10 +52,10 @@ class GetBusinessEntitlementsUseCase {
       throw new ResourceNotFoundError();
     }
 
-    // Non-master users only read their own company's plan.
-    if (findUser.role !== "MASTER" && findUser.businessId !== businessId) {
-      throw new BusinessNotFoundError();
-    }
+    // Same answers as the route's guards (role, then tenant), so the result
+    // does not depend on which wall caught the request.
+    assertCallerRole(findUser, ["MASTER", "BUSINESS_ADMIN"]);
+    assertTenantAccess(findUser, businessId);
 
     const findBusiness = await this.business.findBusinessById(businessId);
 
@@ -138,50 +142,78 @@ class UpdateBusinessEntitlementUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // MASTER-only, like the route: see assertCallerRole.
+    assertCallerRole(findUser, ["MASTER"]);
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
     }
 
-    // Read before writing: the notification and the audit entry both state
-    // the movement, not just the destination.
-    const currentRows = await getBusinessEntitlements(businessId);
+    /**
+     * The switch and its notice commit together (OUTBOX-10).
+     *
+     * The event is the mandatory notice to masters and admins — the tripwire
+     * of a stolen MASTER session — and the plan's audit line. Written after
+     * the switch had committed, a failure in between left the module changed
+     * with no event, and the admin's retry found the state already there and
+     * returned early: the notice was lost for good.
+     *
+     * The company row is locked first, so two concurrent switches serialize
+     * and the second reads the state the first left: one change, one notice.
+     * NO KEY UPDATE and not UPDATE: the stronger lock also conflicts with the
+     * key-share every foreign-key check takes on this row, so the switch
+     * waited for any open write of the company, and the company's next
+     * writes queued behind the switch.
+     */
+    const changed = await database.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "business" WHERE "id" = ${businessId} FOR NO KEY UPDATE`;
 
-    const previousEnabled = currentRows.some(
-      (row) => row.module === module && row.enabled,
-    );
+      // Read before writing: the notification and the audit entry both state
+      // the movement, not just the destination.
+      const currentRows = await getBusinessEntitlements(businessId, tx);
 
-    // Re-affirming the current state is not a plan change; publishing it
-    // would page every master over nothing.
-    if (previousEnabled === enabled) return;
+      const previousEnabled = currentRows.some(
+        (row) => row.module === module && row.enabled,
+      );
 
-    await setModuleEnabled(businessId, module, enabled);
+      // Re-affirming the current state is not a plan change; publishing it
+      // would page every master over nothing.
+      if (previousEnabled === enabled) return false;
 
-    // Connected clients redraw their navigation immediately; nobody is
-    // disconnected — the module gate on the API is the enforcement point.
-    sendEntitlementsChangedEvent(businessId, { module, enabled });
+      await setModuleEnabled(businessId, module, enabled, tx);
 
-    await this.outbox.publishAfterCommit({
-      topic: "business-module.changed",
-      aggregateType: "business",
-      aggregateId: businessId,
-      businessId,
-      actorId: userId,
-      payload: {
+      await this.outbox.publish(tx, {
+        topic: "business-module.changed",
+        aggregateType: "business",
+        aggregateId: businessId,
         businessId,
-        businessName: findBusiness.corporate_reason,
-        module,
-        enabled,
-        previousEnabled,
-        actor: {
-          id: findUser.id,
-          name: findUser.name,
-          email: findUser.email,
-          role: findUser.role,
+        actorId: userId,
+        payload: {
+          businessId,
+          businessName: findBusiness.corporate_reason,
+          module,
+          enabled,
+          previousEnabled,
+          actor: {
+            id: findUser.id,
+            name: findUser.name,
+            email: findUser.email,
+            role: findUser.role,
+          },
         },
-      },
+      });
+
+      return true;
     });
+
+    if (!changed) return;
+
+    // After the commit: connected clients redraw their navigation for a
+    // change that happened; nobody is disconnected — the module gate on the
+    // API is the enforcement point.
+    sendEntitlementsChangedEvent(businessId, { module, enabled });
   }
 }
 

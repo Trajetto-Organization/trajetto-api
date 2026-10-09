@@ -1,3 +1,5 @@
+import { AppError } from "@/shared/errors/AppError";
+
 /**
  * The operation history a driver carries: the deliveries they made and the
  * routes they ran.
@@ -12,7 +14,7 @@
  * Deactivating the driver is the answer for someone who left: they disappear
  * from every picker, cannot log in, and the history stays theirs.
  */
-class DriverHasAssociatedOperationError extends Error {
+class DriverHasAssociatedOperationError extends AppError {
   constructor(deliveryCount: number, routeCount: number) {
     const parts = [
       deliveryCount > 0 && `${deliveryCount} entrega(s)`,
@@ -25,6 +27,8 @@ class DriverHasAssociatedOperationError extends Error {
         `\n\nOpções disponíveis:\n` +
         `• Inativar o motorista (recomendado) — ele sai das listas e o histórico fica\n` +
         `• Transferir o histórico para outro motorista antes de deletar`,
+      409,
+      "DRIVER_HAS_OPERATION",
     );
   }
 }

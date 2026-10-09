@@ -486,7 +486,10 @@ describe("one open stop per delivery", () => {
 
     await repository.addStops(route.id, CARRIER, [first]);
 
-    const added = await repository.addStops(route.id, CARRIER, [second, third]);
+    const { stops: added } = await repository.addStops(route.id, CARRIER, [
+      second,
+      third,
+    ]);
 
     expect(added.map((stop) => stop.deliveryId)).toEqual([second, third]);
 
@@ -508,6 +511,14 @@ describe("one open stop per delivery", () => {
       from: ["PENDING", "ARRIVED"],
       status: "FAILED",
       completed_at: new Date(),
+    });
+
+    // The redelivery decision (FAILED → PENDING) the use cases would have
+    // recorded: only a PENDING delivery may join a route, and the route write
+    // itself refuses anything else (IDEMP-06).
+    await prisma.delivery.update({
+      where: { id: delivery },
+      data: { status: "PENDING" },
     });
 
     // The failed stop is closed, so the index no longer reserves the delivery.
@@ -782,9 +793,11 @@ describe("what the driver's phone receives", () => {
     // empty array as "not on a route". They must not be confused.
     const loose = await seedDelivery();
 
+    // IN_TRANSIT: the only loose work the phone still gets (D8). A PENDING
+    // delivery with a driver and no route is the old direct assignment.
     await prisma.delivery.update({
       where: { id: loose },
-      data: { driverId: DRIVER },
+      data: { driverId: DRIVER, status: "IN_TRANSIT" },
     });
 
     const rows = (await deliveries.listDriverDeliveries(
@@ -797,4 +810,121 @@ describe("what the driver's phone receives", () => {
     expect(row).toBeDefined();
     expect(row!.stops).toEqual([]);
   });
+});
+
+/**
+ * Decision 14.7, D8 (design §4.13): the route is the unit of assignment, and a
+ * route still being planned is a draft the driver must not see change while
+ * the dispatcher drags it. The phone gets what is IN_TRANSIT, and what is
+ * PENDING on a RELEASED or IN_PROGRESS route.
+ */
+describe("what the driver's phone receives from a route being planned (D8)", () => {
+  async function listed(deliveryId: string) {
+    const rows = (await deliveries.listDriverDeliveries(CARRIER, DRIVER)) as Array<{
+      id: string;
+      stops: Array<{ route: { id: string; plan_version: number } }>;
+    }>;
+
+    return rows.find((row) => row.id === deliveryId);
+  }
+
+  it("leaves out a delivery on a PLANNED route, and shows it once released", async () => {
+    const delivery = await seedDelivery();
+
+    const route = await repository.createRoute({
+      businessId: CARRIER,
+      driverId: DRIVER,
+      vehicleId: await seedVehicle(),
+      scheduled_date: new Date(),
+      deliveryIds: [delivery],
+    });
+
+    expect((await deliveryRow(delivery)).driverId).toBe(DRIVER);
+    expect(await listed(delivery)).toBeUndefined();
+
+    await repository.transitionRoute(route.id, CARRIER, {
+      expectedStatus: "PLANNED",
+      status: "RELEASED",
+    });
+
+    const row = await listed(delivery);
+
+    expect(row).toBeDefined();
+    // The app keeps the plan's version in its cache to notice a change
+    // made while it was offline (design §6).
+    expect(row!.stops[0].route).toMatchObject({ id: route.id, plan_version: expect.any(Number) });
+  });
+
+  it("leaves out a PENDING delivery designated with no route", async () => {
+    const loose = await seedDelivery();
+
+    await prisma.delivery.update({ where: { id: loose }, data: { driverId: DRIVER } });
+
+    expect(await listed(loose)).toBeUndefined();
+  });
+});
+
+describe("the last two stops settled at the same instant", () => {
+  /**
+   * A write skew the unit suite cannot see.
+   *
+   * Each settle updated its OWN stop and then counted the open ones. Under
+   * READ COMMITTED neither transaction sees the other's uncommitted stop, so
+   * both counted one still open and neither closed the route. It happens in
+   * the field: the app's outbox sends a proof queued in a dead zone at the
+   * same moment the driver, back online, proves the next address — or the
+   * panel settles one while the phone settles the other.
+   *
+   * Nothing ever repaired it. The route stayed IN_PROGRESS with nothing left
+   * to do, the truck stayed "Em rota" and refused its next departure
+   * (ROUTE_VEHICLE_BUSY), the driver's GPS kept being recorded, and the ERP
+   * never heard `route.completed`. The only way out was cancelling a route
+   * that had been fully delivered.
+   */
+  it("still closes the route and brings the truck back", async () => {
+    const first = await seedDelivery();
+    const second = await seedDelivery();
+    const vehicle = await seedVehicle();
+
+    const routeId = await runningRoute([first, second], vehicle);
+
+    const proof = () => ({
+      from: ["PENDING", "ARRIVED"] as Array<"PENDING" | "ARRIVED">,
+      status: "COMPLETED" as const,
+      completed_at: new Date(),
+    });
+
+    let firstSettled!: () => void;
+    const settledOnce = new Promise<void>((done) => (firstSettled = done));
+
+    // The first proof has settled its stop but not committed yet.
+    const one = prisma.$transaction(
+      async (tx) => {
+        await repository.settleStopForDelivery(first, CARRIER, proof(), tx);
+
+        firstSettled();
+
+        await new Promise((done) => setTimeout(done, 400));
+      },
+      { timeout: 15_000 },
+    );
+
+    await settledOnce;
+
+    // The second arrives inside that window.
+    const two = prisma.$transaction(
+      (tx) => repository.settleStopForDelivery(second, CARRIER, proof(), tx),
+      { timeout: 15_000 },
+    );
+
+    await Promise.all([one, two]);
+
+    const route = await prisma.route.findUniqueOrThrow({ where: { id: routeId } });
+    const stops = await prisma.routeStop.findMany({ where: { routeId } });
+    const truck = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicle } });
+
+    expect(stops.map((stop) => stop.status)).toEqual(["COMPLETED", "COMPLETED"]);
+    expect(route.status, "rota zumbi: nada aberto e ainda IN_PROGRESS").toBe("COMPLETED");
+    expect(truck.status).toBe("ACTIVE");
+  }, 30_000);
 });

@@ -5,7 +5,6 @@ import { z } from "zod";
 
 import { ListDeliveryUseCase } from "./list-delivery-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { listDeliverySchema } from "@/schemas/list-delivery-schema";
 
 import { sendAsNDJSON } from "@/config/stream-utils";
@@ -13,47 +12,42 @@ import { sendAsNDJSON } from "@/config/stream-utils";
 class ListDeliveryController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
-    const { businessId, page, pageSize, status, shipperId, driverId, search } =
-      request.query as z.infer<typeof listDeliverySchema>;
+
+    // The route already validated AND transformed the querystring (page is a
+    // number, each facet a list): re-parsing it would reject the lists.
+    const {
+      businessId,
+      page,
+      pageSize,
+      search,
+      sort,
+      order,
+      status,
+      shipperId,
+      driverId,
+    } = request.query as z.infer<typeof listDeliverySchema>;
 
     const listDeliveryUseCase = container.resolve(ListDeliveryUseCase);
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
+    const deliveriesPromise = listDeliveryUseCase.execute({
+      userId: id,
+      businessId,
+      page,
+      pageSize,
+      search,
+      sort,
+      order,
+      statuses: status,
+      shipperIds: shipperId,
+      driverIds: driverId,
+    });
 
-    if (search) {
-      try {
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        decodedSearch = search;
-      }
-    }
-
-    try {
-      const deliveriesPromise = listDeliveryUseCase.execute({
-        userId: id,
-        businessId,
-        page,
-        pageSize,
-        status,
-        shipperId,
-        driverId,
-        search: decodedSearch,
-      });
-
-      await sendAsNDJSON({
-        reply,
-        dataPromise: deliveriesPromise,
-        page,
-        pageSize,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await sendAsNDJSON({
+      reply,
+      dataPromise: deliveriesPromise,
+      page,
+      pageSize,
+    });
   }
 }
 

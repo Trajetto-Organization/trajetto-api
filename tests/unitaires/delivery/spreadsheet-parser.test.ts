@@ -166,6 +166,24 @@ describe("the fields as people actually type them", () => {
     expect(result.rows).toEqual([]);
   });
 
+  it("refuses an impossible day instead of rolling it into the next month", () => {
+    // new Date("2026-02-31") is 03/03; a truck would leave on the wrong day.
+    const result = withColumn("Data prevista", "31/02/2026");
+
+    expect(result.rows).toEqual([]);
+    expect(result.errors[0].column).toBe("Data prevista");
+  });
+
+  it("keeps the day a datetime spells, whatever its offset (decision 1.3)", () => {
+    // 21:00 in Brasília is 00:00Z of the next day; the column is a DAY, and
+    // the day written is the 16th.
+    const result = withColumn("Data prevista", "2026-09-16T21:00:00-03:00");
+
+    expect(result.rows[0].scheduled_date?.toISOString()).toBe(
+      "2026-09-16T00:00:00.000Z",
+    );
+  });
+
   it("reads a date the way a Brazilian writes it", () => {
     const result = withColumn("Data prevista", "16/09/2026");
 

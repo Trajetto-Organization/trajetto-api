@@ -1,18 +1,27 @@
-class StatusChangeReasonNotFoundError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/**
+ * Honest HTTP with a code (decision 11.3). Also the answer for a reason of
+ * another company: a separate "not yours" refusal would tell a caller which
+ * ids exist at other carriers.
+ */
+class StatusChangeReasonNotFoundError extends AppError {
   constructor() {
-    super("Motivo de mudança de status não encontrado! Por favor, tente novamente.");
+    super(
+      "Motivo de mudança de status não encontrado! Por favor, tente novamente.",
+      404,
+      "STATUS_CHANGE_REASON_NOT_FOUND",
+    );
   }
 }
 
-class StatusChangeReasonNameAlreadyExistsError extends Error {
+class StatusChangeReasonNameAlreadyExistsError extends AppError {
   constructor() {
-    super("Já existe um motivo com este nome nesta empresa.");
-  }
-}
-
-class StatusChangeReasonNotBelongBusinessError extends Error {
-  constructor() {
-    super("Este motivo não pertence à empresa informada.");
+    super(
+      "Já existe um motivo com este nome nesta empresa.",
+      409,
+      "STATUS_CHANGE_REASON_NAME_TAKEN",
+    );
   }
 }
 
@@ -20,14 +29,17 @@ class StatusChangeReasonNotBelongBusinessError extends Error {
  * The same answer the occurrence-type catalogue gives, for the same reason:
  * the trail has to keep naming what happened. A reason cited by an event that
  * disappeared would leave support reading "status alterado — motivo: (nada)"
- * about a decision somebody made deliberately.
+ * about a decision somebody made deliberately. 409: the request was well
+ * formed, the reason is simply part of the record now.
  */
-class StatusChangeReasonInUseError extends Error {
+class StatusChangeReasonInUseError extends AppError {
   constructor(eventCount: number) {
     super(
       `Não é possível excluir este motivo: ele já explica ${eventCount} ` +
         `mudança(s) de status no histórico. Desative-o para tirá-lo das ` +
         `opções sem apagar o que já foi respondido.`,
+      409,
+      "STATUS_CHANGE_REASON_IN_USE",
     );
   }
 }
@@ -35,6 +47,5 @@ class StatusChangeReasonInUseError extends Error {
 export {
   StatusChangeReasonNotFoundError,
   StatusChangeReasonNameAlreadyExistsError,
-  StatusChangeReasonNotBelongBusinessError,
   StatusChangeReasonInUseError,
 };

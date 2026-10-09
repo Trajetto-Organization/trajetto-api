@@ -3,11 +3,7 @@ import { container } from "tsyringe";
 
 import { SearchServiceOrderByVehicleCursorUseCase } from "./search-service-order-by-vehicle-cursor-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
-
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
+import { replyVehicleError } from "@/modules/vehicle/usecases/errors/vehicle-http-errors";
 
 import { updateDeleteVehicleSchema } from "@/schemas/update-delete-vehicle-schema";
 import { cursorPaginationSchema } from "@/schemas/cursor-pagination-schema";
@@ -56,21 +52,11 @@ class SearchServiceOrderByVehicleCursorController {
         })),
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotBelongBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
+      // The vehicle routes' table, so the app reads the same answers here:
+      // a colleague's vehicle is 403 VEHICLE_NOT_ASSIGNED_TO_DRIVER (it was a
+      // plain Error, so it fell to the generic 500), and another company's
+      // vehicle is 404 like a missing one, without confirming it exists.
+      if (replyVehicleError(reply, error)) return;
 
       throw error;
     }

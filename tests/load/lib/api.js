@@ -54,13 +54,24 @@ const throttled = new Rate("surface_throttled");
  */
 const LATE_FRACTION = 0.8;
 
+/**
+ * How long the run is planned to last, set by the scenario that thresholds on
+ * `phase` (soak.js, from its own duration). It used to come only from
+ * RUN_DURATION_MS: without that variable every sample was tagged `all`, and
+ * the `{phase:late}` thresholds had nothing to judge — they passed empty.
+ */
+let plannedMs = Number(__ENV.RUN_DURATION_MS || 0);
+
+function planRun(ms) {
+  if (!Number(__ENV.RUN_DURATION_MS || 0)) plannedMs = ms;
+}
+
 function phaseOf() {
   const total = exec.instance.currentTestRunDuration;
-  const planned = Number(__ENV.RUN_DURATION_MS || 0);
 
-  if (!planned) return "all";
+  if (!plannedMs) return "all";
 
-  return total >= planned * LATE_FRACTION ? "late" : "early";
+  return total >= plannedMs * LATE_FRACTION ? "late" : "early";
 }
 
 function record(surface, response, expected) {
@@ -289,4 +300,33 @@ const surfaces = {
   },
 };
 
-export { BASE, context, surfaces };
+/**
+ * A threshold that always holds, one per surface and metric.
+ *
+ * k6 only breaks a tagged metric out in its summary when some threshold names
+ * that tag, so a run reported a per-surface p95 for the four thresholded
+ * surfaces and an aggregate for everything else — the aggregate this file's
+ * own header calls close to meaningless. These name every surface, so the
+ * summary (and --summary-export) carries each one; they never fail a run.
+ */
+const SURFACE_NAMES = [
+  "delivery.list", "delivery.get", "delivery.summary", "delivery.mine",
+  "route.list", "route.tower", "route.positions",
+  "integration.deliveries", "integration.catalogue",
+  "notification.unread", "dashboard.overview",
+  "chat.threads", "chat.messages", "system.health",
+];
+
+function perSurfaceBreakdown() {
+  const thresholds = {};
+
+  for (const surface of SURFACE_NAMES) {
+    thresholds[`surface_latency{surface:${surface}}`] = ["max>=0"];
+    thresholds[`surface_failures{surface:${surface}}`] = ["rate>=0"];
+    thresholds[`surface_throttled{surface:${surface}}`] = ["rate>=0"];
+  }
+
+  return thresholds;
+}
+
+export { BASE, context, perSurfaceBreakdown, planRun, surfaces };

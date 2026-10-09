@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 const updateUserPasswordSchema = z.object({
+  ...tenantLockedShape,
   currentPassword: z
     .string()
     .min(7, "A senha deve ter pelo menos 7 caracteres.")

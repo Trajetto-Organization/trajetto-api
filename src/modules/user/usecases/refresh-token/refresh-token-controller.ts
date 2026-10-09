@@ -22,7 +22,7 @@ class RefreshTokenController {
       if (error instanceof JsonWebTokenError) {
         return reply.status(401).send({
           code: "AUTH_REFRESH_INVALID",
-          message: "Token de atualizacao invalido ou expirado.",
+          message: "Token de atualização inválido ou expirado.",
         });
       }
 

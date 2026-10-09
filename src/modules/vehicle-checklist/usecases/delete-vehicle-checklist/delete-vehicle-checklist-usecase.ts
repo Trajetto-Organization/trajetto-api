@@ -9,7 +9,6 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleChecklistNotFoundError } from "../errors/vehicle-checklist-not-found-error";
-import { VehicleChecklistNotBelongBusinessError } from "../errors/vehicle-checklist-not-belong-business-error";
 
 import { VehicleChecklistDriverCannotDeleteChecklistError } from "../errors/vehicle-checklist-driver-cannot-delete-checklist-error";
 
@@ -18,8 +17,11 @@ import { VehicleChecklist } from "../../dtos/vehicle-checklist-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
 import { AppError } from "@/shared/errors/AppError";
+import { logger } from "@/shared/logging/logger";
 
 import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
+
+const log = logger.child({ component: "vehicle-checklist" });
 
 interface DeleteVehicleChecklistProps {
   checklistId: string;
@@ -66,58 +68,67 @@ class DeleteVehicleChecklistUseCase {
       throw new BusinessNotFoundError();
     }
 
+    // Looked up WITH the company: another company's checklist answers like
+    // one that does not exist. A separate "não pertence" 403 confirmed the
+    // id existed in some other tenant (decision 8.1).
     const findChecklist =
-      await this.vehicleChecklist.findVehicleChecklistById(checklistId);
+      await this.vehicleChecklist.getVehicleChecklistByIdAndBusiness({
+        checklistId,
+        businessId,
+      });
 
     if (!findChecklist) {
       throw new VehicleChecklistNotFoundError();
     }
 
-    if (findChecklist.businessId !== businessId) {
-      throw new VehicleChecklistNotBelongBusinessError();
-    }
+    // Get vehicle information for activity description before deletion
+    const findVehicle = await this.vehicle.findVehicleById(
+      findChecklist.vehicleId,
+    );
+
+    let deletedChecklist: VehicleChecklist;
 
     try {
-      // Delete photos from storage if they exist
-      if (findChecklist.photos && findChecklist.photos.length > 0) {
-        for (const photoPath of findChecklist.photos) {
-          try {
-            await this.uploadService.deleteFile(photoPath);
-          } catch (error) {
-            console.error(`Failed to delete photo file: ${photoPath}`, error);
-            // Continue with other deletions even if one fails
-          }
-        }
-      }
-
-      // Get vehicle information for activity description before deletion
-      const findVehicle = await this.vehicle.findVehicleById(
-        findChecklist.vehicleId,
-      );
-
-      const deletedChecklist =
+      deletedChecklist =
         await this.vehicleChecklist.deleteVehicleChecklist(checklistId);
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Checklist Veicular",
-        action: "delete",
-        entityId: checklistId,
-        description: findVehicle
-          ? `Checklist veicular excluído para o veículo ${findVehicle.license_plate} - ${findVehicle.description}`
-          : `Checklist veicular excluído`,
-        status: "Deletado",
-        performedBy: userId,
-        businessId,
-      });
-
-      return deletedChecklist;
     } catch (error) {
+      log.error({ err: error, checklistId }, "vehicle checklist could not be deleted");
+
       throw new AppError(
         "Houve um erro ao tentar deletar o checklist veicular! Por favor, tente novamente.",
         500,
       );
     }
+
+    // The photos go only after the row is gone. They used to be deleted
+    // first: a delete that then failed left a checklist whose photos no
+    // longer existed. An object left behind is only storage cost.
+    const photoPaths = new Set<string>(findChecklist.photos ?? []);
+
+    await Promise.allSettled(
+      [...photoPaths].map((photoPath) =>
+        this.uploadService.deleteFile(photoPath).catch((error) => {
+          log.error(
+            { err: error, key: photoPath, checklistId },
+            "checklist photo could not be deleted",
+          );
+        }),
+      ),
+    );
+
+    this.notificationService.createActivityIfEnabled({
+      type: "Checklist Veicular",
+      action: "delete",
+      entityId: checklistId,
+      description: findVehicle
+        ? `Checklist veicular excluído para o veículo ${findVehicle.license_plate} - ${findVehicle.description}`
+        : `Checklist veicular excluído`,
+      status: "Deletado",
+      performedBy: userId,
+      businessId,
+    });
+
+    return deletedChecklist;
   }
 }
 

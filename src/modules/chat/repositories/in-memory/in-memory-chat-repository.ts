@@ -1,7 +1,16 @@
-import { randomUUID } from "node:crypto";
+// uuid v7 like the columns' @default(uuid(7)): the id breaks created_at ties
+// in creation order, as the (created_at, id) orderings expect.
+import { v7 as uuidV7 } from "uuid";
 
-import { IChatRepository } from "../IChat-repository";
+import { Prisma } from "@prisma/client";
+
+import { CHAT_MESSAGE_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
+import { compareCodePoints } from "@/shared/pagination/in-memory-order";
+
+import { ChatRouteRef, IChatRepository } from "../IChat-repository";
 import {
+  ChatAudienceCount,
+  ChatBroadcastTarget,
   ChatDeliverySide,
   ChatMessage,
   ChatMessageSearchHit,
@@ -11,9 +20,55 @@ import {
   ListChatMessagesProps,
   ListChatMessagesResult,
   ListChatThreadsProps,
+  ListChatRecipientsProps,
+  ListChatRecipientsResult,
   ListChatThreadsResult,
   SearchChatMessagesProps,
 } from "../../dtos/chat-dto";
+
+/** A route row, as far as the chat reads it. */
+interface RouteRow {
+  id: string;
+  businessId: string;
+  driverId: string;
+  code: number;
+  name: string | null;
+  status: "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+  started_at: Date | null;
+  created_at: Date;
+}
+
+/** A stop, as far as the chat reads it: which route carries which delivery. */
+interface RouteStopRow {
+  id: string;
+  routeId: string;
+  deliveryId: string;
+  created_at: Date;
+}
+
+function routeRef(route: RouteRow): ChatRouteRef {
+  return {
+    id: route.id,
+    businessId: route.businessId,
+    driverId: route.driverId,
+    code: route.code,
+    name: route.name,
+  };
+}
+
+/**
+ * Same total order as the SQL repository's `ORDER BY name, id`: code point,
+ * the collation of the deployed postgres:16-alpine (see compareCodePoints).
+ * localeCompare("en-US") put "Ágata" next to "ana", where Postgres never does.
+ */
+function byNameThenId(
+  a: { name: string; id: string },
+  b: { name: string; id: string },
+): number {
+  const byName = compareCodePoints(a.name, b.name);
+
+  return byName !== 0 ? byName : compareCodePoints(a.id, b.id);
+}
 
 interface ReadRow {
   threadId: string;
@@ -25,7 +80,15 @@ interface ReadRow {
 function byNewestFirst(a: ChatMessage, b: ChatMessage): number {
   const byDate = b.created_at.getTime() - a.created_at.getTime();
 
-  return byDate !== 0 ? byDate : b.id.localeCompare(a.id);
+  return byDate !== 0 ? byDate : compareCodePoints(b.id, a.id);
+}
+
+/** P2003, as Postgres answers a row pointing at a thread that does not exist. */
+function missingThread(): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError(
+    "Foreign key constraint violated on the foreign key",
+    { code: "P2003", clientVersion: "in-memory", meta: { field_name: "threadId" } },
+  );
 }
 
 /** Mirrors the SQL repository: past this the badge only says "99+". */
@@ -36,12 +99,36 @@ class InMemoryChatRepository implements IChatRepository {
   public messages: ChatMessage[] = [];
   public reads: ReadRow[] = [];
 
-  // Seeded by the tests so views resolve names without a database.
-  public driverDirectory = new Map<string, { name: string; cnh: string }>();
+  // Seeded by the tests so views resolve names without a database. A driver
+  // is a chat RECIPIENT only when the test says which company he is in and
+  // that he is active — the SQL filters on both, so the twin does too.
+  public driverDirectory = new Map<
+    string,
+    {
+      name: string;
+      cnh: string;
+      businessId?: string;
+      status?: "ACTIVE" | "INACTIVE";
+
+      /** The driver's branch; absent or null = no branch (branchId null). */
+      branch?: { is_active: boolean } | null;
+    }
+  >();
   public userDirectory = new Map<
     string,
-    { name: string; driverId: string | null; last_seen_at?: Date | null }
+    {
+      name: string;
+      driverId: string | null;
+      last_seen_at?: Date | null;
+      access_revoked?: boolean;
+
+      /** Checked against the driver's company when a test seeds it. */
+      businessId?: string | null;
+    }
   >();
+
+  public routes: RouteRow[] = [];
+  public routeStops: RouteStopRow[] = [];
   public deliveryDirectory = new Map<
     string,
     { recipient_name: string; status: string }
@@ -55,10 +142,40 @@ class InMemoryChatRepository implements IChatRepository {
     return null;
   }
 
+  /**
+   * The driver's app account that can read, as the SQL `hasApp` decides it:
+   * not revoked, of the driver's company, and the driver's branch (if any)
+   * active.
+   */
+  private appUserOf(driverId: string): string | null {
+    const driver = this.driverDirectory.get(driverId);
+
+    if (driver?.branch && !driver.branch.is_active) return null;
+
+    for (const [userId, user] of this.userDirectory) {
+      if (user.driverId !== driverId || user.access_revoked) continue;
+
+      if (
+        user.businessId !== undefined &&
+        driver?.businessId !== undefined &&
+        user.businessId !== driver.businessId
+      ) {
+        continue;
+      }
+
+      return userId;
+    }
+
+    return null;
+  }
+
   private toView(message: ChatMessage): ChatMessageView {
     const sender = this.userDirectory.get(message.senderId);
     const delivery = message.deliveryId
       ? this.deliveryDirectory.get(message.deliveryId)
+      : undefined;
+    const route = message.routeId
+      ? this.routes.find((row) => row.id === message.routeId)
       : undefined;
 
     return {
@@ -68,6 +185,7 @@ class InMemoryChatRepository implements IChatRepository {
         message.deliveryId && delivery
           ? { id: message.deliveryId, ...delivery }
           : null,
+      route: route ? { id: route.id, code: route.code, name: route.name } : null,
     };
   }
 
@@ -91,12 +209,18 @@ class InMemoryChatRepository implements IChatRepository {
     businessId: string,
     driverId: string,
   ): Promise<ChatThread> {
-    const existing = await this.findThreadByDriver(businessId, driverId);
+    // Checked and inserted with no await in between, like the SQL's single
+    // ON CONFLICT DO NOTHING: two first messages racing converge on one
+    // thread. With an await here both saw "none" and made two.
+    const existing = this.threads.find(
+      (thread) =>
+        thread.businessId === businessId && thread.driverId === driverId,
+    );
 
     if (existing) return existing;
 
     const thread: ChatThread = {
-      id: randomUUID(),
+      id: uuidV7(),
       businessId,
       driverId,
       last_message_at: null,
@@ -158,11 +282,20 @@ class InMemoryChatRepository implements IChatRepository {
       return true;
     });
 
+    // Same order as the SQL: last_message_at desc with never-written threads
+    // last, then the newest thread first. Without the second key two threads
+    // nobody wrote to came out oldest first here and newest first in SQL.
     const sorted = [...scoped].sort((a, b) => {
-      const aTime = a.last_message_at?.getTime() ?? -1;
-      const bTime = b.last_message_at?.getTime() ?? -1;
+      const aTime = a.last_message_at?.getTime() ?? -Infinity;
+      const bTime = b.last_message_at?.getTime() ?? -Infinity;
 
-      return bTime - aTime;
+      if (aTime !== bTime) return bTime > aTime ? 1 : -1;
+
+      const byCreated = b.created_at.getTime() - a.created_at.getTime();
+
+      // The id closes the order, as in SQL: without it two threads created in
+      // the same instant could swap between pages.
+      return byCreated !== 0 ? byCreated : compareCodePoints(b.id, a.id);
     });
 
     const pageRows = sorted.slice((page - 1) * pageSize, page * pageSize);
@@ -223,6 +356,9 @@ class InMemoryChatRepository implements IChatRepository {
     around,
     limit,
     search,
+    deliveryId,
+    routeId,
+    ticketId,
   }: ListChatMessagesProps): Promise<ListChatMessagesResult> {
     const normalizedSearch = search?.trim().toLowerCase() ?? "";
 
@@ -233,11 +369,15 @@ class InMemoryChatRepository implements IChatRepository {
     ): number => {
       const byDate = a.created_at.getTime() - b.created_at.getTime();
 
-      return byDate !== 0 ? byDate : a.id.localeCompare(b.id);
+      return byDate !== 0 ? byDate : compareCodePoints(a.id, b.id);
     };
 
     const scoped = this.messages.filter((message) => {
       if (message.threadId !== threadId) return false;
+
+      if (deliveryId && message.deliveryId !== deliveryId) return false;
+      if (routeId && message.routeId !== routeId) return false;
+      if (ticketId && message.ticketId !== ticketId) return false;
 
       if (
         normalizedSearch &&
@@ -408,27 +548,46 @@ class InMemoryChatRepository implements IChatRepository {
     props: CreateChatMessageProps,
     _tx?: unknown,
   ): Promise<ChatMessage> {
+    // The column is UNIQUE across every company, and Postgres answers a
+    // second insert of the same key with P2002. The twin used to accept it,
+    // so the race two replicas run with one key could not be tested here.
+    if (
+      props.client_submission_id !== null &&
+      this.messages.some(
+        (message) =>
+          message.client_submission_id === props.client_submission_id,
+      )
+    ) {
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Unique constraint failed on the fields: (`client_submission_id`)",
+        { code: "P2002", clientVersion: "in-memory" },
+      );
+    }
+
+    const thread = this.threads.find((row) => row.id === props.threadId);
+
+    // The thread's foreign key: the twin used to store an orphan message.
+    if (!thread) throw missingThread();
+
     const message: ChatMessage = {
-      id: randomUUID(),
+      ...CHAT_MESSAGE_COLUMN_DEFAULTS,
+      id: uuidV7(),
       kind: props.kind,
       body: props.body,
       attachment_key: props.attachment_key,
       duration_ms: props.duration_ms,
       deliveryId: props.deliveryId,
+      routeId: props.routeId ?? null,
       broadcast_id: props.broadcast_id,
       client_submission_id: props.client_submission_id,
       threadId: props.threadId,
       senderId: props.senderId,
+      ticketId: props.ticketId ?? null,
       created_at: new Date(),
     };
 
     this.messages.push(message);
-
-    const thread = this.threads.find((row) => row.id === props.threadId);
-
-    if (thread) {
-      thread.last_message_at = message.created_at;
-    }
+    thread.last_message_at = message.created_at;
 
     return message;
   }
@@ -441,14 +600,8 @@ class InMemoryChatRepository implements IChatRepository {
     clientSubmissionId: string,
     businessId: string,
   ): Promise<ChatMessage | null> {
-    /**
-     * O escopo também aqui.
-     *
-     * Um fake que aceita o parâmetro e o ignora é pior que um fake que não o
-     * aceita: o TypeScript deixa passar (um método com menos parâmetros é
-     * atribuível), e o teste unitário fica verde com o furo aberto. Foi assim
-     * que a chave de idempotência do chat virou credencial e ninguém viu.
-     */
+    // Scoped here too: a twin that accepts `businessId` and ignores it
+    // type-checks and keeps a unit test green over a cross-tenant leak.
     const message = this.messages.find(
       (entry) => entry.client_submission_id === clientSubmissionId,
     );
@@ -470,6 +623,12 @@ class InMemoryChatRepository implements IChatRepository {
     );
 
     if (!existing) {
+      // The SQL inserts the first cursor, and the thread's foreign key
+      // refuses one for a thread that does not exist.
+      if (!this.threads.some((row) => row.id === threadId)) {
+        throw missingThread();
+      }
+
       this.reads.push({ threadId, userId, last_read_at: at });
       return;
     }
@@ -502,6 +661,166 @@ class InMemoryChatRepository implements IChatRepository {
     if (!thread.staff_delivered_at || thread.staff_delivered_at < at) {
       thread.staff_delivered_at = at;
     }
+  }
+
+  /** Active drivers of one company, as the SQL's WHERE picks them. */
+  private activeDriversOf(businessId: string) {
+    return [...this.driverDirectory.entries()]
+      .filter(
+        ([, driver]) =>
+          driver.businessId === businessId && driver.status === "ACTIVE",
+      )
+      .map(([id, driver]) => ({
+        id,
+        name: driver.name,
+        appUserId: this.appUserOf(id),
+      }));
+  }
+
+  async listRecipients({
+    businessId,
+    search,
+    app,
+    cursor,
+    limit,
+  }: ListChatRecipientsProps): Promise<ListChatRecipientsResult> {
+    const term = search?.trim().toLowerCase() ?? "";
+
+    const ordered = this.activeDriversOf(businessId)
+      .filter((driver) => {
+        if (app === "WITH_APP" && !driver.appUserId) return false;
+        if (app === "WITHOUT_APP" && driver.appUserId) return false;
+
+        // By name only, like the SQL: the CNH is not the chat's to match on.
+        return !term || driver.name.toLowerCase().includes(term);
+      })
+      .sort(byNameThenId);
+
+    // Keyset after the anchor, like the SQL: the anchor is looked up by id
+    // inside the company and WITHOUT the list's filter, so a driver made
+    // inactive between two pages neither ends the list nor hides the next
+    // colleague. Positioned by its current name, as in the SQL. Nothing
+    // when the anchor is gone.
+    const anchor = cursor ? this.driverDirectory.get(cursor) : undefined;
+
+    const rows = !cursor
+      ? ordered.slice(0, limit + 1)
+      : !anchor || anchor.businessId !== businessId
+        ? []
+        : ordered
+            .filter(
+              (driver) =>
+                byNameThenId(driver, { id: cursor, name: anchor.name }) > 0,
+            )
+            .slice(0, limit + 1);
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    return {
+      data: page.map((driver) => ({
+        id: driver.id,
+        name: driver.name,
+        hasApp: driver.appUserId !== null,
+      })),
+      nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
+      hasMore,
+    };
+  }
+
+  async countAudience(businessId: string): Promise<ChatAudienceCount> {
+    const active = this.activeDriversOf(businessId);
+    const withApp = active.filter((driver) => driver.appUserId).length;
+
+    return { withApp, withoutApp: active.length - withApp };
+  }
+
+  async listAudience(
+    businessId: string,
+    limit: number,
+  ): Promise<ChatBroadcastTarget[]> {
+    return this.activeDriversOf(businessId)
+      .filter((driver) => driver.appUserId !== null)
+      .sort(byNameThenId)
+      .slice(0, limit)
+      .map(({ id, name, appUserId }) => ({ id, name, appUserId }));
+  }
+
+  async findRoute(routeId: string): Promise<ChatRouteRef | null> {
+    const route = this.routes.find((row) => row.id === routeId);
+
+    return route ? routeRef(route) : null;
+  }
+
+  async findRunningRoutes(
+    businessId: string,
+    driverIds: string[],
+  ): Promise<Map<string, ChatRouteRef>> {
+    const wanted = new Set(driverIds);
+
+    const running = this.routes
+      .filter(
+        (route) =>
+          route.businessId === businessId &&
+          wanted.has(route.driverId) &&
+          route.status === "IN_PROGRESS",
+      )
+      .sort((a, b) => {
+        // started_at desc, nulls last; then created_at desc; then id desc.
+        const aStart = a.started_at?.getTime() ?? -Infinity;
+        const bStart = b.started_at?.getTime() ?? -Infinity;
+
+        if (aStart !== bStart) return bStart > aStart ? 1 : -1;
+
+        const byCreated = b.created_at.getTime() - a.created_at.getTime();
+
+        return byCreated !== 0 ? byCreated : compareCodePoints(b.id, a.id);
+      });
+
+    const byDriver = new Map<string, ChatRouteRef>();
+
+    for (const route of running) {
+      if (!byDriver.has(route.driverId)) {
+        byDriver.set(route.driverId, routeRef(route));
+      }
+    }
+
+    return byDriver;
+  }
+
+  async findDeliveryRouteOfDriver(
+    businessId: string,
+    driverId: string,
+    deliveryId: string,
+  ): Promise<ChatRouteRef | null> {
+    const routeById = new Map(this.routes.map((route) => [route.id, route]));
+
+    const stops = this.routeStops
+      .filter((stop) => {
+        const route = routeById.get(stop.routeId);
+
+        return (
+          stop.deliveryId === deliveryId &&
+          route?.businessId === businessId &&
+          route.driverId === driverId
+        );
+      })
+      .sort((a, b) => {
+        const byCreated = b.created_at.getTime() - a.created_at.getTime();
+
+        return byCreated !== 0 ? byCreated : compareCodePoints(b.id, a.id);
+      });
+
+    const open = stops.find((stop) => {
+      const status = routeById.get(stop.routeId)?.status;
+
+      return status === "RELEASED" || status === "IN_PROGRESS";
+    });
+
+    const chosen = open ?? stops[0];
+    const route = chosen ? routeById.get(chosen.routeId) : undefined;
+
+    return route ? routeRef(route) : null;
   }
 }
 

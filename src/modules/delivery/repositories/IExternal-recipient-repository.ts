@@ -23,7 +23,12 @@ interface TrackingSource {
     delivered_at: Date | string | null;
     received_by: string | null;
 
-    business: { corporate_reason: string; fantasy_name: string | null };
+    business: {
+      corporate_reason: string;
+      fantasy_name: string | null;
+      /** The carrier's zone (decision 1.1), for the times the page prints. */
+      timezone?: string | null;
+    };
   };
 
   events: Array<{
@@ -39,6 +44,17 @@ interface TrackingSource {
   }>;
 
   proofToken: string | null;
+}
+
+/**
+ * The delivery as it is NOW: its status and the contact it holds. What a
+ * customer message is checked against before it is sent, and addressed to.
+ */
+interface DeliveryContactState {
+  status: string;
+  name: string;
+  email: string | null;
+  telephone: string | null;
 }
 
 interface IExternalRecipientRepository {
@@ -57,6 +73,21 @@ interface IExternalRecipientRepository {
 
   /** They asked to stop hearing from us. Checked before every send. */
   optOut: (token: string) => Promise<boolean>;
+
+  /**
+   * The delivery's current status and contact, or null when it no longer
+   * exists. One lookup by primary key.
+   *
+   * The event carries both as they were when it was published; by the time a
+   * message goes out — after a backoff, or a re-run of an old event — the
+   * delivery may have moved on, or its phone been corrected.
+   */
+  findDeliveryState: (deliveryId: string) => Promise<DeliveryContactState | null>;
 }
 
-export type { IExternalRecipientRepository, TrackingSource, ProofDocumentSource };
+export type {
+  DeliveryContactState,
+  IExternalRecipientRepository,
+  TrackingSource,
+  ProofDocumentSource,
+};

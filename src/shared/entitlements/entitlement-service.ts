@@ -1,5 +1,5 @@
 import database from "@/../infra/database";
-import { BusinessModule } from "@prisma/client";
+import { BusinessModule, Prisma } from "@prisma/client";
 
 import { isModuleEnabled } from "./entitlement-rules";
 
@@ -17,8 +17,9 @@ interface BusinessEntitlementRow {
 
 async function getBusinessEntitlements(
   businessId: string,
+  client: Prisma.TransactionClient = database,
 ): Promise<BusinessEntitlementRow[]> {
-  const rows = await database.businessEntitlement.findMany({
+  const rows = await client.businessEntitlement.findMany({
     where: { businessId },
     select: { module: true, enabled: true },
     orderBy: { module: "asc" },
@@ -35,12 +36,54 @@ async function hasModule(
   return isModuleEnabled(rows, module);
 }
 
+interface CompanyModuleState {
+  id: string;
+  isActive: boolean;
+  moduleEnabled: boolean;
+}
+
+/**
+ * For each id that names an existing company: whether it is active and has
+ * `module` on. An id with no company is simply absent from the answer.
+ *
+ * One query for all of them, because the MASTER's module gate checks every
+ * company a request names, and must tell "no such company" and "company
+ * switched off" apart from "module not hired" — the web offers to enable the
+ * module on the last one only.
+ */
+async function getCompaniesModuleState(
+  businessIds: readonly string[],
+  module: BusinessModule,
+): Promise<CompanyModuleState[]> {
+  if (businessIds.length === 0) return [];
+
+  const rows = await database.business.findMany({
+    where: { id: { in: [...businessIds] } },
+    select: {
+      id: true,
+      is_active: true,
+      entitlements: { where: { module }, select: { module: true, enabled: true } },
+    },
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    isActive: row.is_active,
+    moduleEnabled: isModuleEnabled(row.entitlements, module),
+  }));
+}
+
+/**
+ * `client` is the plan change's transaction: the switch and the event that
+ * announces it commit together (OUTBOX-10).
+ */
 async function setModuleEnabled(
   businessId: string,
   module: BusinessModule,
   enabled: boolean,
+  client: Prisma.TransactionClient = database,
 ): Promise<void> {
-  await database.businessEntitlement.upsert({
+  await client.businessEntitlement.upsert({
     where: { businessId_module: { businessId, module } },
     create: { businessId, module, enabled },
     update: { enabled },
@@ -60,7 +103,7 @@ interface ModuleImpact {
   module: BusinessModule;
   /** Records that stop being reachable, by label, for the confirm dialog. */
   records: Array<{ label: string; count: number }>;
-  /** Company users whose menu loses items — MASTER excluded, it bypasses. */
+  /** Company users whose menu loses items; the MASTER belongs to no company. */
   affectedUsers: number;
   /** Work in flight, which is what makes the timing of the switch matter. */
   inFlight: Array<{ label: string; count: number }>;
@@ -155,7 +198,9 @@ async function getDeliveriesImpact(businessId: string): Promise<ModuleImpact> {
   ] = await Promise.all([
     database.delivery.count({ where }),
     database.shipper.count({ where }),
-    database.occurrenceType.count({ where }),
+    // The company's own types: the four defaults the platform seeds
+    // (system_key) are not something the company would lose.
+    database.occurrenceType.count({ where: { businessId, system_key: null } }),
     database.delivery.count({ where: { businessId, status: "PENDING" } }),
     database.delivery.count({ where: { businessId, status: "IN_TRANSIT" } }),
     countAffectedUsers(businessId, "DELIVERIES"),
@@ -187,9 +232,10 @@ async function getModuleImpact(
 
 export {
   getBusinessEntitlements,
+  getCompaniesModuleState,
   hasModule,
   setModuleEnabled,
   getModuleImpact,
   MODULE_PERMISSION_KEYS,
 };
-export type { BusinessEntitlementRow, ModuleImpact };
+export type { BusinessEntitlementRow, CompanyModuleState, ModuleImpact };

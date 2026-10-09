@@ -52,7 +52,8 @@ class ListChatThreadsUseCase {
       pageSize,
     });
 
-    // The controller needs the resolved scope to enrich presence.
+    // The resolved scope, for callers that need it. Presence no longer does:
+    // it is asked about the page's drivers, not the company.
     return { ...result, businessId: scope.businessId };
   }
 }

@@ -33,19 +33,20 @@ class CreateKanbanColumnUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The named board first, before anything about it is looked up.
+    if (
+      findUser.role !== "MASTER" &&
+      findUser.businessId !== columnData.businessId
+    ) {
+      throw new KanbanNotAllowedCreateColumnBusinessError();
+    }
+
     const findBusiness = await this.business.findBusinessById(
       columnData.businessId,
     );
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
-    }
-
-    // Verify user permissions
-    if (findUser.role !== "MASTER") {
-      if (findUser.businessId !== columnData.businessId) {
-        throw new KanbanNotAllowedCreateColumnBusinessError();
-      }
     }
 
     try {

@@ -132,6 +132,23 @@ beforeAll(async () => {
   });
 
   /**
+   * The carrier chose to tell its customers that the load left.
+   *
+   * A channel without an active template for the moment is a decision not to
+   * send (DLVP-NOTIF-2): no recipient, no rows. Without this row the
+   * customer-facing half of the criterion would expand into nothing and step
+   * 11 would be asserting a notice the carrier never configured.
+   */
+  await prisma.deliveryMessageTemplate.create({
+    data: {
+      businessId: CARRIER,
+      topic: "DISPATCHED",
+      channel: "WHATSAPP",
+      body: "Sua entrega saiu. {{link}} Sair: {{link_descadastro}}",
+    },
+  });
+
+  /**
    * A truck, because a route cannot leave without one.
    *
    * The release refuses a route with no vehicle — "defina o veículo da rota

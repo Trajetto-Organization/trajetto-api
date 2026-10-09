@@ -4,51 +4,42 @@ import { z } from "zod";
 import { container } from "tsyringe";
 
 import { ListFuelTypeUseCase } from "./list-fuel-type-usecase";
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { listFuelTypeSchema } from "@/schemas/list-fuel-type-schema";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { replyFuelTypeError } from "../errors/fuel-type-http-errors";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListFuelTypeController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // Validated and transformed by the route: page is already a number.
+    const { page, pageSize, search, businessId, sort, order } =
+      request.query as z.infer<typeof listFuelTypeSchema>;
 
     const listFuelTypeUseCase = container.resolve(ListFuelTypeUseCase);
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        // Try to decode, but catch errors
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        // If it fails, use the value without decoding.
-        decodedSearch = search;
-      }
-    }
-
     try {
-      const fuelTypesPromise = listFuelTypeUseCase.execute(
-        id,
+      const fuelTypesPromise = listFuelTypeUseCase.execute({
+        userId: id,
+        businessId,
         page,
         pageSize,
-        decodedSearch,
-      );
+        search,
+        sort,
+        order,
+      });
 
-      await sendAsNDJSON({
+      // `return await`: a bare return inside try/catch lets the rejection
+      // walk past the catch below and surface as a 500.
+      return await sendAsNDJSON({
         reply,
         dataPromise: fuelTypesPromise,
         page,
         pageSize,
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      if (replyFuelTypeError(reply, error)) return;
 
       throw error;
     }

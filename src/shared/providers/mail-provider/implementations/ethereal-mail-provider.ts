@@ -6,9 +6,13 @@ import { IMailProvider } from "../IMail-provider";
 
 import nodemailer, { Transporter } from "nodemailer";
 
+import { logger } from "@/shared/logging/logger";
+
 import { renderMailTemplate } from "../template-renderer";
 import { toMailDeliveryError } from "../errors/mail-delivery-error";
 import { buildMessageId } from "../message-id";
+
+const log = logger.child({ component: "mail-provider", provider: "ethereal" });
 
 const SMTP_TIMEOUT_MS = 10_000;
 
@@ -89,20 +93,22 @@ class EtherealMailProvider implements IMailProvider {
 
       // Dev-only affordance: without the preview link the message is
       // unreachable, since Ethereal never delivers anywhere.
-      console.log(
-        "[EtherealMailProvider] Preview URL: %s",
-        nodemailer.getTestMessageUrl(message) || "indisponível",
+      log.info(
+        {
+          previewUrl: nodemailer.getTestMessageUrl(message) || null,
+          referenceId,
+        },
+        "e-mail captured by Ethereal",
       );
 
       return { messageId: message.messageId };
     } catch (error) {
-      const deliveryError = toMailDeliveryError(
-        error,
-        `Falha ao enviar e-mail para ${to}`,
-      );
+      // No recipient in the text (OBS-15), as in the production provider.
+      const deliveryError = toMailDeliveryError(error, "Falha ao enviar e-mail");
 
-      console.error(
-        `[EtherealMailProvider] ${deliveryError.message} (retryable=${deliveryError.retryable})`,
+      log.error(
+        { err: deliveryError, retryable: deliveryError.retryable, referenceId },
+        "e-mail send failed",
       );
 
       throw deliveryError;

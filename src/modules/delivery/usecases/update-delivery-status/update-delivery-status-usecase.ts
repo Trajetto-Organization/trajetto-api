@@ -8,12 +8,11 @@ import { IStatusChangeReasonRepository } from "@/modules/status-change-reason/re
 import database from "@/../infra/database";
 
 import { NotificationService } from "@/shared/services/notification-service";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import {
   DeliveryNotFoundError,
-  DeliveryNotBelongBusinessError,
   DeliveryStatusConflictError,
+  DeliveryNeedsDriverError,
+  DeliveryRouteNotStartedError,
 } from "../errors/delivery-errors";
 
 import {
@@ -25,6 +24,8 @@ import {
 import { stopOutcomeForDelivery } from "@/shared/route/route-rules";
 
 import { announceStopSettled } from "@/shared/route/route-realtime";
+import { announceDroppedPlans } from "@/modules/route/usecases/shared/route-plan-change";
+import type { PlanBump } from "@/modules/route/dtos/route-dto";
 import { announceDeliveryOverride } from "@/shared/delivery/delivery-realtime";
 
 import { driverShouldHearOverride } from "@/shared/delivery/driver-worklist";
@@ -43,7 +44,11 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { AppError } from "@/shared/errors/AppError";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { Delivery } from "../../dtos/delivery-dto";
+
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
+import { sendDeliveryStatusToBusiness } from "@/websocket";
 
 interface UpdateDeliveryStatusRequest {
   userId: string;
@@ -65,7 +70,7 @@ interface UpdateDeliveryStatusRequest {
   reasonId: string;
 
   /** The detail the catalogue cannot carry: "cliente ligou às 14h". */
-  note?: string;
+  note?: string | null;
 }
 
 @injectable()
@@ -99,32 +104,33 @@ class UpdateDeliveryStatusUseCase {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
-      throw new ResourceNotFoundError();
+      throw callerNotFound();
     }
+
+    // Defense in depth: the route guard must not be the only wall between
+    // tenants (same check as get-delivery and the list/exports).
+    assertTenantAccess(findUser, businessId);
 
     const findDelivery = await this.delivery.findDeliveryById(deliveryId);
 
-    if (!findDelivery) {
+    // Another company's id reads as absent (decision 11.3): a separate
+    // "not yours" answer told a caller which ids exist elsewhere.
+    if (!findDelivery || findDelivery.businessId !== businessId) {
       throw new DeliveryNotFoundError();
     }
 
-    if (findDelivery.businessId !== businessId) {
-      throw new DeliveryNotBelongBusinessError();
-    }
-
     /**
-     * Motorista não passa por aqui.
+     * The driver does not come through here.
      *
-     * A permissão `delivery_manage:write` é aberta ao motorista de propósito —
-     * é nela que o aplicativo dele roda —, e sem esta linha ele marcava a
-     * própria entrega como DELIVERED por este endpoint: sem foto, sem
-     * assinatura, sem geolocalização, contornando `register-delivery-proof`,
-     * que existe justamente para exigir a evidência. O bloco docstring lá em
-     * cima já dizia que "o aplicativo do motorista passa por chegada,
-     * comprovação e ocorrência"; faltava a linha que faz isso ser verdade.
+     * `delivery_manage:write` is open to the driver on purpose (the app runs
+     * on it), and without this line a driver marked their own delivery
+     * DELIVERED through this endpoint: no photo, no signature, no location,
+     * going round `register-delivery-proof`, which exists to require the
+     * evidence.
      *
-     * O escopo anterior ("motorista só move a entrega dele") não era proteção:
-     * a entrega dele é exatamente a que ele quer fechar sem comprovar.
+     * The old scope ("a driver only moves their own delivery") protected
+     * nothing: their own delivery is exactly the one they would close
+     * without proving it.
      */
     assertDispatcher(findUser);
 
@@ -132,6 +138,23 @@ class UpdateDeliveryStatusUseCase {
 
     if (!verdict.allowed) {
       throw new AppError(verdict.reason!, 400, "INVALID_STATUS_TRANSITION");
+    }
+
+    // "Em rota" from the panel only for a load a driver is carrying on a
+    // route that left (decision 5.4). Without a driver the delivery vanished
+    // from Monitoring; on a PLANNED/RELEASED route it read "em rota" with its
+    // stop open on a route that never started — starting the route is what
+    // puts its deliveries on the street.
+    const openRoute = await this.delivery.findOpenStopRoute(deliveryId);
+
+    if (status === "IN_TRANSIT") {
+      if (!findDelivery.driverId) {
+        throw new DeliveryNeedsDriverError();
+      }
+
+      if (openRoute?.status === "PLANNED" || openRoute?.status === "RELEASED") {
+        throw new DeliveryRouteNotStartedError();
+      }
     }
 
     const findReason = await this.reason.findStatusChangeReasonById(reasonId);
@@ -164,12 +187,36 @@ class UpdateDeliveryStatusUseCase {
         ReturnType<IRouteRepository["settleStopForDelivery"]>
       > = null;
 
+      // What the change means for the stop the delivery occupies. Asked with
+      // where it comes FROM: IN_TRANSIT → PENDING is a load returned to base
+      // while its route runs, and takes it off that route (IDEMP-11).
+      const outcome = stopOutcomeForDelivery(
+        status,
+        new Date(),
+        findDelivery.status,
+      );
+
+      // True when this change took the delivery off a running route: the
+      // driver loses the address even though PENDING is still "on the list".
+      let releasedFromRoute = false;
+
+      // A stop taken off a plan that had not left (its version moved),
+      // announced after the commit like every plan write (design §7.1).
+      const droppedPlans: PlanBump[] = [];
+
       // The panel can resolve a delivery the driver never touched — the
       // customer called the office, the load came back. If that delivery is a
       // stop on a running route, the stop has to learn about it in the same
       // commit, or the route would wait forever for an address nobody is going
       // to visit.
       const updatedDelivery = await database.$transaction(async (tx) => {
+        // An outcome that settles a stop takes the running route's row
+        // before the delivery's, the order a route cancellation takes them
+        // in. Delivery first and route second deadlocked against it.
+        if (outcome) {
+          await this.route.lockRouteOfOpenStop(deliveryId, businessId, tx);
+        }
+
         const updated = await this.delivery.updateDeliveryStatus(
           deliveryId,
           {
@@ -206,12 +253,27 @@ class UpdateDeliveryStatusUseCase {
           tx,
         );
 
+        // The stop follows the delivery, in this same commit. Before the
+        // driver's push below, because whether the driver loses the address
+        // depends on it.
+        if (outcome) {
+          settled = await this.route.settleStopForDelivery(
+            deliveryId,
+            businessId,
+            { ...outcome, onPlanDropped: (bump) => droppedPlans.push(bump) },
+            tx,
+          );
+
+          releasedFromRoute = Boolean(outcome.releaseDelivery && settled);
+        }
+
         // The driver loses — or gains — a stop, and their app is the last
         // place to find out. Published in the SAME transaction as the change,
         // because a push that survives a crash is the whole reason the outbox
         // exists: the delivery is already cancelled in the database, and a
         // driver who never heard is a driver standing at the address.
         if (
+          releasedFromRoute ||
           driverShouldHearOverride({
             from: findDelivery.status,
             to: status,
@@ -240,7 +302,9 @@ class UpdateDeliveryStatusUseCase {
               toLabel: DELIVERY_STATUS_LABELS[status],
               reason: findReason.name,
               note: note?.trim() || null,
-              removedFromWorklist: !["PENDING", "IN_TRANSIT"].includes(status),
+              removedFromWorklist:
+                releasedFromRoute ||
+                !["PENDING", "IN_TRANSIT"].includes(status),
             },
           });
         }
@@ -269,17 +333,6 @@ class UpdateDeliveryStatusUseCase {
               receivedBy: status === "DELIVERED" ? (received_by ?? null) : null,
             },
           });
-        }
-
-        const outcome = stopOutcomeForDelivery(status, new Date());
-
-        if (outcome) {
-          settled = await this.route.settleStopForDelivery(
-            deliveryId,
-            businessId,
-            outcome,
-            tx,
-          );
         }
 
         // The customers' systems, for the outcomes the catalogue publishes.
@@ -318,12 +371,26 @@ class UpdateDeliveryStatusUseCase {
       // The panel and the control tower are watching this stop.
       announceStopSettled(businessId, settled);
 
+      await announceDroppedPlans(this.user, businessId, droppedPlans);
+
+      // No stop settled (no route, or a route that has not left): nothing
+      // above told the tower and the boards, which kept the old status until
+      // their next poll (DLV-MON-4).
+      if (!settled) {
+        sendDeliveryStatusToBusiness(businessId, {
+          deliveryId,
+          deliveryStatus: status,
+          routeId: openRoute?.routeId ?? null,
+        });
+      }
+
       // And the driver's app, if it is open right now. Not redundant with the
       // push above: the push reaches a phone in a pocket with the app closed,
       // this reaches a screen the driver is looking at, in the second it
       // happens. After the commit, always — an event about a write that rolled
       // back is a lie the client cannot undo.
       if (
+        releasedFromRoute ||
         driverShouldHearOverride({
           from: findDelivery.status,
           to: status,
@@ -338,7 +405,8 @@ class UpdateDeliveryStatusUseCase {
           type: "delivery.status_overridden",
           deliveryId,
           status,
-          removedFromWorklist: !["PENDING", "IN_TRANSIT"].includes(status),
+          removedFromWorklist:
+            releasedFromRoute || !["PENDING", "IN_TRANSIT"].includes(status),
         });
       }
 

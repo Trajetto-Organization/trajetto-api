@@ -1,6 +1,12 @@
 import type { Redis } from "ioredis";
 
-import { lastForwardedAddress, type TrustedProxyMode } from "@/config/rate-limit";
+import {
+  EDGE_SECRET_HEADER,
+  rateLimitAddressKey,
+  resolveClientAddress,
+  type TrustedProxyMode,
+} from "@/config/rate-limit";
+import { countInFixedWindow } from "@/shared/services/fixed-window-counter";
 
 /**
  * The socket handshake, counted like every other request.
@@ -40,6 +46,19 @@ export const HANDSHAKES_PER_USER = 30;
 
 export const HANDSHAKE_WINDOW_SECONDS = 60;
 
+/**
+ * Sockets one user may hold open on ONE replica at a time.
+ *
+ * The budgets above count attempts per minute, not connections that stay:
+ * one valid token could open thirty a minute and keep every one, without
+ * end. A dispatcher's tabs are a handful, and a reconnection storm briefly
+ * doubles them while the old sockets time out; twenty leaves room for both.
+ * Per replica on purpose — it is read from the local adapter's own room
+ * index, exact and self-cleaning, with no counter to drift — so the ceiling
+ * across the cluster is this times the replicas.
+ */
+export const SOCKET_MAX_CONNECTIONS_PER_USER = 20;
+
 interface HandshakeLike {
   address?: string;
   headers: Record<string, string | string[] | undefined>;
@@ -48,37 +67,45 @@ interface HandshakeLike {
 /**
  * Where the connection says it came from, using the configured source.
  *
- * Same rule as the HTTP key: read the LAST entry of the forwarding header,
- * because a trusted proxy APPENDS the peer address and anything before it is
- * whatever the client chose to write.
+ * The very rule the HTTP key uses (resolveClientAddress): the LAST entry of
+ * the forwarding header, because a trusted proxy APPENDS the peer address and
+ * anything before it is whatever the client chose to write; and in
+ * `cloudflare` mode, CF-Connecting-IP only when that peer is a Cloudflare edge.
  */
 export function handshakeAddress(
   handshake: HandshakeLike,
   mode: TrustedProxyMode,
 ): string {
-  const forwarded =
-    mode === "cloudflare"
-      ? lastForwardedAddress(handshake.headers["cf-connecting-ip"])
-      : mode === "xff"
-        ? lastForwardedAddress(handshake.headers["x-forwarded-for"])
-        : null;
-
-  return forwarded ?? handshake.address ?? "unknown";
+  return resolveClientAddress(
+    {
+      peer: handshake.address,
+      forwardedFor: handshake.headers["x-forwarded-for"],
+      edgeClient: handshake.headers["cf-connecting-ip"],
+      edgeSecret: handshake.headers[EDGE_SECRET_HEADER],
+    },
+    mode,
+  );
 }
 
+/** IPv4 keys are unchanged; IPv6 is keyed by its /64, like the HTTP limiter. */
 export const addressHandshakeKey = (address: string): string =>
-  `socket-handshake:ip:${address}`;
+  `socket-handshake:${rateLimitAddressKey(address)}`;
 
 export const userHandshakeKey = (userId: string): string =>
   `socket-handshake:user:${userId}`;
 
 /**
- * The counter itself: increment, and expire the bucket on first use.
+ * The counter itself: one atomic increment that also arms the window whenever
+ * the bucket has none (shared/services/fixed-window-counter.ts).
  *
- * A fixed window rather than a sliding one — the same shape @fastify/rate-limit
- * uses, so the two behave alike — and the EXPIRE is set only when the counter
- * is created, otherwise every attempt would push the window forward and a
- * steady stream would never reset.
+ * It used to be INCR, then a second EXPIRE only when the count was 1. Whatever
+ * lost that second command — a connection dropping with it in flight, ioredis
+ * replaying an unanswered INCR after a reconnect (which then answers 2, so the
+ * branch is skipped), the 250 ms command timeout firing on a slow INCR — left
+ * a counter with no TTL that no later attempt ever repaired: 30 more attempts
+ * and the user, or 300 and a whole office behind one NAT, was refused realtime
+ * for good, across Redis restarts. Keys already stuck that way heal on their
+ * next attempt after the deploy.
  */
 export interface HandshakeLimiter {
   allow: (key: string, max: number) => Promise<boolean>;
@@ -88,11 +115,11 @@ export function createHandshakeLimiter(redis: Redis): HandshakeLimiter {
   return {
     async allow(key, max) {
       try {
-        const count = await redis.incr(key);
-
-        if (count === 1) {
-          await redis.expire(key, HANDSHAKE_WINDOW_SECONDS);
-        }
+        const count = await countInFixedWindow(
+          redis,
+          key,
+          HANDSHAKE_WINDOW_SECONDS,
+        );
 
         return count <= max;
       } catch {

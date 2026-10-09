@@ -114,3 +114,92 @@ describe("the chat message table", () => {
     ).toBe(true);
   });
 });
+
+describe("the notification delivery queue", () => {
+  /**
+   * The cascade from a purged outbox event deletes children by outboxEventId
+   * alone. The only indexes starting with that column were PARTIAL, which the
+   * cascade cannot use: one sequential scan of the delivery table per event
+   * purged, five thousand per batch.
+   */
+  it("has an index the purge's cascade can use", async () => {
+    const indexes = await indexesOf("notification_delivery");
+
+    expect(
+      indexes.some(
+        (index) =>
+          /\(\s*"outboxEventId"\s*\)/.test(index.indexdef) &&
+          !index.indexdef.includes("WHERE"),
+      ),
+    ).toBe(true);
+  });
+
+  it("claims each lane from its own partial index", async () => {
+    const names = (await indexesOf("notification_delivery")).map(
+      (index) => index.indexname,
+    );
+
+    expect(names).toContain("notification_delivery_claim_internal_idx");
+    expect(names).toContain("notification_delivery_claim_external_idx");
+    expect(names).not.toContain("notification_delivery_claim_idx");
+  });
+
+  /**
+   * The claim spells the lane's channels as literals precisely so the
+   * planner can prove the partial index predicate. A generic plan over bound
+   * parameters could not, and would walk the whole queue.
+   */
+  it("uses the lane's index to find the next bell behind a backlog of e-mails", async () => {
+    await prisma.$executeRawUnsafe("SET enable_seqscan = off");
+
+    // The claim's shape since PG-19: one range on the index key (the claim
+    // writes the lease end into availableAt), ordered by it.
+    const plan = await prisma.$queryRawUnsafe<Array<{ "QUERY PLAN": string }>>(`
+      EXPLAIN SELECT "id" FROM "notification_delivery"
+      WHERE "channel" IN ('IN_APP', 'ACTIVITY', 'PUSH')
+        AND "status" IN ('PENDING', 'PROCESSING')
+        AND "availableAt" <= now()
+        AND ("status" = 'PENDING'
+          OR ("leaseExpiresAt" < now() AND "attempts" < 7))
+      ORDER BY "availableAt"
+      LIMIT 20
+    `);
+
+    await prisma.$executeRawUnsafe("RESET enable_seqscan");
+
+    const text = plan.map((row) => row["QUERY PLAN"]).join("\n");
+
+    expect(text).toContain("notification_delivery_claim_internal_idx");
+
+    // A range on the key, not a filter: the scan stops at now().
+    expect(text).toMatch(/Index Cond: \("availableAt" <= now\(\)\)/);
+  });
+});
+
+describe("an access profile's permissions", () => {
+  /**
+   * Loaded by profile on every authenticated request of a user who has one,
+   * and on every socket handshake. The only index was the unique that leads
+   * with `action`, so the lookup read the index of every tenant's permissions
+   * — a cost that grew with the number of customers, not with anyone's use.
+   */
+  it("can be found by the profile", async () => {
+    const indexes = await indexesOf("permission");
+
+    expect(
+      indexes.some((index) =>
+        /\(\s*"profileAccessId"\s*[,)]/.test(index.indexdef),
+      ),
+    ).toBe(true);
+  });
+
+  it("and the users of a profile too, for when it is deleted", async () => {
+    const indexes = await indexesOf("user");
+
+    expect(
+      indexes.some((index) =>
+        /\(\s*"profileAccessId"\s*[,)]/.test(index.indexdef),
+      ),
+    ).toBe(true);
+  });
+});

@@ -1,3 +1,4 @@
+import { perSurfaceBreakdown } from "./lib/api.js";
 import { pause, runOneOperation } from "./lib/mix.js";
 
 /**
@@ -22,12 +23,18 @@ export const options = {
 
       duration: __ENV.LOAD_DURATION || "3m",
 
-      preAllocatedVUs: 60,
-      maxVUs: 400,
+      // Every iteration also pauses 0.5–2 s (a client, not a fuzzer), so one
+      // VU sustains under one iteration a second: 400 VUs capped the run near
+      // 300/s whatever LOAD_RATE asked, and the excess showed up only as
+      // dropped_iterations. The budget now follows the rate.
+      preAllocatedVUs: Number(__ENV.LOAD_PRE_VUS || Math.max(60, Math.ceil(Number(__ENV.LOAD_RATE || 120) * 0.5))),
+      maxVUs: Number(__ENV.LOAD_MAX_VUS || Math.max(400, Math.ceil(Number(__ENV.LOAD_RATE || 120) * 3))),
     },
   },
 
   thresholds: {
+    ...perSurfaceBreakdown(),
+
     // The whole product answering in under a second at p95. Not a number
     // borrowed from anywhere: it is what a dispatcher notices.
     "surface_latency{surface:delivery.list}": ["p(95)<1000"],

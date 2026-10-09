@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -13,6 +14,8 @@ const updateMasterUserParamsSchema = z.object({
 
 const updateMasterUserSchema = z
   .object({
+    // A master has no company, and no edit gives them one.
+    ...tenantLockedShape,
     email: z
       .string()
       .min(1, "O e-mail é obrigatório.")
@@ -76,22 +79,18 @@ const updateMasterUserSchema = z
         .optional()
         .nullable(),
     ),
-    password: z.preprocess(
-      emptyStringToNull,
-      z
-        .string()
-        .min(7, "A senha deve ter pelo menos 7 caracteres.")
-        .max(100, "A senha deve ter no máximo 100 caracteres.")
-        .refine((value) => !/\s/.test(value), {
-          message: "A senha não deve conter espaços.",
-        })
-        .optional()
-        .nullable(),
-    ),
+    // Decision 4.9: nobody types another master's password, and no
+    // password is mailed. A single-use link is sent instead.
+    sendPasswordSetupLink: z
+      .boolean({ invalid_type_error: "Envio do link de senha inválido." })
+      .optional()
+      .describe(
+        "Envia ao master um link de uso único (24 h) para definir uma nova senha.",
+      ),
   })
-  .refine((data) => data.name || data.email || data.password, {
+  .refine((data) => data.name || data.email || data.sendPasswordSetupLink, {
     message:
-      "Pelo menos um campo deve ser informado para atualização (nome, e-mail ou senha).",
+      "Informe ao menos uma alteração: nome, e-mail ou o envio do link de redefinição de senha.",
   });
 
 export { updateMasterUserSchema, updateMasterUserParamsSchema };

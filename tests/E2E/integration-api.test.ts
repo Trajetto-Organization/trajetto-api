@@ -549,7 +549,7 @@ describe("counting what a customer's system asked for", () => {
  * key provisioned at 60/min got 600. A limit the product promises and does not
  * enforce is worse than none: somebody sizes their integration trusting it.
  */
-describe("o limite por chave", () => {
+describe("the per-key limit", () => {
   it("refuses when the key reaches the ceiling provisioned for it", async () => {
     const tight = generateApiKey();
 
@@ -581,6 +581,57 @@ describe("o limite por chave", () => {
     // The bucket is per key, not per company nor per address: one integration
     // stuck in a loop must not take down another at the same carrier.
     const response = await call("/deliveries?limit=1", readKey);
+
+    expect(response.statusCode).toBe(200);
+  });
+});
+
+describe("a key whose company may not operate", () => {
+  /**
+   * The same two gates a person of that company passes on every request. A
+   * deactivated company's users are locked out at once, and a company without
+   * the Entregas module cannot open its deliveries — yet its API keys kept
+   * reading and writing both.
+   */
+  it("is refused once the company is deactivated", async () => {
+    const company = randomUUID();
+    await seedBusiness(company);
+
+    const key = await seedKey(company, ["deliveries:read"]);
+
+    expect((await call("/deliveries", key)).statusCode).toBe(200);
+
+    await prisma.business.update({
+      where: { id: company },
+      data: { is_active: false },
+    });
+
+    expect((await call("/deliveries", key)).statusCode).toBe(403);
+  });
+
+  it("is refused once the Entregas module is switched off", async () => {
+    const company = randomUUID();
+    await seedBusiness(company);
+
+    const key = await seedKey(company, ["deliveries:read"]);
+
+    await prisma.businessEntitlement.updateMany({
+      where: { businessId: company, module: "DELIVERIES" },
+      data: { enabled: false },
+    });
+
+    expect((await call("/deliveries", key)).statusCode).toBe(403);
+  });
+});
+
+describe("a page size that is not one", () => {
+  /**
+   * Capped at 200 and, before, not floored at all: a negative limit went to
+   * Prisma as a negative `take` — "the last N rows" — and loaded the whole
+   * history before the paging code choked on it with a 500.
+   */
+  it.each(["-1000000", "0", "abc"])("answers a normal page for limit=%s", async (limit) => {
+    const response = await call(`/deliveries?limit=${limit}`, readKey);
 
     expect(response.statusCode).toBe(200);
   });

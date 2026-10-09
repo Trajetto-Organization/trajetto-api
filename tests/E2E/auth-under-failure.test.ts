@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
@@ -155,9 +155,13 @@ describe("a database the API cannot reach", () => {
 
     const original = UserRepository.prototype.findUserById;
 
-    // What Prisma raises when it cannot get a connection.
+    // What Prisma raises when it cannot get a connection. The real class and
+    // code: a plain Error is now (rightly) a bug, answered 500.
     UserRepository.prototype.findUserById = async () => {
-      throw new Error("Can't reach database server at localhost:5432");
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Can't reach database server at localhost:5432",
+        { code: "P1001", clientVersion: Prisma.prismaVersion.client },
+      );
     };
 
     try {
@@ -167,12 +171,15 @@ describe("a database the API cannot reach", () => {
       // in the field being logged out because a database restarted.
       expect(response.statusCode).toBe(503);
       expect(response.json().code).toBe("AUTH_SESSION_UNAVAILABLE");
+      expect(response.headers["retry-after"]).toBe("5");
     } finally {
       UserRepository.prototype.findUserById = original;
     }
   });
 
-  it("recovers on the next request, with no restart", async () => {
+  it("answers 200 again once the stub is gone", async () => {
+    // This only proves the stub above was undone. Recovery from connections
+    // Postgres really dropped is proved in database-reconnect.test.ts.
     const response = await call({ authorization: `Bearer ${token}` });
 
     expect(response.statusCode).toBe(200);
@@ -186,7 +193,10 @@ describe("a database the API cannot reach", () => {
     const original = UserTokensRepository.prototype.hasActiveRefreshTokenFamily;
 
     UserTokensRepository.prototype.hasActiveRefreshTokenFamily = async () => {
-      throw new Error("Connection terminated unexpectedly");
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Server has closed the connection.",
+        { code: "P1017", clientVersion: Prisma.prismaVersion.client },
+      );
     };
 
     try {
@@ -196,6 +206,39 @@ describe("a database the API cannot reach", () => {
       expect(response.statusCode).toBe(503);
     } finally {
       UserTokensRepository.prototype.hasActiveRefreshTokenFamily = original;
+    }
+  });
+});
+
+describe("a bug in the session check", () => {
+  /**
+   * Not every exception in the middleware is the database (GAP6-10).
+   *
+   * The catch used to turn ANY non-AppError into 503 AUTH_SESSION_UNAVAILABLE.
+   * A regression in the eligibility or tenant check that threw a TypeError
+   * for one profile then answered "come back later" to every request of that
+   * user, forever: the app keeps a 5xx in its outbox and retries, the log
+   * had only a console.error without the request id, and nothing alerted.
+   */
+  it("is a 500 with the stack in the log, not a transient 503", async () => {
+    const { UserRepository } = await import(
+      "@/modules/user/repositories/user-repository"
+    );
+
+    const original = UserRepository.prototype.findUserById;
+
+    UserRepository.prototype.findUserById = async () => {
+      throw new TypeError("Cannot read properties of undefined (reading 'role')");
+    };
+
+    try {
+      const response = await call({ authorization: `Bearer ${token}` });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json().code).toBe("INTERNAL_ERROR");
+      expect(response.headers["retry-after"]).toBeUndefined();
+    } finally {
+      UserRepository.prototype.findUserById = original;
     }
   });
 });

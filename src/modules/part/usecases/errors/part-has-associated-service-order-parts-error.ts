@@ -1,12 +1,17 @@
-class PartHasAssociatedServiceOrderPartsError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/**
+ * A part used by service orders stays: the order lines point at it (the
+ * foreign key refuses the delete), and they are the history of what was
+ * spent on each vehicle.
+ */
+class PartHasAssociatedServiceOrderPartsError extends AppError {
   constructor(serviceOrderPartCount: number) {
     super(
-      `Não é possível deletar esta peça pois ela está sendo utilizada em ${serviceOrderPartCount} ordem(ns) de serviço. ` +
-        `\n\nOpções disponíveis:\n` +
-        `• Substituir a peça nas ordens de serviço por outra peça (recomendado)\n` +
-        `• Remover a peça das ordens de serviço antes de deletar\n` +
-        `• Finalizar/cancelar as ordens de serviço que utilizam esta peça\n` +
-        `• Inativar a peça ao invés de deletar`,
+      `Não é possível excluir esta peça: ela está em ${serviceOrderPartCount} lançamento(s) de ordem de serviço, que fazem parte do histórico de custos dos veículos. ` +
+        "Para removê-la, retire-a dessas ordens de serviço antes.",
+      409,
+      "PART_IN_USE",
     );
   }
 }

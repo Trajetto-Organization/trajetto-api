@@ -3,14 +3,8 @@ import { container } from "tsyringe";
 
 import { SendChatMessageUseCase } from "./send-chat-message-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import {
-  ChatDriverNotBelongBusinessError,
-  ChatDriverNotFoundError,
-} from "../errors/chat-errors";
-
-import { DeliveryNotFoundError } from "@/modules/delivery/usecases/errors/delivery-errors";
 import { sendChatMessageSchema } from "@/schemas/send-chat-message-schema";
+import { idempotencyKeyOf } from "@/shared/http/idempotency-key";
 
 class SendChatMessageController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -18,49 +12,46 @@ class SendChatMessageController {
 
     const {
       driverIds,
+      audience,
       kind,
       body,
       attachmentKey,
       durationMs,
       deliveryId,
+      routeId,
       clientSubmissionId,
       businessId,
+      ticketId,
     } = sendChatMessageSchema.parse(request.body);
 
     const sendChatMessageUseCase = container.resolve(SendChatMessageUseCase);
 
-    try {
-      const { data } = await sendChatMessageUseCase.execute({
-        userId: id,
-        driverIds,
-        kind,
-        body,
-        attachmentKey,
-        durationMs,
-        deliveryId,
-        clientSubmissionId,
-        businessId,
-      });
+    // The chat's not-found answers (driver, delivery, route) are AppErrors:
+    // the global handler sends each one's 404 with its code.
+    const { data, outcomes, summary } = await sendChatMessageUseCase.execute({
+      userId: id,
+      driverIds,
+      audience,
+      kind,
+      body,
+      attachmentKey,
+      durationMs,
+      deliveryId,
+      routeId,
+      clientSubmissionId,
+      businessId,
+      // The header keys a mass notice per driver, and a single send that
+      // carries no body key (see broadcastKey).
+      broadcastKey: idempotencyKeyOf(request.headers),
+      ticketId,
+    });
 
-      return reply.status(201).send({
-        message: "Mensagem enviada!",
-        data,
-      });
-    } catch (error) {
-      if (
-        error instanceof ResourceNotFoundError ||
-        error instanceof ChatDriverNotFoundError ||
-        error instanceof DeliveryNotFoundError
-      ) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof ChatDriverNotBelongBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(201).send({
+      message: "Mensagem enviada!",
+      data,
+      outcomes,
+      summary,
+    });
   }
 }
 

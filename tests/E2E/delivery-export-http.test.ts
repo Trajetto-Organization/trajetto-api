@@ -236,12 +236,14 @@ beforeAll(async () => {
     data: [
       {
         deliveryId: mine.id,
+        businessId: CARRIER,
         occurrenceTypeId: occurrenceType.id,
         reportedById: reporter.id,
         description: "Ocorrencia do motorista",
       },
       {
         deliveryId: colleagues.id,
+        businessId: CARRIER,
         occurrenceTypeId: occurrenceType.id,
         reportedById: reporter.id,
         description: "Ocorrencia do colega",
@@ -400,6 +402,71 @@ describe("exporting the occurrences", () => {
     const response = await exportOccurrences(otherToken);
 
     expect(rowsOf(response.body)).toHaveLength(0);
+  });
+
+  it("writes the form's answers and the tower's decision (decisions 6.2 and 6.3)", async () => {
+    const type = await prisma.occurrenceType.create({
+      data: {
+        name: "Avaria na carga",
+        blocks_delivery: true,
+        requires_authorization: true,
+        form_version: 1,
+        form_fields: [
+          { key: "volumes", label: "Volumes avariados", type: "number", required: true },
+          { key: "foto_ok", label: "Fotografou a avaria", type: "boolean", required: false },
+        ],
+        businessId: CARRIER,
+      },
+    });
+
+    const delivery = await prisma.delivery.findFirstOrThrow({
+      where: { businessId: CARRIER, driverId: DRIVER },
+    });
+    const decider = await prisma.user.findFirstOrThrow({
+      where: { businessId: CARRIER, driverId: null },
+    });
+
+    const occurrence = await prisma.deliveryOccurrence.create({
+      data: {
+        deliveryId: delivery.id,
+        businessId: CARRIER,
+        occurrenceTypeId: type.id,
+        reportedById: decider.id,
+        description: "Caixas amassadas",
+        form_answers: { volumes: 3, foto_ok: true },
+        form_version: 1,
+        authorization_status: "DENIED",
+        authorizedById: decider.id,
+        authorized_at: new Date("2026-09-24T15:30:00.000Z"),
+        authorization_note: "Siga com a entrega",
+      },
+    });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/delivery/export-occurrence?search=${occurrence.id}`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      const [header] = parseCsv(response.body);
+      const rows = rowsOf(response.body);
+
+      expect(rows).toHaveLength(1);
+
+      const cell = (name: string) => rows[0][header.map(String).indexOf(name)];
+
+      expect(cell("Respostas do formulário")).toBe(
+        "Volumes avariados: 3; Fotografou a avaria: Sim",
+      );
+      expect(cell("Autorização")).toBe("Negada");
+      expect(cell("Decidida por")).toBe(decider.name);
+      expect(cell("Decidida em")).toMatch(/24\/09\/2026/);
+      expect(cell("Motivo da decisão")).toBe("Siga com a entrega");
+    } finally {
+      await prisma.deliveryOccurrence.delete({ where: { id: occurrence.id } });
+      await prisma.occurrenceType.delete({ where: { id: type.id } });
+    }
   });
 
   it("writes whether the type blocks the delivery in words", async () => {

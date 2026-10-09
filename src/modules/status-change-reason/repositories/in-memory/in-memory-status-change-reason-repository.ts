@@ -6,8 +6,16 @@ import {
   CreateStatusChangeReasonProps,
   UpdateStatusChangeReasonProps,
   ListStatusChangeReasonsProps,
-  ListStatusChangeReasonsResult,
+  ListStatusChangeReasonsPage,
 } from "../../dtos/status-change-reason-dto";
+
+import { compareCodePoints, compareForOrder } from "@/shared/pagination/in-memory-order";
+import { requireIndex, uniqueViolation } from "@/shared/in-memory/prisma-errors";
+import { isActiveFilter } from "@/shared/delivery/catalog-list";
+import {
+  STATUS_REASON_SORT_FALLBACK,
+  type StatusReasonGroup,
+} from "../../usecases/list-status-change-reason/status-change-reason-list";
 
 class InMemoryStatusChangeReasonRepository
   implements IStatusChangeReasonRepository
@@ -24,6 +32,18 @@ class InMemoryStatusChangeReasonRepository
    */
   public eventCountByReasonId = new Map<string, number>();
 
+  /** @@unique([businessId, name]), case-sensitive like the index. */
+  private assertUniqueName(candidate: StatusChangeReason): void {
+    const taken = this.statusChangeReasons.some(
+      (entry) =>
+        entry.id !== candidate.id &&
+        entry.businessId === candidate.businessId &&
+        entry.name === candidate.name,
+    );
+
+    if (taken) throw uniqueViolation(["businessId", "name"]);
+  }
+
   async createStatusChangeReason(
     reasonData: CreateStatusChangeReasonProps,
   ): Promise<StatusChangeReason> {
@@ -36,36 +56,78 @@ class InMemoryStatusChangeReasonRepository
       updated_at: new Date(),
     };
 
+    this.assertUniqueName(created);
+
     this.statusChangeReasons.push(created);
 
     return created;
   }
 
+  /**
+   * As statusReasonListWhere/STATUS_REASON_SORT: tenant, search on id, name
+   * and description, the Status filter, ties by created_at desc, id desc, and
+   * the counts over the search alone.
+   */
   async listStatusChangeReasons({
     page,
     pageSize,
     businessId,
     search,
-  }: ListStatusChangeReasonsProps): Promise<ListStatusChangeReasonsResult> {
-    let filtered = this.statusChangeReasons.filter(
-      (reason) => reason.businessId === businessId,
+    sort,
+    order,
+    statuses,
+  }: ListStatusChangeReasonsProps): Promise<ListStatusChangeReasonsPage> {
+    const term = search?.trim().toLowerCase();
+
+    const base = this.statusChangeReasons.filter(
+      (reason) =>
+        reason.businessId === businessId &&
+        (!term ||
+          [reason.id ?? "", reason.name, reason.description ?? ""].some(
+            (value) => value.toLowerCase().includes(term),
+          )),
     );
 
-    if (search) {
-      const term = search.trim().toLowerCase();
+    const isActive = isActiveFilter(statuses);
 
-      filtered = filtered.filter((reason) =>
-        [reason.id ?? "", reason.name, reason.description ?? ""].some((value) =>
-          value.toLowerCase().includes(term),
-        ),
+    const key = sort ?? STATUS_REASON_SORT_FALLBACK.sort;
+    const direction = order ?? (sort ? "asc" : STATUS_REASON_SORT_FALLBACK.order);
+
+    const time = (value: Date | string | undefined) =>
+      value === undefined ? undefined : new Date(value);
+
+    const rows = base
+      .filter(
+        (reason) =>
+          isActive === undefined || (reason.is_active !== false) === isActive,
+      )
+      .sort(
+        (a, b) =>
+          (key === "name"
+            ? compareForOrder(a.name, b.name, direction)
+            : compareForOrder(time(a[key]), time(b[key]), direction)) ||
+          compareForOrder(time(a.created_at), time(b.created_at), "desc") ||
+          compareForOrder(a.id, b.id, "desc"),
       );
+
+    const groups = new Map<boolean, StatusReasonGroup>();
+
+    for (const reason of base) {
+      const active = reason.is_active !== false;
+      const group = groups.get(active) ?? { is_active: active, count: 0 };
+
+      group.count += 1;
+      groups.set(active, group);
     }
 
     const skip = (page - 1) * pageSize;
 
     return {
-      data: filtered.slice(skip, skip + pageSize),
-      total: filtered.length,
+      data: rows.slice(skip, skip + pageSize),
+      groups: Array.from(groups.values()),
+      used: base.filter(
+        (reason) => (this.eventCountByReasonId.get(reason.id!) ?? 0) > 0,
+      ).length,
     };
   }
 
@@ -76,7 +138,8 @@ class InMemoryStatusChangeReasonRepository
       .filter(
         (reason) => reason.businessId === businessId && reason.is_active !== false,
       )
-      .sort((left, right) => left.name.localeCompare(right.name))
+      // `orderBy: { name: "asc" }`: code point order, as Postgres sorts it.
+      .sort((left, right) => compareCodePoints(left.name, right.name))
       .map((reason) => ({
         id: reason.id!,
         name: reason.name,
@@ -103,31 +166,17 @@ class InMemoryStatusChangeReasonRepository
     );
   }
 
-  async countStatusChangeReasonsSummary(businessId: string): Promise<{
-    total: number;
-    active: number;
-    used: number;
-  }> {
-    const own = this.statusChangeReasons.filter(
-      (reason) => reason.businessId === businessId,
-    );
-
-    return {
-      total: own.length,
-      active: own.filter((reason) => reason.is_active !== false).length,
-      used: own.filter(
-        (reason) => (this.eventCountByReasonId.get(reason.id!) ?? 0) > 0,
-      ).length,
-    };
-  }
-
   async updateStatusChangeReason(
     reasonId: string,
     reasonData: UpdateStatusChangeReasonProps,
   ): Promise<StatusChangeReason> {
-    const reason = this.statusChangeReasons.find(
-      (entry) => entry.id === reasonId,
-    )!;
+    // P2025 like Prisma; `find(...)!` used to crash with a TypeError.
+    const reason =
+      this.statusChangeReasons[requireIndex(this.statusChangeReasons, (entry) => entry.id === reasonId)];
+
+    if (reasonData.name !== undefined && reasonData.name !== null) {
+      this.assertUniqueName({ ...reason, name: reasonData.name });
+    }
 
     Object.assign(reason, {
       ...(reasonData.name !== undefined &&
@@ -147,8 +196,11 @@ class InMemoryStatusChangeReasonRepository
   async deleteStatusChangeReason(
     reasonId: string,
   ): Promise<StatusChangeReason> {
-    const index = this.statusChangeReasons.findIndex(
+    // P2025 like Prisma; `splice(-1, 1)` used to delete the last reason.
+    const index = requireIndex(
+      this.statusChangeReasons,
       (reason) => reason.id === reasonId,
+      "delete",
     );
 
     const [removed] = this.statusChangeReasons.splice(index, 1);

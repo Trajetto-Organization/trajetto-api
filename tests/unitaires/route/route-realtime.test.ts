@@ -28,7 +28,7 @@ function stop(overrides: Partial<RouteStop> = {}): RouteStop {
     sequence: 10,
     status: "COMPLETED",
     arrived_at: null,
-    completed_at: new Date(),
+    completed_at: new Date("2026-09-17T14:32:00.000Z"),
     routeId: "route-1",
     deliveryId: "delivery-1",
     created_at: new Date(),
@@ -44,6 +44,7 @@ function closedRoute(): Route {
     name: null,
     status: "COMPLETED",
     scheduled_date: new Date(),
+    destination: null,
     planned_departure_at: null,
     planned_arrival_at: null,
     started_at: new Date(),
@@ -53,6 +54,9 @@ function closedRoute(): Route {
     driverId: "driver-1",
     vehicleId: "vehicle-1",
     importId: null,
+    plan_version: 0,
+    released_at: null,
+    client_submission_id: null,
     created_at: new Date(),
     updated_at: new Date(),
   };
@@ -69,13 +73,25 @@ describe("what the operation's screens are told", () => {
     expect(emitted).toHaveLength(1);
     expect(emitted[0].id).toBe(BUSINESS);
 
+    // completedAt: the board's live-patched dot says "às HH:mm" without
+    // waiting for its next refetch (tower).
     expect(emitted[0].event).toEqual({
       type: "route-stop.settled",
       routeId: "route-1",
       stopId: "stop-1",
       stopStatus: "COMPLETED",
       deliveryId: "delivery-1",
+      completedAt: "2026-09-17T14:32:00.000Z",
     });
+  });
+
+  it("sends a null completion for a stop settled without one", () => {
+    announceStopSettled(BUSINESS, {
+      stop: stop({ status: "CANCELLED", completed_at: null }),
+      closedRoute: null,
+    });
+
+    expect(emitted[0].event.completedAt).toBeNull();
   });
 
   it("announces an arrival the same way as a proof", () => {

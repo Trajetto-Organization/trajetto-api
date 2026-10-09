@@ -6,6 +6,7 @@ import {
   UpdateFuelType,
   SearchFuelTypeWithCursorProps,
   CursorPaginatedFuelType,
+  FuelTypeUsage,
 } from "../dtos/fuel-type-dto";
 
 interface IFuelTypeRepository {
@@ -30,6 +31,8 @@ interface IFuelTypeRepository {
   searchFuelTypeWithCursor: (
     props: SearchFuelTypeWithCursorProps,
   ) => Promise<CursorPaginatedFuelType>;
+  /** Vehicles and refuelings pointing at the fuel type, counted in one read. */
+  countFuelTypeUsage: (fuelTypeId: string) => Promise<FuelTypeUsage>;
 }
 
 export { IFuelTypeRepository };

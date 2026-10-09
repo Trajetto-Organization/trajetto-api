@@ -4,7 +4,6 @@ import { container } from "tsyringe";
 import { z } from "zod";
 import { GetActivitySummaryUseCase } from "./get-activity-summary-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { activitySummarySchema } from "@/schemas/activity-summary-schema";
 
 class GetActivitySummaryController {
@@ -19,21 +18,13 @@ class GetActivitySummaryController {
       GetActivitySummaryUseCase,
     );
 
-    try {
-      const summary = await getActivitySummaryUseCase.execute({
-        userId: id,
-        businessId,
-        periodDays: period === "30d" ? 30 : 7,
-      });
+    const summary = await getActivitySummaryUseCase.execute({
+      userId: id,
+      businessId,
+      periodDays: period === "30d" ? 30 : 7,
+    });
 
-      return reply.status(200).send({ data: summary });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(200).send({ data: summary });
   }
 }
 

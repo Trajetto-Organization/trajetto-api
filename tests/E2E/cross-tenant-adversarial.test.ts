@@ -338,7 +338,7 @@ const call = (
  * worse than no test — it gives the impression of coverage exactly where there
  * is none.
  *
- * So 422/"Validation Error" is a FAILURE here: it means the request never got
+ * So 422/VALIDATION_ERROR is a FAILURE here: it means the request never got
  * where it needed to go.
  */
 function expectRefused(response: { statusCode: number; body: string }, what: string) {
@@ -352,7 +352,7 @@ function expectRefused(response: { statusCode: number; body: string }, what: str
   expect(
     response.body,
     `${what} foi recusado pelo SCHEMA, não pela regra: ${response.body.slice(0, 200)}`,
-  ).not.toContain("Validation Error");
+  ).not.toContain('"code":"VALIDATION_ERROR"');
 
   expect(response.statusCode, `${what} foi recusado pelo schema`).not.toBe(422);
 
@@ -445,8 +445,9 @@ describe("rewriting another company’s driver", () => {
 
 describe("stealing another company’s part", () => {
   it("is refused even when a businessId is sent in the body", async () => {
-    // O exploit exato: a verificação de posse vivia num `else`, e mandar
-    // qualquer `businessId` tomava o outro ramo e a pulava.
+    // The exact exploit: the ownership check lived in an `else`, and any
+    // body `businessId` took the other branch and skipped it. Since decision
+    // 16.100 the schema refuses the field itself, before any rule runs.
     const response = await call(
       "PATCH",
       `/part/update-part/${created.partB}/business/${A}`,
@@ -454,7 +455,8 @@ describe("stealing another company’s part", () => {
       { businessId: A, description: "Reparentada" },
     );
 
-    expectRefused(response, "update-part");
+    expect(response.statusCode, response.body).toBe(400);
+    expect(JSON.parse(response.body).code).toBe("VALIDATION_ERROR");
 
     const after = await prisma.part.findUniqueOrThrow({
       where: { id: created.partB },
@@ -574,7 +576,9 @@ describe("a driver closing their own delivery without proving it", () => {
       "PATCH",
       `/delivery/update-delivery-status/${delivery.id}/business/${A}`,
       driverTokenA,
-      { status: "DELIVERED", reasonId: reason.id },
+      // A well-formed body (decision 5.3 requires who received it), so the
+      // refusal below is the rule's and not the schema's.
+      { status: "DELIVERED", reasonId: reason.id, received_by: "Portaria" },
     );
 
     expectRefused(response, "override de status como motorista");

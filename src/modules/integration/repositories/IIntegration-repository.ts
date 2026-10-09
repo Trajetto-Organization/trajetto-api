@@ -3,6 +3,8 @@ import type {
   PublicRoute,
 } from "@/shared/integration/public-shapes";
 
+import type { StoredDelivery } from "../usecases/create-delivery/replay-fingerprint";
+
 interface CursorPage<T> {
   data: T[];
 
@@ -63,6 +65,17 @@ interface IIntegrationRepository {
       data: Record<string, unknown>;
     }>
   >;
+
+  /**
+   * The delivery a create with this Idempotency-Key already made in this
+   * company, in the fields the create wrote — what a retry is compared with
+   * (decision 5.10). The unique (businessId, client_submission_id) index
+   * answers it.
+   */
+  findSubmission: (
+    businessId: string,
+    idempotencyKey: string,
+  ) => Promise<(StoredDelivery & { id: string }) | null>;
 }
 
 export type { CursorPage, IIntegrationRepository, IntegrationListProps };

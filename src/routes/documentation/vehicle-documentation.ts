@@ -3,15 +3,19 @@ import { z } from "zod";
 import { createVehicleSchema } from "@/schemas/create-vehicle-schema";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
-import { updateDeleteVehicleSchema } from "@/schemas/update-delete-vehicle-schema";
 
 import { updateVehicleSchema } from "@/schemas/update-vehicle-schema";
-
-import { listPagesSchema } from "@/schemas/list-pages-schema";
-import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
+import {
+  exportVehicleSchema,
+  listVehicleSchema,
+} from "@/schemas/list-vehicle-schema";
 
 import { getVehicleSchema } from "@/schemas/get-vehicle-schema";
-import { exportReports } from "@/schemas/export-reports-schema";
+import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
+
+import { searchMetaDoc } from "@/shared/pagination/list-meta";
+
+import { errorResponse } from "./common-responses";
 
 const vehicleBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
@@ -21,421 +25,182 @@ const vehicleBusinessParams = z.object({
 const vehicleSchemas = {
   createVehicle: createVehicleSchema,
   updateVehicle: updateVehicleSchema,
-  listVehicle: listPagesSchema,
-  listVehicleBusinessSchema: listPagesByBusinessSchema,
+  listVehicle: listVehicleSchema,
   businessIdParam: updateDeleteBusinessSchema,
-  vehicleIdParam: updateDeleteVehicleSchema,
   vehicleBusinessParams: vehicleBusinessParams,
   getVehicle: getVehicleSchema,
-  exportVehicleQuery: exportReports,
-  searchVehicleCursor: z.object({
-    limit: z
-      .string()
-      .optional()
-      .describe("Número máximo de empresas a retornar (padrão: 10)"),
-    cursor: z
-      .string()
-      .optional()
-      .describe("ID da última empresa da página anterior para paginação"),
-    search: z.string().trim().max(100).optional(),
-    businessId: z.string().describe("ID da empresa"),
-  }),
+  exportVehicleQuery: exportVehicleSchema,
+  searchVehicleCursor: cursorPaginationByBusinessSchema,
 };
 
-const vehicleResponses = {
-  searchVehicleStreamDescription: z.object({
-    description: z
-      .string()
-      .default(
-        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are vehicle objects.",
-      ),
-  }),
-  vehicleCreated: z.object({
-    message: z.string().default("Veículo criado com sucesso!"),
-  }),
+const dateLike = z.union([z.string(), z.date()]);
 
-  vehicleList: z.object({
-    data: z.array(
-      z.object({
-        id: z.string(),
+const statusEnum = z
+  .enum(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"])
+  .describe("IN_ROUTE é escrito pela rota; as pessoas escolhem entre os outros três.");
+
+/** One line of GET /vehicle/list-vehicle. */
+const vehicleListItem = z.object({
+  id: z.string(),
+  description: z.string(),
+  license_plate: z.string().describe("Sempre em maiúsculas."),
+  brand: z.string(),
+  model: z.string(),
+  acquisition_date: dateLike,
+  fleet_type: z.enum(["OWNED", "THIRD_PARTY"]),
+  fleet_id: z.string().nullable(),
+  last_maintenance_date: dateLike.nullable(),
+  current_mileage: z.number(),
+  last_maintenance_mileage: z.number().nullable(),
+  maintenance_interval_km: z.number(),
+  maintenance_interval_months: z.number().int(),
+  renavam: z.string(),
+  manufacturing_year: dateLike.describe("1º de janeiro do ano (UTC); só o ano conta."),
+  model_year: dateLike.describe("1º de janeiro do ano (UTC); só o ano conta."),
+  km_per_liter: z.number().describe("Até duas casas decimais."),
+  number_of_axles: z.number().int(),
+  status: statusEnum,
+  vehicleTypeId: z.string().nullable(),
+  fuelTypeId: z.string(),
+  driverId: z.string().nullable().describe("O motorista responsável (fixo)."),
+  branchId: z.string().nullable(),
+  businessId: z.string(),
+  created_at: dateLike,
+  updated_at: dateLike,
+  vehicleType: z.object({ description: z.string() }).nullable(),
+  fuelType: z.object({ description: z.string() }).nullable(),
+  driver: z.object({ name: z.string(), cnh: z.string() }).nullable(),
+  branch: z.object({ corporate_reason: z.string() }).nullable(),
+});
+
+/** One line of the picker search, as a fleet reader receives it. */
+const vehicleSearchItem = vehicleListItem
+  .omit({ vehicleType: true, fuelType: true, branch: true, driver: true })
+  .extend({
+    driver: z
+      .object({ name: z.string() })
+      .nullable()
+      .describe("O motorista responsável, para o seletor dizer de quem é o veículo."),
+    vehicleType: z
+      .object({
         description: z.string(),
-        license_plate: z.string(),
-        brand: z.string(),
-        model: z.string(),
-        acquisition_date: z.union([z.string(), z.date()]),
-        fleet_type: z.enum(["OWNED", "THIRD_PARTY"]),
-        fleet_id: z.string().nullable(),
-        last_maintenance_date: z.union([z.string(), z.date()]).nullable(),
-        current_mileage: z.number(),
-        last_maintenance_mileage: z.number().nullable(),
-        maintenance_interval_km: z.number(),
-        maintenance_interval_months: z.number(),
-        renavam: z.string(),
-        manufacturing_year: z.number(),
-        model_year: z.number(),
-        km_per_liter: z.number(),
-        number_of_axles: z.number(),
-        status: z.enum(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"]),
-        vehicleTypeId: z.string().nullable(),
-        fuelTypeId: z.string(),
-        driverId: z.string().nullable(),
-        branchId: z.string().nullable(),
-        businessId: z.string(),
-        last_fuel_mileage: z.number().nullable().optional(),
-        last_fuel_date: z.union([z.string(), z.date()]).nullable().optional(),
-        created_at: z.union([z.string(), z.date()]),
-        updated_at: z.union([z.string(), z.date()]),
-        vehicleType: z
-          .object({
-            description: z.string(),
-          })
-          .nullable()
-          .optional(),
-        fuelType: z
-          .object({
-            description: z.string(),
-          })
-          .optional(),
-        driver: z
-          .object({
-            name: z.string(),
-            cnh: z.string(),
-          })
-          .nullable()
-          .optional(),
-        branch: z
-          .object({
-            corporate_reason: z.string(),
-          })
-          .nullable()
-          .optional(),
-        business: z
-          .object({
-            corporate_reason: z.string(),
-          })
-          .optional(), // Only for MASTER role
-      }),
-    ),
-    total: z.number(),
-  }),
+        required_cnh_category: z
+          .enum(["A", "B", "C", "D", "E", "AB", "AC", "AD", "AE"])
+          .nullable(),
+      })
+      .nullable()
+      .describe(
+        "O tipo e a categoria de CNH que ele exige, para a atribuição avisar quando a do motorista não cobre (decisão 8.5).",
+      ),
+  })
+  .partial()
+  .required({ id: true, description: true, license_plate: true, status: true })
+  .describe(
+    "Quem tem leitura de veículos recebe o cadastro inteiro. Quem só entra pela escrita de Entregas (despacho) recebe apenas id, description, license_plate, brand, model, status, businessId, driverId, vehicleTypeId, driver.name e vehicleType (descrição e CNH exigida).",
+  );
 
-  listVehicleBusinessErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
+/** GET /vehicle/list-vehicle `meta.searchMeta`, as summarizeVehicleList builds it. */
+const vehicleListSearchMetaDoc = searchMetaDoc(
+  {
+    total: z
+      .number()
+      .int()
+      .describe("Veículos da busca e dos demais filtros, sem o de status (o total dos cartões)."),
+    statusCounts: z
+      .object({
+        ACTIVE: z.number().int(),
+        INACTIVE: z.number().int(),
+        BLOCKED: z.number().int(),
+        IN_ROUTE: z.number().int(),
+      })
+      .describe("Os quatro status sobre a mesma base de `total`; somam `total`."),
+  },
+  ["status", "branchId"],
+);
 
-  vehicleUpdated: z.object({
-    message: z.string().default("Veículo atualizado com sucesso!"),
-  }),
+const message = (text: string) => z.object({ message: z.string().default(text) });
 
-  vehicleDeleted: z.object({
-    message: z.string().default("Veículo deletado com sucesso!"),
-  }),
+const vehicleResponses = {
+  vehicleCreated: message("Veículo criado com sucesso!"),
+  vehicleUpdated: message("Veículo atualizado com sucesso!"),
+  vehicleDeleted: message("Veículo deletado com sucesso!"),
+
+  vehicleListItem,
+  vehicleSearchItem,
 
   vehicleReturned: z.object({
-    id: z.string().describe("Vehicle ID"),
-    description: z.string().describe("Vehicle description"),
-    license_plate: z.string().describe("Vehicle license plate"),
-    brand: z.string().describe("Vehicle brand"),
-    model: z.string().describe("Vehicle model"),
-    acquisition_date: z
-      .union([z.string(), z.date()])
-      .describe("Vehicle acquisition date"),
-    fleet_type: z.enum(["OWNED", "THIRD_PARTY"]).describe("Fleet type"),
-    fleet_id: z
-      .string()
+    id: z.string().describe("ID do veículo"),
+    description: z.string().describe("Descrição"),
+    license_plate: z.string().describe("Placa, em maiúsculas"),
+    brand: z.string().describe("Marca"),
+    model: z.string().describe("Modelo"),
+    acquisition_date: dateLike.describe("Data de aquisição"),
+    fleet_type: z.enum(["OWNED", "THIRD_PARTY"]).describe("Frota própria ou terceirizada"),
+    fleet_id: z.string().nullable().optional().describe("Identificador na frota"),
+    last_maintenance_date: dateLike
       .nullable()
       .optional()
-      .describe("Fleet ID if third party"),
-    last_maintenance_date: z
-      .union([z.string(), z.date()])
-      .nullable()
-      .optional()
-      .describe("Last maintenance date"),
-    current_mileage: z.number().describe("Current vehicle mileage"),
+      .describe("Data da última manutenção"),
+    current_mileage: z.number().describe("Quilometragem atual"),
     last_maintenance_mileage: z
       .number()
       .nullable()
       .optional()
-      .describe("Mileage at last maintenance"),
-    maintenance_interval_km: z
-      .number()
-      .describe("Maintenance interval in kilometers"),
-    maintenance_interval_months: z
-      .number()
-      .describe("Maintenance interval in months"),
-    renavam: z.string().describe("Vehicle RENAVAM number"),
-    manufacturing_year: z
-      .union([z.string(), z.date()])
-      .describe("Vehicle manufacturing year"),
-    model_year: z.union([z.string(), z.date()]).describe("Vehicle model year"),
-    km_per_liter: z.number().describe("Fuel efficiency in km per liter"),
-    number_of_axles: z.number().describe("Number of vehicle axles"),
-    status: z
-      .enum(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"])
-      .describe("Vehicle status"),
-    businessId: z.string().describe("Business ID"),
-    vehicleTypeId: z.string().nullable().optional().describe("Vehicle type ID"),
-    fuelTypeId: z.string().describe("Fuel type ID"),
-    driverId: z.string().nullable().optional().describe("Assigned driver ID"),
-    branchId: z.string().nullable().optional().describe("Assigned branch ID"),
+      .describe("Quilometragem da última manutenção"),
+    maintenance_interval_km: z.number().describe("Intervalo de revisão em km"),
+    maintenance_interval_months: z.number().describe("Intervalo de revisão em meses"),
+    renavam: z.string().describe("RENAVAM"),
+    manufacturing_year: dateLike.describe("Ano de fabricação (1º de janeiro, UTC)"),
+    model_year: dateLike.describe("Ano do modelo (1º de janeiro, UTC)"),
+    km_per_liter: z.number().describe("Consumo em km/l, até duas casas decimais"),
+    number_of_axles: z.number().describe("Número de eixos"),
+    status: statusEnum,
+    businessId: z.string().describe("ID da empresa"),
+    vehicleTypeId: z.string().nullable().optional().describe("ID do tipo de veículo"),
+    fuelTypeId: z.string().describe("ID do tipo de combustível"),
+    driverId: z.string().nullable().optional().describe("ID do motorista responsável"),
+    branchId: z.string().nullable().optional().describe("ID da filial"),
     last_fuel_mileage: z
       .number()
       .nullable()
       .optional()
-      .describe("Mileage at last fuel refill"),
-    last_fuel_date: z
-      .union([z.string(), z.date()])
+      .describe("Quilometragem do último abastecimento"),
+    last_fuel_date: dateLike
       .nullable()
       .optional()
-      .describe("Date of last fuel refill"),
-    created_at: z
-      .union([z.string(), z.date()])
-      .describe("Vehicle creation timestamp"),
-    updated_at: z
-      .union([z.string(), z.date()])
-      .describe("Vehicle last update timestamp"),
+      .describe("Data do último abastecimento"),
+    created_at: dateLike.describe("Criado em"),
+    updated_at: dateLike.describe("Atualizado em"),
   }),
 
-  // Common Error Responses
-  internalServerError: z.object({
-    message: z.string().default("Internal server error"),
-  }),
-
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-
-  validationError: z.object({
-    message: z.string().default("Validation Error"),
-    issues: z.array(z.string()),
-  }),
-
-  vehicleNotFound: z.object({
-    message: z.string().default("Veículo não encontrado!"),
-  }),
-
-  businessNotFound: z.object({
-    message: z
-      .string()
-      .default("Empresa não encontrada! Por favor, tente novamente."),
-  }),
-
-  vehicleTypeNotFound: z.object({
-    message: z.string().default("Tipo de veículo não encontrado."),
-  }),
-
-  fuelTypeNotFound: z.object({
-    message: z.string().default("Tipo de combustível não encontrado."),
-  }),
-
-  driverNotFound: z.object({
-    message: z.string().default("Motorista não encontrado."),
-  }),
-
-  branchNotFound: z.object({
-    message: z.string().default("Filial não encontrada."),
-  }),
-
-  vehicleAlreadyExists: z.object({
-    message: z
-      .string()
-      .default("Este veículo já foi cadastrado para esta empresa!"),
-  }),
-
-  vehicleInUse: z.object({
-    message: z
-      .string()
-      .default(
-        "Não é possível excluir este veículo pois ele está sendo usado em ordens de serviço.",
-      ),
-  }),
-
-  vehicleRenavamExists: z.object({
-    message: z
-      .string()
-      .default("Um veículo com este RENAVAM já foi cadastrado!"),
-  }),
-
-  // Grouping errors by route
-  createVehicleErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Tipo de veículo não encontrado."),
-    }),
-    z.object({
-      message: z.string().default("Tipo de combustível não encontrado."),
-    }),
-    z.object({
-      message: z.string().default("Motorista não encontrado."),
-    }),
-    z.object({
-      message: z.string().default("Filial não encontrada."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este veículo já foi cadastrado para esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Um veículo com este RENAVAM já foi cadastrado!"),
-    }),
-  ]),
-
-  createVehicleForbiddenErrors: z.union([
-    z.object({
-      message: z
-        .string()
-        .default("Este tipo de veículo não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este tipo de combustível não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este motorista não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z.string().default("Esta filial não pertence a esta empresa!"),
-    }),
-  ]),
-
-  listVehicleErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-  ]),
-
-  updateVehicleErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Veículo não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Tipo de veículo não encontrado."),
-    }),
-    z.object({
-      message: z.string().default("Tipo de combustível não encontrado."),
-    }),
-    z.object({
-      message: z.string().default("Motorista não encontrado."),
-    }),
-    z.object({
-      message: z.string().default("Filial não encontrada."),
-    }),
-  ]),
-
-  updateVehicleForbiddenErrors: z.union([
-    z.object({
-      message: z.string().default("Este veículo não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este tipo de veículo não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este tipo de combustível não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este motorista não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z.string().default("Esta filial não pertence a esta empresa!"),
-    }),
-  ]),
-
-  deleteVehicleErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Veículo não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Empresa não encontrada!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Não é possível excluir este veículo pois ele está sendo usado em ordens de serviço.",
-        ),
-    }),
-  ]),
-
-  deleteVehicleForbiddenErrors: z.object({
-    message: z.string().default("Este veículo não pertence a esta empresa!"),
-  }),
-
-  getVehicleErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Veículo não encontrado!"),
-    }),
-  ]),
-
-  // Export errors (GET /export-vehicle)
-  exportVehicleErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Não existem veículos para exportar!"),
-    }),
-  ]),
+  // Every refusal leaves in the handler's shape (`code` + `message`); the
+  // descriptions list the codes a client branches on.
+  validationError: errorResponse.describe(
+    "VALIDATION_ERROR (campo inválido, ordenação ou filtro fora da lista), BUSINESS_NOT_IDENTIFIED (MASTER sem empresa), VEHICLE_MODEL_YEAR_INVALID, VEHICLE_MILEAGE_READ_ONLY, VEHICLE_MAINTENANCE_MILEAGE_INVALID, VEHICLE_STATUS_DERIVED ou um cadastro relacionado (tipo, combustível, motorista, filial) que não existe nesta empresa.",
+  ),
+  forbidden: errorResponse.describe(
+    "PERMISSION_DENIED (inclui o motorista na listagem da frota) ou VEHICLE_NOT_ASSIGNED_TO_DRIVER (o motorista pediu um veículo que não é o dele nem o da rota liberada ou em andamento).",
+  ),
+  notFound: errorResponse.describe(
+    "VEHICLE_NOT_FOUND, BUSINESS_NOT_FOUND ou USER_NOT_FOUND (o usuário da sessão não existe mais). Um veículo de outra empresa responde exatamente como um inexistente.",
+  ),
+  // The list only looks the session user up; no vehicle id to miss.
+  sessionUserNotFound: errorResponse.describe(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
+  createConflict: errorResponse.describe(
+    "VEHICLE_PLATE_TAKEN ou VEHICLE_RENAVAM_TAKEN (já existe nesta empresa) e VEHICLE_LIMIT_REACHED (frota contratada cheia).",
+  ),
+  updateConflict: errorResponse.describe(
+    "VEHICLE_PLATE_TAKEN, VEHICLE_RENAVAM_TAKEN, VEHICLE_LIMIT_REACHED (reativação além do contrato), VEHICLE_IN_ACTIVE_ROUTE (com rota em andamento só é possível bloquear) ou VEHICLE_HAS_OPEN_ROUTES (inativar com rotas planejadas, liberadas ou em andamento; a mensagem traz as contagens).",
+  ),
+  deleteConflict: errorResponse.describe(
+    "VEHICLE_IN_USE: multas, abastecimentos, OS, checklists, contas a pagar, entregas ou rotas ainda apontam para o veículo; a mensagem traz a contagem e o que fazer.",
+  ),
+  exportError: errorResponse.describe(
+    "NOTHING_TO_EXPORT (nenhum veículo na busca e nos filtros) ou BUSINESS_NOT_IDENTIFIED.",
+  ),
+  internalServerError: errorResponse,
 };
 
-export { vehicleSchemas, vehicleResponses };
+export { vehicleSchemas, vehicleResponses, vehicleListSearchMetaDoc };

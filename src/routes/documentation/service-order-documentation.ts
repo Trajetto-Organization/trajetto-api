@@ -5,11 +5,46 @@ import { createServiceOrderSchema } from "@/schemas/create-service-order-schema"
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateServiceOrderSchema } from "@/schemas/update-service-order-schema";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
-import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
+import {
+  exportServiceOrderSchema,
+  listServiceOrderSchema,
+} from "@/schemas/list-service-order-schema";
 
-import { exportReports } from "@/schemas/export-reports-schema";
+import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
 import { updateDeleteVehicleSchema } from "@/schemas/update-delete-vehicle-schema";
+
+import { searchMetaDoc } from "@/shared/pagination/list-meta";
+import { errorResponse } from "./common-responses";
+
+/**
+ * Every error body these routes send: `code` is what a client branches on,
+ * and a schema listing only `message` stripped it on the way out (the zod
+ * serializer drops unknown keys).
+ */
+const codedError = (description: string) => errorResponse.describe(description);
+
+/**
+ * The list's `meta.searchMeta`, as summarizeServiceOrderList builds it: the
+ * cards and the options of the three server-side filters.
+ */
+const serviceOrderSearchMetaDoc = searchMetaDoc(
+  {
+    total: z
+      .number()
+      .int()
+      .describe(
+        "Ordens da busca e dos demais filtros, sem o de situação (abertas + concluídas).",
+      ),
+    open: z.number().int().describe("Das quais sem data de conclusão."),
+    completed: z.number().int().describe("Das quais concluídas."),
+    totalAmount: z
+      .number()
+      .describe(
+        "Soma do valor total (total_amount) das ordens que a tabela mostra, com todos os filtros.",
+      ),
+  },
+  ["status", "maintenanceType", "branchId"],
+);
 
 const serviceOrderBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
@@ -18,26 +53,13 @@ const serviceOrderBusinessParams = z.object({
 
 const serviceOrderSchemas = {
   createServiceOrder: createServiceOrderSchema,
-  listServiceOrder: listPagesSchema,
-  listServiceOrderBusinessSchema: listPagesByBusinessSchema,
+  listServiceOrder: listServiceOrderSchema,
   updateServiceOrder: updateServiceOrderSchema,
   searchServiceOrderByVehicleParams: updateDeleteVehicleSchema,
   businessIdParam: updateDeleteBusinessSchema,
   serviceOrderBusinessParams: serviceOrderBusinessParams,
-  exportServiceOrderQuery: exportReports,
-  searchServiceOrderBusinessCursor: z.object({
-    limit: z
-      .string()
-      .optional()
-      .describe("Número máximo de ordens de serviço a retornar (padrão: 10)"),
-    cursor: z
-      .string()
-      .optional()
-      .describe(
-        "ID da última ordem de serviço da página anterior para paginação",
-      ),
-    businessId: z.string().describe("ID da empresa"),
-  }),
+  exportServiceOrderQuery: exportServiceOrderSchema,
+  searchServiceOrderBusinessCursor: cursorPaginationByBusinessSchema,
   searchServiceOrderByVehicleCursor: z.object({
     limit: z
       .string()
@@ -53,13 +75,6 @@ const serviceOrderSchemas = {
 };
 
 const serviceOrderResponses = {
-  searchServiceOrderStreamDescription: z.object({
-    description: z
-      .string()
-      .default(
-        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are service order objects.",
-      ),
-  }),
   serviceOrderCreated: z.object({
     message: z.string().default("Ordem de serviço criada com sucesso!"),
   }),
@@ -91,14 +106,14 @@ const serviceOrderResponses = {
         location_source: z.string().nullable(),
         location_edited_by: z.string().nullable(),
         location_edited_at: z.union([z.string(), z.date()]).nullable(),
-        created_from: z.enum(["WEB", "MOBILE", "WEB_DASHBOARD"]),
+        created_from: z.enum(["MOBILE_APP", "WEB_DASHBOARD"]),
         created_at: z.union([z.string(), z.date()]),
         updated_at: z.union([z.string(), z.date()]),
         business: z
           .object({
             corporate_reason: z.string(),
           })
-          .optional(), // Only for MASTER role
+          .optional(),
         vehicle: z
           .object({
             license_plate: z.string(),
@@ -129,6 +144,7 @@ const serviceOrderResponses = {
               id: z.string(),
               quantity: z.number(),
               unit_price: z.number(),
+              discount_percentage: z.number().nullable(),
               serviceOrderId: z.string(),
               partId: z.string(),
               part: z.object({
@@ -138,25 +154,32 @@ const serviceOrderResponses = {
             }),
           )
           .optional(),
+        parts_total: z
+          .number()
+          .optional()
+          .describe(
+            "Na listagem: soma das peças (preço × quantidade − desconto). O valor total é digitado (mão de obra + peças); a tela avisa quando as peças sozinhas passam dele.",
+          ),
+        parts_count: z
+          .number()
+          .int()
+          .optional()
+          .describe("Na listagem: quantas peças a ordem tem."),
+        accounts_payable_count: z
+          .number()
+          .int()
+          .optional()
+          .describe(
+            "Na listagem: contas a pagar vinculadas. Com alguma, a ordem não pode ser excluída.",
+          ),
       }),
     ),
     total: z.number(),
   }),
 
-  listServiceOrderBusinessErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
+  listServiceOrderBusinessErrors: codedError(
+    "VALIDATION_ERROR: limite, cursor ou busca inválidos. BUSINESS_NOT_IDENTIFIED: o MASTER não informou a empresa.",
+  ),
 
   serviceOrderUpdated: z.object({
     message: z.string().default("Ordem de serviço atualizada com sucesso!"),
@@ -164,220 +187,52 @@ const serviceOrderResponses = {
 
   serviceOrderDeleted: z.object({
     message: z.string().default("Ordem de serviço deletada com sucesso!"),
+    partsRemoved: z
+      .number()
+      .int()
+      .describe("Peças da ordem removidas junto com ela."),
   }),
 
-  // Common Error Responses
+  /** The list's meta line: pager total, cards and filter options. */
+  serviceOrderSearchMeta: serviceOrderSearchMetaDoc,
+
+  genericError: errorResponse,
+
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
   }),
 
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
+  createServiceOrderErrors: codedError(
+    "VALIDATION_ERROR: um campo foi recusado (issues diz qual). VEHICLE_NOT_FOUND, SUPPLIER_NOT_FOUND ou RESPONSIBLE_USER_NOT_FOUND: o veículo, o fornecedor ou o responsável não existe ou é de outra empresa — a mesma resposta, que não confirma que o ID existe. SERVICE_ORDER_COMPLETION_BEFORE_DATE: conclusão antes da data da ordem. SERVICE_ORDER_MILEAGE_REQUIRED: concluída sem a nova quilometragem. SERVICE_ORDER_MILEAGE_BEHIND: nova quilometragem menor que a do veículo. LOCATION_REQUIRED ou LOCATION_ORIGINAL_REQUIRED: registro do app sem a localização exigida. LOCATION_ADJUSTMENT_TOO_FAR: o ponto ajustado à mão está a mais de 500 m do capturado pelo GPS.",
+  ),
 
-  validationError: z.object({
-    message: z.string().default("Validation Error"),
-    issues: z.array(z.string()),
-  }),
+  updateServiceOrderErrors: codedError(
+    "VALIDATION_ERROR: um campo foi recusado (issues diz qual). VEHICLE_NOT_FOUND, SUPPLIER_NOT_FOUND ou RESPONSIBLE_USER_NOT_FOUND: o vínculo não existe ou é de outra empresa (a mesma resposta). SERVICE_ORDER_COMPLETION_BEFORE_DATE, SERVICE_ORDER_MILEAGE_REQUIRED ou SERVICE_ORDER_MILEAGE_BEHIND: como na criação; numa ordem já concluída, SERVICE_ORDER_MILEAGE_BEHIND compara a correção com a quilometragem da abertura da ordem. SERVICE_ORDER_MILEAGE_AHEAD: a correção passa o hodômetro, e há manutenção registrada depois desta ordem.",
+  ),
 
-  serviceOrderNotFound: z.object({
-    message: z.string().default("Ordem de serviço não encontrada!"),
-  }),
+  serviceOrderNotFound: codedError(
+    "SERVICE_ORDER_NOT_FOUND: a ordem não existe ou é de outra empresa — a mesma resposta, que não confirma que o ID existe. BRANCH_NOT_FOUND: a filial informada não existe ou é de outra empresa. TENANT_NOT_FOUND ou BUSINESS_NOT_FOUND: a empresa do caminho não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
-  businessNotFound: z.object({
-    message: z
-      .string()
-      .default("Empresa não encontrada! Por favor, tente novamente."),
-  }),
+  createServiceOrderNotFound: codedError(
+    "BRANCH_NOT_FOUND: a filial informada não existe ou é de outra empresa (a mesma resposta). TENANT_NOT_FOUND ou BUSINESS_NOT_FOUND: a empresa do caminho não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
-  vehicleNotFound: z.object({
-    message: z.string().default("Veículo não encontrado."),
-  }),
+  exportServiceOrderNotFound: codedError(
+    "BUSINESS_NOT_FOUND: a empresa informada não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
-  branchNotFound: z.object({
-    message: z.string().default("Filial não encontrada."),
-  }),
+  sessionUserNotFound: codedError("USER_NOT_FOUND: o usuário da sessão não existe mais."),
 
-  supplierNotFound: z.object({
-    message: z.string().default("Fornecedor não encontrado."),
-  }),
+  serviceOrderConflict: codedError(
+    "SERVICE_ORDER_HAS_ACCOUNTS_PAYABLE: uma conta a pagar aponta para a ordem. SERVICE_ORDER_COMPLETED: a ordem está concluída.",
+  ),
 
-  serviceOrderInUse: z.object({
-    message: z
-      .string()
-      .default(
-        "Não é possível excluir esta ordem de serviço pois ela está sendo usada em contas a pagar.",
-      ),
-  }),
-
-  // Grouping errors by route
-  createServiceOrderErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Veículo não encontrado."),
-    }),
-    z.object({
-      message: z.string().default("Filial não encontrada."),
-    }),
-    z.object({
-      message: z.string().default("Fornecedor não encontrado."),
-    }),
-    z.object({
-      message: z.string().default("Usuário responsável não encontrado!"),
-    }),
-  ]),
-
-  createServiceOrderForbiddenErrors: z.union([
-    z.object({
-      message: z.string().default("Este veículo não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z.string().default("Esta filial não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este fornecedor não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z.string().default("Este usuário não pertence a esta empresa!"),
-    }),
-  ]),
-
-  listServiceOrderErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Usuário não possui empresa associada!"),
-    }),
-  ]),
-
-  listServiceOrderByVehicleErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Veículo não encontrado."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
-
-  listServiceOrderByVehicleForbiddenErrors: z.object({
-    message: z.string().default("Este veículo não pertence a esta empresa!"),
-  }),
-
-  vehicleNotBelongBusiness: z.object({
-    message: z.string().default("Este veículo não pertence a esta empresa!"),
-  }),
-
-  updateServiceOrderErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Ordem de serviço não encontrada!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Veículo não encontrado."),
-    }),
-    z.object({
-      message: z.string().default("Filial não encontrada."),
-    }),
-    z.object({
-      message: z.string().default("Fornecedor não encontrado."),
-    }),
-    z.object({
-      message: z.string().default("Usuário responsável não encontrado!"),
-    }),
-  ]),
-
-  updateServiceOrderForbiddenErrors: z.union([
-    z.object({
-      message: z
-        .string()
-        .default("Esta ordem de serviço não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z.string().default("Este veículo não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z.string().default("Esta filial não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este fornecedor não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z.string().default("Este usuário não pertence a esta empresa!"),
-    }),
-  ]),
-
-  deleteServiceOrderErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Ordem de serviço não encontrada!"),
-    }),
-    z.object({
-      message: z.string().default("Empresa não encontrada!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Não é possível excluir esta ordem de serviço pois ela está sendo usada em contas a pagar.",
-        ),
-    }),
-  ]),
-
-  deleteServiceOrderForbiddenErrors: z.object({
-    message: z
-      .string()
-      .default("Esta ordem de serviço não pertence a esta empresa!"),
-  }),
-
-  // Export errors (GET /export-service-order)
-  exportServiceOrderErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Não existem ordens de serviço para exportar!"),
-    }),
-  ]),
+  // A gone session user is 404 (in serviceOrderNotFound); delete's only 400
+  // is a malformed path.
+  deleteServiceOrderErrors: codedError(
+    "VALIDATION_ERROR: um parâmetro do caminho foi recusado (issues diz qual).",
+  ),
 };
 
 export { serviceOrderSchemas, serviceOrderResponses };

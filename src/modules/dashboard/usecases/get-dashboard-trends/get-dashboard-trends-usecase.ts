@@ -2,105 +2,90 @@ import { inject, injectable } from "tsyringe";
 
 import { IDashboardRepository } from "../../repositories/IDashboard-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
-import { hasModule } from "@/shared/entitlements/entitlement-service";
+import { getBusinessEntitlements } from "@/shared/entitlements/entitlement-service";
+import { isModuleEnabled } from "@/shared/entitlements/entitlement-rules";
+
+import {
+  businessDayWindow,
+  businessMonthWindow,
+  dateOnlyFromKey,
+  type BusinessWindow,
+} from "@/shared/time/business-day";
+import { loadBusinessTimeZone } from "@/shared/time/business-time-zone";
+
+import {
+  SERIES_KEY,
+  canReadKey,
+  monthLabel,
+  visibleDashboardEntities,
+  type DashboardModule,
+} from "../shared/dashboard-entities";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
 
+type TrendsPeriod = "7d" | "30d" | "3m" | "6m" | "12m";
+
 interface GetDashboardTrendsRequest {
   userId: string;
-  period: "7d" | "30d" | "3m" | "6m" | "12m";
+  period: TrendsPeriod;
 }
+
+/**
+ * One point per bucket. A series is present only when the viewer may see it
+ * and the company hired its module (DLVP-ADM-1): the chart draws one line per
+ * key it receives, so a hidden series sent as zero was a flat line.
+ */
+type TrendPoint = Record<string, string | number> & { date: string };
 
 interface DashboardTrendsResponse {
-  activityTrends: Array<{
-    date: string;
-    vehicles: number;
-    drivers: number;
-    businesses: number;
-    branches: number;
-    parts: number;
-    suppliers: number;
-    serviceOrders: number;
-    users: number;
-    fines: number;
-    deliveries: number;
-    routes: number;
-  }>;
+  activityTrends: TrendPoint[];
   maintenanceCosts: Array<{
     date: string;
-    preventive: number;
-    corrective: number;
+    internal: number;
+    external: number;
   }>;
 }
 
-const pluralizeFieldName = (key: string): string => {
-  const pluralMap: Record<string, string> = {
-    business: "businesses",
-    branch: "branches",
-    "service-order": "serviceOrders",
-    fine: "fines",
-
-    // "deliverys" is what the default rule produces, and the chart keys off
-    // these names — a wrong one draws a line of undefined.
-    delivery: "deliveries",
-  };
-
-  if (pluralMap[key]) {
-    return pluralMap[key];
+/**
+ * The buckets of a period, in the company's calendar. Days for 7 and 30;
+ * months otherwise, the current one plus N before it (the same number of
+ * points the chart always drew).
+ */
+function windowFor(
+  period: TrendsPeriod,
+  now: Date,
+  timeZone: string,
+): { granularity: "day" | "month"; window: BusinessWindow } {
+  switch (period) {
+    case "7d":
+      return { granularity: "day", window: businessDayWindow(now, timeZone, 7) };
+    case "30d":
+      return { granularity: "day", window: businessDayWindow(now, timeZone, 30) };
+    case "3m":
+      return { granularity: "month", window: businessMonthWindow(now, timeZone, 4) };
+    case "6m":
+      return { granularity: "month", window: businessMonthWindow(now, timeZone, 7) };
+    case "12m":
+      return { granularity: "month", window: businessMonthWindow(now, timeZone, 13) };
   }
-
-  return key + "s";
-};
+}
 
 /**
- * The grouping key, in local wall time.
- *
- * Must match what the repository's `to_char(date_trunc(...))` produces, or
- * every lookup misses and the chart draws a flat line of zeroes over a
- * database full of rows.
+ * The label under a point: "27 de set." for a civil day (read in UTC — the
+ * key is a calendar day, not an instant), "Set" for a month.
  */
-const periodKey = (at: Date, granularity: "day" | "month"): string => {
-  const year = at.getFullYear();
-  const month = String(at.getMonth() + 1).padStart(2, "0");
-
-  if (granularity === "month") return `${year}-${month}`;
-
-  return `${year}-${month}-${String(at.getDate()).padStart(2, "0")}`;
-};
-
-/**
- * The last instant of the window's final bucket.
- *
- * `endDateLocal` is midnight, and the query filters `created_at <= to`, so
- * without this every row created DURING the last day would be dropped — the
- * day people are actually looking at.
- *
- * It follows the granularity, because the last bucket is a different size in
- * each case. On a monthly chart the final point is the current month, and it
- * has to include the rest of that month exactly as the old per-bucket loop
- * did with `new Date(year, month + 1, 0)`.
- */
-const endOfWindow = (
-  endDateLocal: Date,
-  granularity: "day" | "month",
-): Date => {
-  const end = new Date(endDateLocal);
-
-  if (granularity === "month") {
-    end.setMonth(end.getMonth() + 1, 0);
-  }
-
-  end.setHours(23, 59, 59, 999);
-
-  return end;
-};
-
-const getCurrentDateLocal = (): Date => {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
-};
+function labelFor(key: string, granularity: "day" | "month"): string {
+  return granularity === "day"
+    ? dateOnlyFromKey(key).toLocaleDateString("pt-BR", {
+        day: "2-digit",
+        month: "short",
+        timeZone: "UTC",
+      })
+    : monthLabel(key);
+}
 
 @injectable()
 class GetDashboardTrendsUseCase {
@@ -109,6 +94,8 @@ class GetDashboardTrendsUseCase {
     private userRepository: IUserRepository,
     @inject("DashboardRepository")
     private dashboardRepository: IDashboardRepository,
+    @inject("BusinessRepository")
+    private businessRepository: IBusinessRepository,
   ) {}
 
   async execute({
@@ -125,95 +112,25 @@ class GetDashboardTrendsUseCase {
       const businessId =
         user.role !== "MASTER" ? (user.businessId as string) : undefined;
 
-      const endDateLocal = getCurrentDateLocal();
-      let startDateLocal = new Date(endDateLocal);
+      // Days and months of the company's calendar, never the server's
+      // (the container runs in UTC; see shared/time/business-day).
+      const timeZone = await loadBusinessTimeZone(
+        this.businessRepository,
+        businessId,
+      );
 
-      let groupBy: "day" | "month" = "day";
+      const { granularity, window } = windowFor(period, new Date(), timeZone);
 
-      switch (period) {
-        case "7d":
-          startDateLocal = new Date(endDateLocal);
-          startDateLocal.setDate(endDateLocal.getDate() - 6);
+      // Same rule as the overview: a MASTER has no single company to ask.
+      const entitlements = businessId
+        ? await getBusinessEntitlements(businessId)
+        : null;
 
-          groupBy = "day";
-          break;
-        case "30d":
-          startDateLocal = new Date(endDateLocal);
-          startDateLocal.setDate(endDateLocal.getDate() - 29);
+      const moduleEnabled = entitlements
+        ? (module: DashboardModule) => isModuleEnabled(entitlements, module)
+        : null;
 
-          groupBy = "day";
-          break;
-        case "3m":
-          startDateLocal = new Date(endDateLocal);
-          startDateLocal.setMonth(endDateLocal.getMonth() - 3);
-
-          groupBy = "month";
-          break;
-        case "6m":
-          startDateLocal = new Date(endDateLocal);
-          startDateLocal.setMonth(endDateLocal.getMonth() - 6);
-
-          groupBy = "month";
-          break;
-        case "12m":
-          startDateLocal = new Date(endDateLocal);
-          startDateLocal.setFullYear(endDateLocal.getFullYear() - 1);
-
-          groupBy = "month";
-          break;
-      }
-
-      const hasPermission = (permissionKey: string): boolean => {
-        if (user.role !== "BUSINESS_USER") return true;
-
-        return (
-          user.profileAccess?.permissions?.some(
-            (perm) =>
-              perm.permissionKey === permissionKey &&
-              (perm.canRead || perm.canWrite),
-          ) ?? false
-        );
-      };
-
-      const entities = [
-        { key: "vehicle", permission: "vehicle_manage" },
-        { key: "driver", permission: "driver_manage" },
-        { key: "business", permission: "business_manage" },
-        { key: "branch", permission: "branch_manage" },
-        { key: "part", permission: "part_manage" },
-        { key: "supplier", permission: "supplier_manage" },
-        { key: "service-order", permission: "service_order_manage" },
-        { key: "user", permission: "user_registration_manage" },
-        { key: "fine", permission: "fine_manage" },
-        { key: "delivery", permission: "delivery_manage" },
-        { key: "route", permission: "delivery_manage" },
-      ];
-
-      /**
-       * Whether this company hired the deliveries module.
-       *
-       * Same rule as the overview, and for the same reason: a permission is
-       * what a PERSON may do, an entitlement is what the company bought, and
-       * a BUSINESS_ADMIN passes every permission check by definition.
-       */
-      const deliveriesEnabled = businessId
-        ? await hasModule(businessId, "DELIVERIES")
-        : true;
-
-      const visible = entities.filter((entity) => {
-        if (user.role === "BUSINESS_ADMIN" && entity.key === "business") {
-          return false;
-        }
-
-        if (
-          !deliveriesEnabled &&
-          (entity.key === "delivery" || entity.key === "route")
-        ) {
-          return false;
-        }
-
-        return hasPermission(entity.permission);
-      });
+      const visible = visibleDashboardEntities(user, moduleEnabled);
 
       /**
        * Every bucket of every entity, in ONE round trip. Then the costs, in a
@@ -221,19 +138,15 @@ class GetDashboardTrendsUseCase {
        *
        * This used to be a loop: for each day in the window, nine counts in
        * parallel plus one cost query. Thirty days is 300 round trips to draw
-       * one chart, and the nine-at-a-time parallelism made it worse rather
-       * than better — the overview already learned that lesson, where nine
-       * concurrent connections per page view starved the pool and made the
-       * p95 of the whole API fifteen times worse.
-       *
-       * Two queries, one connection at a time, identical numbers.
+       * one chart. Two queries, one connection at a time, identical numbers.
        */
       const buckets = await this.dashboardRepository.countManyByPeriod(
         {
-          entities: visible.map((entity) => entity.key as any),
-          from: startDateLocal,
-          to: endOfWindow(endDateLocal, groupBy),
-          granularity: groupBy,
+          entities: visible.map((entity) => entity.key),
+          from: window.start,
+          to: window.end,
+          granularity,
+          timeZone,
         },
         businessId,
       );
@@ -245,16 +158,14 @@ class GetDashboardTrendsUseCase {
         ]),
       );
 
-      const countFor = (key: string, at: Date): number =>
-        byEntity.get(key)?.get(periodKey(at, groupBy)) ?? 0;
+      // Service orders are Frotas: no costs without the module (DASH-MOD-1).
+      const showCosts =
+        (moduleEnabled?.("FLEET") ?? true) &&
+        canReadKey(user, "service_order_manage");
 
-      const costBuckets = hasPermission("service_order_manage")
+      const costBuckets = showCosts
         ? await this.dashboardRepository.getCostsByPeriod(
-            {
-              from: startDateLocal,
-              to: endOfWindow(endDateLocal, groupBy),
-              granularity: groupBy,
-            },
+            { from: window.start, to: window.end, granularity, timeZone },
             businessId,
           )
         : [];
@@ -263,66 +174,27 @@ class GetDashboardTrendsUseCase {
         costBuckets.map((bucket) => [bucket.period, bucket]),
       );
 
-      const activityTrends: any[] = [];
-      const maintenanceCosts: any[] = [];
+      const activityTrends: TrendPoint[] = [];
+      const maintenanceCosts: DashboardTrendsResponse["maintenanceCosts"] = [];
 
-      const monthNames = [
-        "Jan",
-        "Fev",
-        "Mar",
-        "Abr",
-        "Mai",
-        "Jun",
-        "Jul",
-        "Ago",
-        "Set",
-        "Out",
-        "Nov",
-        "Dez",
-      ];
+      for (const key of window.keys) {
+        const label = labelFor(key, granularity);
+        const point: TrendPoint = { date: label };
 
-      /** The label the chart puts under a point. Unchanged from before. */
-      const labelFor = (at: Date): string =>
-        groupBy === "day"
-          ? at.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })
-          : monthNames[at.getMonth()];
-
-      const cursor = new Date(startDateLocal);
-
-      // The monthly branch always started on the first of the month.
-      if (groupBy === "month") cursor.setDate(1);
-
-      while (cursor <= endDateLocal) {
-        const label = labelFor(cursor);
-
-        const trendData: any = { date: label };
-
-        // EVERY entity, not only the visible ones: a hidden entity answers
-        // zero rather than being absent, because the chart draws a line for
-        // it either way and "undefined" is not a number.
-        for (const entity of entities) {
-          trendData[pluralizeFieldName(entity.key)] = countFor(
-            entity.key,
-            cursor,
-          );
+        for (const entity of visible) {
+          point[SERIES_KEY[entity.key]] = byEntity.get(entity.key)?.get(key) ?? 0;
         }
 
-        activityTrends.push(trendData);
+        activityTrends.push(point);
 
-        if (hasPermission("service_order_manage")) {
-          const bucket = costsByPeriod.get(periodKey(cursor, groupBy));
+        if (showCosts) {
+          const bucket = costsByPeriod.get(key);
 
           maintenanceCosts.push({
             date: label,
-            preventive: bucket?.preventive ?? 0,
-            corrective: bucket?.corrective ?? 0,
+            internal: bucket?.internal ?? 0,
+            external: bucket?.external ?? 0,
           });
-        }
-
-        if (groupBy === "day") {
-          cursor.setDate(cursor.getDate() + 1);
-        } else {
-          cursor.setMonth(cursor.getMonth() + 1);
         }
       }
 

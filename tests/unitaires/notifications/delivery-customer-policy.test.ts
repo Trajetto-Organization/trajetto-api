@@ -18,6 +18,7 @@ import {
 import type { DeliveryCustomerPayload } from "@/shared/notifications/notification-types";
 import type { Business } from "@/modules/business/dtos/business-dto";
 import type { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+import { BUSINESS_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
 
 /**
  * What a carrier says to the person waiting for their delivery.
@@ -39,9 +40,19 @@ beforeEach(() => {
   recipients = new InMemoryExternalRecipientRepository();
   templates = new InMemoryDeliveryMessageTemplateRepository();
 
+  // The delivery as it stands now: the policy addresses the contact the
+  // delivery holds, not the event's copy (customer-message-freshness.test.ts).
+  recipients.deliveryStates.set(DELIVERY, {
+    status: "IN_TRANSIT",
+    name: "Padaria Central Ltda",
+    email: "contato@padaria.com.br",
+    telephone: "11999999999",
+  });
+
   businesses = new InMemoryBusinessRepository();
 
   businesses.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
     id: BUSINESS,
     corporate_reason: "Transportes Silva Ltda",
     fantasy_name: "Silva Log",
@@ -100,6 +111,8 @@ function seedTemplate(
 
 describe("who hears about a delivery", () => {
   it("creates the recipient row and returns them", async () => {
+    await seedTemplate("DISPATCHED", "EMAIL", "Saiu para entrega {{link}}");
+
     const found = await deliveryDispatchedPolicy.resolveExternalRecipients!(
       payload(),
       deps(),
@@ -114,6 +127,9 @@ describe("who hears about a delivery", () => {
   it("reuses the same row — and the same link — on the next moment", async () => {
     // A second row would mean a second token, and the link the customer
     // already opened would go dark halfway through their delivery.
+    await seedTemplate("DISPATCHED", "EMAIL", "Saiu para entrega {{link}}");
+    await seedTemplate("DELIVERED", "EMAIL", "Entregue {{link}}");
+
     const [first] = await deliveryDispatchedPolicy.resolveExternalRecipients!(
       payload(),
       deps(),
@@ -130,6 +146,13 @@ describe("who hears about a delivery", () => {
 
   it("tells nobody when the carrier holds no contact details", async () => {
     // The ordinary case, not an error: most deliveries carry neither.
+    recipients.deliveryStates.set(DELIVERY, {
+      status: "IN_TRANSIT",
+      name: "Padaria Central Ltda",
+      email: null,
+      telephone: null,
+    });
+
     const found = await deliveryDispatchedPolicy.resolveExternalRecipients!(
       payload({ recipientEmail: null, recipientTelephone: null }),
       deps(),
@@ -179,16 +202,30 @@ describe("what the message says", () => {
 
   it("sends nothing at all when the company never wrote that message", async () => {
     // Null is a DECISION, not a failure. A carrier that has not written the
-    // "saiu para entrega" text does not want one sent in their name.
-    const [recipient] = await deliveryDispatchedPolicy.resolveExternalRecipients!(
+    // "saiu para entrega" text does not want one sent in their name — and no
+    // recipient means no delivery row, so the decision never shows up as a
+    // dead-lettered failure in the Sistema counters (DLVP-NOTIF-2).
+    const found = await deliveryDispatchedPolicy.resolveExternalRecipients!(
       payload(),
       deps(),
     );
 
+    expect(found).toEqual([]);
+    expect(recipients.recipients).toEqual([]);
+
+    // And a recipient reached by any other path still renders nothing.
+    const recipient = await recipients.ensureForDelivery({
+      deliveryId: DELIVERY,
+      businessId: BUSINESS,
+      name: "Padaria Central Ltda",
+      email: "contato@padaria.com.br",
+      telephone: "11999999999",
+    });
+
     expect(
       await deliveryDispatchedPolicy.renderExternal!(
         payload(),
-        recipient,
+        recipient as never,
         deps(),
         "WHATSAPP",
       ),
@@ -200,19 +237,10 @@ describe("what the message says", () => {
 
     templates.templates[0].is_active = false;
 
-    const [recipient] = await deliveryDeliveredPolicy.resolveExternalRecipients!(
-      payload(),
-      deps(),
-    );
-
     expect(
-      await deliveryDeliveredPolicy.renderExternal!(
-        payload(),
-        recipient,
-        deps(),
-        "EMAIL",
-      ),
-    ).toBeNull();
+      await deliveryDeliveredPolicy.resolveExternalRecipients!(payload(), deps()),
+    ).toEqual([]);
+    expect(recipients.recipients).toEqual([]);
   });
 
   it("keeps the channels apart", async () => {
@@ -224,6 +252,14 @@ describe("what the message says", () => {
       payload(),
       deps(),
     );
+
+    // Only the channel with a template is offered, so no WhatsApp row is ever
+    // created for this moment...
+    expect(recipient.email).toBe("contato@padaria.com.br");
+    expect(recipient.telephone).toBeNull();
+
+    // ...while the stored contact stays whole for the next moment.
+    expect(recipients.recipients[0].telephone).toBe("11999999999");
 
     expect(
       await deliveryDeliveredPolicy.renderExternal!(
@@ -276,7 +312,9 @@ describe("what the message says", () => {
       "WHATSAPP",
     );
 
-    expect(rendered!.body).toBe("Café & Cia & você");
+    // The opt-out link is appended after it: this template lacks one, which
+    // the save refuses and the send makes up for (whatsapp-opt-out.test.ts).
+    expect(rendered!.body).toMatch(/^Café & Cia & você Para não receber/);
   });
 
   it("falls back to the corporate name when there is no trading name", async () => {
@@ -296,7 +334,60 @@ describe("what the message says", () => {
       "WHATSAPP",
     );
 
-    expect(rendered!.body).toBe("Transportes Silva Ltda");
+    expect(rendered!.body).toMatch(/^Transportes Silva Ltda Para não receber/);
+  });
+});
+
+describe("dates in the message", () => {
+  it("prints the expected date as the day, with no time, in any zone", async () => {
+    // Decision 1.3: the column holds UTC midnight of the chosen day. On the
+    // carrier's clock (UTC-3) the old formatter printed "16/09/2026, 21:00".
+    await seedTemplate(
+      "DISPATCHED",
+      "EMAIL",
+      "Previsão: {{previsao}}. Acompanhe: {{link}}",
+    );
+
+    const [recipient] = await deliveryDispatchedPolicy.resolveExternalRecipients!(
+      payload({ scheduledDate: new Date("2026-09-17T00:00:00.000Z") }),
+      deps(),
+    );
+
+    const rendered = await deliveryDispatchedPolicy.renderExternal!(
+      payload({ scheduledDate: new Date("2026-09-17T00:00:00.000Z") }),
+      recipient,
+      deps(),
+      "EMAIL",
+    );
+
+    expect(rendered!.body).toContain("Previsão: 17/09/2026.");
+    expect(rendered!.body).not.toMatch(/d{2}:d{2}/);
+  });
+
+  it("prints the delivery moment on the carrier's own clock", async () => {
+    // Decision 1.1: a carrier in Manaus (UTC-4) reads its own time.
+    (businesses.business[0] as Business & { timezone: string }).timezone =
+      "America/Manaus";
+
+    await seedTemplate(
+      "DELIVERED",
+      "EMAIL",
+      "Entregue em {{data_entrega}}. {{link}}",
+    );
+
+    const [recipient] = await deliveryDeliveredPolicy.resolveExternalRecipients!(
+      payload(),
+      deps(),
+    );
+
+    const rendered = await deliveryDeliveredPolicy.renderExternal!(
+      payload({ deliveredAt: new Date("2026-09-17T15:30:00.000Z") }),
+      recipient,
+      deps(),
+      "EMAIL",
+    );
+
+    expect(rendered!.body).toContain("Entregue em 17/09/2026, 11:30.");
   });
 });
 

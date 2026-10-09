@@ -6,6 +6,7 @@ import { hash } from "bcrypt";
 
 import { UserRepository } from "@/modules/user/repositories/user-repository";
 import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
+import { hashSingleUseToken } from "@/shared/security/single-use-token";
 
 import { ResetUserPasswordUseCase } from "@/modules/user/usecases/reset-user-password/reset-user-password-usecase";
 
@@ -80,9 +81,11 @@ async function userWithToken(kind: "reset" | "email" | "two-factor") {
   const token = randomUUID();
   const expires = new Date(Date.now() + 60 * 60 * 1000);
 
+  // Seeded the way the repository writes it: the column holds the hash of
+  // the link's token, never the token (AUTH-04).
   if (kind === "reset") {
     const row = await prisma.forgotPasswordVerificationToken.create({
-      data: { email, token, expires },
+      data: { email, token: hashSingleUseToken(token), expires },
     });
 
     return { user, email, token, tokenId: row.id };
@@ -90,7 +93,7 @@ async function userWithToken(kind: "reset" | "email" | "two-factor") {
 
   if (kind === "email") {
     const row = await prisma.emailVerificationToken.create({
-      data: { email, token, expires },
+      data: { email, token: hashSingleUseToken(token), expires },
     });
 
     return { user, email, token, tokenId: row.id };

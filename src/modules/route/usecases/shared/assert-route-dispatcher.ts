@@ -1,5 +1,6 @@
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { AppError } from "@/shared/errors/AppError";
 
@@ -19,10 +20,14 @@ import type { User } from "@/modules/user/dtos/user-dto";
  * a job, a script, the spreadsheet importer, another use case — and it fails
  * open. `start-driver-route` already calls straight into `start-route`, so
  * that caller is not hypothetical.
+ *
+ * The company too, for the same reason: checking the person and not the
+ * company let another company's dispatcher who named this one plan it.
  */
 async function assertRouteDispatcher(
   users: IUserRepository,
   userId: string,
+  businessId: string,
 ): Promise<User> {
   const findUser = await users.findUserById(userId);
 
@@ -35,6 +40,7 @@ async function assertRouteDispatcher(
   }
 
   assertDispatcher(findUser);
+  assertTenantAccess(findUser, businessId);
 
   return findUser;
 }

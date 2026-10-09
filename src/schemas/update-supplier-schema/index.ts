@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -7,6 +8,7 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateSupplierSchema = z.object({
+  ...tenantLockedShape,
   name: z
     .string()
     .min(2, "O nome do fornecedor deve ter no mínimo 2 caracteres.")

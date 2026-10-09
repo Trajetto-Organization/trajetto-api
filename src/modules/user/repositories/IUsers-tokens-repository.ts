@@ -2,6 +2,7 @@ import {
   CreateTwoFactorToken,
   CreateUserRefreshTokenProps,
   CreateVerificationToken,
+  RefreshRotation,
   RotateUserRefreshTokenProps,
   TokenByIdAndRefreshTokenProps,
   TwoFactor,
@@ -26,14 +27,22 @@ interface IUsersTokensRepository {
   deleteUserRefreshTokenById: (refreshTokenId: string) => Promise<void>;
   rotateUserRefreshToken: (
     props: RotateUserRefreshTokenProps,
-  ) => Promise<UserRefreshTokenProps | null>;
+  ) => Promise<RefreshRotation>;
   hasActiveRefreshTokenFamily: (
     userId: string,
     familyId: string,
   ) => Promise<boolean>;
+  /** Ends one session: its refresh tokens and the push devices it registered. */
   revokeUserRefreshTokenFamily: (familyId: string) => Promise<void>;
   revokeAllUserRefreshTokens: (userId: string) => Promise<void>;
   deleteExpiredUserRefreshTokens: (now?: Date) => Promise<number>;
+
+  /**
+   * Unregisters the push devices whose session has no refresh token left —
+   * a logout the server never heard of (offline, app killed), once the
+   * session has expired and been purged. Returns how many were removed.
+   */
+  deleteOrphanPushTokens: () => Promise<number>;
   createEmailVerificationToken: ({
     email,
     token,
@@ -86,11 +95,9 @@ interface IUsersTokensRepository {
   consumeTwoFactorToken: (twoFactorId: string) => Promise<boolean>;
 
   /**
-   * Conta mais um palpite errado e devolve o total.
-   *
-   * O incremento é do banco (`increment`), nunca um read-then-write: duas
-   * tentativas simultâneas do mesmo código leriam o mesmo valor e gravariam o
-   * mesmo, e o contador contaria uma.
+   * Counts one more wrong guess and returns the total. The database
+   * increments (`increment`), never a read-then-write: two concurrent guesses
+   * would read the same value and count once.
    */
   countTwoFactorAttempt: (twoFactorId: string) => Promise<number>;
   createForgotPasswordVerificationToken: ({

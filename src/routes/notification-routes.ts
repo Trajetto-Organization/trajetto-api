@@ -20,6 +20,7 @@ import {
   notificationResponses,
   notificationSchemas,
 } from "./documentation/notification-documentation";
+import { ndjsonCursor } from "./documentation/ndjson";
 
 const listUserNotificationsCursorController =
   new ListUserNotificationsCursorController();
@@ -47,16 +48,20 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        summary: "Stream user notifications (NDJSON)",
+        summary: "Lista as notificações do usuário (NDJSON, cursor)",
         description:
-          "Retrieve notifications as NDJSON stream with cursor-based pagination. " +
-          "First line contains meta object: {meta: {total, unread, nextCursor, hasMore}}. " +
-          "Subsequent lines are individual notification objects. " +
-          "Use nextCursor value as cursor parameter for the next page.",
+          "Responde em application/x-ndjson, paginado por cursor. " +
+          "A primeira linha traz o envelope {meta: {total, searchMeta: {unread, nextCursor, hasMore}}}; " +
+          "cada linha seguinte é uma notificação. " +
+          "Passe o nextCursor em `cursor` para a próxima página.",
         querystring: notificationSchemas.listNotificationsCursorQuery,
         response: {
-          200: notificationResponses.notificationsStreamDescription,
-          400: notificationResponses.listNotificationsErrors,
+          200: ndjsonCursor(
+            notificationResponses.notificationStreamRow,
+            notificationResponses.notificationStreamMeta,
+          ),
+          400: notificationResponses.validationError,
+          404: notificationResponses.sessionUserNotFound,
           500: notificationResponses.internalServerError,
         },
       },
@@ -71,12 +76,12 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        summary: "Count unread notifications",
+        summary: "Conta as notificações não lidas",
         description:
-          "Get the total count of unread notifications for the authenticated user",
+          "Total de notificações não lidas do usuário autenticado.",
         response: {
           200: notificationResponses.unreadCount,
-          400: notificationResponses.listNotificationsErrors,
+          404: notificationResponses.sessionUserNotFound,
           500: notificationResponses.internalServerError,
         },
       },
@@ -91,14 +96,14 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        summary: "Mark notification as read",
-        description: "Mark a specific notification as read by its ID",
+        summary: "Marca uma notificação como lida",
+        description:
+          "Marca como lida uma notificação do usuário autenticado. A notificação de outra pessoa responde o mesmo 404 NOTIFICATION_NOT_FOUND de uma que não existe.",
         params: notificationSchemas.notificationIdParam,
         response: {
           200: notificationResponses.notificationMarkedAsRead,
-          400: notificationResponses.markAsReadErrors,
-          403: notificationResponses.markAsReadForbiddenError,
-          404: notificationResponses.markAsReadNotFoundError,
+          400: notificationResponses.validationError,
+          404: notificationResponses.notificationNotFound,
           500: notificationResponses.internalServerError,
         },
       },
@@ -113,14 +118,14 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        summary: "Delete notification",
-        description: "Permanently delete a specific notification by its ID",
+        summary: "Exclui uma notificação",
+        description:
+          "Exclui de vez uma notificação do usuário autenticado. A notificação de outra pessoa responde o mesmo 404 NOTIFICATION_NOT_FOUND de uma que não existe.",
         params: notificationSchemas.notificationIdParam,
         response: {
           200: notificationResponses.notificationDeleted,
-          400: notificationResponses.deleteNotificationErrors,
-          403: notificationResponses.deleteNotificationForbiddenError,
-          404: notificationResponses.deleteNotificationNotFoundError,
+          400: notificationResponses.validationError,
+          404: notificationResponses.notificationNotFound,
           500: notificationResponses.internalServerError,
         },
       },
@@ -138,12 +143,12 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        summary: "Mark all notifications as read",
+        summary: "Marca todas as notificações como lidas",
         description:
-          "Mark every unread notification of the authenticated user as read",
+          "Marca como lidas todas as notificações não lidas do usuário autenticado.",
         response: {
           200: notificationResponses.allNotificationsMarkedAsRead,
-          400: notificationResponses.listNotificationsErrors,
+          404: notificationResponses.sessionUserNotFound,
           500: notificationResponses.internalServerError,
         },
       },
@@ -161,13 +166,14 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        summary: "Register the device's Expo push token",
+        summary: "Registra o token de push (Expo) do aparelho",
         description:
-          "Registers (or reassigns to the authenticated user) the Expo push token of the mobile device. The PUSH pipeline channel only fans out to users with a registered token.",
+          "Registra o token de push Expo do celular (ou o transfere para o usuário autenticado). O canal PUSH só envia para quem tem token registrado.",
         body: notificationSchemas.registerPushToken,
         response: {
           200: notificationResponses.pushTokenChanged,
-          400: notificationResponses.listNotificationsErrors,
+          400: notificationResponses.validationError,
+          404: notificationResponses.sessionUserNotFound,
           500: notificationResponses.internalServerError,
         },
       },
@@ -185,13 +191,14 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        summary: "Unregister the device's Expo push token",
+        summary: "Remove o token de push (Expo) do aparelho",
         description:
-          "Best-effort logout cleanup — dead tokens are also pruned automatically when the provider reports DeviceNotRegistered.",
+          "Limpeza no logout, sem garantia: tokens mortos também saem sozinhos quando o provedor responde DeviceNotRegistered.",
         body: notificationSchemas.removePushToken,
         response: {
           200: notificationResponses.pushTokenChanged,
-          400: notificationResponses.listNotificationsErrors,
+          400: notificationResponses.validationError,
+          404: notificationResponses.sessionUserNotFound,
           500: notificationResponses.internalServerError,
         },
       },
@@ -206,12 +213,12 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        summary: "Get notification preferences",
+        summary: "Consulta as preferências de notificação",
         description:
-          "Per-category channel preferences for the authenticated user. Categories never saved return the user's legacy global toggles as defaults (isDefault: true)",
+          "Canais escolhidos por categoria para o usuário autenticado. Uma categoria nunca salva volta com os interruptores gerais antigos do usuário como padrão (isDefault: true).",
         response: {
           200: notificationResponses.preferencesRetrieved,
-          400: notificationResponses.listNotificationsErrors,
+          404: notificationResponses.sessionUserNotFound,
           500: notificationResponses.internalServerError,
         },
       },
@@ -229,13 +236,14 @@ async function notificationRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
-        summary: "Update notification preferences",
+        summary: "Atualiza as preferências de notificação",
         description:
-          "Upsert per-category channel preferences. Mandatory account notices are always delivered in-app regardless of these settings; WhatsApp additionally requires a configured phone number",
+          "Grava os canais por categoria. Os avisos obrigatórios da conta chegam sempre no app, seja qual for a escolha; o WhatsApp exige também um telefone configurado.",
         body: notificationSchemas.updatePreferences,
         response: {
           200: notificationResponses.preferencesUpdated,
-          400: notificationResponses.listNotificationsErrors,
+          400: notificationResponses.validationError,
+          404: notificationResponses.sessionUserNotFound,
           500: notificationResponses.internalServerError,
         },
       },

@@ -1,4 +1,5 @@
 import type {
+  GpsAddressCache,
   ProofDocumentRecord,
   ProofDocumentSource,
   SaveProofDocumentProps,
@@ -38,14 +39,37 @@ interface IProofDocumentRepository {
   ) => Promise<ProofDocumentSource | null>;
 
   /**
+   * The first document of a delivery, or the one somebody else created first.
+   *
+   * Insert-only: when another first reader got there before, nothing is
+   * written and their row comes back with `created: false`. That row's token
+   * is the delivery's token from then on, and whoever lost has rendered a QR
+   * with a token no row holds — they render again with this one (IDEMP-12).
+   */
+  createIfAbsent: (
+    data: SaveProofDocumentProps,
+  ) => Promise<{ record: ProofDocumentRecord; created: boolean }>;
+
+  /**
    * Writes the row, replacing any previous one for the same delivery.
    *
-   * Upsert and not create: two concurrent first-readers both render, and the
-   * second must not fail with a unique violation on a request that did nothing
-   * wrong. The storage key is derived from the delivery, so both wrote the same
-   * object and there is nothing orphaned either way.
+   * The update branch keeps the token — a printed QR must keep working — and
+   * moves storage_key and sha256 together. The key is addressed by the hash
+   * (proofStorageKey), so whichever save lands last, the row describes the
+   * object it points at.
    */
   save: (data: SaveProofDocumentProps) => Promise<ProofDocumentRecord>;
+
+  /**
+   * Caches the reverse-geocoded address on the proof event (design §4.2),
+   * so a regeneration prints the same text and the provider is asked once.
+   * Scoped by tenant: another company's event is left untouched.
+   */
+  saveGpsAddress: (
+    eventId: string,
+    businessId: string,
+    cache: GpsAddressCache,
+  ) => Promise<void>;
 }
 
 export type { IProofDocumentRepository };

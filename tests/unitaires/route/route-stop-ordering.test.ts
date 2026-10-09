@@ -6,12 +6,14 @@ import { StartRouteUseCase } from "@/modules/route/usecases/start-route/start-ro
 
 import { AddRouteStopsUseCase } from "@/modules/route/usecases/add-route-stops/add-route-stops-usecase";
 import { RemoveRouteStopUseCase } from "@/modules/route/usecases/remove-route-stop/remove-route-stop-usecase";
+import { RemoveRouteStopsUseCase } from "@/modules/route/usecases/remove-route-stops/remove-route-stops-usecase";
 import { ReorderRouteStopsUseCase } from "@/modules/route/usecases/reorder-route-stops/reorder-route-stops-usecase";
 
 import { GetRouteUseCase } from "@/modules/route/usecases/get-route/get-route-usecase";
 import { ListRoutesUseCase } from "@/modules/route/usecases/list-routes/list-routes-usecase";
 
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
+import { InMemoryDriverPositionRepository } from "@/modules/route/repositories/in-memory/in-memory-driver-position-repository";
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
@@ -146,11 +148,18 @@ function makeContext() {
       userRepository,
       deliveryRepository,
       notificationService,
+      webhookStub.asService(),
     ),
-    removeStop: new RemoveRouteStopUseCase(routeRepository, userRepository, notificationService),
+    removeStop: new RemoveRouteStopUseCase(
+      new RemoveRouteStopsUseCase(routeRepository, userRepository, notificationService),
+    ),
     reorder: new ReorderRouteStopsUseCase(routeRepository, userRepository, notificationService),
 
-    get: new GetRouteUseCase(routeRepository, userRepository),
+    get: new GetRouteUseCase(
+      routeRepository,
+      userRepository,
+      new InMemoryDriverPositionRepository(),
+    ),
     list: new ListRoutesUseCase(routeRepository, userRepository),
   };
 }
@@ -207,7 +216,7 @@ describe("adding stops to a route", () => {
     const route = await plannedRoute([await seedDelivery()]);
     const extra = await seedDelivery(A, "Cliente novo");
 
-    const created = await context.addStops.execute({
+    const { stops: created } = await context.addStops.execute({
       userId: DISPATCHER_A,
       businessId: A,
       routeId: route.id,
@@ -254,27 +263,26 @@ describe("adding stops to a route", () => {
     ).rejects.toMatchObject({ statusCode: 400, code: "ROUTE_STOPS_REQUIRED" });
   });
 
-  it("refuses a delivery that is already a stop on this very route", async () => {
+  it("answers a delivery already on this very route as a retry, not a 409", async () => {
     const delivery = await seedDelivery();
     const route = await plannedRoute([delivery]);
 
-    await expect(
-      context.addStops.execute({
-        userId: DISPATCHER_A,
-        businessId: A,
-        routeId: route.id,
-        deliveryIds: [delivery],
-      }),
-    ).rejects.toMatchObject({
-      statusCode: 409,
-      code: "DELIVERY_ALREADY_ON_ROUTE",
-      // The partial unique index would refuse this too, with the same code —
-      // but its message says "já está em OUTRA rota", which is false here and
-      // sends the dispatcher looking for a route that does not exist. The
-      // check above it exists for this sentence.
-      message: expect.stringContaining("já está nesta rota"),
+    // Decision 14.7, §4.3: the first call committed and its answer was lost.
+    // The resend is success with nothing written — no new stop, no version.
+    const before = context.routeRepository.routes[0].plan_version;
+
+    const result = await context.addStops.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route.id,
+      deliveryIds: [delivery],
     });
 
+    expect(result).toMatchObject({
+      stops: [],
+      alreadyOnRoute: [delivery],
+      planVersion: before,
+    });
     expect(orderOf(route.id)).toHaveLength(1);
   });
 
@@ -290,8 +298,8 @@ describe("adding stops to a route", () => {
         deliveryIds: [foreign],
       }),
     ).rejects.toMatchObject({
-      statusCode: 403,
-      code: "DELIVERY_NOT_BELONG_BUSINESS",
+      statusCode: 404,
+      code: "DELIVERY_NOT_FOUND",
     });
 
     expect(orderOf(route.id)).toHaveLength(0);
@@ -769,7 +777,7 @@ describe("reading routes back", () => {
       businessId: A,
       page: 1,
       pageSize: 10,
-      driverId: other,
+      driverIds: [other],
     });
 
     // The driver's own id REPLACES what was sent — it is not a filter they can

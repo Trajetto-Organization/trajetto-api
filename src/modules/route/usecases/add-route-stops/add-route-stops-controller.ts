@@ -13,20 +13,29 @@ class AddRouteStopsController {
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
     const { routeId } = routeIdParamSchema.parse(request.params);
 
-    const { deliveryIds } = addRouteStopsSchema.parse(request.body);
+    const { deliveryIds, expectedPlanVersion } = addRouteStopsSchema.parse(
+      request.body,
+    );
 
     const addRouteStopsUseCase = container.resolve(AddRouteStopsUseCase);
 
-    const created = await addRouteStopsUseCase.execute({
-      userId: id,
-      businessId,
-      routeId,
-      deliveryIds,
-    });
+    const { stops, alreadyOnRoute, planVersion } =
+      await addRouteStopsUseCase.execute({
+        userId: id,
+        businessId,
+        routeId,
+        deliveryIds,
+        expectedPlanVersion,
+      });
 
     return reply.status(201).send({
       message: "Paradas adicionadas à rota!",
-      data: { added: created.length },
+      data: {
+        added: stops.length,
+        stopIds: stops.map((stop) => stop.id),
+        alreadyOnRoute,
+        planVersion,
+      },
     });
   }
 }

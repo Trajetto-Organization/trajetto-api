@@ -21,17 +21,24 @@ import {
   businessLimitChangedPolicy,
   businessModuleChangedPolicy,
 } from "./policies/business-plan-policies";
-import { deliveryOccurrenceReportedPolicy } from "./policies/delivery-occurrence-policy";
+import {
+  deliveryOccurrenceAuthorizationDecidedPolicy,
+  deliveryOccurrenceAuthorizationEscalatedPolicy,
+  deliveryOccurrenceAuthorizationRequestedPolicy,
+  deliveryOccurrenceReportedPolicy,
+} from "./policies/delivery-occurrence-policy";
 import { chatMessageSentPolicy } from "./policies/chat-message-policy";
 import { deliveryStatusOverriddenPolicy } from "./policies/delivery-status-policy";
 import {
   deliveryDeliveredPolicy,
   deliveryDispatchedPolicy,
   deliveryFailedPolicy,
+  deliveryOnTheWayPolicy,
 } from "./policies/delivery-customer-policy";
 
 import {
   routeCancelledPolicy,
+  routePlanChangedPolicy,
   routeReleasedPolicy,
 } from "./policies/route-policies";
 import {
@@ -40,6 +47,8 @@ import {
   masterUserUpdatedPolicy,
   masterUserWelcomedPolicy,
 } from "./policies/master-user-policies";
+import { webhookEndpointDisabledPolicy } from "./policies/webhook-endpoint-policies";
+import { proofAIFeedbackPolicy } from "./policies/proof-ai-feedback-policy";
 
 /**
  * Everything the system notifies, in one place.
@@ -62,6 +71,10 @@ const notificationPolicies: {
   "account-payable.updated": accountPayableUpdatedPolicy,
   "kanban-card.created": kanbanCardCreatedPolicy,
   "kanban-card.updated": kanbanCardUpdatedPolicy,
+  // Nothing publishes this topic any more: the audit trail is written
+  // directly (NotificationService, GAP2-4). Kept for one release so events
+  // queued by the previous image during a rolling deploy still drain instead
+  // of failing as an unknown topic; remove it after that.
   "activity.recorded": activityRecordedPolicy,
   "master-user.created": masterUserCreatedPolicy,
   "master-user.welcomed": masterUserWelcomedPolicy,
@@ -70,14 +83,26 @@ const notificationPolicies: {
   "business-module.changed": businessModuleChangedPolicy,
   "business-limit.changed": businessLimitChangedPolicy,
   "delivery-occurrence.reported": deliveryOccurrenceReportedPolicy,
+  "delivery-occurrence.authorization_requested":
+    deliveryOccurrenceAuthorizationRequestedPolicy,
+  "delivery-occurrence.authorization_escalated":
+    deliveryOccurrenceAuthorizationEscalatedPolicy,
+  "delivery-occurrence.authorization_decided":
+    deliveryOccurrenceAuthorizationDecidedPolicy,
   "chat-message.sent": chatMessageSentPolicy,
   "route.released": routeReleasedPolicy,
   "route.cancelled": routeCancelledPolicy,
+  "route.plan_changed": routePlanChangedPolicy,
   "delivery.status_overridden": deliveryStatusOverriddenPolicy,
 
   "delivery.dispatched": deliveryDispatchedPolicy,
+  "delivery.on_the_way": deliveryOnTheWayPolicy,
   "delivery.delivered": deliveryDeliveredPolicy,
   "delivery.failed": deliveryFailedPolicy,
+
+  "webhook-endpoint.disabled": webhookEndpointDisabledPolicy,
+
+  "delivery-proof.ai-flagged": proofAIFeedbackPolicy,
 };
 
 function getNotificationPolicy(

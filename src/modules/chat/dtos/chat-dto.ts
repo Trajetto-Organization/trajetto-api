@@ -31,11 +31,31 @@ interface ChatMessage {
   attachment_key: string | null;
   duration_ms: number | null;
   deliveryId: string | null;
+
+  /**
+   * The route the message was said during (decision 6.7). The thread stays
+   * one per driver; this is what lets a route's detail show its messages.
+   */
+  routeId: string | null;
   broadcast_id: string | null;
   client_submission_id: string | null;
   threadId: string;
   senderId: string;
   created_at: Date;
+
+  /**
+   * The support ticket the message belongs to (decision 14.5). Null only
+   * for a mass notice, and for a message an older image wrote during a
+   * rolling deploy (the repair job files it).
+   */
+  ticketId: string | null;
+}
+
+/** The route tag, resolved like the delivery chip. */
+interface ChatRouteTag {
+  id: string;
+  code: number;
+  name: string | null;
 }
 
 /** A message as the conversation screen consumes it. */
@@ -44,6 +64,9 @@ interface ChatMessageView extends ChatMessage {
 
   /** The context chip — resolved so the UI never joins on its side. */
   delivery: { id: string; recipient_name: string; status: string } | null;
+
+  /** The route tag; null for a message said outside any route. */
+  route: ChatRouteTag | null;
 }
 
 interface ChatThreadListEntry {
@@ -120,6 +143,16 @@ interface ListChatMessagesProps {
 
   /** Filters the thread's history by text. */
   search?: string;
+
+  /**
+   * Only the messages about this delivery / said during this route. Both
+   * narrow the same thread, so the cursors page the filtered history.
+   */
+  deliveryId?: string;
+  routeId?: string;
+
+  /** Only the messages of this support ticket (same thread). */
+  ticketId?: string;
 }
 
 interface ListChatMessagesResult {
@@ -177,8 +210,63 @@ interface CreateChatMessageProps {
   attachment_key: string | null;
   duration_ms: number | null;
   deliveryId: string | null;
+
+  /** Omitted = no route (the column's null), for callers that predate 6.7. */
+  routeId?: string | null;
   broadcast_id: string | null;
   client_submission_id: string | null;
+
+  /** Omitted = no ticket: a mass notice. */
+  ticketId?: string | null;
+}
+
+/**
+ * An active driver as the chat pickers list them.
+ *
+ * `hasApp` is what a mass notice needs: a driver whose account cannot log in
+ * (none, revoked, or held in an inactive branch) never reads the thread, so
+ * a notice "sent" to him would be counted as delivered while nobody receives
+ * it. Only the fields of the choice: the list is read under delivery_manage,
+ * so nothing of the driver's registration (the CNH used to ride along).
+ */
+interface ChatRecipient {
+  id: string;
+  name: string;
+  hasApp: boolean;
+}
+
+/** Which side of the app line a picker lists. */
+type ChatRecipientAppFilter = "WITH_APP" | "WITHOUT_APP";
+
+interface ListChatRecipientsProps {
+  businessId: string;
+  search?: string;
+  app?: ChatRecipientAppFilter;
+
+  /** The id of the last row of the previous page. */
+  cursor?: string;
+  limit: number;
+}
+
+interface ListChatRecipientsResult {
+  data: ChatRecipient[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+/** Active drivers of the company, on each side of the app line. */
+interface ChatAudienceCount {
+  withApp: number;
+  withoutApp: number;
+}
+
+/** A target of a mass notice, resolved in one read. */
+interface ChatBroadcastTarget {
+  id: string;
+  name: string;
+
+  /** The driver's app account; null when he has none or it was revoked. */
+  appUserId: string | null;
 }
 
 export type {
@@ -195,4 +283,11 @@ export type {
   SearchChatMessagesProps,
   CreateChatMessageProps,
   ChatDeliverySide,
+  ChatRouteTag,
+  ChatRecipient,
+  ChatRecipientAppFilter,
+  ListChatRecipientsProps,
+  ListChatRecipientsResult,
+  ChatAudienceCount,
+  ChatBroadcastTarget,
 };

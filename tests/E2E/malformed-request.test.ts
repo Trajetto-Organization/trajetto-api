@@ -57,6 +57,12 @@ beforeAll(async () => {
     },
   });
 
+  // Integrations belong to Entregas (decision 4.3): the key routes answer
+  // MODULE_NOT_ENABLED to a company without it.
+  await prisma.businessEntitlement.create({
+    data: { businessId: CARRIER, module: "DELIVERIES", enabled: true },
+  });
+
   const profile = await prisma.profileAccess.create({
     data: {
       name: "Integrações",
@@ -137,6 +143,7 @@ afterAll(async () => {
 
   await prisma.permission.deleteMany({ where: { profileAccessId: profileId } });
   await prisma.profileAccess.deleteMany({ where: { id: profileId } });
+  await prisma.businessEntitlement.deleteMany({ where: { businessId: CARRIER } });
 
   await prisma.business.deleteMany({ where: { id: CARRIER } });
 
@@ -221,6 +228,14 @@ describe("an empty body where the route needs one", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.body).toContain("Validation Error");
+    // pt-BR at the source: the first refused field's sentence, not the
+    // English "Validation Error" every client used to print.
+    expect(response.json().message).toBe(response.json().issues[0]);
+    expect(response.json().message).not.toMatch(/Required|Expected/);
+
+    // "Naming the fields" is the list itself. This route's 400 schema used to
+    // strip it on the way out, and the test above still passed.
+    expect(response.json().code).toBe("VALIDATION_ERROR");
+    expect(response.json().issues?.length).toBeGreaterThan(0);
   });
 });

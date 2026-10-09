@@ -27,8 +27,16 @@ function renderChatMessagePush(payload: ChatMessageSentPayload): RenderedPush {
     title: `💬 ${payload.senderName}`,
     body: payload.bodyPreview || attachmentLine,
 
-    // Tapping the tray entry opens the conversation, not the feed.
-    data: { url: "/chat" },
+    // Tapping the tray entry opens the conversation, not the feed — on the
+    // message's subject when it has one (decision 14.5).
+    data: {
+      url: "/chat",
+      ...(payload.ticketId && {
+        ticketId: payload.ticketId,
+        ticketNumber: payload.ticketNumber ?? null,
+        ticketSubject: payload.ticketSubject ?? null,
+      }),
+    },
   };
 }
 

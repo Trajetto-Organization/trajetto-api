@@ -7,6 +7,17 @@ import type {
   SaveDeliveryMessageTemplateProps,
 } from "../IDelivery-message-template-repository";
 
+/** enum DeliveryMessageTopic, in declaration order. */
+const TOPIC_ORDER: readonly DeliveryMessageTopic[] = [
+  "DISPATCHED",
+  "DELIVERED",
+  "FAILED",
+  "ON_THE_WAY",
+];
+
+/** enum NotificationChannel, in declaration order. */
+const CHANNEL_ORDER = ["IN_APP", "EMAIL", "WHATSAPP", "ACTIVITY", "PUSH"] as const;
+
 class InMemoryDeliveryMessageTemplateRepository
   implements IDeliveryMessageTemplateRepository
 {
@@ -31,7 +42,21 @@ class InMemoryDeliveryMessageTemplateRepository
   async listByBusiness(
     businessId: string,
   ): Promise<DeliveryMessageTemplateRecord[]> {
-    return this.templates.filter((entry) => entry.businessId === businessId);
+    // Prisma orders by topic, then channel, and Postgres sorts enums by
+    // declaration order (schema.prisma), not alphabetically.
+    const rank = (order: readonly string[], value: string) => {
+      const index = order.indexOf(value);
+
+      return index === -1 ? order.length : index;
+    };
+
+    return this.templates
+      .filter((entry) => entry.businessId === businessId)
+      .sort(
+        (a, b) =>
+          rank(TOPIC_ORDER, a.topic) - rank(TOPIC_ORDER, b.topic) ||
+          rank(CHANNEL_ORDER, a.channel) - rank(CHANNEL_ORDER, b.channel),
+      );
   }
 
   async save(

@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { AssignDeliveriesUseCase } from "@/modules/delivery/usecases/assign-deliveries/assign-deliveries-usecase";
+import { UpdateRouteUseCase } from "@/modules/route/usecases/update-route/update-route-usecase";
+import {
+  AssignDeliveriesUseCase,
+  assignmentMessage,
+} from "@/modules/delivery/usecases/assign-deliveries/assign-deliveries-usecase";
 
 import { CreateRouteUseCase } from "@/modules/route/usecases/create-route/create-route-usecase";
 import { ReleaseRouteUseCase } from "@/modules/route/usecases/release-route/release-route-usecase";
 import { StartRouteUseCase } from "@/modules/route/usecases/start-route/start-route-usecase";
+import { CancelRouteUseCase } from "@/modules/route/usecases/cancel-route/cancel-route-usecase";
 
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
@@ -135,11 +140,28 @@ function makeContext() {
     webhookStub.asService(),
   );
 
+  const cancelRoute = new CancelRouteUseCase(
+    routeRepository,
+    userRepository,
+    notificationService,
+    outboxStub,
+    webhookStub.asService(),
+  );
+
   const useCase = new AssignDeliveriesUseCase(
     userRepository,
     routeRepository,
     createRoute,
     releaseRoute,
+    cancelRoute,
+    new UpdateRouteUseCase(
+      routeRepository,
+      userRepository,
+      driverRepository,
+      vehicleRepository,
+      notificationService,
+      webhookStub.asService(),
+    ),
   );
 
   return {
@@ -401,6 +423,60 @@ describe("the vehicle is no longer optional", () => {
   });
 });
 
+describe("a session whose user no longer exists", () => {
+  it("is refused as an invalid session, before anything is read or written", async () => {
+    // Red before: a bare ResourceNotFoundError, which only the controller's
+    // own catch turned into a 400 "Recurso não encontrado!"; that catch is
+    // gone, and every route write answers this case with 401.
+    const context = makeContext();
+    seedDriver(context.driverRepository);
+    seedVehicle(context.vehicleRepository);
+
+    const delivery = await seedPendingDelivery(context.deliveryRepository);
+
+    await expect(
+      context.useCase.execute({
+        userId: "018f0000-0000-7000-8000-0000000000ff",
+        businessId: BUSINESS,
+        deliveryIds: [delivery.id!],
+        driverId: DRIVER_ID,
+        vehicleId: VEHICLE_ID,
+      }),
+    ).rejects.toMatchObject({ statusCode: 401, code: "AUTH_SESSION_INVALID" });
+
+    expect(context.routeRepository.routes).toHaveLength(0);
+  });
+});
+
+describe("what the answer says happened", () => {
+  it("names a created, a resent and a re-planned route for what each is", () => {
+    // Red before: "criada e liberada" for all three.
+    expect(
+      assignmentMessage({ outcome: "created", routeCode: 12, assigned: 3 }),
+    ).toBe("Rota 12 criada e liberada com 3 entregas.");
+    expect(
+      assignmentMessage({ outcome: "resent", routeCode: 12, assigned: 1 }),
+    ).toBe("Rota 12 já estava criada e liberada com 1 entrega; nada foi alterado.");
+    expect(
+      assignmentMessage({ outcome: "replanned", routeCode: 12, assigned: 2 }),
+    ).toBe("Rota 12 atualizada com o novo planejamento (2 entregas).");
+  });
+
+  it("reports the outcome the use case took", async () => {
+    const context = makeContext();
+    seedDriver(context.driverRepository);
+    seedVehicle(context.vehicleRepository);
+
+    const delivery = await seedPendingDelivery(context.deliveryRepository);
+
+    const first = await assign(context, [delivery.id!]);
+    const again = await assign(context, [delivery.id!]);
+
+    expect(first.outcome).toBe("created");
+    expect(again).toMatchObject({ outcome: "resent", routeId: first.routeId });
+  });
+});
+
 describe("reassignment", () => {
   it("moves the delivery to the new route while the old one has not left", async () => {
     // An ordinary morning: a driver calls in sick and the documents move.
@@ -434,8 +510,10 @@ describe("reassignment", () => {
     );
 
     // A delivery may hold only one open stop at a time, so the first route
-    // gives it up rather than keeping a stop nobody will work.
+    // gives it up rather than keeping a stop nobody will work — and, left with
+    // nothing on it, is cancelled instead of staying released (IDEMP-05).
     expect(previous!.stops).toHaveLength(0);
+    expect(previous!.status).toBe("CANCELLED");
 
     const current = await context.routeRepository.findRouteById(
       second.routeId,
@@ -559,8 +637,11 @@ describe("what the route path refuses on the assignment's behalf", () => {
       businessId: "018f0000-0000-7000-8000-00000000000c",
     });
 
+    // The same answer as an id that does not exist: a 403 here told the
+    // caller the id was real, someone else's.
     await expect(assign(context, [foreign.id!])).rejects.toMatchObject({
-      code: "DELIVERY_NOT_BELONG_BUSINESS",
+      statusCode: 404,
+      code: "DELIVERY_NOT_FOUND",
     });
   });
 });

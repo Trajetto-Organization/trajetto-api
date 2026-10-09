@@ -28,6 +28,8 @@ interface NFeParsedData {
   /** Issuer = the cargo owner, which is the shipper in a carrier's world. */
   issuer_cnpj: string | null;
   issuer_name: string | null;
+  /** emit/xNome alone: the issuer's legal name (decision 14.8). */
+  issuer_legal_name: string | null;
 
   recipient_name: string;
   recipient_document: string | null;
@@ -240,6 +242,7 @@ function parseNFeXml(xml: string): NFeParsedData {
 
     issuer_cnpj: onlyDigits(asText(emit?.["CNPJ"])),
     issuer_name: asText(emit?.["xNome"]) ?? asText(emit?.["xFant"]),
+    issuer_legal_name: asText(emit?.["xNome"]),
 
     recipient_name: recipientName ?? `Destinatário em ${city}`,
     recipient_document:

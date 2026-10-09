@@ -1,5 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 
+import { emptyDatabaseRefusal } from "./database-bootstrap-guard";
+
 /**
  * Blocks until Postgres answers, or gives up.
  *
@@ -9,11 +11,17 @@ import { PrismaClient } from "@prisma/client";
  *
  * The chain it breaks: a replica whose database is briefly unreachable gets
  * recreated by Swarm, runs `migrate deploy` at boot, fails in seconds against
- * the still-dead database, and exits. Three of those in under a minute
- * exhaust `max_attempts` and the task is never recreated again. Waiting here
- * turns those seconds into minutes, which is long enough for almost every
- * real interruption — a failover, a restart, a node rescheduling the database
- * task — to resolve on its own.
+ * the still-dead database, and exits — a crash loop that, back when the
+ * restart policy had `max_attempts`, made Swarm give up on the task for good.
+ * Waiting here turns those seconds into minutes, which is long enough for
+ * almost every real interruption — a failover, a restart — to resolve on its
+ * own.
+ *
+ * Answering is not enough, though. A database task rescheduled onto an empty
+ * local volume answers too, and in production that must stop the boot rather
+ * than be migrated and seeded into a "healthy" empty system — see
+ * database-bootstrap-guard.ts. It is checked here because this is the first
+ * step of docker-entrypoint.sh in BOTH modes, before anything is written.
  *
  * Bounded on purpose. Waiting forever would hide a genuinely wrong
  * DATABASE_URL behind a container that looks like it is starting, and a
@@ -38,6 +46,8 @@ async function waitForPostgres(): Promise<void> {
   const prisma = new PrismaClient({ log: [] });
 
   let lastError: unknown = null;
+  let answered = false;
+  let refusal: string | null = null;
 
   try {
     for (;;) {
@@ -45,7 +55,10 @@ async function waitForPostgres(): Promise<void> {
         await prisma.$queryRaw`SELECT 1`;
         console.log("\n🟢 Postgres is ready and accepting connections!\n");
 
-        return;
+        refusal = await emptyDatabaseRefusal(prisma);
+        answered = true;
+
+        break;
       } catch (error) {
         lastError = error;
 
@@ -57,6 +70,16 @@ async function waitForPostgres(): Promise<void> {
     }
   } finally {
     await prisma.$disconnect().catch(() => undefined);
+  }
+
+  if (answered) {
+    if (refusal) {
+      console.error(`\n🔴 ${refusal}\n`);
+
+      process.exit(1);
+    }
+
+    return;
   }
 
   console.error(

@@ -3,13 +3,6 @@ import { container } from "tsyringe";
 
 import { UpdateOccurrenceTypeUseCase } from "./update-occurrence-type-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import {
-  OccurrenceTypeNotFoundError,
-  OccurrenceTypeNameAlreadyExistsError,
-  OccurrenceTypeNotBelongBusinessError,
-} from "../errors/occurrence-type-errors";
-
 import { updateOccurrenceTypeSchema } from "@/schemas/update-occurrence-type-schema";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
@@ -28,36 +21,16 @@ class UpdateOccurrenceTypeController {
       UpdateOccurrenceTypeUseCase,
     );
 
-    try {
-      await updateOccurrenceTypeUseCase.execute({
-        userId: id,
-        businessId,
-        occurrenceTypeId,
-        occurrenceTypeData,
-      });
+    await updateOccurrenceTypeUseCase.execute({
+      userId: id,
+      businessId,
+      occurrenceTypeId,
+      occurrenceTypeData,
+    });
 
-      return reply
-        .status(200)
-        .send({ message: "Tipo de ocorrência atualizado com sucesso!" });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof OccurrenceTypeNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof OccurrenceTypeNameAlreadyExistsError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof OccurrenceTypeNotBelongBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply
+      .status(200)
+      .send({ message: "Tipo de ocorrência atualizado com sucesso!" });
   }
 }
 

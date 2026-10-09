@@ -4,11 +4,11 @@ import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+
+import { socketClientEntry } from "./support/socket-client";
 
 /**
  * Who hears where the trucks are.
@@ -60,18 +60,7 @@ interface TestSocket {
 let connect: (url: string, options: unknown) => TestSocket;
 
 async function loadClient(): Promise<void> {
-  const entry = pathToFileURL(
-    resolve(
-      process.cwd(),
-      "..",
-      "trajetto-fleet-manager-ui",
-      "node_modules",
-      "socket.io-client",
-      "build",
-      "esm",
-      "index.js",
-    ),
-  ).href;
+  const entry = socketClientEntry();
 
   ({ io: connect } = await import(/* @vite-ignore */ entry));
 }
@@ -510,7 +499,7 @@ describe("when the dispatcher loses the permission mid-connection", () => {
 
     expect(await received).toBeNull();
 
-    const online = await io.getOnlineUserIdsForBusiness(CARRIER);
+    const online = await io.getOnlineUserIds([DISPATCHER]);
     expect(online).toContain(DISPATCHER);
   }, 30_000);
 

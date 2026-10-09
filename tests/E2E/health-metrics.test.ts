@@ -402,3 +402,53 @@ describe("the queue tables", () => {
     }
   });
 });
+
+/**
+ * What the meeting-wave features left for operators to watch (decisions 14.2,
+ * 14.3/14.4 and 14.8): the deprecated app contracts still in use (removed
+ * after 14 days without one), the device pre-check's agreement with the
+ * server, and the proof signing certificate's state and end date.
+ */
+describe("the meeting-wave numbers", () => {
+  it("count the legacy app contracts this replica served", async () => {
+    const { countLegacyContractUse } = await import("@/shared/http/legacy-contract-usage");
+    const before = (await metrics(masterToken)).json().legacy_contracts;
+
+    countLegacyContractUse("legacy_proof_adapter");
+
+    const after = (await metrics(masterToken)).json().legacy_contracts;
+
+    expect(after.legacy_proof_adapter.count).toBe(before.legacy_proof_adapter.count + 1);
+    expect(after.legacy_proof_adapter.last_use_at).toEqual(expect.any(String));
+    expect(after.legacy_pause_kind).toEqual({
+      count: expect.any(Number),
+      last_use_at: before.legacy_pause_kind.last_use_at,
+    });
+  });
+
+  it("count the device pre-check's agreement per kind and result", async () => {
+    const { countDeviceAgreement } = await import("@/shared/ai-precheck/device-agreement-metrics");
+    const before = (await metrics(masterToken)).json().ai_device_agreement_total;
+
+    countDeviceAgreement("fuel_odometer", "DISAGREE");
+
+    const after = (await metrics(masterToken)).json().ai_device_agreement_total;
+
+    expect(after.fuel_odometer.DISAGREE).toBe(before.fuel_odometer.DISAGREE + 1);
+    expect(Object.keys(after).sort()).toEqual(["checklist_mileage", "fuel_odometer", "proof"]);
+  });
+
+  it("show the proof signing certificate's state without its serial or CNPJ", async () => {
+    const body = (await metrics(masterToken)).json();
+
+    // The test stack configures no certificate.
+    expect(body.proof_signing).toEqual({
+      state: "ABSENT",
+      reason: null,
+      profile: null,
+      signer_name: null,
+      not_after: null,
+      days_left: null,
+    });
+  });
+});

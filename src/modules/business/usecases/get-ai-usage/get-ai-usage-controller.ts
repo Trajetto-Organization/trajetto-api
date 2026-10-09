@@ -3,9 +3,6 @@ import { container } from "tsyringe";
 
 import { GetAIUsageUseCase } from "./get-ai-usage-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 class GetAIUsageController {
@@ -15,24 +12,14 @@ class GetAIUsageController {
 
     const getAIUsageUseCase = container.resolve(GetAIUsageUseCase);
 
-    try {
-      const result = await getAIUsageUseCase.execute({
-        userId: id,
-        businessId,
-      });
+    // 404 with a code (decision 11.3). Another company's id answers the
+    // same as one that does not exist, so an admin cannot probe for them.
+    const result = await getAIUsageUseCase.execute({
+      userId: id,
+      businessId,
+    });
 
-      return reply.status(200).send({ data: result });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(200).send({ data: result });
   }
 }
 

@@ -3,10 +3,6 @@ import { inject, injectable } from "tsyringe";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
 import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
-import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
-
-import { StartRouteUseCase } from "@/modules/route/usecases/start-route/start-route-usecase";
-import { isStopOpen } from "@/shared/route/route-rules";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
@@ -17,6 +13,20 @@ import { AppError } from "@/shared/errors/AppError";
 interface StartDriverRouteRequest {
   userId: string;
   businessId: string;
+
+  /**
+   * When the driver tapped "iniciar rota" (resolveOccurredAt). Absent on
+   * every build before MOB-08. Not a timestamp to write — a loose departure
+   * has no started_at — but the bound of what the tap may move: only loose
+   * deliveries that existed when it was made (see `execute`).
+   */
+  occurredAt?: Date | null;
+
+  /**
+   * The request carried a tap older than the offline horizon
+   * (isOccurredAtStale). occurredAt is null then, like for no tap at all.
+   */
+  staleTap?: boolean;
 }
 
 interface StartDriverRouteResult {
@@ -26,25 +36,23 @@ interface StartDriverRouteResult {
 /**
  * The departure, as the driver's app has always asked for it.
  *
- * This endpoint is now an ADAPTER, and stays one deliberately: phones in the
- * field have queued submissions pointing at it, some of them from before the
- * route existed, and deleting it would turn a day of collected work into
- * permanent failures on drivers' screens. The app can migrate to
- * `POST /routes/:routeId/start` at its own pace.
+ * This endpoint stays for the deliveries that have no route: phones in the
+ * field may have queued submissions pointing at it, and deleting it would
+ * turn collected work into permanent failures on drivers' screens.
  *
- * Two dispatch models coexist while that happens, so the order below matters:
+ * Two dispatch models coexist, and this is the old one only:
  *
- *  - The driver has a route. It is the thing that starts; delegating to
- *    start-route gets the stop bookkeeping, the vehicle swap, the R6 index and
- *    the mirroring for free, and there is exactly one departure in the system.
+ *  - A route leaves through `POST /route/start-route/:routeId`, which the app
+ *    calls whenever it shows a route. This endpoint never starts one — see
+ *    the note in `execute` (IDEMP-17).
  *
- *  - The driver has no route, only deliveries assigned in a batch. The old
- *    path, unchanged — except that it can no longer touch a delivery which
- *    belongs to a route (see NOT_ON_A_ROUTE in the repository). Without that
- *    filter this tap would drag an unreleased plan onto the street.
+ *  - Deliveries assigned in a batch before routes existed move here, as they
+ *    always did — never one that belongs to a route (NOT_ON_A_ROUTE in the
+ *    repository). Without that filter this tap would drag a plan onto the
+ *    street.
  *
- * Idempotent either way: a resend finds the route already IN_PROGRESS, or
- * finds nothing left to move, and succeeds with started = 0.
+ * Idempotent: a resend finds nothing left to move and succeeds with
+ * started = 0.
  *
  * On the legacy path a load never leaves with no vehicle behind it. That is a
  * stricter rule than the rest of the platform applies: the other vehicle
@@ -62,9 +70,6 @@ class StartDriverRouteUseCase {
     private delivery: IDeliveryRepository,
     @inject("VehicleRepository")
     private vehicle: IVehicleRepository,
-    @inject("RouteRepository")
-    private route: IRouteRepository,
-    private startRoute: StartRouteUseCase,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -72,6 +77,8 @@ class StartDriverRouteUseCase {
   async execute({
     userId,
     businessId,
+    occurredAt,
+    staleTap = false,
   }: StartDriverRouteRequest): Promise<StartDriverRouteResult> {
     const findUser = await this.user.findUserById(userId);
 
@@ -87,35 +94,47 @@ class StartDriverRouteUseCase {
       );
     }
 
-    // The route comes first, and before the "nothing to do" check below: a
-    // driver whose whole day is one released route has no loose PENDING
-    // deliveries at all, so that check would answer "nothing to start" over a
-    // route sitting right there waiting to leave.
-    const findRoute = await this.route.findDriverRoute(
-      businessId,
-      findUser.driverId,
-    );
+    /**
+     * No route is ever started from here (IDEMP-17).
+     *
+     * This endpoint used to look up "the driver's route" at the moment the
+     * request RAN and start whatever it found. But the app calls it only when
+     * none of the deliveries it shows is on a route — so a route found here is
+     * one the tap never saw: released after the list was cached, or after a
+     * tap queued offline (up to seven days). Starting it put that load "on
+     * the street" — "saiu para entrega" to every customer, route.started to
+     * every integration — with the truck still in the yard, and left behind
+     * the loose deliveries the driver was actually looking at. (MOB-08's
+     * stale-tap check narrowed it to taps older than the route; this closes
+     * it.) A route leaves through POST /route/start-route/:routeId, which the
+     * app calls whenever it shows one; the next refresh shows it.
+     *
+     * So: loose deliveries only (NOT_ON_A_ROUTE in the repository). A driver
+     * with nothing loose gets started = 0 — which is also the resend.
+     */
 
-    if (findRoute) {
-      // Already out. This is the resend, and it must not be an error: the app
-      // classifies a 4xx as permanent and would park a departure that did
-      // happen on the pending screen.
-      if (findRoute.status === "IN_PROGRESS") {
-        return { started: 0 };
-      }
-
-      await this.startRoute.execute({
-        userId,
-        businessId,
-        routeId: findRoute.id,
-      });
-
-      // What the app shows on the toast: how many addresses it just took on.
-      return {
-        started: findRoute.stops.filter((stop) => isStopOpen(stop.status))
-          .length,
-      };
+    /**
+     * A late replay acts only on what the tap could have seen (MOB-08).
+     *
+     * The batch is picked when the request RUNS, so a tap queued offline and
+     * sent hours later took along every loose delivery designated since —
+     * documents the phone never showed, still in the warehouse, "Em rota" on
+     * the panel. The route path cannot do this: the tap names its route, and
+     * it is never dated before the route existed. Same rule here: nothing
+     * created after the tap moves, and a tap older than the offline horizon
+     * (seven days) moves nothing at all — a week-old "start my day" is not a
+     * command about today. Both answer success, so the outbox lets the item
+     * go; the driver's next "Iniciar rota" takes what is left.
+     *
+     * A build that sends no time keeps moving the whole batch, as before.
+     * What this cannot see: a delivery created before the tap but designated
+     * to the driver after it — there is no assignment timestamp to bound by.
+     */
+    if (staleTap) {
+      return { started: 0 };
     }
+
+    const createdUpTo = occurredAt ?? undefined;
 
     // The vehicle guard below belongs to the DEPARTURE, so nothing that is not
     // a departure may reach it. An outbox resend of a route that already left
@@ -126,6 +145,7 @@ class StartDriverRouteUseCase {
     const stillWaiting = await this.delivery.countPendingForDriver(
       businessId,
       findUser.driverId,
+      createdUpTo,
     );
 
     if (stillWaiting === 0) {
@@ -159,6 +179,7 @@ class StartDriverRouteUseCase {
       const started = await this.delivery.startDriverRoute(
         businessId,
         findUser.driverId,
+        createdUpTo,
       );
 
       if (started > 0) {

@@ -4,8 +4,6 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IImportRepository } from "../../repositories/IImport-repository";
 
 import { NotificationService } from "@/shared/services/notification-service";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 
 import {
@@ -15,6 +13,10 @@ import {
 
 import { AppError } from "@/shared/errors/AppError";
 import type { ReversalResult } from "../../dtos/import-dto";
+
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
+import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
+import { deliveryEventPayload } from "@/shared/integration/announce";
 
 interface ReverseImportRequest {
   userId: string;
@@ -46,6 +48,8 @@ class ReverseImportUseCase {
     private importRepository: IImportRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
+    @inject("WebhookFanOutService")
+    private webhooks: WebhookFanOutService,
   ) {}
 
   async execute({
@@ -55,7 +59,7 @@ class ReverseImportUseCase {
   }: ReverseImportRequest): Promise<ReversalResult> {
     const findUser = await this.user.findUserById(userId);
 
-    if (!findUser) throw new ResourceNotFoundError();
+    if (!findUser) throw callerNotFound();
 
     assertDispatcher(findUser);
 
@@ -67,7 +71,7 @@ class ReverseImportUseCase {
     // The read is already scoped by company, so another carrier's upload
     // reads as absent — no separate "exists but is not yours" to learn from.
     if (!findImport) {
-      throw new AppError(new ImportNotFoundError().message, 404);
+      throw new ImportNotFoundError();
     }
 
     // A running import is still writing rows. Undoing one would delete
@@ -93,10 +97,37 @@ class ReverseImportUseCase {
       );
     }
 
-    const result = await this.importRepository.reverseImport(
-      importId,
-      businessId,
-    );
+    let result: ReversalResult;
+
+    try {
+      // Each delivery the upload announced as `delivery.created` and this undo
+      // removes is announced as `delivery.cancelled` (decision 5.1), in the
+      // deletion's own transaction: an ERP that heard about the delivery must
+      // hear it is gone, or it keeps a ghost record billing for it.
+      result = await this.importRepository.reverseImport(
+        importId,
+        businessId,
+        async (removed, tx) => {
+          for (const delivery of removed) {
+            await this.webhooks.announce(
+              "delivery.cancelled",
+              businessId,
+              deliveryEventPayload({ ...delivery, status: "CANCELLED" }),
+              tx,
+            );
+          }
+        },
+      );
+    } catch (error) {
+      // A double click: both passed the check above, and the repository's
+      // claim let only one of them undo it (IDEMP-13). The loser gets the
+      // same answer the check gives a late second click.
+      if (error instanceof ImportAlreadyReversedError) {
+        throw new AppError(error.message, 409, "IMPORT_ALREADY_REVERSED");
+      }
+
+      throw error;
+    }
 
     const kept = result.keptDeliveries.length + result.keptRoutes.length;
 

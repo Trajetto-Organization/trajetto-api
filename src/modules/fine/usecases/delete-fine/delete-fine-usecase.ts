@@ -37,17 +37,17 @@ class DeleteFineUseCase {
 
     const existingFine = await this.fine.findFineById(fineId);
 
-    // O mesmo 404 para "não existe" e "não é sua": um 403 distinto
-    // confirmaria que a multa existe, que é metade do que alguém
-    // varrendo ids quer saber.
+    // The same 404 for "does not exist" and "not yours": a distinct 403
+    // would confirm the fine exists, which is half of what someone
+    // sweeping ids wants to know.
     if (!existingFine || existingFine.businessId !== businessId) {
       throw new FineNotFoundError();
     }
 
     try {
-      // O `businessId` também no repositório, duplicando a checagem acima:
-      // a use case protege o caminho de que alguém lembrou, e o `where`
-      // protege os que ninguém pensou.
+      // The `businessId` in the repository too, duplicating the check above:
+      // the use case protects the path someone remembered, the `where` the
+      // ones nobody thought of.
       const deletedFine = await this.fine.deleteFine(fineId, businessId);
 
       // Process activity asynchronously without blocking the main flow

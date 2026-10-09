@@ -10,6 +10,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
 import { AppError } from "@/shared/errors/AppError";
+import { sendNotificationsReadToUser } from "@/websocket";
 
 interface MarkNotificationAsReadRequest {
   notificationId: string;
@@ -50,16 +51,22 @@ class MarkNotificationAsReadUseCase {
       return notification; // It is already marked as read
     }
 
+    let updatedNotification: Notification;
+
     try {
-      const updatedNotification =
+      updatedNotification =
         await this.notificationRepository.markAsRead(notificationId);
-      return updatedNotification;
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar marcar a notificação como lida!",
         500,
       );
     }
+
+    // The user's other devices drop their badge now instead of on a poll.
+    sendNotificationsReadToUser(userId, { notificationId });
+
+    return updatedNotification;
   }
 }
 

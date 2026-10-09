@@ -19,7 +19,7 @@ import { UserRole } from "../user/dtos/user-dto";
  * kind of refusal.
  */
 function verifyUserRole(allowedRoles: UserRole[]) {
-  return (
+  const hook = (
     request: FastifyRequest,
     reply: FastifyReply,
     done: (err?: Error) => void,
@@ -40,6 +40,9 @@ function verifyUserRole(allowedRoles: UserRole[]) {
 
     done();
   };
+
+  // Read back by the OpenAPI transform, which only sees the hook itself.
+  return Object.assign(hook, { openapi: { roles: [...allowedRoles] } });
 }
 
 export { verifyUserRole };

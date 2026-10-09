@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import database from "@/../infra/database";
 
 import {
@@ -14,20 +16,28 @@ import {
 import { IPermissionRepository } from "./IPermission-repository";
 import { permissionLabels, PermissionKey } from "@/config/permissions";
 
-import { buildSearchOr } from "@/shared/pagination/search-or";
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+
+import {
+  PERMISSION_SORT,
+  permissionListWhere,
+} from "../usecases/list-permission/permission-list";
 
 class PermissionRepository implements IPermissionRepository {
   constructor(private prisma = database) {}
 
-  async createPermission({
-    action,
-    canRead,
-    canWrite,
-    businessId,
-    profileAccessId,
-    permissionKey,
-  }: CreatePermissionProps): Promise<Permission> {
-    const createdPermission = await this.prisma.permission.create({
+  async createPermission(
+    {
+      action,
+      canRead,
+      canWrite,
+      businessId,
+      profileAccessId,
+      permissionKey,
+    }: CreatePermissionProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Permission> {
+    const createdPermission = await (tx ?? this.prisma).permission.create({
       data: {
         action: action,
         permissionKey: permissionKey,
@@ -44,104 +54,60 @@ class PermissionRepository implements IPermissionRepository {
   async listPermission({
     page,
     pageSize,
-    businessId,
-    currentUserRole,
-    profileAccessId,
-    search,
+    sort,
+    order,
+    ...filters
   }: ListPermissionProps): Promise<ListPermission> {
-    const skip = (page - 1) * pageSize;
-
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      // Find permission keys that match the search by label
-      const matchingPermissionKeys: PermissionKey[] = [];
-
-      Object.entries(permissionLabels).forEach(([key, label]) => {
-        if (label.toLowerCase().includes(normalizedSearch)) {
-          matchingPermissionKeys.push(key as PermissionKey);
-        }
-      });
-
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { action: { contains: normalizedSearch, mode: "insensitive" } },
-        {
-          profileAccessId: { contains: normalizedSearch, mode: "insensitive" },
-        },
-        {
-          ...(currentUserRole === "MASTER"
-            ? {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
-              }
-            : {}),
-        },
-        {
-          ...(currentUserRole === "MASTER"
-            ? {
-                business: {
-                  corporate_reason: {
-                    contains: normalizedSearch,
-                    mode: "insensitive",
-                  },
-                },
-              }
-            : {}),
-        },
-        {
-          profileAccess: {
-            name: { contains: normalizedSearch, mode: "insensitive" },
-          },
-        },
-      );
-
-      // Add conditions for matching permission keys by label
-      if (matchingPermissionKeys.length > 0) {
-        orConditions.push({
-          permissionKey: { in: matchingPermissionKeys },
-        });
-      }
-    }
-
-    const whereCondition = {
-      ...(currentUserRole !== "MASTER" && { businessId }),
-      ...(currentUserRole === "BUSINESS_USER" && {
-        profileAccessId: { not: profileAccessId },
-      }),
-      ...buildSearchOr(orConditions),
-    };
-
-    const [permissionData, total] = await Promise.all([
+    // Two at a time (connection budget): the page ‖ the grouped counts;
+    // then the names of the profiles the groups mention.
+    const [rows, grouped] = await Promise.all([
       this.prisma.permission.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
-        include: {
-          ...(currentUserRole === "MASTER" && {
-            business: {
-              select: {
-                id: true,
-                corporate_reason: true,
-              },
-            },
-          }),
-          profileAccess: { select: { name: true } },
-        },
-        orderBy: {
-          created_at: "desc", // Sort by created_at
-        },
+        where: permissionListWhere(filters, { withFacets: true }),
+        include: { profileAccess: { select: { name: true } } },
+        orderBy: resolveOrderBy(PERMISSION_SORT, { sort, order }),
       }),
-      this.prisma.permission.count({
-        where: whereCondition,
+      this.prisma.permission.groupBy({
+        by: ["permissionKey", "profileAccessId", "canRead", "canWrite"],
+        where: permissionListWhere(filters, { withFacets: false }),
+        _count: { _all: true },
       }),
     ]);
 
-    return { data: permissionData, total };
+    const profileIds = Array.from(
+      new Set([
+        ...grouped.map((group) => group.profileAccessId),
+        ...(filters.profileAccessIds ?? []),
+      ]),
+    );
+
+    // Only this company's profiles are named: a foreign id in the URL brings
+    // back neither a row nor a name.
+    const profiles =
+      profileIds.length > 0
+        ? await this.prisma.profileAccess.findMany({
+            where: { id: { in: profileIds }, businessId: filters.businessId },
+            select: { id: true, name: true },
+          })
+        : [];
+
+    return {
+      data: rows,
+      groups: grouped.map((group) => ({
+        permissionKey: group.permissionKey,
+        profileAccessId: group.profileAccessId,
+        canRead: group.canRead,
+        canWrite: group.canWrite,
+        count: group._count._all,
+      })),
+      profileNames: new Map(profiles.map((profile) => [profile.id, profile.name])),
+    };
   }
 
   async updatePermission(
     permissionData: UpdatePermission,
+    tx?: Prisma.TransactionClient,
   ): Promise<Permission> {
     const { permissionId, ...dataToUpdate } = permissionData;
 
@@ -151,14 +117,17 @@ class PermissionRepository implements IPermissionRepository {
       ),
     );
 
-    return await this.prisma.permission.update({
+    return await (tx ?? this.prisma).permission.update({
       where: { id: permissionId },
       data: filteredData,
     });
   }
 
-  async deletePermission(permissionId: string): Promise<Permission> {
-    const deletePermission = await this.prisma.permission.delete({
+  async deletePermission(
+    permissionId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Permission> {
+    const deletePermission = await (tx ?? this.prisma).permission.delete({
       where: {
         id: permissionId,
       },
@@ -207,12 +176,11 @@ class PermissionRepository implements IPermissionRepository {
     return findPermissionById;
   }
 
-  async bulkConfigurePermissions({
-    businessId,
-    profileAccessId,
-    permissions,
-  }: BulkConfigurePermissionsProps): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
+  async bulkConfigurePermissions(
+    { businessId, profileAccessId, permissions }: BulkConfigurePermissionsProps,
+    outerTx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    const replace = async (tx: Prisma.TransactionClient) => {
       await tx.permission.deleteMany({
         where: { profileAccessId, businessId },
       });
@@ -229,7 +197,15 @@ class PermissionRepository implements IPermissionRepository {
           })),
         });
       }
-    });
+    };
+
+    // The caller's transaction when it has one (the audit entry joins it).
+    if (outerTx) {
+      await replace(outerTx);
+      return;
+    }
+
+    await this.prisma.$transaction(replace);
   }
 
   async findPermissionsByProfile(

@@ -227,6 +227,7 @@ describe("the line the undo does not cross", () => {
       data: {
         type: "ARRIVAL",
         deliveryId: delivery.id,
+        businessId: CARRIER,
         reportedById: DISPATCHER,
         client_submission_id: randomUUID(),
       },

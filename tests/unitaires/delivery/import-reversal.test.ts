@@ -6,6 +6,7 @@ import { InMemoryImportRepository } from "@/modules/import/repositories/in-memor
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
 import type { NotificationService } from "@/shared/services/notification-service";
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { ImportReport } from "@/modules/import/dtos/import-dto";
 
@@ -42,6 +43,7 @@ const emptyReport: ImportReport = {
 function makeContext() {
   const userRepository = new InMemoryUserRepository();
   const importRepository = new InMemoryImportRepository();
+  const webhooks = new InMemoryWebhookFanOutService();
 
   userRepository.user.push(
     { id: DISPATCHER, role: "BUSINESS_ADMIN", businessId: BUSINESS } as User,
@@ -70,12 +72,14 @@ function makeContext() {
 
   return {
     importRepository,
+    webhooks,
     reverse: new ReverseImportUseCase(
       userRepository,
       importRepository,
       {
         createActivityIfEnabled: async () => undefined,
       } as unknown as NotificationService,
+      webhooks.asService(),
     ),
   };
 }
@@ -123,6 +127,44 @@ function seedRoute(
     ...overrides,
   });
 }
+
+describe("telling the integrations what the undo removed (decision 5.1)", () => {
+  it("announces delivery.cancelled for each removed delivery, and only those", async () => {
+    // Every imported row was announced as delivery.created; an undo that
+    // deleted them in silence left ghost records in the customer's ERP.
+    seedDelivery("d1");
+    context.importRepository.deliveries[0].invoice_key = "3524".padEnd(44, "0");
+    seedDelivery("d2", { status: "IN_TRANSIT" });
+
+    await context.reverse.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      importId: IMPORT,
+    });
+
+    const cancelled = context.webhooks.forTopic("delivery.cancelled");
+
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0].businessId).toBe(BUSINESS);
+    expect(cancelled[0].payload).toMatchObject({
+      delivery_id: "d1",
+      status: "CANCELLED",
+      invoice_key: "3524".padEnd(44, "0"),
+    });
+  });
+
+  it("announces nothing when nothing was removed", async () => {
+    seedDelivery("d1", { eventCount: 1 });
+
+    await context.reverse.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      importId: IMPORT,
+    });
+
+    expect(context.webhooks.forTopic("delivery.cancelled")).toEqual([]);
+  });
+});
 
 describe("undoing an upload nobody has touched", () => {
   it("removes everything it created", async () => {

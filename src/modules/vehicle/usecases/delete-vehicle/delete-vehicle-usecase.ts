@@ -3,27 +3,23 @@ import { inject, injectable } from "tsyringe";
 import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
-import { IFineRepository } from "@/modules/fine/repositories/IFine-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { VehicleNotBelongBusinessError } from "../errors/vehicle-not-belong-business-error";
 import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";
 
 import { VehicleHasAssociatedServiceOrdersError } from "../errors/vehicle-has-associated-service-orders-error";
-import { IServiceOrderRepository } from "@/modules/service-order/repositories/IService-order-repository";
-
-import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
-import { IVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/IVehicle-checklist-repository";
-
 import { VehicleHasAssociatedFinesError } from "../errors/vehicle-has-associated-fines-error";
 import { VehicleHasAssociatedFuelError } from "../errors/vehicle-has-associated-fuel-error";
 
 import { VehicleHasAssociatedChecklistsError } from "../errors/vehicle-has-associated-checklists-error";
+import { VehicleHasAssociatedPayablesError } from "../errors/vehicle-has-associated-payables-error";
 
 import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
 import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
@@ -32,6 +28,7 @@ import { VehicleHasAssociatedOperationError } from "../errors/vehicle-has-associ
 
 import { AppError } from "@/shared/errors/AppError";
 import { Vehicle } from "../../dtos/vehicle-dto";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 @injectable()
 class DeleteVehicleUseCase {
@@ -42,14 +39,6 @@ class DeleteVehicleUseCase {
     private business: IBusinessRepository,
     @inject("VehicleRepository")
     private vehicle: IVehicleRepository,
-    @inject("FineRepository")
-    private fine: IFineRepository,
-    @inject("ServiceOrderRepository")
-    private serviceOrder: IServiceOrderRepository,
-    @inject("FuelRepository")
-    private fuel: IFuelRepository,
-    @inject("VehicleChecklistRepository")
-    private vehicleChecklist: IVehicleChecklistRepository,
     @inject("DeliveryRepository")
     private delivery: IDeliveryRepository,
     @inject("RouteRepository")
@@ -69,6 +58,10 @@ class DeleteVehicleUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The caller's own company, not only the route guard: a job or another
+    // use case reaches this without the HTTP tenant check.
+    assertTenantAccess(findUser, businessId);
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
@@ -85,39 +78,33 @@ class DeleteVehicleUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
-    const associatedFines = await this.fine.findFinesByVehicleId(vehicleId);
+    // Counted in one statement (FLEET-VEH-10): the guards used to load
+    // every fine, fuelling, order and checklist of the truck to read
+    // `.length` — thousands of rows to answer "is there any".
+    const usage = await this.vehicle.countVehicleUsage(vehicleId);
 
-    if (associatedFines.length > 0) {
-      throw new VehicleHasAssociatedFinesError(associatedFines.length);
+    if (usage.fines > 0) {
+      throw new VehicleHasAssociatedFinesError(usage.fines);
     }
 
-    const associatedServiceOrders =
-      await this.serviceOrder.findServiceOrdersByVehicleId(vehicleId);
-
-    if (associatedServiceOrders && associatedServiceOrders.length > 0) {
-      throw new VehicleHasAssociatedServiceOrdersError(
-        associatedServiceOrders.length,
-      );
+    if (usage.serviceOrders > 0) {
+      throw new VehicleHasAssociatedServiceOrdersError(usage.serviceOrders);
     }
 
-    const associatedFuels = await this.fuel.findFuelsByVehicleId(vehicleId);
-
-    if (associatedFuels.length > 0) {
-      throw new VehicleHasAssociatedFuelError(associatedFuels.length);
+    if (usage.fuels > 0) {
+      throw new VehicleHasAssociatedFuelError(usage.fuels);
     }
 
-    const associatedChecklists =
-      await this.vehicleChecklist.findVehicleChecklistsByVehicleId(vehicleId);
-
-    if (associatedChecklists.length > 0) {
-      throw new VehicleHasAssociatedChecklistsError(
-        associatedChecklists.length,
-      );
+    if (usage.checklists > 0) {
+      throw new VehicleHasAssociatedChecklistsError(usage.checklists);
     }
 
+    if (usage.accountsPayable > 0) {
+      throw new VehicleHasAssociatedPayablesError(usage.accountsPayable);
+    }
 
     /**
-     * The operation history, which the four guards above never covered.
+     * The operation history, which the guards above never covered.
      *
      * Both relations are optional, so this delete would SUCCEED and silently
      * erase whose work it was — see tests/E2E/delete-cascade-integrity for
@@ -135,27 +122,30 @@ class DeleteVehicleUseCase {
       );
     }
 
+    let deletedVehicle: Vehicle;
+
     try {
-      const deletedVehicle = await this.vehicle.deleteVehicle(vehicleId);
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Veículo",
-        action: "delete",
-        entityId: vehicleId,
-        description: `Veículo ${deletedVehicle.license_plate} deletado permanentemente (sem multas associadas) | ID: ${deletedVehicle.id}`,
-        status: "Deletado",
-        performedBy: userId,
-        businessId,
-      });
-
-      return deletedVehicle;
+      deletedVehicle = await this.vehicle.deleteVehicle(vehicleId);
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar excluir o veículo! Por favor, tente novamente.",
         500,
       );
     }
+
+    sendCatalogChangedEvent(businessId, "vehicle");
+
+    this.notificationService.createActivityIfEnabled({
+      type: "Veículo",
+      action: "delete",
+      entityId: vehicleId,
+      description: `Veículo ${deletedVehicle.license_plate} deletado permanentemente | ID: ${deletedVehicle.id}`,
+      status: "Deletado",
+      performedBy: userId,
+      businessId,
+    });
+
+    return deletedVehicle;
   }
 }
 

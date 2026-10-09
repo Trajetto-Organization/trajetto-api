@@ -79,10 +79,51 @@ function isModuleEnabled(
   return rows.some((row) => row.module === module && row.enabled);
 }
 
+type MasterModuleRefusal =
+  | "company-not-found"
+  | "company-inactive"
+  | "module-not-enabled";
+
+/**
+ * Why a MASTER request is refused by the module gate, or null to let it on.
+ *
+ * `requested` are the companies the request names; `companies` what the
+ * database knows of them (an unknown id is absent). The most basic reason
+ * wins: a company that does not exist, then one switched off, then the plan.
+ * Answering MODULE_NOT_ENABLED for the first two made the web offer "Gerenciar
+ * módulos" for a company nobody can operate. A switched-off company that
+ * DID hire the module is not this gate's to refuse: the tenant gate of the
+ * route answers for it, exactly as before.
+ */
+function masterModuleRefusal(
+  requested: readonly string[],
+  companies: ReadonlyArray<{
+    id: string;
+    isActive: boolean;
+    moduleEnabled: boolean;
+  }>,
+): MasterModuleRefusal | null {
+  const byId = new Map(companies.map((company) => [company.id, company]));
+  const named = requested.map((id) => byId.get(id));
+
+  if (named.some((company) => company === undefined)) {
+    return "company-not-found";
+  }
+
+  const withoutModule = named.filter((company) => !company!.moduleEnabled);
+
+  if (withoutModule.some((company) => !company!.isActive)) {
+    return "company-inactive";
+  }
+
+  return withoutModule.length > 0 ? "module-not-enabled" : null;
+}
+
 export {
   canRegisterVehicle,
   canReactivateVehicle,
   occupiesFleetSlot,
   isModuleEnabled,
+  masterModuleRefusal,
 };
-export type { VehicleQuotaVerdict };
+export type { MasterModuleRefusal, VehicleQuotaVerdict };

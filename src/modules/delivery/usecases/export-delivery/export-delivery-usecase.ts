@@ -2,21 +2,30 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { ExportFormatters } from "@/shared/services/export/formatters";
 import { ExportColumn } from "@/shared/services/export/types";
 
-import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
+import {
+  DELIVERY_STATUS_LABELS,
+  DeliveryStatus,
+} from "@/shared/delivery/delivery-rules";
 import { AppError } from "@/shared/errors/AppError";
+
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
+import { businessDateKey, resolveTimeZone } from "@/shared/time/business-day";
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { formatDateOnlyBR } from "@/shared/delivery/date-only-field";
+import { formatInstant } from "@/shared/vehicle/record-dates";
 
 interface ExportDeliveryRequest {
   userId: string;
   businessId?: string;
   search?: string;
-  status?: string;
+  statuses?: DeliveryStatus[];
+  shipperIds?: string[];
+  driverIds?: string[];
 }
 
 /**
@@ -38,13 +47,17 @@ class ExportDeliveryUseCase {
     private user: IUserRepository,
     @inject("DeliveryRepository")
     private delivery: IDeliveryRepository,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
   ) {}
 
   async execute({
     userId,
     businessId,
     search,
-    status,
+    statuses,
+    shipperIds,
+    driverIds,
   }: ExportDeliveryRequest): Promise<{
     iterator: AsyncGenerator<any>;
     columns: ExportColumn[];
@@ -52,7 +65,7 @@ class ExportDeliveryUseCase {
   }> {
     const findUser = await this.user.findUserById(userId);
 
-    if (!findUser) throw new ResourceNotFoundError();
+    if (!findUser) throw callerNotFound();
 
     const resolvedBusinessId = businessId ?? findUser.businessId;
 
@@ -66,13 +79,24 @@ class ExportDeliveryUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
-    // A driver exporting gets their own work, the same way their listing does.
+    // The listing's filters, so the file is what the screen shows (decision
+    // 5.8). A driver exporting gets their own work, as their listing does.
     const iterator = this.delivery.streamDeliveriesForExport({
       businessId: resolvedBusinessId,
-      driverId: findUser.driverId ?? undefined,
+      scopeDriverId: findUser.driverId ?? undefined,
       search,
-      status,
+      statuses,
+      shipperIds,
+      driverIds,
     });
+
+    // The company's zone (decision 1.1): the day in the file name and the
+    // hour in "Entregue em", which the server's zone (UTC) put a day ahead
+    // from 21:00 in São Paulo.
+    const findBusiness = await this.business.findBusinessById(resolvedBusinessId);
+    const timeZone = resolveTimeZone(
+      (findBusiness as { timezone?: string | null } | null)?.timezone,
+    );
 
     const columns: ExportColumn[] = [
       { header: "ID", key: "id", width: 38, formatter: ExportFormatters.fallback },
@@ -93,13 +117,15 @@ class ExportDeliveryUseCase {
       { header: "Motorista", key: "driverName", width: 28, formatter: ExportFormatters.fallback },
       { header: "Veículo", key: "vehiclePlate", width: 12, formatter: ExportFormatters.fallback },
       { header: "Rota", key: "routeCode", width: 10, formatter: ExportFormatters.fallback },
-      { header: "Data prevista", key: "scheduled_date", width: 16, formatter: ExportFormatters.date },
-      { header: "Entregue em", key: "delivered_at", width: 20, formatter: ExportFormatters.datetime },
+      // A civil day (decision 1.3): read as the day it stores, never shifted
+      // by the process's zone like the instant columns.
+      { header: "Data prevista", key: "scheduled_date", width: 16, formatter: (value) => formatDateOnlyBR(value as Date | string | null) },
+      { header: "Entregue em", key: "delivered_at", width: 20, formatter: (value) => formatInstant(value, timeZone) },
       { header: "Recebido por", key: "received_by", width: 24, formatter: ExportFormatters.fallback },
       { header: "Observações", key: "notes", width: 40, formatter: ExportFormatters.fallback },
     ];
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = businessDateKey(new Date(), timeZone);
 
     return { iterator, columns, filename: `entregas-${today}` };
   }

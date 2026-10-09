@@ -116,6 +116,9 @@ async function seedDelivery(
     city: "São Paulo",
     uf: "SP",
     street: "Rua das Entregas",
+    // Carried by a driver: the panel does not put a driverless load in
+    // transit (decision 5.4, panel-status-rules.test.ts).
+    driverId: "018f0000-0000-7000-8000-0000000000dd",
     ...overrides,
   } as CreateDeliveryProps);
 
@@ -242,16 +245,21 @@ describe("two surfaces writing at the same time", () => {
     const { useCase, deliveryRepository } = makeContext();
     const delivery = await seedDelivery(deliveryRepository);
 
-    await Promise.allSettled([
+    const [cancelling, dispatching] = await Promise.allSettled([
       move(useCase, delivery.id, "CANCELLED"),
       move(useCase, delivery.id, "IN_TRANSIT"),
     ]);
 
-    // Whichever won, the row is in one of the two legal outcomes and nothing
-    // was left half-applied. Without the precondition the loser's write would
-    // simply overwrite the winner's.
-    expect(["CANCELLED", "IN_TRANSIT"]).toContain(
-      deliveryRepository.deliveries[0].status,
+    // Exactly one landed, and the row holds THAT one's status. "One of the
+    // two" was not an assertion: without the precondition both writes land,
+    // the last one wins, and the row still holds one of the two values.
+    expect([cancelling.status, dispatching.status].sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+
+    expect(deliveryRepository.deliveries[0].status).toBe(
+      cancelling.status === "fulfilled" ? "CANCELLED" : "IN_TRANSIT",
     );
   });
 });
@@ -334,7 +342,7 @@ describe("the proof write", () => {
   });
 });
 
-describe("o painel editando enquanto o motorista comprova", () => {
+describe("the panel editing while the driver proves the delivery", () => {
   /**
    * A única escrita do módulo que era read-then-write.
    *
@@ -345,7 +353,7 @@ describe("o painel editando enquanto o motorista comprova", () => {
    * e motorista de uma entrega cujo canhoto já estava assinado e cujo webhook
    * já tinha saído para o ERP do cliente.
    */
-  it("é recusada com 409 quando o status mudou no meio", async () => {
+  it("is refused with 409 when the status changed in between", async () => {
     const repository = new InMemoryDeliveryRepository();
     const delivery = await seedDelivery(repository);
 
@@ -370,7 +378,7 @@ describe("o painel editando enquanto o motorista comprova", () => {
     ).not.toBe("Reescrito");
   });
 
-  it("passa quando o status é o esperado", async () => {
+  it("goes through when the status is the expected one", async () => {
     // A outra metade do par: sem ela, o teste acima passaria para um
     // repositório que recusa tudo.
     const repository = new InMemoryDeliveryRepository();

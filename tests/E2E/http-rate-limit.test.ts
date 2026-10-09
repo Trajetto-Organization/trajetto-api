@@ -55,7 +55,8 @@ let app: Awaited<typeof import("@/http")>["app"];
 beforeAll(async () => {
   ({ app } = await import("@/http"));
   await app.ready();
-});
+  // Boots the whole application: longer than vitest's 10 s hook default.
+}, 60_000);
 
 /**
  * Waits until the limiter is actually counting.
@@ -94,8 +95,8 @@ async function awaitLimiter(): Promise<void> {
   );
 }
 
-describe("o limite de requisições do servidor", () => {
-  it("recusa com 429 e diz como voltar", async () => {
+describe("the server's request limit", () => {
+  it("refuses with 429 and says when to come back", async () => {
     await awaitLimiter();
 
     const statuses: number[] = [];
@@ -171,7 +172,7 @@ describe("o limite de requisições do servidor", () => {
     ).toBe(200);
   });
 
-  it("e o teto é o da rota, não o global", async () => {
+  it("and the ceiling is the route's, not the global one", async () => {
     /**
      * `/integration/docs` has its own bucket of thirty a minute; the global
      * limit is three hundred. Reading the header off a route that has not been

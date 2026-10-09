@@ -10,6 +10,37 @@ import {
 import { ITrafficViolationCodeRepository } from "./ITraffic-violation-code-repository";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
+import { escapeLikePattern } from "@/shared/utils/like-pattern";
+
+import { Prisma } from "@prisma/client";
+
+// "745-50" is how a code is printed on the notice and in the picker.
+const FULL_CODE = /^(\d{1,6})-(\d{1,4})$/;
+
+/**
+ * The picker's search: the code as printed ("745", "745-50") or words of the
+ * description, case-insensitive and literal (buildSearchOr escapes % and _).
+ */
+function trafficViolationCodeSearchWhere(
+  search: string | undefined,
+): Prisma.TrafficViolationCodeWhereInput {
+  const term = search?.trim() ?? "";
+
+  if (!term) return {};
+
+  const contains = { contains: term, mode: "insensitive" as const };
+  const fullCode = FULL_CODE.exec(term);
+
+  const conditions: Prisma.TrafficViolationCodeWhereInput[] = [
+    { code: contains },
+    { description: contains },
+    ...(fullCode
+      ? [{ code: fullCode[1], sub_code: Number(fullCode[2]) }]
+      : []),
+  ];
+
+  return buildSearchOr(conditions);
+}
 
 class TrafficViolationCodeRepository
   implements ITrafficViolationCodeRepository
@@ -56,7 +87,10 @@ class TrafficViolationCodeRepository
     const whereCondition: any = {
       ...(gravity && { gravity }),
       ...(violatorType && {
-        violator_type: { contains: violatorType, mode: "insensitive" },
+        violator_type: {
+          contains: escapeLikePattern(violatorType),
+          mode: "insensitive",
+        },
       }),
       ...buildSearchOr(orConditions),
     };
@@ -98,11 +132,15 @@ class TrafficViolationCodeRepository
   async searchTrafficViolationCodeWithCursor({
     limit = 10,
     cursor,
+    search,
   }: SearchTrafficViolationCodeWithCursorProps): Promise<CursorPaginatedTrafficViolationCode> {
+    // The picker used to ignore what was typed: the national table has
+    // hundreds of codes, and one not yet scrolled into view "did not exist".
     const items = await this.prisma.trafficViolationCode.findMany({
+      where: trafficViolationCodeSearchWhere(search),
       take: limit + 1,
       ...(cursor && { cursor: { id: cursor }, skip: 1 }),
-      orderBy: [{ code: "asc" }, { sub_code: "asc" }],
+      orderBy: [{ code: "asc" }, { sub_code: "asc" }, { id: "asc" }],
     });
 
     const hasMore = items.length > limit;
@@ -120,4 +158,4 @@ class TrafficViolationCodeRepository
   }
 }
 
-export { TrafficViolationCodeRepository };
+export { TrafficViolationCodeRepository, trafficViolationCodeSearchWhere };

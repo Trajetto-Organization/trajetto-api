@@ -13,6 +13,8 @@ import { NotificationService } from "@/shared/services/notification-service";
 
 import { FuelType, CreateFuelTypeProps } from "../../dtos/fuel-type-dto";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 @injectable()
 class CreateFuelTypeUseCase {
@@ -37,6 +39,10 @@ class CreateFuelTypeUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The route's tenant guard already refused another company's id; this
+    // keeps the use case safe when called from anywhere else.
+    assertTenantAccess(findUser, fuelTypeData.businessId);
+
     const findBusiness = await this.business.findBusinessById(
       fuelTypeData.businessId,
     );
@@ -57,6 +63,9 @@ class CreateFuelTypeUseCase {
 
     try {
       const fuelTypeCreated = await this.fuelType.createFuelType(fuelTypeData);
+
+      // After the write: open pickers of this company refetch (decision 2.3).
+      sendCatalogChangedEvent(fuelTypeData.businessId, "fuel_type");
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({

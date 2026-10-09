@@ -130,6 +130,7 @@ beforeAll(async () => {
     data: {
       type: "ARRIVAL",
       deliveryId,
+      businessId: CARRIER,
       reportedById: DRIVER_USER,
       actor: "DRIVER_APP",
       device: "Moto G84 · 3f9a",
@@ -143,6 +144,7 @@ beforeAll(async () => {
   await prisma.deliveryOccurrence.create({
     data: {
       deliveryId,
+      businessId: CARRIER,
       occurrenceTypeId: OCCURRENCE_TYPE,
       reportedById: DRIVER_USER,
       description: "Ninguém atendeu",
@@ -169,6 +171,7 @@ beforeAll(async () => {
     data: {
       type: "STATUS_CHANGE",
       deliveryId,
+      businessId: CARRIER,
       reportedById: OPERATOR,
       actor: "USER",
       status_from: "IN_TRANSIT",

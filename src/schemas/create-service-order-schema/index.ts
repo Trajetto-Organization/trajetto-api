@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isPickedDateInput } from "@/shared/vehicle/record-dates";
+
 import { LocationSource, RecordOrigin } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 
@@ -7,7 +9,6 @@ import {
   emptyStringToNull,
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
-  isValidDateString,
 } from "@/shared/utils/zod-schema-helpers";
 
 const createServiceOrderSchema = z
@@ -16,7 +17,7 @@ const createServiceOrderSchema = z
       .string()
       .min(1, "Data da ordem de serviço é obrigatória.")
       .superRefine((val, ctx) => {
-        if (!isValidDateString(val)) {
+        if (!isPickedDateInput(val)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: "Data da ordem de serviço inválida",
@@ -33,7 +34,7 @@ const createServiceOrderSchema = z
         .nullable()
         .optional()
         .refine(
-          (val) => !val || isValidDateString(val),
+          (val) => !val || isPickedDateInput(val),
           "Data de conclusão inválida",
         ),
     ),
@@ -126,7 +127,6 @@ const createServiceOrderSchema = z
       },
       z
         .number({
-          required_error: "A quilometragem da última revisão é obrigatória.",
           invalid_type_error:
             "A quilometragem da última revisão deve ser um número válido.",
         })
@@ -137,7 +137,11 @@ const createServiceOrderSchema = z
         .max(
           9999999,
           "A quilometragem da última revisão não pode exceder 9.999.999 km.",
-        ),
+        )
+        // Vehicle.last_maintenance_mileage is optional: a vehicle that never
+        // had a review still needs its first order.
+        .optional()
+        .nullable(),
     ),
     new_mileage_after_service: z.preprocess(
       (val) => {
@@ -334,16 +338,17 @@ const createServiceOrderSchema = z
   )
   .refine(
     (data) => {
-      // Validation: new mileage must be > current mileage (strictly greater)
+      // Equal is valid: a vehicle that stood in the workshop did not move
+      // (FLEET-SO-4). Only a reading behind the snapshot is refused.
       if (data.new_mileage_after_service && data.current_mileage_at_service) {
-        return data.new_mileage_after_service > data.current_mileage_at_service;
+        return data.new_mileage_after_service >= data.current_mileage_at_service;
       }
 
       return true;
     },
     {
       message:
-        "A nova quilometragem deve ser maior que a quilometragem atual do veículo",
+        "A nova quilometragem não pode ser menor que a quilometragem atual do veículo",
       path: ["new_mileage_after_service"],
     },
   );

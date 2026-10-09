@@ -3,25 +3,24 @@ interface AuthenticateUserProps {
   refresh_token?: string;
   twoFactorVerificationMessage?: string;
   isTwoFactorVerification?: boolean;
+  twoFactorChallenge?: string;
   emailVerificationMessage?: string;
   emailVerification?: boolean;
   role?: string;
 }
 
+// The code, its hash and the verification token are made inside each flow,
+// so a login that needs neither never pays for them.
 interface TwoFactorProps {
   email: string;
   userId: string;
   name: string;
-  hashedTwoFactorToken: string;
-  twoFactorExpires: Date;
-  twoFactorToken: string;
+  sessionVersion?: number;
 }
 
 interface EmailVerificationProps {
   email: string;
   name: string;
-  tokenVerification: string;
-  expires: Date;
 }
 
 export { AuthenticateUserProps, TwoFactorProps, EmailVerificationProps };

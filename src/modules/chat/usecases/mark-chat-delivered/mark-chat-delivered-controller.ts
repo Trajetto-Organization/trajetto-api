@@ -3,9 +3,6 @@ import { container } from "tsyringe";
 
 import { MarkChatDeliveredUseCase } from "./mark-chat-delivered-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { ChatThreadNotFoundError } from "../errors/chat-errors";
-
 import { markChatDeliveredSchema } from "@/schemas/mark-chat-delivered-schema";
 
 class MarkChatDeliveredController {
@@ -18,30 +15,19 @@ class MarkChatDeliveredController {
       MarkChatDeliveredUseCase,
     );
 
-    try {
-      const { delivered_at, side } = await markChatDeliveredUseCase.execute({
-        userId: id,
-        threadId,
-        deliveredAt: deliveredAt ? new Date(deliveredAt) : undefined,
-        businessId,
-      });
+    // ChatThreadNotFoundError (404) and ChatDeliveryReceiptNotAllowedError
+    // (403) are AppErrors: the global handler answers each with its code.
+    const { delivered_at, side } = await markChatDeliveredUseCase.execute({
+      userId: id,
+      threadId,
+      deliveredAt: deliveredAt ? new Date(deliveredAt) : undefined,
+      businessId,
+    });
 
-      return reply.status(200).send({
-        message: "Entrega confirmada.",
-        data: { delivered_at, side },
-      });
-    } catch (error) {
-      if (
-        error instanceof ResourceNotFoundError ||
-        error instanceof ChatThreadNotFoundError
-      ) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      // ChatDeliveryReceiptNotAllowedError is an AppError: the global
-      // handler answers it with its own 403 and error code.
-      throw error;
-    }
+    return reply.status(200).send({
+      message: "Entrega confirmada.",
+      data: { delivered_at, side },
+    });
   }
 }
 

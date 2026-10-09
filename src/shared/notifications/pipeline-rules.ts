@@ -65,7 +65,85 @@ function assertDeliveryLeaseInvariant(
 
 /** Backoff between attempts; length also defines the maximum attempts. */
 const OUTBOX_RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000, 30 * 60_000];
-const DELIVERY_RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000, 30 * 60_000];
+
+/**
+ * Deliveries get a longer tail than expansion: expansion only needs our own
+ * database, while a delivery waits on somebody else's provider. The schedule
+ * used to end at ~42 minutes, so an hour-long e-mail or WhatsApp outage turned
+ * every message of its first twenty minutes into a permanent failure that
+ * nothing replayed. It now spans ~4h40 — past a long provider incident.
+ */
+const DELIVERY_RETRY_DELAYS_MS = [
+  30_000,
+  2 * 60_000,
+  10 * 60_000,
+  30 * 60_000,
+  60 * 60_000,
+  3 * 60 * 60_000,
+];
+
+/**
+ * The most times a row is ever claimed: the retry schedule, plus the attempt
+ * before it. Also the ceiling on RECLAIMS — a row whose attempt died with the
+ * process is claimed again when its lease runs out, and before this ceiling it
+ * was claimed again forever: a row that kills its worker would take every
+ * replica down in turn.
+ */
+const OUTBOX_MAX_ATTEMPTS = OUTBOX_RETRY_DELAYS_MS.length + 1;
+const DELIVERY_MAX_ATTEMPTS = DELIVERY_RETRY_DELAYS_MS.length + 1;
+
+/**
+ * A provider asking us to come back later is honoured, within reason: never
+ * sooner than our own backoff, never later than an hour.
+ */
+const MAX_RETRY_AFTER_MS = 60 * 60_000;
+
+function honourRetryAfter(
+  backoffMs: number,
+  retryAfterMs: number | undefined,
+): number {
+  if (!retryAfterMs || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) {
+    return backoffMs;
+  }
+
+  return Math.max(backoffMs, Math.min(retryAfterMs, MAX_RETRY_AFTER_MS));
+}
+
+/**
+ * How long an event whose topic this build does not know is kept waiting for
+ * a build that does.
+ *
+ * During a rolling deploy the OLD replicas keep claiming work, including
+ * events published by the new version under topics the old code has never
+ * heard of — and those used to be marked FAILED on the spot, for good. A
+ * rollback did the same to every such event still pending. The row is now put
+ * back untouched for a newer replica to take; only after a day is it given up
+ * on, which is when "unknown topic" stops meaning "deploy in progress".
+ */
+const UNKNOWN_TOPIC_PATIENCE_MS = 24 * 60 * 60_000;
+const UNKNOWN_TOPIC_RECHECK_MS = 60_000;
+
+/**
+ * Deliveries run in two lanes, each with its own claim and its own workers.
+ *
+ * One FIFO used to serve every channel of every tenant: a slow or hung e-mail
+ * or WhatsApp provider held the five delivery slots, and the in-app bell, the
+ * phone push and the chat of every company waited behind it. The internal
+ * lane touches only our own database and Expo; the external lane is where
+ * third-party latency lives, and it can no longer starve the other.
+ */
+const DELIVERY_LANES = {
+  internal: ["IN_APP", "ACTIVITY", "PUSH"],
+  external: ["EMAIL", "WHATSAPP"],
+} as const satisfies Record<string, readonly NotificationChannel[]>;
+
+type DeliveryLane = keyof typeof DELIVERY_LANES;
+
+function laneOf(channel: NotificationChannel): DeliveryLane {
+  return (DELIVERY_LANES.external as readonly string[]).includes(channel)
+    ? "external"
+    : "internal";
+}
 
 /**
  * Delay before the next try, or null when the attempts are exhausted and the
@@ -211,6 +289,13 @@ function withRetryJitter(delayMs: number): number {
 }
 
 export {
+  DELIVERY_LANES,
+  DELIVERY_MAX_ATTEMPTS,
+  OUTBOX_MAX_ATTEMPTS,
+  UNKNOWN_TOPIC_PATIENCE_MS,
+  UNKNOWN_TOPIC_RECHECK_MS,
+  honourRetryAfter,
+  laneOf,
   OUTBOX_LEASE_SECONDS,
   DELIVERY_LEASE_SECONDS,
   DELIVERY_CONCURRENCY,
@@ -224,4 +309,9 @@ export {
   resolveRecipientChannelFlags,
 };
 
-export type { RecipientChannelFlags, RecipientLegacyToggles, CategoryPreference };
+export type {
+  CategoryPreference,
+  DeliveryLane,
+  RecipientChannelFlags,
+  RecipientLegacyToggles,
+};

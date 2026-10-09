@@ -5,8 +5,10 @@ import { IShipperRepository } from "../../repositories/IShipper-repository";
 
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+import {
+  businessNotFound,
+  callerNotFound,
+} from "@/shared/delivery/caller-not-found";
 
 import { CursorPaginatedShipper } from "../../dtos/shipper-dto";
 import { AppError } from "@/shared/errors/AppError";
@@ -18,6 +20,7 @@ interface SearchShipperWithCursorRequest {
   limit?: number;
   cursor?: string;
   businessId: string;
+  search?: string;
 }
 
 @injectable()
@@ -36,11 +39,12 @@ class SearchShipperCursorUseCase {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchShipperWithCursorRequest): Promise<CursorPaginatedShipper> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
-      throw new ResourceNotFoundError();
+      throw callerNotFound();
     }
 
     assertTenantAccess(findUser, businessId);
@@ -48,7 +52,7 @@ class SearchShipperCursorUseCase {
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
-      throw new BusinessNotFoundError();
+      throw businessNotFound();
     }
 
     try {
@@ -56,6 +60,7 @@ class SearchShipperCursorUseCase {
         limit,
         cursor,
         businessId,
+        search,
       });
     } catch (error) {
       if (error instanceof AppError) {

@@ -1,4 +1,5 @@
 import { UserRole } from "@/modules/user/dtos/user-dto";
+import { readOperationsBusinessId } from "@/shared/socket/operations-access";
 
 /**
  * Pure access rules for the driver chat.
@@ -11,6 +12,19 @@ import { UserRole } from "@/modules/user/dtos/user-dto";
 /** The SAC team room of one company. */
 function chatStaffRoom(businessId: string): string {
   return `chat-staff:${businessId}`;
+}
+
+/**
+ * One driver's own chat room, named after the company they belong to.
+ *
+ * The staff's typing hints are addressed to a user id the client sends. They
+ * used to go out through a cluster-wide `fetchSockets` per keystroke, only to
+ * filter the answer by company. With the company in the room name — the
+ * SENDER's company, from its handshake — a hint aimed at another tenant's
+ * driver goes to a room nobody is in, with no round trip at all.
+ */
+function chatDriverRoom(businessId: string, userId: string): string {
+  return `chat-driver:${businessId}:${userId}`;
 }
 
 /**
@@ -61,27 +75,49 @@ function canSubscribeToChatBusiness(
 }
 
 /**
- * The only thing read out of a `chatSubscribe`/`chatUnsubscribe` payload.
- * Anything that is not a non-empty string business id becomes null, and the
- * caller ignores the event silently — a malformed frame is never a reason to
- * drop a connection.
+ * The only thing read out of a `chatSubscribe`/`chatUnsubscribe` payload: a
+ * company id shaped like one, lower-cased, or null — and the caller ignores
+ * the event silently, since a malformed frame is never a reason to drop a
+ * connection.
+ *
+ * The same reader as `operationsSubscribe` (RT-1). It used to accept any
+ * non-empty string up to the frame ceiling (16 KB); the id becomes part of a
+ * room name, which is published through Redis with every emit.
  */
 function readBusinessIdPayload(payload: unknown): string | null {
+  return readOperationsBusinessId(payload);
+}
+
+/** Longer than any id this product issues, and far short of a padded frame. */
+const MAX_DRIVER_USER_ID_LENGTH = 64;
+
+/**
+ * The driver a staff hint is addressed to — a short string, or nothing.
+ *
+ * It becomes part of a room name, and a room name is published through Redis
+ * with every emit. Unchecked, a client could make that as large as the whole
+ * message ceiling.
+ */
+function readDriverUserIdPayload(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") return null;
 
-  const { businessId } = payload as { businessId?: unknown };
+  const { driverUserId } = payload as { driverUserId?: unknown };
 
-  if (typeof businessId !== "string") return null;
+  if (typeof driverUserId !== "string") return null;
 
-  const trimmed = businessId.trim();
+  const trimmed = driverUserId.trim();
 
-  return trimmed.length > 0 ? trimmed : null;
+  return trimmed.length > 0 && trimmed.length <= MAX_DRIVER_USER_ID_LENGTH
+    ? trimmed
+    : null;
 }
 
 export {
   chatStaffRoom,
+  chatDriverRoom,
   canWriteInChat,
   canSubscribeToChatBusiness,
   readBusinessIdPayload,
+  readDriverUserIdPayload,
 };
 export type { ChatSubscriber };

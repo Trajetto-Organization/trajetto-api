@@ -1,19 +1,11 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
+import { totalsWarning } from "../service-order-totals-warning";
+
 import { UpdateServiceOrderPartUseCase } from "./update-service-order-part-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
-import { PartNotFoundError } from "@/modules/part/usecases/errors/part-not-found-error";
-
-import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
-import { ServiceOrderPartNotFoundError } from "../errors/service-order-part-not-found-error";
-
-import { ServiceOrderPartAlreadyExistsError } from "../errors/service-order-part-already-exists-error";
-import { PartNotBelongError } from "@/modules/part/usecases/errors/part-not-belong-error";
+import { replyMaintenanceError } from "@/modules/service-order/usecases/errors/maintenance-http-errors";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDeleteServiceOrderSchema } from "@/schemas/update-delete-service-order-schema";
@@ -46,7 +38,7 @@ class UpdateServiceOrderPartController {
     );
 
     try {
-      await updateServiceOrderPartUseCase.execute(
+      const { totals } = await updateServiceOrderPartUseCase.execute(
         serviceOrderPartData,
         serviceOrderPartId,
         serviceOrderId,
@@ -54,41 +46,15 @@ class UpdateServiceOrderPartController {
         id,
       );
 
-      return reply
-        .status(200)
-        .send({ message: "Peça da ordem de serviço atualizada com sucesso!" });
+      return reply.status(200).send({
+        message: "Peça da ordem de serviço atualizada com sucesso!",
+        ...totalsWarning(totals),
+      });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof ServiceOrderNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof PartNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof ServiceOrderPartNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof ServiceOrderPartAlreadyExistsError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof ServiceOrderNotBelongBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      if (error instanceof PartNotBelongError) {
-        return reply.status(403).send({ message: error.message });
-      }
+      // A missing or foreign order (404 SERVICE_ORDER_NOT_FOUND) and a
+      // missing or foreign part (404 PART_NOT_FOUND) are AppErrors from the
+      // use case, one answer each (decision 11.3).
+      if (replyMaintenanceError(reply, error)) return reply;
 
       throw error;
     }

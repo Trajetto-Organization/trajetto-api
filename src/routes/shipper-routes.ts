@@ -17,6 +17,13 @@ import {
   shipperSchemas,
   shipperResponses,
 } from "./documentation/shipper-documentation";
+import {
+  itemOf,
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
+import { shipperListSearchMetaDoc } from "@/modules/shipper/usecases/list-shipper/list-shipper-documentation";
 
 const createShipperController = new CreateShipperController();
 const listShipperController = new ListShipperController();
@@ -42,14 +49,17 @@ async function shipperRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["shipper"],
-        summary: "Create a new shipper (embarcador)",
+        summary: "Cria um embarcador",
         description:
-          "Register a cargo owner the carrier delivers for. Shippers are a dimension inside the tenant (multi-shipper support).",
+          "Cadastra o dono da carga para quem a transportadora entrega. Nome e CNPJ são únicos na empresa (409 SHIPPER_NAME_TAKEN ou SHIPPER_CNPJ_TAKEN); o CNPJ passa pela validação dos dígitos verificadores. Emite `catalogChanged` (shipper) depois de gravar.",
         params: shipperSchemas.businessIdParam,
         body: shipperSchemas.createShipper,
         response: {
           201: shipperResponses.shipperCreated,
-          400: shipperResponses.genericError,
+          400: shipperResponses.codedError,
+          403: shipperResponses.codedError,
+          404: shipperResponses.lookupNotFound,
+          409: shipperResponses.codedError,
           500: shipperResponses.internalServerError,
         },
       },
@@ -61,20 +71,26 @@ async function shipperRoutes(app: FastifyInstance) {
     "/list-shipper",
     {
       onRequest: [ensureAuthenticated],
+      // Company-wide catalogue with the shippers' contacts: not the driver's
+      // to read (decision 4.4). The app never lists shippers.
       preHandler: [
         deliveriesModule,
-        verifyPermission("delivery_manage", "read"),
+        verifyPermission("delivery_manage", "read", { allowDriver: false }),
       ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["shipper"],
-        summary: "List shippers",
+        summary: "Lista os embarcadores",
         description:
-          "Paginated list of the company's shippers with optional search by name, CNPJ or email.",
+          "Tabela paginada no servidor: ordena por `sort`/`order` (name, created_at, updated_at) e filtra por `status` (active, inactive), além da busca por id, nome, CNPJ (com ou sem máscara) ou e-mail. A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões (com a busca, sem o filtro de status) e as opções do filtro com as contagens. Token de motorista recebe 403 PERMISSION_DENIED.",
         querystring: shipperSchemas.listShippers,
         response: {
-          200: shipperResponses.shipperList,
-          400: shipperResponses.genericError,
+          200: ndjsonList(
+            itemOf(shipperResponses.shipperList),
+            offsetMetaWith(shipperListSearchMetaDoc),
+          ),
+          400: shipperResponses.codedError,
+          404: shipperResponses.lookupNotFound,
           500: shipperResponses.internalServerError,
         },
       },
@@ -88,19 +104,20 @@ async function shipperRoutes(app: FastifyInstance) {
       onRequest: [ensureAuthenticated],
       preHandler: [
         deliveriesModule,
-        verifyPermission("delivery_manage", "read"),
+        verifyPermission("delivery_manage", "read", { allowDriver: false }),
       ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["shipper"],
-        summary: "Search shippers by business (cursor-based)",
+        summary: "Busca embarcadores ativos (cursor)",
         description:
-          "Active shippers as an NDJSON stream with cursor pagination, for the infinite-scroll select used when creating a delivery. " +
-          "First line carries {meta: {searchMeta: {nextCursor, hasMore}}}; the following lines are shippers.",
+          "Embarcadores ATIVOS em NDJSON com paginação por cursor, para o seletor de cadastro de entregas, em ordem de nome. `search` filtra no servidor por nome, CNPJ (com ou sem máscara; um nome com dígitos, como \"Loja 2\", não vira busca de CNPJ) ou e-mail. Empresa inexistente responde 404 TENANT_NOT_FOUND, em JSON e antes de abrir o stream. " +
+          "A primeira linha traz {meta: {searchMeta: {nextCursor, hasMore}}}; as seguintes, os embarcadores. Token de motorista recebe 403 PERMISSION_DENIED.",
         querystring: shipperSchemas.searchShipperCursor,
         response: {
-          200: shipperResponses.searchShipperStreamDescription,
-          400: shipperResponses.genericError,
+          200: ndjsonCursor(itemOf(shipperResponses.shipperList)),
+          400: shipperResponses.codedError,
+          404: shipperResponses.lookupNotFound,
           500: shipperResponses.internalServerError,
         },
       },
@@ -120,15 +137,17 @@ async function shipperRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["shipper"],
-        summary: "Update a shipper",
+        summary: "Edita um embarcador",
         description:
-          "Update shipper data or toggle is_active. Deactivated shippers keep their delivery history but leave new-delivery dropdowns.",
+          "Edita os dados ou liga/desliga `is_active`. Um embarcador desativado mantém o histórico e é recusado em novos cadastros, edições, XML e planilha. Embarcador inexistente ou de outra empresa → 404 SHIPPER_NOT_FOUND (a mesma resposta nos dois casos). Nome ou CNPJ de outro embarcador da empresa → 409 SHIPPER_NAME_TAKEN ou SHIPPER_CNPJ_TAKEN. Emite `catalogChanged` (shipper).",
         params: shipperSchemas.shipperBusinessParams,
         body: shipperSchemas.updateShipper,
         response: {
           200: shipperResponses.shipperUpdated,
-          400: shipperResponses.genericError,
-          403: shipperResponses.genericError,
+          400: shipperResponses.codedError,
+          403: shipperResponses.codedError,
+          404: shipperResponses.shipperNotFound,
+          409: shipperResponses.codedError,
           500: shipperResponses.internalServerError,
         },
       },
@@ -140,21 +159,25 @@ async function shipperRoutes(app: FastifyInstance) {
     "/delete-shipper/:shipperId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
+      // Same guard as create and update (DLV-SHP-7).
       preHandler: [
+        verifyBusinessActive,
         deliveriesModule,
         verifyPermission("delivery_manage", "write"),
       ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["shipper"],
-        summary: "Delete a shipper",
+        summary: "Exclui um embarcador",
         description:
-          "Remove a shipper without deliveries. Shippers with deliveries must be deactivated instead (history preservation).",
+          "Remove um embarcador sem entregas; com entregas, ele deve ser desativado (409 SHIPPER_HAS_DELIVERIES: o histórico depende dele). Embarcador inexistente ou de outra empresa → 404 SHIPPER_NOT_FOUND. Empresa inativa recebe 403 TENANT_INACTIVE. Emite `catalogChanged` (shipper).",
         params: shipperSchemas.shipperBusinessParams,
         response: {
           200: shipperResponses.shipperDeleted,
-          400: shipperResponses.genericError,
-          403: shipperResponses.genericError,
+          400: shipperResponses.codedError,
+          403: shipperResponses.codedError,
+          404: shipperResponses.shipperNotFound,
+          409: shipperResponses.codedError,
           500: shipperResponses.internalServerError,
         },
       },

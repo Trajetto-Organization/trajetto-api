@@ -4,6 +4,7 @@ import { INotificationRepository } from "../../repositories/INotification-reposi
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { sendNotificationsReadToUser } from "@/websocket";
 
 @injectable()
 class MarkAllNotificationsReadUseCase {
@@ -22,7 +23,14 @@ class MarkAllNotificationsReadUseCase {
       throw new ResourceNotFoundError();
     }
 
-    return this.notificationRepository.markAllAsRead(userId);
+    const flipped = await this.notificationRepository.markAllAsRead(userId);
+
+    // The user's other devices drop their badge now instead of on a poll.
+    if (flipped > 0) {
+      sendNotificationsReadToUser(userId, { notificationId: null });
+    }
+
+    return flipped;
   }
 }
 

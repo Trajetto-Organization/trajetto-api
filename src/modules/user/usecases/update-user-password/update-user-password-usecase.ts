@@ -1,6 +1,6 @@
 import { inject, injectable } from "tsyringe";
 
-import { hash, compare } from "bcrypt";
+import { compareSecret, hashSecret } from "@/shared/security/bcrypt-gate";
 import { IUserRepository } from "../../repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
@@ -12,6 +12,9 @@ import { sendTransactionalMail } from "@/shared/services/transactional-mail-serv
 import { AppError } from "@/shared/errors/AppError";
 import { env } from "@/env";
 import { sendSecurityEventToUser } from "@/websocket";
+import { logger } from "@/shared/logging/logger";
+
+const log = logger.child({ component: "user" });
 
 interface UpdateUserPasswordProps {
   currentPassword: string;
@@ -39,19 +42,22 @@ class UpdateUserPasswordUseCase {
       throw new ResourceNotFoundError();
     }
 
-    const comparePassword = await compare(currentPassword, findUser.password);
+    const comparePassword = await compareSecret(
+      currentPassword,
+      findUser.password,
+    );
 
     if (!comparePassword) {
       throw new UserUpdateUserPasswordNotMatchError();
     }
 
-    const isSamePassword = await compare(newPassword, findUser.password);
+    const isSamePassword = await compareSecret(newPassword, findUser.password);
 
     if (isSamePassword) {
       throw new UserUpdateUserIsSamePasswordError();
     }
 
-    const hashedPassword = await hash(newPassword, 10);
+    const hashedPassword = await hashSecret(newPassword, 10);
 
     try {
       await this.user.updateUserPassword({
@@ -67,16 +73,22 @@ class UpdateUserPasswordUseCase {
       );
     }
 
-    await sendTransactionalMail({
-      email: findUser.email,
-      name: findUser.name,
-      subject: "Sua senha foi atualizada com sucesso",
-      templateName: "user-password-updated.hbs",
-      moduleName: "user",
-      additionalVariablesProperties: {
-        logo: this.cloudinaryLogo,
-      },
-    });
+    // The password is already changed: a mail failure must not answer 500,
+    // or the person retries with a "current password" that no longer works.
+    try {
+      await sendTransactionalMail({
+        email: findUser.email,
+        name: findUser.name,
+        subject: "Sua senha foi atualizada com sucesso",
+        templateName: "user-password-updated.hbs",
+        moduleName: "user",
+        additionalVariablesProperties: {
+          logo: this.cloudinaryLogo,
+        },
+      });
+    } catch (error) {
+      log.error({ err: error, userId }, "password change notice could not be sent");
+    }
   }
 }
 

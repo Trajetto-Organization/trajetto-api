@@ -1,3 +1,6 @@
+import { compareCodePoints } from "@/shared/pagination/in-memory-order";
+import { afterCursor, newestFirst } from "@/shared/in-memory/cursor";
+import { recordNotFound } from "@/shared/in-memory/prisma-errors";
 import { v7 as uuidV7 } from "uuid";
 import { IFuelTypeRepository } from "../IFuel-type-repository";
 
@@ -9,7 +12,11 @@ import {
   UpdateFuelType,
   SearchFuelTypeWithCursorProps,
   CursorPaginatedFuelType,
+  FuelTypeUsage,
 } from "../../dtos/fuel-type-dto";
+
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+import { FUEL_TYPE_SORT } from "../../usecases/list-fuel-type/fuel-type-list";
 
 class InMemoryFuelTypeRepository implements IFuelTypeRepository {
   public fuelTypes: FuelType[] = [];
@@ -30,32 +37,64 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
   async listFuelTypes({
     page,
     pageSize,
+    sort,
+    order,
     businessId,
     search,
-    currentUserRole,
+    refuelWindow,
   }: ListFuelTypeByBusinessIdProps): Promise<ListFuelTypeProps> {
-    let filteredFuelTypes = this.fuelTypes;
+    const term = search?.trim().toLowerCase() ?? "";
 
-    // If not MASTER user, filter by business
-    if (currentUserRole !== "MASTER" && businessId) {
-      filteredFuelTypes = this.fuelTypes.filter(
-        (fuelType) => fuelType.businessId === businessId,
-      );
-    }
+    const filtered = this.fuelTypes.filter(
+      (fuelType) =>
+        fuelType.businessId === businessId &&
+        (!term ||
+          fuelType.id.toLowerCase().includes(term) ||
+          fuelType.description.toLowerCase().includes(term)),
+    );
 
-    if (search) {
-      const searchTerm = search.toLowerCase();
-      filteredFuelTypes = filteredFuelTypes.filter((fuelType) =>
-        fuelType.description.toLowerCase().includes(searchTerm),
-      );
-    }
+    const orderBy = resolveOrderBy(FUEL_TYPE_SORT, { sort, order });
+
+    const value = (fuelType: FuelType, field: string): string | number =>
+      field === "description"
+        ? fuelType.description
+        : field === "id"
+          ? fuelType.id
+          : new Date(
+              fuelType[field as "created_at" | "updated_at"],
+            ).getTime();
+
+    const sorted = [...filtered].sort((a, b) => {
+      for (const entry of orderBy) {
+        const [field, direction] = Object.entries(entry)[0] as [string, string];
+        const left = value(a, field);
+        const right = value(b, field);
+
+        const result =
+          typeof left === "string" && typeof right === "string"
+            ? compareCodePoints(left, right)
+            : Number(left) - Number(right);
+
+        if (result !== 0) return direction === "desc" ? -result : result;
+      }
+
+      return 0;
+    });
 
     const skip = (page - 1) * pageSize;
 
-    const data = filteredFuelTypes.slice(skip, skip + pageSize);
-    const total = filteredFuelTypes.length;
-
-    return { data, total };
+    return {
+      data: sorted.slice(skip, skip + pageSize),
+      total: filtered.length,
+      usage: filtered.map((fuelType) => ({
+        id: fuelType.id,
+        label: fuelType.description,
+        count: this.vehicleFuelTypeIds.filter((id) => id === fuelType.id).length,
+      })),
+      refuelings: refuelWindow
+        ? this.refuelingsIn(businessId, new Set(filtered.map((row) => row.id)), refuelWindow)
+        : null,
+    };
   }
 
   async updateFuelType({
@@ -67,14 +106,16 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
     );
 
     if (index === -1) {
-      throw new Error("Fuel type not found");
+      throw recordNotFound("update");
     }
 
-    const filteredData = Object.fromEntries(
-      Object.entries(fuelTypeData).filter(
-        ([, value]) => value !== undefined && value !== null && value !== "",
-      ),
-    );
+    // Only the description, like the repository.
+    const filteredData =
+      fuelTypeData.description !== undefined &&
+      fuelTypeData.description !== null &&
+      fuelTypeData.description !== ""
+        ? { description: fuelTypeData.description }
+        : {};
 
     const updatedFuelType: FuelType = {
       ...this.fuelTypes[index],
@@ -92,7 +133,7 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
     );
 
     if (index === -1) {
-      throw new Error("Fuel type not found");
+      throw recordNotFound("delete");
     }
 
     const deletedFuelType = this.fuelTypes.splice(index, 1)[0];
@@ -123,9 +164,10 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
     description: string,
     businessId: string,
   ): Promise<FuelType | null> {
+    // Case-insensitive, like the repository's insensitiveEquals.
     const fuelType = this.fuelTypes.find(
       (fuelType) =>
-        fuelType.description === description &&
+        fuelType.description.toLowerCase() === description.toLowerCase() &&
         fuelType.businessId === businessId,
     );
 
@@ -138,7 +180,14 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
     businessId,
     search,
   }: SearchFuelTypeWithCursorProps): Promise<CursorPaginatedFuelType> {
-    let filtered = this.fuelTypes.filter((ft) => ft.businessId === businessId);
+    // Newest first, like the repository's (created_at, id) order.
+    let filtered = this.fuelTypes
+      .filter((ft) => ft.businessId === businessId)
+      .sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime() ||
+          b.id.localeCompare(a.id),
+      );
 
     if (search) {
       const term = search.toLowerCase();
@@ -147,12 +196,9 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
       );
     }
 
-    if (cursor) {
-      const cursorIndex = filtered.findIndex((ft) => ft.id === cursor);
-      if (cursorIndex !== -1) {
-        filtered = filtered.slice(cursorIndex + 1);
-      }
-    }
+    // Prisma's cursor: positioned on the cursor ROW, skip 1; an unknown
+    // cursor yields nothing (it used to restart the list from the top).
+    filtered = afterCursor(filtered, this.fuelTypes, cursor, newestFirst);
 
     const hasMore = filtered.length > limit;
 
@@ -160,6 +206,67 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };
+  }
+
+  /**
+   * What points at a fuel type. The twin has no vehicle table: tests seed
+   * `vehicleFuelTypeIds` (one entry per vehicle) and may hand it the fuel
+   * twin, whose rows are counted as the repository counts `fuel`.
+   */
+  public vehicleFuelTypeIds: string[] = [];
+
+  /**
+   * Refuelings as the fuel table holds them. Rows seeded with only
+   * `fuelTypeId` count for the deletion guard; the cards also need the
+   * company, the date and the amounts.
+   */
+  public fuelRows: Array<{
+    fuelTypeId: string;
+    businessId?: string;
+    refueling_date?: Date;
+    liters_amount?: number;
+    total_amount?: number;
+  }> = [];
+
+  /** The repository's groupBy over `fuel`, per type, inside [start, end). */
+  private refuelingsIn(
+    businessId: string,
+    typeIds: ReadonlySet<string>,
+    window: { start: Date; end: Date },
+  ) {
+    const byType = new Map<string, { refuelings: number; liters: number; amount: number }>();
+
+    for (const row of this.fuelRows) {
+      const date = row.refueling_date?.getTime();
+
+      if (
+        row.businessId !== businessId ||
+        !typeIds.has(row.fuelTypeId) ||
+        date === undefined ||
+        date < window.start.getTime() ||
+        date >= window.end.getTime()
+      ) {
+        continue;
+      }
+
+      const entry = byType.get(row.fuelTypeId) ?? { refuelings: 0, liters: 0, amount: 0 };
+
+      entry.refuelings += 1;
+      entry.liters += row.liters_amount ?? 0;
+      entry.amount += row.total_amount ?? 0;
+      byType.set(row.fuelTypeId, entry);
+    }
+
+    return [...byType].map(([fuelTypeId, entry]) => ({ fuelTypeId, ...entry }));
+  }
+
+  async countFuelTypeUsage(fuelTypeId: string): Promise<FuelTypeUsage> {
+    return {
+      vehicles: this.vehicleFuelTypeIds.filter((id) => id === fuelTypeId)
+        .length,
+      fuels: this.fuelRows.filter((row) => row.fuelTypeId === fuelTypeId)
+        .length,
+    };
   }
 }
 

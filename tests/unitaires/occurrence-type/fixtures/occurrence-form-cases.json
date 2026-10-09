@@ -1,0 +1,78 @@
+{
+  "$comment": "Shared cases of the occurrence form rules (decision 6.2). The API test runs them against src/modules/occurrence-type/form/occurrence-form-rules.ts; the web test (trajetto-ui/tests/unitaires/occurrence-form-rules.test.ts) runs the same file against its copy, so the two cannot drift. The app's copy (mobile-occ) should run it too.",
+  "form": [
+    { "key": "responsavel", "label": "Quem atendeu", "type": "text", "required": true, "max_length": 20 },
+    { "key": "detalhes", "label": "Detalhes", "type": "text", "required": false, "multiline": true },
+    { "key": "volumes", "label": "Volumes avariados", "type": "number", "required": true, "min": 1, "max": 10, "integer": true },
+    { "key": "cliente_presente", "label": "Cliente presente", "type": "boolean", "required": true },
+    { "key": "motivo", "label": "Motivo", "type": "select", "required": true, "options": ["Endereço errado", "Recusa", "Ausente"] },
+    { "key": "nova_data", "label": "Nova data", "type": "date", "required": false }
+  ],
+  "answers": [
+    {
+      "name": "all valid, optional ones blank",
+      "given": { "responsavel": "Maria", "volumes": 2, "cliente_presente": false, "motivo": "Recusa", "detalhes": "", "nova_data": null },
+      "kept": { "responsavel": "Maria", "volumes": 2, "cliente_presente": false, "motivo": "Recusa" },
+      "errors": []
+    },
+    {
+      "name": "multiline text keeps its paragraphs",
+      "given": { "responsavel": "Maria", "volumes": 1, "cliente_presente": true, "motivo": "Ausente", "detalhes": "Portão fechado.\n\nVizinho informou", "nova_data": "2026-10-01" },
+      "kept": { "responsavel": "Maria", "detalhes": "Portão fechado.\n\nVizinho informou", "volumes": 1, "cliente_presente": true, "motivo": "Ausente", "nova_data": "2026-10-01" },
+      "errors": []
+    },
+    {
+      "name": "required fields missing or blank",
+      "given": { "responsavel": "   ", "motivo": "" },
+      "kept": null,
+      "errors": ["responsavel", "volumes", "cliente_presente", "motivo"]
+    },
+    {
+      "name": "wrong types and bounds",
+      "given": { "responsavel": "Nome  duplo", "volumes": 2.5, "cliente_presente": "sim", "motivo": "Outro", "nova_data": "2026-02-30" },
+      "kept": null,
+      "errors": ["responsavel", "volumes", "cliente_presente", "motivo", "nova_data"]
+    },
+    {
+      "name": "too long and out of range",
+      "given": { "responsavel": "Um nome longo demais para caber", "volumes": 11, "cliente_presente": true, "motivo": "Recusa" },
+      "kept": null,
+      "errors": ["responsavel", "volumes"]
+    },
+    {
+      "name": "unknown keys are dropped, not refused",
+      "given": { "responsavel": "Maria", "volumes": 3, "cliente_presente": true, "motivo": "Recusa", "campo_removido": "x" },
+      "kept": { "responsavel": "Maria", "volumes": 3, "cliente_presente": true, "motivo": "Recusa" },
+      "errors": []
+    },
+    {
+      "name": "edge spaces on a single-line text",
+      "given": { "responsavel": " Maria", "volumes": 3, "cliente_presente": true, "motivo": "Recusa" },
+      "kept": null,
+      "errors": ["responsavel"]
+    },
+    {
+      "name": "a number sent as text is not a number",
+      "given": { "responsavel": "Maria", "volumes": "3", "cliente_presente": true, "motivo": "Recusa" },
+      "kept": null,
+      "errors": ["volumes"]
+    }
+  ],
+  "definitions": [
+    { "name": "valid form", "fields": [{ "key": "a", "label": "A", "type": "text", "required": true }], "valid": true },
+    { "name": "empty form", "fields": [], "valid": true },
+    { "name": "key with uppercase", "fields": [{ "key": "Nome", "label": "Nome", "type": "text" }], "valid": false },
+    { "name": "duplicated key", "fields": [{ "key": "a", "label": "A", "type": "text" }, { "key": "a", "label": "B", "type": "text" }], "valid": false },
+    { "name": "duplicated label (case-insensitive)", "fields": [{ "key": "a", "label": "Nome", "type": "text" }, { "key": "b", "label": "nome", "type": "text" }], "valid": false },
+    { "name": "select without options", "fields": [{ "key": "a", "label": "A", "type": "select" }], "valid": false },
+    { "name": "select with one option", "fields": [{ "key": "a", "label": "A", "type": "select", "options": ["Só"] }], "valid": false },
+    { "name": "select with repeated option", "fields": [{ "key": "a", "label": "A", "type": "select", "options": ["Sim", "sim"] }], "valid": false },
+    { "name": "options on a text field", "fields": [{ "key": "a", "label": "A", "type": "text", "options": ["x", "y"] }], "valid": false },
+    { "name": "min greater than max", "fields": [{ "key": "a", "label": "A", "type": "number", "min": 5, "max": 1 }], "valid": false },
+    { "name": "fractional bound on an integer field", "fields": [{ "key": "a", "label": "A", "type": "number", "integer": true, "min": 0.5 }], "valid": false },
+    { "name": "label with double spaces", "fields": [{ "key": "a", "label": "Nome  do campo", "type": "text" }], "valid": false },
+    { "name": "unknown property", "fields": [{ "key": "a", "label": "A", "type": "text", "placeholder": "x" }], "valid": false },
+    { "name": "unknown type", "fields": [{ "key": "a", "label": "A", "type": "phone" }], "valid": false },
+    { "name": "text limit above the ceiling", "fields": [{ "key": "a", "label": "A", "type": "text", "max_length": 501 }], "valid": false }
+  ]
+}

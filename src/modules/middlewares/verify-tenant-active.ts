@@ -2,8 +2,10 @@ import { FastifyReply, FastifyRequest } from "fastify";
 
 import { BusinessRepository } from "../business/repositories/business-repository";
 import { BranchRepository } from "../branch/repositories/branch-repository";
+import { UserRepository } from "../user/repositories/user-repository";
 
 import { AppError } from "@/shared/errors/AppError";
+import { tenantInactive } from "@/shared/errors/access-errors";
 import { assertTenantAccess } from "./tenant-authorization";
 
 type Business = {
@@ -53,24 +55,58 @@ async function verifyBusinessActive(
 
   assertTenantAccess(request.user, businessId);
 
+  /**
+   * The caller's own company, answered from this request's session lookup.
+   *
+   * For anyone but MASTER the line above has just forced `businessId` to be
+   * the user's own company — and ensureAuthenticated loaded that company with
+   * the user, and refused an inactive one, milliseconds ago in this request.
+   * Reading every column of it again was one more query on every route with
+   * a :businessId. findUserById is memoised per request, so this is the row
+   * already in hand; never a cache across requests. MASTER, who may name any
+   * company, still reads it below.
+   */
+  if (
+    request.user.role !== "MASTER" &&
+    businessId === request.user.businessId
+  ) {
+    const own = (await new UserRepository().findUserById(request.user.id))
+      ?.business;
+
+    if (own) {
+      if (!own.is_active) throw inactiveBusiness();
+
+      request.business = { id: businessId, is_active: true };
+
+      return;
+    }
+  }
+
   const businessRepository = new BusinessRepository();
   const business = (await businessRepository.findBusinessById(
     businessId,
   )) as Business | null;
 
-  if (!business) {
-    throw new AppError("Empresa não encontrada!", 404, "TENANT_NOT_FOUND");
-  }
+  if (!business) throw businessNotFound();
 
-  if (!business.is_active) {
-    throw new AppError(
-      "Esta empresa está desativada. Entre em contato com o administrador para reativar o acesso.",
-      403,
-      "TENANT_INACTIVE",
-    );
-  }
+  if (!business.is_active) throw inactiveBusiness();
 
   request.business = business;
+}
+
+/** Shared with the MASTER's module gate, so both say it the same way. */
+function businessNotFound(): AppError {
+  return new AppError("Empresa não encontrada!", 404, "TENANT_NOT_FOUND");
+}
+
+function branchNotFound(): AppError {
+  return new AppError("Filial não encontrada!", 404, "BRANCH_NOT_FOUND");
+}
+
+function inactiveBusiness(): AppError {
+  return tenantInactive(
+    "Esta empresa está desativada. Entre em contato com o administrador para reativar o acesso.",
+  );
 }
 
 async function verifyBranchActive(
@@ -87,11 +123,16 @@ async function verifyBranchActive(
     branchId,
   )) as Branch | null;
 
-  if (!branch) {
-    throw new AppError("Filial não encontrada!", 404, "BRANCH_NOT_FOUND");
-  }
+  // Another company's branch is answered like one that does not exist, and
+  // before its status is looked at: a 403 for "exists elsewhere" beside a
+  // 404 for "exists nowhere" let a carrier map another's branch ids
+  // (decision 8.1). The MASTER may name any company's branch.
+  const foreign =
+    branch !== null &&
+    request.user.role !== "MASTER" &&
+    branch.businessId !== request.user.businessId;
 
-  assertTenantAccess(request.user, branch.businessId);
+  if (!branch || foreign) throw branchNotFound();
 
   if (!branch.is_active) {
     throw new AppError(
@@ -119,6 +160,8 @@ async function verifyBranchBelongsToBusiness(
 }
 
 export {
+  businessNotFound,
+  inactiveBusiness,
   verifyBusinessActive,
   verifyBranchActive,
   verifyBranchBelongsToBusiness,

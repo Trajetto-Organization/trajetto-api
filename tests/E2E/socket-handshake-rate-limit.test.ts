@@ -4,8 +4,6 @@ import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import Redis from "ioredis";
 import { sign } from "jsonwebtoken";
@@ -17,6 +15,8 @@ import {
   HANDSHAKES_PER_USER,
   userHandshakeKey,
 } from "@/shared/socket/handshake-rate-limit";
+
+import { socketClientEntry } from "./support/socket-client";
 
 /**
  * The connection attempt, counted.
@@ -51,18 +51,7 @@ let io: typeof import("@/websocket");
  * eventually imports in production.
  */
 async function connect(): Promise<{ disconnect: () => void }> {
-  const entry = pathToFileURL(
-    resolve(
-      process.cwd(),
-      "..",
-      "trajetto-fleet-manager-ui",
-      "node_modules",
-      "socket.io-client",
-      "build",
-      "esm",
-      "index.js",
-    ),
-  ).href;
+  const entry = socketClientEntry();
 
   const { io: createClient } = await import(/* @vite-ignore */ entry);
 

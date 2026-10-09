@@ -2,6 +2,7 @@ import { v7 as uuidV7 } from "uuid";
 import { randomBytes } from "node:crypto";
 
 import type {
+  DeliveryContactState,
   IExternalRecipientRepository,
   TrackingSource,
 } from "../IExternal-recipient-repository";
@@ -18,6 +19,12 @@ class InMemoryExternalRecipientRepository
 
   /** Stated by the test, the way the proof repository's sources are. */
   public tracking = new Map<string, TrackingSource>();
+
+  /**
+   * The deliveries' current status and contact, by delivery id, stated by the
+   * test. An unstated one does not exist, like a deleted delivery.
+   */
+  public deliveryStates = new Map<string, DeliveryContactState>();
 
   async ensureForDelivery(
     data: EnsureExternalRecipientProps,
@@ -76,6 +83,14 @@ class InMemoryExternalRecipientRepository
     recipient.opted_out_at = new Date();
 
     return true;
+  }
+
+  async findDeliveryState(
+    deliveryId: string,
+  ): Promise<DeliveryContactState | null> {
+    const state = this.deliveryStates.get(deliveryId);
+
+    return state ? { ...state } : null;
   }
 }
 

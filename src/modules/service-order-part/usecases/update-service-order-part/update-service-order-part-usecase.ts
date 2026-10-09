@@ -18,14 +18,13 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { formatCurrency } from "@/shared/utils/format-values";
 
 import { ServiceOrderPartNotFoundError } from "../errors/service-order-part-not-found-error";
-import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
 
 import { ServiceOrderPartAlreadyExistsError } from "../errors/service-order-part-already-exists-error";
-import { PartNotBelongError } from "@/modules/part/usecases/errors/part-not-belong-error";
 
 import {
   ServiceOrderPart,
   UpdateServiceOrderPartProps,
+  ServiceOrderTotals,
 } from "../../dtos/service-order-part-dto";
 import { AppError } from "@/shared/errors/AppError";
 
@@ -52,7 +51,7 @@ class UpdateServiceOrderPartUseCase {
     serviceOrderId: string,
     businessId: string,
     userId: string,
-  ): Promise<ServiceOrderPart> {
+  ): Promise<{ line: ServiceOrderPart; totals: ServiceOrderTotals | null }> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -69,23 +68,20 @@ class UpdateServiceOrderPartUseCase {
     const findServiceOrder =
       await this.serviceOrder.findServiceOrderById(serviceOrderId);
 
-    if (!findServiceOrder) {
+    // Another company's order is not found from here either: a distinct
+    // answer confirmed the id exists elsewhere (decision 11.3).
+    if (!findServiceOrder || findServiceOrder.businessId !== businessId) {
       throw new ServiceOrderNotFoundError();
-    }
-
-    if (findServiceOrder.businessId !== businessId) {
-      throw new ServiceOrderNotBelongBusinessError();
     }
 
     // Check if the work order part exists
     const findServiceOrderPart =
       await this.serviceOrderPart.findServiceOrderPartById(serviceOrderPartId);
 
-    // A linha tem que ser DESTA ordem de serviço, que já foi provada
-    // desta empresa. Sem a comparação, a linha de outra empresa era
-    // reparentada para a ordem de quem chamou: a ordem dela perdia um
-    // item e o custo total mudava dos dois lados. A irmã `delete` faz
-    // exatamente esta checagem.
+    // The line must belong to THIS order, already proven to be this
+    // company's. Without the comparison another company's line was moved
+    // onto the caller's order, changing both orders' totals. Delete makes
+    // the same check.
     if (
       !findServiceOrderPart ||
       findServiceOrderPart.serviceOrderId !== serviceOrderId
@@ -99,12 +95,9 @@ class UpdateServiceOrderPartUseCase {
         serviceOrderPartData.partId,
       );
 
-      if (!findPart) {
+      // Another company's part is not found either (decision 11.3).
+      if (!findPart || findPart.businessId !== businessId) {
         throw new PartNotFoundError();
-      }
-
-      if (findPart.businessId !== businessId) {
-        throw new PartNotBelongError();
       }
 
       // Check if the new part has already been added to the work order (except the current one)
@@ -141,7 +134,11 @@ class UpdateServiceOrderPartUseCase {
         businessId: businessId,
       });
 
-      return updatedServiceOrderPart;
+      // Both figures for the screen's warning (FLEET-SO-2).
+      const totals =
+        await this.serviceOrderPart.serviceOrderTotals(serviceOrderId);
+
+      return { line: updatedServiceOrderPart, totals };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar atualizar a peça da ordem de serviço! Por favor, tente novamente.",

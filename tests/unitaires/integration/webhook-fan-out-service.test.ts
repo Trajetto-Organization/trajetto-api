@@ -2,11 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 
+import { clearLogged, logged } from "../../support/log-capture";
+
 const fanOut = vi.fn();
 
 vi.mock("@/shared/integration/webhook-dispatch-service", () => ({
   fanOutWebhookEvent: (...args: unknown[]) => fanOut(...args),
 }));
+
+vi.mock("@/shared/logging/logger", async (importOriginal) =>
+  (await import("../../support/log-capture")).capturingLogger(
+    await importOriginal(),
+  ),
+);
 
 /**
  * The one place that decides whether a broken integration can cost somebody a
@@ -20,17 +28,12 @@ vi.mock("@/shared/integration/webhook-dispatch-service", () => ({
  */
 describe("announcing an event to the customers' systems", () => {
   let service: WebhookFanOutService;
-  let logged: unknown[][];
 
   beforeEach(() => {
     fanOut.mockReset();
     fanOut.mockResolvedValue(1);
 
-    logged = [];
-
-    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-      logged.push(args);
-    });
+    clearLogged();
 
     service = new WebhookFanOutService();
   });
@@ -70,8 +73,11 @@ describe("announcing an event to the customers' systems", () => {
       service.announce("route.released", "business-1", {}),
     ).resolves.toBeUndefined();
 
-    expect(logged).toHaveLength(1);
-    expect(String(logged[0][0])).toContain("route.released");
+    expect(logged("error")).toHaveLength(1);
+    expect(logged("error")[0]).toMatchObject({
+      topic: "route.released",
+      businessId: "business-1",
+    });
   });
 
   it("rethrows inside a transaction, because half a write is worse", async () => {
@@ -87,6 +93,6 @@ describe("announcing an event to the customers' systems", () => {
       service.announce("delivery.delivered", "business-1", {}, tx as never),
     ).rejects.toThrow("deadlock detected");
 
-    expect(logged).toHaveLength(0);
+    expect(logged()).toHaveLength(0);
   });
 });

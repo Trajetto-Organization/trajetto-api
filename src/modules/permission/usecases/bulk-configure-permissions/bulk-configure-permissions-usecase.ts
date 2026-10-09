@@ -14,9 +14,12 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 
 import { UserProfileAccessNotFoundError } from "@/modules/user/usecases/errors/user-profile-access-not-found-error";
 import { PermissionBusinessError } from "../errors/permission-business-error";
+import { assertNotOwnProfile } from "../errors/permission-own-profile-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import { sendSecurityEventToBusiness } from "@/websocket";
+
+import database from "@/../infra/database";
 
 @injectable()
 class BulkConfigurePermissionsUseCase {
@@ -43,6 +46,9 @@ class BulkConfigurePermissionsUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // Replacing your own profile's set would grant you anything.
+    assertNotOwnProfile(findUser, props.profileAccessId);
+
     const findBusiness = await this.business.findBusinessById(props.businessId);
 
     if (!findBusiness) {
@@ -62,15 +68,23 @@ class BulkConfigurePermissionsUseCase {
     }
 
     try {
-      await this.permission.bulkConfigurePermissions(props);
-      this.notificationService.createActivityIfEnabled({
-        type: "Permissão",
-        action: "update",
-        entityId: props.profileAccessId,
-        description: `Permissões configuradas em lote para o perfil: ${findProfile.name} | Total: ${props.permissions.length} permissão(ões) configurada(s)`,
-        status: "Atualizado",
-        performedBy: userId,
-        businessId: props.businessId,
+      // The new permission set and its audit entry commit together
+      // (OUTBOX-10).
+      await database.$transaction(async (tx) => {
+        await this.permission.bulkConfigurePermissions(props, tx);
+
+        await this.notificationService.createActivityIfEnabled(
+          {
+            type: "Permissão",
+            action: "update",
+            entityId: props.profileAccessId,
+            description: `Permissões configuradas em lote para o perfil: ${findProfile.name} | Total: ${props.permissions.length} permissão(ões) configurada(s)`,
+            status: "Atualizado",
+            performedBy: userId,
+            businessId: props.businessId,
+          },
+          tx,
+        );
       });
 
       sendSecurityEventToBusiness(props.businessId, {

@@ -1,15 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { sign } from "jsonwebtoken";
+
 import {
+  FORWARDED_CLIENT_HEADER,
+  FORWARDER_SECRET_HEADER,
   clientRateLimitKey,
   lastForwardedAddress,
+  refreshSessionRateLimitKey,
 } from "@/config/rate-limit";
 
+const REFRESH_SECRET = "refresh-secret-for-this-test-only";
+const FORWARDER_SECRET = "f".repeat(40);
+
 vi.mock("@/env", () => ({
-  env: { get RATE_LIMIT_TRUSTED_PROXY() { return mode; } },
+  env: {
+    get RATE_LIMIT_TRUSTED_PROXY() { return mode; },
+    get RATE_LIMIT_FORWARDER_SECRET() { return forwarderSecret; },
+    JWT_SECRET: "access-secret-for-this-test-only",
+    JWT_SECRET_REFRESH_TOKEN: "refresh-secret-for-this-test-only",
+  },
 }));
 
 let mode = "none";
+let forwarderSecret: string | undefined;
 
 /**
  * Which bucket an anonymous request falls into.
@@ -24,16 +38,19 @@ function requestWith(
   headers: Record<string, string | string[] | undefined>,
   remoteAddress = "10.9.9.9",
   user?: { id: string },
+  body?: unknown,
 ) {
   return {
     headers,
     socket: { remoteAddress },
     user,
+    body,
   } as never;
 }
 
 afterEach(() => {
   mode = "none";
+  forwarderSecret = undefined;
 });
 
 describe("an authenticated request", () => {
@@ -115,11 +132,18 @@ describe("behind Traefik or nginx", () => {
 });
 
 describe("behind Cloudflare", () => {
-  it("reads the header Cloudflare overwrites", () => {
+  it("reads the header Cloudflare overwrites, when the peer is Cloudflare", () => {
     mode = "cloudflare";
 
+    // 172.70.1.1 is a Cloudflare edge (172.64.0.0/13), appended by Traefik.
+    // The spoofing cases live in rate-limit-edge.test.ts.
     expect(
-      clientRateLimitKey(requestWith({ "cf-connecting-ip": "200.160.2.3" })),
+      clientRateLimitKey(
+        requestWith({
+          "x-forwarded-for": "172.70.1.1",
+          "cf-connecting-ip": "200.160.2.3",
+        }),
+      ),
     ).toBe("ip:200.160.2.3");
   });
 });
@@ -143,5 +167,109 @@ describe("reading a forwarding chain", () => {
     expect(lastForwardedAddress(undefined)).toBeNull();
     expect(lastForwardedAddress("")).toBeNull();
     expect(lastForwardedAddress("  ,  ")).toBeNull();
+  });
+});
+
+/**
+ * Calls the web server makes on a browser's behalf.
+ *
+ * Login, 2FA, password recovery, refresh and tracking come from the Next.js
+ * server. Before, every web user therefore shared the web server's address —
+ * one bucket of eight logins a minute for the whole product.
+ */
+describe("a call relayed by the web server", () => {
+  const relayed = (secret: string | undefined, client = "189.40.1.7") =>
+    requestWith(
+      {
+        [FORWARDED_CLIENT_HEADER]: client,
+        ...(secret !== undefined ? { [FORWARDER_SECRET_HEADER]: secret } : {}),
+      },
+      "10.0.0.50", // the web server's own address
+    );
+
+  it("is counted by the browser's address when the secret matches", () => {
+    forwarderSecret = FORWARDER_SECRET;
+
+    expect(clientRateLimitKey(relayed(FORWARDER_SECRET))).toBe(
+      "ip:189.40.1.7",
+    );
+  });
+
+  it("keeps two browsers behind the same web server apart", () => {
+    forwarderSecret = FORWARDER_SECRET;
+
+    expect(clientRateLimitKey(relayed(FORWARDER_SECRET, "189.40.1.7"))).not.toBe(
+      clientRateLimitKey(relayed(FORWARDER_SECRET, "177.12.9.3")),
+    );
+  });
+
+  it("ignores the header without the secret — anybody can send it", () => {
+    forwarderSecret = FORWARDER_SECRET;
+
+    expect(clientRateLimitKey(relayed(undefined))).toBe("ip:10.0.0.50");
+    expect(clientRateLimitKey(relayed("wrong".repeat(10)))).toBe(
+      "ip:10.0.0.50",
+    );
+  });
+
+  it("ignores the header when this API holds no secret at all", () => {
+    forwarderSecret = undefined;
+
+    expect(clientRateLimitKey(relayed(FORWARDER_SECRET))).toBe(
+      "ip:10.0.0.50",
+    );
+  });
+
+  it("ignores a forwarded value that is not an address", () => {
+    forwarderSecret = FORWARDER_SECRET;
+
+    expect(
+      clientRateLimitKey(relayed(FORWARDER_SECRET, "not-an-ip; drop table")),
+    ).toBe("ip:10.0.0.50");
+  });
+});
+
+describe("the refresh bucket", () => {
+  const refreshToken = (familyId: string, secret = REFRESH_SECRET) =>
+    sign({ tokenType: "refresh", familyId, sessionVersion: 0 }, secret, {
+      subject: "user-1",
+      expiresIn: "1d",
+    });
+
+  it("is the session a verified refresh token names", () => {
+    expect(
+      refreshSessionRateLimitKey(
+        requestWith({}, "10.0.0.50", undefined, {
+          token: refreshToken("family-1"),
+        }),
+      ),
+    ).toBe("session:family-1");
+  });
+
+  it("gives each session its own budget behind the same address", () => {
+    const first = refreshSessionRateLimitKey(
+      requestWith({}, "10.0.0.50", undefined, { token: refreshToken("a") }),
+    );
+    const second = refreshSessionRateLimitKey(
+      requestWith({}, "10.0.0.50", undefined, { token: refreshToken("b") }),
+    );
+
+    expect(first).not.toBe(second);
+  });
+
+  it("counts a forged token by address — a made-up family buys nothing", () => {
+    expect(
+      refreshSessionRateLimitKey(
+        requestWith({}, "10.0.0.50", undefined, {
+          token: refreshToken("family-1", "not-our-secret"),
+        }),
+      ),
+    ).toBe("ip:10.0.0.50");
+
+    expect(
+      refreshSessionRateLimitKey(
+        requestWith({}, "10.0.0.50", undefined, { token: "garbage" }),
+      ),
+    ).toBe("ip:10.0.0.50");
   });
 });

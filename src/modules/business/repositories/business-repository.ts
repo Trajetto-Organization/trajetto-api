@@ -1,3 +1,6 @@
+import { Prisma } from "@prisma/client";
+import { ensureDefaultOccurrenceTypes } from "@/shared/delivery/default-occurrence-types";
+
 import { IBusinessRepository } from "./IBusiness-repository";
 import {
   Business,
@@ -8,95 +11,83 @@ import {
   SearchBusinessWithCursorProps,
   UpdateBusiness,
 } from "../dtos/business-dto";
+import {
+  BUSINESS_SORT,
+  TOP_PLACES,
+  businessListWhere,
+  cityLabel,
+} from "../usecases/list-business/business-list";
 
 import database from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+import { insensitiveEquals } from "@/shared/utils/like-pattern";
 
 class BusinessRepository implements IBusinessRepository {
   constructor(private prisma = database) {}
 
-  async createBusiness(businessData: CreateBusinessProps): Promise<Business> {
-    const businessCreated = await this.prisma.business.create({
-      data: {
-        ...businessData,
-        erp_code: businessData.erp_code || null,
-        complement: businessData.complement || null,
+  async createBusiness(
+    businessData: CreateBusinessProps,
+    outerTx?: Prisma.TransactionClient,
+  ): Promise<Business> {
+    // The company and its default occurrence types (decisions 14.3 and
+    // 14.4: "Entrega normal" and the three pause types) commit together, so
+    // the installed app's proof and pause always find their type.
+    const create = async (tx: Prisma.TransactionClient) => {
+      const businessCreated = await tx.business.create({
+        data: {
+          ...businessData,
+          erp_code: businessData.erp_code || null,
+          complement: businessData.complement || null,
 
-        // Every new company starts with the fleet module — it is the base
-        // product; additional modules are toggled by the master afterwards.
-        entitlements: {
-          create: { module: "FLEET", enabled: true },
+          // Every new company starts with the fleet module — it is the base
+          // product; additional modules are toggled by the master afterwards.
+          entitlements: {
+            create: { module: "FLEET", enabled: true },
+          },
         },
-      },
-    });
+      });
 
-    return businessCreated;
+      await ensureDefaultOccurrenceTypes(tx, businessCreated.id);
+
+      return businessCreated;
+    };
+
+    // Prisma has no nested interactive transactions: join the caller's.
+    return outerTx ? create(outerTx) : this.prisma.$transaction(create);
   }
 
+  /**
+   * One page of companies ‖ the (is_active, uf) breakdown, then the top
+   * cities: at most two connections at a time (connection-fan-out budget).
+   * The cards and filters are derived from the breakdowns, never from the
+   * page (decision 8.8).
+   */
   async listBusiness({
     page,
     pageSize,
     businessId,
     currentUserRole,
     search,
+    statuses,
+    ufs,
+    sort,
+    order,
   }: ListBusinessByBusinessIdProps): Promise<ListBusinessProps> {
-    const skip = (page - 1) * pageSize;
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
-
-    const digitSearch = normalizedSearch.replace(/\D/g, "");
-
-    let digitSearchPhone = digitSearch;
-
-    if (digitSearchPhone.startsWith("55") && digitSearchPhone.length > 10) {
-      digitSearchPhone = digitSearchPhone.substring(2);
-    }
-
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        {
-          corporate_reason: { contains: normalizedSearch, mode: "insensitive" },
-        },
-        { fantasy_name: { contains: normalizedSearch, mode: "insensitive" } },
-        { city: { contains: normalizedSearch, mode: "insensitive" } },
-        { uf: { contains: normalizedSearch, mode: "insensitive" } },
-        { street: { contains: normalizedSearch, mode: "insensitive" } },
-        { address_number: { contains: normalizedSearch, mode: "insensitive" } },
-        { complement: { contains: normalizedSearch, mode: "insensitive" } },
-        { cnae: { contains: normalizedSearch, mode: "insensitive" } },
-        { erp_code: { contains: normalizedSearch, mode: "insensitive" } },
-        {
-          responsible_name: { contains: normalizedSearch, mode: "insensitive" },
-        },
-        { email: { contains: normalizedSearch, mode: "insensitive" } },
-        ...(digitSearch
-          ? [
-              { cep: { contains: digitSearch, mode: "insensitive" } },
-              {
-                telephone: { contains: digitSearchPhone, mode: "insensitive" },
-              },
-              { cnpj: { contains: digitSearch, mode: "insensitive" } },
-            ]
-          : []),
-      );
-    }
-
-    const whereCondition = {
-      ...(currentUserRole !== "MASTER" && { id: businessId }),
-      ...buildSearchOr(orConditions),
+    const filters = {
+      search,
+      statuses,
+      ufs,
+      ...(currentUserRole !== "MASTER" && { ownBusinessId: businessId }),
     };
 
-    const [businessRows, total] = await Promise.all([
+    const [businessRows, grouped] = await Promise.all([
       this.prisma.business.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
-        orderBy: {
-          created_at: "desc", // Sort by created_at
-        },
+        where: businessListWhere(filters),
+        orderBy: resolveOrderBy(BUSINESS_SORT, { sort, order }),
         include: {
           _count: {
             // Active fleet only — INACTIVE vehicles free their slot.
@@ -106,19 +97,42 @@ class BusinessRepository implements IBusinessRepository {
           },
         },
       }),
-      this.prisma.business.count({
-        where: whereCondition,
+      this.prisma.business.groupBy({
+        by: ["is_active", "uf"],
+        where: businessListWhere(filters, { except: "facets" }),
+        _count: { _all: true, erp_code: true },
       }),
     ]);
 
+    // By city AND state: two "São José" (SC and SP) are two places.
+    const cities = await this.prisma.business.groupBy({
+      by: ["city", "uf"],
+      where: businessListWhere(filters),
+      _count: { _all: true },
+      orderBy: [{ _count: { city: "desc" } }, { city: "asc" }, { uf: "asc" }],
+      take: TOP_PLACES,
+    });
+
     // Flatten the relation count so the API exposes registered fleet size
     // next to the contracted limit (vehicle_limit).
-    const businessData = businessRows.map(({ _count, ...business }) => ({
+    const data = businessRows.map(({ _count, ...business }) => ({
       ...business,
       vehicle_count: _count.vehicles,
     }));
 
-    return { data: businessData, total };
+    return {
+      data,
+      groups: grouped.map((group) => ({
+        is_active: group.is_active,
+        uf: group.uf,
+        count: group._count._all,
+        withErpCode: group._count.erp_code,
+      })),
+      topCities: cities.map((place) => ({
+        value: cityLabel(place.city, place.uf),
+        count: place._count._all,
+      })),
+    };
   }
 
   async searchBusinessWithCursor({
@@ -131,8 +145,8 @@ class BusinessRepository implements IBusinessRepository {
     const whereCondition = {
       ...(currentUserRole !== "MASTER" && { id: businessId }),
       is_active: true,
-      ...(search && {
-        OR: [
+      ...(search &&
+        buildSearchOr([
           {
             corporate_reason: {
               contains: search,
@@ -148,8 +162,7 @@ class BusinessRepository implements IBusinessRepository {
               mode: "insensitive" as const,
             },
           },
-        ],
-      }),
+        ])),
     };
 
     const businesses = await this.prisma.business.findMany({
@@ -159,9 +172,9 @@ class BusinessRepository implements IBusinessRepository {
         cursor: { id: cursor },
         skip: 1,
       }),
-      orderBy: {
-        created_at: "desc",
-      },
+      // The id breaks created_at ties: a cursor over an unstable order skips
+      // or repeats rows between pages.
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     });
 
     const hasMore = businesses.length > limit;
@@ -175,8 +188,9 @@ class BusinessRepository implements IBusinessRepository {
   async toggleBusinessActive(
     businessId: string,
     expectedActive: boolean,
+    tx?: Prisma.TransactionClient,
   ): Promise<Business | null> {
-    return this.prisma.$transaction(async (transaction) => {
+    const toggle = async (transaction: Prisma.TransactionClient) => {
       const { count } = await transaction.business.updateMany({
         where: { id: businessId, is_active: expectedActive },
         data: { is_active: !expectedActive },
@@ -185,18 +199,21 @@ class BusinessRepository implements IBusinessRepository {
       if (count === 0) return null;
 
       return transaction.business.findUnique({ where: { id: businessId } });
-    });
+    };
+
+    // The caller's transaction when it has one (the audit entry joins it).
+    return tx ? toggle(tx) : this.prisma.$transaction(toggle);
   }
 
-  async updateBusiness({
-    businessData,
-    businessId,
-  }: UpdateBusiness): Promise<Business> {
+  async updateBusiness(
+    { businessData, businessId }: UpdateBusiness,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Business> {
     const filteredData = Object.fromEntries(
       Object.entries(businessData).filter(([_, value]) => value !== undefined),
     );
 
-    const updateBusiness = await this.prisma.business.update({
+    const updateBusiness = await (tx ?? this.prisma).business.update({
       where: {
         id: businessId,
       },
@@ -206,8 +223,11 @@ class BusinessRepository implements IBusinessRepository {
     return updateBusiness;
   }
 
-  async deleteBusiness(businessId: string): Promise<Business> {
-    const deleteBusiness = await this.prisma.business.delete({
+  async deleteBusiness(
+    businessId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Business> {
+    const deleteBusiness = await (tx ?? this.prisma).business.delete({
       where: {
         id: businessId,
       },
@@ -241,10 +261,8 @@ class BusinessRepository implements IBusinessRepository {
   ): Promise<Business | null> {
     const findBusinessByCorporateReason = await this.prisma.business.findFirst({
       where: {
-        corporate_reason: {
-          equals: corporateReason,
-          mode: "insensitive",
-        },
+        // Escaped: the value is an ILIKE pattern underneath (like-pattern.ts).
+        corporate_reason: insensitiveEquals(corporateReason),
       },
     });
 
@@ -254,10 +272,7 @@ class BusinessRepository implements IBusinessRepository {
   async findBusinessByErpcode(erpCode: string): Promise<Business | null> {
     const findBusinessByErpcode = await this.prisma.business.findFirst({
       where: {
-        erp_code: {
-          equals: erpCode,
-          mode: "insensitive",
-        },
+        erp_code: insensitiveEquals(erpCode),
       },
     });
 
@@ -267,10 +282,7 @@ class BusinessRepository implements IBusinessRepository {
   async findBusinessByEmail(email: string): Promise<Business | null> {
     const findBusinessByEmail = await this.prisma.business.findFirst({
       where: {
-        email: {
-          equals: email,
-          mode: "insensitive",
-        },
+        email: insensitiveEquals(email),
       },
     });
 
@@ -280,10 +292,11 @@ class BusinessRepository implements IBusinessRepository {
   async updateVehicleLimit(
     businessId: string,
     vehicle_limit: number,
+    tx?: Prisma.TransactionClient,
   ): Promise<Business> {
     // Lowering the limit below the current fleet never deletes vehicles —
     // it only blocks new registrations (checked at create-vehicle time).
-    const updatedBusiness = await this.prisma.business.update({
+    const updatedBusiness = await (tx ?? this.prisma).business.update({
       where: { id: businessId },
       data: { vehicle_limit },
     });
@@ -294,11 +307,12 @@ class BusinessRepository implements IBusinessRepository {
   async updateAILimit(
     businessId: string,
     ai_analysis_limit: number,
+    tx?: Prisma.TransactionClient,
   ): Promise<Business> {
     // Consumption lives in the AIUsagePeriod ledger and is never rewritten:
     // lowering the limit below what was already spent simply leaves zero
     // remaining for the rest of the period.
-    const updatedBusiness = await this.prisma.business.update({
+    const updatedBusiness = await (tx ?? this.prisma).business.update({
       where: { id: businessId },
       data: { ai_analysis_limit },
     });

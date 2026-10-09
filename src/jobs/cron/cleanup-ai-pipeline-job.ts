@@ -1,8 +1,11 @@
 import { Prisma } from "@prisma/client";
 
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
+import { logger } from "@/shared/logging/logger";
 
 import { deleteInBatches, PURGE_RUN_BUDGET_MS } from "./batch-delete";
+
+const log = logger.child({ component: "cron", job: "cleanup-ai-pipeline" });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -61,14 +64,11 @@ const cleanupAIPipelineJob: CronJobDefinition = {
       deadline,
     });
 
-    console.log(
-      `[CleanupAIPipeline] Expurgo: ${requests.deleted} análise(s) IA encerradas`,
-    );
+    log.info({ deleted: requests.deleted }, "finished AI analyses purged");
 
     if (requests.stoppedEarly) {
-      console.warn(
-        "[CleanupAIPipeline] Expurgo interrompido pelo teto/tempo da " +
-          "execução; backlog restante fica para a próxima janela",
+      log.warn(
+        "AI analysis purge stopped at the run's cap or deadline; the rest waits for the next window",
       );
     }
   },

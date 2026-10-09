@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import { Prisma } from "@prisma/client";
 
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
@@ -8,8 +9,6 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
 import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
-
-import { DriverHasAssociatedOperationError } from "../errors/driver-has-associated-operation-error";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -21,14 +20,16 @@ import { DriverNotFoundError } from "../errors/driver-not-found-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
 
-import { DriverHasAssociatedFinesError } from "../errors/driver-has-associated-fines-error";
-import { DriverHasAssociatedFuelError } from "../errors/driver-has-associated-fuel-error";
-
-import { DriverHasAssociatedChecklistsError } from "../errors/driver-has-associated-checklists-error";
-import { DriverHasAssociatedUserError } from "../errors/driver-has-associated-user-error";
+import {
+  driverHistoryRefusal,
+  type DriverHistoryCounts,
+} from "../errors/driver-history-refusal";
 
 import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 import { IVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/IVehicle-checklist-repository";
+
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 import { Driver } from "../../dtos/driver-dto";
 
@@ -66,6 +67,8 @@ class DeleteDriverUseCase {
       throw new ResourceNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
@@ -82,73 +85,70 @@ class DeleteDriverUseCase {
       throw new DriverNotBelongBusinessError();
     }
 
-    // Check if driver is linked to a user account
-    const linkedUser = await this.user.findUserByDriverId(driverId);
-
-    if (linkedUser) {
-      throw new DriverHasAssociatedUserError();
-    }
-
-    const associatedFines = await this.fine.findFinesByDriverId(driverId);
-
-    if (associatedFines.length > 0) {
-      throw new DriverHasAssociatedFinesError(associatedFines.length);
-    }
-
-    const associatedFuels = await this.fuel.findFuelsByDriverId(driverId);
-
-    if (associatedFuels.length > 0) {
-      throw new DriverHasAssociatedFuelError(associatedFuels.length);
-    }
-
-    const associatedChecklists =
-      await this.vehicleChecklist.findVehicleChecklistsByDriverId(driverId);
-
-    if (associatedChecklists.length > 0) {
-      throw new DriverHasAssociatedChecklistsError(associatedChecklists.length);
-    }
-
-
     /**
-     * The operation history, which the four guards above never covered.
-     *
-     * Both relations are optional, so this delete would SUCCEED and silently
-     * erase whose work it was — see tests/E2E/delete-cascade-integrity for
-     * what the database actually does without this.
+     * The history that keeps a driver from being deleted, counted (never
+     * loaded) and refused with the first reason found. Deliveries and routes
+     * matter as much as fines: `Delivery.driver` is optional, so without the
+     * guard a DELIVERED delivery would lose who delivered it
+     * (tests/E2E/delete-cascade-integrity). The repository counts all of it
+     * again under the driver row's lock before the DELETE.
      */
-    const [associatedDeliveries, associatedRoutes] = await Promise.all([
-      this.delivery.countDeliveriesReferencing({ driverId: driverId }),
-      this.route.countRoutesReferencing({ driverId: driverId }),
-    ]);
+    const refusal = driverHistoryRefusal(await this.historyOf(driverId));
 
-    if (associatedDeliveries > 0 || associatedRoutes > 0) {
-      throw new DriverHasAssociatedOperationError(
-        associatedDeliveries,
-        associatedRoutes,
-      );
-    }
+    if (refusal) throw refusal;
+
+    let driverDeleted: Driver;
 
     try {
-      const driverDeleted = await this.driver.deleteDriver(driverId);
-
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Motorista",
-        action: "delete",
-        entityId: driverDeleted.id,
-        description: `Motorista excluído: ${driverDeleted.name} | CNH: ${driverDeleted.cnh} | ID: ${driverDeleted.id}`,
-        status: "Deletado",
-        performedBy: userId,
-        businessId: businessId,
-      });
-
-      return driverDeleted;
+      driverDeleted = await this.driver.deleteDriver(driverId);
     } catch (error) {
+      // The history refusal from under the lock: the same 409 as above.
+      if (error instanceof AppError) throw error;
+
+      // Deleted by someone else since it was read.
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2025"
+      ) {
+        throw new DriverNotFoundError();
+      }
+
       throw new AppError(
         "Houve um erro ao tentar deletar o motorista! Por favor, tente novamente.",
         500,
       );
     }
+
+    sendCatalogChangedEvent(businessId, "driver");
+
+    // Process activity asynchronously without blocking the main flow
+    this.notificationService.createActivityIfEnabled({
+      type: "Motorista",
+      action: "delete",
+      entityId: driverDeleted.id,
+      description: `Motorista excluído: ${driverDeleted.name} | CNH: ${driverDeleted.cnh} | ID: ${driverDeleted.id}`,
+      status: "Deletado",
+      performedBy: userId,
+      businessId: businessId,
+    });
+
+    return driverDeleted;
+  }
+
+  /** Sequential: a delete is rare, and the pool budget is per request. */
+  private async historyOf(driverId: string): Promise<DriverHistoryCounts> {
+    const users = (await this.user.findUserByDriverId(driverId)) ? 1 : 0;
+    const fines = await this.fine.countFinesByDriverId(driverId);
+    const fuels = await this.fuel.countFuelsByDriverId(driverId);
+    const checklists =
+      await this.vehicleChecklist.countVehicleChecklistsByDriverId(driverId);
+    const deliveries = await this.delivery.countDeliveriesReferencing({ driverId });
+    const routes = await this.route.countRoutesReferencing({ driverId });
+    // `driver_pause.driverId` is RESTRICT: without this the database refused
+    // and the refusal surfaced as a 500.
+    const pauses = await this.driver.countDriverPauses(driverId);
+
+    return { users, fines, fuels, checklists, deliveries, routes, pauses };
   }
 }
 

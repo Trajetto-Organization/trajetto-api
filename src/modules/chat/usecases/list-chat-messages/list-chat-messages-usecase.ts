@@ -3,6 +3,7 @@ import { inject, injectable } from "tsyringe";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { IChatRepository } from "../../repositories/IChat-repository";
+import type { ISupportTicketRepository } from "../../repositories/ISupport-ticket-repository";
 
 import { UploadService } from "@/shared/services/upload-service";
 
@@ -16,6 +17,13 @@ import {
   ChatMessageNotFoundError,
   ChatThreadNotFoundError,
 } from "../errors/chat-errors";
+import { SupportTicketNotFoundError } from "../errors/support-ticket-errors";
+import {
+  driverTicketView,
+  presentTicket,
+  type DriverTicketView,
+  type TicketSummary,
+} from "../shared/ticket-presenter";
 
 interface ListChatMessagesRequest {
   userId: string;
@@ -36,6 +44,13 @@ interface ListChatMessagesRequest {
   limit: number;
   search?: string;
   businessId?: string;
+
+  /** Narrow the thread to one delivery's / one route's messages. */
+  deliveryId?: string;
+  routeId?: string;
+
+  /** Only this support ticket's messages (decision 14.5). */
+  ticketId?: string;
 }
 
 interface ListChatMessagesResponse {
@@ -63,6 +78,20 @@ interface ListChatMessagesResponse {
 
   /** Grey double check — only a staff viewer ever gets a value here. */
   counterpartDeliveredAt: Date | null;
+
+  /**
+   * The tickets the messages of this page belong to, for the subject
+   * separators (design §8). The driver gets the reduced view.
+   */
+  tickets: Array<TicketSummary | DriverTicketView>;
+
+  /**
+   * The other side's read cursor per ticket cited on the page (a ticket
+   * read moves only the ticket cursor, not the thread one). A message is read
+   * when it is covered by counterpartLastReadAt OR by its ticket's entry
+   * here. Tickets the other side never read are absent.
+   */
+  counterpartTicketReadAt: Record<string, Date>;
 }
 
 @injectable()
@@ -76,6 +105,9 @@ class ListChatMessagesUseCase {
     private uploadService: UploadService,
     @inject("DriverRepository")
     private driver: IDriverRepository,
+    // Optional so callers built before the tickets keep working.
+    @inject("SupportTicketRepository")
+    private tickets?: ISupportTicketRepository,
   ) {}
 
   async execute({
@@ -88,6 +120,9 @@ class ListChatMessagesUseCase {
     limit,
     search,
     businessId: requestedBusinessId,
+    deliveryId,
+    routeId,
+    ticketId,
   }: ListChatMessagesRequest): Promise<ListChatMessagesResponse> {
     const scope = await resolveChatScope(
       this.user,
@@ -95,22 +130,43 @@ class ListChatMessagesUseCase {
       requestedBusinessId,
     );
 
+    // A ticket names its own thread. Out of the company, or another
+    // driver's for a driver token, it answers exactly like a missing one.
+    const ticket =
+      ticketId && this.tickets
+        ? await this.tickets.findById(ticketId, scope.businessId)
+        : null;
+
+    if (ticketId && (!ticket || (scope.driverId && ticket.driverId !== scope.driverId))) {
+      throw new SupportTicketNotFoundError();
+    }
+
     // Whose conversation this is. A driver token can only ever be its own,
     // whatever the query asks for; the staff picks, by thread or by driver.
-    const targetDriverId = scope.driverId ?? driverId ?? null;
+    const targetDriverId = scope.driverId ?? ticket?.driverId ?? driverId ?? null;
 
     // A driver resolves their own thread from the token; a foreign threadId
     // answers "not found", never "not yours" — same non-leak rule as
     // list-delivery.
-    const thread = threadId
+    const found = ticket
+      ? await this.chat.findThreadById(ticket.threadId)
+      : threadId
       ? await this.chat.findThreadById(threadId)
       : targetDriverId
         ? await this.chat.findThreadByDriver(scope.businessId, targetDriverId)
         : null;
 
-    if (scope.driverId && threadId && thread && thread.driverId !== scope.driverId) {
-      throw new ChatThreadNotFoundError();
-    }
+    // Another company's thread, or another driver's for a driver token, is a
+    // thread that does not exist — and goes down exactly the path a random id
+    // goes. Refusing it on its own branch (404 here, 200 "empty chat" for the
+    // random id next to a driverId) told the caller which ids are real
+    // (IDOR sweep, 10/2026).
+    const thread =
+      found &&
+      found.businessId === scope.businessId &&
+      !(scope.driverId && found.driverId !== scope.driverId)
+        ? found
+        : null;
 
     // Asked by driver and there is no conversation yet: that is not an error,
     // it is an empty chat. The staff side gets the same answer the driver
@@ -126,6 +182,8 @@ class ListChatMessagesUseCase {
         counterpartLastReadAt: null,
         counterpartDeliveredAt: null,
         driverUser: await this.resolveDriverUser(scope.businessId, targetDriverId),
+        tickets: [],
+        counterpartTicketReadAt: {},
       };
     }
 
@@ -144,6 +202,16 @@ class ListChatMessagesUseCase {
       throw new ChatMessageNotFoundError();
     }
 
+    // A window centred on a message the filter hides would open on nothing.
+    if (
+      anchor &&
+      ((deliveryId && anchor.deliveryId !== deliveryId) ||
+        (routeId && anchor.routeId !== routeId) ||
+        (ticketId && anchor.ticketId !== ticketId))
+    ) {
+      throw new ChatMessageNotFoundError();
+    }
+
     const result = await this.chat.listMessages({
       threadId: thread.id,
       viewerIsDriverSide: Boolean(scope.driverId),
@@ -154,6 +222,9 @@ class ListChatMessagesUseCase {
         : undefined,
       limit,
       search,
+      deliveryId,
+      routeId,
+      ticketId,
     });
 
     const data = await Promise.all(
@@ -162,16 +233,75 @@ class ListChatMessagesUseCase {
       ),
     );
 
+    const viewerIsDriverSide = Boolean(scope.driverId);
+    const driverUser = await this.resolveDriverUser(scope.businessId, thread.driverId);
+
+    const ticketCursors = await this.ticketReadCursors(
+      result.data,
+      ticketId ?? null,
+      // The driver himself is the viewer on his side: his id is the token's.
+      viewerIsDriverSide ? userId : (driverUser?.id ?? null),
+      viewerIsDriverSide,
+    );
+
+    // A view filtered to one ticket answers that ticket's cursor too.
+    const ticketCursor = ticketId ? ticketCursors.get(ticketId) : undefined;
+
     return {
       threadId: thread.id,
       data,
-      driverUser: await this.resolveDriverUser(scope.businessId, thread.driverId),
+      driverUser,
       nextCursor: result.nextCursor,
       previousCursor: result.previousCursor,
       hasNewer: result.hasNewer,
-      counterpartLastReadAt: result.counterpartLastReadAt,
+      counterpartLastReadAt: latestDate(result.counterpartLastReadAt, ticketCursor ?? null),
       counterpartDeliveredAt: result.counterpartDeliveredAt,
+      tickets: await this.citedTickets(result.data, scope.businessId, viewerIsDriverSide),
+      counterpartTicketReadAt: Object.fromEntries(ticketCursors),
     };
+  }
+
+  /** The other side's cursor on each ticket cited on the page. */
+  private async ticketReadCursors(
+    messages: Array<{ ticketId: string | null }>,
+    filterTicketId: string | null,
+    driverUserId: string | null,
+    viewerIsDriverSide: boolean,
+  ): Promise<Map<string, Date>> {
+    if (!this.tickets) return new Map();
+
+    const ids = new Set(
+      messages.map((message) => message.ticketId).filter((id): id is string => Boolean(id)),
+    );
+
+    if (filterTicketId) ids.add(filterTicketId);
+
+    return this.tickets.counterpartReadCursors([...ids], driverUserId, viewerIsDriverSide);
+  }
+
+  /** The tickets cited on the page, presented for the separators. */
+  private async citedTickets(
+    messages: Array<{ ticketId: string | null }>,
+    businessId: string,
+    forDriver: boolean,
+  ): Promise<Array<TicketSummary | DriverTicketView>> {
+    if (!this.tickets) return [];
+
+    const ids = [
+      ...new Set(
+        messages
+          .map((message) => message.ticketId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+
+    const rows = await this.tickets.findManyRows(ids, businessId);
+
+    return rows.map((row) => {
+      const summary = presentTicket(row);
+
+      return forDriver ? driverTicketView(summary) : summary;
+    });
   }
 
   /**
@@ -196,6 +326,13 @@ class ListChatMessagesUseCase {
 
     return { id: user.id, last_seen_at: user.last_seen_at ?? null };
   }
+}
+
+function latestDate(a: Date | null, b: Date | null): Date | null {
+  if (!a) return b;
+  if (!b) return a;
+
+  return a > b ? a : b;
 }
 
 export { ListChatMessagesUseCase };

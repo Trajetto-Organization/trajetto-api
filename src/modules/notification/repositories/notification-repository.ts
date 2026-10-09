@@ -88,9 +88,11 @@ class NotificationRepository implements INotificationRepository {
         cursor: { id: cursor },
         skip: 1, // Skip the cursor item itself
       }),
-      orderBy: {
-        created_at: "desc",
-      },
+      // The id breaks created_at ties. The notification pipeline writes a
+      // whole fan-out in one instant, and a cursor over a non-unique order
+      // re-reads the same tied row on every page (skip: 1 always drops the
+      // first of the ties) while the others are never shown.
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     });
 
     // Check if there are more items

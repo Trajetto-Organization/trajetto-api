@@ -1,7 +1,12 @@
-class SupplierNameAlreadyExistsError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/** Unique per company, ignoring case. */
+class SupplierNameAlreadyExistsError extends AppError {
   constructor() {
     super(
-      "Este nome não está disponível para cadastro. Já existe um fornecedor com este nome.",
+      "Já existe um fornecedor com este nome nesta empresa.",
+      409,
+      "SUPPLIER_NAME_TAKEN",
     );
   }
 }

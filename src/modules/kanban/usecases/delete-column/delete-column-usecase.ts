@@ -10,9 +10,8 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
-import { KanbanColumnNotBelongBusinessError } from "../errors/kanban-column-not-belong-business-error";
-
 import { KanbanNotAllowedDeleteColumnBusinessError } from "../errors/kanban-not-allowed-delete-column-business-error";
+
 import { AppError } from "@/shared/errors/AppError";
 
 @injectable()
@@ -37,6 +36,11 @@ class DeleteKanbanColumnUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The path's board first, whatever column id came with it.
+    if (findUser.role !== "MASTER" && findUser.businessId !== businessId) {
+      throw new KanbanNotAllowedDeleteColumnBusinessError();
+    }
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
@@ -45,30 +49,19 @@ class DeleteKanbanColumnUseCase {
 
     const findColumn = await this.kanban.findColumnById(columnId);
 
-    if (!findColumn) {
+    // Missing and "on another board" answer alike (decision 11.3).
+    if (!findColumn || findColumn.businessId !== businessId) {
       throw new KanbanColumnNotFoundError();
     }
 
-    if (findColumn.businessId !== businessId) {
-      throw new KanbanColumnNotBelongBusinessError();
-    }
-
-    // Verify user permissions
-    if (
-      findUser.role === "BUSINESS_ADMIN" ||
-      findUser.role === "BUSINESS_USER"
-    ) {
-      if (findUser.businessId !== businessId) {
-        throw new KanbanNotAllowedDeleteColumnBusinessError();
-      }
-    }
-
     try {
-      const deletedColumn = await this.kanban.deleteColumn(columnId);
-      return deletedColumn;
+      return await this.kanban.deleteColumn(columnId);
     } catch (error) {
+      // Deleted meanwhile by someone else: the repository says "not found".
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
-        "Houve um erro ao tentar deletar a coluna! Por favor, tente novamente.",
+        "Houve um erro ao tentar excluir a coluna! Por favor, tente novamente.",
         500,
       );
     }

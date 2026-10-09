@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   renderRouteCancelledPush,
+  renderRoutePlanChangedPush,
   renderRouteReleasedPush,
   routeCancelledPolicy,
+  routePlanChangedPolicy,
   routeReleasedPolicy,
 } from "@/shared/notifications/policies/route-policies";
 
@@ -174,7 +176,7 @@ describe("the shape of the two topics", () => {
     }
   });
 
-  it("registers exactly these two route topics and no more", () => {
+  it("registers exactly these route topics and no more", () => {
     // Publishing a topic with no entry fails visibly in the pipeline, so the
     // registry is the real list. A departure and a completion are deliberately
     // absent: the board shows them and the trail records them.
@@ -182,6 +184,39 @@ describe("the shape of the two topics", () => {
       Object.keys(notificationPolicies).filter((topic) =>
         topic.startsWith("route."),
       ),
-    ).toEqual(["route.released", "route.cancelled"]);
+    ).toEqual(["route.released", "route.cancelled", "route.plan_changed"]);
+  });
+});
+
+/**
+ * Decision 14.7 (design §7.2): the dispatcher changed the stops of a route
+ * already released to the driver. The socket reaches an open app; this push
+ * reaches a phone in a pocket, and opens the day's list.
+ */
+describe("the plan-changed push", () => {
+  const changed = {
+    routeId: "018f0000-0000-7000-8000-0000000000r1",
+    businessId: "018f0000-0000-7000-8000-00000000000a",
+    driverUserId: DRIVER_USER,
+    code: 42,
+    planVersion: 3,
+  };
+
+  it("names the route and opens the day's list", () => {
+    const push = renderRoutePlanChangedPush(changed);
+
+    expect(push.title).toBe("Sua rota foi alterada");
+    expect(push.body).toContain("rota 42");
+    expect(push.data).toEqual({ url: "/route", routeId: changed.routeId, planVersion: 3 });
+  });
+
+  it("reaches the route's driver, push-only and mandatory", async () => {
+    expect(routePlanChangedPolicy.mandatory).toBe(true);
+    expect(routePlanChangedPolicy.renderInApp).toBeUndefined();
+    expect(
+      await routePlanChangedPolicy.resolveRecipients(changed, {
+        userRepository: userRepositoryWith({ id: DRIVER_USER } as User),
+      } as never),
+    ).toEqual([{ id: DRIVER_USER }]);
   });
 });

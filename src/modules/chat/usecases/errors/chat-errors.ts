@@ -1,27 +1,58 @@
 import { AppError } from "@/shared/errors/AppError";
 
-class ChatThreadNotFoundError extends Error {
+/**
+ * The chat's "não encontrado" answers: 404 with a code (decision 11.3).
+ *
+ * They used to be plain Errors that each controller mapped to a 400 with no
+ * code — and not always the same way. As AppErrors the global handler
+ * answers every one of them identically, whichever route raises it.
+ *
+ * "Of another company" is always the same answer as "does not exist": a
+ * different status or sentence would tell a caller that an id is real in
+ * some other tenant.
+ */
+class ChatThreadNotFoundError extends AppError {
   constructor() {
-    super("Conversa não encontrada! Por favor, tente novamente.");
+    super(
+      "Conversa não encontrada! Por favor, tente novamente.",
+      404,
+      "CHAT_THREAD_NOT_FOUND",
+    );
+    this.name = "ChatThreadNotFoundError";
   }
 }
 
-class ChatMessageNotFoundError extends Error {
+class ChatMessageNotFoundError extends AppError {
   constructor() {
-    super("Mensagem não encontrada.");
+    super("Mensagem não encontrada.", 404, "CHAT_MESSAGE_NOT_FOUND");
     this.name = "ChatMessageNotFoundError";
   }
 }
 
-class ChatDriverNotFoundError extends Error {
+class ChatDriverNotFoundError extends AppError {
   constructor() {
-    super("Motorista não encontrado para esta conversa.");
+    super(
+      "Motorista não encontrado para esta conversa.",
+      404,
+      "CHAT_DRIVER_NOT_FOUND",
+    );
+    this.name = "ChatDriverNotFoundError";
   }
 }
 
-class ChatDriverNotBelongBusinessError extends Error {
+/** The delivery cited in the chip: missing, of another company or driver. */
+class ChatDeliveryNotFoundError extends AppError {
   constructor() {
-    super("Este motorista não pertence à sua empresa.");
+    super("Entrega não encontrada.", 404, "CHAT_DELIVERY_NOT_FOUND");
+    this.name = "ChatDeliveryNotFoundError";
+  }
+}
+
+/** An explicit `routeId` that is missing or of another company. */
+class ChatRouteNotFoundError extends AppError {
+  constructor() {
+    super("Rota não encontrada.", 404, "CHAT_ROUTE_NOT_FOUND");
+    this.name = "ChatRouteNotFoundError";
   }
 }
 
@@ -45,6 +76,7 @@ export {
   ChatThreadNotFoundError,
   ChatMessageNotFoundError,
   ChatDriverNotFoundError,
-  ChatDriverNotBelongBusinessError,
+  ChatDeliveryNotFoundError,
+  ChatRouteNotFoundError,
   ChatDeliveryReceiptNotAllowedError,
 };

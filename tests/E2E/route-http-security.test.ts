@@ -45,6 +45,9 @@ const DELIVERY_A = "018f1000-0000-7000-8000-0000000000e1";
 let routeOfA: string;
 let stopOfA: string;
 
+// A civil date, the only form the route endpoints take (decision 1.3).
+const ROUTE_DAY = "2026-09-28";
+
 let cnpjSeq = 0;
 
 async function seedBusiness(id: string, withDeliveries = true): Promise<void> {
@@ -199,7 +202,7 @@ function surface(businessId: string, routeId: string, stopId: string) {
       url: `/route/create-route/${businessId}`,
       payload: {
         driverId: DRIVER_A,
-        scheduled_date: new Date().toISOString(),
+        scheduled_date: ROUTE_DAY,
       },
     },
     {
@@ -334,7 +337,7 @@ describe("with a carrier that never hired the module", () => {
       url: `/route/create-route/${CARRIER_NO_MODULE}`,
       payload: {
         driverId: DRIVER_A,
-        scheduled_date: new Date().toISOString(),
+        scheduled_date: ROUTE_DAY,
       },
       headers: { authorization: `Bearer ${noModuleToken}` },
     });
@@ -418,7 +421,7 @@ describe("with a driver token", () => {
       url: `/route/create-route/${CARRIER_A}`,
       payload: {
         driverId: DRIVER_A,
-        scheduled_date: new Date().toISOString(),
+        scheduled_date: ROUTE_DAY,
         deliveryIds: [],
       },
       headers: { authorization: `Bearer ${driverTokenA}` },

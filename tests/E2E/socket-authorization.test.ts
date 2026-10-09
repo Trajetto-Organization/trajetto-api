@@ -4,11 +4,11 @@ import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+
+import { socketClientEntry } from "./support/socket-client";
 
 /**
  * The socket, and the permission that changed underneath it.
@@ -53,18 +53,7 @@ let client: {
  * eventually imports in production.
  */
 async function connectClient(): Promise<typeof client> {
-  const entry = pathToFileURL(
-    resolve(
-      process.cwd(),
-      "..",
-      "trajetto-fleet-manager-ui",
-      "node_modules",
-      "socket.io-client",
-      "build",
-      "esm",
-      "index.js",
-    ),
-  ).href;
+  const entry = socketClientEntry();
 
   const { io: connect } = await import(/* @vite-ignore */ entry);
 
@@ -288,7 +277,7 @@ describe("once the permission is revoked", () => {
     // Dropping it would be worse: a server-side disconnect does not reconnect
     // on its own, and the company would be left without realtime until the
     // next page load.
-    const online = await io.getOnlineUserIdsForBusiness(CARRIER);
+    const online = await io.getOnlineUserIds([STAFF]);
 
     expect(online).toContain(STAFF);
   });

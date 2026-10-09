@@ -1,759 +1,329 @@
-# 🚛 Trajetto - Sistema de Gestão de Frotas
+# Trajetto — API
 
-<div align="center">
+Back-end do Trajetto: a API HTTP, o tempo real (Socket.IO) e os processos de
+fundo (filas e crons) que atendem o painel web (`trajetto-ui`), o aplicativo do
+motorista (`trajetto-mobile`) e os sistemas dos clientes que se integram pela
+API pública. Inclui também o serviço de IA local (`infra/ai-ocr`) e o serviço
+de backup (`infra/backup`), publicados como imagens próprias.
 
-![Node.js](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)
-![Fastify](https://img.shields.io/badge/Fastify-000000?style=for-the-badge&logo=fastify&logoColor=white)
-![Prisma](https://img.shields.io/badge/Prisma-3982CE?style=for-the-badge&logo=Prisma&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white)
-![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)
-![Socket.IO](https://img.shields.io/badge/Socket.IO-010101?style=for-the-badge&logo=socket.io&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+> Software proprietário. Leia [Licença](#licença) antes de copiar qualquer coisa
+> deste repositório.
 
-**Sistema completo de gestão de frotas com funcionalidades avançadas de controle, manutenção e monitoramento de veículos**
+## Sumário
 
-[🚀 Começar](#-instalação) • [📚 Documentação](#-documentação) • [🏗️ Arquitetura](#️-arquitetura) • [🧪 Testes](#-testes)
+- [O Trajetto em 1 minuto](#o-trajetto-em-1-minuto)
+- [Documentação deste repositório](#documentação-deste-repositório)
+- [O que a API faz](#o-que-a-api-faz)
+- [Arquitetura em resumo](#arquitetura-em-resumo)
+- [Rodando localmente](#rodando-localmente)
+- [Variáveis de ambiente](#variáveis-de-ambiente)
+- [Scripts](#scripts)
+- [Testes](#testes)
+- [Documentação das rotas](#documentação-das-rotas)
+- [Deploy: staging e produção](#deploy-staging-e-produção)
+- [Operação e saúde](#operação-e-saúde)
+- [Solução de problemas](#solução-de-problemas)
+- [Onde está cada decisão](#onde-está-cada-decisão)
+- [Licença](#licença)
 
-</div>
+## O Trajetto em 1 minuto
 
----
+O Trajetto é uma plataforma B2B (SaaS multiempresa) para transportadoras, com
+dois módulos vendidos separadamente por empresa:
 
-## 📋 Índice
+- **Frotas** (`FLEET`): veículos, motoristas, abastecimentos com foto do
+  odômetro, checklists veiculares, ordens de serviço, peças, fornecedores,
+  multas, contas a pagar, filiais e um quadro Kanban.
+- **Entregas** (`DELIVERIES`): documentos de entrega (manual, planilha ou XML
+  de NF-e), embarcadores, rotas, torre de controle, monitoramento, ocorrências
+  com formulário e autorização da torre, pausas do motorista, comprovante em
+  PDF assinado, atendimento por ticket (chat), mensagens ao cliente final e a
+  API pública com webhooks.
 
-- [Sobre o Projeto](#-sobre-o-projeto)
-- [Funcionalidades](#-funcionalidades)
-- [Tecnologias](#-tecnologias)
-- [Pré-requisitos](#-pré-requisitos)
-- [Instalação](#-instalação)
-- [Configuração](#-configuração)
-- [Uso](#-uso)
-- [Arquitetura](#️-arquitetura)
-- [API Documentation](#-api-documentation)
-- [Testes](#-testes)
-- [Deploy](#-deploy)
-- [Contribuição](#-contribuição)
-- [Licença](#-licença)
+Três projetos formam o produto:
 
-## 🎯 Sobre o Projeto
+| Repositório no GitHub (pasta local)                 | O que é                                                           | Tecnologia                                          | Onde roda                           |
+| --------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------- | ----------------------------------- |
+| `trajetto-api` (este)                               | API, tempo real, filas, crons, IA local, backup                   | Node.js 22, Fastify, Prisma, PostgreSQL 16, Redis 7 | Dokploy, app Compose (Docker Stack) |
+| `trajetto-fleet-manager-ui` (`trajetto-ui`)         | painel web (`/dashboard`, `/admin`), site público, portal `/docs` | Next.js 14 (App Router)                             | Dokploy, Application                |
+| `trajetto-fleet-manager-mobile` (`trajetto-mobile`) | aplicativo de campo do motorista, só Android                      | Expo / React Native                                 | EAS (APK interno e Play Store)      |
 
-O **Trajetto** é uma solução completa para gestão de frotas empresariais, desenvolvido com foco em escalabilidade, performance e facilidade de uso. O sistema oferece controle total sobre veículos, motoristas, manutenções, custos e compliance regulatório.
+## Documentação deste repositório
 
-### ✨ Diferenciais
+| Documento                                                          | Para quê                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`docs/arquitetura.md`](./docs/arquitetura.md)                     | como a API é por dentro: estrutura do código, anatomia de um módulo e como criar uma feature, processos, filas, tempo real, IA, comprovante, regras de migration, compatibilidade com o app, unicidade por empresa, ADRs            |
+| [`docs/deploy.md`](./docs/deploy.md)                               | o caminho até a produção: branches, workflows, GHCR, Dokploy (staging e produção, passo a passo), IA, Postgres e Redis, borda, migrations, rollback, backup e restore, alertas, cadeia de suprimentos, checklist do primeiro deploy |
+| [`docs/variaveis-de-ambiente.md`](./docs/variaveis-de-ambiente.md) | cada variável: para que serve, obrigatoriedade, segredo, formato, valor em dev/staging/produção e onde mora                                                                                                                         |
+| [`docs/testes.md`](./docs/testes.md)                               | as suítes, como rodar, o que cada uma prova, cobertura, mutação e as regras para escrever testes                                                                                                                                    |
+| [`CLAUDE.md`](./CLAUDE.md) / [`AGENTS.md`](./AGENTS.md)            | o guia de trabalho para agentes de código (e um bom resumo para quem chega)                                                                                                                                                         |
+| [`infra/traefik/README.md`](./infra/traefik/README.md)             | a configuração estática do Traefik do Dokploy                                                                                                                                                                                       |
+| [`tests/load/README.md`](./tests/load/README.md)                   | o harness de carga e o que ele mediu                                                                                                                                                                                                |
 
-- **🏢 Multi-tenant**: Suporte completo para múltiplas empresas e filiais
-- **🔐 Segurança Avançada**: Autenticação JWT + 2FA, controle granular de permissões
-- **📊 Analytics em Tempo Real**: Dashboard completo com métricas e indicadores
-- **🔔 Notificações Inteligentes**: Sistema de alertas via WebSocket e email
-- **📱 API RESTful**: Documentação completa com Swagger/OpenAPI
-- **🐳 Cloud Ready**: Containerizado com Docker e orquestração
+## O que a API faz
 
-## 🚀 Funcionalidades
+Cada pasta de `src/modules/` é um domínio, com casos de uso (`usecases/`,
+injetados com `tsyringe`), repositórios Prisma e seus gêmeos em memória
+(`repositories/`) e DTOs. As rotas ficam em `src/routes/` e os esquemas zod em
+`src/schemas/`. A tabela de módulos e prefixos HTTP, os papéis e as permissões
+estão em [`docs/arquitetura.md`](./docs/arquitetura.md#papéis-permissões-e-módulos).
 
-### 👥 Gestão de Usuários e Permissões
+Regras que valem para toda rota:
 
-- Sistema de autenticação com JWT e refresh tokens
-- Autenticação de dois fatores (2FA) por email
-- Controle granular de permissões por módulo
-- Perfis de acesso personalizáveis por empresa
-- Gestão de sessões e revogação de acesso
+- **Multiempresa.** Toda leitura e escrita é filtrada pela empresa da sessão
+  (ou pela escolhida pelo MASTER no `/admin`). Um id de outra empresa recebe o
+  mesmo 404 de um id inexistente. O guard de tenant roda em `preHandler`.
+- **Dia de negócio.** `Business.timezone` define o "hoje" de cada empresa
+  (`src/shared/time/business-day.ts`); o contêiner roda em UTC, sem `TZ`.
+- **Erros com código** e mensagem em pt-BR (`PERMISSION_DENIED`,
+  `MODULE_NOT_ENABLED`, `TENANT_INACTIVE`…).
+- **Idempotência** com `Idempotency-Key` ou `client_submission_id`.
+- **Listagens** do painel em NDJSON com paginação por página e uma linha
+  final `meta`; seletores com cursor.
 
-### 🏢 Gestão Empresarial
+## Arquitetura em resumo
 
-- Cadastro de empresas e filiais
-- Estrutura hierárquica multi-tenant
-- Gestão de fornecedores e parceiros
-- Controle de dados fiscais e regulatórios
-
-### 🚛 Gestão de Frota
-
-- Cadastro completo de veículos com histórico
-- Categorização por tipos e combustíveis
-- Controle de propriedade (próprio/terceirizado)
-- Status em tempo real (ativo, em rota, manutenção)
-- Gestão de documentação e vencimentos
-
-### 👨‍✈️ Gestão de Motoristas
-
-- Cadastro completo com documentação
-- Controle de CNH e vencimentos
-- Histórico de infrações e penalidades
-- Gestão de contratos (próprio/terceirizado)
-
-### 🔧 Manutenção e Ordens de Serviço
-
-- Criação e acompanhamento de ordens de serviço
-- Controle de peças e materiais utilizados
-- Gestão de fornecedores de serviços
-- Histórico completo de manutenções
-- Alertas de manutenção preventiva
-
-### 💰 Gestão Financeira
-
-- Contas a pagar com controle de vencimentos
-- Análise de custos por veículo/motorista
-- Relatórios financeiros detalhados
-- Controle de orçamentos e centros de custo
-
-### 🚨 Gestão de Multas e Infrações
-
-- Importação automática de códigos DETRAN
-- Registro e acompanhamento de multas
-- Controle de pontuação na CNH
-- Relatórios de compliance
-
-### 📊 Dashboard e Relatórios
-
-- Métricas em tempo real da frota
-- Análise de custos e performance
-- Indicadores de manutenção
-- Gráficos e visualizações interativas
-
-### 🔔 Sistema de Notificações
-
-- Notificações em tempo real via WebSocket
-- Alertas por email com templates personalizados
-- Notificações push para eventos importantes
-- Centro de notificações integrado
-
-### 📋 Sistema Kanban
-
-- Organização visual de tarefas
-- Gestão de projetos e atividades
-- Colaboração em equipe
-- Acompanhamento de progresso
-
-## 🛠 Tecnologias
-
-### Backend Core
-
-- **[Node.js](https://nodejs.org/)** - Runtime JavaScript
-- **[TypeScript](https://www.typescriptlang.org/)** - Superset tipado do JavaScript
-- **[Fastify](https://www.fastify.io/)** - Framework web rápido e eficiente
-- **[Prisma ORM](https://www.prisma.io/)** - ORM moderno para TypeScript
-
-### Banco de Dados e Cache
-
-- **[PostgreSQL](https://www.postgresql.org/)** - Banco de dados relacional
-- **[Redis](https://redis.io/)** + **[ioredis](https://github.com/redis/ioredis)** - Pub/sub do adapter de WebSocket e store distribuído de rate-limit
-
-### Autenticação e Segurança
-
-- **[JWT](https://jwt.io/)** - JSON Web Tokens
-- **[bcrypt](https://www.npmjs.com/package/bcrypt)** - Hash de senhas
-- **[Helmet](https://helmetjs.github.io/)** - Middleware de segurança
-- **[@fastify/rate-limit](https://github.com/fastify/fastify-rate-limit)** - Limitação de requisições (distribuída via Redis)
-
-### Comunicação em Tempo Real
-
-- **[Socket.IO](https://socket.io/)** + **[@socket.io/redis-adapter](https://github.com/socketio/socket.io-redis-adapter)** - WebSocket com propagação entre réplicas
-- **[Nodemailer](https://nodemailer.com/)** + **[Handlebars](https://handlebarsjs.com/)** - Envio e templating de e-mails (SMTP direto, sem broker)
-
-### Integrações e Processamento
-
-- **[@anthropic-ai/sdk](https://docs.anthropic.com/)** - Verificação por IA (Claude) de imagens/checklists
-- **[Meta WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api)** - Notificações via WhatsApp oficial (templates aprovados)
-- **[OSRM](https://project-osrm.org/)** - Roteirização e cálculo de rotas
-- **[aws-sdk](https://www.npmjs.com/package/aws-sdk)** - Upload para Cloudflare R2 (S3-compatible)
-- **[ExcelJS](https://github.com/exceljs/exceljs)** - Geração de relatórios
-
-### Validação e Injeção de Dependência
-
-- **[Zod](https://zod.dev/)** + **[fastify-type-provider-zod](https://github.com/turkerdev/fastify-type-provider-zod)** - Validação e tipagem das rotas
-- **[TSyringe](https://github.com/microsoft/tsyringe)** - Injeção de dependência
-
-### Infraestrutura e DevOps
-
-- **[Docker](https://www.docker.com/)** - Containerização
-- **[Docker Compose](https://docs.docker.com/compose/)** - Orquestração local
-- **[GitHub Actions](https://github.com/features/actions)** - CI/CD (testes + build + push para GHCR)
-
-### Documentação e Testes
-
-- **[Swagger/OpenAPI](https://swagger.io/)** - Documentação da API
-- **[Vitest](https://vitest.dev/)** - Framework de testes
-- **[Supertest](https://www.npmjs.com/package/supertest)** - Testes de API
-
-### Qualidade de Código
-
-- **[Prettier](https://prettier.io/)** - Formatação de código (`yarn lint:check` / `yarn lint:fix`)
-
-## 📋 Pré-requisitos
-
-Antes de começar, você precisa ter instalado em sua máquina:
-
-- [Node.js](https://nodejs.org/) (versão 18 ou superior)
-- [Docker](https://www.docker.com/) e [Docker Compose](https://docs.docker.com/compose/)
-- [Git](https://git-scm.com/)
-- [Yarn](https://yarnpkg.com/) (recomendado) ou npm
-
-## 🚀 Instalação
-
-### 1. Clone o repositório
-
-```bash
-git clone https://github.com/seu-usuario/trajetto-api.git
-cd trajetto-api
+```
+ navegador / app / ERP do cliente
+            │ HTTPS + WebSocket
+            ▼
+ Cloudflare ─▶ Traefik (Dokploy) ─▶ api ×2 réplicas (mesma imagem)
+                                     │  HTTP (Fastify) + Socket.IO
+                                     │  workers + crons (WORKERS_ENABLED)
+                     ┌───────────────┼──────────────────┬──────────────┐
+                     ▼               ▼                  ▼              ▼
+               PostgreSQL 16     Redis 7         trajetto-ai      Cloudflare R2
+           dados + filas + crons  rate limit +   (OCR local,       (fotos, PDFs;
+                                  pub/sub do     rede interna)     URLs assinadas)
+                                  Socket.IO
 ```
 
-### 2. Instale as dependências
+- **Postgres é a fila**: outbox transacional e filas em tabelas com
+  `FOR UPDATE SKIP LOCKED`; não há broker.
+- **Redis é descartável**: só rate limit e o pub/sub do Socket.IO entre
+  réplicas.
+- **IA local**: o serviço `trajetto-ai` (RapidOCR em CPU) só transcreve; a API
+  decide. Nenhum provedor externo.
+- **Comprovante** em PDF assinado com o A1 ICP-Brasil quando configurado.
+
+Detalhes em [`docs/arquitetura.md`](./docs/arquitetura.md).
+
+## Rodando localmente
+
+### Pré-requisitos
+
+- Node.js 22 (a imagem usa `node:22.21.1-alpine`);
+- Yarn 1 (o repositório usa `yarn.lock`);
+- Docker com Docker Compose (Postgres e Redis de desenvolvimento).
+
+### Passo a passo
 
 ```bash
+# 1. Dependências
 yarn install
-# ou
-npm install
-```
 
-### 3. Configure as variáveis de ambiente
+# 2. Variáveis: a API lê SÓ o .env da raiz
+cp .env.example .env
+#    preencha pelo menos JWT_SECRET, JWT_SECRET_REFRESH_TOKEN,
+#    MASTER_USER_EMAIL, MASTER_USER_INITIAL_PASSWORD e as POSTGRES_* / DATABASE_URL
 
-```bash
-# Use o arquivo de desenvolvimento como base
-cp .env.development .env
-```
-
-### 4. Inicie os serviços com Docker
-
-```bash
-# Inicia PostgreSQL e Redis
-yarn services:dev:up
-```
-
-### 5. Execute as migrações do banco
-
-```bash
-# Gera o cliente Prisma e executa migrações
-yarn prisma:generate
-yarn prisma:migrate:dev
-```
-
-### 6. Execute o seed do banco
-
-```bash
-# Cria usuário master e importa códigos de infração
-yarn seed
-yarn seed:infringement
-```
-
-### 7. Inicie o servidor de desenvolvimento
-
-```bash
+# 3. Tudo de uma vez
 yarn dev
 ```
 
-A API estará disponível em `http://localhost:3333`
+`yarn dev` faz, em ordem:
 
-## ⚙️ Configuração
+1. sobe o Postgres e o Redis do `compose.development.yaml`
+   (`database:dev:up`, `redis:dev:up`), em `127.0.0.1:5432` e `127.0.0.1:6379`;
+2. espera o Postgres responder (`wait-for-postgres`);
+3. gera o cliente Prisma e aplica as migrations (`prisma:migrate:deploy`);
+4. no `postdev`: cria o usuário master (`seed`), importa a tabela de infrações
+   do RENAINF (`seed:infringement`) e sobe o servidor com recarga
+   (`dev:server`, porta `3333`).
 
-### Variáveis de Ambiente
+Para rodar só o servidor depois que o banco já existe: `yarn dev:server`.
 
-O projeto utiliza diferentes arquivos de ambiente:
-
-- `.env.development` - Desenvolvimento local
-- `.env.test` - Ambiente de testes
-- `.env.production` - Produção
-
-#### Principais variáveis:
-
-```bash
-# Banco de dados
-DATABASE_URL="postgresql://user:password@localhost:5432/database"
-
-# Redis (adapter de WebSocket + rate-limit distribuído)
-REDIS_URL="redis://localhost:6379"
-
-# Autenticação JWT
-JWT_SECRET="seu-jwt-secret-seguro"
-JWT_SECRET_REFRESH_TOKEN="seu-refresh-token-secret"
-
-# Email (Resend)
-RESEND_SECRET_KEY="sua-api-key-resend"
-RESEND_FROM_EMAIL="noreply@seudominio.com"
-
-# Usuário Master
-MASTER_USER_EMAIL="admin@trajetto.com"
-MASTER_USER_INITIAL_PASSWORD="SenhaSegura123@"
-
-# Integrações
-OSRM_URL="http://localhost:5000"            # Roteirização
-META_WHATSAPP_ACCESS_TOKEN=""               # WhatsApp oficial (Meta Cloud API)
-META_WHATSAPP_PHONE_NUMBER_ID=""            # Id do número no painel da Meta
-META_WHATSAPP_TEMPLATE_NAME="trajetto_notification"
-META_WHATSAPP_API_VERSION="v23.0"
-ANTHROPIC_API_KEY="sk-ant-..."              # Verificação por IA
-
-# HTTP
-HTTP_REQUEST="http://localhost:3000"
-```
-
-### Docker Compose
-
-Os serviços de desenvolvimento ficam em composes dedicados, com scripts de atalho:
+### Serviço de IA (opcional)
 
 ```bash
-# Sobe todos os serviços de desenvolvimento (PostgreSQL, Redis)
-yarn services:dev:up
-
-# Serviços auxiliares (opcionais)
-yarn osrm:dev:up           # OSRM (roteirização)
+# ~1 GiB de RAM. Sem ele, os pedidos de IA ficam PENDING e o resto funciona.
+docker compose -f compose.development.yaml --profile ai up -d trajetto-ai
 ```
 
-### WhatsApp (Meta Cloud API)
+O `.env.example` já aponta `AI_LOCAL_URL=http://127.0.0.1:18080` com o token
+de desenvolvimento do compose.
 
-O envio usa a API oficial da Meta — não há serviço local para subir. Em
-desenvolvimento, use o número de teste do painel
-([developers.facebook.com](https://developers.facebook.com) → seu app →
-WhatsApp → API Setup): ele fornece o `META_WHATSAPP_ACCESS_TOKEN` temporário e
-o `META_WHATSAPP_PHONE_NUMBER_ID`, e envia para até 5 números verificados.
-
-Como mensagem proativa exige template pré-aprovado, crie no Meta Business
-Manager um template de utilidade com o nome de `META_WHATSAPP_TEMPLATE_NAME`
-(padrão `trajetto_notification`), idioma `pt_BR` e **uma única variável** no
-corpo. Exemplo aprovável:
-
-> Olá! Você tem uma nova notificação do Trajetto: {{1}} Acesse o sistema para
-> mais detalhes.
-
-O texto da notificação entra em `{{1}}` (o provider já remove quebras de linha,
-que a Meta não aceita em variáveis). Sem as credenciais configuradas a API
-sobe normalmente e apenas os envios de WhatsApp falham, com erro claro no log.
-
-Em produção, a imagem é publicada no GHCR pela pipeline e o deploy é disparado via webhook (ver [Deploy](#-deploy)).
-
-## 🎮 Uso
-
-### Autenticação
-
-1. **Login inicial**:
+### Criando uma migration
 
 ```bash
-POST /user/session
-{
-  "email": "admin@trajetto.com",
-  "password": "SenhaSegura123@"
-}
+# edite prisma/schema.prisma, depois:
+yarn prisma:migrate:dev     # só CRIA o arquivo (--create-only); revise o SQL
+yarn prisma:migrate:deploy  # aplica
 ```
 
-2. **Usar o token retornado** em todas as requisições:
+As migrations seguem expandir/contrair: uma versão nova nunca remove o que a
+versão anterior ainda lê (regras em
+[`docs/arquitetura.md`](./docs/arquitetura.md#migrations-expandir-e-contrair)).
 
-```bash
-Authorization: Bearer seu-jwt-token
-```
+## Variáveis de ambiente
 
-### Principais Endpoints
+O modelo comentado é o `.env.example`; a referência completa, com o valor de
+cada ambiente, é [`docs/variaveis-de-ambiente.md`](./docs/variaveis-de-ambiente.md).
+A validação acontece no boot (`src/schemas/env-schema/index.ts`): valor
+faltando ou inválido derruba o processo com a lista do que corrigir.
 
-#### Usuários
+- **desenvolvimento:** `.env` na raiz (o único arquivo lido);
+- **staging e produção:** o Environment do app Compose no Dokploy;
+- **CI:** os environments `staging` e `production` e as variáveis do
+  repositório no GitHub.
 
-```bash
-POST /user/create-user          # Criar usuário
-GET  /user/list-users           # Listar usuários
-GET  /user/me                   # Perfil do usuário logado
-PATCH /user/password            # Alterar senha
-```
+Obrigatórias sempre: `DATABASE_URL`, `REDIS_URL`, `HTTP_REQUEST`, `JWT_SECRET`,
+`JWT_SECRET_REFRESH_TOKEN`, `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`.
+Em produção também: `UPLOAD_STORAGE_TYPE=r2` com as quatro `R2_*` e
+`RATE_LIMIT_TRUSTED_PROXY`. Segredos nunca vão para o repositório nem para o
+log.
 
-#### Empresas
+## Scripts
 
-```bash
-POST /business/create-business  # Criar empresa
-GET  /business/list-business    # Listar empresas
-PATCH /business/update-business/:id # Atualizar empresa
-```
+| Script                                     | O que faz                                                                                                           |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `yarn dev`                                 | sobe Postgres e Redis, migra, roda os seeds e o servidor com recarga                                                |
+| `yarn dev:server`                          | só o servidor com recarga (`tsx watch src/server.ts`)                                                               |
+| `yarn start:dev`                           | o servidor sem recarga                                                                                              |
+| `yarn build`                               | compila com `tsup`                                                                                                  |
+| `yarn start`                               | o entrypoint da imagem (`infra/scripts/docker-entrypoint.sh`)                                                       |
+| `yarn migrate:release`                     | o passo de release: migrations e seeds, sem subir o servidor                                                        |
+| `yarn services:dev:up` / `:down` / `:stop` | todos os serviços do `compose.development.yaml`                                                                     |
+| `yarn database:dev:up` / `:down` / `:stop` | só o Postgres de desenvolvimento                                                                                    |
+| `yarn redis:dev:up` / `:down` / `:stop`    | só o Redis de desenvolvimento                                                                                       |
+| `yarn wait-for-postgres`                   | espera o banco responder                                                                                            |
+| `yarn prisma:generate`                     | gera o cliente Prisma                                                                                               |
+| `yarn prisma:migrate:dev`                  | cria uma migration sem aplicar (`--create-only`)                                                                    |
+| `yarn prisma:migrate:deploy`               | aplica as migrations pendentes                                                                                      |
+| `yarn prisma:migrate:reset`                | recria o banco local do zero (apaga os dados)                                                                       |
+| `yarn prisma:studio`                       | abre o Prisma Studio                                                                                                |
+| `yarn seed`                                | cria o usuário master                                                                                               |
+| `yarn seed:infringement`                   | importa os códigos de infração do RENAINF                                                                           |
+| `yarn webhooks:seal`                       | cifra os segredos de webhook já gravados com `WEBHOOK_SECRETS_KEY`                                                  |
+| `yarn test`                                | testes unitários (`tests/unitaires`)                                                                                |
+| `yarn test:watch`                          | unitários em modo watch                                                                                             |
+| `yarn test:e2e`                            | testes E2E contra um Postgres real (`tests/E2E`)                                                                    |
+| `yarn test:e2e:watch`                      | E2E em modo watch                                                                                                   |
+| `yarn test:coverage`                       | cobertura dos unitários (`coverage/unit`), com piso (statements e linhas 70,8 %, branches 82,57 %, funções 57,62 %) |
+| `yarn test:coverage:e2e`                   | cobertura do E2E em lotes, juntada em `coverage/all`                                                                |
+| `yarn test:mutation`                       | teste de mutação (Stryker) nas regras críticas                                                                      |
+| `yarn test:ui`                             | interface do Vitest                                                                                                 |
+| `yarn typecheck`                           | `tsc --noEmit`                                                                                                      |
+| `yarn validate`                            | gera o Prisma, typecheck e unitários                                                                                |
+| `yarn lint:check` / `yarn lint:fix`        | Prettier                                                                                                            |
+| `yarn ci`                                  | `yarn install --frozen-lockfile`                                                                                    |
 
-#### Veículos
+## Testes
 
-```bash
-POST /vehicle/create-vehicle/:businessId    # Criar veículo
-GET  /vehicle/list-vehicle                  # Listar veículos
-PATCH /vehicle/update-vehicle/:id/business/:businessId # Atualizar veículo
-```
+| Suíte                                      | Onde                 | Como rodar                                     | Precisa de                                             |
+| ------------------------------------------ | -------------------- | ---------------------------------------------- | ------------------------------------------------------ |
+| Unitários                                  | `tests/unitaires`    | `yarn test`                                    | Node (e um Redis para o teste do adapter do Socket.IO) |
+| E2E (HTTP, repositórios, SQL, autorização) | `tests/E2E`          | `yarn test:e2e`                                | Postgres e Redis reais (um banco por arquivo)          |
+| Contrato de repositório                    | `tests/contract`     | junto com o E2E                                | Postgres                                               |
+| Serviço de IA (Python)                     | `infra/ai-ocr/tests` | `docker build --target test infra/ai-ocr`      | Docker                                                 |
+| Contrato com a IA real                     | `tests/ai-local`     | `AI_LOCAL_E2E=1 npx vitest run tests/ai-local` | Docker                                                 |
+| Carga                                      | `tests/load`         | `tests/load/README.md`                         | Docker e k6                                            |
+| Mutação                                    | `stryker.config.mjs` | `yarn test:mutation`                           | Postgres e Redis de teste                              |
 
-#### Ordens de Serviço
+No Windows, rode no máximo 8 arquivos E2E por vez (o engine do Prisma pode cair
+com um _napi panic_ com 12 ou mais). Tudo — o que cada suíte prova, cobertura,
+mutação e as regras para escrever testes — em [`docs/testes.md`](./docs/testes.md).
 
-```bash
-POST /service-order/create-service-order/:businessId # Criar OS
-GET  /service-order/list-service-order              # Listar OS
-```
+## Documentação das rotas
 
-### Documentação Interativa
+| Endereço              | Para quem                                                                   | Acesso                                                                                             |
+| --------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `/docs`               | equipe Trajetto: referência interna de **todas** as rotas, em pt-BR         | aberto fora de produção; em produção, só com `DOCS_USER` e `DOCS_PASSWORD` (HTTP Basic), senão 404 |
+| `/integration/docs`   | clientes: console interativo (Scalar) só com o que uma chave de API alcança | aberto                                                                                             |
+| portal `/docs` da web | clientes: guias e a referência gerada a partir do mesmo OpenAPI público     | aberto                                                                                             |
 
-Acesse a documentação Swagger em: `http://localhost:3333/docs`
+O OpenAPI gerado pelo Fastify é a única fonte: cada rota declara os esquemas de
+requisição e de resposta, incluindo 400/401/403/404/409/429.
 
-### WebSocket
-
-Conecte-se ao WebSocket para notificações em tempo real:
-
-```javascript
-import io from "socket.io-client";
-
-const socket = io("http://localhost:3333", {
-  auth: {
-    token: "seu-jwt-token",
-  },
-});
-
-socket.on("pushNotification", (notification) => {
-  console.log("Nova notificação:", notification);
-});
-```
-
-## 🏗️ Arquitetura
-
-### Estrutura do Projeto
-
-```
-src/
-├── @types/           # Definições de tipos TypeScript
-├── config/           # Configurações da aplicação
-├── env/              # Validação de variáveis de ambiente
-├── jobs/             # Jobs agendados (cron)
-├── modules/          # Módulos da aplicação
-│   ├── user/         # Módulo de usuários
-│   │   ├── dtos/     # Data Transfer Objects
-│   │   ├── repositories/ # Camada de dados
-│   │   └── usecases/ # Casos de uso (regras de negócio)
-│   ├── vehicle/      # Módulo de veículos
-│   ├── business/     # Módulo de empresas
-│   └── ...
-├── routes/           # Definição de rotas da API
-├── services/         # Serviços compartilhados
-├── shared/           # Código compartilhado
-├── websocket.ts      # Configuração WebSocket
-└── workers/          # Workers para processamento assíncrono
-```
-
-### Princípios Arquiteturais
-
-#### Clean Architecture + DDD
-
-- **Entities**: Regras de negócio fundamentais
-- **Use Cases**: Casos de uso da aplicação
-- **Repositories**: Abstração da camada de dados
-- **Controllers**: Adaptadores para entrada HTTP
-
-#### SOLID Principles
-
-- **S**ingle Responsibility
-- **O**pen/Closed
-- **L**iskov Substitution
-- **I**nterface Segregation
-- **D**ependency Inversion
-
-#### Design Patterns
-
-- **Repository Pattern**: Abstração do acesso a dados
-- **Dependency Injection**: Inversão de controle com TSyringe
-- **Observer Pattern**: Notificações e eventos
-- **Strategy Pattern**: Diferentes provedores (email, storage)
-
-### Fluxo de Dados
-
-```mermaid
-graph TD
-    A[HTTP Request] --> B[Route Handler]
-    B --> C[Controller]
-    C --> D[Use Case]
-    D --> E[Repository]
-    E --> F[Database/Prisma]
-    D --> G[External Services]
-    D --> H[Event Dispatcher]
-    H --> I[Notification Outbox - Postgres]
-    I --> J[Notification Pipeline]
-    J --> K[Email / SMTP]
-    J --> L[WebSocket]
-    J --> M[WhatsApp / Push]
-```
-
-O e-mail é apenas mais um canal do pipeline de notificações: a fila durável é
-o próprio Postgres (outbox + entregas com claim `FOR UPDATE SKIP LOCKED`,
-lease, backoff persistido e idempotência), sem message broker no caminho.
-
-## 📚 API Documentation
-
-### Swagger/OpenAPI
-
-A documentação completa da API está disponível em `/docs` quando o servidor está rodando.
-
-### Esquemas de Validação
-
-Todas as rotas utilizam validação com Zod:
-
-```typescript
-const createUserSchema = z.object({
-  name: z.string().min(2).max(100),
-  email: z.string().email(),
-  password: z.string().min(8),
-  role: z.enum(["MASTER", "BUSINESS_ADMIN", "BUSINESS_USER"]),
-});
-```
-
-### Rate Limiting
-
-Proteção contra abuso com rate limiting:
-
-```typescript
-// Login: máximo 8 tentativas por minuto
-// Cadastro: máximo 20 por minuto
-// Forgot Password: máximo 4 por minuto
-```
-
-### Paginação
-
-As listagens usam paginação baseada em cursor para performance estável em grandes volumes:
-
-```bash
-GET /vehicle/list-vehicle?cursor=<id>&limit=20
-```
-
-Resposta:
-
-```json
-{
-  "data": [],
-  "nextCursor": "01J...",
-  "hasMore": true
-}
-```
-
-## 🧪 Testes
-
-### Estrutura de Testes
+## Deploy: staging e produção
 
 ```
-tests/
-├── E2E/              # Testes end-to-end
-├── unitaires/        # Testes unitários
-└── utils/            # Utilitários para testes
+branch de trabalho ─push─▶ ci.yml (lint, typecheck, unitários + cobertura, audit, gitleaks, IA)
+staging ─push─▶ deploy.yml: validação completa (+ E2E) ─▶ build ÚNICO das 3 imagens (GHCR sha-<sha>)
+                            ─▶ tag `staging` por digest ─▶ Dokploy (stack de staging) ─▶ convergência
+PR staging → main ─▶ a mesma validação + "o head do PR tem imagem de staging?"
+merge em main ─▶ promoção (sem build): migrations ─▶ tag `stable` por digest ─▶ Dokploy (produção)
+                 ─▶ convergência ─▶ release        [aprovação do environment production]
+Run workflow ─▶ a mesma promoção com uma tag antiga (rollback)
 ```
 
-### Executar Testes
-
-```bash
-# Testes unitários
-yarn test
-
-# Testes unitários em modo watch
-yarn test:watch
-
-# Testes E2E
-yarn test:e2e
-
-# Cobertura de testes
-yarn test:coverage
-
-# Interface visual dos testes
-yarn test:ui
-```
-
-### Ambiente de Teste
-
-Os testes E2E utilizam um ambiente Prisma isolado:
-
-```typescript
-// Cada teste roda em um schema único
-// Cleanup automático após execução
-// Dados de seed específicos para testes
-```
-
-### Exemplo de Teste
-
-```typescript
-describe("Create User Use Case", () => {
-  it("should create a new user", async () => {
-    const userData = {
-      name: "John Doe",
-      email: "john@example.com",
-      password: "12345678",
-      role: "BUSINESS_USER",
-    };
-
-    const user = await createUserUseCase.execute(userData);
-
-    expect(user).toHaveProperty("id");
-    expect(user.email).toBe(userData.email);
-  });
-});
-```
-
-## 🚀 Deploy
-
-### Pipeline CI/CD (GitHub Actions)
-
-O deploy é automatizado por `.github/workflows/deploy.yml`, em três estágios:
-
-1. **Test** — sobe PostgreSQL e Redis como _services_ e roda os testes unitários e E2E
-2. **Build & Push** — builda a imagem Docker e publica no **GitHub Container Registry (GHCR)**
-3. **Deploy** — dispara o redeploy via webhook (Portainer), com aprovação manual no ambiente `Production`
-
-### Build local da imagem
-
-```bash
-docker build -t trajetto-api .
-```
-
-### Variáveis de Ambiente (Produção)
-
-```bash
-# Configure no seu provedor de cloud / orquestrador
-DATABASE_URL="postgresql://..."
-REDIS_URL="redis://..."
-JWT_SECRET="production-secret"
-RESEND_SECRET_KEY="re_..."
-```
-
-### Health Checks
-
-A aplicação inclui endpoints de saúde:
-
-```bash
-GET /health          # Status completo
-GET /health/liveness # Aplicação respondendo
-GET /health/readiness # Pronto para receber tráfego
-```
-
-### Monitoramento
-
-#### Logs Estruturados
-
-```typescript
-console.log({
-  level: "info",
-  service: "trajetto-api",
-  message: "User created",
-  userId: "123",
-  timestamp: new Date().toISOString(),
-});
-```
-
-#### Métricas
-
-- Response time
-- Error rates
-- Database connections
-- Queue lengths
-
-## 📊 Performance
-
-### Otimizações Implementadas
-
-- **Database**: Índices otimizados, connection pooling
-- **API**: Rate limiting, compression, caching
-- **Workers**: Processamento assíncrono pelo pipeline de notificações (fila durável em Postgres)
-- **Memory**: Singleton patterns, garbage collection tuning
-
-### Benchmarks
-
-```bash
-# Exemplo de performance
-GET /vehicle/list-vehicle
-- Média: 150ms
-- P95: 300ms
-- P99: 500ms
-```
-
-## 🤝 Contribuição
-
-### Como Contribuir
-
-1. Fork o projeto
-2. Crie uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
-3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
-4. Push para a branch (`git push origin feature/AmazingFeature`)
-5. Abra um Pull Request
-
-### Padrões de Código
-
-#### Commits Semânticos
-
-```bash
-feat: add new vehicle registration feature
-fix: resolve authentication token expiry issue
-docs: update API documentation
-test: add unit tests for user service
-refactor: optimize database queries
-```
-
-#### Code Style
-
-- Use Prettier para formatação (`yarn lint:fix`)
-- Nomeação em inglês
-- Interfaces com prefixo `I`
-- DTOs com sufixo `Props`
-
-### Code Review
-
-- Pelo menos 1 aprovação necessária
-- Testes devem passar
-- Cobertura mínima de 80%
-- Documentação atualizada
-
-## 🔐 Segurança
-
-### Medidas Implementadas
-
-- **Autenticação**: JWT + Refresh Tokens
-- **2FA**: Verificação por email
-- **Rate Limiting**: Proteção contra brute force
-- **Helmet**: Headers de segurança
-- **Validation**: Sanitização de inputs
-- **CORS**: Configurado para dominios específicos
-
-### Vulnerabilidades Conhecidas
-
-Execute regularmente:
-
-```bash
-# Auditoria de dependências
-yarn audit
-
-# Verificação de segurança
-npm audit fix
-```
-
-## 🐛 Troubleshooting
-
-### Problemas Comuns
-
-#### Database Connection Error
-
-```bash
-# Verifique se o PostgreSQL está rodando
-docker-compose ps
-
-# Recrie o banco se necessário
-yarn prisma:migrate:reset
-```
-
-#### Port Already in Use
-
-```bash
-# Encontre o processo usando a porta
-lsof -i :3333
-
-# Mate o processo
-kill -9 PID
-```
-
-### Logs de Debug
-
-Ative logs detalhados:
-
-```bash
-# Desenvolvimento
-NODE_ENV=development DEBUG=* yarn dev
-
-# Apenas logs da aplicação
-DEBUG=trajetto:* yarn dev
-```
-
-## 📄 Licença
-
-Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
-
----
-
-<div align="center">
-
-**Desenvolvido com ❤️ pela equipe Trajetto**
-
-[Website](https://www.intrajetto.com) • [Documentação](https://docs.trajetto.com) • [Suporte](mailto:contato@trajetto.com)
-
-</div>
+- **Uma imagem para os dois ambientes**, construída uma vez em `staging` e
+  promovida por digest; staging e produção mudam só o Environment do app no
+  Dokploy.
+- Imagens: `trajetto-api`, `trajetto-ai` e `trajetto-backup` em
+  `ghcr.io/trajetto-organization/`.
+- **Dokploy**: um app Compose do tipo Docker Stack por ambiente, com o
+  `compose.production.yaml` (`api` ×2, `trajetto-database`, `trajetto-redis`,
+  `trajetto-ai`, `trajetto-backup`), atrás do Traefik do Dokploy e da
+  Cloudflare.
+- Enquanto o Dokploy não estiver configurado, os jobs movem as tags e pulam o
+  deploy com um aviso.
+- **Merge em `main` sempre com merge commit** (nunca squash/rebase): a
+  promoção usa o 2º pai do merge para achar o build de staging.
+- Ordem entre web e API: **API primeiro**.
+
+O passo a passo completo (servidor, Dokploy, GitHub, IA, banco, migrations,
+rollback, backup, alertas e o checklist do primeiro deploy) está em
+[`docs/deploy.md`](./docs/deploy.md). A seção "Os três repositórios juntos"
+dele (igual nos três repositórios) traz a ordem do primeiro deploy (banco,
+Redis e IA → API → web → app), a ordem de cada release e os valores que
+precisam casar entre a API, a web e o app.
+
+## Operação e saúde
+
+| Rota                                                                                       | Para quê                                                                                        |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `GET /health/liveness`                                                                     | o processo está vivo (sonda do Swarm)                                                           |
+| `GET /health/readiness`                                                                    | pode receber tráfego (sonda do Traefik; vira 503 durante o desligamento)                        |
+| `GET /health/metrics`                                                                      | filas, workers, crons, pool, provedores, sockets, Redis, certificado do comprovante (só MASTER) |
+| `GET /health/providers`                                                                    | prontidão de cada provedor, sem enviar nada (só MASTER)                                         |
+| `GET /health/dead-letter`, `/health/dead-letter/events`, `POST /health/dead-letter/replay` | o que esgotou as tentativas, e o reenvio                                                        |
+
+A aba "Sistema" do `/admin` na web mostra esses números. O heartbeat de
+operações avisa o monitor externo a cada minuto; o silêncio dele é o alerta
+([`docs/deploy.md`](./docs/deploy.md#20-alertas-e-monitoramento)). Os logs são
+JSON (pino), uma linha por requisição, sem segredo e sem URL crua.
+
+## Solução de problemas
+
+| Sintoma                                           | Causa provável                                                        | O que fazer                                                                                                                                 |
+| ------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Invalid enviroment variables` no boot            | variável obrigatória faltando ou inválida                             | leia a lista impressa e compare com `docs/variaveis-de-ambiente.md`                                                                         |
+| `wait-for-postgres` desiste                       | Postgres não subiu ou a porta 5432 está ocupada                       | `yarn database:dev:up` e `docker ps`; pare outro Postgres local                                                                             |
+| `P1001` / conexão recusada                        | `DATABASE_URL` aponta para host ou porta errados                      | confira `POSTGRES_HOST`/`POSTGRES_PORT` e a URL expandida                                                                                   |
+| Pedidos de IA parados em `PENDING`                | `trajetto-ai` fora do ar ou `AI_PROVIDER=none`                        | suba o serviço com `--profile ai` ou aceite que fique sem leitura                                                                           |
+| Toda leitura de IA falha com `401`                | `AI_LOCAL_TOKEN` diferente na API e no serviço                        | use o mesmo valor nos dois                                                                                                                  |
+| Login respondendo 429 para todo mundo em produção | `RATE_LIMIT_TRUSTED_PROXY` errado atrás da Cloudflare                 | use `cloudflare` (`docs/deploy.md`, "Domínios, TLS e a borda")                                                                              |
+| Tempo real não chega entre réplicas               | Redis fora ou `SOCKET_ADAPTER_KEY` diferente entre réplicas           | confira o Redis; o resto da API segue funcionando                                                                                           |
+| `/docs` responde 404 em produção                  | sem `DOCS_USER`/`DOCS_PASSWORD` (ou senha com menos de 20 caracteres) | defina as duas                                                                                                                              |
+| PDF do comprovante sem assinatura                 | certificado ausente, vencido ou senha errada                          | veja o estado em `/health/metrics` e o log do boot                                                                                          |
+| E2E cai com _napi panic_ no Windows               | muitos arquivos E2E na mesma execução                                 | rode em lotes de até 8 arquivos                                                                                                             |
+| Boot de produção recusa banco vazio               | volume novo sem migrations                                            | instalação nova: `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` uma única vez; com dados, restaure o dump (`docs/deploy.md`, "Backup e restauração") |
+| Promoção falha com "não existe" no GHCR           | o commit não passou pelo staging, ou o merge foi squash/rebase        | leve o commit a `staging`, espere o verde e faça merge commit                                                                               |
+| Deploy "pulado" no resumo do run                  | o environment do GitHub ainda não tem os secrets do Dokploy           | `docs/deploy.md`, "Configurar o GitHub"                                                                                                     |
+
+## Onde está cada decisão
+
+- Arquitetura, ADRs 0001–0010 (resumo), unicidade por empresa, regras de
+  migration e compatibilidade com o app: [`docs/arquitetura.md`](./docs/arquitetura.md).
+- Fora do repositório, na pasta `docs/` da raiz do workspace (não versionada):
+  o texto integral das decisões da fase final, dos ADRs, dos desenhos e as
+  pendências do dono.
+
+## Licença
+
+Software proprietário da Trajetto, com todos os direitos reservados. O uso, a
+cópia, a modificação e a distribuição dependem de autorização por escrito. Os
+termos completos estão em [`LICENSE`](./LICENSE). O `package.json` declara
+`"license": "UNLICENSED"` e `"private": true` para impedir publicação acidental
+em registro público.

@@ -2,10 +2,11 @@ import type { Prisma } from "@prisma/client";
 
 import type {
   ListProofAuditsProps,
-  ListProofAuditsResult,
+  ListProofAuditsQueue,
+  ProofAuditQueueSettings,
   ProofAuditRecord,
-  ProofAuditSuggestion,
 } from "../dtos/proof-audit-dto";
+import type { DevicePrecheck } from "@/shared/ai-precheck/device-precheck";
 
 /**
  * The queue a receipt waits in for a person to look at it.
@@ -22,16 +23,20 @@ interface IProofAuditRepository {
    * Idempotent: the proof use case calls it on every proof, and a driver's
    * outbox resends after a dead network. A second row would be a second card
    * for the same address.
+   *
+   * `tx` is the proof's own transaction: the card commits with the proof or
+   * not at all (INV-08).
+   *
+   * `devicePrecheck` is the phone's check of THIS photo (decision 14.2): a
+   * re-proof replaces it like it replaces the suggestion — null included —
+   * and clears the server's verdict on the old one.
    */
-  enqueue: (deliveryId: string, businessId: string) => Promise<ProofAuditRecord>;
-
-  /** Attaches what the model concluded, once it answers. */
-  attachSuggestion: (
+  enqueue: (
     deliveryId: string,
     businessId: string,
-    suggestion: ProofAuditSuggestion,
-    confidence: number,
-  ) => Promise<void>;
+    tx?: Prisma.TransactionClient,
+    options?: { devicePrecheck?: DevicePrecheck | null },
+  ) => Promise<ProofAuditRecord>;
 
   findById: (
     auditId: string,
@@ -39,7 +44,25 @@ interface IProofAuditRepository {
     tx?: Prisma.TransactionClient,
   ) => Promise<ProofAuditRecord | null>;
 
-  listQueue: (props: ListProofAuditsProps) => Promise<ListProofAuditsResult>;
+  /**
+   * One page of one tab, in the tab's own order, decided in SQL so every
+   * page continues the one before it (DLVB-02):
+   *
+   * - PENDING: the model's review priority (no reading first, then the least
+   *   sure), then oldest first, then id.
+   * - APPROVED / REJECTED: the decision, newest first (`reviewed_at` desc,
+   *   then id desc). History has no priority.
+   *
+   * The agreement rate is counted in SQL over `agreementSince` onwards
+   * (DLVB-04): it used to load every reviewed card of the tenant, JSON
+   * included, on every listing.
+   */
+  listQueue: (props: ListProofAuditsProps) => Promise<ListProofAuditsQueue>;
+
+  /** The company's zone and reading quota; null when it does not exist. */
+  findQueueSettings: (
+    businessId: string,
+  ) => Promise<ProofAuditQueueSettings | null>;
 
   /**
    * Records a person's decision, and only if nobody got there first.

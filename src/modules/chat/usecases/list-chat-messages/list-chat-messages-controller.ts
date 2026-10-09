@@ -4,9 +4,6 @@ import { z } from "zod";
 
 import { ListChatMessagesUseCase } from "./list-chat-messages-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { ChatThreadNotFoundError } from "../errors/chat-errors";
-
 import { listChatMessagesSchema } from "@/schemas/list-chat-messages-schema";
 
 class ListChatMessagesController {
@@ -26,40 +23,38 @@ class ListChatMessagesController {
       limit,
       search,
       businessId,
+      deliveryId,
+      routeId,
+      ticketId,
     } = request.query as z.infer<typeof listChatMessagesSchema>;
 
     const listChatMessagesUseCase = container.resolve(ListChatMessagesUseCase);
 
-    try {
-      const result = await listChatMessagesUseCase.execute({
-        userId: id,
-        threadId,
-        driverId,
-        before:
-          beforeAt && beforeId
-            ? { created_at: new Date(beforeAt), id: beforeId }
-            : undefined,
-        after:
-          afterAt && afterId
-            ? { created_at: new Date(afterAt), id: afterId }
-            : undefined,
-        aroundMessageId,
-        limit,
-        search,
-        businessId,
-      });
+    // A thread of another company (404 CHAT_THREAD_NOT_FOUND, it used to be
+    // a 400 with no code) and a stale or filtered-out anchor (404
+    // CHAT_MESSAGE_NOT_FOUND) are AppErrors, answered by the global handler.
+    const result = await listChatMessagesUseCase.execute({
+      userId: id,
+      threadId,
+      driverId,
+      before:
+        beforeAt && beforeId
+          ? { created_at: new Date(beforeAt), id: beforeId }
+          : undefined,
+      after:
+        afterAt && afterId
+          ? { created_at: new Date(afterAt), id: afterId }
+          : undefined,
+      aroundMessageId,
+      limit,
+      search,
+      businessId,
+      deliveryId,
+      routeId,
+      ticketId,
+    });
 
-      return reply.status(200).send(result);
-    } catch (error) {
-      if (
-        error instanceof ResourceNotFoundError ||
-        error instanceof ChatThreadNotFoundError
-      ) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(200).send(result);
   }
 }
 

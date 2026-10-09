@@ -1,22 +1,20 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
-
 import { ExportVehicleChecklistExcelUseCase } from "./export-vehicle-checklist-usecase";
-import { exportReports } from "@/schemas/export-reports-schema";
-
 import { ExportPipeline } from "@/shared/services/export/export-pipeline";
 import { CsvWriter } from "@/shared/services/export/writers/csv-writer";
-
 import { ExcelWriter } from "@/shared/services/export/writers/excel-writer";
-import { ExportColumn } from "@/shared/services/export/types";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { VehicleChecklistNoChecklistsToExportError } from "../errors/vehicle-checklist-no-checklists-to-export-error";
+import { z } from "zod";
+import { exportVehicleChecklistSchema } from "@/schemas/list-vehicle-checklist-schema";
+import { replyChecklistError } from "../errors/vehicle-checklist-http-errors";
 
 class ExportVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply) {
     const { id } = request.user;
-    const { search, format } = exportReports.parse(request.query);
+
+    // Validated and transformed by the route (each facet is a list here).
+    const { search, format, businessId, overall_condition, branchId, vehicleId } =
+      request.query as z.infer<typeof exportVehicleChecklistSchema>;
 
     const exportVehicleChecklistExcelUseCase = container.resolve(
       ExportVehicleChecklistExcelUseCase,
@@ -24,34 +22,22 @@ class ExportVehicleChecklistController {
 
     try {
       const { iterator, columns, filename } =
-        await exportVehicleChecklistExcelUseCase.execute(id, search);
+        await exportVehicleChecklistExcelUseCase.execute({
+          userId: id,
+          businessId,
+          search,
+          conditions: overall_condition,
+          branchIds: branchId,
+          vehicleIds: vehicleId,
+        });
 
-      // Choose writer
-      let writer;
-      switch (format) {
-        case "excel":
-          writer = new ExcelWriter();
-          break;
-        case "csv":
-        default:
-          writer = new CsvWriter();
-      }
+      const writer = format === "excel" ? new ExcelWriter() : new CsvWriter();
 
-      const pipeline = new ExportPipeline(
-        iterator,
-        columns as ExportColumn[],
-        writer,
-      );
+      const pipeline = new ExportPipeline(iterator, columns, writer);
 
       await pipeline.execute(reply, filename);
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleChecklistNoChecklistsToExportError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      if (replyChecklistError(reply, error)) return;
 
       throw error;
     }

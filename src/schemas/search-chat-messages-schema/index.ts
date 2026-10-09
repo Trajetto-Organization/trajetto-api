@@ -11,7 +11,8 @@ const searchChatMessagesSchema = z.object({
   search: z
     .string()
     .trim()
-    .min(2, "Informe ao menos 2 caracteres para buscar."),
+    .min(2, "Informe ao menos 2 caracteres para buscar.")
+    .describe("O texto procurado nas mensagens, ao menos 2 caracteres."),
 
   // Querystrings are strings; the transform hands the use case a number.
   limit: z
@@ -22,7 +23,8 @@ const searchChatMessagesSchema = z.object({
 
       return Number.isFinite(parsed) && parsed >= 1 ? parsed : 30;
     })
-    .refine((value) => value <= 100, "No máximo 100 resultados por busca."),
+    .refine((value) => value <= 100, "No máximo 100 resultados por busca.")
+    .describe("Resultados, até 100; padrão 30."),
 });
 
 export { searchChatMessagesSchema };

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
@@ -57,7 +58,7 @@ const updatePartSchema = z.object({
     .uuid("ID do fornecedor é inválido.")
     .optional()
     .nullable(),
-  businessId: z.string().uuid("ID da empresa é inválido.").optional(),
+  ...tenantLockedShape,
 });
 
 export { updatePartSchema };

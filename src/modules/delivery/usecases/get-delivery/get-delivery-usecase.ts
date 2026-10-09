@@ -9,12 +9,10 @@ import {
   buildDeliveryTimeline,
   type TimelineSources,
 } from "@/shared/delivery/delivery-timeline";
+import { DeliveryNotFoundError } from "../errors/delivery-errors";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import {
-  DeliveryNotFoundError,
-  DeliveryNotBelongBusinessError,
-} from "../errors/delivery-errors";
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 interface GetDeliveryRequest {
   userId: string;
@@ -41,17 +39,19 @@ class GetDeliveryUseCase {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
-      throw new ResourceNotFoundError();
+      throw callerNotFound();
     }
+
+    // Defense in depth: the route guard must not be the only wall between
+    // tenants, as in the list and the exports of this module.
+    assertTenantAccess(findUser, businessId);
 
     const findDelivery = await this.delivery.findDeliveryById(deliveryId);
 
-    if (!findDelivery) {
+    // Another company's id reads as absent (decision 11.3): a separate
+    // "not yours" answer told a caller which ids exist elsewhere.
+    if (!findDelivery || findDelivery.businessId !== businessId) {
       throw new DeliveryNotFoundError();
-    }
-
-    if (findDelivery.businessId !== businessId) {
-      throw new DeliveryNotBelongBusinessError();
     }
 
     // Drivers only open deliveries assigned to them.

@@ -1,55 +1,41 @@
 import { FastifyReply, FastifyRequest } from "fastify";
-
 import { z } from "zod";
 import { container } from "tsyringe";
-
 import { ListMasterUsersUseCase } from "./list-master-users-usecase";
-import { listPagesSchema } from "@/schemas/list-pages-schema";
-
-import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { sendAsNDJSON } from "@/config/stream-utils";
+import { listMasterUserSchema } from "@/schemas/list-user-schema";
 
 class ListMasterUsersController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // Validated and transformed by the route (facets arrive as lists).
+    const { page, pageSize, search, sort, order, access, two_factor } =
+      request.query as z.infer<typeof listMasterUserSchema>;
 
     const listMasterUsersUseCase = container.resolve(ListMasterUsersUseCase);
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        decodedSearch = search;
-      }
-    }
-
-    try {
-      const listMasterUsers = listMasterUsersUseCase.execute(
-        page,
-        pageSize,
-        decodedSearch,
-        id,
-      );
-
-      await sendAsNDJSON({
-        reply,
-        dataPromise: listMasterUsers,
-        page,
-        pageSize,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await sendAsNDJSON({
+      reply,
+      page,
+      pageSize,
+      dataPromise: listMasterUsersUseCase
+        .execute({
+          userId: id,
+          page,
+          pageSize,
+          search: search?.trim() || undefined,
+          sort,
+          order,
+          access,
+          twoFactor: two_factor,
+        })
+        .then((result) => ({
+          data: result.data,
+          total: result.total,
+          meta: result.searchMeta,
+        })),
+    });
   }
 }
 

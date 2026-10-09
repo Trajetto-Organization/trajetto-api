@@ -18,9 +18,12 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { PermissionBusinessError } from "../errors/permission-business-error";
+import { assertNotOwnProfile } from "../errors/permission-own-profile-error";
 import { AppError } from "@/shared/errors/AppError";
 
 import { sendSecurityEventToBusiness } from "@/websocket";
+
+import database from "@/../infra/database";
 
 @injectable()
 class CreatePermissionUseCase {
@@ -53,6 +56,9 @@ class CreatePermissionUseCase {
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    // Before any lookup: granting to your own profile is never allowed.
+    assertNotOwnProfile(findUser, profileAccessId);
 
     const findBusinessById = await this.business.findBusinessById(businessId);
 
@@ -94,24 +100,35 @@ class CreatePermissionUseCase {
     }
 
     try {
-      const permissionCreated = await this.permission.createPermission({
-        action,
-        businessId,
-        canRead,
-        canWrite,
-        profileAccessId,
-        permissionKey,
-      });
+      // The grant and its audit entry commit together: an access change is
+      // exactly what an audit trail must never miss (OUTBOX-10).
+      const permissionCreated = await database.$transaction(async (tx) => {
+        const created = await this.permission.createPermission(
+          {
+            action,
+            businessId,
+            canRead,
+            canWrite,
+            profileAccessId,
+            permissionKey,
+          },
+          tx,
+        );
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Permissão",
-        action: "create",
-        entityId: permissionCreated.id,
-        description: `Permissão criada com sucesso: ${permissionCreated.action} | Chave: ${permissionCreated.permissionKey} | Leitura: ${permissionCreated.canRead ? "Sim" : "Não"} | Escrita: ${permissionCreated.canWrite ? "Sim" : "Não"} | ID: ${permissionCreated.id}`,
-        status: "Completo",
-        performedBy: userId,
-        businessId: businessId,
+        await this.notificationService.createActivityIfEnabled(
+          {
+            type: "Permissão",
+            action: "create",
+            entityId: created.id,
+            description: `Permissão criada com sucesso: ${created.action} | Chave: ${created.permissionKey} | Leitura: ${created.canRead ? "Sim" : "Não"} | Escrita: ${created.canWrite ? "Sim" : "Não"} | ID: ${created.id}`,
+            status: "Completo",
+            performedBy: userId,
+            businessId: businessId,
+          },
+          tx,
+        );
+
+        return created;
       });
 
       sendSecurityEventToBusiness(businessId, {

@@ -83,3 +83,33 @@ describe("kanban card renders", () => {
     ).toContain("criado automaticamente a partir de ordem de serviço");
   });
 });
+
+/**
+ * The due day in the company's zone (decision 1.1): the WhatsApp line used the
+ * process's zone, so a card due on the 23rd in Manaus read the 24th.
+ */
+describe("kanban card due date", () => {
+  const lineOf = (text: string) =>
+    text.split("\n").find((line) => line.startsWith("Data de vencimento:"));
+
+  it("reads the due instant on the company's day", () => {
+    // 03:30 UTC on the 24th = 23:30 on the 23rd in Manaus.
+    const text = renderKanbanCardCreatedWhatsApp({
+      ...payload(),
+      dueDate: "2026-09-24T03:30:00.000Z",
+      timeZone: "America/Manaus",
+    });
+
+    expect(lineOf(text)).toBe("Data de vencimento: *23/09/2026*");
+  });
+
+  it("keeps a date-only due date on the day it names", () => {
+    const text = renderKanbanCardUpdatedWhatsApp({
+      ...payload(),
+      dueDate: "2026-09-24T00:00:00.000Z",
+      timeZone: "America/Manaus",
+    });
+
+    expect(lineOf(text)).toBe("Data de vencimento: *24/09/2026*");
+  });
+});

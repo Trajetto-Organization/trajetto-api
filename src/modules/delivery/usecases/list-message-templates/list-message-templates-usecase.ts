@@ -2,12 +2,12 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDeliveryMessageTemplateRepository } from "../../repositories/IDelivery-message-template-repository";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { AppError } from "@/shared/errors/AppError";
 import type { DeliveryMessageTemplateRecord } from "../../repositories/IDelivery-message-template-repository";
+
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
 
 interface ListMessageTemplatesRequest {
   userId: string;
@@ -32,7 +32,7 @@ class ListMessageTemplatesUseCase {
   }> {
     const findUser = await this.user.findUserById(userId);
 
-    if (!findUser) throw new ResourceNotFoundError();
+    if (!findUser) throw callerNotFound();
 
     const resolvedBusinessId = businessId ?? findUser.businessId;
 

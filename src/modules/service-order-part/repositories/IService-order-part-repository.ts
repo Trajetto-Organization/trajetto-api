@@ -4,6 +4,7 @@ import {
   ListServiceOrderPartProps,
   ListServiceOrderPartByBusinessIdProps,
   UpdateServiceOrderPart,
+  ServiceOrderTotals,
 } from "../dtos/service-order-part-dto";
 
 interface IServiceOrderPartRepository {
@@ -28,6 +29,8 @@ interface IServiceOrderPartRepository {
     serviceOrderId: string,
   ) => Promise<ServiceOrderPart | null>;
   calculateServiceOrderTotal: (serviceOrderId: string) => Promise<number>;
+  /** The order's typed total and the sum of its parts, after a change. */
+  serviceOrderTotals: (serviceOrderId: string) => Promise<ServiceOrderTotals | null>;
 }
 
 export { IServiceOrderPartRepository };

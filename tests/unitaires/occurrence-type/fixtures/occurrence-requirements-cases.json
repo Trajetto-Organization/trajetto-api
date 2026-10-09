@@ -1,0 +1,95 @@
+{
+  "$comment": "Shared cases of the occurrence category rules (decisions 14.3 and 14.4; src/modules/occurrence-type/rules/occurrence-category-rules.ts). The API, the web dialog (trajetto-ui/tests/unitaires/occurrence-category-rules.test.ts) and the app's proof screen (trajetto-mobile/tests/unitaires/delivered-requirements.test.ts) run the same file against their copy.",
+  "matrix": [
+    {
+      "name": "default delivered type: receipt only",
+      "shape": { "category": "DELIVERED", "requires_photo": false, "requires_receipt_photo": true, "requires_signature": false, "requires_authorization": false, "blocks_delivery": false, "pause_kind": null, "has_form": false },
+      "issues": []
+    },
+    {
+      "name": "delivered type with everything a delivery may ask",
+      "shape": { "category": "DELIVERED", "requires_photo": true, "requires_receipt_photo": true, "requires_signature": true, "requires_authorization": true, "blocks_delivery": false, "pause_kind": null, "has_form": true },
+      "issues": []
+    },
+    {
+      "name": "delivered type cannot block",
+      "shape": { "category": "DELIVERED", "requires_photo": false, "requires_receipt_photo": true, "requires_signature": false, "requires_authorization": false, "blocks_delivery": true, "pause_kind": null, "has_form": false },
+      "issues": [{ "field": "blocks_delivery", "message": "Só tipos de não entrega podem ser impeditivos." }]
+    },
+    {
+      "name": "not delivered blocking type with receipt and signature",
+      "shape": { "category": "NOT_DELIVERED", "requires_photo": true, "requires_receipt_photo": true, "requires_signature": true, "requires_authorization": true, "blocks_delivery": true, "pause_kind": null, "has_form": true },
+      "issues": []
+    },
+    {
+      "name": "not delivered type with a pause nature",
+      "shape": { "category": "NOT_DELIVERED", "requires_photo": false, "requires_receipt_photo": false, "requires_signature": false, "requires_authorization": false, "blocks_delivery": false, "pause_kind": "MEAL", "has_form": false },
+      "issues": [{ "field": "pause_kind", "message": "A natureza legal só existe em tipos de pausa." }]
+    },
+    {
+      "name": "pause with its nature",
+      "shape": { "category": "PAUSE", "requires_photo": false, "requires_receipt_photo": false, "requires_signature": false, "requires_authorization": false, "blocks_delivery": false, "pause_kind": "REST", "has_form": false },
+      "issues": []
+    },
+    {
+      "name": "pause without a nature",
+      "shape": { "category": "PAUSE", "requires_photo": false, "requires_receipt_photo": false, "requires_signature": false, "requires_authorization": false, "blocks_delivery": false, "pause_kind": null, "has_form": false },
+      "issues": [{ "field": "pause_kind", "message": "Escolha a natureza legal da pausa (refeição, descanso ou outra)." }]
+    },
+    {
+      "name": "pause asking for attachments, a form and the tower, and blocking",
+      "shape": { "category": "PAUSE", "requires_photo": true, "requires_receipt_photo": false, "requires_signature": true, "requires_authorization": true, "blocks_delivery": true, "pause_kind": "OTHER", "has_form": true },
+      "issues": [
+        { "field": "requirements", "message": "Tipos de pausa não exigem fotos, assinatura, formulário nem autorização." },
+        { "field": "blocks_delivery", "message": "Só tipos de não entrega podem ser impeditivos." }
+      ]
+    },
+    {
+      "name": "pause with only a form",
+      "shape": { "category": "PAUSE", "requires_photo": false, "requires_receipt_photo": false, "requires_signature": false, "requires_authorization": false, "blocks_delivery": false, "pause_kind": "MEAL", "has_form": true },
+      "issues": [{ "field": "requirements", "message": "Tipos de pausa não exigem fotos, assinatura, formulário nem autorização." }]
+    }
+  ],
+  "missing": [
+    {
+      "name": "default delivered type with the receipt",
+      "type": { "category": "DELIVERED", "requires_photo": false, "requires_receipt_photo": true, "requires_signature": false },
+      "sent": { "receipt_photo": true, "signature": false, "photos": 0 },
+      "missing": []
+    },
+    {
+      "name": "default delivered type without the receipt",
+      "type": { "category": "DELIVERED", "requires_photo": false, "requires_receipt_photo": true, "requires_signature": false },
+      "sent": { "receipt_photo": false, "signature": true, "photos": 0 },
+      "missing": [{ "code": "OCCURRENCE_RECEIPT_PHOTO_REQUIRED", "message": "Este tipo exige a foto do canhoto." }]
+    },
+    {
+      "name": "everything required, nothing sent, in the API's order",
+      "type": { "category": "DELIVERED", "requires_photo": true, "requires_receipt_photo": true, "requires_signature": true },
+      "sent": { "receipt_photo": false, "signature": false, "photos": 0 },
+      "missing": [
+        { "code": "OCCURRENCE_RECEIPT_PHOTO_REQUIRED", "message": "Este tipo exige a foto do canhoto." },
+        { "code": "OCCURRENCE_SIGNATURE_REQUIRED", "message": "Este tipo exige a assinatura de quem recebeu." },
+        { "code": "OCCURRENCE_PHOTO_REQUIRED", "message": "Este tipo de ocorrência exige foto anexada ao registro." }
+      ]
+    },
+    {
+      "name": "signature and photos required and sent",
+      "type": { "category": "DELIVERED", "requires_photo": true, "requires_receipt_photo": false, "requires_signature": true },
+      "sent": { "receipt_photo": false, "signature": true, "photos": 2 },
+      "missing": []
+    },
+    {
+      "name": "not delivered type asking for the signature",
+      "type": { "category": "NOT_DELIVERED", "requires_photo": false, "requires_receipt_photo": false, "requires_signature": true },
+      "sent": { "receipt_photo": false, "signature": false, "photos": 1 },
+      "missing": [{ "code": "OCCURRENCE_SIGNATURE_REQUIRED", "message": "Este tipo exige a assinatura de quem recebeu." }]
+    },
+    {
+      "name": "delivered type asking for nothing",
+      "type": { "category": "DELIVERED", "requires_photo": false, "requires_receipt_photo": false, "requires_signature": false },
+      "sent": { "receipt_photo": false, "signature": false, "photos": 0 },
+      "missing": []
+    }
+  ]
+}

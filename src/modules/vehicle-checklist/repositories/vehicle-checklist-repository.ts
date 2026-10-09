@@ -1,7 +1,23 @@
 import database from "@/../infra/database";
 import { Prisma } from "@prisma/client";
-import { IVehicleChecklistRepository } from "./IVehicle-checklist-repository";
+import {
+  IVehicleChecklistRepository,
+  type ChecklistMileageUpdate,
+  type ChecklistPlacement,
+} from "./IVehicle-checklist-repository";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
+import { editedReadingRefusal } from "@/modules/vehicle/usecases/errors/vehicle-mileage-out-of-order-error";
+import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
+import { VehicleChecklistBusinessNotFoundError } from "../usecases/errors/vehicle-checklist-business-not-found-error";
+import {
+  odometerTimeline,
+  recordDate,
+  releaseOdometer,
+} from "@/shared/vehicle/odometer-timeline";
+// The fueling edit's placement: one timeline holds both kinds of record, so
+// they are decided by one rule (to move into shared/vehicle, see notes).
+import { placeReading } from "@/modules/fuel/usecases/fuel-rules";
+import { resolveTimeZone } from "@/shared/time/business-day";
 
 import {
   VehicleChecklist,
@@ -10,10 +26,16 @@ import {
   ListVehicleChecklistByBusinessIdProps,
   UpdateVehicleChecklist,
   GetVehicleChecklistByIdAndBusinessProps,
-  VehicleChecklistWithRelations,
 } from "../dtos/vehicle-checklist-dto";
 
-import { buildSearchOr } from "@/shared/pagination/search-or";
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+
+import {
+  CHECKLIST_SORT,
+  checklistListWhere,
+  tallyConditions,
+  type ChecklistListFilters,
+} from "../usecases/list-vehicle-checklist/checklist-list";
 
 class VehicleChecklistRepository implements IVehicleChecklistRepository {
   constructor(private prisma = database) {}
@@ -55,6 +77,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
       tx: Prisma.TransactionClient,
       checklist: VehicleChecklist,
     ) => Promise<void>,
+    placement?: ChecklistPlacement,
   ): Promise<{ checklist: VehicleChecklist; created: boolean }> {
     const executeTransaction = async () =>
       this.prisma.$transaction(
@@ -72,22 +95,64 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
             }
           }
 
-          const mileageUpdate = await transaction.vehicle.updateMany({
+          // Placed by its date before any odometer move (placeReading, the
+          // fueling create's rule; one timeline holds both). The forward rule
+          // used to run first: a checklist dated days ago with its km typed
+          // above the later readings moved the odometer, and every later
+          // record of the truck was refused from then on. Between the
+          // readings around its date it is stored and the vehicle stays;
+          // as the newest reading it moves the odometer forward, as always.
+          const vehicle = await transaction.vehicle.findFirst({
             where: {
               id: checklistData.vehicleId,
               businessId: checklistData.businessId,
-              current_mileage: { lt: checklistData.current_mileage },
             },
-            data: { current_mileage: checklistData.current_mileage },
+            select: { current_mileage: true, last_maintenance_mileage: true },
           });
 
-          if (mileageUpdate.count !== 1) {
-            throw new VehicleMileageInvalidError();
+          if (!vehicle) throw new VehicleMileageInvalidError();
+
+          const placed = placeReading({
+            mileage: checklistData.current_mileage,
+            ...(await odometerTimeline(transaction, {
+              businessId: checklistData.businessId,
+              vehicleId: checklistData.vehicleId,
+              at: recordDate(checklistData.checklist_date),
+              timeZone: resolveTimeZone(placement?.timeZone),
+            })),
+            odometer: vehicle.current_mileage,
+            maintenanceFloor: vehicle.last_maintenance_mileage,
+            previousMileage: null,
+          });
+
+          if (!placed.fits) throw new VehicleMileageInvalidError();
+
+          if (placed.odometer !== null) {
+            // Conditional on the odometer read above: a concurrent change
+            // aborts this serializable transaction (P2034) and the retry
+            // below decides again on what is stored then.
+            const moved = await transaction.vehicle.updateMany({
+              where: {
+                id: checklistData.vehicleId,
+                businessId: checklistData.businessId,
+                current_mileage: vehicle.current_mileage,
+              },
+              data: { current_mileage: placed.odometer },
+            });
+
+            if (moved.count !== 1) throw new VehicleMileageInvalidError();
           }
+
+          // `created_from` is accepted by the schema (the app stamps
+          // MOBILE_APP) and read by the use case for the outbox event's
+          // `origin`, but vehicle_checklist has no such column: spread into
+          // the insert, it failed every checklist the app sent with a 500,
+          // which the outbox then retried forever as a server error.
+          const { created_from: _origin, ...row } = checklistData;
 
           const checklist = await transaction.vehicleChecklist.create({
             data: {
-              ...checklistData,
+              ...row,
               photos: checklistData.photos,
               branchId: checklistData.branchId!,
               driverId: checklistData.driverId!,
@@ -135,139 +200,18 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
   async listVehicleChecklists({
     page,
     pageSize,
-    businessId,
-    currentUserRole,
-    search,
-    vehicleId,
-    driverId,
-    overall_condition,
-    startDate,
-    endDate,
+    sort,
+    order,
+    ...filters
   }: ListVehicleChecklistByBusinessIdProps): Promise<ListVehicleChecklistProps> {
-    const skip = (page - 1) * pageSize;
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
-
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { notes: { contains: normalizedSearch, mode: "insensitive" } },
-        {
-          vehicle: {
-            OR: [
-              {
-                id: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-              {
-                description: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-              {
-                license_plate: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-              { brand: { contains: normalizedSearch, mode: "insensitive" } },
-              { model: { contains: normalizedSearch, mode: "insensitive" } },
-            ],
-          },
-        },
-        {
-          driver: {
-            OR: [
-              { id: { contains: normalizedSearch, mode: "insensitive" } },
-              { name: { contains: normalizedSearch, mode: "insensitive" } },
-              { cnh: { contains: normalizedSearch, mode: "insensitive" } },
-            ],
-          },
-        },
-        {
-          branch: {
-            OR: [
-              {
-                id: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-              {
-                corporate_reason: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-              {
-                fantasy_name: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-            ],
-          },
-        },
-        // Business ID and name (MASTER only)
-        ...(currentUserRole === "MASTER"
-          ? [
-              {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
-              },
-              {
-                business: {
-                  corporate_reason: {
-                    contains: normalizedSearch,
-                    mode: "insensitive",
-                  },
-                },
-              },
-            ]
-          : []),
-      );
-    }
-
-    const whereConditions: any = {
-      ...(currentUserRole !== "MASTER" && { businessId: businessId }),
-      ...buildSearchOr(orConditions),
-    };
-
-    // Add additional filters
-    if (vehicleId) {
-      whereConditions.vehicleId = vehicleId;
-    }
-
-    if (driverId) {
-      whereConditions.driverId = driverId;
-    }
-
-    if (overall_condition) {
-      whereConditions.overall_condition = overall_condition;
-    }
-
-    if (startDate && endDate) {
-      whereConditions.checklist_date = {
-        gte: new Date(startDate),
-        lte: new Date(endDate),
-      };
-    }
-
-    const [checklistsData, total] = await Promise.all([
+    // Two reads at a time at most (tests/E2E/connection-fan-out): the page
+    // with the condition breakdown, then each id facet in turn.
+    const [checklistsData, conditionGroups] = await Promise.all([
       this.prisma.vehicleChecklist.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereConditions,
+        where: checklistListWhere(filters),
         include: {
-          business: {
-            select: {
-              corporate_reason: true,
-              fantasy_name: true,
-            },
-          },
           branch: {
             select: {
               corporate_reason: true,
@@ -290,18 +234,73 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
             },
           },
         },
-        orderBy: {
-          created_at: "desc", // Sort by created_at
-        },
+        orderBy: resolveOrderBy(CHECKLIST_SORT, { sort, order }),
       }),
-      this.prisma.vehicleChecklist.count({
-        where: whereConditions,
+      // The cards come from the whole filter, never from the page: they used
+      // to count "Condição boa" among the ten rows on screen.
+      this.prisma.vehicleChecklist.groupBy({
+        by: ["overall_condition"],
+        where: checklistListWhere(filters, { except: "condition" }),
+        _count: { _all: true },
       }),
     ]);
 
+    const branchGroups = await this.prisma.vehicleChecklist.groupBy({
+      by: ["branchId"],
+      where: checklistListWhere(filters, { except: "branch" }),
+      _count: { _all: true },
+    });
+
+    const vehicleGroups = await this.prisma.vehicleChecklist.groupBy({
+      by: ["vehicleId"],
+      where: checklistListWhere(filters, { except: "vehicle" }),
+      _count: { _all: true },
+    });
+
+    const branchCount = new Map(
+      branchGroups.map((group) => [group.branchId, group._count._all]),
+    );
+    const vehicleCount = new Map(
+      vehicleGroups.map((group) => [group.vehicleId, group._count._all]),
+    );
+
+    // Named from THIS company only: an id of another company in the URL gets
+    // neither a count nor a name. A selected option that matches nothing
+    // stays listed with 0 so its chip keeps a name.
+    const branchIds = [
+      ...new Set([...branchCount.keys(), ...(filters.branchIds ?? [])]),
+    ];
+    const vehicleIds = [
+      ...new Set([...vehicleCount.keys(), ...(filters.vehicleIds ?? [])]),
+    ];
+
+    const branches = branchIds.length
+      ? await this.prisma.branch.findMany({
+          where: { id: { in: branchIds }, businessId: filters.businessId },
+          select: { id: true, corporate_reason: true },
+        })
+      : [];
+
+    const vehicles = vehicleIds.length
+      ? await this.prisma.vehicle.findMany({
+          where: { id: { in: vehicleIds }, businessId: filters.businessId },
+          select: { id: true, license_plate: true, description: true },
+        })
+      : [];
+
     return {
       data: checklistsData,
-      total,
+      conditionCounts: tallyConditions(conditionGroups),
+      branchCounts: branches.map((branch) => ({
+        id: branch.id,
+        name: branch.corporate_reason,
+        count: branchCount.get(branch.id) ?? 0,
+      })),
+      vehicleCounts: vehicles.map((vehicle) => ({
+        id: vehicle.id,
+        name: `${vehicle.license_plate} — ${vehicle.description}`,
+        count: vehicleCount.get(vehicle.id) ?? 0,
+      })),
     };
   }
 
@@ -326,60 +325,155 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
 
   async updateVehicleChecklistAndMileage(
     { checklistData, checklistId }: UpdateVehicleChecklist,
-    mileageUpdate?: {
-      businessId: string;
-      vehicleId: string;
-      currentMileage: number;
-    },
+    mileageUpdate?: ChecklistMileageUpdate,
   ): Promise<VehicleChecklist> {
-    return this.prisma.$transaction(
-      async (transaction) => {
-        if (mileageUpdate) {
-          const updatedMileage = await transaction.vehicle.updateMany({
-            where: {
-              id: mileageUpdate.vehicleId,
-              businessId: mileageUpdate.businessId,
-              current_mileage: { lt: mileageUpdate.currentMileage },
-            },
-            data: { current_mileage: mileageUpdate.currentMileage },
-          });
+    return this.serializableWithRetry(async (transaction) => {
+      if (mileageUpdate) {
+        // The timeline decides before the odometer (placeReading, the
+        // fueling edit's rule too: one timeline holds both). Trying "ahead
+        // of the odometer" first let an older checklist jump above the ones
+        // after it and drag the odometer along, and never let the newest
+        // be corrected downwards.
+        const { businessId, vehicleId, currentMileage } = mileageUpdate;
 
-          if (updatedMileage.count !== 1) {
-            throw new VehicleMileageInvalidError();
-          }
+        // One after another: a transaction holds a single connection.
+        const stored = await transaction.vehicleChecklist.findFirst({
+          where: { id: checklistId, businessId },
+          select: { vehicleId: true, current_mileage: true },
+        });
+
+        if (!stored) throw new VehicleChecklistBusinessNotFoundError();
+
+        const vehicle = await transaction.vehicle.findFirst({
+          where: { id: vehicleId, businessId },
+          select: { current_mileage: true, last_maintenance_mileage: true },
+        });
+
+        if (!vehicle) throw new VehicleNotFoundError();
+
+        const timeline = await odometerTimeline(transaction, {
+          businessId,
+          vehicleId,
+          at: mileageUpdate.at,
+          timeZone: resolveTimeZone(mileageUpdate.timeZone),
+          excludeChecklistId: mileageUpdate.checklistId ?? checklistId,
+        });
+
+        const previousMileage =
+          stored.vehicleId === vehicleId ? stored.current_mileage : null;
+
+        const placement = placeReading({
+          mileage: currentMileage,
+          ...timeline,
+          odometer: vehicle.current_mileage,
+          maintenanceFloor: vehicle.last_maintenance_mileage,
+          previousMileage,
+        });
+
+        if (!placement.fits) {
+          throw editedReadingRefusal(
+            previousMileage !== null,
+            timeline,
+          );
         }
 
-        const filteredData = Object.fromEntries(
-          Object.entries(checklistData).filter(
-            ([, value]) => value !== undefined,
-          ),
-        );
+        // A date-only move re-checks the order and leaves the odometer as
+        // it is: the reading was accepted once, and a MASTER's correction
+        // of the vehicle since then must not be undone by a new date.
+        const nextOdometer =
+          mileageUpdate.readingChanged === false ? null : placement.odometer;
 
-        return transaction.vehicleChecklist.update({
-          where: { id: checklistId },
-          data: filteredData,
-        });
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+        if (nextOdometer !== null && nextOdometer !== vehicle.current_mileage) {
+          // Conditional on the odometer read above: a concurrent change
+          // aborts this serializable transaction (P2034) and the retry
+          // below decides again on what is stored then.
+          const moved = await transaction.vehicle.updateMany({
+            where: {
+              id: vehicleId,
+              businessId,
+              current_mileage: vehicle.current_mileage,
+            },
+            data: { current_mileage: nextOdometer },
+          });
+
+          if (moved.count !== 1) throw new VehicleMileageInvalidError();
+        }
+
+        // Moved to another vehicle: when its reading set the odometer of
+        // the one it leaves, that odometer goes back to the readings left.
+        if (stored.vehicleId !== vehicleId) {
+          await releaseOdometer(transaction, {
+            businessId,
+            vehicleId: stored.vehicleId,
+            leaving: stored.current_mileage,
+            excludeChecklistId: checklistId,
+          });
+        }
+      }
+
+      const filteredData = Object.fromEntries(
+        Object.entries(checklistData).filter(
+          ([, value]) => value !== undefined,
+        ),
+      );
+
+      return transaction.vehicleChecklist.update({
+        where: { id: checklistId },
+        data: filteredData,
+      });
+    });
   }
 
   async deleteVehicleChecklist(checklistId: string): Promise<VehicleChecklist> {
-    const checklistToDelete = await this.prisma.vehicleChecklist.findUnique({
-      where: { id: checklistId },
-    });
+    // The row and the odometer it may have set go together: deleting the
+    // 150 000 typed for 15 000 left the vehicle at 150 000, and every later
+    // fueling and checklist was refused until a MASTER edited the vehicle.
+    return this.serializableWithRetry(async (transaction) => {
+      const checklistToDelete = await transaction.vehicleChecklist.findUnique({
+        where: { id: checklistId },
+      });
 
-    if (!checklistToDelete) {
-      throw new Error("Checklist not found");
+      if (!checklistToDelete) {
+        throw new Error("Checklist not found");
+      }
+
+      const deletedChecklist = await transaction.vehicleChecklist.delete({
+        where: { id: checklistId },
+      });
+
+      await releaseOdometer(transaction, {
+        businessId: deletedChecklist.businessId,
+        vehicleId: deletedChecklist.vehicleId,
+        leaving: deletedChecklist.current_mileage,
+        excludeChecklistId: deletedChecklist.id,
+      });
+
+      return deletedChecklist;
+    });
+  }
+
+  /**
+   * A serializable transaction retried on P2034: the timeline reads widen
+   * the read set, so a record committed meanwhile aborts it and a fresh
+   * attempt sees that record. Same budget as the create.
+   */
+  private async serializableWithRetry<T>(
+    work: (transaction: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(work, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+      } catch (error) {
+        const retryable =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2034" &&
+          attempt < 2;
+
+        if (!retryable) throw error;
+      }
     }
-
-    const deletedChecklist = await this.prisma.vehicleChecklist.delete({
-      where: {
-        id: checklistId,
-      },
-    });
-
-    return deletedChecklist;
   }
 
   async findVehicleChecklistById(
@@ -388,51 +482,6 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     const checklist = await this.prisma.vehicleChecklist.findUnique({
       where: {
         id: checklistId,
-      },
-    });
-
-    return checklist;
-  }
-
-  async findVehicleChecklistByIdWithRelations(
-    checklistId: string,
-  ): Promise<VehicleChecklistWithRelations | null> {
-    const checklist = await this.prisma.vehicleChecklist.findUnique({
-      where: {
-        id: checklistId,
-      },
-      include: {
-        business: {
-          select: {
-            id: true,
-            corporate_reason: true,
-            fantasy_name: true,
-          },
-        },
-        branch: {
-          select: {
-            id: true,
-            corporate_reason: true,
-            fantasy_name: true,
-          },
-        },
-        vehicle: {
-          select: {
-            id: true,
-            description: true,
-            license_plate: true,
-            brand: true,
-            model: true,
-            current_mileage: true,
-          },
-        },
-        driver: {
-          select: {
-            id: true,
-            name: true,
-            cnh: true,
-          },
-        },
       },
     });
 
@@ -453,190 +502,34 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     return checklist;
   }
 
-  async getVehicleChecklistByIdAndBusinessWithRelations({
-    businessId,
-    checklistId,
-  }: GetVehicleChecklistByIdAndBusinessProps): Promise<VehicleChecklistWithRelations | null> {
-    const checklist = await this.prisma.vehicleChecklist.findFirst({
-      where: {
-        id: checklistId,
-        businessId,
-      },
-      include: {
-        business: {
-          select: {
-            id: true,
-            corporate_reason: true,
-            fantasy_name: true,
-          },
-        },
-        branch: {
-          select: {
-            id: true,
-            corporate_reason: true,
-            fantasy_name: true,
-          },
-        },
-        vehicle: {
-          select: {
-            id: true,
-            description: true,
-            license_plate: true,
-            brand: true,
-            model: true,
-            current_mileage: true,
-          },
-        },
-        driver: {
-          select: {
-            id: true,
-            name: true,
-            cnh: true,
-          },
-        },
-      },
-    });
-
-    return checklist;
-  }
-
-  async findVehicleChecklistsByVehicleId(
-    vehicleId: string,
-  ): Promise<VehicleChecklist[]> {
-    const checklists = await this.prisma.vehicleChecklist.findMany({
-      where: {
-        vehicleId,
-      },
-      orderBy: {
-        created_at: "desc", // Sort by created_at
-      },
-    });
-
-    return checklists;
-  }
-
-  async findVehicleChecklistsByDriverId(
-    driverId: string,
-  ): Promise<VehicleChecklist[]> {
-    const checklists = await this.prisma.vehicleChecklist.findMany({
-      where: {
-        driverId,
-      },
-      orderBy: {
-        created_at: "desc", // Sort by created_at
-      },
-    });
-
-    return checklists;
+  async countVehicleChecklistsByDriverId(driverId: string): Promise<number> {
+    return this.prisma.vehicleChecklist.count({ where: { driverId } });
   }
 
   async *streamChecklistsForExport(
-    businessId: string,
-    userRole: string,
-    search?: string,
-  ): AsyncGenerator<any> {
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { notes: { contains: normalizedSearch, mode: "insensitive" } },
-        {
-          vehicle: {
-            OR: [
-              {
-                id: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-              {
-                description: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-              {
-                license_plate: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-              { brand: { contains: normalizedSearch, mode: "insensitive" } },
-              { model: { contains: normalizedSearch, mode: "insensitive" } },
-            ],
-          },
-        },
-        {
-          driver: {
-            OR: [
-              { id: { contains: normalizedSearch, mode: "insensitive" } },
-              { name: { contains: normalizedSearch, mode: "insensitive" } },
-              { cnh: { contains: normalizedSearch, mode: "insensitive" } },
-            ],
-          },
-        },
-        {
-          branch: {
-            OR: [
-              {
-                id: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-              {
-                corporate_reason: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-              {
-                fantasy_name: {
-                  contains: normalizedSearch,
-                  mode: "insensitive",
-                },
-              },
-            ],
-          },
-        },
-        // Business ID and name (MASTER only)
-        ...(userRole === "MASTER"
-          ? [
-              {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
-              },
-              {
-                business: {
-                  corporate_reason: {
-                    contains: normalizedSearch,
-                    mode: "insensitive",
-                  },
-                },
-              },
-            ]
-          : []),
-      );
-    }
-
-    const whereCondition = {
-      ...(userRole !== "MASTER" && { businessId: businessId }),
-      ...buildSearchOr(orConditions),
-    };
+    filters: ChecklistListFilters,
+  ): AsyncGenerator<Record<string, unknown>> {
+    const whereCondition = checklistListWhere(filters);
 
     const batchSize = 1000;
     let cursor: string | undefined = undefined;
 
     while (true) {
-      const checklists: any = await this.prisma.vehicleChecklist.findMany({
+      const checklists: Array<
+        VehicleChecklist & {
+          branch: { corporate_reason: string } | null;
+          vehicle: {
+            description: string;
+            license_plate: string;
+            brand: string;
+            model: string;
+            current_mileage: number;
+          } | null;
+          driver: { name: string; cnh: string } | null;
+        }
+      > = await this.prisma.vehicleChecklist.findMany({
         where: whereCondition,
         include: {
-          business: {
-            select: {
-              corporate_reason: true,
-            },
-          },
           branch: {
             select: {
               corporate_reason: true,
@@ -708,9 +601,6 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
           overall_condition: checklist.overall_condition,
           notes: checklist.notes,
           branchName: checklist.branch?.corporate_reason,
-          ...(userRole === "MASTER" && {
-            businessName: checklist.business?.corporate_reason,
-          }),
           created_at: checklist.created_at,
           updated_at: checklist.updated_at,
         };
@@ -721,18 +611,11 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
   }
 
   async countChecklistForExport(
-    businessId: string,
-    userRole: string,
+    filters: ChecklistListFilters,
   ): Promise<number> {
-    const whereCondition: any = {
-      ...(userRole !== "MASTER" && { businessId }),
-    };
-
-    const checklistsCount = await this.prisma.vehicleChecklist.count({
-      where: whereCondition,
+    return this.prisma.vehicleChecklist.count({
+      where: checklistListWhere(filters),
     });
-
-    return checklistsCount;
   }
 }
 

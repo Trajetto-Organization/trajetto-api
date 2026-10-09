@@ -1,0 +1,139 @@
+# Findings gitleaks already had in the history when the scan was switched on
+# (INFRA-21, 2026-09-24). One fingerprint per line: commit:file:rule:line.
+# Never a path or a rule wide allowlist: that would also hide the next leak in
+# the same file. (The one exception is .gitleaks.toml: the heuristic
+# generic-api-key rule on test fixtures and .env.example, nothing else.)
+# A NEW finding fails the "Secret scan" job of ci.yml and deploy.yml; fix it
+# (rotate the secret, then remove it) instead of adding it here. Only a false
+# positive, or a rotated secret left in a commit of main (never rewritten),
+# joins this list: without it the job stays red and main builds nothing.
+#
+# The history is not rewritten: every clone and tag would break. The values
+# below are dev-only, except the one flagged for rotation in its group.
+
+# .env.development / .env.test, committed in c84bfd4 and removed in a92c1de.
+# Dev-only values, all different from production (checked by equality, never
+# printed). EXCEPT anthropic-api-key (2926c01): the same key as the local
+# .env of 2026-09-24 — rotate it in the Anthropic console
+# (docs/deploy.md (Cadeia de suprimentos)).
+2926c01842b38b2976fa459d8841d70b154b514c:.env.development:anthropic-api-key:52
+7044d51fbf33bd1724172e67476a2bc806ded9e8:.env.development:generic-api-key:42
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:.env.development:generic-api-key:35
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:.env.development:generic-api-key:39
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:.env.development:generic-api-key:40
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:.env.test:generic-api-key:39
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:.env.test:generic-api-key:40
+d7ea3eb91ba78301b6327e55828d21dd43300fd1:.env.test:generic-api-key:42
+
+# api.http: request samples carrying dev-only JWTs and a dev reset token.
+2025c51ad2834deb3b4a99373177cd7922fd5fc2:api.http:jwt:2
+7044d51fbf33bd1724172e67476a2bc806ded9e8:api.http:jwt:2
+bee1ab68f1bdf8ca10ab01f7e12f1ac99d2a86e4:api.http:jwt:2
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:api.http:generic-api-key:4
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:api.http:jwt:2
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:api.http:jwt:3
+c98ea6b2de28ef59c6caec407f7182b2da9a4660:api.http:jwt:2
+dd9742a11078cf622fbabf0cd8f5846bc3ef463f:api.http:jwt:2
+e9109817367d88df846f943ccf2de6caff3d2145:api.http:jwt:2
+
+# Test strings that look like keys (a password fixture, a document field).
+81d87b62686506f5ca136b204e45edc27349327f:tests/unitaires/delivery/proof-document.test.ts:generic-api-key:21
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:tests/unitaires/user/update-user-password-zod-validation-fields.test.ts:generic-api-key:17
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:tests/unitaires/user/update-user-password-zod-validation-fields.test.ts:generic-api-key:41
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:tests/unitaires/user/update-user-password-zod-validation-fields.test.ts:generic-api-key:66
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:tests/unitaires/user/update-user-password-zod-validation-fields.test.ts:generic-api-key:8
+c84bfd4795318044551fd4dfcc1a0d10ac7bdcb3:tests/unitaires/user/update-user-password-zod-validation-fields.test.ts:generic-api-key:91
+
+# tests/load/fixtures/load-context.json (52ee094, removed in 2b86cea): JWTs
+# and an API key minted for a throwaway local load-test database.
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:generic-api-key:98
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:10
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:11
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:12
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:13
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:14
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:15
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:16
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:17
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:18
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:19
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:20
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:21
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:22
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:23
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:24
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:25
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:26
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:27
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:28
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:29
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:30
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:31
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:32
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:33
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:34
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:35
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:36
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:37
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:38
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:39
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:40
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:41
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:42
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:43
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:44
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:45
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:46
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:47
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:48
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:49
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:5
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:50
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:51
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:52
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:53
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:54
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:57
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:58
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:59
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:6
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:60
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:61
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:62
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:63
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:64
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:65
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:66
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:67
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:68
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:69
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:7
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:70
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:71
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:72
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:73
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:74
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:75
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:76
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:77
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:78
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:79
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:8
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:80
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:81
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:82
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:83
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:84
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:85
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:86
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:87
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:88
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:89
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:9
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:90
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:91
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:92
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:93
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:94
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:95
+52ee0944889f8257ee5c8ca1ce6229bd68e61cf9:tests/load/fixtures/load-context.json:jwt:96

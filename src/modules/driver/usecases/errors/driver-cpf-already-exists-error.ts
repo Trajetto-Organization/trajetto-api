@@ -1,7 +1,16 @@
-class DriverCpfAlreadyExistsError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/**
+ * The CPF is unique per company (decision 8.1): an independent driver may
+ * work for two carriers. The message speaks only of THIS company, so it
+ * cannot tell anyone that the CPF exists at another one.
+ */
+class DriverCpfAlreadyExistsError extends AppError {
   constructor() {
     super(
-      "Este CPF não está disponível para cadastro. Os CPFs de motoristas devem ser únicos em todo o sistema.",
+      "Já existe um motorista com este CPF nesta empresa. Procure-o na listagem.",
+      409,
+      "DRIVER_CPF_ALREADY_EXISTS",
     );
   }
 }

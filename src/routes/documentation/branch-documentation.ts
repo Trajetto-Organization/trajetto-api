@@ -1,90 +1,99 @@
 import { z } from "zod";
 
+import { internalErrorResponse } from "./common-responses";
+
 import { createBranchSchema } from "@/schemas/create-branch-schema";
 import { updateBranchSchema } from "@/schemas/update-branch-schema";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDeleteBranchSchema } from "@/schemas/update-delete-branch-schema";
 
-import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { listBranchSchema } from "@/schemas/list-branch-schema";
+import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
 
 import { confirmDeletionCodeSchema } from "@/schemas/confirm-deletion-code-schema";
+import { searchMetaDoc } from "@/shared/pagination/list-meta";
+
+/**
+ * Every error body the API sends: `code` is what a client branches on, and a
+ * schema listing only `message` would strip it on the way out.
+ */
+const codedError = (description: string) =>
+  z
+    .object({
+      code: z.string().optional(),
+      message: z.string(),
+      issues: z.array(z.string()).optional(),
+    })
+    .describe(description);
 
 const branchSchemas = {
   createBranch: createBranchSchema,
-  listBranch: listPagesSchema,
-  listBranchBusiness: listPagesByBusinessSchema,
+  listBranch: listBranchSchema,
   updateDeleteBranch: updateDeleteBranchSchema,
   updateBranch: updateBranchSchema,
   businessIdParam: updateDeleteBusinessSchema,
-  searchBranchCursor: z.object({
-    limit: z
-      .string()
-      .optional()
-      .describe("Número máximo de empresas a retornar (padrão: 10)"),
-    cursor: z
-      .string()
-      .optional()
-      .describe("ID da última empresa da página anterior para paginação"),
-    search: z.string().trim().max(100).optional(),
-    businessId: z.string().describe("ID da empresa"),
-  }),
+  searchBranchCursor: cursorPaginationByBusinessSchema,
   confirmDeletionCode: confirmDeletionCodeSchema,
 };
+
+const branchRow = z.object({
+  id: z.string(),
+  corporate_reason: z.string(),
+  fantasy_name: z.string().nullable(),
+  cep: z.string(),
+  city: z.string(),
+  uf: z.string(),
+  street: z.string(),
+  address_number: z.string(),
+  cnpj: z.string(),
+  complement: z.string().nullable(),
+  cnae: z.string(),
+  erp_code: z.string().nullable(),
+  responsible_name: z.string(),
+  telephone: z.string(),
+  email: z.string(),
+  is_active: z.boolean(),
+  businessId: z.string(),
+  created_at: z.union([z.string(), z.date()]),
+  updated_at: z.union([z.string(), z.date()]),
+});
+
+/** The list's `meta.searchMeta`, as summarizeBranchList builds it. */
+const branchListSearchMetaDoc = searchMetaDoc(
+  {
+    total: z
+      .number()
+      .int()
+      .describe("Filiais da busca e dos filtros (o cartão de total)."),
+    active: z
+      .number()
+      .int()
+      .describe(
+        "Ativas, com a busca e o filtro de UF aplicados e sem o de situação (o cartão não zera ao escolher \"Inativa\").",
+      ),
+    withErpCode: z
+      .number()
+      .int()
+      .describe("Das quais com código ERP cadastrado."),
+    withFantasyName: z
+      .number()
+      .int()
+      .describe("Das quais com nome fantasia (não vazio)."),
+  },
+  ["status", "uf"],
+);
 
 const branchResponses = {
   branchCreated: z.object({
     message: z.string().default("Filial criada com sucesso!"),
+    id: z.string().uuid().describe("O ID da filial criada."),
   }),
-  branchList: z.object({
-    data: z.array(
-      z.object({
-        id: z.string(),
-        corporate_reason: z.string(),
-        fantasy_name: z.string(),
-        cep: z.string(),
-        city: z.string(),
-        uf: z.string(),
-        street: z.string(),
-        address_number: z.string(),
-        complement: z.string(),
-        cnae: z.string(),
-        erp_code: z.string(),
-        responsible_name: z.string(),
-        email: z.string(),
-        created_at: z.string(),
-        updated_at: z.string(),
-        telephone: z.string(),
-        cnpj: z.string(),
-        businessId: z.string(),
-        business_name: z.string().optional(),
-      }),
-    ),
-    total: z.number(),
-  }),
-  branchBusinessList: z.object({
-    data: z.array(
-      z.object({
-        id: z.string(),
-        name: z.string(),
-        cnpj: z.string(),
-        cep: z.string(),
-        city: z.string(),
-        uf: z.string(),
-        street: z.string(),
-        address_number: z.string(),
-        complement: z.string(),
-        telephone: z.string(),
-        email: z.string(),
-        businessId: z.string(),
-        business_name: z.string(),
-        created_at: z.string(),
-        updated_at: z.string(),
-      }),
-    ),
-    total: z.number(),
-  }),
+
+  branchRow,
+
+  branchListSearchMeta: branchListSearchMetaDoc,
+
   branchUpdated: z.object({
     message: z.string().default("Filial atualizada com sucesso!"),
   }),
@@ -92,278 +101,9 @@ const branchResponses = {
     message: z.string().default("Filial deletada com sucesso!"),
   }),
   branchToggled: z.object({
-    message: z.string().default("Status da filial atualizado com sucesso!"),
+    message: z.string().default("Filial ativada com sucesso!"),
     is_active: z.boolean(),
   }),
-
-  searchBranchStreamDescription: z.object({
-    description: z
-      .string()
-      .default(
-        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are branch objects.",
-      ),
-  }),
-
-  // Common Error Responses
-  internalServerError: z.object({
-    message: z.string().default("Internal server error"),
-  }),
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-  validationError: z.object({
-    message: z.string().default("Validation Error"),
-    issues: z.array(z.string()),
-  }),
-  branchNotFound: z.object({
-    message: z.string().default("Filial não encontrada."),
-  }),
-  businessNotFound: z.object({
-    message: z
-      .string()
-      .default("Empresa não encontrada! Por favor, tente novamente."),
-  }),
-
-  // Branch-specific errors (400)
-  branchCnpjAlreadyExists: z.object({
-    message: z
-      .string()
-      .default(
-        "Este CNPJ não está disponível para cadastro. Os CNPJs de filiais devem ser únicos em todo o sistema.",
-      ),
-  }),
-  branchCorporateReasonAlreadyExists: z.object({
-    message: z
-      .string()
-      .default(
-        "Esta razão social não está disponível para cadastro. As razões sociais de filiais devem ser únicas em todo o sistema.",
-      ),
-  }),
-  branchErpCodeAlreadyExists: z.object({
-    message: z
-      .string()
-      .default(
-        "Este código ERP não está disponível para cadastro. Os códigos ERP de filiais devem ser únicos em todo o sistema.",
-      ),
-  }),
-  branchEmailAlreadyExists: z.object({
-    message: z
-      .string()
-      .default(
-        "Este e-mail não está disponível para cadastro. Os e-mails de filiais devem ser únicos em todo o sistema.",
-      ),
-  }),
-
-  // Business-specific errors (400) - thrown by branch controllers
-  businessCnpjAlreadyExists: z.object({
-    message: z.string().default("Este cnpj já foi cadastrado em uma empresa!"),
-  }),
-  businessCorporateReasonAlreadyExists: z.object({
-    message: z
-      .string()
-      .default("Esta razão social já foi cadastrada em uma empresa!"),
-  }),
-  businessErpCodeAlreadyExists: z.object({
-    message: z
-      .string()
-      .default("Este código erp já foi cadastrado em uma empresa!"),
-  }),
-  businessEmailAlreadyExists: z.object({
-    message: z
-      .string()
-      .default("Este e-mail já foi cadastrado em uma empresa!"),
-  }),
-
-  // Forbidden errors (403)
-  branchNotBelongBusiness: z.object({
-    message: z.string().default("Esta filial não pertence a esta empresa!"),
-  }),
-
-  // Grouping errors by route
-  createBranchErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este CNPJ não está disponível para cadastro. Os CNPJs de filiais devem ser únicos em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Esta razão social não está disponível para cadastro. As razões sociais de filiais devem ser únicas em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este código ERP não está disponível para cadastro. Os códigos ERP de filiais devem ser únicos em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este e-mail não está disponível para cadastro. Os e-mails de filiais devem ser únicos em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este cnpj já foi cadastrado em uma empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Esta razão social já foi cadastrada em uma empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este código erp já foi cadastrado em uma empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este e-mail já foi cadastrado em uma empresa!"),
-    }),
-  ]),
-  listBranchErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
-  listBranchBusinessErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
-
-  // Update branch errors (400 only - 403 and 404 are separate)
-  updateBranchErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este CNPJ não está disponível para cadastro. Os CNPJs de filiais devem ser únicos em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Esta razão social não está disponível para cadastro. As razões sociais de filiais devem ser únicas em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este código ERP não está disponível para cadastro. Os códigos ERP de filiais devem ser únicos em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este e-mail não está disponível para cadastro. Os e-mails de filiais devem ser únicos em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este cnpj já foi cadastrado em uma empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Esta razão social já foi cadastrada em uma empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este código erp já foi cadastrado em uma empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este e-mail já foi cadastrado em uma empresa!"),
-    }),
-  ]),
-
-  // Update branch forbidden error (403)
-  updateBranchForbidden: z.object({
-    message: z.string().default("Esta filial não pertence a esta empresa!"),
-  }),
-
-  // Update branch not found error (404)
-  updateBranchNotFound: z.object({
-    message: z.string().default("Filial não encontrada."),
-  }),
-
-  // Delete branch errors (400 only - 403 and 404 are separate)
-  deleteBranchErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
-
-  // Delete branch forbidden error (403)
-  deleteBranchForbidden: z.object({
-    message: z.string().default("Esta filial não pertence a esta empresa!"),
-  }),
-
-  // Delete branch not found error (404)
-  deleteBranchNotFound: z.object({
-    message: z.string().default("Filial não encontrada."),
-  }),
-
-  // Two-step deletion flow
   branchDeletionCodeSent: z.object({
     message: z
       .string()
@@ -371,65 +111,43 @@ const branchResponses = {
         "Um código de confirmação foi enviado para o seu e-mail. O código expira em 5 minutos.",
       ),
   }),
-  branchHasChildrenConflict: z.object({
-    message: z.string().default("Existem 3 veículo(s), 2 motorista(s)."),
-  }),
-  requestBranchDeletionErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Houve um erro ao tentar enviar o código de confirmação! Por favor, tente novamente.",
-        ),
-    }),
-  ]),
-  confirmBranchDeletionErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Nenhuma solicitação de exclusão pendente. Solicite a exclusão novamente.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Código de confirmação expirado. Solicite a exclusão novamente para receber um novo código.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Código de confirmação inválido. Verifique e tente novamente.",
-        ),
-    }),
-  ]),
+
+  internalServerError: internalErrorResponse,
+
+  createBranchErrors: codedError("VALIDATION_ERROR (com `issues`)."),
+  listBranchErrors: codedError(
+    "VALIDATION_ERROR: ordenação ou filtro inválido (`sort` fora da lista, status ou UF desconhecidos). BUSINESS_NOT_IDENTIFIED: o MASTER não informou `businessId`.",
+  ),
+  searchBranchErrors: codedError(
+    "VALIDATION_ERROR: limite, cursor ou busca inválidos.",
+  ),
+  updateBranchErrors: codedError("VALIDATION_ERROR (com `issues`)."),
+  toggleBranchErrors: codedError("VALIDATION_ERROR: parâmetro inválido."),
+  requestBranchDeletionErrors: codedError("VALIDATION_ERROR: parâmetro inválido."),
+  confirmBranchDeletionErrors: codedError(
+    "VALIDATION_ERROR: código ausente ou fora do formato. BRANCH_DELETION_CODE_INVALID: o código não confere. BRANCH_DELETION_CODE_EXPIRED: passaram os 5 minutos; peça a exclusão de novo para receber outro código.",
+  ),
+  /** The confirmation refusals that are about state, not input (decision 11.3). */
+  branchDeletionConflict: codedError(
+    "BRANCH_IN_USE: a filial tem veículos, motoristas, ordens de serviço, contas a pagar, multas, abastecimentos ou checklists; a mensagem traz as contagens. BRANCH_DELETION_NOT_REQUESTED: não há pedido de exclusão desta filial por este usuário — peça a exclusão (POST) antes de confirmar.",
+  ),
+  /** Routes without the tenant gate: the MASTER can name a missing company. */
+  branchOrBusinessNotFound: codedError(
+    "BRANCH_NOT_FOUND: a filial não existe nesta empresa (a de outra empresa responde igual, para não confirmar que o ID existe). BUSINESS_NOT_FOUND: o MASTER informou uma empresa que não existe.",
+  ),
+
+  branchForbidden: codedError(
+    "TENANT_ACCESS_DENIED: a empresa do caminho não é a do usuário; PERMISSION_DENIED: o perfil não tem `branch_manage`.",
+  ),
+  branchNotFound: codedError(
+    "BRANCH_NOT_FOUND: a filial não existe nesta empresa. A filial de outra empresa responde igual, para não confirmar que o ID existe.",
+  ),
+  branchConflict: codedError(
+    "BRANCH_NAME_TAKEN, BRANCH_EMAIL_TAKEN ou BRANCH_ERP_CODE_TAKEN: já existe uma filial com a mesma razão social (sem diferenciar maiúsculas), e-mail ou código ERP NESTA empresa. BRANCH_CNPJ_UNAVAILABLE: o CNPJ, identidade nacional, já está cadastrado; a mensagem não diz onde. TOGGLE_CONFLICT: o status mudou enquanto a tela estava aberta.",
+  ),
+  branchInUse: codedError(
+    "BRANCH_IN_USE: a filial tem veículos, motoristas, ordens de serviço, contas a pagar, multas, abastecimentos ou checklists; a mensagem traz as contagens.",
+  ),
 };
 
 export { branchSchemas, branchResponses };

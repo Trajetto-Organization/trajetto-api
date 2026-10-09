@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import database from "@/../infra/database";
 import { IProfileAccessRepository } from "./IProfile-access-repository";
 
@@ -13,15 +15,22 @@ import {
 } from "../dtos/profile-access-dto";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+import { insensitiveEquals } from "@/shared/utils/like-pattern";
+
+import {
+  PROFILE_SORT,
+  profileListWhere,
+} from "../usecases/list-profile-access/profile-access-list";
 
 class ProfileAccessRepository implements IProfileAccessRepository {
   constructor(private prisma = database) {}
 
-  async createProfileAccess({
-    name,
-    businessId,
-  }: CreateProfileAccessProps): Promise<ProfileAccess> {
-    const createdProfileAccess = await this.prisma.profileAccess.create({
+  async createProfileAccess(
+    { name, businessId }: CreateProfileAccessProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<ProfileAccess> {
+    const createdProfileAccess = await (tx ?? this.prisma).profileAccess.create({
       data: {
         name: name,
         businessId: businessId,
@@ -34,113 +43,65 @@ class ProfileAccessRepository implements IProfileAccessRepository {
   async listProfileAccess({
     page,
     pageSize,
-    currentUserRole,
-    businessId,
-    profileAccessId,
-    search,
+    sort,
+    order,
+    ...filters
   }: ListProfileAccessProps): Promise<ListProfileAccess> {
-    const skip = (page - 1) * pageSize;
+    const where = profileListWhere(filters);
 
-    const normalizedSearch = search ? search.trim().toLowerCase() : "";
-    const orConditions: any[] = [];
-
-    if (normalizedSearch) {
-      orConditions.push(
-        { id: { contains: normalizedSearch, mode: "insensitive" } },
-        { name: { contains: normalizedSearch, mode: "insensitive" } },
-        {
-          ...(currentUserRole === "MASTER"
-            ? {
-                businessId: { contains: normalizedSearch, mode: "insensitive" },
-              }
-            : {}),
-        },
-        {
-          ...(currentUserRole === "MASTER"
-            ? {
-                business: {
-                  corporate_reason: {
-                    contains: normalizedSearch,
-                    mode: "insensitive",
-                  },
-                },
-              }
-            : {}),
-        },
-      );
-    }
-
-    const whereCondition = {
-      ...(currentUserRole !== "MASTER" && { businessId }),
-      ...(currentUserRole === "BUSINESS_USER" && {
-        id: { not: profileAccessId },
-      }),
-      ...buildSearchOr(orConditions),
-    };
-
-    const [profileAccessData, total] = await Promise.all([
+    const [rows, usage] = await Promise.all([
       this.prisma.profileAccess.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
-        ...(currentUserRole === "MASTER" && {
-          include: {
-            business: {
-              select: {
-                id: true,
-                corporate_reason: true,
-              },
-            },
-          },
-        }),
-        orderBy: {
-          created_at: "desc", // Sort by created_at
-        },
+        where,
+        include: { _count: { select: { users: true, permissions: true } } },
+        orderBy: resolveOrderBy(PROFILE_SORT, { sort, order }),
       }),
-      this.prisma.profileAccess.count({
-        where: whereCondition,
+      // One users count per profile of the whole search, for the cards: a
+      // company holds a few dozen profiles at most, so this also answers the
+      // pager total without a separate COUNT.
+      this.prisma.profileAccess.findMany({
+        where,
+        select: { id: true, name: true, _count: { select: { users: true } } },
       }),
     ]);
 
-    return { data: profileAccessData, total };
+    return {
+      data: rows.map(({ _count, ...profile }) => ({
+        ...profile,
+        usersCount: _count.users,
+        permissionsCount: _count.permissions,
+      })),
+      total: usage.length,
+      usage: usage.map(({ id, name, _count }) => ({
+        id,
+        label: name,
+        count: _count.users,
+      })),
+    };
   }
 
+  /**
+   * Renames the profile. It never changes company: moving a profile used to
+   * carry its users into another company without ending their sessions or
+   * clearing their inbox (decision 4.6). A person changes company through
+   * their own record, where that is handled.
+   */
   async updateProfileAccess(
-    profileAccessData: UpdateProfileAccess,
+    { profileAccessId, name }: UpdateProfileAccess,
+    tx?: Prisma.TransactionClient,
   ): Promise<ProfileAccess> {
-    const { profileAccessId, ...dataToUpdate } = profileAccessData;
-
-    const filteredData = Object.fromEntries(
-      Object.entries(dataToUpdate).filter(
-        ([_, value]) => value !== undefined && value !== null && value !== "",
-      ),
-    );
-
-    return this.prisma.$transaction(async (prisma) => {
-      // Update ProfileAccess
-      const updatedProfile = await prisma.profileAccess.update({
-        where: { id: profileAccessId },
-        data: filteredData,
-      });
-
-      // Updates related permissions
-      await prisma.permission.updateMany({
-        where: { profileAccessId },
-        data: { businessId: filteredData.businessId as string },
-      });
-
-      // Updates related users
-      await prisma.user.updateMany({
-        where: { profileAccessId },
-        data: { businessId: filteredData.businessId },
-      });
-
-      return updatedProfile;
+    return (tx ?? this.prisma).profileAccess.update({
+      where: { id: profileAccessId },
+      data: { ...(name && { name }) },
     });
   }
 
-  async deleteProfileAccess(profileAccessId: string): Promise<ProfileAccess> {
-    const deleteProfileAccess = await this.prisma.profileAccess.delete({
+  async deleteProfileAccess(
+    profileAccessId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<ProfileAccess> {
+    const deleteProfileAccess = await (tx ?? this.prisma).profileAccess.delete({
       where: {
         id: profileAccessId,
       },
@@ -155,10 +116,8 @@ class ProfileAccessRepository implements IProfileAccessRepository {
   }: findProfileAccessByNameAndBusiness): Promise<ProfileAccess | null> {
     const findUserByEmail = await this.prisma.profileAccess.findFirst({
       where: {
-        name: {
-          equals: name,
-          mode: "insensitive",
-        },
+        // Escaped: the value is an ILIKE pattern underneath (like-pattern.ts).
+        name: insensitiveEquals(name),
         businessId: businessId,
       },
     });
@@ -170,17 +129,27 @@ class ProfileAccessRepository implements IProfileAccessRepository {
     limit = 10,
     cursor,
     businessId,
+    search,
+    hideProfileId,
   }: SearchProfileAccessWithCursorProps): Promise<CursorPaginatedProfileAccess> {
+    const term = search?.trim() ?? "";
+
     const items = await this.prisma.profileAccess.findMany({
-      where: { businessId },
+      where: {
+        businessId,
+        ...(hideProfileId && { id: { not: hideProfileId } }),
+        ...(term &&
+          buildSearchOr<Prisma.ProfileAccessWhereInput>([
+            { name: { contains: term, mode: "insensitive" as const } },
+          ])),
+      },
       take: limit + 1,
       ...(cursor && {
         cursor: { id: cursor },
         skip: 1,
       }),
-      orderBy: {
-        created_at: "desc",
-      },
+      // The id breaks created_at ties, so a cursor never skips a row.
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     });
 
     const hasMore = items.length > limit;
@@ -194,16 +163,18 @@ class ProfileAccessRepository implements IProfileAccessRepository {
   async findProfileAccessById(
     profileAccessId: string,
   ): Promise<ProfileAccess | null> {
-    const findProfileAccessById = await this.prisma.profileAccess.findUnique({
-      where: {
-        id: profileAccessId,
-      },
-      include: {
-        users: true,
-      },
+    // The count, not the rows: the callers need to know whether anybody uses
+    // the profile, and the rows carried every user's password hash.
+    const found = await this.prisma.profileAccess.findUnique({
+      where: { id: profileAccessId },
+      include: { _count: { select: { users: true } } },
     });
 
-    return findProfileAccessById;
+    if (!found) return null;
+
+    const { _count, ...profile } = found;
+
+    return { ...profile, usersCount: _count.users };
   }
 }
 

@@ -9,6 +9,43 @@ import { VehicleNoVehiclesToExportError } from "../errors/vehicle-no-vehicles-to
 import { ExportFormatters } from "@/shared/services/export/formatters";
 import { ExportColumn } from "@/shared/services/export/types";
 
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { AppError } from "@/shared/errors/AppError";
+
+import { businessDateKey, resolveTimeZone } from "@/shared/time/business-day";
+import { vehicleYearOf } from "@/shared/vehicle/vehicle-years";
+import { formatInstant, formatPickedDay } from "@/shared/vehicle/record-dates";
+import type { VehicleStatus } from "@/shared/vehicle/vehicle-rules";
+
+interface ExportVehicleRequest {
+  userId: string;
+  /** The MASTER names the company; everyone else exports their own. */
+  businessId?: string;
+  search?: string;
+  statuses?: VehicleStatus[];
+  branchIds?: string[];
+}
+
+/** Only the year means anything in these two dates (stored on 1 January). */
+const yearOnly = (value?: Date | string | null): string =>
+  value ? String(vehicleYearOf(value)) : "N/A";
+
+const kmPerLiter = (value?: number | null): string =>
+  value === null || value === undefined
+    ? "N/A"
+    : value.toLocaleString("pt-BR", {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 2,
+      });
+
+/**
+ * The vehicle table as a file, with the SAME search and filters as the
+ * screen (decision 5.8) and for the company on screen — the MASTER's export
+ * used to dump every company's fleet into one sheet.
+ */
 @injectable()
 class ExportVehicleUseCase {
   constructor(
@@ -16,32 +53,59 @@ class ExportVehicleUseCase {
     private user: IUserRepository,
     @inject("VehicleRepository")
     private vehicle: IVehicleRepository,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
   ) {}
 
-  async execute(
-    userId: string,
-    search?: string,
-  ): Promise<{
-    iterator: AsyncGenerator<any>;
+  async execute({
+    userId,
+    businessId,
+    search,
+    statuses,
+    branchIds,
+  }: ExportVehicleRequest): Promise<{
+    iterator: AsyncGenerator<Record<string, unknown>>;
     columns: ExportColumn[];
     filename: string;
   }> {
     const findUser = await this.user.findUserById(userId);
     if (!findUser) throw new ResourceNotFoundError();
 
-    const total = await this.vehicle.countVehiclesForExport(
-      findUser.businessId as string,
-      findUser.role,
-    );
+    const resolvedBusinessId = businessId ?? findUser.businessId;
+
+    if (!resolvedBusinessId) {
+      throw new AppError(
+        "Empresa não identificada. Selecione uma empresa para continuar.",
+        400,
+        "BUSINESS_NOT_IDENTIFIED",
+      );
+    }
+
+    assertTenantAccess(findUser, resolvedBusinessId);
+
+    const findBusiness = await this.business.findBusinessById(resolvedBusinessId);
+
+    if (!findBusiness) throw new BusinessNotFoundError();
+
+    const filters = {
+      businessId: resolvedBusinessId,
+      search: search?.trim() || undefined,
+      statuses,
+      branchIds,
+    };
+
+    const total = await this.vehicle.countVehiclesForExport(filters);
 
     if (total === 0) {
       throw new VehicleNoVehiclesToExportError();
     }
 
-    const iterator = this.vehicle.streamVehiclesForExport(
-      findUser.businessId!,
-      findUser.role,
-      search,
+    const iterator = this.vehicle.streamVehiclesForExport(filters);
+
+    // The company's day, not the server's: at 22:00 in São Paulo the UTC
+    // date is already tomorrow — in the file name and in every date column.
+    const timeZone = resolveTimeZone(
+      (findBusiness as { timezone?: string | null }).timezone,
     );
 
     const statusMap: Record<string, string> = {
@@ -124,7 +188,7 @@ class ExportVehicleUseCase {
         header: "Km/L",
         key: "km_per_liter",
         width: 8,
-        formatter: ExportFormatters.number3,
+        formatter: kmPerLiter,
       },
 
       {
@@ -159,21 +223,21 @@ class ExportVehicleUseCase {
         header: "Data de Aquisição",
         key: "acquisition_date",
         width: 18,
-        formatter: ExportFormatters.date,
+        formatter: (value) => formatPickedDay(value, timeZone),
       },
 
       {
         header: "Ano de Fabricação",
         key: "manufacturing_year",
         width: 18,
-        formatter: ExportFormatters.date,
+        formatter: yearOnly,
       },
 
       {
         header: "Ano do Modelo",
         key: "model_year",
         width: 15,
-        formatter: ExportFormatters.date,
+        formatter: yearOnly,
       },
 
       {
@@ -201,7 +265,16 @@ class ExportVehicleUseCase {
         header: "Última Manutenção",
         key: "last_maintenance_date",
         width: 18,
-        formatter: (value) => (value ? ExportFormatters.date(value) : "N/A"),
+        formatter: (value) => formatPickedDay(value, timeZone),
+      },
+
+      {
+        // With the date above, what tells a service overdue by mileage (the
+        // table shows both; the file had only the date).
+        header: "Km da Última Manutenção",
+        key: "last_maintenance_mileage",
+        width: 22,
+        formatter: ExportFormatters.fallback,
       },
 
       {
@@ -211,35 +284,22 @@ class ExportVehicleUseCase {
         formatter: ExportFormatters.fallback,
       },
 
-      ...(findUser.role === "MASTER"
-        ? [
-            {
-              header: "Empresa",
-              key: "businessName",
-              width: 25,
-              formatter: ExportFormatters.fallback,
-            },
-          ]
-        : []),
-
       {
         header: "Criado em",
         key: "created_at",
         width: 20,
-        formatter: ExportFormatters.datetime,
+        formatter: (value) => formatInstant(value, timeZone),
       },
 
       {
         header: "Atualizado em",
         key: "updated_at",
         width: 20,
-        formatter: ExportFormatters.datetime,
+        formatter: (value) => formatInstant(value, timeZone),
       },
     ];
 
-    const filename = `relatorio-veiculos-${
-      new Date().toISOString().split("T")[0]
-    }`;
+    const filename = `relatorio-veiculos-${businessDateKey(new Date(), timeZone)}`;
 
     return { iterator, columns, filename };
   }

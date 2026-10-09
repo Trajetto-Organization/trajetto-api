@@ -443,6 +443,19 @@ describe("reassigning", () => {
     const first = await assign([delivery], THIRD_VEHICLE);
     const routeId = first.json().data.routeId;
 
+    // The same driver left with an earlier route in this file, and a driver
+    // holds one route in progress at a time (FLEET-ASSIGN-3): that one ends
+    // first, so this departure is the one under test.
+    await prisma.route.updateMany({
+      where: {
+        businessId: CARRIER,
+        driverId: DRIVER,
+        status: "IN_PROGRESS",
+        id: { not: routeId },
+      },
+      data: { status: "COMPLETED", completed_at: new Date() },
+    });
+
     const departed = await app.inject({
       method: "POST",
       url: `/route/start-route/${routeId}/business/${CARRIER}`,

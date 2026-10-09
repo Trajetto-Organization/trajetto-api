@@ -1,0 +1,9 @@
+{
+  "client_submission_id": "018fd960-0000-7000-8000-0000000001f6",
+  "occurrenceTypeId": "018fd960-0000-7000-8000-0000000000e1",
+  "occurred_at": "2026-09-24T13:05:12.345Z",
+  "description": "Portaria fechada",
+  "latitude": -23.5505,
+  "longitude": -46.6333,
+  "photos": ["deliveryPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-portaria-00000017.jpg"]
+}

@@ -1,56 +1,49 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
-
 import { GetNotificationPreferencesUseCase } from "./get-notification-preferences-usecase";
 import { UpdateNotificationPreferencesUseCase } from "./update-notification-preferences-usecase";
-
 import { updateNotificationPreferencesSchema } from "@/schemas/notification-preferences-schema";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { OpsAlertPreferenceUseCase } from "@/modules/chat/usecases/ops-alert-preference/ops-alert-preference-usecase";
 
 class NotificationPreferencesController {
   async getPreferences(request: FastifyRequest, reply: FastifyReply) {
     const { id: userId } = request.user;
 
-    try {
-      const getPreferencesUseCase = container.resolve(
-        GetNotificationPreferencesUseCase,
-      );
+    const getPreferencesUseCase = container.resolve(
+      GetNotificationPreferencesUseCase,
+    );
 
-      const preferences = await getPreferencesUseCase.execute(userId);
+    const preferences = await getPreferencesUseCase.execute(userId);
 
-      return reply.status(200).send({ preferences });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+    // Decision 14.6: the alert sound rides the same screen.
+    const opsAlert = await container.resolve(OpsAlertPreferenceUseCase).get(userId);
 
-      throw error;
-    }
+    return reply.status(200).send({ preferences, opsAlert });
   }
 
   async updatePreferences(request: FastifyRequest, reply: FastifyReply) {
     const { id: userId } = request.user;
-    const { preferences } = updateNotificationPreferencesSchema.parse(
+    const { preferences, opsAlert } = updateNotificationPreferencesSchema.parse(
       request.body,
     );
 
-    try {
+    // Either part may come alone (decision 14.6: the alert sound is saved by
+    // itself from the operations balloon).
+    if (preferences) {
       const updatePreferencesUseCase = container.resolve(
         UpdateNotificationPreferencesUseCase,
       );
 
       await updatePreferencesUseCase.execute(userId, preferences);
-
-      return reply
-        .status(200)
-        .send({ message: "Preferências de notificação atualizadas!" });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
     }
+
+    if (opsAlert) {
+      await container.resolve(OpsAlertPreferenceUseCase).update(userId, opsAlert);
+    }
+
+    return reply
+      .status(200)
+      .send({ message: "Preferências de notificação atualizadas!" });
   }
 }
 

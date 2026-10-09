@@ -9,7 +9,6 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { UserAssignedUserNotFoundError } from "@/modules/user/usecases/errors/user-assigned-user-not-found-error";
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
 
-import { KanbanNotAllowedUpdateCardBusinessError } from "../errors/kanban-not-allowed-update-card-business-error";
 import { KanbanCardColumnNotFoundError } from "../errors/kanban-card-column-not-found-error";
 
 import { KanbanCardNotFoundError } from "../errors/kanban-card-not-found-error";
@@ -17,6 +16,8 @@ import { KanbanCardNotFoundError } from "../errors/kanban-card-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
 
 import { OutboxService } from "@/shared/notifications/outbox-service";
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { loadBusinessTimeZone } from "@/shared/time/business-time-zone";
 import database from "@/../infra/database";
 
 @injectable()
@@ -28,6 +29,8 @@ class UpdateKanbanCardUseCase {
     private kanban: IKanbanRepository,
     @inject("OutboxService")
     private outbox: OutboxService,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
   ) {}
 
   async execute(
@@ -53,11 +56,12 @@ class UpdateKanbanCardUseCase {
       throw new KanbanCardColumnNotFoundError();
     }
 
-    // Verify user permissions
-    if (findUser.role !== "MASTER") {
-      if (findUser.businessId !== findColumn.businessId) {
-        throw new KanbanNotAllowedUpdateCardBusinessError();
-      }
+    // Another company's card answers as a missing one (decision 11.3).
+    if (
+      findUser.role !== "MASTER" &&
+      findUser.businessId !== findColumn.businessId
+    ) {
+      throw new KanbanCardNotFoundError();
     }
 
     // Verify assigned user if changed
@@ -69,17 +73,24 @@ class UpdateKanbanCardUseCase {
         cardData.assignedUserId,
       );
 
-      if (!assignedUser) {
+      // For everyone, the MASTER included: the card stays inside its board's
+      // company. Only the MASTER is told why; anyone else hears "not found".
+      if (
+        !assignedUser ||
+        (findUser.role !== "MASTER" &&
+          assignedUser.businessId !== findColumn.businessId)
+      ) {
         throw new UserAssignedUserNotFoundError();
       }
 
-      if (
-        findUser.role !== "MASTER" &&
-        assignedUser.businessId !== findColumn.businessId
-      ) {
+      if (assignedUser.businessId !== findColumn.businessId) {
         throw new UserNotBelongBusinessError();
       }
     }
+
+    // Read before the transaction: the message prints the due day in the
+    // company's zone (decision 1.1), and the render never queries.
+    const timeZone = await loadBusinessTimeZone(this.business, findColumn.businessId);
 
     try {
       // Only a hand-over pages someone: an update that keeps the assignment
@@ -106,6 +117,7 @@ class UpdateKanbanCardUseCase {
             dueDate: updated.dueDate
               ? new Date(updated.dueDate).toISOString()
               : null,
+            timeZone,
             isCompleted: Boolean(updated.completed),
             assignedUserId:
               assignedUserChanged && cardData.assignedUserId
@@ -119,6 +131,9 @@ class UpdateKanbanCardUseCase {
 
       return updatedCard;
     } catch (error) {
+      // Deleted meanwhile: the repository says "not found".
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
         "Houve um erro ao tentar atualizar o card! Por favor, tente novamente.",
         500,

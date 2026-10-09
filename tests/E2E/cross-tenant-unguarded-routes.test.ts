@@ -344,7 +344,7 @@ async function expectRefused(
   ).not.toBe(422);
 
   expect(
-    response.body.includes("Validation Error"),
+    response.body.includes('"code":"VALIDATION_ERROR"'),
     `${what}: recusado pelo schema, não pela regra`,
   ).toBe(false);
 
@@ -402,9 +402,9 @@ describe("writing to another carrier's people", () => {
       url: `/user/update-user/${B_OWNED.userId}`,
       headers: asA(),
 
-      // A full name and A's own company, so zod is satisfied and the tenant
-      // check passes — leaving only the rule under test.
-      payload: { name: "Usuária Sequestrada", businessId: A },
+      // A full name, so zod is satisfied — leaving only the rule under test.
+      // (A businessId in the body is refused by the schema, decision 16.100.)
+      payload: { name: "Usuária Sequestrada" },
     });
 
     await expectRefused(response, "renomear usuária da B");
@@ -451,7 +451,8 @@ describe("writing to another carrier's permissions", () => {
       method: "PATCH",
       url: `/profile-access/update-profile-access/${B_OWNED.profileAccessId}`,
       headers: asA(),
-      payload: { name: "Perfil Sequestrado", businessId: A },
+      // No businessId: the edit body refuses it (decision 16.100).
+      payload: { name: "Perfil Sequestrado" },
     });
 
     await expectRefused(response, "editar perfil da B");
@@ -491,7 +492,6 @@ describe("writing to another carrier's permissions", () => {
       payload: {
         canRead: true,
         canWrite: true,
-        businessId: A,
         profileAccessId: profileA,
       },
     });

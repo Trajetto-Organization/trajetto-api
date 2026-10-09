@@ -1,0 +1,14 @@
+-- The request an outbox event came from.
+--
+-- A request id existed only in that request's log line, and it was the
+-- per-process counter `req-N`, repeated on every replica and every restart.
+-- Nothing tied the request to the event it published or to the deliveries the
+-- event fanned out to, so "the driver did not get the 10:03 notice" was an
+-- investigation by aggregateId and time window. The event now records the
+-- request's id (its x-request-id), which also travels in the workers' log
+-- lines.
+--
+-- Nullable, no default: metadata-only. Not indexed — it is read while
+-- investigating, never on a hot path, and this is the busiest insert of the
+-- pipeline.
+ALTER TABLE "domain_outbox_event" ADD COLUMN "correlationId" TEXT;

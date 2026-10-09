@@ -11,13 +11,23 @@ import { TwoFactorVerificationUseCase } from "./two-factor-verification-usecase"
 import { UserInvalidCodeForUserError } from "../errors/user-invalid-code-for-user-error";
 
 import { UserNotFoundPermissionOrProfileAccess } from "../errors/user-not-found-permission-profile-access-error";
+import { parseSessionClient } from "../../services/session-service";
 
 class TwoFactorVerificationController {
   async handle(
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<Response> {
-    const { email, code } = twoFactorUserSchema.parse(request.body);
+    const { email, code, challenge } = twoFactorUserSchema.parse(request.body);
+
+    // How many callers still send no challenge: the signal for switching
+    // TWO_FACTOR_CHALLENGE_REQUIRED on (WEB-07).
+    if (!challenge) {
+      request.log.info(
+        { event: "auth.two_factor_without_challenge", step: "verify" },
+        "Two-factor request without challenge",
+      );
+    }
 
     const twoFactorVerificationUseCase = container.resolve(
       TwoFactorVerificationUseCase,
@@ -25,10 +35,14 @@ class TwoFactorVerificationController {
 
     try {
       const { token, refresh_token, role } =
-        await twoFactorVerificationUseCase.execute({
-          email: email as string,
-          twoFactorCode: code as string,
-        });
+        await twoFactorVerificationUseCase.execute(
+          {
+            email: email as string,
+            twoFactorCode: code as string,
+            challenge,
+          },
+          parseSessionClient(request.headers["x-trajetto-client"]),
+        );
 
       return reply.status(200).send({
         message: "Autenticação de dois fatores bem-sucedida!",

@@ -2,16 +2,89 @@ version: "3.8"
 
 services:
   trajetto-database:
-    image: postgres:16-alpine
+    # Set POSTGRES_IMAGE to the exact digest running today
+    # (`docker service inspect <stack>_trajetto-database --format
+    # '{{.Spec.TaskTemplate.ContainerSpec.Image}}'`). A floating tag is
+    # resolved again on every stack deploy: when upstream moves
+    # `16-alpine`, deploying the API restarts and upgrades the database
+    # without anyone asking. The default is today's value, so nothing changes
+    # until it is set. infra/scripts/restore-postgres.sh drills on the same one.
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    # The image stops Postgres with SIGINT (fast shutdown: disconnect clients,
+    # checkpoint, exit). Swarm's default 10 s before SIGKILL can cut that
+    # checkpoint short on a busy database, and a killed Postgres comes back
+    # through crash recovery — a longer outage on every planned restart.
+    stop_grace_period: 60s
+    # Docker's json-file never rotates on its own, and the host's daemon.json
+    # is versioned nowhere: without this every container's log grows until
+    # the node's disk is full — the disk this database's volume lives on.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       POSTGRES_USER: ${POSTGRES_USERNAME}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DATABASE}
+    # Server tuning — OFF until scheduled. Today the image defaults apply
+    # (shared_buffers 128MB, work_mem 4MB, random_page_cost 4). Uncommenting
+    # this changes the task spec and RESTARTS Postgres (stop-first: a short
+    # outage), so it goes out in a planned window, with values sized for the
+    # host's real RAM: docs/deploy.md (Backup e restauração), "Tuning do Postgres".
+    # command:
+    #   - postgres
+    #   - -c
+    #   - shared_buffers=${PG_SHARED_BUFFERS:-256MB}
+    #   - -c
+    #   - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-1GB}
+    #   - -c
+    #   - work_mem=${PG_WORK_MEM:-8MB}
+    #   - -c
+    #   - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-128MB}
+    #   - -c
+    #   - random_page_cost=${PG_RANDOM_PAGE_COST:-1.1}
+    #   - -c
+    #   - max_wal_size=2GB
+    #   - -c
+    #   - log_min_duration_statement=1000
+    #   - -c
+    #   - log_lock_waits=on
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # /dev/shm — OFF until the same planned window as the tuning above
+      # (it changes the task spec and restarts Postgres). Docker gives a
+      # container 64 MB, and parallel workers share memory through it: during
+      # the 10/2026 measurement a parallel VACUUM and a parallel CREATE INDEX
+      # failed with "could not resize shared memory segment … No space left
+      # on device" (docs/desempenho/banco-2026-10.md §9 item 7). Swarm ignores
+      # `shm_size`, so it is a tmpfs mount. Size it with the tuning; 256 MB
+      # covers the defaults. Without it, set max_parallel_maintenance_workers=0
+      # in the command block instead.
+      # - type: tmpfs
+      #   target: /dev/shm
+      #   tmpfs:
+      #     size: 268435456
     deploy:
       mode: replicated
       replicas: 1 # Essential for preventing data corruption in large volumes locally
+      # No memory limit, on purpose: this is what the other services' limits
+      # protect. Capping Postgres without knowing the host's RAM risks the
+      # kernel killing the database itself; its memory is sized by its own
+      # settings (the tuning block above).
+      #
+      # The data lives on a LOCAL volume, which belongs to one node. Scheduled
+      # anywhere else, this task would find an empty volume, initdb a brand
+      # new database and look healthy (the API's boot now refuses such a
+      # database in production — infra/scripts/database-bootstrap-guard.ts —
+      # but a pinned task is the first line). The single node is the manager
+      # today, so this holds with nothing to prepare; with workers added it
+      # keeps the database on the manager. Moving it means a restore:
+      # docs/deploy.md (Backup e restauração). Redis is deliberately NOT pinned: it holds
+      # nothing that matters, and pinning would only tie it to this node.
+      placement:
+        constraints:
+          - node.role == manager
       update_config:
         parallelism: 1
         order: stop-first # Ensures the old device lowers the volume before the new one does
@@ -20,19 +93,22 @@ services:
       rollback_config:
         parallelism: 1
         order: stop-first
+      # Always restart, with no attempt limit. With `max_attempts` SwarmKit
+      # stops recreating the task for GOOD once the budget is spent — and even
+      # with a window, a fast crash loop (a full disk, three failures in two
+      # minutes) spends it. A single stateful instance has nothing to fail
+      # over to: giving up only makes the outage outlive its cause, until a
+      # human notices. Crash loops are for alerting. A slot Swarm did give up
+      # on comes back with `docker service update --force <service>`.
       restart_policy:
-        condition: any # It always restarts if the process crashes
-        delay: 5s
-        max_attempts: 3
-        # Without a window the attempt counter NEVER resets: Swarm's default is
-        # 0, meaning "evaluate over the whole lifetime of the service". Three
-        # restarts spread over three months exhaust the budget exactly like
-        # three in fifteen seconds, and once exhausted Swarm stops recreating
-        # the task permanently — including after the cause is long gone. With a
-        # window, a task that survives two minutes gets its three attempts back.
-        window: 120s
+        condition: any
+        delay: 10s
+    # Only the stack's internal network: nothing outside this stack (Traefik,
+    # the web, Dokploy's own containers) can reach the database port. The
+    # shared-network leg kept for the Portainer rollout is gone — the Dokploy
+    # stack is a new one, so no old replica needs it (docs/deploy.md).
     networks:
-      - minha_rede
+      - backend
     healthcheck:
       test:
         [
@@ -46,11 +122,56 @@ services:
 
   trajetto-redis:
     image: redis:7-alpine
-    volumes:
-      - redis_data:/data
+    # See trajetto-database above.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    # A password even on the internal network: any container that reaches
+    # this Redis could publish straight into the Socket.IO adapter's channels
+    # and put any payload in any tenant's rooms, or wipe the rate-limit
+    # counters. Required on purpose: a deploy without it fails here instead of
+    # coming up open.
+    # Generate with `openssl rand -hex 32` (hex, so it needs no URL escaping).
+    # No `-` inside a `${VAR:?message}`, here or anywhere in this file:
+    # `docker stack deploy` reads it as a default and renders the rest of the
+    # message as the value (compose-stack-render.test.ts).
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Defina REDIS_PASSWORD (openssl rand, 32 bytes em hex)}
+      # `false` ONLY for the first rollout from a release whose API reaches
+      # Redis without a password: when this update restarts Redis, those old
+      # replicas are still serving, get NOAUTH and crash on the adapter's
+      # publish error while the new ones are still booting. Flip back to
+      # `true` once every api task runs the new image (docs/deploy.md,
+      # "Postgres e Redis"). With it off, the new API still sends its
+      # password: ioredis only warns that the server has none.
+      REDIS_ENFORCE_AUTH: ${REDIS_ENFORCE_AUTH:-true}
+    # Nothing here is durable — TTL'd rate-limit counters and the Socket.IO
+    # adapter's pub/sub (ADR 0002: Redis is disposable). So no RDB/AOF and no
+    # volume: a snapshot only brought back keys that should have expired.
+    # A ceiling that EVICTS instead of the default `noeviction`, which on a
+    # full Redis refuses the INCR and turns every limiter off at once;
+    # allkeys-lru rather than volatile-*, so a key without a TTL can never
+    # pin memory. An evicted counter is an early reset — fail-open, as ADR
+    # 0002 already accepts.
+    # Through the image's docker-entrypoint.sh, never straight to
+    # redis-server: the entrypoint drops from root to the `redis` user only
+    # when its first argument is `redis-server`, and a command that starts
+    # with `sh -c` bypasses it — Redis then ran as root.
+    command: ["sh", "-c", "set -- --save '' --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru; if [ \"$$REDIS_ENFORCE_AUTH\" = false ]; then exec docker-entrypoint.sh redis-server \"$$@\"; fi; exec docker-entrypoint.sh redis-server --requirepass \"$$REDIS_PASSWORD\" \"$$@\""]
     deploy:
       mode: replicated
       replicas: 1 # Stateful — single shared instance for all API replicas (pub/sub + rate-limit)
+      # stop-first stays: this is ONE pub/sub bus. start-first would briefly
+      # run two Redis tasks behind the same service VIP and split the API
+      # replicas between them. The few seconds without Redis go through the
+      # degraded-realtime and fail-open paths.
+      # Room for --maxmemory plus client output buffers (the pub/sub
+      # connections of every API replica) and fragmentation.
+      resources:
+        limits:
+          memory: 512M
       update_config:
         parallelism: 1
         order: stop-first
@@ -59,29 +180,127 @@ services:
       rollback_config:
         parallelism: 1
         order: stop-first
+      # No attempt limit — see trajetto-database above.
       restart_policy:
         condition: any
         delay: 5s
-        max_attempts: 3
-        window: 120s # See trajetto-database above.
+    # As trajetto-database: the internal network only.
     networks:
-      - minha_rede
+      - backend
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # An unauthenticated PING answers NOAUTH, which is not a healthy Redis.
+      # With REDIS_ENFORCE_AUTH=false the server has no password and answers
+      # `redis-cli -a` with an AUTH error (7.4 still sends the PING after it;
+      # a client that stops there would not) — so the probe follows the same
+      # switch as the server.
+      test:
+        [
+          "CMD-SHELL",
+          "if [ \"$$REDIS_ENFORCE_AUTH\" = false ]; then redis-cli ping; else redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping; fi | grep -q PONG",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
 
   api:
-    image: ghcr.io/trajetto-organization/trajetto-api:latest
+    # `stable`: the tag the promote workflow moves to the immutable
+    # `sha-<sha>` it ships — on the merge into main, or by hand, which makes
+    # the same button the rollback path (docs/deploy.md, "Rollback"). Staging
+    # runs the same file with API_IMAGE_TAG=staging, the tag each push to the
+    # staging branch moves. On a brand-new stack `stable` may not exist yet:
+    # the first deploy pins API_IMAGE_TAG=sha-<sha> (docs/deploy.md).
+    image: ghcr.io/trajetto-organization/trajetto-api:${API_IMAGE_TAG:-stable}
     # The default 10s SIGKILLs the process mid-shutdown; the graceful
-    # sequence is bounded at 25s by the server watchdog.
+    # sequence is bounded at 35s by the server watchdog.
     stop_grace_period: 40s
+    # See trajetto-database above. Larger here: this is the chatty one (two
+    # lines per request), and what is on disk is what is left to read in an
+    # incident unless a log shipper keeps more.
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}?schema=public&connection_limit=10&pool_timeout=20
-      REDIS_URL: redis://${REDIS_HOST}:${REDIS_PORT}
+      # Which deployment this stack is: `production` or `staging`. Required,
+      # because staging runs this same file and image: forgetting it would
+      # make a staging stack call itself production.
+      APP_ENV: ${APP_ENV:?Defina APP_ENV (production ou staging)}
+      # The V8 heap stops at ~75% of the container's memory limit (below), so
+      # a heap that runs away ends in a clean "heap out of memory" and a
+      # restart of this replica — not in a cgroup SIGKILL mid-request. The
+      # rest of the limit is for Buffers (uploads, spreadsheets) and the
+      # runtime. Raise both together: API_HEAP_MB and API_MEMORY_LIMIT.
+      NODE_OPTIONS: --max-old-space-size=${API_HEAP_MB:-768}
+      # fatal|error|warn|info|debug|trace|silent. `debug` adds the per-socket
+      # connect/disconnect lines, the bulk of the volume at fleet scale.
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # The external dead man's switch pinged every minute by the ops
+      # heartbeat (docs/deploy.md (Alertas e monitoramento)). Empty: the reasons only go to the
+      # log and nobody is paged. FAIL_URL only for checks that do not follow
+      # the `<url>/fail` convention (Uptime Kuma).
+      HEALTHCHECK_PING_URL: ${HEALTHCHECK_PING_URL:-}
+      HEALTHCHECK_FAIL_URL: ${HEALTHCHECK_FAIL_URL:-}
+      # `false` once the promote workflow runs the release step
+      # (MIGRATIONS_VIA_JOB=true, infra/scripts/run-release-migrations.sh):
+      # then a failing migration fails one deploy step instead of the boot of
+      # every replica. docs/deploy.md (Migrations).
+      RUN_MIGRATIONS_ON_BOOT: ${RUN_MIGRATIONS_ON_BOOT:-true}
+      # `true` ONCE, for the first boot of a brand-new installation. Otherwise
+      # a database with no applied migration stops the boot before anything
+      # is migrated or seeded: it means the database task came back on an
+      # empty volume, not that production is new.
+      ALLOW_EMPTY_DATABASE_BOOTSTRAP: ${ALLOW_EMPTY_DATABASE_BOOTSTRAP:-false}
+      # `options` sets per-session ceilings on the RUNTIME connection only:
+      #   statement_timeout=30s   a runaway query is cancelled instead of
+      #     holding a pool slot for ever. A ceiling, not a latency target:
+      #     well above any legitimate statement (1,000-row export batches,
+      #     5,000-row purge batches, the partition DDL).
+      #   lock_timeout=5s         a statement queued behind a lock gives up
+      #     instead of queueing every later writer behind itself; interactive
+      #     transactions already end at Prisma's 5 s.
+      #   idle_in_transaction_session_timeout=60s   a transaction left open
+      #     by a dead client stops pinning locks and the xmin horizon.
+      # Migrations and seeds use MIGRATION_DATABASE_URL below (see
+      # infra/scripts/docker-entrypoint.sh): a CREATE INDEX cancelled halfway
+      # is a failed migration.
+      # Connection budget: each replica opens connection_limit (10) for the
+      # app PLUS 1 for /health/readiness, which probes on a connection of its
+      # own so a full pool cannot take the replica out of rotation
+      # (src/shared/health/readiness-probe.ts). Keep
+      # replicas × 11 + migrations (2) + tooling below Postgres'
+      # max_connections. /health/metrics `runtime.prisma_pool` shows the pool
+      # of the replica that answered.
+      # A peer that goes silent (node lost, partition, the Swarm VIP forgetting
+      # an idle flow) sends no FIN or RST; without these a request on that
+      # connection waited for the kernel (~15 min) and the pool behind it
+      # answered P2024 with the database up (GAP6-4):
+      #   max_idle_connection_lifetime=300   a connection idle for 5 min is
+      #     replaced on its next checkout, never reused: IPVS forgets an idle
+      #     flow at 900 s, and writing into a forgotten flow hangs.
+      #   socket_timeout=60   a query with no answer fails (P1008 → 503) after
+      #     60 s, above statement_timeout so a live server always answers
+      #     first. Prisma 6.1 applies it to EXECUTING a statement, not to
+      #     preparing one the connection has not seen yet; that case still
+      #     waits for the kernel (net.ipv4.tcp_retries2, see
+      #     docs/arquitetura.md (Conexão com o Postgres)).
+      #   connect_timeout=5   explicit (Prisma's default).
+      # tests/E2E/runtime-database-dead-peer.test.ts proves each against a
+      # peer that goes silent.
+      DATABASE_URL: postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}?schema=public&connection_limit=10&pool_timeout=20&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
+      # Same database, no runtime ceilings, a small pool: used only by the
+      # schema steps (migrate deploy and the seeds), at boot or in the release
+      # job.
+      MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DATABASE}?schema=public&connection_limit=2&connect_timeout=10
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Defina REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}
+      # Prefix of the Socket.IO adapter's channels. Empty = `socket.io`. Set a
+      # different one ONLY on a stack that shares this Redis with another
+      # (e.g. `socket.io-staging` on staging): Pub/Sub ignores the database
+      # number, so the prefix is what keeps their realtime apart. Changing it
+      # on a running stack splits old and new replicas until the rollout ends.
+      SOCKET_ADAPTER_KEY: ${SOCKET_ADAPTER_KEY:-}
       HTTP_REQUEST: ${HTTP_REQUEST}
       API_HTTP_REQUEST: ${API_HTTP_REQUEST}
       CLOUDINARY_LOGO_IMAGE: ${CLOUDINARY_LOGO_IMAGE}
@@ -91,19 +310,145 @@ services:
       META_WHATSAPP_PHONE_NUMBER_ID: ${META_WHATSAPP_PHONE_NUMBER_ID}
       META_WHATSAPP_TEMPLATE_NAME: ${META_WHATSAPP_TEMPLATE_NAME}
       META_WHATSAPP_API_VERSION: ${META_WHATSAPP_API_VERSION}
+      # Approved template for a carrier's message to its customer. Empty:
+      # those messages keep using META_WHATSAPP_TEMPLATE_NAME.
+      META_WHATSAPP_CUSTOMER_TEMPLATE_NAME: ${META_WHATSAPP_CUSTOMER_TEMPLATE_NAME:-}
+      # The WABA that owns the templates: only /health/providers reads it, to
+      # say whether each template is APPROVED. Empty: that check says unknown.
+      META_WHATSAPP_BUSINESS_ACCOUNT_ID: ${META_WHATSAPP_BUSINESS_ACCOUNT_ID:-}
+      # Meta's status callbacks (POST /webhooks/whatsapp). Empty: the receiver
+      # answers 404 and nothing is reconciled; sends keep working.
+      META_WHATSAPP_APP_SECRET: ${META_WHATSAPP_APP_SECRET:-}
+      META_WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${META_WHATSAPP_WEBHOOK_VERIFY_TOKEN:-}
       JWT_SECRET: ${JWT_SECRET}
       JWT_SECRET_REFRESH_TOKEN: ${JWT_SECRET_REFRESH_TOKEN}
       RESEND_SECRET_KEY: ${RESEND_SECRET_KEY}
       RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL}
+      # Resend's webhook signing secret (POST /webhooks/resend: delivered,
+      # bounced, complained). Empty: the receiver answers 404.
+      RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
+      # AI readings (receipt number/date, odometer) by the trajetto-ai service
+      # below, on the internal network (ADR 0010, decision 14.1). No external
+      # provider: ANTHROPIC_API_KEY is gone. `none` switches the readings off
+      # (records marked "não analisado"); `local` without the token behaves
+      # the same. Still gated per company by ai_analysis_limit. The token is
+      # the service's AI_TOKEN — the same value, set once on the stack.
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      AI_LOCAL_URL: http://trajetto-ai:8080
+      AI_LOCAL_TOKEN: ${AI_LOCAL_TOKEN:-}
+      # One call's budget (15 s; it must fit the 300 s lease or the boot
+      # stops) and reads in flight per replica (the service reads one at a
+      # time with a queue of AI_MAX_QUEUE). No depends_on: Swarm ignores it,
+      # and the provider_down circuit covers the service being away.
+      AI_LOCAL_TIMEOUT_MS: ${AI_LOCAL_TIMEOUT_MS:-}
+      AI_LOCAL_MAX_CONCURRENCY: ${AI_LOCAL_MAX_CONCURRENCY:-}
+      # Turnstile on the public quote form, verified by the API itself (same
+      # secret as the web). REQUIRED refuses a request with no token: switch
+      # it on only after the web that forwards the token is live.
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      TURNSTILE_REQUIRED: ${TURNSTILE_REQUIRED:-false}
       UPLOAD_STORAGE_TYPE: ${UPLOAD_STORAGE_TYPE}
       UPLOAD_LOCAL_PATH: ${UPLOAD_LOCAL_PATH}
       R2_ACCOUNT_ID: ${R2_ACCOUNT_ID}
       R2_BUCKET_NAME: ${R2_BUCKET_NAME}
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
       R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      # Nightly orphan collector: dry-run only counts. Switch to `delete`
+      # after reviewing a few summaries (ADR 0006: in doubt, keep).
+      UPLOAD_ORPHAN_GC: ${UPLOAD_ORPHAN_GC:-dry-run}
+      # Cloudflare -> Traefik -> API. Traefik appends the peer it saw to
+      # X-Forwarded-For; behind Cloudflare that peer is an edge shared by
+      # thousands of users, so `xff` put them all in one login bucket.
+      # `cloudflare` reads CF-Connecting-IP only when that peer IS a Cloudflare
+      # edge and otherwise keys by the peer, exactly as `xff` — safe with the
+      # origin reachable directly and in every topology `xff` was right for.
+      # The API refuses to boot in production if this is missing.
+      RATE_LIMIT_TRUSTED_PROXY: ${RATE_LIMIT_TRUSTED_PROXY:-cloudflare}
+      # Optional: the value a Transform Rule on our Cloudflare zones puts in
+      # `x-trajetto-edge-secret`, so a Worker on somebody else's account (same
+      # IP ranges) cannot vouch for a client address. Empty = ranges only.
+      RATE_LIMIT_EDGE_SECRET: ${RATE_LIMIT_EDGE_SECRET:-}
+      # Shared with the web server, which forwards the browser's address on the
+      # calls it makes on the user's behalf (login, refresh, 2FA, tracking).
+      RATE_LIMIT_FORWARDER_SECRET: ${RATE_LIMIT_FORWARDER_SECRET}
+      # `true` once the web and an app build that send the two-factor
+      # challenge are out: until then a code with only the e-mail still logs
+      # in (old app builds cannot send it). Watch the API logs for
+      # `auth.two_factor_without_challenge` going quiet before switching.
+      TWO_FACTOR_CHALLENGE_REQUIRED: ${TWO_FACTOR_CHALLENGE_REQUIRED:-false}
+      # Empty = off. The lowest app `contract` still served (426 below it,
+      # sign-in/refresh/logout exempt); only builds that send
+      # x-trajetto-client-version are ever refused. Raise it only after the
+      # logs show the builds below it have gone quiet.
+      MIN_MOBILE_CONTRACT: ${MIN_MOBILE_CONTRACT:-}
+      # Optional, https only: the store page named in that 426 (`storeUrl`),
+      # opened by the app when no over-the-air update fits its runtime.
+      # Empty = left out; the app falls back to its own Play Store page.
+      MOBILE_STORE_URL: ${MOBILE_STORE_URL:-}
+      # Seals customers' webhook secrets and gateway headers at rest
+      # (base64 of 32 bytes, `openssl rand -base64 32`). Empty = stored in
+      # clear, as before, with a boot warning. Keep a copy OUTSIDE the
+      # database backups: without it the sealed values cannot be read.
+      WEBHOOK_SECRETS_KEY: ${WEBHOOK_SECRETS_KEY:-}
+      # Optional levers the API reads. Empty = unset: the env loader treats ""
+      # as absent, so each keeps its default. Before they were forwarded here,
+      # setting them on the stack did nothing.
+      # - DOCS_USER / DOCS_PASSWORD: /docs behind HTTP Basic (empty: 404). The
+      #   web promote's route gate reads /docs/json with them (API_DOCS_URL).
+      # - PROOF_VERIFICATION_TTL_DAYS: how long a printed proof QR stays valid
+      #   (default 1825 days; ADR 0009).
+      # - ACTIVITY_RETENTION_DAYS: purge the audit trail older than this
+      #   (unset: never; under 365 is refused).
+      DOCS_USER: ${DOCS_USER:-}
+      DOCS_PASSWORD: ${DOCS_PASSWORD:-}
+      PROOF_VERIFICATION_TTL_DAYS: ${PROOF_VERIFICATION_TTL_DAYS:-}
+      ACTIVITY_RETENTION_DAYS: ${ACTIVITY_RETENTION_DAYS:-}
+      # Proof document (decision 14.8): the ICP-Brasil A1 certificate, the
+      # issuer printed when unsigned, the static map tiles and the reverse
+      # geocoder. Empty = unset: no certificate means every receipt is stored
+      # UNSIGNED with the reason; no map/geocoder means the PDF prints the
+      # registered address. The PFX goes either as base64 or as a file path
+      # (e.g. a Swarm secret mounted at /run/secrets/proof_signing.pfx).
+      # tests/unitaires/lifecycle/compose-proof-env.test.ts keeps this list
+      # in sync with the env schema.
+      PROOF_SIGNING_PFX_BASE64: ${PROOF_SIGNING_PFX_BASE64:-}
+      PROOF_SIGNING_PFX_PATH: ${PROOF_SIGNING_PFX_PATH:-}
+      PROOF_SIGNING_PFX_PASSWORD: ${PROOF_SIGNING_PFX_PASSWORD:-}
+      PROOF_SIGNATURE_PROFILE: ${PROOF_SIGNATURE_PROFILE:-}
+      PROOF_SIGNING_DISABLED: ${PROOF_SIGNING_DISABLED:-}
+      PROOF_SIGNER_LOCATION: ${PROOF_SIGNER_LOCATION:-}
+      PROOF_SIGNER_CONTACT: ${PROOF_SIGNER_CONTACT:-}
+      PROOF_SIGNER_BRAND: ${PROOF_SIGNER_BRAND:-}
+      PROOF_ISSUER_LEGAL_NAME: ${PROOF_ISSUER_LEGAL_NAME:-}
+      PROOF_ISSUER_CNPJ: ${PROOF_ISSUER_CNPJ:-}
+      PROOF_MAP_TILE_URL: ${PROOF_MAP_TILE_URL:-}
+      PROOF_MAP_TILE_ATTRIBUTION: ${PROOF_MAP_TILE_ATTRIBUTION:-}
+      PROOF_MAP_TIMEOUT_MS: ${PROOF_MAP_TIMEOUT_MS:-}
+      REVERSE_GEOCODER_URL: ${REVERSE_GEOCODER_URL:-}
+      REVERSE_GEOCODER_KEY: ${REVERSE_GEOCODER_KEY:-}
+      REVERSE_GEOCODER_KEY_PARAM: ${REVERSE_GEOCODER_KEY_PARAM:-}
+      REVERSE_GEOCODER_USER_AGENT: ${REVERSE_GEOCODER_USER_AGENT:-}
+      REVERSE_GEOCODER_TIMEOUT_MS: ${REVERSE_GEOCODER_TIMEOUT_MS:-}
+      # `true`: this service also runs the pipelines, the webhook dispatcher
+      # and the cron. Set `false` ONLY together with a worker service of this
+      # same image left at `true` and a PIPELINE_SWEEP_INTERVAL_MS of 1-2 s
+      # there — nothing else drains the queues. Redo the connection budget
+      # (api replicas × 11 + worker × its limit + migrations + tooling below
+      # max_connections) first. docs/deploy.md (Réplicas, workers e tempo real).
+      WORKERS_ENABLED: ${WORKERS_ENABLED:-true}
+      PIPELINE_SWEEP_INTERVAL_MS: ${PIPELINE_SWEEP_INTERVAL_MS:-30000}
     deploy:
       mode: replicated
       replicas: 2 # Horizontal scale — events propagate across replicas via Redis adapter
+      # One host runs the API, Postgres, Redis and the web: without a ceiling
+      # a replica that grows without bound (parallel 13 MB spreadsheet
+      # imports) takes the RAM Postgres lives on, and the kernel's OOM victim
+      # is anyone's guess. No reservation (on a small host it can leave a task
+      # unschedulable) and no CPU limit (CFS throttling hurts p99; shares
+      # already split one host). Size with `docker stats` after the deploy.
+      resources:
+        limits:
+          memory: ${API_MEMORY_LIMIT:-1024M}
       update_config:
         parallelism: 1
         delay: 5s
@@ -115,36 +460,47 @@ services:
         delay: 5s
         order: start-first
         monitor: 30s
+      # No attempt limit — see trajetto-database above. The replicas no longer
+      # die with their dependencies (liveness touches none, and the boot
+      # waits for Postgres), so a limit only ever turned a crash loop into a
+      # permanent 0/2.
       restart_policy:
         condition: any
         delay: 5s
-        max_attempts: 3
-        window: 120s # See trajetto-database above.
+      # Everything that differs between production and staging behind ONE
+      # Traefik comes from the stack's env: two stacks with the same router
+      # name make Traefik drop the router ("defined multiple times"), and two
+      # with the same Host() steal each other's traffic. docs/deploy.md.
       labels:
         - traefik.enable=true
-        - traefik.http.routers.api.rule=Host(`trajettoapi.thorsolucoes.com.br`)
-        - traefik.http.routers.api.entrypoints=websecure
-        - traefik.http.routers.api.tls.certresolver=letsencryptresolver
-        - traefik.http.routers.api.priority=1
-        - traefik.http.routers.api.service=api
-        - traefik.http.services.api.loadbalancer.server.port=3333
-        - traefik.http.services.api.loadbalancer.passHostHeader=true
-        # Sticky sessions — pin each client to one replica so the Socket.IO
-        # polling handshake stays consistent. The Redis adapter handles
-        # cross-replica event propagation; sticky keeps the connection stable.
-        - traefik.http.services.api.loadbalancer.sticky.cookie=true
-        - traefik.http.services.api.loadbalancer.sticky.cookie.name=trajetto_api_affinity
-        - traefik.http.services.api.loadbalancer.sticky.cookie.httponly=true
-        - traefik.http.services.api.loadbalancer.sticky.cookie.secure=true
+        # The `:?` checks sit in label VALUES: `docker stack deploy` splits
+        # `key=value` before interpolating, and mangles a message in a key.
+        - traefik.http.routers.${ROUTER_PREFIX}-api.rule=Host(`${API_HOST:?Defina API_HOST (ex. trajettoapi.thorsolucoes.com.br)}`)
+        - traefik.http.routers.${ROUTER_PREFIX}-api.service=${ROUTER_PREFIX:?Defina ROUTER_PREFIX (único por stack, ex. trajetto)}-api
+        - traefik.http.routers.${ROUTER_PREFIX}-api.entrypoints=websecure
+        - traefik.http.routers.${ROUTER_PREFIX}-api.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
+        - traefik.http.routers.${ROUTER_PREFIX}-api.priority=1
+        - traefik.http.services.${ROUTER_PREFIX}-api.loadbalancer.server.port=3333
+        - traefik.http.services.${ROUTER_PREFIX}-api.loadbalancer.passHostHeader=true
+        # No sticky cookie: the socket is WebSocket-only in the API, the web
+        # and the app, a WebSocket stays on its replica by nature, and the
+        # Redis adapter carries events between replicas (ADR 0007).
+        #
         # Readiness lives HERE, where being unready costs traffic instead of
         # costing the container. A replica whose database is unreachable stops
         # receiving requests and rejoins by itself once it answers 200 again.
-        - traefik.http.services.api.loadbalancer.healthcheck.path=/health/readiness
-        - traefik.http.services.api.loadbalancer.healthcheck.interval=10s
-        - traefik.http.services.api.loadbalancer.healthcheck.timeout=5s
-        - traefik.docker.network=minha_rede
+        - traefik.http.services.${ROUTER_PREFIX}-api.loadbalancer.healthcheck.path=/health/readiness
+        - traefik.http.services.${ROUTER_PREFIX}-api.loadbalancer.healthcheck.interval=10s
+        - traefik.http.services.${ROUTER_PREFIX}-api.loadbalancer.healthcheck.timeout=5s
+        # The network Traefik reaches the replicas on. Traefik v3 reads the
+        # swarm key for stack services; the docker key covers a v2 Traefik.
+        - traefik.swarm.network=${TRAEFIK_NETWORK:-dokploy-network}
+        - traefik.docker.network=${TRAEFIK_NETWORK:-dokploy-network}
+    # backend: Postgres, Redis and trajetto-ai. edge: Traefik (see
+    # traefik.*.network) and egress to Meta, Resend and R2.
     networks:
-      - minha_rede
+      - backend
+      - edge
     depends_on:
       - trajetto-database
       - trajetto-redis
@@ -166,14 +522,14 @@ services:
     # Traefik against /health/readiness (see the labels above): a replica with
     # no database leaves the load balancer and comes back on its own, which is
     # what readiness is for.
+    #
+    # busybox wget, not `node -e`: a Node process per probe cost ~54 ms of CPU
+    # and ~52 MB of RSS every 30 s inside this container's memory limit; wget
+    # costs ~1 ms and ~1 MB, and exits 1 on a 5xx or a refused connection.
+    # 127.0.0.1, not localhost: busybox tries the first address only, and the
+    # server listens on IPv4.
     healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "require('http').get('http://localhost:3333/health/liveness', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))",
-        ]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3333/health/liveness"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -181,12 +537,165 @@ services:
       # grace period the readiness probe needed is no longer justified.
       start_period: 30s
 
+  # The nightly, encrypted, OFF-HOST backup (infra/backup). Before it the
+  # only backup was a manual script writing to this same host, while up to
+  # seven jobs delete data every night, 03:17 to 04:50 UTC (the last one only
+  # with UPLOAD_ORPHAN_GC=delete) — a dead disk or a wrong purge predicate had
+  # no way back.
+  #
+  # pg_dump over the network, never through the Docker socket (whoever
+  # compromised a container holding it would be root on the host). Encrypted
+  # with age before upload: only the PUBLIC recipient is here. The bucket is
+  # a SEPARATE one, with its own token; retention and immutability are its
+  # lifecycle rules and Bucket Lock. The heartbeat alerts on /fail and on
+  # silence. Setup and restore: docs/deploy.md (Backup e restauração).
+  #
+  # The backup variables are required on purpose, like REDIS_PASSWORD: a
+  # production deploy without somewhere to send the backup fails here instead
+  # of coming up with no backup at all.
+  trajetto-backup:
+    image: ghcr.io/trajetto-organization/trajetto-backup:${BACKUP_IMAGE_TAG:-stable}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      PGHOST: ${POSTGRES_HOST:-trajetto-database}
+      PGPORT: ${POSTGRES_PORT:-5432}
+      PGUSER: ${POSTGRES_USERNAME}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DATABASE}
+      # UTC, and before 03:17 UTC — the first nightly job that deletes data —
+      # so a wrong purge is recoverable from the same night's dump. Quoted:
+      # YAML 1.1 reads a bare 02:30 as the number 150.
+      BACKUP_AT_UTC: "${BACKUP_AT_UTC:-02:30}"
+      BACKUP_R2_ACCOUNT_ID: ${BACKUP_R2_ACCOUNT_ID:?Defina BACKUP_R2_ACCOUNT_ID (ver o runbook de restore)}
+      BACKUP_R2_BUCKET: ${BACKUP_R2_BUCKET:?Defina BACKUP_R2_BUCKET, um bucket SÓ de backup}
+      BACKUP_R2_ACCESS_KEY_ID: ${BACKUP_R2_ACCESS_KEY_ID:?Defina BACKUP_R2_ACCESS_KEY_ID (token só do bucket de backup)}
+      BACKUP_R2_SECRET_ACCESS_KEY: ${BACKUP_R2_SECRET_ACCESS_KEY:?Defina BACKUP_R2_SECRET_ACCESS_KEY}
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:?Defina BACKUP_AGE_RECIPIENT (chave PÚBLICA do age)}
+      BACKUP_HEARTBEAT_URL: ${BACKUP_HEARTBEAT_URL:?Defina BACKUP_HEARTBEAT_URL (healthchecks.io ou Better Stack)}
+      # `true` leaves the trail's rows (driver_position) out of the dump.
+      BACKUP_EXCLUDE_TRAIL: ${BACKUP_EXCLUDE_TRAIL:-false}
+    deploy:
+      mode: replicated
+      replicas: 1
+      # pg_dump streams to a file; age and rclone stream too.
+      resources:
+        limits:
+          memory: 256M
+      restart_policy:
+        condition: any
+        delay: 30s
+    # backend: the database. edge: egress to R2 and the heartbeat — backend
+    # is internal and has no route out.
+    networks:
+      - backend
+      - edge
+
+  # The OCR service of the AI readings (infra/ai-ocr, ADR 0010 §3.1): it only
+  # transcribes photos the API sends it; the API decides what they say.
+  # Internal network ONLY: no Traefik, no published port, no route out — it
+  # decodes images that come from outside, so it gets nothing it does not
+  # need: read-only filesystem, no capabilities, never root (USER 10001 in
+  # the image). Models are baked in the image and verified by SHA-256: the
+  # boot needs no network.
+  #
+  # Staging on the production host can skip it: AI_PROVIDER=none on the api
+  # and AI_REPLICAS=0 here (AI_LOCAL_TOKEN still needs a value to render).
+  trajetto-ai:
+    image: ghcr.io/trajetto-organization/trajetto-ai:${AI_IMAGE_TAG:-stable}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      # Required, like REDIS_PASSWORD: an OCR endpoint without a token would
+      # read anyone's photos for anyone on the network. 32+ random bytes
+      # (openssl rand, hex); the api gets the same value.
+      AI_TOKEN: ${AI_LOCAL_TOKEN:?Defina AI_LOCAL_TOKEN (openssl rand, 32 bytes em hex; o mesmo valor vai para a API)}
+      # The ONNX threads take every CPU the container gets: equal to the limit.
+      OCR_THREADS: ${AI_CPUS:-2}
+      # Reads waiting behind the one running; above it (or after 10 s of
+      # waiting) the service answers 503 and the API re-queues as "busy".
+      AI_MAX_QUEUE: ${AI_MAX_QUEUE:-2}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    # Effective under plain `docker compose` only: `docker stack deploy`
+    # (Swarm/Dokploy) ignores security_opt. In production the controls are
+    # USER 10001 in the image, cap_drop and read_only above.
+    security_opt:
+      - no-new-privileges:true
+    # 200 only after both profiles loaded and read the warm-up image. Python,
+    # because the slim image has no wget; its cost per probe is to be
+    # measured with `docker stats` on the first deploy.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      mode: replicated
+      replicas: ${AI_REPLICAS:-1}
+      # Measured peak 0.60–0.63 GiB, stable (results-2026-10.md). A CPU
+      # limit HERE, unlike the api: OCR saturates every core it gets and
+      # must not take Postgres' CPU. Latency at 2 vCPU: measure on the VPS.
+      resources:
+        limits:
+          memory: ${AI_MEMORY_LIMIT:-1024M}
+          cpus: "${AI_CPUS:-2}"
+      # Two copies of ~0.6 GiB live together for seconds during an update.
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+        monitor: 30s
+      # No attempt limit — see trajetto-database above. Stateless: a restart
+      # loses nothing, the API's queue (Postgres) keeps the work.
+      restart_policy:
+        condition: any
+        delay: 5s
+    # backend only: internal, no route out, not reachable by Traefik.
+    networks:
+      - backend
+
 volumes:
+  # An explicit name, never the stack's: Swarm prefixes an unnamed volume with
+  # the stack name, so the same file deployed under Dokploy's app name (or any
+  # other stack name) mounted a NEW, empty volume and initdb'd a fresh
+  # database. Required: production names the volume it already has
+  # (`trajetto_postgres_data`, from the Portainer stack `trajetto`), staging a
+  # different one — two stacks on one volume would run two postmasters on one
+  # PGDATA. docs/deploy.md.
   postgres_data:
+    name: "${POSTGRES_VOLUME:?Defina POSTGRES_VOLUME (produção trajetto_postgres_data, staging outro nome)}"
     driver: local
-  redis_data:
-    driver: local
+  # (`redis_data` is gone: Redis persists nothing. The old volume stays on the
+  # node, orphaned, until someone runs `docker volume rm <stack>_redis_data`.)
 
 networks:
-  minha_rede:
+  # The overlay Traefik lives on — Dokploy's `dokploy-network` by default.
+  # External: Dokploy creates it; this stack only joins it.
+  edge:
     external: true
+    name: ${TRAEFIK_NETWORK:-dokploy-network}
+  # This stack's own network for Postgres and Redis. `internal`: no route
+  # out, and nothing outside the stack attaches to it. `edge` is shared with
+  # Traefik, the web and whatever else runs on the host; on it, any
+  # compromised neighbour could reach the database port and publish into the
+  # Socket.IO adapter's channels.
+  backend:
+    driver: overlay
+    internal: true

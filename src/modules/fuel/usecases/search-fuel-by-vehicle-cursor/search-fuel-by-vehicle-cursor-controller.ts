@@ -3,11 +3,7 @@ import { container } from "tsyringe";
 
 import { SearchFuelByVehicleCursorUseCase } from "./search-fuel-by-vehicle-cursor-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
-
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
+import { replyFuelVehicleReadError } from "../errors/fuel-http-errors";
 
 import { cursorPaginationSchema } from "@/schemas/cursor-pagination-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
@@ -19,7 +15,9 @@ class SearchFuelByVehicleCursorController {
       const { id } = request.user;
 
       const { vehicleId } = updateDeleteVehicleSchema.parse(request.params);
-      const { limit, cursor } = cursorPaginationSchema.parse(request.query);
+      const { limit, cursor, search } = cursorPaginationSchema.parse(
+        request.query,
+      );
 
       const searchFuelByVehicleCursorUseCase = container.resolve(
         SearchFuelByVehicleCursorUseCase,
@@ -30,6 +28,7 @@ class SearchFuelByVehicleCursorController {
         vehicleId,
         limit,
         cursor,
+        search,
       });
 
       /**
@@ -55,21 +54,11 @@ class SearchFuelByVehicleCursorController {
         })),
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotBelongBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
+      // Missing or another company's vehicle: 404 VEHICLE_NOT_FOUND, alike.
+      // A driver on a vehicle they may not operate: 403
+      // VEHICLE_NOT_ASSIGNED_TO_DRIVER — it used to fall through as a plain
+      // Error and answer 500.
+      if (replyFuelVehicleReadError(reply, error)) return;
 
       throw error;
     }

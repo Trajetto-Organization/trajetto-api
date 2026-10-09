@@ -12,8 +12,20 @@ class ListRoutesController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { businessId, page, pageSize, status, driverId, scheduled_date, search } =
-      request.query as z.infer<typeof listRoutesSchema>;
+    // Already validated AND transformed by the route's schema: the facets
+    // arrive as arrays, the day as a Date.
+    const {
+      businessId,
+      page,
+      pageSize,
+      sort,
+      order,
+      status,
+      driverId,
+      vehicleId,
+      scheduled_date,
+      search,
+    } = request.query as z.infer<typeof listRoutesSchema>;
 
     const listRoutesUseCase = container.resolve(ListRoutesUseCase);
 
@@ -34,8 +46,11 @@ class ListRoutesController {
       businessId,
       page,
       pageSize,
-      status,
-      driverId,
+      sort,
+      order,
+      statuses: status,
+      driverIds: driverId,
+      vehicleIds: vehicleId,
       scheduled_date,
       search: decodedSearch,
     });

@@ -54,7 +54,11 @@ const importReport = z.object({
 const importEntity = z.object({
   id: z.string(),
   source: z.enum(["SPREADSHEET", "NFE_XML"]),
-  status: z.enum(["COMPLETED", "REVERSED"]),
+
+  // IN_PROGRESS is real: the record is written before the first row, so an
+  // upload still running is listed and can be opened. Left out, the detail
+  // route's serializer turned that upload into a 500.
+  status: z.enum(["IN_PROGRESS", "COMPLETED", "REVERSED"]),
 
   filename: z.string(),
 
@@ -111,23 +115,29 @@ const importResponses = {
     }),
   }),
 
-  /**
-   * NOT a JSON object: this endpoint streams `application/x-ndjson` like every
-   * other offset listing in the API — an envelope line, then one upload per
-   * line. Calling `response.json()` on it throws.
-   */
-  importListEnvelope: z.object({
-    meta: z.object({
-      total: z.number(),
-      page: z.number(),
-      pageSize: z.number(),
-    }),
+  /** One line of the stream, after the envelope. */
+  importListRow: importEntity.extend({
+    report: importReport
+      .optional()
+      .describe(
+        "Ausente quando a listagem é pedida com includeReport=false; o relatório de uma importação vem de GET /import/get-import/:importId/business/:businessId.",
+      ),
   }),
 
-  /** One line of the stream, after the envelope. */
-  importListRow: importEntity,
+  /** One upload with its per-row report, when the operator opens it. */
+  importDetail: z.object({ data: importEntity }),
 
-  genericError: z.object({ message: z.string() }),
+  // Not found (caller or company): 404 with a code (decision 11.3).
+  lookupNotFound: z
+    .object({ code: z.string().describe("USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."), message: z.string() })
+    .describe("USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."),
+  spreadsheetNotFound: z
+    .object({ code: z.string().describe("SHIPPER_NOT_FOUND (o embarcador informado não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."), message: z.string() })
+    .describe("SHIPPER_NOT_FOUND (o embarcador informado não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."),
+  importNotFound: z
+    .object({ code: z.string().describe("IMPORT_NOT_FOUND (a importação não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."), message: z.string() })
+    .describe("IMPORT_NOT_FOUND (a importação não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."),
+  codedError: z.object({ code: z.string(), message: z.string() }),
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
   }),

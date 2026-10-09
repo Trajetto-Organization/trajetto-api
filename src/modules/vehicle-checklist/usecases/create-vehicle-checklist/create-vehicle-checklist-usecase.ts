@@ -38,6 +38,21 @@ import { UploadService } from "@/shared/services/upload-service";
 
 import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
 import { uploadConfig } from "@/config/upload";
+import {
+  checklistPhotoKeys,
+  isFinalRejection,
+  unreferencedKeys,
+} from "@/shared/services/presigned-ownership";
+import { logger } from "@/shared/logging/logger";
+import {
+  assertChecklistNotInTheFuture,
+  withChecklistDate,
+} from "../checklist-rules";
+import { timeZoneOfBusiness } from "@/shared/time/business-time-zone";
+import { aiProviderConfigured } from "@/shared/ai/ai-provider";
+import { acceptDevicePrecheck } from "@/shared/ai-precheck/device-precheck";
+
+const log = logger.child({ component: "vehicle-checklist" });
 
 @injectable()
 class CreateVehicleChecklistUseCase {
@@ -60,14 +75,58 @@ class CreateVehicleChecklistUseCase {
     private uploadService: UploadService,
   ) {}
 
+  /**
+   * The checklist an earlier attempt already recorded under this key, if any.
+   *
+   * Called by `execute` and, before any body validation, by the controller:
+   * an outbox resend of a record that exists is answered with it even when
+   * the frozen body would no longer pass today's schema (see
+   * `submissionKeyOf`). The tenant was checked by the route's guards before
+   * either caller gets here, and the key is unique per business.
+   */
+  async findReplay(
+    businessId: string,
+    submissionId: string,
+    callerDriverId: string | null | undefined,
+  ): Promise<VehicleChecklist | null> {
+    const existingChecklist = await this.vehicleChecklist.findBySubmissionId(
+      businessId,
+      submissionId,
+    );
+
+    if (!existingChecklist) return null;
+
+    /**
+     * A replay has to belong to the driver replaying it.
+     *
+     * The key is unique per `(businessId, client_submission_id)`, so the
+     * tenant is already safe — but inside one carrier this returned whatever
+     * record carried the key, and the driver-ownership check that would have
+     * caught it runs further down `execute`, after the early return. A guessed
+     * identifier therefore read back another driver's submission.
+     */
+    if (
+      !submissionBelongsToCaller(callerDriverId, existingChecklist.driverId)
+    ) {
+      throw new SubmissionOwnerMismatchError();
+    }
+
+    return existingChecklist;
+  }
+
   async execute(
-    checklistData: CreateVehicleChecklistProps,
+    input: CreateVehicleChecklistProps,
     userId: string,
 
     // Photos the client already uploaded straight to storage. Only their keys
     // reach this API — the bytes went from the device to the bucket.
     presignedPhotos?: { key: string; fieldName?: string }[],
   ): Promise<VehicleChecklist> {
+    // The phone's check of the odometer photo (decision 14.2) is not a field
+    // of the row as sent — nor of the AI request's input, which is hashed
+    // for idempotency: it lands in its own column, if at all.
+    const { device_precheck: devicePrecheck, ...checklistData } = input;
+
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -94,33 +153,19 @@ class CreateVehicleChecklistUseCase {
       );
     }
 
+    // The company's day, not the server's (decision 1.2). Safe before the
+    // replay lookup: a date accepted once can only be further in the past
+    // when the same submission is retried.
+    assertChecklistNotInTheFuture(checklistData.checklist_date, findBusiness);
+
     if (checklistData.client_submission_id) {
-      const existingChecklist = await this.vehicleChecklist.findBySubmissionId(
+      const existingChecklist = await this.findReplay(
         checklistData.businessId,
         checklistData.client_submission_id,
+        findUser.driverId,
       );
 
-      if (existingChecklist) {
-      /**
-       * A replay has to belong to the driver replaying it.
-       *
-       * The key is unique per `(businessId, client_submission_id)`, so the
-       * tenant is already safe — but inside one carrier this returned
-       * whatever record carried the key, and the driver-ownership check that
-       * would have caught it runs further down, after this early return. A
-       * guessed identifier therefore read back another driver's submission.
-       */
-        if (
-          !submissionBelongsToCaller(
-            findUser.driverId,
-            existingChecklist.driverId,
-          )
-        ) {
-          throw new SubmissionOwnerMismatchError();
-        }
-
-        return existingChecklist;
-      }
+      if (existingChecklist) return existingChecklist;
     }
 
     // Validate vehicle exists and belongs to business
@@ -136,9 +181,17 @@ class CreateVehicleChecklistUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
-    // Security: If user is a driver, verify vehicle belongs to them
+    // A driver inspects only a vehicle they may operate: the responsible
+    // one, or the one of their released or running route (FLEET-ASSIGN-1,
+    // decision 8.2; the rule lives in shared/vehicle/driver-vehicle-access).
     if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
-      if (findVehicle.driverId !== findUser.driverId) {
+      const allowed = await this.vehicle.canDriverOperateVehicle({
+        vehicleId: findVehicle.id,
+        driverId: findUser.driverId,
+        businessId: checklistData.businessId,
+      });
+
+      if (!allowed) {
         throw new VehicleNotAssignedToDriverError();
       }
     }
@@ -156,10 +209,10 @@ class CreateVehicleChecklistUseCase {
       }
     }
 
-    // Validate mileage (cannot be less than current vehicle mileage)
-    if (checklistData.current_mileage <= findVehicle.current_mileage) {
-      throw new VehicleMileageInvalidError();
-    }
+    // The mileage is decided inside the repository's transaction, not here:
+    // ahead of the vehicle's odometer as before, OR — for a checklist that
+    // arrives after later records, like one the app queued offline — between
+    // the readings around its own date (shared/vehicle/odometer-timeline).
 
     // Validate driver exists and belongs to business (if driverId is provided)
     if (checklistData.driverId) {
@@ -177,7 +230,7 @@ class CreateVehicleChecklistUseCase {
 
       if (findDriver.status !== "ACTIVE") {
         throw new AppError(
-          "O motorista selecionado esta inativo.",
+          "O motorista selecionado está inativo.",
           422,
           "DRIVER_INACTIVE",
         );
@@ -229,6 +282,10 @@ class CreateVehicleChecklistUseCase {
     const attachedPhotoPaths: string[] = [];
     let databaseCommitted = false;
 
+    // Set once the replay branch has decided which of them to keep, so the
+    // catch below does not decide again.
+    let photosSettled = false;
+
     try {
       const photoPaths: string[] = [];
       const photoPathsByField: Record<string, string[]> = {};
@@ -255,15 +312,26 @@ class CreateVehicleChecklistUseCase {
         }
       }
 
+      // Kept once (a replay never gets here), only with the odometer photo
+      // it is about and only for a company that bought the reading.
+      const mileagePrecheck = photoPathsByField.current_mileage?.length
+        ? acceptDevicePrecheck(devicePrecheck, {
+            kind: "odometer",
+            aiAnalysisLimit: findBusiness.ai_analysis_limit,
+            providerConfigured: aiProviderConfigured(),
+          })
+        : null;
+
       // Add photo paths to checklist data
-      const checklistDataWithPhotos = {
+      const checklistDataWithPhotos = withChecklistDate({
         ...checklistData,
+        ...(mileagePrecheck && { mileage_device_precheck: mileagePrecheck }),
         photos: photoPaths,
         photos_by_field:
           Object.keys(photoPathsByField).length > 0
             ? photoPathsByField
             : undefined,
-      };
+      }, timeZoneOfBusiness(findBusiness));
 
       // Record creation, mileage advancement and the outbox event are
       // committed atomically; the pipeline turns the event into the activity
@@ -287,16 +355,23 @@ class CreateVehicleChecklistUseCase {
                 origin: checklistData.created_from ?? "WEB_DASHBOARD",
               },
             }),
+          // Which readings fall on a later civil day of the company.
+          { timeZone: timeZoneOfBusiness(findBusiness) },
         );
 
       if (!created) {
-        // An idempotent retry: the original checklist keeps its own photos, so
-        // the ones this attempt uploaded belong to nothing.
+        // An idempotent replay. The app resends the keys it already uploaded,
+        // so the existing checklist usually points at the very objects this
+        // attempt attached — deleting "this attempt's" uploads deleted its
+        // evidence. Only keys it does not reference belong to nothing.
         await Promise.allSettled(
-          attachedPhotoPaths.map((photoPath) =>
-            this.uploadService.deleteFile(photoPath),
-          ),
+          unreferencedKeys(
+            attachedPhotoPaths,
+            checklistPhotoKeys(checklistCreated),
+          ).map((photoPath) => this.uploadService.deleteFile(photoPath)),
         );
+
+        photosSettled = true;
 
 
         /**
@@ -343,16 +418,27 @@ class CreateVehicleChecklistUseCase {
             },
           })
           .catch((err) =>
-            console.error(
-              "[AI] Failed to request checklist verification:",
-              err,
+            log.error(
+              {
+                err,
+                checklistId: checklistCreated.id,
+                businessId: checklistData.businessId,
+              },
+              "AI checklist verification could not be requested",
             ),
           );
       }
 
       return checklistCreated;
     } catch (error) {
-      if (!databaseCommitted) {
+      // Only on a verdict the retry cannot change. A transient failure is
+      // retried by the app with these same keys; deleting them turned a 500
+      // into a permanent UPLOADED_FILE_NOT_FOUND and lost the checklist.
+      if (
+        !databaseCommitted &&
+        !photosSettled &&
+        isFinalRejection(error, [VehicleMileageInvalidError])
+      ) {
         await Promise.allSettled(
           attachedPhotoPaths.map((photoPath) =>
             this.uploadService.deleteFile(photoPath),
@@ -368,10 +454,7 @@ class CreateVehicleChecklistUseCase {
         throw error;
       }
 
-      console.error(
-        "[CreateVehicleChecklistUseCase] Failed to create checklist:",
-        error,
-      );
+      log.error({ err: error }, "vehicle checklist could not be created");
       throw new AppError(
         "Houve um erro ao tentar criar o checklist veicular! Por favor, tente novamente.",
         500,

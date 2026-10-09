@@ -14,7 +14,7 @@ class LogoutController {
 
     return reply.status(200).send({
       code: "AUTH_LOGGED_OUT",
-      message: "Sessao encerrada com sucesso.",
+      message: "Sessão encerrada com sucesso.",
     });
   }
 }

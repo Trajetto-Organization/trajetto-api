@@ -2,112 +2,57 @@ import { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
 import {
-  CountByDateRangeParams,
-  CountByDateRangeResult,
+  DashboardEntity,
   VehicleStatusCountResult,
+  MaintenanceStatsParams,
   MaintenanceStatsResult,
-  MonthlyCostsParams,
-  MonthlyCostsResult,
   VehicleTypeCountResult,
-  ModelWithCount,
   CountByMonthParams,
   MonthlyCountBucket,
   MonthlyCostBucket,
   PeriodGranularity,
   PeriodCountBucket,
   PeriodCostBucket,
+  EntityTotal,
 } from "../dtos/dashboard-dto";
 
 import { IDashboardRepository } from "./IDashboard-repository";
+import { DUE_SOON_DAYS } from "./maintenance-standing";
+import { periodBuckets } from "./period-buckets";
+
+/** A UTC timestamp column compared with an instant, whatever the session zone. */
+function utc(instant: Date): Prisma.Sql {
+  return Prisma.sql`(${instant}::timestamptz AT TIME ZONE 'UTC')`;
+}
+
+/**
+ * The civil day or month a row was created on, in the company's zone.
+ *
+ * `created_at` is `timestamp WITHOUT time zone` holding a UTC instant, so it
+ * is read as UTC first and then moved to the company's wall clock before it
+ * is truncated. A plain `date_trunc` files everything created after 21:00 in
+ * São Paulo under the next day; the process zone (the old basis) is UTC in
+ * the container and says nothing about a carrier in Manaus.
+ */
+function createdBucket(granularity: PeriodGranularity, timeZone: string): Prisma.Sql {
+  const unit = granularity === "day" ? "day" : "month";
+  const format = granularity === "day" ? "YYYY-MM-DD" : "YYYY-MM";
+
+  return Prisma.sql`to_char(
+    date_trunc(${unit}, ("created_at" AT TIME ZONE 'UTC') AT TIME ZONE ${timeZone}),
+    ${format}
+  )`;
+}
+
+/** [from, to) on `created_at`. */
+function createdWithin(from: Date, to: Date): Prisma.Sql {
+  return Prisma.sql`"created_at" >= ${utc(from)} AND "created_at" < ${utc(to)}`;
+}
 
 class DashboardRepository implements IDashboardRepository {
   constructor(private prisma = database) {}
 
-  async countByDateRange(
-    params: CountByDateRangeParams,
-    businessId?: string,
-  ): Promise<CountByDateRangeResult> {
-    // Determines which model to use based on the entity parameter
-    let model: ModelWithCount;
-    switch (params.entity) {
-      case "vehicle":
-        model = this.prisma.vehicle;
-        break;
-      case "driver":
-        model = this.prisma.driver;
-        break;
-      case "business":
-        model = this.prisma.business;
-        break;
-      case "branch":
-        model = this.prisma.branch;
-        break;
-      case "part":
-        model = this.prisma.part;
-        break;
-      case "supplier":
-        model = this.prisma.supplier;
-        break;
-      case "service-order":
-        model = this.prisma.serviceOrder;
-        break;
-      case "user":
-        model = this.prisma.user;
-        break;
-      case "fine":
-        model = this.prisma.fine;
-        break;
-      default:
-        throw new Error("Entidade inválida");
-    }
-
-    // Convert date string to local timezone Date objects
-    // params.startDate and params.endDate are in format "YYYY-MM-DD"
-    const [startYear, startMonth, startDay] = params.startDate
-      .split("-")
-      .map(Number);
-    const [endYear, endMonth, endDay] = params.endDate.split("-").map(Number);
-
-    // Create dates in local timezone (server timezone - Brazil UTC-3)
-    const startDateLocal = new Date(
-      startYear,
-      startMonth - 1,
-      startDay,
-      0,
-      0,
-      0,
-      0,
-    );
-    const endDateLocal = new Date(
-      endYear,
-      endMonth - 1,
-      endDay,
-      23,
-      59,
-      59,
-      999,
-    );
-
-    const whereClause: any = {
-      created_at: {
-        gte: startDateLocal,
-        lte: endDateLocal,
-      },
-    };
-
-    if (businessId) {
-      whereClause.businessId = businessId;
-    }
-
-    if (params.entity === "user") {
-      whereClause.role = { not: "MASTER" };
-    }
-
-    const count = await model.count({ where: whereClause });
-    return { count };
-  }
-
-/**
+  /**
    * The table and the extra predicate behind each entity name.
    *
    * A map and not a switch, because this is used to build raw SQL and a switch
@@ -116,7 +61,7 @@ class DashboardRepository implements IDashboardRepository {
    * from a request ever reaches the string.
    */
   private static readonly MONTHLY_SOURCES: Record<
-    CountByMonthParams["entity"],
+    DashboardEntity,
     { table: string; extra?: Prisma.Sql }
   > = {
     vehicle: { table: "vehicle" },
@@ -138,7 +83,57 @@ class DashboardRepository implements IDashboardRepository {
     route: { table: "route" },
   };
 
-/**
+  /** One arm of the union: an entity's rows of the window, per bucket. */
+  private static countArm(
+    entity: DashboardEntity,
+    params: { from: Date; to: Date; granularity: PeriodGranularity; timeZone: string },
+    businessId?: string,
+  ): Prisma.Sql {
+    const source = DashboardRepository.MONTHLY_SOURCES[entity];
+
+    // `business` has no businessId of its own — it IS the tenant — so
+    // scoping it by one would count zero and quietly blank the card.
+    const tenant =
+      businessId && entity !== "business"
+        ? Prisma.sql`AND "businessId" = ${businessId}`
+        : Prisma.empty;
+
+    // The buckets' boundaries come from the app (period-buckets.ts), so no
+    // row is converted to the company's zone. The table is read ONCE over the
+    // whole window and width_bucket files each row by a binary search of the
+    // boundaries. A range count per bucket (LATERAL) was tried first: fine
+    // with the tenant's (businessId, created_at) index, but a MASTER view has
+    // no tenant and no table has a created_at-only index, so every bucket
+    // became its own full scan, 30 per table for the 30-day trends.
+    const buckets = periodBuckets(params.from, params.to, params.granularity, params.timeZone);
+
+    if (buckets.length === 0) {
+      return Prisma.sql`SELECT NULL::text AS entity, NULL::text AS period, 0::bigint AS count WHERE FALSE`;
+    }
+
+    const periods = Prisma.join(buckets.map((bucket) => Prisma.sql`${bucket.period}::text`));
+
+    // Contiguous buckets: every start, then the last end. width_bucket gives
+    // 1..n for a row inside [first start, last end), the WHERE keeps only those.
+    const thresholds = Prisma.join([
+      ...buckets.map((bucket) => utc(bucket.start)),
+      utc(buckets[buckets.length - 1].end),
+    ]);
+
+    return Prisma.sql`
+      SELECT
+        ${entity}::text AS entity,
+        (ARRAY[${periods}]::text[])[width_bucket("created_at", ARRAY[${thresholds}]::timestamp[])] AS period,
+        count(*)::bigint AS count
+      FROM ${Prisma.raw(`"public"."${source.table}"`)}
+      WHERE ${createdWithin(buckets[0].start, buckets[buckets.length - 1].end)}
+        ${tenant}
+        ${source.extra ?? Prisma.empty}
+      GROUP BY 2
+    `;
+  }
+
+  /**
    * Every entity, every month, in ONE round trip.
    *
    * The first attempt at fixing the dashboard replaced 72 sequential counts
@@ -153,29 +148,47 @@ class DashboardRepository implements IDashboardRepository {
    */
   async countManyByMonth(
     params: {
-      entities: CountByMonthParams["entity"][];
+      entities: DashboardEntity[];
       from: Date;
       to: Date;
+      timeZone: string;
     },
     businessId?: string,
   ): Promise<Record<string, MonthlyCountBucket[]>> {
-    const result: Record<string, MonthlyCountBucket[]> = {};
+    const byPeriod = await this.countManyByPeriod(
+      { ...params, granularity: "month" },
+      businessId,
+    );
+
+    return Object.fromEntries(
+      Object.entries(byPeriod).map(([entity, buckets]) => [
+        entity,
+        buckets.map((bucket) => ({ month: bucket.period, count: bucket.count })),
+      ]),
+    );
+  }
+
+  /**
+   * The catalogues as stocks, in ONE round trip (the same UNION ALL as the
+   * monthly counts, for the same reason: one connection per page view).
+   * `total` counts every row; `before`, those created before the cut.
+   */
+  async countManyTotals(
+    params: { entities: DashboardEntity[]; before: Date },
+    businessId?: string,
+  ): Promise<Record<string, EntityTotal>> {
+    const result: Record<string, EntityTotal> = {};
 
     const wanted = params.entities.filter(
       (entity) => DashboardRepository.MONTHLY_SOURCES[entity],
     );
 
-    for (const entity of params.entities) result[entity] = [];
+    for (const entity of params.entities) result[entity] = { total: 0, before: 0 };
 
     if (wanted.length === 0) return result;
 
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-
     const parts = wanted.map((entity) => {
       const source = DashboardRepository.MONTHLY_SOURCES[entity];
-
-      // `business` has no businessId of its own — it IS the tenant — so
-      // scoping it by one would count zero and quietly blank the card.
       const tenant =
         businessId && entity !== "business"
           ? Prisma.sql`AND "businessId" = ${businessId}`
@@ -184,32 +197,21 @@ class DashboardRepository implements IDashboardRepository {
       return Prisma.sql`
         SELECT
           ${entity} AS entity,
-          to_char(
-            date_trunc(
-              'month',
-              ("created_at" AT TIME ZONE 'UTC') AT TIME ZONE ${zone}
-            ),
-            'YYYY-MM'
-          ) AS month,
-          count(*)::bigint AS count
+          count(*)::bigint AS total,
+          count(*) FILTER (WHERE "created_at" < ${utc(params.before)})::bigint AS before
         FROM ${Prisma.raw(`"public"."${source.table}"`)}
-        WHERE "created_at" >= ${params.from}
-          AND "created_at" <= ${params.to}
+        WHERE TRUE
           ${tenant}
           ${source.extra ?? Prisma.empty}
-        GROUP BY 1, 2
       `;
     });
 
     const rows = await this.prisma.$queryRaw<
-      Array<{ entity: string; month: string; count: bigint }>
+      Array<{ entity: string; total: bigint; before: bigint }>
     >(Prisma.join(parts, " UNION ALL "));
 
     for (const row of rows) {
-      (result[row.entity] ??= []).push({
-        month: row.month,
-        count: Number(row.count),
-      });
+      result[row.entity] = { total: Number(row.total), before: Number(row.before) };
     }
 
     return result;
@@ -218,28 +220,26 @@ class DashboardRepository implements IDashboardRepository {
   /**
    * The same union, cut by day or by month.
    *
-   * `countManyByMonth` above answers the overview, which always wants months.
-   * The trends endpoint wants days for a seven- or thirty-day window, and it
+   * `countManyByMonth` answers the overview, which always wants months. The
+   * trends endpoint wants days for a seven- or thirty-day window, and it
    * used to get them by asking one count per bucket per entity: thirty days
    * times nine entities is 270 round trips, plus thirty more for the costs,
    * to draw ONE chart. Every one of them held a connection.
-   *
-   * The grouping key is built in local wall time for the same reason the
-   * monthly one is — `created_at` is a UTC instant in a session that runs in
-   * UTC, so a plain `date_trunc('day')` files everything created after 21:00
-   * in São Paulo under the following day.
    */
   async countManyByPeriod(
     params: {
-      entities: CountByMonthParams["entity"][];
+      entities: DashboardEntity[];
       from: Date;
       to: Date;
       granularity: PeriodGranularity;
+      timeZone: string;
     },
     businessId?: string,
   ): Promise<Record<string, PeriodCountBucket[]>> {
     const result: Record<string, PeriodCountBucket[]> = {};
 
+    // An unknown name answers empty instead of failing the whole page: this
+    // serves the screen every login opens.
     const wanted = params.entities.filter(
       (entity) => DashboardRepository.MONTHLY_SOURCES[entity],
     );
@@ -248,38 +248,9 @@ class DashboardRepository implements IDashboardRepository {
 
     if (wanted.length === 0) return result;
 
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-
-    const unit = params.granularity === "day" ? "day" : "month";
-    const format = params.granularity === "day" ? "YYYY-MM-DD" : "YYYY-MM";
-
-    const parts = wanted.map((entity) => {
-      const source = DashboardRepository.MONTHLY_SOURCES[entity];
-
-      const tenant =
-        businessId && entity !== "business"
-          ? Prisma.sql`AND "businessId" = ${businessId}`
-          : Prisma.empty;
-
-      return Prisma.sql`
-        SELECT
-          ${entity} AS entity,
-          to_char(
-            date_trunc(
-              ${unit},
-              ("created_at" AT TIME ZONE 'UTC') AT TIME ZONE ${zone}
-            ),
-            ${format}
-          ) AS period,
-          count(*)::bigint AS count
-        FROM ${Prisma.raw(`"public"."${source.table}"`)}
-        WHERE "created_at" >= ${params.from}
-          AND "created_at" <= ${params.to}
-          ${tenant}
-          ${source.extra ?? Prisma.empty}
-        GROUP BY 1, 2
-      `;
-    });
+    const parts = wanted.map((entity) =>
+      DashboardRepository.countArm(entity, params, businessId),
+    );
 
     const rows = await this.prisma.$queryRaw<
       Array<{ entity: string; period: string; count: bigint }>
@@ -303,52 +274,45 @@ class DashboardRepository implements IDashboardRepository {
    * day back to add two numbers here.
    */
   async getCostsByPeriod(
-    params: { from: Date; to: Date; granularity: PeriodGranularity },
+    params: {
+      from: Date;
+      to: Date;
+      granularity: PeriodGranularity;
+      timeZone: string;
+    },
     businessId?: string,
   ): Promise<PeriodCostBucket[]> {
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-
     const tenant = businessId
       ? Prisma.sql`AND "businessId" = ${businessId}`
       : Prisma.empty;
 
-    const unit = params.granularity === "day" ? "day" : "month";
-    const format = params.granularity === "day" ? "YYYY-MM-DD" : "YYYY-MM";
-
     const rows = await this.prisma.$queryRaw<
-      Array<{ period: string; preventive: string; corrective: string }>
+      Array<{ period: string; internal: string; external: string }>
     >(Prisma.sql`
       SELECT
-        to_char(
-          date_trunc(
-            ${unit},
-            ("created_at" AT TIME ZONE 'UTC') AT TIME ZONE ${zone}
-          ),
-          ${format}
-        ) AS period,
+        ${createdBucket(params.granularity, params.timeZone)} AS period,
 
-        -- INTERNAL is what the screen calls preventive, exactly as the old
-        -- JavaScript branch decided it. Everything else is corrective.
+        -- Where the work was done (MaintenanceType), not its nature: the keys
+        -- were "preventive/corrective" while the column never said that.
         COALESCE(
           SUM("total_amount") FILTER (WHERE "maintenance_type" = 'INTERNAL'),
           0
-        )::text AS preventive,
+        )::text AS internal,
 
         COALESCE(
-          SUM("total_amount") FILTER (WHERE "maintenance_type" <> 'INTERNAL'),
+          SUM("total_amount") FILTER (WHERE "maintenance_type" = 'EXTERNAL'),
           0
-        )::text AS corrective
+        )::text AS external
       FROM "public"."service_order"
-      WHERE "created_at" >= ${params.from}
-        AND "created_at" <= ${params.to}
+      WHERE ${createdWithin(params.from, params.to)}
         ${tenant}
       GROUP BY 1
     `);
 
     return rows.map((row) => ({
       period: row.period,
-      preventive: Number(row.preventive),
-      corrective: Number(row.corrective),
+      internal: Number(row.internal),
+      external: Number(row.external),
     }));
   }
 
@@ -356,58 +320,22 @@ class DashboardRepository implements IDashboardRepository {
     params: CountByMonthParams,
     businessId?: string,
   ): Promise<MonthlyCountBucket[]> {
-    const source = DashboardRepository.MONTHLY_SOURCES[params.entity];
-
-    if (!source) {
+    if (!DashboardRepository.MONTHLY_SOURCES[params.entity]) {
       throw new Error("Entidade inválida");
     }
 
-    // `business` has no businessId of its own — it IS the tenant — so scoping
-    // it by one would count zero and quietly blank the card.
-    const tenant =
-      businessId && params.entity !== "business"
-        ? Prisma.sql`AND "businessId" = ${businessId}`
-        : Prisma.empty;
-
-    /**
-     * Grouped by the month in the SERVER's timezone, not in the database's.
-     *
-     * `created_at` is `timestamp WITHOUT time zone` holding a UTC instant, and
-     * the database session runs in UTC — so a plain `date_trunc` groups by the
-     * UTC month. The cards were always computed from local month boundaries
-     * (`new Date(year, month, 1)`), and the two disagree for everything
-     * created between 21:00 and midnight on the last day of a Brazilian month:
-     * those rows are already the 1st in UTC.
-     *
-     * A card that is wrong by a day at the start of every month is wrong
-     * exactly when somebody looks at it. So the value is read back into local
-     * wall time before it is truncated, which is what the old per-month loop
-     * effectively did.
-     */
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-
     const rows = await this.prisma.$queryRaw<
-      Array<{ month: string; count: bigint }>
-    >(Prisma.sql`
-      SELECT
-        to_char(
-          date_trunc(
-            'month',
-            ("created_at" AT TIME ZONE 'UTC') AT TIME ZONE ${zone}
-          ),
-          'YYYY-MM'
-        ) AS month,
-        count(*)::bigint AS count
-      FROM ${Prisma.raw(`"public"."${source.table}"`)}
-      WHERE "created_at" >= ${params.from}
-        AND "created_at" <= ${params.to}
-        ${tenant}
-        ${source.extra ?? Prisma.empty}
-      GROUP BY 1
-    `);
+      Array<{ entity: string; period: string; count: bigint }>
+    >(
+      DashboardRepository.countArm(
+        params.entity,
+        { ...params, granularity: "month" },
+        businessId,
+      ),
+    );
 
     return rows.map((row) => ({
-      month: row.month,
+      month: row.period,
       count: Number(row.count),
     }));
   }
@@ -421,175 +349,89 @@ class DashboardRepository implements IDashboardRepository {
       whereClause.businessId = businessId;
     }
 
-    const [active, inactive, blocked, inRoute] = await Promise.all([
-      this.prisma.vehicle.count({
-        where: {
-          ...whereClause,
-          status: "ACTIVE",
-        },
-      }),
-      this.prisma.vehicle.count({
-        where: {
-          ...whereClause,
-          status: "INACTIVE",
-        },
-      }),
-      this.prisma.vehicle.count({
-        where: {
-          ...whereClause,
-          status: "BLOCKED",
-        },
-      }),
-      this.prisma.vehicle.count({
-        where: {
-          ...whereClause,
-          status: "IN_ROUTE",
-        },
-      }),
-    ]);
+    // One grouped count instead of four parallel ones: four connections for
+    // four numbers is how the dashboard starved the pool before (see
+    // countManyByMonth).
+    const grouped = await this.prisma.vehicle.groupBy({
+      by: ["status"],
+      where: whereClause,
+      _count: { _all: true },
+    });
 
-    return {
-      ACTIVE: active,
-      INACTIVE: inactive,
-      BLOCKED: blocked,
-      IN_ROUTE: inRoute,
-    };
+    const counts = { ACTIVE: 0, INACTIVE: 0, BLOCKED: 0, IN_ROUTE: 0 };
+
+    for (const row of grouped) {
+      counts[row.status] = row._count._all;
+    }
+
+    return counts;
   }
 
+  /**
+   * The maintenance card (Atrasada / A vencer / Em dia) in ONE aggregate, on
+   * the company's calendar. Same rule as maintenance-standing.ts, which the
+   * twin runs; tests/E2E/dashboard-maintenance-stats holds them together.
+   *
+   * It used to pull every vehicle back and compare `setMonth` on the
+   * server's calendar with the server's clock, so a vehicle due today was
+   * late once its hour had passed and one due tomorrow at 21:00 in São Paulo.
+   * Now both sides are civil days: the due day is the last maintenance's day
+   * plus the interval (Postgres clamps 31/08 + 1 month to 30/09), and it is
+   * compared with the company's today, which the caller passes.
+   *
+   * The day of the last maintenance: `timestamp` holding an instant, read in
+   * the company's zone; exactly 00:00 UTC is a "YYYY-MM-DD" the API parsed,
+   * read as that UTC day (no Brazilian midnight falls there).
+   */
   async getMaintenanceStats(
+    params: MaintenanceStatsParams,
     businessId?: string,
   ): Promise<MaintenanceStatsResult> {
-    const whereClause: any = {};
+    const tenant = businessId
+      ? Prisma.sql`AND "businessId" = ${businessId}`
+      : Prisma.empty;
 
-    if (businessId) {
-      whereClause.businessId = businessId;
-    }
+    const today = Prisma.sql`${params.today}::date`;
+    const horizon = Prisma.sql`(${params.today}::date + ${DUE_SOON_DAYS}::int)`;
 
-    const vehicles = await this.prisma.vehicle.findMany({
-      where: whereClause,
-      select: {
-        id: true,
-        last_maintenance_date: true,
-        maintenance_interval_months: true,
-        current_mileage: true,
-        last_maintenance_mileage: true,
-        maintenance_interval_km: true,
-      },
-    });
+    const [row] = await this.prisma.$queryRaw<
+      Array<{ pending: number; recent: number; overdue: number }>
+    >(Prisma.sql`
+      WITH standing AS (
+        SELECT
+          "last_maintenance_date" IS NULL AS unrecorded,
 
-    const now = new Date();
+          -- A missing last mileage counts from zero, as it always has.
+          "current_mileage" >= COALESCE("last_maintenance_mileage", 0) + "maintenance_interval_km" AS km_due,
 
-    let pending = 0;
-    let recent = 0;
-
-    let overdue = 0;
-    vehicles.forEach((vehicle) => {
-      if (!vehicle.last_maintenance_date) {
-        pending++;
-        return;
-      }
-
-      const lastMaintenanceDate = new Date(vehicle.last_maintenance_date);
-
-      // Calculate next maintenance date (by time)
-      const nextMaintenanceDate = new Date(lastMaintenanceDate);
-      nextMaintenanceDate.setMonth(
-        nextMaintenanceDate.getMonth() + vehicle.maintenance_interval_months,
-      );
-
-      // Calculate next maintenance by mileage
-      const nextMaintenanceKm =
-        (vehicle.last_maintenance_mileage as number) +
-        vehicle.maintenance_interval_km;
-      const kmOverdue = vehicle.current_mileage >= nextMaintenanceKm;
-
-      // Calculate days until next maintenance
-      const daysUntilMaintenance = Math.floor(
-        (nextMaintenanceDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
-      );
-
-      if (daysUntilMaintenance < 0 || kmOverdue) {
-        overdue++;
-      } else if (daysUntilMaintenance <= 30) {
-        pending++;
-      } else {
-        recent++;
-      }
-    });
+          (
+            CASE
+              WHEN "last_maintenance_date"::time = time '00:00'
+                THEN "last_maintenance_date"::date
+              ELSE (("last_maintenance_date" AT TIME ZONE 'UTC') AT TIME ZONE ${params.timeZone})::date
+            END
+            + make_interval(months => "maintenance_interval_months")
+          )::date AS due_day
+        FROM "public"."vehicle"
+        WHERE TRUE ${tenant}
+      )
+      SELECT
+        count(*) FILTER (
+          WHERE NOT unrecorded AND (km_due OR due_day < ${today})
+        )::int AS overdue,
+        count(*) FILTER (
+          WHERE unrecorded OR (NOT km_due AND due_day >= ${today} AND due_day <= ${horizon})
+        )::int AS pending,
+        count(*) FILTER (
+          WHERE NOT unrecorded AND NOT km_due AND due_day > ${horizon}
+        )::int AS recent
+      FROM standing
+    `);
 
     return {
-      pending,
-      recent,
-      overdue,
-    };
-  }
-
-  async getMonthlyCosts(
-    params: MonthlyCostsParams,
-    businessId?: string,
-  ): Promise<MonthlyCostsResult> {
-    // Convert date string to local timezone Date objects
-    // params.startDate and params.endDate are in format "YYYY-MM-DD"
-    const [startYear, startMonth, startDay] = params.startDate
-      .split("-")
-      .map(Number);
-    const [endYear, endMonth, endDay] = params.endDate.split("-").map(Number);
-
-    // Create dates in local timezone (server timezone - Brazil UTC-3)
-    const startDateLocal = new Date(
-      startYear,
-      startMonth - 1,
-      startDay,
-      0,
-      0,
-      0,
-      0,
-    );
-    const endDateLocal = new Date(
-      endYear,
-      endMonth - 1,
-      endDay,
-      23,
-      59,
-      59,
-      999,
-    );
-
-    const whereClause: any = {
-      created_at: {
-        gte: startDateLocal,
-        lte: endDateLocal,
-      },
-    };
-
-    if (businessId) {
-      whereClause.businessId = businessId;
-    }
-
-    const serviceOrders = await this.prisma.serviceOrder.findMany({
-      where: whereClause,
-      select: {
-        id: true,
-        maintenance_type: true,
-        total_amount: true,
-        created_at: true,
-      },
-    });
-
-    let preventive = 0;
-    let corrective = 0;
-
-    serviceOrders.forEach((order) => {
-      if (order.maintenance_type === "INTERNAL") {
-        preventive += Number(order.total_amount);
-      } else {
-        corrective += Number(order.total_amount);
-      }
-    });
-
-    return {
-      preventive,
-      corrective,
+      pending: row?.pending ?? 0,
+      recent: row?.recent ?? 0,
+      overdue: row?.overdue ?? 0,
     };
   }
 
@@ -601,54 +443,20 @@ class DashboardRepository implements IDashboardRepository {
    * thousands of rows crossing the wire, six times, to produce twelve numbers
    * — and the sum of a `Decimal` is a job the database does exactly and
    * JavaScript does approximately.
-   *
-   * Grouped in local wall time, for the same reason `countByMonth` is: the
-   * column is naive UTC and the cards were always drawn on local months.
    */
   async getCostsByMonth(
-    params: { from: Date; to: Date },
+    params: { from: Date; to: Date; timeZone: string },
     businessId?: string,
   ): Promise<MonthlyCostBucket[]> {
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const buckets = await this.getCostsByPeriod(
+      { ...params, granularity: "month" },
+      businessId,
+    );
 
-    const tenant = businessId
-      ? Prisma.sql`AND "businessId" = ${businessId}`
-      : Prisma.empty;
-
-    const rows = await this.prisma.$queryRaw<
-      Array<{ month: string; preventive: string; corrective: string }>
-    >(Prisma.sql`
-      SELECT
-        to_char(
-          date_trunc(
-            'month',
-            ("created_at" AT TIME ZONE 'UTC') AT TIME ZONE ${zone}
-          ),
-          'YYYY-MM'
-        ) AS month,
-
-        -- INTERNAL is what the screen calls preventive, exactly as the old
-        -- JavaScript branch decided it. Everything else is corrective.
-        COALESCE(
-          SUM("total_amount") FILTER (WHERE "maintenance_type" = 'INTERNAL'),
-          0
-        )::text AS preventive,
-
-        COALESCE(
-          SUM("total_amount") FILTER (WHERE "maintenance_type" <> 'INTERNAL'),
-          0
-        )::text AS corrective
-      FROM "public"."service_order"
-      WHERE "created_at" >= ${params.from}
-        AND "created_at" <= ${params.to}
-        ${tenant}
-      GROUP BY 1
-    `);
-
-    return rows.map((row) => ({
-      month: row.month,
-      preventive: Number(row.preventive),
-      corrective: Number(row.corrective),
+    return buckets.map((bucket) => ({
+      month: bucket.period,
+      internal: bucket.internal,
+      external: bucket.external,
     }));
   }
 

@@ -2,17 +2,19 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IShipperRepository } from "../../repositories/IShipper-repository";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import {
   ShipperNotFoundError,
   ShipperNameAlreadyExistsError,
-  ShipperNotBelongBusinessError,
+  ShipperCnpjAlreadyExistsError,
 } from "../errors/shipper-errors";
 
 import { AppError } from "@/shared/errors/AppError";
 import { Shipper, UpdateShipperProps } from "../../dtos/shipper-dto";
+
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
+import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 interface UpdateShipperRequest {
   userId: string;
@@ -39,24 +41,20 @@ class UpdateShipperUseCase {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
-      throw new ResourceNotFoundError();
+      throw callerNotFound();
     }
 
-    // O catálogo da operação é do despachante. `delivery_manage` e
-    // `occurrence_manage` são abertos ao motorista de propósito — o
-    // aplicativo dele roda nessas permissões —, então a tabela de
-    // permissões diz sim e a use case diz não. O módulo de motivos de
-    // status, na MESMA chave, já fazia isto nas três escritas.
+    // The operation's catalogue belongs to the dispatcher. `delivery_manage`
+    // and `occurrence_manage` are open to the driver on purpose (the app runs
+    // on them), so the permission table says yes and the use case says no.
     assertDispatcher(findUser);
 
     const findShipper = await this.shipper.findShipperById(shipperId);
 
-    if (!findShipper) {
+    // Another company's id reads as absent (decision 11.3): a separate
+    // "not yours" answer told a caller which ids exist elsewhere.
+    if (!findShipper || findShipper.businessId !== businessId) {
       throw new ShipperNotFoundError();
-    }
-
-    if (findShipper.businessId !== businessId) {
-      throw new ShipperNotBelongBusinessError();
     }
 
     if (shipperData.name && shipperData.name !== findShipper.name) {
@@ -70,14 +68,40 @@ class UpdateShipperUseCase {
       }
     }
 
+    if (shipperData.cnpj && shipperData.cnpj !== findShipper.cnpj) {
+      const findShipperByCnpj = await this.shipper.findShipperByCnpj(
+        businessId,
+        shipperData.cnpj,
+      );
+
+      if (findShipperByCnpj && findShipperByCnpj.id !== shipperId) {
+        throw new ShipperCnpjAlreadyExistsError();
+      }
+    }
+
+    let updated: Shipper;
+
     try {
-      return await this.shipper.updateShipper(shipperId, shipperData);
+      updated = await this.shipper.updateShipper(shipperId, shipperData);
     } catch (error) {
+      if (violatesUniqueOn(error, "cnpj")) {
+        throw new ShipperCnpjAlreadyExistsError();
+      }
+
+      if (violatesUniqueOn(error, "name")) {
+        throw new ShipperNameAlreadyExistsError();
+      }
+
       throw new AppError(
         "Houve um erro ao tentar atualizar o embarcador! Por favor, tente novamente.",
         500,
       );
     }
+
+    // Deactivating hides it from every open "Novo cadastro" picker at once.
+    sendCatalogChangedEvent(businessId, "shipper");
+
+    return updated;
   }
 }
 

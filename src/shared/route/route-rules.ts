@@ -218,14 +218,34 @@ function nextSequence(highestExisting: number | null): number {
  * Takes the complete list of stop ids in the order the dispatcher dropped
  * them, and returns the number each one gets. The complete list, not a move
  * instruction: two dispatchers dragging at once would otherwise produce an
- * order neither of them chose, and the write is guarded by the route's own
- * version anyway — the second one loses and reloads.
+ * order neither of them chose.
+ *
+ * There is no version column behind it (this used to claim one). What guards
+ * the write is the route row lock `reorderStops` takes first: two reorders of
+ * one route queue instead of interleaving, the later complete list wins, and
+ * a list that no longer names exactly the route's stops is refused with
+ * ROUTE_REORDER_MISMATCH. A route that left meanwhile is refused as well.
  */
 function resequence(orderedStopIds: string[]): { id: string; sequence: number }[] {
   return orderedStopIds.map((id, index) => ({
     id,
     sequence: (index + 1) * SEQUENCE_STEP,
   }));
+}
+
+/**
+ * The route code a search term names, or null when it names none.
+ *
+ * `code` is a Postgres INTEGER. The old test was `Number.isInteger(Number(term))`,
+ * which also accepted "1e3" (code 1000) and a 44-digit NF-e key pasted into
+ * the box — Number turns that into 4.4e43, Prisma refuses a value out of the
+ * column's range, and the board answered 500. At most nine digits always
+ * fits; "Rota 12" and "#12" are what people type when they mean code 12.
+ */
+function routeCodeFromSearch(term: string | null | undefined): number | null {
+  const match = /^(?:rota\s*)?#?\s*(\d{1,9})$/i.exec((term ?? "").trim());
+
+  return match ? Number(match[1]) : null;
 }
 
 /** How far along the route is, for the header the driver sees and the panel. */
@@ -255,6 +275,12 @@ interface StopOutcome {
   status: RouteStopStatus;
   arrived_at?: Date;
   completed_at?: Date;
+
+  /**
+   * The delivery leaves the route with the stop: its driver/vehicle shadow is
+   * cleared, so it is back in the unassigned pool and off the driver's phone.
+   */
+  releaseDelivery?: boolean;
 }
 
 /**
@@ -267,11 +293,19 @@ interface StopOutcome {
  * new DeliveryStatus fail to compile until somebody decides what it does to a
  * route.
  *
- * Null means "the route has nothing to say about this". PENDING and IN_TRANSIT
- * are not stop outcomes: leaving for the street does not resolve a stop, and a
- * delivery sent back to PENDING for a second attempt gets a NEW stop on a NEW
- * route rather than reopening the one that failed — the old stop is the record
- * of an attempt that happened.
+ * Null means "the route has nothing to say about this". IN_TRANSIT is not a
+ * stop outcome: leaving for the street does not resolve a stop. Nor is a
+ * FAILED delivery reopened as PENDING for a second attempt: it gets a NEW stop
+ * on a NEW route rather than reopening the one that failed — the old stop is
+ * the record of an attempt that happened.
+ *
+ * PENDING coming off the street (`from` IN_TRANSIT) is the one exception: the
+ * load goes back to base, rescheduled, while the route is still running. Its
+ * stop is called off (CANCELLED) and the delivery released from the route —
+ * otherwise the stop stayed open on a route that could then never close, the
+ * driver kept an address refused at arrival and proof, and the delivery was
+ * locked out of every future route by the one-open-stop index. The caller
+ * passes where the delivery came FROM for exactly this.
  *
  * `from` is both open statuses for every outcome, including COMPLETED. A proof
  * legitimately lands on a stop that was never marked ARRIVED: the driver
@@ -280,6 +314,7 @@ interface StopOutcome {
 function stopOutcomeForDelivery(
   status: DeliveryStatus,
   at: Date,
+  previous?: DeliveryStatus,
 ): StopOutcome | null {
   switch (status) {
     case "DELIVERED":
@@ -295,6 +330,10 @@ function stopOutcomeForDelivery(
       return { from: OPEN_STOP_STATUSES, status: "CANCELLED" };
 
     case "PENDING":
+      return previous === "IN_TRANSIT"
+        ? { from: OPEN_STOP_STATUSES, status: "CANCELLED", releaseDelivery: true }
+        : null;
+
     case "IN_TRANSIT":
       return null;
 
@@ -318,6 +357,52 @@ function arrivalStopOutcome(at: Date): StopOutcome {
   return { from: ["PENDING"], status: "ARRIVED", arrived_at: at };
 }
 
+interface RouteCompletionInput {
+  /**
+   * When the stop that closed the route resolved, by the time of the fact
+   * (the outcome's `completed_at`). Absent when the closing act has no time
+   * of its own — a cancellation, a load sent back to base.
+   */
+  closingAt?: Date | null;
+
+  /** The latest resolution among ALL the route's stops, this one included. */
+  lastResolvedAt?: Date | null;
+
+  startedAt?: Date | null;
+  now: Date;
+}
+
+/**
+ * When a route that closed itself finished (MOB-08).
+ *
+ * The last stop to ARRIVE is not always the last to HAPPEN: a proof taken at
+ * 10:05 in a dead zone and uploaded at 13:40 closes the route at 13:40, while
+ * its stop already says 10:05. Stamping the upload made a route worked until
+ * 10:05 read "concluída às 13:40" on the panel, in the tower and in its
+ * punctuality.
+ *
+ * So the route ends when its work did: the closing fact, but never before
+ * another stop resolved (the offline proof may be older than one proven
+ * online), never before the route left, and never in the future. With no
+ * time of its own the close is "now", exactly as before.
+ */
+function routeCompletedAt({
+  closingAt,
+  lastResolvedAt,
+  startedAt,
+  now,
+}: RouteCompletionInput): Date {
+  if (!closingAt) return now;
+
+  const latest = Math.max(
+    closingAt.getTime(),
+    lastResolvedAt?.getTime() ?? -Infinity,
+    startedAt?.getTime() ?? -Infinity,
+  );
+
+  return new Date(Math.min(latest, now.getTime()));
+}
+
 export {
   OPEN_STOP_STATUSES,
   ROUTE_STATUS_LABELS,
@@ -335,12 +420,15 @@ export {
   isTerminalRouteStatus,
   nextSequence,
   resequence,
+  routeCodeFromSearch,
+  routeCompletedAt,
   routeProgress,
   stopOutcomeForDelivery,
 };
 
 export type {
   ReleaseCandidate,
+  RouteCompletionInput,
   StopOutcome,
   RouteStatus,
   RouteStopStatus,

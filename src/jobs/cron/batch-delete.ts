@@ -18,10 +18,10 @@ const DELETE_BATCH_SIZE = 5_000;
  * Wall-clock ceiling for one purge run.
  *
  * CronSchedulerService leases an execution for 10 minutes
- * (EXECUTION_LEASE_MS) and lets another replica take over once the lease
- * expires. Stopping at half the lease keeps a slow purge from ever running
- * alongside its own takeover; whatever is left is picked up by the next
- * night's run.
+ * (EXECUTION_LEASE_MS), and its catch-up sweep treats a run past the lease as
+ * dead: it marks it FAILED and may run the job again. Stopping at half the
+ * lease keeps a slow purge from ever running alongside its own re-run;
+ * whatever is left is picked up by the next night's run.
  */
 const PURGE_RUN_BUDGET_MS = 5 * 60 * 1000;
 

@@ -1,7 +1,9 @@
 import { Prisma } from "@prisma/client";
 
-import { IChatRepository } from "./IChat-repository";
+import { ChatRouteRef, IChatRepository } from "./IChat-repository";
 import {
+  ChatAudienceCount,
+  ChatBroadcastTarget,
   ChatDeliverySide,
   ChatMessage,
   ChatMessageSearchHit,
@@ -11,16 +13,52 @@ import {
   ListChatMessagesProps,
   ListChatMessagesResult,
   ListChatThreadsProps,
+  ListChatRecipientsProps,
+  ListChatRecipientsResult,
   ListChatThreadsResult,
   SearchChatMessagesProps,
 } from "../dtos/chat-dto";
 
 import database from "@/../infra/database";
+import { escapeLikePattern } from "@/shared/utils/like-pattern";
+import { buildSearchOr } from "@/shared/pagination/search-or";
 
 const messageInclude = {
   sender: { select: { id: true, name: true } },
   delivery: { select: { id: true, recipient_name: true, status: true } },
+  route: { select: { id: true, code: true, name: true } },
 } satisfies Prisma.ChatMessageInclude;
+
+/**
+ * "Can read the thread": a driver whose app account could log in, as
+ * `assertSessionEligible` decides it — not revoked, of this company, and
+ * not held in an inactive branch. `access_revoked` alone counted a driver of
+ * an inactive branch as reached: he was in "everyone", got rung and was
+ * reported SENT without being able to open the app. The driver's own status
+ * is the caller's ACTIVE filter. The use case asks the same question of a
+ * hand-picked driver through the login rule itself (`canUseApp`).
+ */
+function hasApp(businessId: string): Prisma.DriverWhereInput {
+  return {
+    User: { is: { access_revoked: false, businessId } },
+    OR: [{ branchId: null }, { branch: { is: { is_active: true } } }],
+  };
+}
+
+function withoutApp(businessId: string): Prisma.DriverWhereInput {
+  return { NOT: hasApp(businessId) };
+}
+
+/** Route statuses a driver still works on: a stop there is "his" delivery. */
+const OPEN_ROUTE_STATUSES = new Set(["RELEASED", "IN_PROGRESS"]);
+
+const ROUTE_REF_SELECT = {
+  id: true,
+  businessId: true,
+  driverId: true,
+  code: true,
+  name: true,
+} satisfies Prisma.RouteSelect;
 
 /**
  * Where counting unread stops being worth anything.
@@ -51,14 +89,26 @@ class ChatRepository implements IChatRepository {
   async getOrCreateThread(
     businessId: string,
     driverId: string,
+    tx?: unknown,
   ): Promise<ChatThread> {
-    // Upsert on the unique pair: two first messages racing (two agents, or
-    // agent and driver) converge on the same thread instead of erroring.
-    return this.prisma.chatThread.upsert({
-      where: { businessId_driverId: { businessId, driverId } },
-      create: { businessId, driverId },
-      update: {},
+    const client = (tx as Prisma.TransactionClient | undefined) ?? this.prisma;
+    const where = { businessId_driverId: { businessId, driverId } };
+
+    // Every message after the first finds its thread here, in one statement.
+    const existing = await client.chatThread.findUnique({ where });
+    if (existing) return existing;
+
+    // Two first messages racing (two agents, or agent and driver) converge on
+    // the same thread: ON CONFLICT DO NOTHING, then read whichever row won.
+    // Not `upsert({ update: {} })`: with an empty update Prisma runs a SELECT
+    // and an INSERT, and the loser of the race got P2002 — its message failed
+    // (tests/E2E/get-or-create-races.test.ts).
+    await client.chatThread.createMany({
+      data: [{ businessId, driverId }],
+      skipDuplicates: true,
     });
+
+    return client.chatThread.findUniqueOrThrow({ where });
   }
 
   async listThreads({
@@ -77,12 +127,17 @@ class ChatRepository implements IChatRepository {
       ...(driverId && { driverId }),
       ...(normalizedSearch && {
         driver: {
-          name: { contains: normalizedSearch, mode: "insensitive" as const },
+          name: {
+            contains: escapeLikePattern(normalizedSearch),
+            mode: "insensitive" as const,
+          },
         },
       }),
     };
 
-    const [threads, total, totalUnread] = await Promise.all([
+    // The page beside its count, the unread total after them: at most two of
+    // the replica's ten connections (tests/E2E/connection-fan-out.test.ts).
+    const [threads, total] = await Promise.all([
       this.prisma.chatThread.findMany({
         skip,
         take: pageSize,
@@ -92,6 +147,9 @@ class ChatRepository implements IChatRepository {
         orderBy: [
           { last_message_at: { sort: "desc", nulls: "last" } },
           { created_at: "desc" },
+          // Closes the order: two threads created in the same instant came
+          // back in any order, and an offset page could repeat or skip one.
+          { id: "desc" },
         ],
         include: {
           driver: {
@@ -105,8 +163,9 @@ class ChatRepository implements IChatRepository {
         },
       }),
       this.prisma.chatThread.count({ where: whereCondition }),
-      this.countTotalUnread({ businessId, requesterUserId, driverId }),
     ]);
+
+    const totalUnread = await this.countTotalUnread({ businessId, requesterUserId, driverId });
 
     const pageIds = threads.map((thread) => thread.id);
 
@@ -119,8 +178,10 @@ class ChatRepository implements IChatRepository {
       this.lastMessageForThreads(pageIds),
     ]);
 
+    // The thread id keys the map and stays out of the preview: it leaked
+    // into every row of the list as an undocumented `lastMessage.threadId`.
     const previewByThread = new Map(
-      previews.map((preview) => [preview.threadId, preview]),
+      previews.map(({ threadId, ...preview }) => [threadId, preview]),
     );
 
     const unreadByThread = new Map(
@@ -362,13 +423,25 @@ class ChatRepository implements IChatRepository {
     around,
     limit,
     search,
+    deliveryId,
+    routeId,
+    ticketId,
   }: ListChatMessagesProps): Promise<ListChatMessagesResult> {
     const normalizedSearch = search ? search.trim() : "";
 
     const base: Prisma.ChatMessageWhereInput = {
       threadId,
+      // Filters narrow the one thread; the partial indexes on each column
+      // serve a route's or a delivery's messages without the thread scan.
+      ...(deliveryId && { deliveryId }),
+      ...(routeId && { routeId }),
+      // A ticket narrows the same thread; served by (ticketId, created_at).
+      ...(ticketId && { ticketId }),
       ...(normalizedSearch && {
-        body: { contains: normalizedSearch, mode: "insensitive" as const },
+        body: {
+          contains: escapeLikePattern(normalizedSearch),
+          mode: "insensitive" as const,
+        },
       }),
     };
 
@@ -564,7 +637,12 @@ class ChatRepository implements IChatRepository {
     const rows = await this.prisma.chatMessage.findMany({
       where: {
         thread: { businessId, ...(driverId && { driverId }) },
-        body: { contains: normalizedSearch, mode: "insensitive" as const },
+        // Literal text: "50%" is not "50 and anything after it". The
+        // trigram index serves an escaped pattern the same way.
+        body: {
+          contains: escapeLikePattern(normalizedSearch),
+          mode: "insensitive" as const,
+        },
       },
       orderBy: [{ created_at: "desc" }, { id: "desc" }],
       take: limit,
@@ -600,8 +678,10 @@ class ChatRepository implements IChatRepository {
           attachment_key: props.attachment_key,
           duration_ms: props.duration_ms,
           deliveryId: props.deliveryId,
+          routeId: props.routeId,
           broadcast_id: props.broadcast_id,
           client_submission_id: props.client_submission_id,
+          ticketId: props.ticketId ?? null,
         },
       });
 
@@ -626,9 +706,9 @@ class ChatRepository implements IChatRepository {
     clientSubmissionId: string,
     businessId: string,
   ): Promise<ChatMessage | null> {
-    // `findFirst` e não `findUnique`: a chave é única globalmente, mas a
-    // pergunta é "existe ESTA mensagem NESTA empresa?", e a resposta para a
-    // chave de outra empresa tem que ser "não existe".
+    // `findFirst`, not `findUnique`: the key is globally unique, but the
+    // question is "this message IN THIS company?" — another company's key
+    // must read as absent.
     return this.prisma.chatMessage.findFirst({
       where: {
         client_submission_id: clientSubmissionId,
@@ -696,6 +776,198 @@ class ChatRepository implements IChatRepository {
           ? { driver_delivered_at: at }
           : { staff_delivered_at: at },
     });
+  }
+
+  async listRecipients({
+    businessId,
+    search,
+    app,
+    cursor,
+    limit,
+  }: ListChatRecipientsProps): Promise<ListChatRecipientsResult> {
+    const normalizedSearch = search?.trim() ?? "";
+
+    const active: Prisma.DriverWhereInput = { businessId, status: "ACTIVE" };
+
+    // Keyset, not Prisma's `cursor + skip: 1`: that drops the row after an
+    // anchor that no longer passes the filter, so a driver made inactive
+    // between two pages hid a colleague. The anchor is read without the
+    // list's filter, inside the company. It is positioned by its CURRENT
+    // name: an anchor renamed between pages still moves the window.
+    let after: Prisma.DriverWhereInput | undefined;
+
+    if (cursor) {
+      const anchor = await this.prisma.driver.findFirst({
+        where: { id: cursor, businessId },
+        select: { id: true, name: true },
+      });
+
+      if (!anchor) return { data: [], nextCursor: null, hasMore: false };
+
+      after = {
+        OR: [
+          { name: { gt: anchor.name } },
+          { name: anchor.name, id: { gt: anchor.id } },
+        ],
+      };
+    }
+
+    const where: Prisma.DriverWhereInput = {
+      AND: [
+        active,
+        ...(app === "WITH_APP" ? [hasApp(businessId)] : []),
+        ...(app === "WITHOUT_APP" ? [withoutApp(businessId)] : []),
+        // By name only. The CNH is registration data, and this list is read
+        // under delivery_manage, not driver_manage: it neither answers nor
+        // matches on it (decision 4.7 — only what the choice needs).
+        ...(normalizedSearch
+          ? [
+              buildSearchOr<Prisma.DriverWhereInput>([
+                { name: { contains: normalizedSearch, mode: "insensitive" } },
+              ]),
+            ]
+          : []),
+        ...(after ? [after] : []),
+      ],
+    };
+
+    // The page, plus which of its rows can use the app, in the same rule
+    // the audience counts with — not re-derived from the selected columns.
+    const rows = await this.prisma.driver.findMany({
+      where,
+      select: { id: true, name: true },
+      // Alphabetical: a person looks a colleague up by name. The id breaks
+      // ties so the cursor walks a total order.
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      take: limit + 1,
+    });
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    const withAppIds =
+      app === "WITH_APP"
+        ? new Set(page.map((row) => row.id))
+        : app === "WITHOUT_APP" || page.length === 0
+          ? new Set<string>()
+          : new Set(
+              (
+                await this.prisma.driver.findMany({
+                  where: {
+                    AND: [
+                      { id: { in: page.map((row) => row.id) } },
+                      hasApp(businessId),
+                    ],
+                  },
+                  select: { id: true },
+                })
+              ).map((row) => row.id),
+            );
+
+    return {
+      data: page.map((row) => ({
+        id: row.id,
+        name: row.name,
+        hasApp: withAppIds.has(row.id),
+      })),
+      nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
+      hasMore,
+    };
+  }
+
+  async countAudience(businessId: string): Promise<ChatAudienceCount> {
+    const active: Prisma.DriverWhereInput = { businessId, status: "ACTIVE" };
+
+    const [total, withApp] = await Promise.all([
+      this.prisma.driver.count({ where: active }),
+      this.prisma.driver.count({ where: { AND: [active, hasApp(businessId)] } }),
+    ]);
+
+    return { withApp, withoutApp: total - withApp };
+  }
+
+  async listAudience(
+    businessId: string,
+    limit: number,
+  ): Promise<ChatBroadcastTarget[]> {
+    const rows = await this.prisma.driver.findMany({
+      where: { AND: [{ businessId, status: "ACTIVE" }, hasApp(businessId)] },
+      select: {
+        id: true,
+        name: true,
+        User: { select: { id: true } },
+      },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      take: limit,
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      appUserId: row.User?.id ?? null,
+    }));
+  }
+
+  async findRoute(routeId: string): Promise<ChatRouteRef | null> {
+    return this.prisma.route.findUnique({
+      where: { id: routeId },
+      select: ROUTE_REF_SELECT,
+    });
+  }
+
+  async findRunningRoutes(
+    businessId: string,
+    driverIds: string[],
+  ): Promise<Map<string, ChatRouteRef>> {
+    if (driverIds.length === 0) return new Map();
+
+    const rows = await this.prisma.route.findMany({
+      where: {
+        businessId,
+        driverId: { in: driverIds },
+        status: "IN_PROGRESS",
+      },
+      select: ROUTE_REF_SELECT,
+      // One running route per driver is the rule; if the data ever says
+      // otherwise, the one he left last is where he is.
+      orderBy: [
+        { started_at: { sort: "desc", nulls: "last" } },
+        { created_at: "desc" },
+        { id: "desc" },
+      ],
+    });
+
+    const byDriver = new Map<string, ChatRouteRef>();
+
+    for (const row of rows) {
+      if (!byDriver.has(row.driverId)) byDriver.set(row.driverId, row);
+    }
+
+    return byDriver;
+  }
+
+  async findDeliveryRouteOfDriver(
+    businessId: string,
+    driverId: string,
+    deliveryId: string,
+  ): Promise<ChatRouteRef | null> {
+    const stops = await this.prisma.routeStop.findMany({
+      where: { deliveryId, route: { businessId, driverId } },
+      select: {
+        route: { select: { ...ROUTE_REF_SELECT, status: true } },
+      },
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
+    });
+
+    const chosen =
+      stops.find((stop) => OPEN_ROUTE_STATUSES.has(stop.route.status)) ??
+      stops[0];
+
+    if (!chosen) return null;
+
+    const { status: _status, ...route } = chosen.route;
+
+    return route;
   }
 }
 

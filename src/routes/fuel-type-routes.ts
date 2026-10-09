@@ -16,6 +16,11 @@ import {
   fuelTypeSchemas,
   fuelTypeResponses,
 } from "./documentation/fuel-type-documentation";
+import { itemOf, ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import { fuelTypeListSearchMetaDoc } from "@/modules/fuel-type/usecases/list-fuel-type/list-fuel-type-documentation";
+import { errorResponse } from "./documentation/common-responses";
+
+import { listFuelTypeSchema } from "@/schemas/list-fuel-type-schema";
 
 const createFuelTypeController = new CreateFuelTypeController();
 const listFuelTypeController = new ListFuelTypeController();
@@ -36,15 +41,18 @@ async function fuelTypeRoutes(app: FastifyInstance) {
       ],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["fuelType"],
-        summary: "Create a new fuel type",
+        tags: ["fuel-type"],
+        summary: "Cadastra um tipo de combustível",
         description:
-          "Register a new fuel type category (gasoline, diesel, ethanol, etc.) with pricing information and business association",
+          "Cadastra um tipo de combustível (Gasolina, Diesel, Etanol, GNV, GLP, Biodiesel, Elétrico ou Hidrogênio) na empresa. Cada combustível existe uma vez por empresa (409 se já existir). Avisa as telas abertas da empresa pelo evento `catalogChanged` (`fuel_type`).",
         params: fuelTypeSchemas.businessIdParam,
         body: fuelTypeSchemas.createFuelType,
         response: {
           201: fuelTypeResponses.fuelTypeCreated,
-          400: fuelTypeResponses.createFuelTypeErrors,
+          400: fuelTypeResponses.writeErrors,
+          403: errorResponse,
+          404: fuelTypeResponses.businessNotFound,
+          409: fuelTypeResponses.alreadyExists,
           500: fuelTypeResponses.internalServerError,
         },
       },
@@ -59,14 +67,18 @@ async function fuelTypeRoutes(app: FastifyInstance) {
       preHandler: [verifyPermission("fuel_type_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["fuelType"],
-        summary: "List fuel types",
+        tags: ["fuel-type"],
+        summary: "Lista os tipos de combustível da empresa",
         description:
-          "Retrieve a paginated list of available fuel type categories with their descriptions and pricing information",
-        querystring: fuelTypeSchemas.listFuelType,
+          "Tipos de combustível de uma empresa, paginados, com ordenação no servidor (`sort` = created_at, description ou updated_at; `order` = asc ou desc) e busca por ID ou nome. O MASTER informa `businessId`; os demais veem a própria empresa. A linha `meta.searchMeta` traz os cartões da tela sobre toda a busca: total, veículos por combustível e, para quem lê Abastecimentos numa empresa com Gestão de Frotas, os abastecimentos do mês de negócio (litros, valor e o combustível mais abastecido com o preço médio por litro).",
+        querystring: listFuelTypeSchema,
         response: {
-          200: fuelTypeResponses.fuelTypeList,
-          400: fuelTypeResponses.listFuelTypeErrors,
+          200: ndjsonList(
+            itemOf(fuelTypeResponses.fuelTypeList),
+            offsetMetaWith(fuelTypeListSearchMetaDoc),
+          ),
+          400: fuelTypeResponses.listErrors,
+          403: errorResponse,
           500: fuelTypeResponses.internalServerError,
         },
       },
@@ -81,17 +93,18 @@ async function fuelTypeRoutes(app: FastifyInstance) {
       preHandler: [verifyPermission("fuel_type_manage", "read")],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["fuelType"],
-        summary: "Search fuel types by business (cursor-based)",
+        tags: ["fuel-type"],
+        summary: "Busca tipos de combustível para seleção (cursor)",
         description:
-          "Retrieve fuel types as NDJSON stream with cursor-based pagination. " +
-          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
-          "Subsequent lines are individual fuel type objects. " +
-          "Use nextCursor value as cursor parameter for the next page.",
+          "Tipos de combustível da empresa em NDJSON paginado por cursor, do mais recente ao mais antigo, filtrados pelo termo digitado (`search`). " +
+          "A primeira linha traz `{meta: {searchMeta: {nextCursor, hasMore}}}`; as seguintes, um tipo cada. " +
+          "Envie `nextCursor` como `cursor` para a próxima página.",
         querystring: fuelTypeSchemas.searchFuelTypeCursor,
         response: {
-          200: fuelTypeResponses.searchFuelTypeStreamDescription,
-          400: fuelTypeResponses.listFuelTypeBusinessErrors,
+          200: ndjsonCursor(itemOf(fuelTypeResponses.fuelTypeList)),
+          400: fuelTypeResponses.searchErrors,
+          403: errorResponse,
+          404: fuelTypeResponses.businessNotFound,
           500: fuelTypeResponses.internalServerError,
         },
       },
@@ -109,16 +122,18 @@ async function fuelTypeRoutes(app: FastifyInstance) {
       ],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["fuelType"],
-        summary: "Update a fuel type",
+        tags: ["fuel-type"],
+        summary: "Atualiza um tipo de combustível",
         description:
-          "Update existing fuel type information including description, pricing details, and category specifications",
+          "Troca o combustível de um tipo da empresa informada no caminho. O tipo nunca muda de empresa (seus veículos e abastecimentos ficariam em outra). Tipo de outra empresa responde 404; nome já usado na empresa, 409. Avisa as telas abertas pelo evento `catalogChanged` (`fuel_type`).",
         params: fuelTypeSchemas.fuelTypeBusinessParams,
         body: fuelTypeSchemas.updateFuelType,
         response: {
           200: fuelTypeResponses.fuelTypeUpdated,
-          400: fuelTypeResponses.updateFuelTypeErrors,
-          403: fuelTypeResponses.updateFuelTypeForbiddenErrors,
+          400: fuelTypeResponses.writeErrors,
+          403: errorResponse,
+          404: fuelTypeResponses.fuelTypeNotFound,
+          409: fuelTypeResponses.updateConflict,
           500: fuelTypeResponses.internalServerError,
         },
       },
@@ -130,18 +145,24 @@ async function fuelTypeRoutes(app: FastifyInstance) {
     "/delete-fuel-type/:fuelTypeId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [verifyPermission("fuel_type_manage", "write")],
+      // Read-only for a deactivated company, like create and update.
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("fuel_type_manage", "write"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
-        tags: ["fuelType"],
-        summary: "Delete a fuel type",
+        tags: ["fuel-type"],
+        summary: "Exclui um tipo de combustível",
         description:
-          "Permanently remove a fuel type category from the system and all associated refueling records",
+          "Exclui um tipo de combustível sem uso. Com veículos ou abastecimentos associados a exclusão é recusada com a contagem (409), para não apagar de que combustível era cada registro. Tipo de outra empresa responde 404. Avisa as telas abertas pelo evento `catalogChanged` (`fuel_type`).",
         params: fuelTypeSchemas.fuelTypeBusinessParams,
         response: {
           200: fuelTypeResponses.fuelTypeDeleted,
-          400: fuelTypeResponses.deleteFuelTypeErrors,
-          403: fuelTypeResponses.deleteFuelTypeForbiddenErrors,
+          400: fuelTypeResponses.writeErrors,
+          403: errorResponse,
+          404: fuelTypeResponses.fuelTypeNotFound,
+          409: fuelTypeResponses.deleteConflict,
           500: fuelTypeResponses.internalServerError,
         },
       },

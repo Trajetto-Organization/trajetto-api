@@ -4,51 +4,57 @@ import { z } from "zod";
 import { container } from "tsyringe";
 
 import { ListServiceOrderUseCase } from "./list-service-order-usecase";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { replyMaintenanceError } from "../errors/maintenance-http-errors";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { listServiceOrderSchema } from "@/schemas/list-service-order-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListServiceOrderController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // The route already validated AND transformed the querystring (page is a
+    // number, each facet a list): re-parsing it would reject the result.
+    const {
+      businessId,
+      page,
+      pageSize,
+      search,
+      sort,
+      order,
+      status,
+      maintenanceType,
+      branchId,
+    } = request.query as z.infer<typeof listServiceOrderSchema>;
 
     const listServiceOrderUseCase = container.resolve(ListServiceOrderUseCase);
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        // Try to decode, but catch errors
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        // If it fails, use the value without decoding.
-        decodedSearch = search;
-      }
-    }
-
     try {
-      const serviceOrdersPromise = listServiceOrderUseCase.execute(
-        id,
-        page,
-        pageSize,
-        decodedSearch,
-      );
-
       await sendAsNDJSON({
         reply,
-        dataPromise: serviceOrdersPromise,
+        dataPromise: listServiceOrderUseCase
+          .execute({
+            userId: id,
+            businessId,
+            page,
+            pageSize,
+            search,
+            sort,
+            order,
+            statuses: status,
+            maintenanceTypes: maintenanceType,
+            branchIds: branchId,
+          })
+          .then((result) => ({
+            data: result.data,
+            total: result.total,
+            meta: result.searchMeta,
+          })),
         page,
         pageSize,
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      if (replyMaintenanceError(reply, error)) return;
 
       throw error;
     }

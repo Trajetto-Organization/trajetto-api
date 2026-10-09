@@ -1,13 +1,11 @@
 import { FastifyReply, FastifyRequest } from "fastify";
-import { container } from "tsyringe";
-import { z } from "zod";
 
 import {
   RegisterPushTokenUseCase,
   RemovePushTokenUseCase,
 } from "./manage-push-token-usecase";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { container } from "tsyringe";
+import { z } from "zod";
 
 const pushTokenSchema = z.object({
   token: z
@@ -25,23 +23,20 @@ const removePushTokenSchema = z.object({
 
 class RegisterPushTokenController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = request.user;
+    const { id, sessionId } = request.user;
     const { token, platform } = pushTokenSchema.parse(request.body);
 
     const registerPushTokenUseCase = container.resolve(RegisterPushTokenUseCase);
 
-    try {
-      await registerPushTokenUseCase.execute({ userId: id, token, platform });
-      return reply
-        .status(200)
-        .send({ message: "Dispositivo registrado para notificações." });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await registerPushTokenUseCase.execute({
+      userId: id,
+      sessionId,
+      token,
+      platform,
+    });
+    return reply
+      .status(200)
+      .send({ message: "Dispositivo registrado para notificações." });
   }
 }
 

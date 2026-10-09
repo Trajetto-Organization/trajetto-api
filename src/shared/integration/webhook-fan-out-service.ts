@@ -2,8 +2,12 @@ import { injectable } from "tsyringe";
 
 import { Prisma } from "@prisma/client";
 
+import { logger } from "@/shared/logging/logger";
+
 import { fanOutWebhookEvent } from "./webhook-dispatch-service";
 import type { WebhookTopic } from "./webhook-catalogue";
+
+const log = logger.child({ component: "webhook-fan-out" });
 
 /**
  * Telling the customers' systems that something happened, as an injected
@@ -44,9 +48,9 @@ class WebhookFanOutService {
     } catch (error) {
       if (tx) throw error;
 
-      console.error(
-        `[Integration] Falha ao enfileirar webhook "${topic}":`,
-        error,
+      log.error(
+        { err: error, topic, businessId },
+        "webhook event could not be queued",
       );
     }
   }

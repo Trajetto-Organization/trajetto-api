@@ -330,7 +330,8 @@ describe("what the override leaves behind", () => {
     // Only the driver's app resends. Two clicks on the web are two deliberate
     // decisions, and a trail that merged them would hide that somebody did it
     // twice — which is exactly the kind of thing support is asked about.
-    const delivery = await seedDelivery();
+    // (With a driver: the panel does not put a driverless load in transit.)
+    const delivery = await seedDelivery({ driverId: DRIVER });
 
     await context.setStatus.execute({
       userId: OPERATOR,

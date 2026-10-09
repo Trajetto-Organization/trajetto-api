@@ -2,21 +2,28 @@ version: "3.8"
 
 services:
   trajetto-database:
-    image: "bitnami/postgresql"
+    # The same major version as production and CI (postgres:16-alpine). The
+    # untagged bitnami image had drifted to PostgreSQL 18, whose skip scan
+    # produces plans 16 never runs: an EXPLAIN checked here said nothing about
+    # production. A new volume on purpose — PG 18 data does not open on 16,
+    # and the old `postgres_data` volume is left untouched.
+    image: "postgres:16-alpine"
     container_name: trajetto-database
     restart: unless-stopped
+    # Loopback only: on a café or coworking network a port on 0.0.0.0 is
+    # reachable by everyone on it.
     ports:
-      - "5432:5432"
-    env_file:
-      - .env # Loads the base variables
+      - "127.0.0.1:5432:5432"
+    # Only the three POSTGRES_* below, interpolated from .env. An `env_file`
+    # here handed the whole API .env (JWT secrets, provider keys) to the
+    # database container.
     environment:
-      # Use .env variables to configure PostgreSQL
       - POSTGRES_USER=${POSTGRES_USERNAME}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DATABASE}
       - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
     volumes:
-      - postgres_data:/bitnami/postgresql
+      - postgres16_data:/var/lib/postgresql/data
     networks:
       - trajetto-network
     healthcheck:
@@ -34,8 +41,9 @@ services:
     image: redis:7-alpine
     container_name: trajetto-redis
     restart: unless-stopped
+    # Loopback only, and this Redis has no password.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -44,8 +52,34 @@ services:
       timeout: 5s
       retries: 10
 
+  # The OCR service of the AI readings (infra/ai-ocr, ADR 0010). Opt-in, it
+  # takes ~1 GiB: `docker compose -f compose.development.yaml --profile ai up -d`.
+  # Without it the API's provider_down circuit opens, the readings wait
+  # PENDING and everything else works; AI_PROVIDER=none switches them off.
+  # The token below is for this laptop only (the API's .env.example has the
+  # same one); production requires its own.
+  trajetto-ai:
+    build: ./infra/ai-ocr
+    profiles: ["ai"]
+    container_name: trajetto-ai
+    environment:
+      AI_TOKEN: ${AI_LOCAL_TOKEN:-dev-only-token-0123456789abcdef0123}
+      OCR_THREADS: "2"
+    # Loopback only, as the database: the photos it reads are the tenants'.
+    ports:
+      - "127.0.0.1:18080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 1g
+    cpus: 2
+
 volumes:
+  # The bitnami/PG 18 data of earlier setups. Kept declared so nothing removes
+  # it by surprise; no service mounts it any more.
   postgres_data:
+    driver: local
+  postgres16_data:
     driver: local
   redis_data:
     driver: local

@@ -4,6 +4,11 @@ import {
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
+import { occurrenceFormFieldsSchema } from "@/modules/occurrence-type/form/occurrence-form-rules";
+import {
+  OCCURRENCE_CATEGORIES,
+  PAUSE_KINDS,
+} from "@/modules/occurrence-type/rules/occurrence-category-rules";
 
 const occurrenceTypeNameSchema = z
   .string()
@@ -65,6 +70,39 @@ const occurrenceTypeDescriptionSchema = z.preprocess(
     .optional(),
 );
 
+/**
+ * The type's form (decision 6.2). Null or [] = no form. Validated whole —
+ * keys, labels, options, limits — so the app never renders a form it cannot
+ * check.
+ */
+const occurrenceTypeFormFieldsSchema = occurrenceFormFieldsSchema
+  .nullable()
+  .optional()
+  .describe(
+    "Formulário que o motorista preenche ao relatar este tipo: até 20 campos `{ key, label, type: text|number|boolean|select|date, required, help?, options? (select), max_length?/multiline? (text), min?/max?/integer? (number) }`. `key` é a chave estável das respostas (minúsculas, números e _). Nulo ou vazio = sem formulário.",
+  );
+
+const occurrenceCategorySchema = z
+  .enum(OCCURRENCE_CATEGORIES, {
+    errorMap: () => ({
+      message: "Categoria inválida. Use DELIVERED, NOT_DELIVERED ou PAUSE.",
+    }),
+  })
+  .describe(
+    "Categoria (decisão 14.3): DELIVERED (entrega: registrar comprova a entrega), NOT_DELIVERED (não entrega: os tipos de problema) ou PAUSE (pausa da jornada, decisão 14.4). Não muda depois que o tipo foi usado, nem nos tipos padrão.",
+  );
+
+const pauseKindSchema = z
+  .enum(PAUSE_KINDS, {
+    errorMap: () => ({
+      message: "Natureza legal inválida. Use MEAL, REST ou OTHER.",
+    }),
+  })
+  .nullable()
+  .describe(
+    "Só em PAUSE, e obrigatória lá: a natureza legal que o relatório da Lei 13.103 lê (MEAL = refeição, REST = descanso, OTHER = outra).",
+  );
+
 const createOccurrenceTypeSchema = z.object({
   name: occurrenceTypeNameSchema,
   description: occurrenceTypeDescriptionSchema,
@@ -78,10 +116,34 @@ const createOccurrenceTypeSchema = z.object({
     .describe(
       "Ocorrência impeditiva: ao ser registrada, a entrega ativa vira Insucesso (FAILED).",
     ),
+  requires_authorization: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Exige autorização da torre: o relato do motorista fica PENDENTE, sem efeito, até alguém aprovar ou negar (decisão 6.3).",
+    ),
+  form_fields: occurrenceTypeFormFieldsSchema,
+  category: occurrenceCategorySchema.default("NOT_DELIVERED"),
+  requires_receipt_photo: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Exigir a foto do canhoto (só pela câmera; lida pela IA quando a empresa tem o módulo). Não vale em PAUSE.",
+    ),
+  requires_signature: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Exigir a assinatura na tela. Em DELIVERED o quadro de assinatura é sempre oferecido; isto só o torna obrigatório. Não vale em PAUSE.",
+    ),
+  pause_kind: pauseKindSchema.optional(),
 });
 
 export {
+  occurrenceCategorySchema,
+  pauseKindSchema,
   createOccurrenceTypeSchema,
   occurrenceTypeNameSchema,
   occurrenceTypeDescriptionSchema,
+  occurrenceTypeFormFieldsSchema,
 };

@@ -6,28 +6,15 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
 import { IShipperRepository } from "@/modules/shipper/repositories/IShipper-repository";
-import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
 
-import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
 
 import { NotificationService } from "@/shared/services/notification-service";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
 import {
   ShipperNotFoundError,
-  ShipperNotBelongBusinessError,
+  ShipperInactiveError,
 } from "@/modules/shipper/usecases/errors/shipper-errors";
-
-import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
-import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
-import { DeliveryVehicleUnavailableError } from "../errors/delivery-errors";
-import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
-
-import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
-import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
 
 import { DeliveryInvoiceKeyExistsError } from "../errors/delivery-errors";
 import { AppError } from "@/shared/errors/AppError";
@@ -35,8 +22,16 @@ import { AppError } from "@/shared/errors/AppError";
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { deliveryEventPayload } from "@/shared/integration/announce";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { Delivery, CreateDeliveryProps } from "../../dtos/delivery-dto";
+
+import {
+  businessNotFound,
+  callerNotFound,
+} from "@/shared/delivery/caller-not-found";
+import { isUniqueViolation } from "@/shared/http/idempotency-key";
+import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
 
 @injectable()
 class CreateDeliveryUseCase {
@@ -47,10 +42,6 @@ class CreateDeliveryUseCase {
     private business: IBusinessRepository,
     @inject("ShipperRepository")
     private shipper: IShipperRepository,
-    @inject("VehicleRepository")
-    private vehicle: IVehicleRepository,
-    @inject("DriverRepository")
-    private driver: IDriverRepository,
     @inject("DeliveryRepository")
     private delivery: IDeliveryRepository,
     @inject("NotificationService")
@@ -59,15 +50,24 @@ class CreateDeliveryUseCase {
     private webhooks: WebhookFanOutService,
   ) {}
 
+  /**
+   * No driver or vehicle (DLV-EDIT-4): putting a delivery in a driver's hands
+   * is an assignment, which builds the route and its stop (assign-deliveries).
+   * The create schema does not carry them, and the type says so.
+   */
   async execute(
-    deliveryData: CreateDeliveryProps,
+    deliveryData: Omit<CreateDeliveryProps, "driverId" | "vehicleId">,
     userId: string,
   ): Promise<Delivery> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
-      throw new ResourceNotFoundError();
+      throw callerNotFound();
     }
+
+    // Defense in depth: the route guard must not be the only wall between
+    // tenants (same check as get-delivery and the list/exports).
+    assertTenantAccess(findUser, deliveryData.businessId);
 
     // One definition, shared: see assertDispatcher.
     assertDispatcher(findUser);
@@ -77,26 +77,29 @@ class CreateDeliveryUseCase {
     );
 
     if (!findBusiness) {
-      throw new BusinessNotFoundError();
+      throw businessNotFound();
     }
+
+    // The same form sent twice — a lost answer, a second click — is the
+    // delivery it already created, announced once (IDEMP-14). Before the
+    // access-key check: a resend of a delivery WITH a key would otherwise be
+    // refused as "this invoice already exists", which reads as a failure.
+    const replay = await this.replayOf(deliveryData);
+
+    if (replay) return replay;
 
     const findShipper = await this.shipper.findShipperById(
       deliveryData.shipperId,
     );
 
-    if (!findShipper) {
+    // Another company's id reads as absent (decision 11.3): a separate
+    // "not yours" answer told a caller which ids exist elsewhere.
+    if (!findShipper || findShipper.businessId !== deliveryData.businessId) {
       throw new ShipperNotFoundError();
     }
 
-    if (findShipper.businessId !== deliveryData.businessId) {
-      throw new ShipperNotBelongBusinessError();
-    }
-
     if (findShipper.is_active === false) {
-      throw new AppError(
-        "Este embarcador está inativo. Reative-o para registrar novas entregas.",
-        400,
-      );
+      throw new ShipperInactiveError();
     }
 
     // The same NFe never spawns two deliveries (manual or imported).
@@ -108,42 +111,6 @@ class CreateDeliveryUseCase {
 
       if (existing) {
         throw new DeliveryInvoiceKeyExistsError();
-      }
-    }
-
-    if (deliveryData.vehicleId) {
-      const findVehicle = await this.vehicle.findVehicleById(
-        deliveryData.vehicleId,
-      );
-
-      if (!findVehicle) {
-        throw new VehicleNotFoundError();
-      }
-
-      if (findVehicle.businessId !== deliveryData.businessId) {
-        throw new VehicleNotBelongBusinessError();
-      }
-
-      // Same refusal assign-deliveries already makes. Without it there were
-      // two doors onto the same delivery and only one of them was guarded:
-      // a vehicle out of operation could not be ASSIGNED to a load but could
-      // be attached to it at creation.
-      if (isVehicleOutOfOperation(findVehicle.status)) {
-        throw new DeliveryVehicleUnavailableError();
-      }
-    }
-
-    if (deliveryData.driverId) {
-      const findDriver = await this.driver.findDriverById(
-        deliveryData.driverId,
-      );
-
-      if (!findDriver) {
-        throw new DriverNotFoundError();
-      }
-
-      if (findDriver.businessId !== deliveryData.businessId) {
-        throw new DriverNotBelongBusinessError();
       }
     }
 
@@ -180,11 +147,37 @@ class CreateDeliveryUseCase {
 
       return deliveryCreated;
     } catch (error) {
+      // The twin of this submission committed after the replay check: the
+      // insert met the unique key, and the twin's delivery is the answer.
+      if (isUniqueViolation(error)) {
+        const replay = await this.replayOf(deliveryData);
+
+        if (replay) return replay;
+
+        // Two creates with the same NF-e key raced past the check above: the
+        // unique index decided, and the loser gets the same 409 the check
+        // gives (DLV-EDIT-5), not a 500.
+        if (violatesUniqueOn(error, "invoice_key")) {
+          throw new DeliveryInvoiceKeyExistsError();
+        }
+      }
+
       throw new AppError(
         "Houve um erro ao tentar criar a entrega! Por favor, tente novamente.",
         500,
       );
     }
+  }
+
+  private async replayOf(
+    deliveryData: CreateDeliveryProps,
+  ): Promise<Delivery | null> {
+    if (!deliveryData.client_submission_id) return null;
+
+    return this.delivery.findDeliveryBySubmissionId(
+      deliveryData.businessId,
+      deliveryData.client_submission_id,
+    );
   }
 }
 

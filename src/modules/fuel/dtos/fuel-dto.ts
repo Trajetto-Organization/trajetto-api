@@ -1,6 +1,15 @@
 import { Decimal } from "@prisma/client/runtime/library";
 import { LocationSource, RecordOrigin } from "@prisma/client";
 
+import type { SortOrder } from "@/shared/pagination/list-query";
+import type {
+  FuelListFilters,
+  FuelListGroup,
+  FuelListLabels,
+  FuelSortKey,
+} from "../usecases/list-fuel/fuel-list";
+import type { DevicePrecheck } from "@/shared/ai-precheck/device-precheck";
+
 interface Fuel {
   id: string;
   client_submission_id?: string | null;
@@ -73,6 +82,15 @@ interface CreateFuelProps {
 
   // 🆕 RECORD ORIGIN: Track where the record was created
   created_from: RecordOrigin;
+
+  /**
+   * The phone's offline check of the odometer photo, as sent (decision
+   * 14.2). The use case moves it to `odometer_device_precheck` or drops it.
+   */
+  device_precheck?: DevicePrecheck | null;
+
+  /** Where the accepted check is stored; set by the use case only. */
+  odometer_device_precheck?: DevicePrecheck;
 }
 
 interface UpdateFuelProps {
@@ -110,20 +128,17 @@ interface UpdateFuel {
 
 interface ListFuelProps {
   data: Fuel[];
-  total: number;
+  /** Refuelings per facet combination over the base (search + scope). */
+  groups: FuelListGroup[];
+  /** Names of the branches, vehicles and fuel types the options point at. */
+  labels: FuelListLabels;
 }
 
-interface ListFuelByBusinessIdProps {
+interface ListFuelByBusinessIdProps extends FuelListFilters {
   page: number;
   pageSize: number;
-  businessId: string;
-  currentUserRole?: string;
-  search?: string;
-  vehicleId?: string;
-  driverId?: string;
-  fuelTypeId?: string;
-  startDate?: string | Date;
-  endDate?: string | Date;
+  sort?: FuelSortKey;
+  order?: SortOrder;
 }
 
 interface GetFuelByIdAndBusinessProps {
@@ -182,12 +197,30 @@ interface SearchFuelByVehicleWithCursorProps {
   cursor?: string;
   vehicleId: string;
   businessId: string;
+  search?: string;
+
+  /**
+   * A driver's own refuelings only (decision 4.4, DRV-SCOPE-1): the history
+   * is open to whoever may operate the vehicle, not the colleagues' records.
+   */
+  driverId?: string;
 }
 
 interface CursorPaginatedFuel {
   data: Fuel[];
   nextCursor: string | null;
   hasMore: boolean;
+}
+
+/**
+ * The previous refueling as the consumption needs it (km, date, litres):
+ * nothing about who fueled, where, at what price or with which photo.
+ */
+interface PreviousFuelReading {
+  vehicleId: string;
+  refueling_date: Date | string;
+  current_mileage: number;
+  liters_amount: number;
 }
 
 export {
@@ -201,4 +234,5 @@ export {
   FuelWithRelations,
   SearchFuelByVehicleWithCursorProps,
   CursorPaginatedFuel,
+  PreviousFuelReading,
 };

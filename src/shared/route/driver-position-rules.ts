@@ -35,10 +35,19 @@ interface AcceptedPing {
  *
  * A phone that spent three hours in a dead zone comes back with hundreds of
  * points, and refusing them would lose the trail for exactly the stretch
- * somebody will ask about. Five hundred at one ping every fifteen seconds is
- * just over two hours — generous, and still a bounded insert.
+ * somebody will ask about.
+ *
+ * At least what the app may buffer (900), on purpose. The app sent its whole
+ * buffer in one request while this was 500: past 500 points every flush was
+ * refused, the batch went back, and the buffer never shrank — tracking dead on
+ * that phone for good. The app now sends 200 at a time, but the builds already
+ * in drivers' hands do not, and this is what lets them recover without an
+ * update. Still a bounded insert: one statement, a couple of hundred KB.
  */
-const MAX_PINGS_PER_BATCH = 500;
+const MAX_PINGS_PER_BATCH = 1000;
+
+/** The app's buffer ceiling (trajetto-mobile, position-rules MAX_BUFFERED). */
+const APP_MAX_BUFFERED = 900;
 
 /**
  * Worse than this and the point is thrown away.
@@ -61,9 +70,11 @@ const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 /**
  * How far back a ping may reach.
  *
- * Matches the partition retention: a point older than the oldest partition has
- * nowhere to be written, and the insert would be REFUSED rather than ignored —
- * taking the rest of the batch with it.
+ * Matches the partition retention. It is not a promise that a partition
+ * exists: for the first weeks after the migration the oldest partition is its
+ * first day, and nights the job missed leave gaps. A point with no partition
+ * is dropped on its own by the repository (splitByPartition) instead of
+ * failing the flush, which it used to take down whole.
  */
 const MAX_AGE_DAYS = 89;
 
@@ -207,7 +218,144 @@ function isPositionFresh(recordedAt: Date, now = new Date()): boolean {
   return now.getTime() - recordedAt.getTime() <= POSITION_FRESH_MS;
 }
 
+/**
+ * The newest point of a batch by DEVICE time, not by position in the body.
+ *
+ * A phone's outbox can resend an older batch after a newer one, and nothing
+ * makes a buffer come out in order. The last element is only what the phone
+ * happened to send last. On a tie the later element wins, as it always did.
+ */
+function latestPing<T extends { recorded_at: Date }>(pings: readonly T[]): T {
+  return pings.reduce((newest, ping) =>
+    ping.recorded_at.getTime() >= newest.recorded_at.getTime() ? ping : newest,
+  );
+}
+
+/**
+ * The route a point belongs to, by when it was RECORDED, not received.
+ *
+ * A phone out of signal since the morning flushes its backlog after the
+ * afternoon route has started; stamped at reception, the morning's points
+ * were credited to the afternoon route — its distance, its time, its trail in
+ * a dispute. A point from before the running route's departure belongs to no
+ * route we can name here, so it is kept in the driver's trail without one.
+ *
+ * A route with no departure time (never true for IN_PROGRESS, but the column
+ * is nullable) claims every point, which is what reception did.
+ */
+function routeOfPing(
+  recordedAt: Date,
+  route: { id: string; started_at: Date | null } | null,
+): string | null {
+  if (!route) return null;
+
+  if (route.started_at && recordedAt.getTime() < route.started_at.getTime()) {
+    return null;
+  }
+
+  return route.id;
+}
+
+/** One partition of driver_position, in epoch ms: `from` inclusive, `to` exclusive. */
+interface PartitionRange {
+  from: number;
+  to: number;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** One edge of a bound as pg_get_expr prints it: 'timestamp', MINVALUE or MAXVALUE. */
+function parseBoundEdge(edge: string): number | null {
+  if (/^MINVALUE$/i.test(edge)) return -Infinity;
+  if (/^MAXVALUE$/i.test(edge)) return Infinity;
+
+  const literal = /^'(.+)'$/.exec(edge)?.[1];
+
+  if (!literal) return null;
+
+  // recorded_at is `timestamp without time zone` holding UTC, so a bare
+  // literal is UTC. An explicit offset ("+03", "+05:30") is honoured.
+  const iso = literal.replace(" ", "T");
+  const withZone = /(Z|[+-]\d{2}(:?\d{2})?)$/.test(iso)
+    ? iso.replace(/([+-]\d{2})$/, "$1:00")
+    : `${iso}Z`;
+
+  const time = new Date(withZone).getTime();
+
+  return Number.isNaN(time) ? null : time;
+}
+
+/**
+ * Reads `pg_get_expr(relpartbound)` for one range partition.
+ *
+ * "FOR VALUES FROM ('2026-09-14 00:00:00') TO ('2026-09-15 00:00:00')" is what
+ * the migration and the nightly job create. DEFAULT, list partitions and
+ * anything unreadable come back as null and are ignored — a point is then
+ * treated as having no partition, which at worst drops a point that could have
+ * been stored, never fails a flush that could have succeeded.
+ */
+function parsePartitionBound(bound: string): PartitionRange | null {
+  const match = /FROM \((MINVALUE|'[^']+')\) TO \((MAXVALUE|'[^']+')\)/i.exec(bound);
+
+  if (!match) return null;
+
+  const from = parseBoundEdge(match[1]);
+  const to = parseBoundEdge(match[2]);
+
+  return from === null || to === null ? null : { from, to };
+}
+
+/**
+ * Splits a flush into the points some partition can hold and the ones none
+ * can, each in its original order.
+ *
+ * Needed because driver_position has no DEFAULT partition on purpose (see the
+ * migration): a single point outside every range fails the WHOLE insert, and
+ * the phone treats that 5xx as transient and resends the same batch forever.
+ */
+function splitByPartition<T extends { recorded_at: Date }>(
+  pings: readonly T[],
+  ranges: readonly PartitionRange[],
+): { writable: T[]; orphaned: T[] } {
+  const writable: T[] = [];
+  const orphaned: T[] = [];
+
+  for (const ping of pings) {
+    const time = ping.recorded_at.getTime();
+
+    if (ranges.some((range) => time >= range.from && time < range.to)) {
+      writable.push(ping);
+    } else {
+      orphaned.push(ping);
+    }
+  }
+
+  return { writable, orphaned };
+}
+
+/**
+ * Whether a partition for this instant may still appear.
+ *
+ * The nightly driver-position-partitions job creates from YESTERDAY (UTC)
+ * through its lookahead on every run, and never behind that. So a point from
+ * before yesterday with no partition has none for good — the migration's
+ * first day, a gap left by nights the job missed — and is dropped. A point
+ * from yesterday on is the job being late: the flush keeps failing and the
+ * phone keeps the points until the partition exists, instead of a 200 that
+ * throws away a day of every driver's trail in silence.
+ */
+function partitionMayStillBeCreated(recordedAt: Date, now = new Date()): boolean {
+  const todayUtc = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  );
+
+  return recordedAt.getTime() >= todayUtc - DAY_MS;
+}
+
 export {
+  APP_MAX_BUFFERED,
   FUTURE_TOLERANCE_MS,
   MAX_ACCURACY_METRES,
   MAX_AGE_DAYS,
@@ -217,6 +365,12 @@ export {
   downsample,
   hasRealCoordinates,
   isPositionFresh,
+  latestPing,
+  parsePartitionBound,
+  partitionMayStillBeCreated,
+  routeOfPing,
+  splitByPartition,
   type AcceptedPing,
+  type PartitionRange,
   type RawPing,
 };

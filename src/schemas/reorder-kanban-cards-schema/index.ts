@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 const reorderKanbanCardsSchema = z.object({
+  ...tenantLockedShape,
   cards: z
     .array(
       z.object({

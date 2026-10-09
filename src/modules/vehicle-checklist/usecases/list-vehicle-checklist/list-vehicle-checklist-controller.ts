@@ -1,56 +1,60 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
-
 import { container } from "tsyringe";
-
 import { ListVehicleChecklistUseCase } from "./list-vehicle-checklist-usecase";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-
-import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
+import { listVehicleChecklistSchema } from "@/schemas/list-vehicle-checklist-schema";
+import { replyChecklistError } from "../errors/vehicle-checklist-http-errors";
 
 class ListVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // Validated and transformed by the route (each facet is a list here).
+    const {
+      businessId,
+      page,
+      pageSize,
+      search,
+      sort,
+      order,
+      overall_condition,
+      branchId,
+      vehicleId,
+    } = request.query as z.infer<typeof listVehicleChecklistSchema>;
 
     const listVehicleChecklistUseCase = container.resolve(
       ListVehicleChecklistUseCase,
     );
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        // Try to decode, but catch errors
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        // If it fails, use the value without decoding.
-        decodedSearch = search;
-      }
-    }
-
     try {
-      const checklistsPromise = listVehicleChecklistUseCase.execute(
-        id,
-        page,
-        pageSize,
-        decodedSearch,
-      );
+      const resultPromise = listVehicleChecklistUseCase
+        .execute({
+          userId: id,
+          businessId,
+          page,
+          pageSize,
+          search: search?.trim() || undefined,
+          sort,
+          order,
+          conditions: overall_condition,
+          branchIds: branchId,
+          vehicleIds: vehicleId,
+        })
+        .then((result) => ({
+          data: result.data,
+          total: result.total,
+          meta: result.searchMeta,
+        }));
 
       await sendAsNDJSON({
         reply,
-        dataPromise: checklistsPromise,
+        dataPromise: resultPromise,
         page,
         pageSize,
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      if (replyChecklistError(reply, error)) return;
 
       throw error;
     }

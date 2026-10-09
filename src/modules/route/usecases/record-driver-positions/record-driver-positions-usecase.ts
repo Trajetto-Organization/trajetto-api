@@ -9,6 +9,7 @@ import { AppError } from "@/shared/errors/AppError";
 
 import {
   acceptPings,
+  latestPing,
   type RawPing,
 } from "@/shared/route/driver-position-rules";
 
@@ -41,11 +42,17 @@ interface RecordDriverPositionsResult {
  * driverId on this route would let any phone write anybody's trail, and the
  * trail is what a dispute is settled with.
  *
- * Nothing here is idempotent by a client key, unlike every other write the app
- * makes. That is deliberate: a resent position is a duplicate dot at the same
- * coordinates at the same second, which draws identically and thins away. An
- * idempotency key per ping would be a unique index on the hottest write path
- * in the product to prevent something invisible.
+ * No client key, unlike every other write the app makes: the point itself is
+ * the key. (driverId, recorded_at) is unique (20260924090800), so a batch the
+ * phone resends after a lost response is absorbed point by point and answered
+ * with `stored: 0` for what was already there. It used to be stored again,
+ * inflating the distance and the time of the trail a dispute is settled with
+ * (IDEMP-16). The index already existed on those columns; being unique costs
+ * only the check.
+ *
+ * Each point is credited to the running route only if it was recorded after
+ * the route left (routeOfPing): a backlog from before is the driver's, not
+ * this route's.
  */
 @injectable()
 class RecordDriverPositionsUseCase {
@@ -87,13 +94,19 @@ class RecordDriverPositionsUseCase {
     const businessId = findUser.businessId;
     const driverId = findUser.driverId;
 
-    const route = await this.route.findDriverRoute(businessId, driverId);
+    // The running route's id, and nothing else. This used to load the whole
+    // route — driver, vehicle, every stop and delivery — on every flush of
+    // every driver on the road, to read two fields.
+    const route = await this.route.findActiveRouteForDriver(
+      businessId,
+      driverId,
+    );
 
     // Only while a route is actually running. A phone that keeps reporting
     // after the last stop is a phone spending a driver's battery on a map
     // nobody is watching, and a trail from someone at home on a Sunday is
     // data we have no business holding.
-    const tracking = route?.status === "IN_PROGRESS";
+    const tracking = route !== null;
 
     if (!tracking) {
       return { stored: 0, rejected: pings.length, tracking: false };
@@ -105,20 +118,32 @@ class RecordDriverPositionsUseCase {
       return { stored: 0, rejected, tracking };
     }
 
-    const stored = await this.positions.recordBatch({
+    const { stored, dropped } = await this.positions.recordBatch({
       driverId,
       businessId,
       routeId: route.id,
+      routeStartedAt: route.started_at,
       pings: accepted,
     });
 
-    // The tower, after the write. Only the LAST point: the socket is a hint
-    // about where the truck is now, and replaying a three-hour backlog through
-    // it would redraw the same dot two hundred times for every open panel.
-    const latest = accepted[accepted.length - 1];
+    // Every point was older than any partition (INV-14): nothing new to
+    // announce, and a dot from weeks ago is not where the truck is.
+    if (dropped === accepted.length) {
+      return { stored, rejected: rejected + dropped, tracking };
+    }
+
+    // The tower, after the write. Only the NEWEST point by device time: the
+    // socket is a hint about where the truck is now, and replaying a
+    // three-hour backlog through it would redraw the same dot two hundred
+    // times for every open panel. Not the last element of the body — a
+    // resent older batch would put the truck back where it was.
+    const latest = latestPing(accepted);
 
     sendDriverPositionToBusiness(businessId, {
       driverId,
+      // The running route, as before: the socket says whose truck this is
+      // now, and its payload's routeId is not nullable for the panels that
+      // read it. The stored rows carry the per-point attribution.
       routeId: route.id,
       latitude: latest.latitude,
       longitude: latest.longitude,
@@ -127,7 +152,8 @@ class RecordDriverPositionsUseCase {
       recordedAt: latest.recorded_at.toISOString(),
     });
 
-    return { stored, rejected, tracking };
+    // Dropped points count as refused: the phone clears them either way.
+    return { stored, rejected: rejected + dropped, tracking };
   }
 }
 

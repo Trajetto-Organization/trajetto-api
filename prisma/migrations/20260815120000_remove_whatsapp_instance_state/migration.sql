@@ -3,4 +3,13 @@
 -- tracked here. The official Meta Cloud API sends from one registered business
 -- number to any opted-in recipient, so there is no per-user connection state
 -- left to store. Opt-in and phone number remain on the user row.
-ALTER TABLE "user" DROP COLUMN "whatsapp_instance_connected";
+--
+-- The column is NOT dropped here, although this release no longer uses it:
+-- migrations run while the previous image is still serving (start-first
+-- deploy, and again after an automatic rollback), and that image selects the
+-- column on every user query. It stays for one release (an @ignore field in
+-- schema.prisma, defaulted, so the new code's inserts need nothing) and is
+-- dropped in the contract phase — see
+-- 20260924090000_keep_legacy_columns_for_rollback. This migration had not
+-- reached production when the DROP was taken out; databases that applied the
+-- original version get the column back from that migration.

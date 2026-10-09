@@ -1,6 +1,8 @@
-class UserRegisterUserNotFoundError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+class UserRegisterUserNotFoundError extends AppError {
   constructor() {
-    super("Usuário de registro não encontrado!");
+    super("Usuário de registro não encontrado!", 404, "USER_NOT_FOUND");
   }
 }
 

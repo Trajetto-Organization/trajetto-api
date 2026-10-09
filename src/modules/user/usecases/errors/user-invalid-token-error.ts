@@ -1,6 +1,8 @@
-class UserInvalidTokenError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+class UserInvalidTokenError extends AppError {
   constructor() {
-    super("Token inválido!");
+    super("Token inválido!", 400, "AUTH_TOKEN_INVALID");
   }
 }
 

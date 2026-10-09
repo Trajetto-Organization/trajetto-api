@@ -2,39 +2,35 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
 import { ResendTwoFactorCodeUseCase } from "./resend-two-factor-code-usecase";
-import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 
 import { resendTwoFactorCodeSchema } from "@/schemas/resend-two-factor-code-schema";
-import { UserResendTwoFactorError } from "../errors/user-resend-two-factor-error";
 
 class ResendTwoFactorCodeController {
   async handle(
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<Response> {
-    const { email } = resendTwoFactorCodeSchema.parse(request.body);
+    const { email, challenge } = resendTwoFactorCodeSchema.parse(request.body);
+
+    // How many callers still send no challenge: the signal for switching
+    // TWO_FACTOR_CHALLENGE_REQUIRED on (WEB-07).
+    if (!challenge) {
+      request.log.info(
+        { event: "auth.two_factor_without_challenge", step: "resend" },
+        "Two-factor request without challenge",
+      );
+    }
+
     const resendTwoFactorCodeUseCase = container.resolve(
       ResendTwoFactorCodeUseCase,
     );
 
-    try {
-      const { twoFactorVerificationMessage } =
-        await resendTwoFactorCodeUseCase.execute(email);
+    const { twoFactorVerificationMessage } =
+      await resendTwoFactorCodeUseCase.execute(email, challenge);
 
-      return reply.status(200).send({
-        message: twoFactorVerificationMessage,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof UserResendTwoFactorError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(200).send({
+      message: twoFactorVerificationMessage,
+    });
   }
 }
 

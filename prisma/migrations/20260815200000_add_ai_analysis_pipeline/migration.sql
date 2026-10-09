@@ -120,6 +120,13 @@ FROM "business"
 WHERE "ai_analysis_used" > 0
   AND date_trunc('month', "ai_analysis_reset_at") = date_trunc('month', CURRENT_DATE);
 
--- The legacy counter and its reset timestamp are fully replaced by the ledger.
-ALTER TABLE "business" DROP COLUMN "ai_analysis_used";
-ALTER TABLE "business" DROP COLUMN "ai_analysis_reset_at";
+-- The legacy counter and its reset timestamp are fully replaced by the ledger,
+-- but NOT dropped here: migrations run while the previous image is still
+-- serving (start-first deploy, and again after an automatic rollback), and
+-- that image selects and increments them. They stay for one release (@ignore
+-- fields in schema.prisma, defaulted) and are dropped in the contract phase —
+-- see 20260924090000_keep_legacy_columns_for_rollback. Increments the previous
+-- image makes during the rollout are not carried into the ledger; that is a
+-- few AI units at most. This migration had not reached production when the
+-- DROPs were taken out; databases that applied the original version get the
+-- columns back from that migration.

@@ -22,18 +22,52 @@ const SOURCE = {
   openapi: "3.1.0",
   info: { title: "Trajetto API", version: "1.0.0" },
   paths: {
-    "/integration/v1/deliveries": { get: { tags: ["integration"] } },
+    "/integration/v1/deliveries": {
+      get: {
+        tags: ["integration"],
+        responses: {
+          200: {
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/PublicDelivery" },
+              },
+            },
+          },
+        },
+      },
+    },
     "/integration/v1/routes/{id}": { get: { tags: ["integration"] } },
     "/integrations/api-keys": { get: { tags: ["integration-admin"] } },
     "/delivery/list-delivery": { get: { tags: ["delivery"] } },
-    "/user/create-user": { post: { tags: ["user"] } },
+    "/user/create-user": {
+      post: {
+        tags: ["user"],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/InternalUser" },
+            },
+          },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
       bearerAuth: { type: "http", scheme: "bearer" },
       apiKey: { type: "http", scheme: "bearer" },
     },
-    schemas: { PublicDelivery: { type: "object" } },
+    schemas: {
+      // Reached through the public path, and through it the item it nests.
+      PublicDelivery: {
+        type: "object",
+        properties: { item: { $ref: "#/components/schemas/PublicItem" } },
+      },
+      PublicItem: { type: "object" },
+      // Only an internal route refers to it; the other, nothing at all.
+      InternalUser: { type: "object" },
+      InternalSecret: { type: "object" },
+    },
   },
 };
 
@@ -66,13 +100,34 @@ describe("the public reference", () => {
     expect(Object.keys(schemes)).toEqual(["apiKey"]);
   });
 
-  it("keeps the shapes the remaining paths refer to", () => {
+  it("keeps the shapes the remaining paths refer to, transitively", () => {
     // Pruning components by guessing which are still referenced ships a
     // dangling $ref, which renders as an empty box and tells the reader
-    // nothing about what to send.
-    expect((document.components as { schemas: object }).schemas).toEqual({
-      PublicDelivery: { type: "object" },
-    });
+    // nothing about what to send. Reachability through $ref cannot guess.
+    const schemas = (document.components as { schemas: Record<string, unknown> })
+      .schemas;
+
+    expect(Object.keys(schemas)).toEqual(
+      expect.arrayContaining(["PublicDelivery", "PublicItem"]),
+    );
+  });
+
+  it("leaks no internal shape into the public reference (DOCS-13)", () => {
+    // Copying every component published whatever the internal document
+    // registered — an internal route's body, or a schema nobody refers to.
+    // What remains is what the public paths reach, plus the webhook payloads.
+    const schemas = (document.components as { schemas: Record<string, unknown> })
+      .schemas;
+
+    expect(schemas.InternalUser).toBeUndefined();
+    expect(schemas.InternalSecret).toBeUndefined();
+    expect(
+      Object.keys(schemas).filter(
+        (name) =>
+          !["PublicDelivery", "PublicItem"].includes(name) &&
+          !name.startsWith("Webhook"),
+      ),
+    ).toEqual([]);
   });
 
   it("titles itself as the integration API, not as the product", () => {
@@ -131,9 +186,11 @@ describe("who may read the internal reference", () => {
   });
 
   it("takes both halves together", () => {
+    // Long enough to be accepted — a short one keeps it closed, see
+    // docs-access-hardening.test.ts.
     const access = docsAccessFor("production", {
       user: "equipe",
-      password: "segredo",
+      password: "segredo-longo-o-bastante",
     });
 
     expect(access.kind).toBe("basic");

@@ -3,7 +3,7 @@ import {
   CreateStatusChangeReasonProps,
   UpdateStatusChangeReasonProps,
   ListStatusChangeReasonsProps,
-  ListStatusChangeReasonsResult,
+  ListStatusChangeReasonsPage,
 } from "../dtos/status-change-reason-dto";
 
 /**
@@ -18,9 +18,13 @@ interface IStatusChangeReasonRepository {
     reasonData: CreateStatusChangeReasonProps,
   ) => Promise<StatusChangeReason>;
 
+  /**
+   * The page (search + Status filter, in the list's order), the count per
+   * status over the search alone, and how many of those some event cites.
+   */
   listStatusChangeReasons: (
     props: ListStatusChangeReasonsProps,
-  ) => Promise<ListStatusChangeReasonsResult>;
+  ) => Promise<ListStatusChangeReasonsPage>;
 
   /** The picker's vocabulary: active reasons only, lean payload. */
   listActiveStatusChangeReasons: (businessId: string) => Promise<
@@ -35,12 +39,6 @@ interface IStatusChangeReasonRepository {
     businessId: string,
     name: string,
   ) => Promise<StatusChangeReason | null>;
-
-  countStatusChangeReasonsSummary: (businessId: string) => Promise<{
-    total: number;
-    active: number;
-    used: number;
-  }>;
 
   updateStatusChangeReason: (
     reasonId: string,

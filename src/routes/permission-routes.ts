@@ -17,6 +17,7 @@ import {
   permissionResponses,
   permissionSchemas,
 } from "./documentation/permission-documentation";
+import { ndjsonList, offsetMetaWith } from "./documentation/ndjson";
 
 const createPermissionController = new CreatePermissionController();
 const listPermissionController = new ListPermissionController();
@@ -41,13 +42,16 @@ async function permissionRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
-        summary: "Create a new permission",
+        summary: "Cria uma permissão num perfil de acesso",
         description:
-          "Register a new system permission with access control rules and resource restrictions",
+          "Concede a um perfil de acesso a leitura (e, se marcada, a escrita) de um recurso. Leitura é obrigatória. Um usuário comum não concede nada ao próprio perfil.",
         body: permissionSchemas.createPermission,
         response: {
           201: permissionResponses.permissionCreated,
           400: permissionResponses.createPermissionErrors,
+          403: permissionResponses.permissionWriteForbidden,
+          404: permissionResponses.permissionWriteNotFound,
+          409: permissionResponses.permissionWriteConflict,
           500: permissionResponses.internalServerError,
         },
       },
@@ -63,13 +67,17 @@ async function permissionRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
-        summary: "List permissions",
+        summary: "Lista as permissões de uma empresa",
         description:
-          "Retrieve a paginated list of system permissions with their access control configurations",
+          "Página de permissões com busca, ordenação e filtros no servidor (recurso, perfil, leitura, escrita). A linha de meta traz em `searchMeta` as contagens e as opções dos filtros, sobre a empresa inteira. O MASTER informa `businessId`; os demais listam a própria empresa, e um usuário comum não vê as permissões do próprio perfil.",
         querystring: permissionSchemas.listPermission,
         response: {
-          200: permissionResponses.permissionList,
+          200: ndjsonList(
+            permissionResponses.permissionListRow,
+            offsetMetaWith(permissionResponses.permissionListSearchMeta),
+          ),
           400: permissionResponses.listPermissionErrors,
+          404: permissionResponses.businessNotFound,
           500: permissionResponses.internalServerError,
         },
       },
@@ -88,15 +96,17 @@ async function permissionRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
-        summary: "Update a permission",
+        summary: "Atualiza uma permissão",
         description:
-          "Update existing permission settings including access rules and resource restrictions",
+          "Altera o nome, o recurso, o perfil (da mesma empresa) ou a leitura/escrita de uma permissão. A empresa é a da permissão e não muda (decisão 16.100): um `businessId` no corpo responde 400 VALIDATION_ERROR, e um perfil de outra empresa, 400 PROFILE_ACCESS_NOT_FOUND. As sessões da empresa releem as permissões na hora. Um usuário comum não altera as permissões do próprio perfil nem move uma permissão para ele.",
         params: permissionSchemas.updateDeletePermission,
         body: permissionSchemas.updatePermission,
         response: {
           200: permissionResponses.permissionUpdated,
           400: permissionResponses.updatePermissionErrors,
-          403: permissionResponses.permissionCannotBeUpdatedByHimself,
+          403: permissionResponses.permissionWriteForbidden,
+          404: permissionResponses.permissionWriteNotFound,
+          409: permissionResponses.permissionWriteConflict,
           500: permissionResponses.internalServerError,
         },
       },
@@ -112,14 +122,15 @@ async function permissionRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
-        summary: "Delete a permission",
+        summary: "Exclui uma permissão",
         description:
-          "Permanently remove a permission from the system access control configuration",
+          "Remove a permissão do perfil. Quem usa o perfil perde o acesso ao recurso na hora.",
         params: permissionSchemas.updateDeletePermission,
         response: {
           200: permissionResponses.permissionDeleted,
           400: permissionResponses.deletePermissionErrors,
-          403: permissionResponses.permissionCannotBeDeletedByHimself,
+          403: permissionResponses.permissionWriteForbidden,
+          404: permissionResponses.permissionWriteNotFound,
           500: permissionResponses.internalServerError,
         },
       },
@@ -138,13 +149,15 @@ async function permissionRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
-        summary: "Bulk configure permissions for a profile",
+        summary: "Configura todas as permissões de um perfil de uma vez",
         description:
-          "Replace all permissions of a profile with the provided set in a single atomic operation",
+          "Substitui, numa só transação, todas as permissões do perfil pelo conjunto enviado. Toda linha precisa de leitura e cada recurso aparece uma vez (400 caso contrário). Um usuário comum não configura o próprio perfil.",
         body: permissionSchemas.bulkConfigurePermissions,
         response: {
           200: permissionResponses.permissionsConfigured,
           400: permissionResponses.bulkConfigurePermissionsErrors,
+          403: permissionResponses.permissionWriteForbidden,
+          404: permissionResponses.permissionWriteNotFound,
           500: permissionResponses.internalServerError,
         },
       },
@@ -160,14 +173,15 @@ async function permissionRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["permission"],
-        summary: "List permissions by profile",
+        summary: "Lista as permissões de um perfil",
         description:
-          "Retrieve all permissions assigned to a specific access profile",
+          "Devolve todas as permissões atribuídas a um perfil de acesso.",
         params: permissionSchemas.listByProfile,
         querystring: permissionSchemas.listByProfileQuery,
         response: {
           200: permissionResponses.permissionsByProfile,
           400: permissionResponses.listPermissionErrors,
+          404: permissionResponses.resourceNotFound,
           500: permissionResponses.internalServerError,
         },
       },

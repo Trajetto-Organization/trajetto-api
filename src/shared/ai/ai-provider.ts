@@ -1,264 +1,262 @@
 import { env } from "@/env";
 
-import Anthropic from "@anthropic-ai/sdk";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 import fs from "node:fs";
 import path from "node:path";
 
+import type { AnswerByKind } from "./ai-answers";
+import type { ChecklistFieldSpec } from "./ai-prompts";
 import {
-  ChecklistProviderResponse,
-  ProofProviderResponse,
-  OdometerProviderResponse,
-} from "./ai-rules";
-import { ProviderCallUsage } from "./ai-types";
+  LOCAL_AI_DEFAULT_MAX_CONCURRENCY,
+  LOCAL_AI_DEFAULT_TIMEOUT_MS,
+} from "./ai-provider-defaults";
+import type { ProviderCall } from "./ai-types";
+import type {
+  ImageReader,
+  ReadTarget,
+  ReadingKind,
+  StoredImage,
+} from "./image-reader";
+import { LocalOcrReader } from "./local/local-ocr-reader";
+import { providerErrorKind, providerMetrics } from "@/shared/health/provider-metrics";
+import { ImageUnavailableError, PaidInvalidResponseError } from "./reader-errors";
+import type { ImageMediaType, ProviderFailureKind } from "./vision-provider";
 
-const PROVIDER_NAME = "anthropic";
-const VISION_MODEL = "claude-haiku-4-5-20251001";
+/** The photo read from storage before the call; a stuck GET must not hang either. */
+const AI_IMAGE_FETCH_TIMEOUT_MS = 15_000;
+
+/** Loads a stored photo for the reader; injectable so tests need no storage. */
+type ImageLoader = (storagePath: string) => Promise<StoredImage>;
+
+// ============================================================================
+// Configuration (ADR 0010, rewritten 05/10/2026)
+// ============================================================================
+
+interface AIProviderConfig {
+  AI_PROVIDER: "local" | "none";
+  AI_LOCAL_URL?: string;
+  AI_LOCAL_TOKEN?: string;
+  AI_LOCAL_TIMEOUT_MS?: number;
+  AI_LOCAL_MAX_CONCURRENCY?: number;
+}
+
+/** The reader the environment selects, or null when the readings are off. */
+function createConfiguredImageReader(
+  config: AIProviderConfig = env,
+): ImageReader | null {
+  if (!aiProviderConfigured(config)) return null;
+
+  return new LocalOcrReader({
+    url: config.AI_LOCAL_URL!,
+    token: config.AI_LOCAL_TOKEN!,
+    timeoutMs: config.AI_LOCAL_TIMEOUT_MS ?? LOCAL_AI_DEFAULT_TIMEOUT_MS,
+    maxConcurrency: config.AI_LOCAL_MAX_CONCURRENCY ?? LOCAL_AI_DEFAULT_MAX_CONCURRENCY,
+  });
+}
 
 /**
- * HTTP status of a provider API error, or undefined for anything else
- * (network failures, parse errors). The pipeline uses it to decide whether a
- * retry can possibly help: an invalid key returns 401 on every attempt, so
- * waiting through the whole backoff schedule just delays the inevitable.
+ * Whether analyses can be requested at all. The one gate for the service, the
+ * proof sweep, the progress route and the pipeline. `local` without a URL or
+ * a token behaves as `none`: the records are marked skipped, nothing queues.
  */
-function providerErrorStatus(error: unknown): number | undefined {
-  return error instanceof Anthropic.APIError ? error.status : undefined;
+function aiProviderConfigured(config: AIProviderConfig = env): boolean {
+  return (
+    config.AI_PROVIDER === "local" &&
+    Boolean(config.AI_LOCAL_URL && config.AI_LOCAL_TOKEN)
+  );
 }
 
-type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+// ============================================================================
+// Images
+// ============================================================================
 
-interface ProviderCall<TParsed> {
-  parsed: TParsed;
-  usage: ProviderCallUsage;
+const MEDIA_TYPES: Record<string, ImageMediaType> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+let s3Client: S3Client | null = null;
+
+function storageClient(): S3Client | null {
+  if (env.UPLOAD_STORAGE_TYPE !== "r2" || !env.R2_ACCOUNT_ID) return null;
+
+  s3Client ??= new S3Client({
+    credentials: {
+      accessKeyId: env.R2_ACCESS_KEY_ID || "",
+      secretAccessKey: env.R2_SECRET_ACCESS_KEY || "",
+    },
+    endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    region: "auto",
+    requestHandler: {
+      connectionTimeout: 5_000,
+      requestTimeout: AI_IMAGE_FETCH_TIMEOUT_MS,
+    },
+  });
+
+  return s3Client;
 }
-
-// Field-specific prompt builders (checklist)
-const CHECKLIST_FIELD_PROMPTS: Record<string, (fieldValue: unknown) => string> =
-  {
-    current_mileage: (reportedKm) =>
-      `Analise esta foto do odômetro de um veículo. O motorista informou a quilometragem de ${reportedKm} km.
-    Extraia o valor numérico exibido no odômetro e compare com o valor informado.
-    Responda APENAS em JSON: { "valor_lido": number | null, "confianca": 0-100, "corresponde": boolean, "legivel": boolean, "observacao": string }`,
-
-    tires_condition: (condition) =>
-      `Analise esta foto de pneu de veículo. O motorista classificou a condição como "${condition}".
-    Avalie: desgaste da banda de rodagem, danos visíveis (cortes, bolhas, desgaste irregular), calibragem aparente.
-    Responda APENAS em JSON: { "condicao_observada": "good" | "bad" | "needs_attention", "corresponde_ao_informado": boolean, "confianca": 0-100, "observacao": string }`,
-
-    fuel_level_adequate: (adequate) =>
-      `Analise esta foto do painel/marcador de combustível de um veículo. O motorista informou que o nível de combustível ${adequate ? "está adequado" : "NÃO está adequado"}.
-    Leia o marcador de combustível e estime o nível.
-    Responda APENAS em JSON: { "nivel_estimado": "cheio" | "tres_quartos" | "metade" | "um_quarto" | "reserva" | "ilegivel", "adequado": boolean, "corresponde_ao_informado": boolean, "confianca": 0-100, "observacao": string }`,
-
-    _default: (fieldValue) =>
-      `Analise esta foto de um item de checklist veicular. O motorista informou a condição como "${fieldValue}".
-    Avalie visualmente se a foto corresponde à condição informada. Verifique se há danos, problemas ou irregularidades visíveis.
-    Responda APENAS em JSON: { "condicao_observada": string, "corresponde_ao_informado": boolean, "confianca": 0-100, "observacao": string }`,
-  };
 
 /**
- * The raw provider boundary: fetches the photo, calls the vision model and
- * returns the parsed JSON plus token usage for the attempt trail. Transport
- * and parse failures THROW — the pipeline records the failed attempt and
- * retries with backoff, unlike the legacy service which swallowed them into
- * a fake "error" result and charged nothing while never retrying.
+ * The photo from R2 (production) or the local upload folder (development),
+ * as bytes: the OCR service takes them as the request body; only a vision
+ * model needs base64, and VisionModelReader computes it.
+ */
+const loadStoredImage: ImageLoader = async (storagePath) => {
+  let buffer: Buffer;
+  const s3 = storageClient();
+
+  if (s3) {
+    // One deadline over the request AND the body: the handler's
+    // requestTimeout is a socket idle timeout, which a slow trickle of bytes
+    // never trips.
+    const abortSignal = AbortSignal.timeout(AI_IMAGE_FETCH_TIMEOUT_MS);
+
+    const result = await s3.send(
+      new GetObjectCommand({ Bucket: env.R2_BUCKET_NAME || "", Key: storagePath }),
+      { abortSignal },
+    );
+
+    buffer = Buffer.from(await result.Body!.transformToByteArray());
+  } else {
+    const fullPath = path.join(path.resolve(env.UPLOAD_LOCAL_PATH), storagePath);
+    buffer = await fs.promises.readFile(fullPath);
+  }
+
+  return {
+    bytes: buffer,
+    mediaType:
+      MEDIA_TYPES[path.extname(storagePath).toLowerCase()] || "image/webp",
+  };
+};
+
+// ============================================================================
+// The analyzer
+// ============================================================================
+
+/**
+ * Reads a photo for the pipeline: loads it and hands it to the reader, which
+ * answers in the product's validated shape (ai-answers.ts). Reader-agnostic:
+ * OCR in production, a vision model or a fake in tests.
+ *
+ * Transport failures and invalid answers THROW. The pipeline records the
+ * attempt and decides with `classifyError` whether to retry, wait (busy),
+ * give the unit back or pause; an invalid answer carries the usage of the
+ * call that produced it.
  */
 class AIAnalysisProvider {
-  private client: Anthropic | null = null;
-  private s3: S3Client | null = null;
+  constructor(
+    private reader: ImageReader | null = createConfiguredImageReader(),
+    private loadImage: ImageLoader = loadStoredImage,
+  ) {}
 
-  constructor() {
-    if (env.ANTHROPIC_API_KEY) {
-      this.client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-    }
-
-    if (env.UPLOAD_STORAGE_TYPE === "r2" && env.R2_ACCOUNT_ID) {
-      this.s3 = new S3Client({
-        credentials: {
-          accessKeyId: env.R2_ACCESS_KEY_ID || "",
-          secretAccessKey: env.R2_SECRET_ACCESS_KEY || "",
-        },
-        endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-        region: "auto",
-      });
-    }
+  isAvailable(): boolean {
+    return this.reader !== null && this.reader.isConfigured();
   }
 
-  public isAvailable(): boolean {
-    return this.client !== null;
+  get providerName(): string {
+    return this.reader?.name ?? "none";
   }
 
-  public async analyzeOdometerImage(
-    imagePath: string,
-    reportedMileage: number,
-  ): Promise<ProviderCall<OdometerProviderResponse>> {
-    const prompt = `Analise esta foto de odômetro de veículo. O motorista informou a quilometragem de ${reportedMileage} km.
-                Extraia o valor numérico exibido no odômetro. Considere:
-                  1. Se é odômetro digital ou analógico
-                  2. Se a imagem está legível e clara
-                  3. Se há sinais de adulteração ou fraude (foto de tela, edição, outro veículo)
-                  4. Compare o valor lido com o informado (${reportedMileage} km)
-
-                  Responda APENAS em JSON válido, sem markdown:
-                  { "valor_lido": number | null, "confianca": 0-100, "legivel": boolean, "sinais_fraude": boolean, "motivos_fraude": string[], "observacao": string }`;
-
-    return this.callVisionModel<OdometerProviderResponse>(imagePath, prompt);
+  get model(): string {
+    return this.reader?.model ?? "none";
   }
 
-  public async analyzeChecklistImage(
-    imagePath: string,
-    fieldName: string,
-    fieldValue: unknown,
-  ): Promise<ProviderCall<ChecklistProviderResponse>> {
-    const promptBuilder =
-      CHECKLIST_FIELD_PROMPTS[fieldName] || CHECKLIST_FIELD_PROMPTS._default;
-
-    return this.callVisionModel<ChecklistProviderResponse>(
-      imagePath,
-      promptBuilder(fieldValue),
-    );
+  /** Reads in flight this reader takes per replica. */
+  get maxConcurrency(): number {
+    return this.reader?.maxConcurrency ?? 1;
   }
 
-  /**
-   * The four criteria, in one call.
-   *
-   * One prompt and not four: they are all about the same photo, and charging a
-   * company four times to look at one picture would make the feature cost four
-   * times what it is worth.
-   *
-   * The model is asked to answer "nao_sei" wherever it cannot tell, and the
-   * prompt says why — a photo taken through a truck window in the rain has
-   * real unanswerable questions in it, and a model pushed into yes/no invents
-   * a "no" that sends a driver back to an address for nothing.
-   */
-  public async analyzeDeliveryProof(
-    imagePath: string,
-    context: {
-      expectedDocument: string | null;
-      expectedRecipient: string;
-      provenOn: string;
-    },
-  ): Promise<ProviderCall<ProofProviderResponse>> {
-    const documentLine = context.expectedDocument
-      ? `O documento esperado no canhoto e "${context.expectedDocument}".`
-      : "Nao ha numero de documento esperado para conferir; responda \"nao_sei\" em documento_confere.";
-
-    const prompt = [
-      "Voce esta olhando a foto de um canhoto de entrega (comprovante assinado pelo destinatario).",
-      `O destinatario esperado e "${context.expectedRecipient}".`,
-      documentLine,
-      `A entrega foi comprovada em ${context.provenOn}.`,
-      "",
-      "Responda APENAS um JSON com exatamente estas chaves:",
-      "{",
-      '  "legivel": "sim" | "nao" | "nao_sei",',
-      '  "tem_assinatura": "sim" | "nao" | "nao_sei",',
-      '  "data_presente": "sim" | "nao" | "nao_sei",',
-      '  "documento_confere": "sim" | "nao" | "nao_sei",',
-      '  "qualidade_foto": 0.0 a 1.0,',
-      '  "confianca": 0.0 a 1.0,',
-      '  "observacao": "uma frase curta em portugues"',
-      "}",
-      "",
-      'Use "nao_sei" sempre que a foto nao permitir concluir. Uma foto tirada pela janela de um caminhao, na chuva, tem perguntas que nao tem resposta — e um "nao" inventado manda um motorista de volta a um endereco a toa.',
-      "Nao aprove nem reprove a entrega: voce apenas descreve o que ve.",
-    ].join("\n");
-
-    return this.callVisionModel<ProofProviderResponse>(imagePath, prompt);
-  }
-
-  private async callVisionModel<TParsed>(
-    imagePath: string,
-    prompt: string,
-  ): Promise<ProviderCall<TParsed>> {
-    if (!this.client) {
-      throw new Error("AI provider not configured (missing ANTHROPIC_API_KEY)");
-    }
-
-    const { base64, mediaType } = await this.fetchImageAsBase64(imagePath);
-    const startedAt = Date.now();
-
-    const response = await this.client.messages.create({
-      model: VISION_MODEL,
-      max_tokens: 500,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: mediaType, data: base64 },
-            },
-            { type: "text", text: prompt },
-          ],
-        },
-      ],
-    });
-
-    const usage: ProviderCallUsage = {
-      provider: PROVIDER_NAME,
-      model: VISION_MODEL,
-      inputTokens: response.usage?.input_tokens ?? null,
-      outputTokens: response.usage?.output_tokens ?? null,
-      durationMs: Date.now() - startedAt,
-    };
-
-    const textContent = response.content.find(
-      (content) => content.type === "text",
-    );
-    const rawText = textContent?.type === "text" ? textContent.text : "";
-
-    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-
-    if (!jsonMatch) {
-      throw new Error(
-        `Model response contained no JSON (${usage.model}): ${rawText.slice(0, 200)}`,
-      );
-    }
-
-    return { parsed: JSON.parse(jsonMatch[0]) as TParsed, usage };
-  }
-
-  private async fetchImageAsBase64(filePath: string): Promise<{
-    base64: string;
-    mediaType: ImageMediaType;
-  }> {
-    let buffer: Buffer;
-
-    if (this.s3 && env.UPLOAD_STORAGE_TYPE === "r2") {
-      const result = await this.s3.send(
-        new GetObjectCommand({
-          Bucket: env.R2_BUCKET_NAME || "",
-          Key: filePath,
-        }),
-      );
-
-      // In SDK v3 the Body is a stream; `transformToByteArray` materializes it.
-      const bytes = await result.Body!.transformToByteArray();
-      buffer = Buffer.from(bytes);
-    } else {
-      const localPath = env.UPLOAD_LOCAL_PATH;
-      const fullPath = path.join(path.resolve(localPath), filePath);
-
-      buffer = await fs.promises.readFile(fullPath);
-    }
-
-    const ext = path.extname(filePath).toLowerCase();
-    const mediaTypeMap: Record<string, ImageMediaType> = {
-      ".jpg": "image/jpeg",
-      ".jpeg": "image/jpeg",
-      ".png": "image/png",
-      ".webp": "image/webp",
-      ".gif": "image/gif",
-    };
-
+  /** The per-call budget the lease has to cover. */
+  budget(): { timeoutMs: number; maxRetries: number } {
     return {
-      base64: buffer.toString("base64"),
-      mediaType: mediaTypeMap[ext] || "image/webp",
+      timeoutMs: this.reader?.timeoutMs ?? 0,
+      maxRetries: this.reader?.maxRetries ?? 0,
     };
+  }
+
+  /** Whether the reader answers this kind; no reader answers nothing. */
+  supports(kind: ReadingKind): boolean {
+    return this.reader?.supports(kind) ?? false;
+  }
+
+  classifyError(error: unknown): ProviderFailureKind {
+    return this.reader?.classifyError(error) ?? "retryable";
+  }
+
+  analyzeOdometerImage(
+    imagePath: string,
+  ): Promise<ProviderCall<AnswerByKind["odometer"]>> {
+    return this.read(imagePath, { kind: "odometer", subject: "o odômetro" });
+  }
+
+  analyzeChecklistImage<K extends ChecklistFieldSpec["kind"]>(
+    imagePath: string,
+    spec: ChecklistFieldSpec & { kind: K },
+  ): Promise<ProviderCall<AnswerByKind[K]>> {
+    return this.read(imagePath, spec);
+  }
+
+  analyzeDeliveryProof(
+    imagePath: string,
+  ): Promise<ProviderCall<AnswerByKind["proof"]>> {
+    return this.read(imagePath, { kind: "proof" });
+  }
+
+  private async read<T extends ReadTarget>(
+    imagePath: string,
+    target: T,
+  ): Promise<ProviderCall<AnswerByKind[T["kind"]]>> {
+    if (!this.reader || !this.reader.isConfigured()) {
+      throw new Error("AI reader not configured");
+    }
+
+    let image: StoredImage;
+
+    try {
+      image = await this.loadImage(imagePath);
+    } catch (error) {
+      throw new ImageUnavailableError(imagePath, error);
+    }
+
+    // Timed per call for /health/metrics. Only the reader's call: loading the
+    // photo from storage is not the OCR service's latency. The kind is the
+    // pipeline's own classification (busy, retryable, ...), never a message.
+    const reader = this.reader;
+    const startedAt = performance.now();
+
+    try {
+      const call = await reader.read(target, image);
+
+      providerMetrics.record("AI_OCR", performance.now() - startedAt, true);
+
+      return call;
+    } catch (error) {
+      let kind: string;
+
+      try {
+        kind = reader.classifyError(error);
+      } catch {
+        kind = providerErrorKind(error);
+      }
+
+      providerMetrics.record("AI_OCR", performance.now() - startedAt, false, kind);
+
+      throw error;
+    }
   }
 }
 
-export { AIAnalysisProvider, PROVIDER_NAME, VISION_MODEL, providerErrorStatus };
-export type { ProviderCall };
+export {
+  AIAnalysisProvider,
+  AI_IMAGE_FETCH_TIMEOUT_MS,
+  ImageUnavailableError,
+  PaidInvalidResponseError,
+  aiProviderConfigured,
+  createConfiguredImageReader,
+  loadStoredImage,
+};
+export type { AIProviderConfig, ImageLoader, ProviderCall };

@@ -22,12 +22,11 @@ import { sendChatDeliveredEvent, sendChatReadEvent } from "@/websocket";
 
 import {
   ChatMessageNotFoundError,
+  ChatDeliveryNotFoundError,
   ChatDeliveryReceiptNotAllowedError,
-  ChatDriverNotBelongBusinessError,
+  ChatDriverNotFoundError,
   ChatThreadNotFoundError,
 } from "@/modules/chat/usecases/errors/chat-errors";
-
-import { DeliveryNotFoundError } from "@/modules/delivery/usecases/errors/delivery-errors";
 import { AppError } from "@/shared/errors/AppError";
 
 import type { UploadService } from "@/shared/services/upload-service";
@@ -71,7 +70,7 @@ vi.mock("@/websocket", () => ({
   sendChatMessageEvent: vi.fn(),
   sendChatReadEvent: vi.fn(),
   sendChatDeliveredEvent: vi.fn(),
-  getOnlineUserIdsForBusiness: vi.fn(async () => []),
+  getOnlineUserIds: vi.fn(async () => []),
 }));
 
 // The presigned upload already happened; the stub answers as the bucket
@@ -142,11 +141,13 @@ function makeRepositories() {
 
   users.forEach((user) => userRepository.user.push(user as User));
 
+  // status is a required column: the send asks the login rule whether the
+  // driver can read the thread, and that rule refuses a driver not ACTIVE.
   const drivers: Array<Partial<Driver>> = [
-    { id: JOAO_DRIVER_ID, name: "João Motorista", cnh: "111", businessId: BUSINESS },
-    { id: MARIA_DRIVER_ID, name: "Maria Motorista", cnh: "222", businessId: BUSINESS },
-    { id: NO_APP_DRIVER_ID, name: "Sem Aplicativo", cnh: "444", businessId: BUSINESS },
-    { id: FOREIGN_DRIVER_ID, name: "De Outra Empresa", cnh: "333", businessId: OTHER_BUSINESS },
+    { id: JOAO_DRIVER_ID, name: "João Motorista", cnh: "111", businessId: BUSINESS, status: "ACTIVE" },
+    { id: MARIA_DRIVER_ID, name: "Maria Motorista", cnh: "222", businessId: BUSINESS, status: "ACTIVE" },
+    { id: NO_APP_DRIVER_ID, name: "Sem Aplicativo", cnh: "444", businessId: BUSINESS, status: "ACTIVE" },
+    { id: FOREIGN_DRIVER_ID, name: "De Outra Empresa", cnh: "333", businessId: OTHER_BUSINESS, status: "ACTIVE" },
   ];
 
   drivers.forEach((driver) => driverRepository.drivers.push(driver as Driver));
@@ -281,17 +282,46 @@ describe("send-chat-message", () => {
     ).rejects.toMatchObject({ code: "DRIVER_CHAT_OWN_THREAD" });
   });
 
-  it("refuses a driver of another company", async () => {
+  it("refuses a driver of another company exactly like a missing one", async () => {
     const repos = makeRepositories();
 
-    await expect(
-      makeSendUseCase(repos).execute({
-        userId: MANAGER_ID,
-        driverIds: [FOREIGN_DRIVER_ID],
-        kind: "TEXT",
-        body: "oi",
-      }),
-    ).rejects.toBeInstanceOf(ChatDriverNotBelongBusinessError);
+    const foreign = makeSendUseCase(repos).execute({
+      userId: MANAGER_ID,
+      driverIds: [FOREIGN_DRIVER_ID],
+      kind: "TEXT",
+      body: "oi",
+    });
+
+    const missing = makeSendUseCase(repos).execute({
+      userId: MANAGER_ID,
+      driverIds: ["018f0000-0000-7000-8000-0000000000fe"],
+      kind: "TEXT",
+      body: "oi",
+    });
+
+    // It used to be 403 "não pertence à sua empresa" against 400 "não
+    // encontrado": the difference said the id was real in another tenant.
+    const answers = await Promise.all(
+      [foreign, missing].map((attempt) =>
+        attempt.then(
+          () => null,
+          (error: AppError) => ({
+            type: error.constructor.name,
+            statusCode: error.statusCode,
+            code: error.code,
+            message: error.message,
+          }),
+        ),
+      ),
+    );
+
+    expect(answers[0]).toEqual({
+      type: ChatDriverNotFoundError.name,
+      statusCode: 404,
+      code: "CHAT_DRIVER_NOT_FOUND",
+      message: "Motorista não encontrado para esta conversa.",
+    });
+    expect(answers[1]).toEqual(answers[0]);
   });
 
   it("validates the delivery chip inside the sender's scope", async () => {
@@ -317,7 +347,7 @@ describe("send-chat-message", () => {
         body: "Sobre essa entrega...",
         deliveryId: mine.id!,
       }),
-    ).rejects.toBeInstanceOf(DeliveryNotFoundError);
+    ).rejects.toBeInstanceOf(ChatDeliveryNotFoundError);
 
     // The SAC references it freely — and the chip comes resolved.
     const sent = await makeSendUseCase(repos).execute({
@@ -331,7 +361,9 @@ describe("send-chat-message", () => {
     expect(sent.data[0].delivery?.recipient_name).toBe("Cliente A");
   });
 
-  it("demands what each kind needs: text, attachment, duration", async () => {
+  it("demands what each kind needs: text, attachment, duration — each with its code", async () => {
+    // Red before: these went out as the fallback BAD_REQUEST, which the
+    // clients cannot tell apart (decision 11.3: every refusal has its code).
     const repos = makeRepositories();
     const useCase = makeSendUseCase(repos);
 
@@ -342,7 +374,7 @@ describe("send-chat-message", () => {
         kind: "TEXT",
         body: "   ",
       }),
-    ).rejects.toBeInstanceOf(AppError);
+    ).rejects.toMatchObject({ statusCode: 400, code: "CHAT_TEXT_REQUIRED" });
 
     await expect(
       useCase.execute({
@@ -350,7 +382,7 @@ describe("send-chat-message", () => {
         driverIds: [JOAO_DRIVER_ID],
         kind: "IMAGE",
       }),
-    ).rejects.toBeInstanceOf(AppError);
+    ).rejects.toMatchObject({ statusCode: 400, code: "CHAT_ATTACHMENT_REQUIRED" });
 
     await expect(
       useCase.execute({
@@ -359,7 +391,23 @@ describe("send-chat-message", () => {
         kind: "AUDIO",
         attachmentKey: `chatAttachments/${BUSINESS}/voz.m4a`,
       }),
-    ).rejects.toBeInstanceOf(AppError);
+    ).rejects.toMatchObject({ statusCode: 400, code: "CHAT_AUDIO_DURATION_REQUIRED" });
+
+    await expect(
+      useCase.execute({ userId: MANAGER_ID, driverIds: [], kind: "TEXT", body: "Oi" }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "CHAT_RECIPIENTS_REQUIRED" });
+
+    await expect(
+      useCase.execute({
+        userId: MANAGER_ID,
+        driverIds: [JOAO_DRIVER_ID, MARIA_DRIVER_ID],
+        kind: "TEXT",
+        body: "Aviso",
+        clientSubmissionId: "018f0000-0000-7000-8000-0000000000c2",
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "CHAT_BROADCAST_REFERENCE_NOT_ALLOWED" });
+
+    expect(repos.chatRepository.messages).toEqual([]);
   });
 
   it("signs the attachment URL on the way out", async () => {
@@ -1066,13 +1114,18 @@ describe("get-chat-attachment-url", () => {
     const photo = await seedPhoto(repos);
 
     // The photo belongs to João's thread; Maria's token must not re-sign it,
-    // and the answer is "not found" rather than "not yours".
+    // and the answer is the one a random id gets — not "conversa não
+    // encontrada", which confirmed the message existed.
     await expect(
       makeUseCase(repos).execute({
         userId: MARIA_USER_ID,
         messageId: photo.id,
       }),
-    ).rejects.toBeInstanceOf(ChatThreadNotFoundError);
+    ).rejects.toMatchObject({
+      name: "ChatMessageNotFoundError",
+      statusCode: 404,
+      code: "CHAT_MESSAGE_NOT_FOUND",
+    });
   });
 });
 

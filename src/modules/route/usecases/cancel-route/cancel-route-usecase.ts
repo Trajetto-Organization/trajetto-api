@@ -25,6 +25,8 @@ import {
   RouteStatusConflictError,
 } from "../errors/route-errors";
 
+import type { Prisma } from "@prisma/client";
+
 import type { Route } from "../../dtos/route-dto";
 
 interface CancelRouteRequest {
@@ -71,7 +73,7 @@ class CancelRouteUseCase {
     // Planning is the dispatcher's job, and `delivery_manage` is open to
     // drivers so the app's own surface works — so the permission says yes
     // and this says no.
-    await assertRouteDispatcher(this.user, userId);
+    await assertRouteDispatcher(this.user, userId, businessId);
 
     const trimmedReason = reason?.trim();
 
@@ -87,7 +89,7 @@ class CancelRouteUseCase {
 
     // Scoped read: another company's route reads as absent, so there is no
     // separate "not yours" answer to learn from.
-    if (!findRoute) throw new AppError(new RouteNotFoundError().message, 404);
+    if (!findRoute) throw new RouteNotFoundError();
 
     const verdict = canTransitionRoute(findRoute.status, "CANCELLED");
 
@@ -96,88 +98,16 @@ class CancelRouteUseCase {
     }
 
     try {
-      const cancelled = await database.$transaction(async (tx) => {
-        const moved = await this.route.transitionRoute(
-          routeId,
+      const { cancelled, afterCommit } = await database.$transaction((tx) =>
+        this.cancelWithin(tx, {
+          userId,
           businessId,
-          {
-            expectedStatus: findRoute.status,
-            status: "CANCELLED",
-            cancellation_reason: trimmedReason,
-          },
-          tx,
-        );
+          route: findRoute,
+          reason: trimmedReason,
+        }),
+      );
 
-        // A route still in planning was never handed over, so cancelling it
-        // tells nobody anything — the driver never knew it existed. Once
-        // released, and especially once it left, the driver has to hear it:
-        // they may be standing at an address that was just called off.
-        if (findRoute.status !== "PLANNED") {
-          const driverUser = await this.user.findUserByDriverId(
-            findRoute.driverId,
-          );
-
-          await this.outbox.publish(tx, {
-            topic: "route.cancelled",
-            aggregateType: "route",
-            aggregateId: routeId,
-            businessId,
-            actorId: userId,
-            payload: {
-              routeId,
-              businessId,
-              driverUserId: driverUser?.id ?? null,
-              code: findRoute.code,
-              routeName: findRoute.name,
-              reason: trimmedReason,
-              hadDeparted: findRoute.status === "IN_PROGRESS",
-            },
-          });
-        }
-
-        // In the SAME transaction as the cancellation, for the reason the
-        // outbox row above is: an event queued after the commit is an event a
-        // crash in between erases, and an ERP that never heard the route was
-        // called off keeps a truck out on paper.
-        await this.webhooks.announce(
-          "route.cancelled",
-          businessId,
-          routeEventPayload({ ...findRoute, status: "CANCELLED" }),
-          tx,
-        );
-
-        return moved;
-      });
-
-      // Both audiences: the panel loses a route from its board, and the driver
-      // may be standing at an address that was just called off.
-      sendRouteEventToBusiness(businessId, {
-        type: "route.cancelled",
-        routeId,
-        routeCode: findRoute.code,
-      });
-
-      if (findRoute.status !== "PLANNED") {
-        const driverUser = await this.user.findUserByDriverId(
-          findRoute.driverId,
-        );
-
-        sendRouteEventToDriver(driverUser?.id ?? null, {
-          type: "route.cancelled",
-          routeId,
-          routeCode: findRoute.code,
-        });
-      }
-
-      this.notificationService.createActivityIfEnabled({
-        type: "Rota",
-        action: "update",
-        entityId: routeId,
-        description: `Rota ${findRoute.code} cancelada: ${trimmedReason}`,
-        status: "Cancelada",
-        performedBy: userId,
-        businessId,
-      });
+      await afterCommit();
 
       return cancelled;
     } catch (error) {
@@ -192,6 +122,111 @@ class CancelRouteUseCase {
         500,
       );
     }
+  }
+
+  /**
+   * The cancellation and what must commit with it (the driver's push, the
+   * integration event) inside the caller's transaction; sockets and the
+   * activity line come back as `afterCommit`.
+   *
+   * Split out for the batch assignment: a released route whose every stop
+   * was just moved to another driver is cancelled in the same unit of work
+   * that moved them, instead of staying RELEASED with nothing on it.
+   */
+  async cancelWithin(
+    tx: Prisma.TransactionClient,
+    {
+      userId,
+      businessId,
+      route,
+      reason,
+    }: {
+      userId: string;
+      businessId: string;
+      route: Route;
+      reason: string;
+    },
+  ): Promise<{ cancelled: Route; afterCommit: () => Promise<void> }> {
+    const routeId = route.id;
+
+    const cancelled = await this.route.transitionRoute(
+      routeId,
+      businessId,
+      {
+        expectedStatus: route.status,
+        status: "CANCELLED",
+        cancellation_reason: reason,
+      },
+      tx,
+    );
+
+    // A route still in planning was never handed over, so cancelling it tells
+    // nobody anything — the driver never knew it existed. Once released, and
+    // especially once it left, the driver has to hear it: they may be
+    // standing at an address that was just called off.
+    if (route.status !== "PLANNED") {
+      const driverUser = await this.user.findUserByDriverId(route.driverId);
+
+      await this.outbox.publish(tx, {
+        topic: "route.cancelled",
+        aggregateType: "route",
+        aggregateId: routeId,
+        businessId,
+        actorId: userId,
+        payload: {
+          routeId,
+          businessId,
+          driverUserId: driverUser?.id ?? null,
+          code: route.code,
+          routeName: route.name,
+          reason,
+          hadDeparted: route.status === "IN_PROGRESS",
+        },
+      });
+    }
+
+    // In the SAME transaction as the cancellation, for the reason the outbox
+    // row above is: an event queued after the commit is an event a crash in
+    // between erases, and an ERP that never heard the route was called off
+    // keeps a truck out on paper.
+    await this.webhooks.announce(
+      "route.cancelled",
+      businessId,
+      routeEventPayload({ ...route, status: "CANCELLED" }),
+      tx,
+    );
+
+    const afterCommit = async (): Promise<void> => {
+      // Both audiences: the panel loses a route from its board, and the
+      // driver may be standing at an address that was just called off.
+      sendRouteEventToBusiness(businessId, {
+        type: "route.cancelled",
+        routeId,
+        routeCode: route.code,
+      });
+
+      if (route.status !== "PLANNED") {
+        const driverUser = await this.user.findUserByDriverId(route.driverId);
+
+        sendRouteEventToDriver(driverUser?.id ?? null, {
+          type: "route.cancelled",
+          routeId,
+          routeCode: route.code,
+        });
+      }
+
+      this.notificationService.createActivityIfEnabled({
+        type: "Rota",
+        action: "update",
+        entityId: routeId,
+        description: `Rota ${route.code} cancelada: ${reason}`,
+        status: "Cancelada",
+        performedBy: userId,
+        businessId,
+      });
+    };
+
+    return { cancelled, afterCommit };
   }
 }
 

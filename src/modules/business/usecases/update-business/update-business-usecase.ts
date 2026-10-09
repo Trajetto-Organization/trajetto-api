@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import { assertCallerRole } from "../errors/business-role-guard";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
@@ -8,6 +9,7 @@ import { AppError } from "@/shared/errors/AppError";
 import { Business, UpdateBusinessProps } from "../../dtos/business-dto";
 
 import { NotificationService } from "@/shared/services/notification-service";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 import { BusinessCnpjAlreadyExistsError } from "../errors/business-cnpj-already-exists-error";
 import { BusinessCorporateReasonAlreadyExistsError } from "../errors/business-corporate-reason-already-exists-error";
@@ -23,6 +25,10 @@ import { BranchCnpjAlreadyExistsError } from "@/modules/branch/usecases/errors/b
 
 import { BranchErpCodeAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-erp-code-already-exists-error";
 import { BranchEmailAlreadyExistsError } from "@/modules/branch/usecases/errors/branch-email-already-exists-error";
+import { businessUniqueViolation } from "../errors/business-unique-violation";
+import { branchUniqueViolation } from "@/modules/branch/usecases/errors/branch-unique-violation";
+
+import database from "@/../infra/database";
 
 interface UpdateBusiness {
   businessData: UpdateBusinessProps;
@@ -54,16 +60,22 @@ class UpdateBusinessUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // MASTER-only, like the route: see assertCallerRole.
+    assertCallerRole(findUser, ["MASTER"]);
+
     const existingBusiness = await this.business.findBusinessById(businessId);
 
     if (!existingBusiness) {
       throw new BusinessNotFoundError();
     }
 
-    // First, we find the parent company associated with this company.
-    const matrixBranch = await this.branch.findBranchByCnpj(
+    // The head office: the branch carrying the company's own CNPJ. Only if
+    // it is this company's — the CNPJ lookup is platform-wide.
+    const branchWithCnpj = await this.branch.findBranchByCnpj(
       existingBusiness.cnpj,
     );
+    const matrixBranch =
+      branchWithCnpj?.businessId === businessId ? branchWithCnpj : null;
 
     // Checks with other companies
     if (businessData.cnpj) {
@@ -124,9 +136,14 @@ class UpdateBusinessUseCase {
       }
     }
 
+    // The head office mirrors the company, so its new name and e-mail must
+    // be free among THIS company's other branches (the per-company uniques,
+    // decision 8.1) — other carriers' branches do not count and are not
+    // looked at.
     if (businessData.corporate_reason) {
       const findBranchByCorporateReason =
         await this.branch.findBranchByCorporateReason(
+          businessId,
           businessData.corporate_reason,
         );
 
@@ -138,8 +155,11 @@ class UpdateBusinessUseCase {
       }
     }
 
+    // Among this company's own branches only (the ERP code is unique per
+    // company); the head office carries the company's code and is excluded.
     if (businessData.erp_code) {
       const findBranchByErpCode = await this.branch.findBranchByErpCode(
+        businessId,
         businessData.erp_code,
       );
 
@@ -153,6 +173,7 @@ class UpdateBusinessUseCase {
 
     if (businessData.email) {
       const findBranchByEmail = await this.branch.findBranchByEmail(
+        businessId,
         businessData.email,
       );
 
@@ -165,18 +186,34 @@ class UpdateBusinessUseCase {
     }
 
     try {
-      const businessUpdated = await this.business.updateBusiness({
-        businessData,
-        businessId,
-      });
+      // Mapped here and only here: a unique violation on the head-office
+      // write below is a branch conflict, not BUSINESS_*_TAKEN.
+      // The company and its head office commit together: a head-office 409
+      // must not leave the company row already changed.
+      const businessUpdated = await database.$transaction(async (tx) => {
+        const updated = await this.business
+          .updateBusiness({ businessData, businessId }, tx)
+          .catch((error: unknown) => {
+            // Another save took the value after the lookups above: a 409.
+            throw businessUniqueViolation(error) ?? error;
+          });
 
-      // Also update the branch matrix
-      if (matrixBranch) {
-        await this.branch.updateBranch({
-          branchData: businessData,
-          branchId: matrixBranch.id,
-        });
-      }
+        // Also update the head office. The zone is the company's alone (the
+        // branch table has no such column: passing it failed the update).
+        if (matrixBranch) {
+          const { timezone: _timezone, ...headOffice } = businessData;
+
+          await this.branch
+            .updateBranch({ branchData: headOffice, branchId: matrixBranch.id }, tx)
+            .catch((error: unknown) => {
+              // A sibling branch took the value after the lookups: the
+              // branch's own 409, not a company one.
+              throw branchUniqueViolation(error) ?? error;
+            });
+        }
+
+        return updated;
+      });
 
       // Process activity asynchronously without blocking the main flow
       this.notificationService.createActivityIfEnabled({
@@ -189,8 +226,12 @@ class UpdateBusinessUseCase {
         businessId,
       });
 
+      if (matrixBranch) sendCatalogChangedEvent(businessId, "branch");
+
       return businessUpdated;
     } catch (error) {
+      if (error instanceof AppError) throw error;
+
       throw new AppError(
         "Houve um erro ao tentar atualizar a empresa! Por favor, tente novamente.",
         500,

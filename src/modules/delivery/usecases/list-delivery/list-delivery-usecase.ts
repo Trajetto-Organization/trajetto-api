@@ -2,8 +2,6 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -11,15 +9,24 @@ import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 
 import { ListDeliveriesResult } from "../../dtos/delivery-dto";
 
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
+import type { SortOrder } from "@/shared/pagination/list-query";
+import {
+  summarizeDeliveryList,
+  DeliverySortKey,
+} from "@/modules/delivery/usecases/list-delivery/delivery-list";
+
 interface ListDeliveriesRequest {
   userId: string;
   businessId?: string;
   page: number;
   pageSize: number;
-  status?: DeliveryStatus;
-  shipperId?: string;
-  driverId?: string;
   search?: string;
+  sort?: DeliverySortKey;
+  order?: SortOrder;
+  statuses?: DeliveryStatus[];
+  shipperIds?: string[];
+  driverIds?: string[];
 }
 
 @injectable()
@@ -36,15 +43,17 @@ class ListDeliveryUseCase {
     businessId,
     page,
     pageSize,
-    status,
-    shipperId,
-    driverId,
     search,
+    sort,
+    order,
+    statuses,
+    shipperIds,
+    driverIds,
   }: ListDeliveriesRequest): Promise<ListDeliveriesResult> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
-      throw new ResourceNotFoundError();
+      throw callerNotFound();
     }
 
     // MASTER picks the company explicitly; everyone else is pinned to
@@ -61,30 +70,32 @@ class ListDeliveryUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
-    // Drivers only see their own route — the app never lists the whole
-    // operation to the person executing one slice of it.
-    const effectiveDriverId = findUser.driverId ?? driverId;
-
     try {
-      // The status breakdown ignores the current filters on purpose: the
-      // cards describe the operation, not the slice being looked at.
-      const [result, statusCounts] = await Promise.all([
-        this.delivery.listDeliveries({
-          page,
-          pageSize,
-          businessId: resolvedBusinessId,
-          status,
-          shipperId,
-          driverId: effectiveDriverId,
-          search,
-        }),
-        this.delivery.countDeliveriesByStatus(
-          resolvedBusinessId,
-          effectiveDriverId,
-        ),
-      ]);
+      // Drivers only see what they carry — the app never lists the whole
+      // operation to the person executing one slice of it. A scope, not a
+      // facet: the driver filter of the screen cannot widen it.
+      const page_ = await this.delivery.listDeliveries({
+        page,
+        pageSize,
+        sort,
+        order,
+        businessId: resolvedBusinessId,
+        scopeDriverId: findUser.driverId ?? undefined,
+        search,
+        statuses,
+        shipperIds,
+        driverIds,
+      });
 
-      return { ...result, meta: { statusCounts } };
+      // The cards and the filter counts come from the whole set, never from
+      // the loaded page (decision 8.8); the pager total is derived from them.
+      const { total, searchMeta } = summarizeDeliveryList(
+        page_.statusCounts,
+        { statuses },
+        { shippers: page_.shipperOptions, drivers: page_.driverOptions },
+      );
+
+      return { data: page_.data, total, meta: searchMeta };
     } catch (error) {
       if (error instanceof AppError) {
         throw error;

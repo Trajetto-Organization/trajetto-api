@@ -5,62 +5,61 @@ import { createProfileAccessSchema } from "@/schemas/create-profile-access";
 import { updateDeleteProfileAccessSchema } from "@/schemas/update-delete-profile-access-schema";
 import { updateProfileAccessSchema } from "@/schemas/update-profile-access";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
-import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
+import { listProfileAccessSchema } from "@/schemas/list-profile-access-schema";
+import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
+
+import { errorResponse } from "./common-responses";
+
+const isoDateTime = z.union([z.string(), z.date()]);
+const codedError = z.object({ code: z.string().optional() });
+
+/**
+ * A refusal as the error handler sends it: always with a code (decision
+ * 11.3). The description lists the codes the route can answer with.
+ */
+const refusal = (description: string) =>
+  errorResponse.extend({ code: z.string() }).describe(description);
 
 const profileAccessSchemas = {
   createProfileAccess: createProfileAccessSchema,
-  listProfileAccess: listPagesSchema,
-  listProfileBusiness: listPagesByBusinessSchema,
+  listProfileAccess: listProfileAccessSchema,
   updateDeleteProfileAccess: updateDeleteProfileAccessSchema,
   updateProfileAccess: updateProfileAccessSchema,
-  searchProfileCursor: z.object({
-    limit: z
-      .string()
+  // The picker's search: the typed term is matched against the name.
+  searchProfileCursor: cursorPaginationByBusinessSchema.extend({
+    editable: z
+      .enum(["true", "false"])
       .optional()
-      .describe("Número máximo de perfis a retornar (padrão: 10)"),
-    cursor: z
-      .string()
-      .optional()
-      .describe("ID do último perfil da página anterior para paginação"),
-    businessId: z.string().describe("ID da empresa"),
+      .transform((value) => value === "true")
+      .describe(
+        "true: só os perfis cujas permissões quem pergunta pode alterar (um usuário comum não recebe o próprio perfil). Usado pelo formulário de permissões.",
+      ),
   }),
 };
+
+/** A profile as the cursor search streams it: the bare row. */
+const profileAccessRow = z.object({
+  id: z.string(),
+  name: z.string(),
+  businessId: z.string(),
+  created_at: isoDateTime,
+  updated_at: isoDateTime,
+});
 
 const profileAccessResponses = {
   profileAccessCreated: z.object({
     message: z.string().default("Perfil de acesso criado com sucesso!"),
   }),
 
-  profileAccessList: z.object({
-    data: z.array(
-      z.object({
-        id: z.string(),
-        name: z.string(),
-        businessId: z.string(),
-        created_at: z.string(),
-        updated_at: z.string(),
-        business: z.object({
-          id: z.string(),
-          fantasy_name: z.string(),
-          corporate_reason: z.string(),
-        }),
-      }),
-    ),
-    total: z.number(),
-  }),
+  profileAccessRow,
 
-  profileBusinessList: z.object({
-    data: z.array(
-      z.object({
-        id: z.string(),
-        name: z.string(),
-        businessId: z.string(),
-        created_at: z.string(),
-        updated_at: z.string(),
-      }),
-    ),
-    total: z.number(),
+  /** A line of GET /profile-access/list-profile-access. */
+  profileAccessListRow: profileAccessRow.extend({
+    usersCount: z.number().int().describe("Usuários com este perfil."),
+    permissionsCount: z
+      .number()
+      .int()
+      .describe("Permissões configuradas no perfil."),
   }),
 
   profileAccessUpdated: z.object({
@@ -71,137 +70,72 @@ const profileAccessResponses = {
     message: z.string().default("Perfil de acesso deletado com sucesso!"),
   }),
 
-  searchProfileStreamDescription: z.object({
-    description: z
-      .string()
-      .default(
-        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are profile access objects.",
-      ),
-  }),
-
-  // Common error responses
   internalServerError: z.object({
+    code: z.string().optional(),
     message: z.string().default("Internal server error"),
   }),
 
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
+  profileAccessCannotBeUpdatedByHimself: refusal(
+    "PERMISSION_DENIED (alterar o próprio perfil de acesso) ou TENANT_ACCESS_DENIED (o `businessId` do corpo é de outra empresa). Perfil de outra empresa no caminho responde 404 PROFILE_ACCESS_NOT_FOUND, como um id que não existe.",
+  ),
 
-  validationError: z.object({
-    message: z.string().default("Validation Error"),
-    issues: z.array(z.string()),
-  }),
+  profileAccessCannotBeDeletedByHimself: refusal(
+    "PERMISSION_DENIED (excluir o próprio perfil de acesso). Perfil de outra empresa responde 404 PROFILE_ACCESS_NOT_FOUND, como um id que não existe.",
+  ),
 
-  profileAccessNotFound: z.object({
-    message: z.string().default("Perfil de acesso não encontrado!"),
-  }),
+  createProfileAccessErrors: refusal("VALIDATION_ERROR (corpo inválido)."),
 
-  businessNotFound: z.object({
-    message: z.string().default("Empresa não encontrada!"),
-  }),
+  lookupNotFound: refusal("USER_NOT_FOUND ou BUSINESS_NOT_FOUND."),
 
-  profileAccessAlreadyExists: z.object({
-    message: z
-      .string()
-      .default(
-        "Este perfil não está disponível para cadastro. Já existe um perfil com este nome.",
-      ),
-  }),
-
-  profileAccessCannotBeUpdatedByHimself: z.object({
-    message: z
-      .string()
-      .default(
-        "Usuário não tem permissão para atualizar o seu próprio perfil de acesso.",
-      ),
-  }),
-
-  profileAccessCannotBeDeletedByHimself: z.object({
-    message: z
-      .string()
-      .default(
-        "Usuário não tem permissão para deletar o seu próprio perfil de acesso.",
-      ),
-  }),
-
-  // Grouping errors by route
-  createProfileAccessErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
+  profileAccessConflict: z
+    .object({
       message: z
         .string()
         .default(
           "Este perfil não está disponível para cadastro. Já existe um perfil com este nome.",
         ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
+    })
+    .and(codedError)
+    .describe(
+      "PROFILE_ACCESS_ALREADY_EXISTS (nome repetido na empresa).",
+    ),
 
-  listProfileAccessErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-  ]),
-
-  listProfileBusinessErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
-
-  updateProfileAccessErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Perfil de acesso não encontrado!"),
-    }),
-    z.object({
+  profileAccessInUse: z
+    .object({
+      code: z.string().describe("PROFILE_ACCESS_IN_USE."),
       message: z
         .string()
         .default(
-          "Este perfil não está disponível para cadastro. Já existe um perfil com este nome.",
+          "Este perfil de acesso está em uso por 2 usuários. Troque o perfil deles antes de excluir.",
         ),
-    }),
-  ]),
+      usersCount: z
+        .number()
+        .int()
+        .optional()
+        .describe("Usuários ainda ligados ao perfil."),
+    })
+    .describe("O perfil está em uso: excluir deixaria essas pessoas sem acesso."),
 
-  deleteProfileAccessErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Perfil de acesso não encontrado!"),
-    }),
-  ]),
+  listProfileAccessErrors: z
+    .object({
+      message: z
+        .string()
+        .default("Empresa não identificada. Selecione uma empresa para continuar."),
+    })
+    .and(codedError)
+    .describe(
+      "Ordenação inválida, ou MASTER sem `businessId` (code BUSINESS_NOT_IDENTIFIED).",
+    ),
+
+  listProfileBusinessErrors: refusal("VALIDATION_ERROR (busca, cursor ou empresa inválidos)."),
+
+  updateProfileAccessErrors: refusal("VALIDATION_ERROR (corpo ou id inválido)."),
+
+  deleteProfileAccessErrors: refusal("VALIDATION_ERROR (id inválido)."),
+
+  profileAccessWriteNotFound: refusal(
+    "PROFILE_ACCESS_NOT_FOUND, USER_NOT_FOUND ou BUSINESS_NOT_FOUND.",
+  ),
 };
 
 export { profileAccessSchemas, profileAccessResponses };

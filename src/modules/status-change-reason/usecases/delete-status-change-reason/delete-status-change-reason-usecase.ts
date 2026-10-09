@@ -2,18 +2,18 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IStatusChangeReasonRepository } from "../../repositories/IStatus-change-reason-repository";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 
 import {
   StatusChangeReasonInUseError,
-  StatusChangeReasonNotBelongBusinessError,
   StatusChangeReasonNotFoundError,
 } from "../errors/status-change-reason-errors";
 
 import { AppError } from "@/shared/errors/AppError";
 import { StatusChangeReason } from "../../dtos/status-change-reason-dto";
+
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 /**
  * Removing a word from the company's vocabulary.
@@ -41,19 +41,17 @@ class DeleteStatusChangeReasonUseCase {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
-      throw new ResourceNotFoundError();
+      throw callerNotFound();
     }
 
     assertDispatcher(findUser);
 
     const findReason = await this.reason.findStatusChangeReasonById(reasonId);
 
-    if (!findReason) {
+    // Another company's id reads as absent (decision 11.3): a separate
+    // "not yours" answer told a caller which ids exist elsewhere.
+    if (!findReason || findReason.businessId !== businessId) {
       throw new StatusChangeReasonNotFoundError();
-    }
-
-    if (findReason.businessId !== businessId) {
-      throw new StatusChangeReasonNotBelongBusinessError();
     }
 
     const citedBy = await this.reason.countEventsByReasonId(reasonId);
@@ -62,14 +60,22 @@ class DeleteStatusChangeReasonUseCase {
       throw new StatusChangeReasonInUseError(citedBy);
     }
 
+    let deleted: Awaited<
+      ReturnType<IStatusChangeReasonRepository["deleteStatusChangeReason"]>
+    >;
+
     try {
-      return await this.reason.deleteStatusChangeReason(reasonId);
+      deleted = await this.reason.deleteStatusChangeReason(reasonId);
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar excluir o motivo! Por favor, tente novamente.",
         500,
       );
     }
+
+    sendCatalogChangedEvent(businessId, "status_reason");
+
+    return deleted;
   }
 }
 

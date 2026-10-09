@@ -11,9 +11,10 @@ import { BusinessNotFoundError } from "@/modules/business/usecases/errors/busine
 
 import { BranchNotFoundError } from "../errors/branch-not-found-error";
 import { ToggleConflictError } from "@/modules/business/usecases/errors/toggle-conflict-error";
-import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { NotificationService } from "@/shared/services/notification-service";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 @injectable()
 class ToggleBranchActiveUseCase {
@@ -45,14 +46,13 @@ class ToggleBranchActiveUseCase {
       throw new BusinessNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const findBranch = await this.branch.findBranchById(branchId);
 
-    if (!findBranch) {
+    // Another company's branch answers like a missing one (decision 11.3).
+    if (!findBranch || findBranch.businessId !== businessId) {
       throw new BranchNotFoundError();
-    }
-
-    if (findBranch.businessId !== businessId) {
-      throw new BranchNotBelongBusinessError();
     }
 
     /**
@@ -85,6 +85,13 @@ class ToggleBranchActiveUseCase {
       performedBy: userId,
       businessId: businessId,
     });
+
+    // An inactive branch leaves the pickers of every open screen.
+    sendCatalogChangedEvent(businessId, "branch");
+
+    // Its drivers too: the chat pickers list a driver "com o app" only while
+    // their branch is active, under the `driver` keys (decision 2.3).
+    sendCatalogChangedEvent(businessId, "driver");
 
     return updatedBranch;
   }

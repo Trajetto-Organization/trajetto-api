@@ -1,14 +1,8 @@
 import { inject, injectable } from "tsyringe";
 
-import { IRouteRepository } from "../../repositories/IRoute-repository";
-import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
-
-import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
-
-import { NotificationService } from "@/shared/services/notification-service";
 import { AppError } from "@/shared/errors/AppError";
 
-import { RouteNotFoundError, RouteStopNotFoundError } from "../errors/route-errors";
+import { RemoveRouteStopsUseCase } from "../remove-route-stops/remove-route-stops-usecase";
 
 interface RemoveRouteStopRequest {
   userId: string;
@@ -33,62 +27,50 @@ interface RemoveRouteStopRequest {
 @injectable()
 class RemoveRouteStopUseCase {
   constructor(
-    @inject("RouteRepository")
-    private route: IRouteRepository,
-    @inject("UserRepository")
-    private user: IUserRepository,
-    @inject("NotificationService")
-    private notificationService: NotificationService,
+    @inject(RemoveRouteStopsUseCase)
+    private removeStops: RemoveRouteStopsUseCase,
   ) {}
 
+  /**
+   * The single-stop endpoint, kept for the clients that call it, on the
+   * batch rules (decision 14.7, §4.4): one writer for "a stop leaves the
+   * plan", so the version, the timeline and the realtime hint come with it.
+   *
+   * Its own contract stays: a stop that is not there — not this route's,
+   * not your company's, or on a route that already left — is the same 404.
+   */
   async execute({
     userId,
     businessId,
     routeId,
     stopId,
   }: RemoveRouteStopRequest): Promise<void> {
-    // Planning is the dispatcher's job, and `delivery_manage` is open to
-    // drivers so the app's own surface works — so the permission says yes
-    // and this says no.
-    await assertRouteDispatcher(this.user, userId);
+    const notFound = () =>
+      new AppError(
+        "Parada não encontrada nesta rota, ou a rota já saiu e não pode " +
+          "mais ser editada.",
+        404,
+        "ROUTE_STOP_NOT_FOUND",
+      );
 
-    const findRoute = await this.route.findRouteById(routeId, businessId);
-
-    if (!findRoute) throw new AppError(new RouteNotFoundError().message, 404);
+    let result;
 
     try {
-      await this.route.removeStop(routeId, businessId, stopId);
-
-      this.notificationService.createActivityIfEnabled({
-        type: "Rota",
-        action: "update",
-        entityId: routeId,
-        description: `Rota ${findRoute.code}: parada removida do planejamento`,
-        status: findRoute.status,
-        performedBy: userId,
+      result = await this.removeStops.execute({
+        userId,
         businessId,
+        routeId,
+        stopIds: [stopId],
       });
     } catch (error) {
-      // One answer for "no such stop", "not this route's stop", "not your
-      // company's" and "the route already left": the `where` that refuses them
-      // is one `where`, and telling the four apart would say more about the
-      // data than the caller is entitled to know.
-      if (error instanceof RouteStopNotFoundError) {
-        throw new AppError(
-          "Parada não encontrada nesta rota, ou a rota já saiu e não pode " +
-            "mais ser editada.",
-          404,
-          "ROUTE_STOP_NOT_FOUND",
-        );
+      if (error instanceof AppError && error.code === "ROUTE_STATUS_CONFLICT") {
+        throw notFound();
       }
 
-      if (error instanceof AppError) throw error;
-
-      throw new AppError(
-        "Houve um erro ao tentar remover a parada! Por favor, tente novamente.",
-        500,
-      );
+      throw error;
     }
+
+    if (result.removed.length === 0) throw notFound();
   }
 }
 

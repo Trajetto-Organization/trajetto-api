@@ -24,4 +24,15 @@ export interface IWhatsAppProvider {
    * only they can read their own error payloads.
    */
   sendMessage(props: SendMessageProps): Promise<WhatsAppResponse>;
+
+  /**
+   * Holds a template's sends for `seconds` (retryable, without calling the
+   * provider), as the provider does on its own after a "template paused"
+   * refusal. Fed by the provider's template status webhook. Optional: a
+   * provider with no such state (test doubles) simply has nothing to hold.
+   */
+  pauseTemplate?(templateName: string, seconds: number): void;
+
+  /** Lifts a template's pause: the provider reinstated or approved it. */
+  resumeTemplate?(templateName: string): void;
 }

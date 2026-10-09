@@ -1,3 +1,12 @@
+import type { SortOrder } from "@/shared/pagination/list-query";
+
+import type {
+  BranchGroupCount,
+  BranchSortKey,
+  BranchStatus,
+  BranchUf,
+} from "../usecases/list-branch/branch-list";
+
 interface CreateBranchProps {
   corporate_reason: string;
   fantasy_name?: string | null;
@@ -41,14 +50,21 @@ interface Branch {
 interface ListAllBranchesProps {
   page: number;
   pageSize: number;
-  currentUserRole: string;
+  /** Always one company: the MASTER names it, everyone else is pinned. */
   businessId: string;
   search?: string;
+  statuses?: BranchStatus[];
+  ufs?: BranchUf[];
+  sort?: BranchSortKey;
+  order?: SortOrder;
 }
 
 interface ListBranchProps {
   data: Branch[];
-  total: number;
+  /** Per (is_active, uf) over search only: cards and facets derive from it. */
+  groups: BranchGroupCount[];
+  /** Non-blank trade names among the fully filtered rows. */
+  withFantasyName: number;
 }
 
 interface UpdateBranchProps {

@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 const updateUserNameSchema = z.object({
+  ...tenantLockedShape,
   name: z.string().superRefine((value, ctx) => {
     if (value.length > 100) {
       ctx.addIssue({

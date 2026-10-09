@@ -1,14 +1,22 @@
 import { v7 as uuidV7 } from "uuid";
 
 import type { IImportRepository } from "../IImport-repository";
+import { ImportAlreadyReversedError } from "../../usecases/errors/import-errors";
 import type {
+  RemovedDelivery,
   CreateImportProps,
   FinishImportProps,
   ImportRecord,
   ListImportsProps,
-  ListImportsResult,
+  ListImportsPage,
   ReversalResult,
 } from "../../dtos/import-dto";
+
+import { compareForOrder } from "@/shared/pagination/in-memory-order";
+import {
+  IMPORT_SORT_FALLBACK,
+  type ImportGroup,
+} from "../../usecases/list-imports/import-list";
 
 /**
  * The reversal's rules, mirrored.
@@ -25,6 +33,11 @@ interface ReversibleDelivery {
   importId: string | null;
   recipient_name: string;
   status: string;
+  code?: string | null;
+  invoice_key?: string | null;
+  invoice_number?: string | null;
+  city?: string;
+  uf?: string;
   eventCount?: number;
   occurrenceCount?: number;
 }
@@ -87,6 +100,9 @@ class InMemoryImportRepository implements IImportRepository {
 
     if (!found) throw new Error("Import not found");
 
+    // Like the real one: only a running upload is closed.
+    if (found.status !== "IN_PROGRESS") return found;
+
     found.status = "COMPLETED";
 
     found.imported = data.imported;
@@ -96,6 +112,61 @@ class InMemoryImportRepository implements IImportRepository {
     found.report = data.report;
 
     return found;
+  }
+
+  /** When each upload last showed signs of life; absent means at creation. */
+  public heartbeats = new Map<string, Date>();
+
+  async touchImport(importId: string, businessId: string): Promise<void> {
+    const found = this.imports.find(
+      (entry) => entry.id === importId && entry.businessId === businessId,
+    );
+
+    if (found?.status === "IN_PROGRESS") {
+      this.heartbeats.set(importId, new Date());
+    }
+  }
+
+  async closeAbandonedImports(staleBefore: Date, limit = 100): Promise<number> {
+    const stale = this.imports
+      .filter(
+        (entry) =>
+          entry.status === "IN_PROGRESS" &&
+          (this.heartbeats.get(entry.id) ?? new Date(entry.created_at)) <
+            staleBefore,
+      )
+      .slice(0, limit);
+
+    for (const entry of stale) {
+      const imported = this.deliveries.filter(
+        (delivery) =>
+          delivery.importId === entry.id &&
+          delivery.businessId === entry.businessId,
+      ).length;
+
+      entry.status = "COMPLETED";
+      entry.imported = imported;
+      entry.duplicated = 0;
+      entry.invalid = 1;
+      entry.report = {
+        imported,
+        duplicated: 0,
+        invalid: 1,
+        unknownHeaders: [],
+        rows: [
+          {
+            line: 1,
+            outcome: "invalid",
+            recipient_name: null,
+            reference: null,
+            message: "Importação interrompida: o servidor parou antes de terminar o arquivo.",
+          },
+        ],
+        routes: [],
+      };
+    }
+
+    return stale.length;
   }
 
   async findImportById(
@@ -113,23 +184,90 @@ class InMemoryImportRepository implements IImportRepository {
     businessId,
     page,
     pageSize,
-  }: ListImportsProps): Promise<ListImportsResult> {
-    const filtered = this.imports.filter(
-      (entry) => entry.businessId === businessId,
-    );
+    includeReport = true,
+    sort,
+    order,
+    statuses,
+    sources,
+  }: ListImportsProps): Promise<ListImportsPage> {
+    const base = this.imports.filter((entry) => entry.businessId === businessId);
+
+    const key = sort ?? IMPORT_SORT_FALLBACK.sort;
+    const direction = order ?? (sort ? "asc" : IMPORT_SORT_FALLBACK.order);
+
+    const time = (value: Date | string) => new Date(value);
+
+    // IMPORT_SORT, with its tiebreaker: created_at desc, then id desc.
+    const filtered = base
+      .filter(
+        (entry) =>
+          (!statuses?.length || statuses.includes(entry.status)) &&
+          (!sources?.length || sources.includes(entry.source)),
+      )
+      .sort(
+        (a, b) =>
+          (key === "created_at"
+            ? compareForOrder(time(a.created_at), time(b.created_at), direction)
+            : compareForOrder(a[key], b[key], direction)) ||
+          compareForOrder(time(a.created_at), time(b.created_at), "desc") ||
+          compareForOrder(a.id, b.id, "desc"),
+      );
+
+    const rows = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+    const groups = new Map<string, ImportGroup>();
+
+    for (const entry of base) {
+      const id = `${entry.status}|${entry.source}`;
+      const group = groups.get(id) ?? {
+        status: entry.status,
+        source: entry.source,
+        count: 0,
+      };
+
+      group.count += 1;
+      groups.set(id, group);
+    }
 
     return {
-      data: filtered.slice((page - 1) * pageSize, page * pageSize),
-      total: filtered.length,
+      // Like the real one: asked without reports, the rows have no key at
+      // all, not an empty one.
+      data: includeReport
+        ? rows
+        : rows.map(({ report: _report, ...summary }) => summary),
+      groups: Array.from(groups.values()),
     };
   }
 
   async reverseImport(
     importId: string,
     businessId: string,
+    onRemoved?: (removed: RemovedDelivery[]) => Promise<void>,
   ): Promise<ReversalResult> {
     const own = (entry: { importId: string | null; businessId: string }) =>
       entry.importId === importId && entry.businessId === businessId;
+
+    // The claim first, like the real one: only a COMPLETED upload is undone,
+    // and the loser of a double click is told it already happened.
+    const record = this.imports.find(
+      (entry) => entry.id === importId && entry.businessId === businessId,
+    );
+
+    if (record && record.status !== "COMPLETED") {
+      if (record.status === "REVERSED") throw new ImportAlreadyReversedError();
+
+      return {
+        removedDeliveries: 0,
+        removedRoutes: 0,
+        keptDeliveries: [],
+        keptRoutes: [],
+      };
+    }
+
+    if (record) {
+      record.status = "REVERSED";
+      record.reversed_at = new Date();
+    }
 
     const keptDeliveries: ReversalResult["keptDeliveries"] = [];
     const removableDeliveryIds: string[] = [];
@@ -178,13 +316,54 @@ class InMemoryImportRepository implements IImportRepository {
       removableRouteIds.push(route.id);
     }
 
+    // A stop on any route that is not going away — this upload's, kept, or
+    // one that never belonged to it — keeps its delivery.
+    const deletableDeliveryIds = removableDeliveryIds.filter((deliveryId) => {
+      const heldBy = this.routes.find(
+        (route) =>
+          route.businessId === businessId &&
+          !removableRouteIds.includes(route.id) &&
+          route.stopDeliveryIds.includes(deliveryId),
+      );
+
+      if (!heldBy) return true;
+
+      const delivery = this.deliveries.find((entry) => entry.id === deliveryId)!;
+
+      keptDeliveries.push({
+        id: delivery.id,
+        recipient_name: delivery.recipient_name,
+        reason: "Está numa rota que não pode ser desfeita.",
+      });
+
+      return false;
+    });
+
     this.routes = this.routes.filter(
       (route) => !removableRouteIds.includes(route.id),
     );
 
-    this.deliveries = this.deliveries.filter(
-      (delivery) => !removableDeliveryIds.includes(delivery.id),
+    const removedRows = this.deliveries.filter((delivery) =>
+      deletableDeliveryIds.includes(delivery.id),
     );
+
+    this.deliveries = this.deliveries.filter(
+      (delivery) => !deletableDeliveryIds.includes(delivery.id),
+    );
+
+    if (onRemoved && removedRows.length > 0) {
+      await onRemoved(
+        removedRows.map((row) => ({
+          id: row.id,
+          code: row.code ?? null,
+          invoice_key: row.invoice_key ?? null,
+          invoice_number: row.invoice_number ?? null,
+          recipient_name: row.recipient_name,
+          city: row.city ?? "",
+          uf: row.uf ?? "",
+        })),
+      );
+    }
 
     // Whatever survived stops claiming to be part of this upload.
     for (const entry of [...this.deliveries, ...this.routes]) {
@@ -193,17 +372,8 @@ class InMemoryImportRepository implements IImportRepository {
       }
     }
 
-    const record = this.imports.find(
-      (entry) => entry.id === importId && entry.businessId === businessId,
-    );
-
-    if (record && record.status === "COMPLETED") {
-      record.status = "REVERSED";
-      record.reversed_at = new Date();
-    }
-
     return {
-      removedDeliveries: removableDeliveryIds.length,
+      removedDeliveries: deletableDeliveryIds.length,
       removedRoutes: removableRouteIds.length,
       keptDeliveries,
       keptRoutes,

@@ -10,7 +10,6 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { FuelNotFoundError } from "../errors/fuel-not-found-error";
-import { FuelNotBelongBusinessError } from "../errors/fuel-not-belong-business-error";
 
 import { FuelDriverCannotDeleteFuelError } from "../errors/fuel-driver-cannot-delete-fuel-error";
 
@@ -62,7 +61,8 @@ class DeleteFuelUseCase {
       throw new BusinessNotFoundError();
     }
 
-    // Validate fuel exists and belongs to business
+    // Scoped by company: another company's refueling is not found, the same
+    // answer as a missing one (404 FUEL_NOT_FOUND).
     const findFuel = await this.fuel.getFuelByIdAndBusinessWithRelations({
       businessId,
       fuelId,
@@ -72,18 +72,15 @@ class DeleteFuelUseCase {
       throw new FuelNotFoundError();
     }
 
-    if (findFuel.businessId !== businessId) {
-      throw new FuelNotBelongBusinessError();
-    }
-
     try {
-      // Delete odometer photo if it exists
+      // The record first, the photo after: deleting the photo first left a
+      // record pointing at a missing file whenever the row delete failed.
+      // The photo removal is best-effort (deleteFile never throws).
+      const deletedFuel = await this.fuel.deleteFuel(fuelId);
+
       if (findFuel.odometer_photo) {
         await this.uploadService.deleteFile(findFuel.odometer_photo);
       }
-
-      // Delete fuel record
-      const deletedFuel = await this.fuel.deleteFuel(fuelId);
 
       this.notificationService.createActivityIfEnabled({
         type: "Abastecimento",

@@ -176,7 +176,7 @@ describe("carrier B reaching carrier A's route", () => {
   });
 
   it("cannot remove its stop", async () => {
-    await expect(repository.removeStop(routeId, B, stopId)).rejects.toThrow();
+    await expect(repository.removeStops(routeId, B, [stopId])).rejects.toThrow();
   });
 
   it("cannot reorder its stops", async () => {

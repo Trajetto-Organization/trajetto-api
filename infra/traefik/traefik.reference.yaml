@@ -1,0 +1,54 @@
+# Reference for the Traefik STATIC configuration of the production stack.
+#
+# NOT applied by any deploy. The Traefik that fronts www.intrajetto.com and
+# trajettoapi.thorsolucoes.com.br is Dokploy's (container dokploy-traefik),
+# configured on the host, outside every repository; this file versions the
+# parts of it the security posture depends on, so they can be reviewed, diffed
+# and re-applied. Merge these keys into Dokploy's traefik.yml
+# (/etc/dokploy/traefik/traefik.yml) — keep its providers and
+# certificatesResolvers (letsencrypt) as they are. See README.md here.
+#
+# Why each key is here:
+#   - entryPoints.web redirects every plain-HTTP request to HTTPS, for every
+#     router, including hosts no label mentions. Without it, :80 answers
+#     whatever the default is, and a first visit on a hostile network can be
+#     stripped before HSTS is ever learned.
+#   - providers.file loads dynamic/tls.yaml, the only place TLS options can be
+#     set: Docker/Swarm labels cannot define `tls.options`.
+#
+# Two things to check on the host before merging:
+#   - Traefik takes ONE file provider. Dokploy already has one
+#     (/etc/dokploy/traefik/dynamic): do not add this block or repoint it;
+#     drop dynamic/tls.yaml into the folder it already watches. Replacing it
+#     would unload every route and middleware that folder defines.
+#   - Static configuration comes from a file OR from command-line flags on
+#     the Traefik service, never both. If the service is started with
+#     `--entrypoints...` flags, add the equivalent flags instead (README.md).
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+    # How long a client may take to SEND a request, headers and body. Never 0
+    # (a body dripped a byte at a time holds the connection forever), and not
+    # Traefik v2.11.2+/v3's 60s default either: the app build in drivers' hands
+    # waits 120s for a multipart upload of up to 5 MB, and Cloudflare streams
+    # that body at the phone's pace. The API enforces the same 120s itself
+    # (src/config/http-server.ts).
+    transport:
+      respondingTimeouts:
+        readTimeout: 120s
+
+providers:
+  file:
+    # Only where no file provider exists yet; on Dokploy keep its own
+    # (/etc/dokploy/traefik/dynamic) and drop tls.yaml there.
+    directory: /etc/traefik/dynamic
+    watch: true

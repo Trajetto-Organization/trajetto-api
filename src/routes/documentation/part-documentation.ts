@@ -1,10 +1,36 @@
 import { z } from "zod";
 
 import { createPartSchema } from "@/schemas/create-part-schema";
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { listPartSchema } from "@/schemas/list-part-schema";
+import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
+
+import { searchMetaDoc } from "@/shared/pagination/list-meta";
+import { errorResponse } from "./common-responses";
+
+/**
+ * Every error body these routes send: `code` is what a client branches on,
+ * and a schema listing only `message` stripped it on the way out (the zod
+ * serializer drops unknown keys).
+ */
+const codedError = (description: string) => errorResponse.describe(description);
+
+/** The catalog's `meta.searchMeta`: cards and the supplier filter's options. */
+const partSearchMetaDoc = searchMetaDoc(
+  {
+    total: z
+      .number()
+      .int()
+      .describe("Peças da busca, sem o filtro de fornecedor (o total dos cartões)."),
+    withSupplier: z.number().int().describe("Das quais com fornecedor."),
+    withoutSupplier: z.number().int().describe("Das quais sem fornecedor."),
+    averagePrice: z
+      .number()
+      .describe("Preço unitário médio das mesmas peças, em reais."),
+  },
+  ["supplierId"],
+);
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
-import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
 
 import { updatePartSchema } from "@/schemas/update-part-schema";
 
@@ -15,22 +41,11 @@ const partBusinessParams = z.object({
 
 const partSchemas = {
   createPart: createPartSchema,
-  listPart: listPagesSchema,
-  listPartBusinessSchema: listPagesByBusinessSchema,
+  listPart: listPartSchema,
   updatePart: updatePartSchema,
   businessIdParam: updateDeleteBusinessSchema,
   partBusinessParams: partBusinessParams,
-  searchPartCursor: z.object({
-    limit: z
-      .string()
-      .optional()
-      .describe("Número máximo de peças a retornar (padrão: 10)"),
-    cursor: z
-      .string()
-      .optional()
-      .describe("ID da última peça da página anterior para paginação"),
-    businessId: z.string().describe("ID da empresa"),
-  }),
+  searchPartCursor: cursorPaginationByBusinessSchema,
 };
 
 const partResponses = {
@@ -60,25 +75,23 @@ const partResponses = {
           })
           .nullable()
           .optional(),
+        service_order_parts_count: z
+          .number()
+          .int()
+          .optional()
+          .describe(
+            "Na listagem: lançamentos em ordens de serviço. Com algum, a peça não pode ser excluída.",
+          ),
       }),
     ),
     total: z.number(),
   }),
 
-  partBusinessErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
+  partSearchMeta: partSearchMetaDoc,
+
+  partBusinessErrors: codedError(
+    "VALIDATION_ERROR: limite, cursor ou busca inválidos. BUSINESS_NOT_IDENTIFIED: o MASTER não informou a empresa.",
+  ),
 
   partUpdated: z.object({
     message: z.string().default("Peça atualizada com sucesso!"),
@@ -88,163 +101,44 @@ const partResponses = {
     message: z.string().default("Peça deletada com sucesso!"),
   }),
 
-  searchPartStreamDescription: z.object({
-    description: z
-      .string()
-      .default(
-        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are part objects.",
-      ),
-  }),
-
-  // Common Error Responses
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
   }),
 
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
+  createPartErrors: codedError(
+    "VALIDATION_ERROR: um campo foi recusado (issues diz qual). SUPPLIER_NOT_FOUND: o fornecedor não existe ou é de outra empresa — a mesma resposta, que não confirma que o ID existe.",
+  ),
 
-  validationError: z.object({
-    message: z.string().default("Validation Error"),
-    issues: z.array(z.string()),
-  }),
+  updatePartErrors: codedError(
+    "VALIDATION_ERROR: um campo foi recusado. SUPPLIER_NOT_FOUND: o fornecedor não existe ou é de outra empresa (a mesma resposta). A empresa de uma peça não muda (decisão 16.100): um `businessId` no corpo é VALIDATION_ERROR.",
+  ),
 
-  partNotFound: z.object({
-    message: z.string().default("Peça não encontrada!"),
-  }),
+  partNotFound: codedError(
+    "PART_NOT_FOUND: a peça não existe ou é de outra empresa — a mesma resposta, que não confirma que o ID existe. TENANT_NOT_FOUND ou BUSINESS_NOT_FOUND: a empresa do caminho não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
-  businessNotFound: z.object({
-    message: z
-      .string()
-      .default("Empresa não encontrada! Por favor, tente novamente."),
-  }),
+  partConflict: codedError(
+    "PART_ALREADY_EXISTS: outra peça da empresa já tem esta descrição (sem diferenciar maiúsculas nem espaços nas pontas). PART_IN_USE: a peça está em lançamentos de ordem de serviço.",
+  ),
 
-  supplierNotFound: z.object({
-    message: z.string().default("Fornecedor não encontrado."),
-  }),
+  // A gone session user is a 404 (USER_NOT_FOUND, in partNotFound); the
+  // only 400 left on delete is a malformed path.
+  deletePartErrors: codedError(
+    "VALIDATION_ERROR: um parâmetro do caminho foi recusado (issues diz qual).",
+  ),
 
-  partAlreadyExists: z.object({
-    message: z
-      .string()
-      .default(
-        "Esta peça não está disponível para cadastro. Já existe uma peça com este nome.",
-      ),
-  }),
+  // Create and search name the company; the list resolves it from the token.
+  partLookupNotFound: codedError(
+    "USER_NOT_FOUND (o usuário da sessão não existe mais), TENANT_NOT_FOUND ou BUSINESS_NOT_FOUND (a empresa informada não existe).",
+  ),
 
-  // Grouping errors by route - CREATE (POST) - status 400
-  createPartErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Fornecedor não encontrado."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Esta peça não está disponível para cadastro. Já existe uma peça com este nome.",
-        ),
-    }),
-  ]),
+  sessionUserNotFound: codedError(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
-  // Forbidden errors for CREATE (status 403)
-  createPartForbiddenErrors: z.object({
-    message: z.string().default("Este fornecedor não pertence a esta empresa!"),
-  }),
-
-  // LIST errors (GET) - status 400
-  listPartErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-  ]),
-
-  // UPDATE errors (PATCH) - status 400
-  updatePartErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Peça não encontrada!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Fornecedor não encontrado."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Esta peça não está disponível para cadastro. Já existe uma peça com este nome.",
-        ),
-    }),
-  ]),
-
-  // Forbidden errors for UPDATE (status 403)
-  updatePartForbiddenErrors: z.union([
-    z.object({
-      message: z.string().default("Esta peça não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este fornecedor não pertence a esta empresa!"),
-    }),
-  ]),
-
-  // DELETE errors (DELETE) - status 400
-  deletePartErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Peça não encontrada!"),
-    }),
-  ]),
-
-  // Forbidden errors for DELETE (status 403)
-  deletePartForbiddenErrors: z.union([
-    z.object({
-      message: z
-        .string()
-        .default("Esta peça não pertence a esta ordem de serviço!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Não é possível deletar esta peça pois ela está sendo utilizada em ordem(ns) de serviço.",
-        ),
-    }),
-  ]),
+  listPartErrors: codedError(
+    "VALIDATION_ERROR: ordenação, filtro ou paginação inválidos. BUSINESS_NOT_IDENTIFIED: o MASTER não informou a empresa.",
+  ),
 };
 
 export { partSchemas, partResponses };

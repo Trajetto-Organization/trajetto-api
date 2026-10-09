@@ -45,9 +45,13 @@ function renderFineCreatedWhatsApp(payload: FineCreatedPayload): string {
     `Veículo: *${payload.vehiclePlate}*`,
     `Valor: *${formatCurrency(payload.amount)}*`,
     `Identificador da multa: *${payload.fineId}*`,
-    `Data da infração: *${formatDate(new Date(payload.violationDate), "pt-BR")}*${locationPart}`,
-    payload.points && `Pontos na carteira: *${payload.points}`,
-    payload.observation && `Observação: *${payload.observation}`,
+    `Data da infração: *${formatDate(payload.violationDate, payload.timeZone)}*${locationPart}`,
+    // Bold is closed on every line: an open `*` bolds the rest of the
+    // message in WhatsApp. Zero points is still a value worth printing.
+    payload.points !== null &&
+      payload.points !== undefined &&
+      `Pontos na carteira: *${payload.points}*`,
+    payload.observation && `Observação: *${payload.observation}*`,
   ]
     .filter(Boolean)
     .join("\n");

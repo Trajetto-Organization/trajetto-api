@@ -3,21 +3,22 @@ import {
   CreateShipperProps,
   UpdateShipperProps,
   ListShippersProps,
-  ListShippersResult,
+  ListShippersPage,
   SearchShipperWithCursorProps,
   CursorPaginatedShipper,
 } from "../dtos/shipper-dto";
 
 interface IShipperRepository {
   createShipper: (shipperData: CreateShipperProps) => Promise<Shipper>;
-  listShippers: (props: ListShippersProps) => Promise<ListShippersResult>;
+  /**
+   * The page (search + Status filter, in the list's order) and, over the
+   * search alone, the count per status with how many carry a CNPJ.
+   */
+  listShippers: (props: ListShippersProps) => Promise<ListShippersPage>;
   searchShipperWithCursor: (
     props: SearchShipperWithCursorProps,
   ) => Promise<CursorPaginatedShipper>;
   findShipperById: (shipperId: string) => Promise<Shipper | null>;
-  countShippersSummary: (
-    businessId: string,
-  ) => Promise<{ total: number; active: number; withCnpj: number }>;
   findShipperByName: (
     businessId: string,
     name: string,

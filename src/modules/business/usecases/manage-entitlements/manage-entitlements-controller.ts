@@ -10,9 +10,6 @@ import {
   UpdateBusinessEntitlementUseCase,
 } from "./manage-entitlements-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 const moduleImpactParamsSchema = z.object({
@@ -38,24 +35,12 @@ class GetBusinessEntitlementsController {
       GetBusinessEntitlementsUseCase,
     );
 
-    try {
-      const result = await getBusinessEntitlementsUseCase.execute({
-        userId: id,
-        businessId,
-      });
+    const result = await getBusinessEntitlementsUseCase.execute({
+      userId: id,
+      businessId,
+    });
 
-      return reply.status(200).send({ data: result });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(200).send({ data: result });
   }
 }
 
@@ -69,25 +54,13 @@ class GetModuleImpactController {
 
     const getModuleImpactUseCase = container.resolve(GetModuleImpactUseCase);
 
-    try {
-      const result = await getModuleImpactUseCase.execute({
-        userId: id,
-        businessId,
-        module,
-      });
+    const result = await getModuleImpactUseCase.execute({
+      userId: id,
+      businessId,
+      module,
+    });
 
-      return reply.status(200).send({ data: result });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(200).send({ data: result });
   }
 }
 
@@ -102,28 +75,16 @@ class UpdateBusinessEntitlementController {
       UpdateBusinessEntitlementUseCase,
     );
 
-    try {
-      await updateBusinessEntitlementUseCase.execute({
-        userId: id,
-        businessId,
-        module,
-        enabled,
-      });
+    await updateBusinessEntitlementUseCase.execute({
+      userId: id,
+      businessId,
+      module,
+      enabled,
+    });
 
-      return reply
-        .status(200)
-        .send({ message: "Módulo da empresa atualizado com sucesso!" });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply
+      .status(200)
+      .send({ message: "Módulo da empresa atualizado com sucesso!" });
   }
 }
 

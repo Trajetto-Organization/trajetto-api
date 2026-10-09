@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 import { createPermissionSchema } from "@/schemas/create-permission-schema";
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { listPermissionSchema } from "@/schemas/list-permission-schema";
+import { searchMetaDoc } from "@/shared/pagination/list-meta";
 
 import { updatePermissionSchema } from "@/schemas/update-permission-schema";
 import { updateDeletePermissionSchema } from "@/schemas/update-delete-permission-schema";
@@ -11,9 +12,18 @@ import { updateDeleteProfileAccessSchema } from "@/schemas/update-delete-profile
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
+import { errorResponse } from "./common-responses";
+
+/**
+ * A refusal as the error handler sends it: always with a code (decision
+ * 11.3). The description lists the codes the route can answer with.
+ */
+const refusal = (description: string) =>
+  errorResponse.extend({ code: z.string() }).describe(description);
+
 const permissionSchemas = {
   createPermission: createPermissionSchema,
-  listPermission: listPagesSchema,
+  listPermission: listPermissionSchema,
   updatePermission: updatePermissionSchema,
   updateDeletePermission: updateDeletePermissionSchema,
   bulkConfigurePermissions: bulkConfigurePermissionsSchema,
@@ -26,33 +36,32 @@ const permissionResponses = {
     message: z.string().default("Permissão criada com sucesso!"),
   }),
 
-  permissionList: z.object({
-    data: z.array(
-      z.object({
-        id: z.string(),
-        action: z.string(),
-        canRead: z.boolean(),
-        canWrite: z.boolean(),
-        created_at: z.string(),
-        updated_at: z.string(),
-        permission_key: z.string(),
-        business_id: z.string(),
-        profile_access_id: z.string(),
-        business: z.object({
-          id: z.string(),
-          fantasy_name: z.string(),
-        }),
-        profile_access: z.object({
-          id: z.string(),
-          name: z.string(),
-        }),
-      }),
-    ),
-    total: z.number(),
-    currentPage: z.number(),
-    pageSize: z.number(),
-    totalPages: z.number(),
+  /** A line of GET /permission/list-permission. */
+  permissionListRow: z.object({
+    id: z.string(),
+    action: z.string(),
+    permissionKey: z.string(),
+    canRead: z.boolean(),
+    canWrite: z.boolean(),
+    businessId: z.string(),
+    profileAccessId: z.string(),
+    created_at: z.union([z.string(), z.date()]),
+    updated_at: z.union([z.string(), z.date()]),
+    profileAccess: z.object({ name: z.string() }),
   }),
+
+  /** Cards and filter options of the list, counted over the whole company. */
+  permissionListSearchMeta: searchMetaDoc(
+    {
+      total: z
+        .number()
+        .int()
+        .describe("Permissões na busca e nos filtros, exceto o de escrita."),
+      writable: z.number().int().describe("Com escrita."),
+      readOnly: z.number().int().describe("Só leitura."),
+    },
+    ["permissionKey", "profileAccessId", "read", "write"],
+  ),
 
   permissionUpdated: z.object({
     message: z.string().default("Permissão atualizada com sucesso!"),
@@ -67,161 +76,32 @@ const permissionResponses = {
     message: z.string().default("Internal server error"),
   }),
 
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
+  resourceNotFound: refusal("USER_NOT_FOUND: o usuário da sessão não existe mais."),
+  validationError: refusal("VALIDATION_ERROR: parâmetro, consulta ou corpo recusado (issues diz qual)."),
+  businessNotFound: refusal("USER_NOT_FOUND (o usuário da sessão não existe mais) ou BUSINESS_NOT_FOUND."),
+  // Refusals shared by the write routes.
+  permissionWriteNotFound: refusal(
+    "USER_NOT_FOUND (o usuário da sessão não existe mais), BUSINESS_NOT_FOUND ou PERMISSION_NOT_FOUND (a permissão do caminho não existe ou é de outra empresa).",
+  ),
+  permissionWriteForbidden: refusal(
+    "PERMISSION_DENIED (um usuário comum mexendo nas permissões do próprio perfil — nem criar, nem mover para ele, nem configurar em lote, nem alterar ou excluir as que já estão nele) ou TENANT_ACCESS_DENIED.",
+  ),
 
-  validationError: z.object({
-    message: z.string().default("Validation Error"),
-    issues: z.array(z.string()),
-  }),
-
-  permissionNotFound: z.object({
-    message: z.string().default("Permissão não encontrada!"),
-  }),
-
-  businessNotFound: z.object({
-    message: z.string().default("Empresa não encontrada!"),
-  }),
-
-  profileAccessNotFound: z.object({
-    message: z.string().default("Perfil de acesso não encontrado!"),
-  }),
-
-  permissionAlreadyExists: z.object({
-    message: z.string().default("Esta permissão já existe!"),
-  }),
-
-  permissionAlreadyAssigned: z.object({
-    message: z.string().default("Esta permissão já está atribuída!"),
-  }),
-
-  permissionBusinessError: z.object({
-    message: z.string().default("Erro na permissão da empresa!"),
-  }),
-
-  permissionCannotBeUpdatedByHimself: z.object({
-    message: z
-      .string()
-      .default(
-        "Usuário não tem permissão para atualizar a sua própria permissão",
-      ),
-  }),
-
-  permissionCannotBeDeletedByHimself: z.object({
-    message: z
-      .string()
-      .default(
-        "Usuário não tem permissão para deletar a sua própria permissão",
-      ),
-  }),
+  permissionWriteConflict: refusal(
+    "PERMISSION_ALREADY_EXISTS (mesmo nome no perfil) ou PERMISSION_ALREADY_ASSIGNED (mesmo recurso no perfil).",
+  ),
 
   // Grouping errors by route
-  createPermissionErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("O perfil de acesso não pertence a essa empresa."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Esta permissão já está atribuída com este perfil."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Já existe uma permissão com esse nome para este perfil! Para alterar, remova a permissão existente primeiro.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Perfil de acesso não encontrado! Por favor tente novamente."),
-    }),
-  ]),
-
-  listPermissionErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-  ]),
-
-  updatePermissionErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("O perfil de acesso não pertence a essa empresa."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Já existe uma permissão com esse nome para este perfil! Para alterar, remova a permissão existente primeiro.",
-        ),
-    }),
-    z.object({
-      message: z.string().default("Permissão não encontrada!"),
-    }),
-    z.object({
-      message: z.string().default("Perfil de acesso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Esta permissão já está atribuída com este perfil."),
-    }),
-  ]),
-
-  updatePermissionForbiddenErrors: z.object({
-    message: z
-      .string()
-      .default(
-        "Usuário não tem permissão para atualizar a sua própria permissão",
-      ),
-  }),
-
-  deletePermissionErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Permissão não encontrada!"),
-    }),
-  ]),
+  createPermissionErrors: refusal(
+    "VALIDATION_ERROR (corpo inválido) ou PROFILE_ACCESS_NOT_FOUND (o perfil indicado no corpo não existe ou é de outra empresa — a mesma resposta).",
+  ),
+  listPermissionErrors: refusal(
+    "VALIDATION_ERROR (parâmetros inválidos) ou BUSINESS_NOT_IDENTIFIED (o MASTER não informou a empresa).",
+  ),
+  updatePermissionErrors: refusal(
+    "VALIDATION_ERROR (corpo ou id inválido) ou PROFILE_ACCESS_NOT_FOUND (o perfil indicado no corpo não existe ou é de outra empresa — a mesma resposta).",
+  ),
+  deletePermissionErrors: refusal("VALIDATION_ERROR (id inválido)."),
 
   permissionsConfigured: z.object({
     message: z.string().default("Permissões configuradas com sucesso!"),
@@ -243,30 +123,9 @@ const permissionResponses = {
     ),
   }),
 
-  bulkConfigurePermissionsErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Perfil de acesso não encontrado! Por favor tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("O perfil de acesso não pertence a essa empresa."),
-    }),
-  ]),
+  bulkConfigurePermissionsErrors: refusal(
+    "VALIDATION_ERROR (linha sem leitura, recurso repetido ou corpo inválido) ou PROFILE_ACCESS_NOT_FOUND (o perfil indicado no corpo não existe ou é de outra empresa — a mesma resposta).",
+  ),
 };
 
 export { permissionSchemas, permissionResponses };

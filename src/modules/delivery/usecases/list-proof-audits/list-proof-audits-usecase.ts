@@ -5,11 +5,14 @@ import { IProofAuditRepository } from "../../repositories/IProof-audit-repositor
 
 import { UploadService } from "@/shared/services/upload-service";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { AppError } from "@/shared/errors/AppError";
+import { businessDaysRange, resolveTimeZone } from "@/shared/time/business-day";
+
+import { proofAiState } from "./proof-ai-state";
+import { proofDeviceAgreement } from "@/shared/ai-precheck/device-precheck";
 
 import type {
   ListProofAuditsResult,
@@ -27,14 +30,22 @@ interface ListProofAuditsRequest {
 }
 
 /**
- * The receipts waiting for a person.
+ * The agreement rate covers the decisions of this many calendar days, today
+ * included, counted in the company's zone (DLVB-04). The web labels the number
+ * with it, from the meta.
+ */
+const AGREEMENT_WINDOW_DAYS = 90;
+
+/**
+ * The receipts waiting for a person, and the ones already decided.
  *
- * Ordered so that the cards where a human adds the most value come first: a
- * photo the model could not read, then the ones it was least sure about, then
- * the clean confident ones a reviewer clears in a second. Sorting within the
- * page rather than in SQL because the priority is buried in a JSON column and
- * a page is fifty rows — an expression index to sort fifty rows would be
- * machinery paid for on every write.
+ * The queue is ordered so that the cards where a human adds the most value
+ * come first: a photo the model could not read, then the ones it was least
+ * sure about, then the clean confident ones a reviewer clears in a second.
+ * The history tabs are ordered by the decision, newest first. Both orders are
+ * the repository's, in SQL, so page 2 continues page 1: sorting inside a page
+ * made pages overlap in priority and put a receipt approved now on the last
+ * page of Aprovados, which the screen never asked for (DLVB-02).
  */
 @injectable()
 class ListProofAuditsUseCase {
@@ -56,7 +67,11 @@ class ListProofAuditsUseCase {
   }: ListProofAuditsRequest): Promise<ListProofAuditsResult> {
     const findUser = await this.user.findUserById(userId);
 
-    if (!findUser) throw new ResourceNotFoundError();
+    // The session was checked by the middleware; a user row gone since then
+    // is a 404 with its code (decision 11.3), not a bare 400.
+    if (!findUser) {
+      throw new AppError("Usuário não encontrado.", 404, "USER_NOT_FOUND");
+    }
 
     // Auditing receipts is the office's job. A driver reviewing their own
     // proof is the one reviewer whose verdict means nothing.
@@ -74,37 +89,65 @@ class ListProofAuditsUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
+    const settings = await this.audits.findQueueSettings(resolvedBusinessId);
+
+    const now = new Date();
+
+    // Civil days in the company's zone (decision 1.1), not the server's:
+    // the window opens at midnight there.
+    const agreementSince = businessDaysRange(
+      now,
+      resolveTimeZone(settings?.timezone),
+      AGREEMENT_WINDOW_DAYS,
+    ).start;
+
+    const aiContracted = (settings?.ai_analysis_limit ?? 0) > 0;
+
     const result = await this.audits.listQueue({
       businessId: resolvedBusinessId,
       status,
       page,
       pageSize,
+      agreementSince,
     });
 
     const data = await Promise.all(
-      result.data
-        .slice()
-        .sort(
-          (left, right) =>
-            (left.ai_suggestion?.assessment.reviewPriority ?? 0) -
-            (right.ai_suggestion?.assessment.reviewPriority ?? 0),
-        )
-        .map(async (card) => ({
-          ...card,
+      result.data.map(async (card) => ({
+        ...card,
 
-          // Signed here rather than in the repository: the signing service is
-          // an I/O concern and the repository's job is the rows.
-          photoUrl: card.photoUrl
-            ? await this.uploads.getFileUrl(card.photoUrl)
-            : null,
-          signatureUrl: card.signatureUrl
-            ? await this.uploads.getFileUrl(card.signatureUrl)
-            : null,
-        })),
+        aiState: proofAiState({
+          hasSuggestion: card.ai_suggestion !== null,
+          analysisStatus: card.analysisStatus,
+          aiContracted,
+          cardStatus: card.status,
+          createdAt: card.created_at,
+          hasDevicePrecheck: card.device_precheck != null,
+          now,
+        }),
+
+        // The phone's check next to the server's reading (decision 14.2):
+        // the verdict once stored, else compared here from the reading.
+        deviceAgreement:
+          card.device_agreement ??
+          proofDeviceAgreement(card.device_precheck, card.ai_suggestion?.reading),
+
+        // Signed here rather than in the repository: the signing service is
+        // an I/O concern and the repository's job is the rows.
+        photoUrl: card.photoUrl
+          ? await this.uploads.getFileUrl(card.photoUrl)
+          : null,
+        signatureUrl: card.signatureUrl
+          ? await this.uploads.getFileUrl(card.signatureUrl)
+          : null,
+      })),
     );
 
-    return { ...result, data };
+    return {
+      data,
+      total: result.total,
+      meta: { ...result.meta, agreementWindowDays: AGREEMENT_WINDOW_DAYS },
+    };
   }
 }
 
-export { ListProofAuditsUseCase };
+export { AGREEMENT_WINDOW_DAYS, ListProofAuditsUseCase };

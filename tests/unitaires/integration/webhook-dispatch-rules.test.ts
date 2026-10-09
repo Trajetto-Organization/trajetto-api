@@ -9,6 +9,7 @@ import {
   WEBHOOK_RETRY_DELAYS_MS,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
+  inFairPool,
   isWebhookPermanent,
   isWebhookSuccess,
   nextWebhookDelayMs,
@@ -152,5 +153,78 @@ describe("the replay window", () => {
     // And the reason the payload is copied onto the row instead of read back
     // from the outbox, whose purge runs on a much shorter horizon.
     expect(REPLAY_WINDOW_DAYS).toBe(30);
+  });
+});
+
+describe("the fair pool", () => {
+  const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+  it("never runs more than the limit at once, nor more than perKey per key", async () => {
+    let running = 0;
+    let peak = 0;
+    const peakByKey = new Map<string, number>();
+    const runningByKey = new Map<string, number>();
+
+    const items = Array.from({ length: 30 }, (_, index) => ({
+      key: index % 3 === 0 ? "slow" : `fast-${index % 4}`,
+    }));
+
+    await inFairPool(items, { concurrency: 5, perKey: 2, keyOf: (item) => item.key }, async (item) => {
+      running += 1;
+      runningByKey.set(item.key, (runningByKey.get(item.key) ?? 0) + 1);
+      peak = Math.max(peak, running);
+      peakByKey.set(item.key, Math.max(peakByKey.get(item.key) ?? 0, runningByKey.get(item.key)!));
+
+      await sleep(item.key === "slow" ? 20 : 2);
+
+      running -= 1;
+      runningByKey.set(item.key, runningByKey.get(item.key)! - 1);
+    });
+
+    expect(peak).toBeLessThanOrEqual(5);
+    expect(Math.max(...peakByKey.values())).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps the other slots moving while one key is slow", async () => {
+    const finished: string[] = [];
+
+    const items = [
+      ...Array.from({ length: 6 }, () => ({ key: "slow" })),
+      ...Array.from({ length: 6 }, (_, index) => ({ key: `fast-${index}` })),
+    ];
+
+    await inFairPool(items, { concurrency: 5, perKey: 2, keyOf: (item) => item.key }, async (item) => {
+      await sleep(item.key === "slow" ? 40 : 1);
+      finished.push(item.key);
+    });
+
+    // In waves, the fast ones would have waited for the slow ones in front.
+    const firstSlow = finished.indexOf("slow");
+    const fastBeforeIt = finished.slice(0, firstSlow).length;
+
+    expect(fastBeforeIt).toBe(6);
+  });
+
+  it("finishes the rest when one piece of work throws", async () => {
+    const done: number[] = [];
+
+    await inFairPool([1, 2, 3], { concurrency: 2, perKey: 2, keyOf: () => "k" }, async (item) => {
+      if (item === 2) throw new Error("boom");
+      done.push(item);
+    });
+
+    expect(done.sort()).toEqual([1, 3]);
+  });
+});
+
+describe("the lease, with the per-endpoint lane", () => {
+  it("still covers one endpoint's whole share at its reduced concurrency", () => {
+    // 10 rows of one endpoint, 2 at a time, 10 s each: 50 s, inside 120 s.
+    expect(() => assertWebhookLeaseInvariant(20)).not.toThrow();
+
+    // A lane so narrow it cannot finish its share within the lease is refused.
+    expect(() =>
+      assertWebhookLeaseInvariant(20, 5, 10_000, 120, 20, 1),
+    ).toThrow(/lease invariant/);
   });
 });

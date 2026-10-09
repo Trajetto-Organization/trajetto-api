@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
+
 /**
  * The published contract of the route module, read back out of the running
  * application rather than out of the file that declares it.
@@ -62,14 +64,14 @@ beforeAll(async () => {
 
   document = app.swagger() as unknown as OpenApiDocument;
   close = () => app.close();
-}, 60_000);
+}, APP_BOOT_TIMEOUT_MS);
 
 afterAll(async () => {
   await close?.();
 });
 
 describe("the route module's published surface", () => {
-  it("publishes exactly the thirteen endpoints the module implements", () => {
+  it("publishes exactly the twenty-two endpoints the module implements", () => {
     // Listed rather than counted: a route added without documentation, or one
     // documented and never registered, both show up here as a diff instead of
     // a number that happens to match.
@@ -81,17 +83,37 @@ describe("the route module's published surface", () => {
         "PATCH /route/update-route/{routeId}/business/{businessId}",
         "PATCH /route/release-route/{routeId}/business/{businessId}",
         "POST /route/start-route/{routeId}/business/{businessId}",
+
+        // "Estou a caminho" (decision 6.4): the driver's statement about a
+        // stop, which moves no status.
+        "POST /route/on-the-way/{stopId}/route/{routeId}/business/{businessId}",
+
         "PATCH /route/cancel-route/{routeId}/business/{businessId}",
         "POST /route/add-stops/{routeId}/business/{businessId}",
         "DELETE /route/remove-stop/{stopId}/route/{routeId}/business/{businessId}",
         "PATCH /route/reorder-stops/{routeId}/business/{businessId}",
 
-        // The control tower. The ingest is a driver surface; the other two
-        // are the manager's, and a driver token is refused rather than shown
-        // the whole operation.
+        // The route as the unit of assignment (decision 14.7): batch removal,
+        // the atomic move between routes, the picker of deliveries without a
+        // route, where a selection is now, and "Fixar no mapa".
+        "POST /route/remove-stops/{routeId}/business/{businessId}",
+        "POST /route/move-stops/{routeId}/business/{businessId}",
+        "GET /route/unrouted-deliveries/{businessId}",
+        "GET /route/open-stops/{businessId}",
+        "PATCH /route/set-delivery-location/{deliveryId}/business/{businessId}",
+
+        // What the assignment dialogs warn about before a pair is chosen
+        // (FLEET-ASSIGN-2): a dispatcher's read.
+        "GET /route/assignment-preview/{businessId}",
+
+        // The control tower and the monitoring board. The ingest is a
+        // driver surface; the other four are the manager's, and a driver
+        // token is refused rather than shown the whole operation.
         "POST /route/positions",
         "GET /route/control-tower",
         "GET /route/driver-trail/{driverId}",
+        "GET /route/monitoring",
+        "GET /route/monitoring/drivers",
       ]);
   });
 
@@ -128,6 +150,7 @@ describe("the statuses each route claims to answer", () => {
       "/route/update-route/{routeId}/business/{businessId}",
       "/route/release-route/{routeId}/business/{businessId}",
       "/route/start-route/{routeId}/business/{businessId}",
+      "/route/on-the-way/{stopId}/route/{routeId}/business/{businessId}",
       "/route/cancel-route/{routeId}/business/{businessId}",
       "/route/add-stops/{routeId}/business/{businessId}",
       "/route/reorder-stops/{routeId}/business/{businessId}",
@@ -149,6 +172,7 @@ describe("the statuses each route claims to answer", () => {
       "/route/list-routes",
       "/route/get-route/{routeId}/business/{businessId}",
       "/route/remove-stop/{stopId}/route/{routeId}/business/{businessId}",
+      "/route/assignment-preview/{businessId}",
     ]) {
       expect(Object.keys(operationFor(path).responses), path).not.toContain(
         "409",
@@ -156,20 +180,62 @@ describe("the statuses each route claims to answer", () => {
     }
   });
 
-  it("claims 429 only where a rate limit is actually configured", () => {
-    // The driver's app resends from its outbox after a dead network, so the
-    // departure carries a limit — and so does the position ingest, which is
-    // the busiest route in the product by an order of magnitude. Nothing else
-    // in the module does, and saying otherwise would have the app back off
-    // from a wall that is not there.
-    const limited = operations().filter(([, , operation]) =>
-      Object.keys(operation.responses).includes("429"),
-    );
+  it("documents the assignment preview's refusals", () => {
+    // A bad query (400), a driver's token or another company (403), and a
+    // driver or vehicle that is not this company's (404, like one that does
+    // not exist).
+    expect(
+      Object.keys(operationFor("/route/assignment-preview/{businessId}").responses),
+    ).toEqual(expect.arrayContaining(["200", "400", "401", "403", "404", "429"]));
+  });
 
-    expect(limited.map(([path]) => path).sort()).toEqual([
+  it("documents 429 on every route, and the stricter limit where there is one", () => {
+    // The limiter is registered with `global: true`, so every route in the
+    // module has a bucket and can answer 429; this test used to assert the
+    // opposite, which is how 228 routes went undocumented. What IS specific
+    // is the stricter limit: the departure (the app resends it from its
+    // outbox after a dead network) and the position ingest, the busiest
+    // route in the product.
+    for (const [path, method, operation] of operations()) {
+      expect(Object.keys(operation.responses), `${method} ${path}`).toContain(
+        "429",
+      );
+    }
+
+    const ownLimit = operations()
+      .filter(([, , operation]) =>
+        JSON.stringify(operation.responses["429"]).includes(
+          "Limite desta rota",
+        ),
+      )
+      .map(([path]) => path)
+      .sort();
+
+    expect(ownLimit).toEqual([
+      "/route/on-the-way/{stopId}/route/{routeId}/business/{businessId}",
       "/route/positions",
       "/route/start-route/{routeId}/business/{businessId}",
     ]);
+  });
+
+  it("documents no 422 anywhere in the module", () => {
+    // Nothing in the route module answers 422: a body that fails the schema
+    // is a 400 VALIDATION_ERROR (with `issues`), and a state that forbids the
+    // write is a 409. Six routes published a 422 anyway, and a client built
+    // from them handled validation on a branch that never runs.
+    const with422 = operations()
+      .filter(([, , operation]) => "422" in operation.responses)
+      .map(([path, method]) => `${method.toUpperCase()} ${path}`);
+
+    expect(with422).toEqual([]);
+
+    for (const [path, method, operation] of operations()) {
+      const badRequest = JSON.stringify(operation.responses["400"] ?? {});
+
+      if (operation.requestBody) {
+        expect(badRequest, `${method} ${path}`).toContain("issues");
+      }
+    }
   });
 
   it("documents 404 wherever a route id is addressed", () => {
@@ -203,6 +269,7 @@ describe("the statuses each route claims to answer", () => {
       "/route/update-route/{routeId}/business/{businessId}",
       "/route/release-route/{routeId}/business/{businessId}",
       "/route/start-route/{routeId}/business/{businessId}",
+      "/route/on-the-way/{stopId}/route/{routeId}/business/{businessId}",
       "/route/cancel-route/{routeId}/business/{businessId}",
       "/route/add-stops/{routeId}/business/{businessId}",
       "/route/reorder-stops/{routeId}/business/{businessId}",
@@ -284,23 +351,27 @@ describe("the status-override catalogue's published surface", () => {
     for (const [path, method, operation] of catalogue()) {
       expect(operation.security, `${method} ${path}`).toBeTruthy();
       expect(operation.tags, `${method} ${path}`).toEqual([
-        "statusChangeReason",
+        "status-change-reason",
       ]);
     }
   });
 
-  it("claims 409 only where a reason can be in use", () => {
-    // Deleting a reason the catalogue already spent is the one refusal here
-    // that is not the caller's fault: the request was well formed and allowed,
-    // and the reason is simply part of the record now.
+  it("claims 409 only where a name can be taken or a reason can be in use", () => {
+    // The refusals that are not the caller's fault (decision 11.3): the
+    // request was well formed and allowed, and the name is another reason's
+    // (create, update) or the reason is part of the record now (delete).
+    // The listing has nothing to conflict with.
     const withConflict = catalogue()
       .filter(([, , operation]) =>
         Object.keys(operation.responses).includes("409"),
       )
-      .map(([path]) => path);
+      .map(([path]) => path)
+      .sort();
 
     expect(withConflict).toEqual([
+      "/status-change-reason/create-status-change-reason/{businessId}",
       "/status-change-reason/delete-status-change-reason/{reasonId}/business/{businessId}",
+      "/status-change-reason/update-status-change-reason/{reasonId}/business/{businessId}",
     ]);
   });
 
@@ -375,13 +446,14 @@ describe("the import module's published surface", () => {
    */
   const imports = () => operationsUnder("/import/");
 
-  it("publishes exactly the four endpoints the module implements", () => {
+  it("publishes exactly the five endpoints the module implements", () => {
     expect(
       imports().map(([path, method]) => `${method.toUpperCase()} ${path}`),
     ).toEqual([
       "GET /import/download-template",
       "POST /import/import-spreadsheet/{businessId}",
       "GET /import/list-imports",
+      "GET /import/get-import/{importId}/business/{businessId}",
       "POST /import/reverse-import/{importId}/business/{businessId}",
     ]);
   });
@@ -427,15 +499,22 @@ describe("the import module's published surface", () => {
 
     expect(template).toContain(".xlsx");
 
-    // And it publishes no 200 schema, because there is no JSON body to
-    // describe — documenting one would be describing a response that never
-    // arrives.
-    const responses = Object.keys(
+    // The 200 is published as the FILE it is: a spreadsheet content type and
+    // the name it is saved under, never a JSON body. Publishing no 200 at all
+    // (as this test used to demand) left a client unable to tell that the
+    // call ever succeeds.
+    const success = (
       imports().find(([path]) => path.endsWith("/download-template"))![2]
-        .responses,
-    );
+        .responses as Record<
+        string,
+        { content?: Record<string, unknown>; headers?: Record<string, unknown> }
+      >
+    )["200"];
 
-    expect(responses).not.toContain("200");
+    expect(Object.keys(success?.content ?? {})).toEqual([
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ]);
+    expect(success?.headers?.["content-disposition"]).toBeDefined();
   });
 
   it("describes the per-row report on the upload, not just a count", () => {
@@ -469,11 +548,16 @@ describe("the delivery exports, as published", () => {
     ).toEqual(["GET /delivery/export-delivery", "GET /delivery/export-occurrence"]);
   });
 
-  it("publishes no 200 schema, because the answer is a file", () => {
+  it("publishes the 200 as a file, never as a JSON body", () => {
     for (const [path, method, operation] of exports()) {
-      expect(Object.keys(operation.responses), `${method} ${path}`).not.toContain(
-        "200",
-      );
+      const success = (
+        operation.responses as Record<string, { content?: Record<string, unknown> }>
+      )["200"];
+
+      expect(Object.keys(success?.content ?? {}), `${method} ${path}`).toEqual([
+        "text/csv",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ]);
 
       expect(operation.description ?? "", `${method} ${path}`).toContain(
         "NÃO com JSON",
@@ -490,12 +574,14 @@ describe("the public integration API, as published", () => {
    */
   const integration = () => operationsUnder("/integration/v1/");
 
-  it("publishes the read surface a v1 promises", () => {
+  it("publishes the surface a v1 promises: the reads and the one write", () => {
     expect(
       integration().map(([path, method]) => `${method.toUpperCase()} ${path}`),
     ).toEqual([
       "GET /integration/v1/catalogue",
       "GET /integration/v1/deliveries",
+      // Decision 5.10: an ERP pushes documents; nothing else is written.
+      "POST /integration/v1/deliveries",
       "GET /integration/v1/deliveries/{id}",
       "GET /integration/v1/routes",
       "GET /integration/v1/routes/{id}",
@@ -559,6 +645,9 @@ describe("the public integration API, as published", () => {
     // away — and an offset page shifts when a row is inserted mid-walk, which
     // is how an integration silently skips a document.
     for (const [path, method, operation] of integration()) {
+      // The lists only: POST /deliveries creates one document.
+      if (method.toLowerCase() !== "get") continue;
+
       if (!path.endsWith("/deliveries") && !path.endsWith("/routes") && !path.endsWith("/events")) {
         continue;
       }
@@ -581,8 +670,10 @@ describe("the public integration API, as published", () => {
     // can only match on one of those breaks the first time a customer's ERP
     // changes how it numbers things.
     const delivery = JSON.stringify(
-      integration().find(([path]) => path === "/integration/v1/deliveries")![2]
-        .responses["200"] ?? {},
+      integration().find(
+        ([path, method]) =>
+          path === "/integration/v1/deliveries" && method.toLowerCase() === "get",
+      )![2].responses["200"] ?? {},
     );
 
     expect(delivery).toContain('"id"');

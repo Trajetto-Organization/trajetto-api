@@ -1,11 +1,9 @@
 import { IDashboardRepository } from "../IDashboard-repository";
 import {
-  CountByDateRangeParams,
-  CountByDateRangeResult,
+  DashboardEntity,
   VehicleStatusCountResult,
+  MaintenanceStatsParams,
   MaintenanceStatsResult,
-  MonthlyCostsParams,
-  MonthlyCostsResult,
   VehicleTypeCountResult,
   CountByMonthParams,
   MonthlyCountBucket,
@@ -13,16 +11,29 @@ import {
   PeriodGranularity,
   PeriodCountBucket,
   PeriodCostBucket,
+  EntityTotal,
 } from "../../dtos/dashboard-dto";
 
-/** Local wall time, the same basis the real query truncates on. */
-function periodKey(at: Date, granularity: PeriodGranularity): string {
-  const year = at.getFullYear();
-  const month = String(at.getMonth() + 1).padStart(2, "0");
+import { businessDateKey, businessMonthKey } from "@/shared/time/business-day";
 
-  if (granularity === "month") return `${year}-${month}`;
+import { tallyMaintenance, type MaintenanceVehicle } from "../maintenance-standing";
 
-  return `${year}-${month}-${String(at.getDate()).padStart(2, "0")}`;
+/** A vehicle as the status and maintenance counts read it, with its tenant. */
+interface DashboardVehicleRow extends MaintenanceVehicle {
+  businessId: string;
+  status: keyof VehicleStatusCountResult;
+}
+
+/** The company's civil day or month, the same key the SQL groups by. */
+function periodKey(at: Date, granularity: PeriodGranularity, timeZone: string): string {
+  return granularity === "month"
+    ? businessMonthKey(at, timeZone)
+    : businessDateKey(at, timeZone);
+}
+
+/** [from, to), like the real `created_at >= from AND created_at < to`. */
+function within(at: Date, from: Date, to: Date): boolean {
+  return at.getTime() >= from.getTime() && at.getTime() < to.getTime();
 }
 
 class InMemoryDashboardRepository implements IDashboardRepository {
@@ -34,19 +45,17 @@ class InMemoryDashboardRepository implements IDashboardRepository {
         businessId?: string;
       }[];
     };
-    vehicleStatus: VehicleStatusCountResult;
-    maintenanceStats: MaintenanceStatsResult;
+    vehicles: DashboardVehicleRow[];
     vehicleTypes: { name: string; count: number; businessId?: string }[];
     monthlyCosts: {
-      preventive: number;
-      corrective: number;
+      internal: number;
+      external: number;
       date: string;
       businessId?: string;
     }[];
   } = {
     entityCounts: {},
-    vehicleStatus: { ACTIVE: 0, INACTIVE: 0, BLOCKED: 0, IN_ROUTE: 0 },
-    maintenanceStats: { pending: 0, recent: 0, overdue: 0 },
+    vehicles: [],
     vehicleTypes: [],
     monthlyCosts: [],
   };
@@ -54,74 +63,17 @@ class InMemoryDashboardRepository implements IDashboardRepository {
   /**
    * The same grouping the database does, over the same fixture rows.
    *
-   * Written as a grouping and not as a loop of `countByDateRange` calls: a
-   * fake that answered by looping would pass even if the real query grouped by
-   * the wrong column, which is the one thing worth checking here.
-   */
-  async countByMonth(
-    params: CountByMonthParams,
-    businessId?: string,
-  ): Promise<MonthlyCountBucket[]> {
-    const entries = this.data.entityCounts[params.entity] ?? [];
-
-    const buckets = new Map<string, number>();
-
-    for (const entry of entries) {
-      const at = new Date(entry.date);
-
-      if (at < params.from || at > params.to) continue;
-
-      // `business` is the tenant itself and carries no businessId, exactly as
-      // in the real repository.
-      if (
-        businessId &&
-        params.entity !== "business" &&
-        entry.businessId !== businessId
-      ) {
-        continue;
-      }
-
-      const month = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}`;
-
-      buckets.set(month, (buckets.get(month) ?? 0) + entry.count);
-    }
-
-    return [...buckets.entries()].map(([month, count]) => ({ month, count }));
-  }
-
-  async countManyByMonth(
-    params: {
-      entities: CountByMonthParams["entity"][];
-      from: Date;
-      to: Date;
-    },
-    businessId?: string,
-  ): Promise<Record<string, MonthlyCountBucket[]>> {
-    const result: Record<string, MonthlyCountBucket[]> = {};
-
-    for (const entity of params.entities) {
-      result[entity] = await this.countByMonth(
-        { entity, from: params.from, to: params.to },
-        businessId,
-      );
-    }
-
-    return result;
-  }
-
-  /**
-   * The same grouping the database does, at the same two granularities.
-   *
-   * Written as its own grouping rather than as a loop over `countByMonth`,
-   * for the reason stated above: a fake that answered by looping would agree
-   * with a real query that grouped by the wrong column.
+   * Written as a grouping and not as a loop of per-bucket counts: a fake that
+   * answered by looping would pass even if the real query grouped by the
+   * wrong column, which is the one thing worth checking here.
    */
   async countManyByPeriod(
     params: {
-      entities: CountByMonthParams["entity"][];
+      entities: DashboardEntity[];
       from: Date;
       to: Date;
       granularity: PeriodGranularity;
+      timeZone: string;
     },
     businessId?: string,
   ): Promise<Record<string, PeriodCountBucket[]>> {
@@ -134,20 +86,17 @@ class InMemoryDashboardRepository implements IDashboardRepository {
       for (const entry of entries) {
         const at = new Date(entry.date);
 
-        if (at < params.from || at > params.to) continue;
+        if (!within(at, params.from, params.to)) continue;
 
-        if (
-          businessId &&
-          entity !== "business" &&
-          entry.businessId !== businessId
-        ) {
+        // `business` is the tenant itself and carries no businessId, exactly
+        // as in the real repository.
+        if (businessId && entity !== "business" && entry.businessId !== businessId) {
           continue;
         }
 
-        buckets.set(
-          periodKey(at, params.granularity),
-          (buckets.get(periodKey(at, params.granularity)) ?? 0) + entry.count,
-        );
+        const key = periodKey(at, params.granularity, params.timeZone);
+
+        buckets.set(key, (buckets.get(key) ?? 0) + entry.count);
       }
 
       result[entity] = [...buckets.entries()].map(([period, count]) => ({
@@ -159,8 +108,73 @@ class InMemoryDashboardRepository implements IDashboardRepository {
     return result;
   }
 
+  async countManyTotals(
+    params: { entities: DashboardEntity[]; before: Date },
+    businessId?: string,
+  ): Promise<Record<string, EntityTotal>> {
+    const result: Record<string, EntityTotal> = {};
+
+    for (const entity of params.entities) {
+      let total = 0;
+      let before = 0;
+
+      for (const entry of this.data.entityCounts[entity] ?? []) {
+        if (businessId && entity !== "business" && entry.businessId !== businessId) {
+          continue;
+        }
+
+        total += entry.count;
+
+        if (new Date(entry.date).getTime() < params.before.getTime()) before += entry.count;
+      }
+
+      result[entity] = { total, before };
+    }
+
+    return result;
+  }
+
+  async countByMonth(
+    params: CountByMonthParams,
+    businessId?: string,
+  ): Promise<MonthlyCountBucket[]> {
+    const grouped = await this.countManyByPeriod(
+      { ...params, entities: [params.entity], granularity: "month" },
+      businessId,
+    );
+
+    return grouped[params.entity].map(({ period, count }) => ({ month: period, count }));
+  }
+
+  async countManyByMonth(
+    params: {
+      entities: DashboardEntity[];
+      from: Date;
+      to: Date;
+      timeZone: string;
+    },
+    businessId?: string,
+  ): Promise<Record<string, MonthlyCountBucket[]>> {
+    const grouped = await this.countManyByPeriod(
+      { ...params, granularity: "month" },
+      businessId,
+    );
+
+    return Object.fromEntries(
+      Object.entries(grouped).map(([entity, buckets]) => [
+        entity,
+        buckets.map(({ period, count }) => ({ month: period, count })),
+      ]),
+    );
+  }
+
   async getCostsByPeriod(
-    params: { from: Date; to: Date; granularity: PeriodGranularity },
+    params: {
+      from: Date;
+      to: Date;
+      granularity: PeriodGranularity;
+      timeZone: string;
+    },
     businessId?: string,
   ): Promise<PeriodCostBucket[]> {
     const buckets = new Map<string, PeriodCostBucket>();
@@ -168,19 +182,19 @@ class InMemoryDashboardRepository implements IDashboardRepository {
     for (const entry of this.data.monthlyCosts) {
       const at = new Date(entry.date);
 
-      if (at < params.from || at > params.to) continue;
+      if (!within(at, params.from, params.to)) continue;
       if (businessId && entry.businessId !== businessId) continue;
 
-      const period = periodKey(at, params.granularity);
+      const period = periodKey(at, params.granularity, params.timeZone);
 
       const bucket = buckets.get(period) ?? {
         period,
-        preventive: 0,
-        corrective: 0,
+        internal: 0,
+        external: 0,
       };
 
-      bucket.preventive += entry.preventive;
-      bucket.corrective += entry.corrective;
+      bucket.internal += entry.internal;
+      bucket.external += entry.external;
 
       buckets.set(period, bucket);
     }
@@ -189,99 +203,45 @@ class InMemoryDashboardRepository implements IDashboardRepository {
   }
 
   async getCostsByMonth(
-    params: { from: Date; to: Date },
+    params: { from: Date; to: Date; timeZone: string },
     businessId?: string,
   ): Promise<MonthlyCostBucket[]> {
-    const buckets = new Map<string, MonthlyCostBucket>();
-
-    for (const entry of this.data.monthlyCosts) {
-      const at = new Date(entry.date);
-
-      if (at < params.from || at > params.to) continue;
-      if (businessId && entry.businessId !== businessId) continue;
-
-      const month = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}`;
-
-      const bucket = buckets.get(month) ?? {
-        month,
-        preventive: 0,
-        corrective: 0,
-      };
-
-      bucket.preventive += entry.preventive;
-      bucket.corrective += entry.corrective;
-
-      buckets.set(month, bucket);
-    }
-
-    return [...buckets.values()];
-  }
-
-  async countByDateRange(
-    params: CountByDateRangeParams,
-    businessId?: string,
-  ): Promise<CountByDateRangeResult> {
-    const { entity, startDate, endDate } = params;
-
-    if (!this.data.entityCounts[entity]) {
-      return { count: 0 };
-    }
-
-    const filteredCounts = this.data.entityCounts[entity].filter((item) => {
-      const itemDate = new Date(item.date);
-      const start = new Date(startDate);
-
-      const end = new Date(endDate);
-
-      const dateInRange = itemDate >= start && itemDate <= end;
-      const businessMatches = !businessId || item.businessId === businessId;
-
-      return dateInRange && businessMatches;
-    });
-
-    const totalCount = filteredCounts.reduce(
-      (sum, item) => sum + item.count,
-      0,
+    const buckets = await this.getCostsByPeriod(
+      { ...params, granularity: "month" },
+      businessId,
     );
 
-    return { count: totalCount };
+    return buckets.map(({ period, internal, external }) => ({
+      month: period,
+      internal,
+      external,
+    }));
   }
 
-  async countVehiclesByStatus(): Promise<VehicleStatusCountResult> {
-    return this.data.vehicleStatus;
+  /** The same tenant filter as the real `where: { businessId }`. */
+  private vehiclesOf(businessId?: string): DashboardVehicleRow[] {
+    return businessId
+      ? this.data.vehicles.filter((vehicle) => vehicle.businessId === businessId)
+      : this.data.vehicles;
   }
 
-  async getMaintenanceStats(): Promise<MaintenanceStatsResult> {
-    return this.data.maintenanceStats;
-  }
-
-  async getMonthlyCosts(
-    params: MonthlyCostsParams,
+  async countVehiclesByStatus(
     businessId?: string,
-  ): Promise<MonthlyCostsResult> {
-    const { startDate, endDate } = params;
+  ): Promise<VehicleStatusCountResult> {
+    const counts = { ACTIVE: 0, INACTIVE: 0, BLOCKED: 0, IN_ROUTE: 0 };
 
-    const filteredCosts = this.data.monthlyCosts.filter((cost) => {
-      const costDate = new Date(cost.date);
-      const start = new Date(startDate);
+    for (const vehicle of this.vehiclesOf(businessId)) {
+      counts[vehicle.status] += 1;
+    }
 
-      const end = new Date(endDate);
+    return counts;
+  }
 
-      const dateInRange = costDate >= start && costDate <= end;
-      const businessMatches = !businessId || cost.businessId === businessId;
-
-      return dateInRange && businessMatches;
-    });
-
-    const totals = filteredCosts.reduce(
-      (sum, cost) => ({
-        preventive: sum.preventive + cost.preventive,
-        corrective: sum.corrective + cost.corrective,
-      }),
-      { preventive: 0, corrective: 0 },
-    );
-
-    return totals;
+  async getMaintenanceStats(
+    params: MaintenanceStatsParams,
+    businessId?: string,
+  ): Promise<MaintenanceStatsResult> {
+    return tallyMaintenance(this.vehiclesOf(businessId), params.today, params.timeZone);
   }
 
   async countVehiclesByType(
@@ -316,12 +276,8 @@ class InMemoryDashboardRepository implements IDashboardRepository {
     });
   }
 
-  setVehicleStatus(status: VehicleStatusCountResult): void {
-    this.data.vehicleStatus = status;
-  }
-
-  setMaintenanceStats(stats: MaintenanceStatsResult): void {
-    this.data.maintenanceStats = stats;
+  addVehicle(vehicle: DashboardVehicleRow): void {
+    this.data.vehicles.push({ ...vehicle });
   }
 
   addVehicleType(name: string, count: number, businessId?: string): void {
@@ -329,14 +285,14 @@ class InMemoryDashboardRepository implements IDashboardRepository {
   }
 
   addMonthlyCost(
-    preventive: number,
-    corrective: number,
+    internal: number,
+    external: number,
     date: string,
     businessId?: string,
   ): void {
     this.data.monthlyCosts.push({
-      preventive,
-      corrective,
+      internal,
+      external,
       date,
       businessId,
     });

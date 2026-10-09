@@ -1,4 +1,5 @@
 import { FastifyInstance } from "fastify";
+import { z } from "zod";
 
 import { CreateBusinessController } from "@/modules/business/usecases/create-business/create-business-controller";
 import { ListBusinessController } from "@/modules/business/usecases/list-business/list-business-controller";
@@ -27,6 +28,8 @@ import {
   businessResponses,
   businessSchemas,
 } from "./documentation/business-documentation";
+import { errorResponse } from "./documentation/common-responses";
+import { ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
 
 const createBusinessController = new CreateBusinessController();
 const listBusinessController = new ListBusinessController();
@@ -59,13 +62,14 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Create a new business",
+        summary: "Cadastra uma empresa",
         description:
-          "Register a new business entity in the fleet management system with company information and administrative details",
+          "Cadastra uma transportadora (tenant) e a filial matriz com os mesmos dados. CNPJ, razão social, e-mail e código ERP da empresa são únicos na plataforma. `timezone` (opcional) é um dos fusos do Brasil e define o \"hoje\" da empresa; ausente, America/Sao_Paulo. Só o MASTER.",
         body: businessSchemas.createBusiness,
         response: {
           201: businessResponses.businessCreated,
           400: businessResponses.createBusinessErrors,
+          409: businessResponses.businessConflict,
           500: businessResponses.internalServerError,
         },
       },
@@ -81,13 +85,22 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "List businesses",
+        summary: "Lista as empresas (tabela do /admin)",
         description:
-          "Retrieve a paginated list of business entities with optional search and filtering capabilities",
+          "Empresas numa tabela paginada, só para o MASTER. Ordena no servidor (`sort`/`order`) e filtra por situação (`status`: active, inactive) e UF (um ou mais valores separados por vírgula), além da busca livre (ID, razão social, nome fantasia, endereço, CNAE, código ERP, responsável, e-mail e os dígitos de CNPJ, CEP e telefone). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões (total, com código ERP, principais estados e cidades) e as opções dos filtros com as contagens — calculados sobre todas as empresas, nunca sobre a página.",
         querystring: businessSchemas.listBusiness,
         response: {
-          200: businessResponses.businessList,
-          400: businessResponses.listBusinessErrors,
+          200: ndjsonList(
+            businessResponses.businessRow,
+            offsetMetaWith(businessResponses.businessListSearchMeta),
+          ),
+          400: z.union([
+            businessResponses.listBusinessCodedErrors,
+            businessResponses.listBusinessErrors,
+          ]),
+          403: businessResponses.listBusinessCodedErrors.describe(
+            "PERMISSION_DENIED: só o MASTER lista as empresas.",
+          ),
           500: businessResponses.internalServerError,
         },
       },
@@ -103,15 +116,19 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Search businesses (cursor-based)",
+        summary: "Busca empresas para o seletor (paginação por cursor)",
         description:
-          "Retrieve businesses as NDJSON stream with cursor-based pagination. " +
-          "First line contains meta object: {meta: {nextCursor, hasMore}}. " +
-          "Subsequent lines are individual business objects. " +
-          "Use nextCursor value as cursor parameter for the next page.",
+          "Devolve as empresas ativas em NDJSON, com paginação por cursor, para o seletor de empresa do /admin. " +
+          "A primeira linha traz o meta: {meta: {total: 0, searchMeta: {nextCursor, hasMore}}}; as seguintes, uma empresa por linha. " +
+          "O termo digitado (search) é buscado no servidor, sem diferenciar maiúsculas e como texto literal (% e _ não são curingas), " +
+          "na razão social, no nome fantasia, no CNPJ, no e-mail e no responsável. " +
+          "Use o nextCursor como cursor da próxima página.",
         querystring: businessSchemas.searchBusinessCursor,
         response: {
-          200: businessResponses.searchBusinessStreamDescription,
+          // The picker reads the plain rows: no fleet count there.
+          200: ndjsonCursor(
+            businessResponses.businessRow.partial({ vehicle_count: true }),
+          ),
           400: businessResponses.listBusinessErrors,
           500: businessResponses.internalServerError,
         },
@@ -128,14 +145,16 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Update a business",
+        summary: "Atualiza uma empresa",
         description:
-          "Update existing business information including company details, contact information, and administrative settings",
+          "Atualiza os campos enviados da empresa e os espelha na filial matriz (exceto o fuso, que é só da empresa). `timezone` aceita apenas fusos do Brasil; trocá-lo muda o \"hoje\" de todos os painéis e relatórios da empresa. Só o MASTER.",
         params: businessSchemas.updateDeleteBusiness,
         body: businessSchemas.updateBusiness,
         response: {
           200: businessResponses.businessUpdated,
           400: businessResponses.updateBusinessErrors,
+          404: businessResponses.businessNotFoundCoded,
+          409: businessResponses.businessConflict,
           500: businessResponses.internalServerError,
         },
       },
@@ -151,14 +170,15 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Update AI analysis limit for a business",
+        summary: "Atualiza o limite mensal de análises de IA da empresa",
         description:
-          "Set the monthly AI analysis limit for a specific business entity. A limit of 0 disables AI analysis for the company.",
+          "Define quantas análises de IA a empresa pode fazer por mês. O limite 0 desliga a análise de IA para a empresa.",
         params: businessSchemas.updateDeleteBusiness,
         body: businessSchemas.updateAILimit,
         response: {
           200: businessResponses.aiLimitUpdated,
-          400: businessResponses.aiLimitErrors,
+          400: businessResponses.businessParamErrors,
+          404: businessResponses.businessNotFoundCodedPath,
           500: businessResponses.internalServerError,
         },
       },
@@ -174,14 +194,15 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Update the contracted vehicle limit for a business",
+        summary: "Atualiza o limite de veículos contratado pela empresa",
         description:
-          "Set the contracted fleet size (billing baseline). 0 = not configured, never blocks. Lowering below the current fleet keeps existing vehicles and only blocks new registrations.",
+          "Define o tamanho de frota contratado (base da cobrança). 0 = não configurado, nunca bloqueia. Baixar o limite abaixo da frota atual mantém os veículos existentes e só bloqueia novos cadastros.",
         params: businessSchemas.updateDeleteBusiness,
         body: businessSchemas.updateVehicleLimit,
         response: {
           200: businessResponses.vehicleLimitUpdated,
-          400: businessResponses.aiLimitErrors,
+          400: businessResponses.businessParamErrors,
+          404: businessResponses.businessNotFoundCodedPath,
           500: businessResponses.internalServerError,
         },
       },
@@ -197,13 +218,17 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Get AI analysis usage for a business",
+        summary: "Consulta o uso de análises de IA da empresa",
         description:
-          "Retrieve current AI analysis usage, limits, and remaining quota for a business",
+          "Devolve o limite, o saldo e o uso de análises de IA da empresa no mês corrente — o mês civil no fuso da empresa (`ai_analysis_timezone`), de `ai_analysis_reset_at` até `ai_analysis_next_reset_at`. Cada unidade é uma foto lida (odômetro, item de checklist ou canhoto de entrega), com a quebra por tipo em `ai_analysis_used_by_type`. Só o MASTER e o administrador da própria empresa: outros papéis recebem 403 AUTH_ROLE_FORBIDDEN, e o id de outra empresa, 403 TENANT_ACCESS_DENIED. Empresa inexistente: 404 BUSINESS_NOT_FOUND.",
         params: businessSchemas.updateDeleteBusiness,
         response: {
           200: businessResponses.aiUsageData,
-          400: businessResponses.aiLimitErrors,
+          400: errorResponse,
+          401: errorResponse,
+          403: errorResponse,
+          404: errorResponse,
+          429: errorResponse,
           500: businessResponses.internalServerError,
         },
       },
@@ -219,13 +244,14 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Get the company's plan: hired modules and fleet usage",
+        summary: "Consulta o plano da empresa: módulos contratados e uso da frota",
         description:
-          "Hired modules (FLEET, DELIVERIES) plus the contracted vehicle limit and how many vehicles are registered. Business admins read their own company; MASTER reads any.",
+          "Módulos contratados (FLEET, DELIVERIES), o limite de veículos contratado e quantos veículos estão cadastrados. O admin da empresa lê a própria empresa; o MASTER lê qualquer uma.",
         params: businessSchemas.updateDeleteBusiness,
         response: {
           200: businessResponses.entitlementsData,
-          400: businessResponses.aiLimitErrors,
+          400: businessResponses.businessParamErrors,
+          404: businessResponses.businessNotFoundCodedPath,
           500: businessResponses.internalServerError,
         },
       },
@@ -241,13 +267,14 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "What a company has riding on a module",
+        summary: "Mostra o que a empresa tem em jogo num módulo",
         description:
-          "Record counts, work in flight and how many users lose menu items if the module is switched off. Feeds the confirmation dialog — nothing here is deleted by disabling.",
+          "Contagens de registros, trabalho em andamento e quantos usuários perdem itens do menu se o módulo for desligado. Alimenta o diálogo de confirmação; desligar um módulo não exclui nada.",
         params: businessSchemas.moduleImpactParams,
         response: {
           200: businessResponses.moduleImpactData,
-          400: businessResponses.aiLimitErrors,
+          400: businessResponses.businessParamErrors,
+          404: businessResponses.businessNotFoundCodedPath,
           500: businessResponses.internalServerError,
         },
       },
@@ -263,14 +290,15 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Enable or disable a module for a company",
+        summary: "Liga ou desliga um módulo da empresa",
         description:
-          "Flips a sellable module (FLEET, DELIVERIES) on or off for the company. Module-gated routes reject companies without the module enabled.",
+          "Liga ou desliga um módulo vendável (FLEET, DELIVERIES) da empresa. As rotas de um módulo recusam a empresa que não o tem ligado (403 MODULE_NOT_ENABLED).",
         params: businessSchemas.updateDeleteBusiness,
         body: businessSchemas.updateEntitlement,
         response: {
           200: businessResponses.entitlementUpdated,
-          400: businessResponses.aiLimitErrors,
+          400: businessResponses.businessParamErrors,
+          404: businessResponses.businessNotFoundCodedPath,
           500: businessResponses.internalServerError,
         },
       },
@@ -286,9 +314,9 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Request business deletion (sends confirmation code)",
+        summary: "Pede a exclusão de uma empresa (envia o código)",
         description:
-          "First step of the two-step business deletion flow. Validates that the business can be deleted (no branches, users or drivers linked) and sends a 6-digit confirmation code to the requesting MASTER user's email. The code expires in 5 minutes. Use the DELETE endpoint with the code to actually delete the business.",
+          "Primeiro passo da exclusão em duas etapas. Confere que a empresa pode ser excluída (sem filiais, usuários ou motoristas vinculados) e envia um código de 6 dígitos ao e-mail do MASTER que pediu, válido por 5 minutos. Use a rota DELETE com o código para excluir.",
         params: businessSchemas.updateDeleteBusiness,
         response: {
           200: businessResponses.businessDeletionCodeSent,
@@ -310,16 +338,16 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Confirm business deletion (with confirmation code)",
+        summary: "Confirma a exclusão de uma empresa (com o código)",
         description:
-          "Second step of the two-step business deletion flow. Validates the 6-digit confirmation code received by email, then permanently removes the business. After deletion, all other MASTER users (excluding the deleter) receive an audit notification by email.",
+          "Segundo passo da exclusão. Valida o código de 6 dígitos recebido por e-mail e exclui a empresa de vez. Depois, os demais MASTER recebem um aviso de auditoria por e-mail, com a data no fuso da empresa excluída.",
         params: businessSchemas.updateDeleteBusiness,
         body: businessSchemas.confirmDeletionCode,
         response: {
           200: businessResponses.businessDeleted,
           400: businessResponses.confirmBusinessDeletionErrors,
           404: businessResponses.businessNotFound,
-          409: businessResponses.businessHasChildrenConflict,
+          409: businessResponses.businessDeletionConflict,
           500: businessResponses.internalServerError,
         },
       },
@@ -335,13 +363,14 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Toggle business active status",
+        summary: "Ativa ou inativa uma empresa",
         description:
-          "Activate or deactivate a business. Inactive businesses block login for all associated users.",
+          "Ativa ou inativa a empresa. Uma empresa inativa bloqueia o acesso de todos os seus usuários (403 TENANT_INACTIVE).",
         params: businessSchemas.updateDeleteBusiness,
         response: {
           200: businessResponses.businessToggled,
-          400: businessResponses.deleteBusinessErrors,
+          400: businessResponses.businessParamErrors,
+          404: businessResponses.businessNotFoundCodedPath,
           500: businessResponses.internalServerError,
         },
       },

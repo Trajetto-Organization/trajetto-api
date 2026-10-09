@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ImportDeliverySpreadsheetUseCase } from "@/modules/import/usecases/import-delivery-spreadsheet/import-delivery-spreadsheet-usecase";
 import { ReverseImportUseCase } from "@/modules/import/usecases/reverse-import/reverse-import-usecase";
@@ -24,6 +24,18 @@ import type { Driver } from "@/modules/driver/dtos/driver-dto";
 import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 
 import type { Shipper } from "@/modules/shipper/dtos/shipper-dto";
+
+import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+import { BUSINESS_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
+
+// Each row (and each route) commits with its webhook events; against
+// in-memory repositories the transaction is a passthrough. What is announced
+// is asserted in import-spreadsheet-webhooks.test.ts.
+vi.mock("@/../infra/database", () => ({
+  default: {
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}),
+  },
+}));
 
 /**
  * A morning's work arriving as a spreadsheet.
@@ -132,6 +144,7 @@ function makeContext() {
   );
 
   businessRepository.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
     id: BUSINESS,
     is_active: true,
   } as Business);
@@ -180,6 +193,7 @@ function makeContext() {
     routeRepository,
     importRepository,
     driverRepository,
+    vehicleRepository,
 
     importSpreadsheet: new ImportDeliverySpreadsheetUseCase(
       userRepository,
@@ -191,12 +205,14 @@ function makeContext() {
       vehicleRepository,
       importRepository,
       notifications,
+      new InMemoryWebhookFanOutService().asService(),
     ),
 
     reverse: new ReverseImportUseCase(
       userRepository,
       importRepository,
       notifications,
+      new InMemoryWebhookFanOutService().asService(),
     ),
   };
 }
@@ -412,6 +428,45 @@ describe("the route columns", () => {
 
     expect(record.report.routes).toEqual([]);
     expect(record.report.rows[0].message).toContain("não encontrado");
+  });
+
+  /**
+   * CNH and plate are unique PER COMPANY (decision 8.1), so another carrier
+   * may hold the same ones. A global lookup could answer with that carrier's
+   * row first and report our own driver or truck as missing.
+   */
+  it("finds its own driver when another carrier registered the same CNH first", async () => {
+    context.driverRepository.drivers.unshift({
+      id: "018f0000-0000-7000-8000-0000000000d8",
+      name: "Homônimo de outra transportadora",
+      cnh: CNH,
+      status: "ACTIVE",
+      businessId: OTHER_BUSINESS,
+    } as Driver);
+
+    const record = await run([
+      line("Padaria Central", { route: "Zona Sul", cnh: CNH }),
+    ]);
+
+    expect(record.report.routes).toHaveLength(1);
+    expect(context.routeRepository.routes[0].driverId).toBe(DRIVER);
+  });
+
+  it("finds its own truck when another carrier registered the same plate first", async () => {
+    context.vehicleRepository.vehicles.unshift({
+      id: "018f0000-0000-7000-8000-0000000000e8",
+      license_plate: PLATE,
+      status: "ACTIVE",
+      businessId: OTHER_BUSINESS,
+    } as Vehicle);
+
+    const record = await run([
+      line("Padaria Central", { route: "Zona Sul", cnh: CNH, plate: PLATE }),
+    ]);
+
+    expect(record.report.routes).toHaveLength(1);
+    expect(context.routeRepository.routes[0].vehicleId).toBe(VEHICLE);
+    expect(record.report.rows[0].message ?? "").not.toContain("sem veículo");
   });
 });
 

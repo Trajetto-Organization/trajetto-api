@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  APP_MAX_BUFFERED,
   MAX_ACCURACY_METRES,
   MAX_PINGS_PER_BATCH,
   POSITION_FRESH_MS,
@@ -9,6 +10,7 @@ import {
   isPositionFresh,
   type RawPing,
 } from "@/shared/route/driver-position-rules";
+import { recordDriverPositionsSchema } from "@/schemas/driver-position-schema";
 
 const NOW = new Date("2026-09-17T12:00:00.000Z");
 
@@ -139,11 +141,39 @@ describe("what a phone sends and what we keep", () => {
 
     const { accepted, rejected } = acceptPings(backlog, { now: NOW });
 
-    expect(accepted).toHaveLength(MAX_PINGS_PER_BATCH);
+    expect(accepted).toHaveLength(720);
+    expect(rejected).toBe(0);
+  });
 
-    // And says how many it could not take, rather than pretending it took
-    // them.
-    expect(rejected).toBe(720 - MAX_PINGS_PER_BATCH);
+  it("takes at least the whole buffer the app is allowed to hold", () => {
+    // Builds in the field send their entire buffer in one request. A cap
+    // below the app's was a poisoned batch: refused on every flush, forever.
+    expect(MAX_PINGS_PER_BATCH).toBeGreaterThanOrEqual(APP_MAX_BUFFERED);
+
+    const full = Array.from({ length: APP_MAX_BUFFERED }, (_, index) =>
+      ping({ recorded_at: new Date(NOW.getTime() - index * 15_000) }),
+    );
+
+    // As the phone sends it: JSON, so the time is an ISO string.
+    const body = {
+      pings: full.map((point) => ({
+        ...point,
+        recorded_at: new Date(point.recorded_at).toISOString(),
+      })),
+    };
+
+    expect(recordDriverPositionsSchema.safeParse(body).success).toBe(true);
+  });
+
+  it("still bounds a batch, and says how many it could not take", () => {
+    const flood = Array.from({ length: MAX_PINGS_PER_BATCH + 220 }, (_, index) =>
+      ping({ recorded_at: new Date(NOW.getTime() - index * 1_000) }),
+    );
+
+    const { accepted, rejected } = acceptPings(flood, { now: NOW });
+
+    expect(accepted).toHaveLength(MAX_PINGS_PER_BATCH);
+    expect(rejected).toBe(220);
   });
 
   it("clamps a battery reading instead of storing nonsense", () => {
@@ -220,7 +250,7 @@ describe("thinning a trail down to what a browser can draw", () => {
   });
 });
 
-describe("whether a dot still means 'onde ele está'", () => {
+describe("whether a dot still shows where the driver is", () => {
   it("is fresh within the window and stale past it", () => {
     expect(isPositionFresh(new Date(NOW.getTime() - 60_000), NOW)).toBe(true);
 

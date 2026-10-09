@@ -62,6 +62,13 @@ interface PublicTrackingView {
 
   carrierName: string;
 
+  /**
+   * The carrier's zone (IANA), so the page prints its instants on the
+   * carrier's clock rather than the server's (decision 1.1). The expected
+   * date is a day and needs none.
+   */
+  timeZone: string;
+
   /** Newest first, and only the moments a customer can act on. */
   events: Array<{
     at: Date | string;

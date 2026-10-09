@@ -19,6 +19,13 @@ interface SessionTokenPair {
   refreshTokenHash: string;
 }
 
+/**
+ * Which client opened the session, and so which refresh policy it lives by
+ * (see `refresh_policies` in config/auth). Anything unknown is the web: the
+ * shorter policy is the default, never the longer one.
+ */
+type SessionClient = keyof typeof auth.refresh_policies;
+
 interface SessionJwtPayload {
   sub: string;
   tokenType: "access" | "refresh";
@@ -26,6 +33,30 @@ interface SessionJwtPayload {
   familyId: string;
   jti: string;
   email?: string;
+  iat?: number;
+
+  /**
+   * Refresh tokens only. Signed, so a rotation keeps the policy the login
+   * chose and nobody can upgrade a web token to the longer mobile one by
+   * asking for it at refresh time. Absent on tokens issued before these
+   * claims existed: those are web sessions.
+   */
+  sessionClient?: SessionClient;
+
+  /** Refresh tokens only: when the family was born (epoch seconds). */
+  familyStartedAt?: number;
+}
+
+interface SessionPolicy {
+  client?: SessionClient;
+
+  /** Epoch seconds. Defaults to now: a new family. */
+  familyStartedAt?: number;
+}
+
+/** The value of the `x-trajetto-client` header, as a policy. */
+function parseSessionClient(header: unknown): SessionClient {
+  return header === "mobile" ? "mobile" : "web";
 }
 
 function hashRefreshToken(token: string): string {
@@ -35,8 +66,22 @@ function hashRefreshToken(token: string): string {
 function issueSessionTokenPair(
   user: User,
   familyId = uuidV7(),
+  { client = "web", familyStartedAt }: SessionPolicy = {},
 ): SessionTokenPair {
   const sessionVersion = user.session_version ?? 0;
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const bornAt = familyStartedAt ?? nowSeconds;
+  const policy = auth.refresh_policies[client];
+
+  // The idle window slides with every rotation; the family cap does not.
+  const refreshExpiresAt =
+    policy.maxAgeSeconds === null
+      ? nowSeconds + policy.idleSeconds
+      : Math.min(
+          nowSeconds + policy.idleSeconds,
+          bornAt + policy.maxAgeSeconds,
+        );
 
   const accessJti = uuidV7();
   const refreshJti = uuidV7();
@@ -64,12 +109,14 @@ function issueSessionTokenPair(
       email: user.email,
       sessionVersion,
       familyId,
+      sessionClient: client,
+      familyStartedAt: bornAt,
+      exp: refreshExpiresAt,
     },
     auth.secret_refresh_token,
     {
       subject: user.id,
       jwtid: refreshJti,
-      expiresIn: auth.expires_in_refresh_token,
     },
   );
 
@@ -78,7 +125,10 @@ function issueSessionTokenPair(
     refresh_token,
     refreshJti,
     familyId,
-    expiresAt: new Date(Date.now() + auth.expires_in_refresh_token_days),
+    // The same instant as the JWT's `exp`. Computed from a second clock read
+    // it landed up to a second later, and a refresh passing `verify` in that
+    // gap met a row that disagreed with it.
+    expiresAt: new Date(refreshExpiresAt * 1000),
     refreshTokenHash: hashRefreshToken(refresh_token),
   };
 }
@@ -86,8 +136,9 @@ function issueSessionTokenPair(
 async function createUserSession(
   user: User,
   usersTokens: IUsersTokensRepository,
+  client: SessionClient = "web",
 ): Promise<Pick<SessionTokenPair, "token" | "refresh_token">> {
-  const pair = issueSessionTokenPair(user);
+  const pair = issueSessionTokenPair(user, undefined, { client });
 
   try {
     await usersTokens.createUserRefreshToken({
@@ -109,8 +160,10 @@ async function createUserSession(
 }
 
 export {
+  SessionClient,
   SessionJwtPayload,
   createUserSession,
   hashRefreshToken,
   issueSessionTokenPair,
+  parseSessionClient,
 };

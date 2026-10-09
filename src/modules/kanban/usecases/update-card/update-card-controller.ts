@@ -6,15 +6,6 @@ import { UpdateKanbanCardUseCase } from "./update-card-usecase";
 import { updateKanbanCardSchema } from "@/schemas/update-kanban-card-schema";
 import { updateDeleteKanbanCardSchema } from "@/schemas/update-delete-kanban-card-schema";
 
-import { UserAssignedUserNotFoundError } from "@/modules/user/usecases/errors/user-assigned-user-not-found-error";
-import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
-
-import { KanbanNotAllowedUpdateCardBusinessError } from "../errors/kanban-not-allowed-update-card-business-error";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-
-import { KanbanCardColumnNotFoundError } from "../errors/kanban-card-column-not-found-error";
-import { KanbanCardNotFoundError } from "../errors/kanban-card-not-found-error";
-
 class UpdateKanbanCardController {
   async handle(
     request: FastifyRequest,
@@ -27,38 +18,13 @@ class UpdateKanbanCardController {
 
     const updateKanbanCardUseCase = container.resolve(UpdateKanbanCardUseCase);
 
-    try {
-      await updateKanbanCardUseCase.execute(cardData, cardId, id);
-      return reply
-        .status(200)
-        .send({ message: "Card atualizado com sucesso!" });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof KanbanCardNotFoundError) {
-        return reply.status(404).send({ message: error.message });
-      }
-
-      if (error instanceof UserAssignedUserNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof UserNotBelongBusinessError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof KanbanNotAllowedUpdateCardBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      if (error instanceof KanbanCardColumnNotFoundError) {
-        return reply.status(404).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    // Every refusal is an AppError with its status and code (decision 11.3):
+    // an assignee of another company is ASSIGNED_USER_NOT_FOUND for a manager,
+    // USER_NOT_IN_BUSINESS only for the MASTER, who sees every company.
+    await updateKanbanCardUseCase.execute(cardData, cardId, id);
+    return reply
+      .status(200)
+      .send({ message: "Card atualizado com sucesso!" });
   }
 }
 

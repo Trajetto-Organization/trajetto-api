@@ -1,3 +1,5 @@
+import { planRun } from "./lib/api.js";
+import { parseDuration } from "./lib/duration.js";
 import { pause, runOneOperation } from "./lib/mix.js";
 
 /**
@@ -12,6 +14,13 @@ import { pause, runOneOperation } from "./lib/mix.js";
  * leak shows as latency that climbs, and an average over the whole run hides
  * a climb behind a healthy start.
  */
+const DURATION = __ENV.SOAK_DURATION || "30m";
+
+// The `phase` tag needs the planned length. It came only from RUN_DURATION_MS,
+// so a soak started without it tagged everything `all` and the two
+// `{phase:late}` thresholds below passed with no samples at all.
+planRun(parseDuration(DURATION));
+
 export const options = {
   scenarios: {
     steady: {
@@ -20,8 +29,7 @@ export const options = {
       rate: Number(__ENV.SOAK_RATE || 60),
       timeUnit: "1s",
 
-      duration: __ENV.SOAK_DURATION || "30m",
-
+      duration: DURATION,
 
       preAllocatedVUs: 40,
       maxVUs: 200,

@@ -4,7 +4,6 @@ import { z } from "zod";
 
 import { SearchChatMessagesUseCase } from "./search-chat-messages-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { searchChatMessagesSchema } from "@/schemas/search-chat-messages-schema";
 
 class SearchChatMessagesController {
@@ -21,22 +20,14 @@ class SearchChatMessagesController {
       SearchChatMessagesUseCase,
     );
 
-    try {
-      const { data } = await searchChatMessagesUseCase.execute({
-        userId: id,
-        search,
-        limit,
-        businessId,
-      });
+    const { data } = await searchChatMessagesUseCase.execute({
+      userId: id,
+      search,
+      limit,
+      businessId,
+    });
 
-      return reply.status(200).send({ data });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(200).send({ data });
   }
 }
 

@@ -1,3 +1,11 @@
+import type { SortOrder } from "@/shared/pagination/list-query";
+
+import type {
+  BrazilianUf,
+  SupplierSortKey,
+  SupplierStateCount,
+} from "../usecases/list-supplier/supplier-list";
+
 interface CreateSupplierProps {
   name: string;
   cnpj: string;
@@ -29,29 +37,27 @@ interface Supplier {
   updated_at: Date | string;
 }
 
-interface ListSupplierByBusinessIdProps {
+interface ListSuppliersProps {
   page: number;
   pageSize: number;
   businessId: string;
-  currentUserRole: string;
   search?: string;
+  ufs?: BrazilianUf[];
+  sort?: SupplierSortKey;
+  order?: SortOrder;
 }
 
-interface ListAllSuppliersProps {
-  page: number;
-  pageSize: number;
-  currentUserRole: string;
-  businessId: string;
-  search?: string;
-}
-
-interface ListSupplierProps {
+interface ListSuppliersResult {
   data: Supplier[];
-  total: number;
+  /** Per UF over the base (search applied, UF facet not): cards and options. */
+  stateCounts: SupplierStateCount[];
 }
+
+/** The editable fields; the company a supplier belongs to never changes. */
+type UpdateSupplierFields = Partial<Omit<CreateSupplierProps, "businessId">>;
 
 interface UpdateSupplier {
-  supplierData: Partial<CreateSupplierProps>;
+  supplierData: UpdateSupplierFields;
   supplierId: string;
 }
 
@@ -59,6 +65,7 @@ interface SearchSupplierWithCursorProps {
   limit: number;
   cursor?: string;
   businessId: string;
+  search?: string;
 }
 
 interface CursorPaginatedSupplier {
@@ -67,13 +74,21 @@ interface CursorPaginatedSupplier {
   hasMore: boolean;
 }
 
+/** What still points at a supplier: the history a deletion would orphan. */
+interface SupplierReferenceCounts {
+  serviceOrders: number;
+  parts: number;
+  accountsPayable: number;
+}
+
 export {
   Supplier,
   CreateSupplierProps,
-  ListSupplierByBusinessIdProps,
-  ListSupplierProps,
+  ListSuppliersProps,
+  ListSuppliersResult,
   UpdateSupplier,
-  ListAllSuppliersProps,
+  UpdateSupplierFields,
   SearchSupplierWithCursorProps,
   CursorPaginatedSupplier,
+  SupplierReferenceCounts,
 };

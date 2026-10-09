@@ -5,6 +5,13 @@ import { OperationSummaryUseCase } from "@/modules/delivery/usecases/operation-s
 
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
+import { InMemoryOperationDayRepository } from "@/modules/route/repositories/in-memory/in-memory-operation-day-repository";
+
+import {
+  DEFAULT_BUSINESS_TIMEZONE,
+  businessDateKey,
+  dateOnlyFromKey,
+} from "@/shared/time/business-day";
 
 import type { UploadService } from "@/shared/services/upload-service";
 import type { User } from "@/modules/user/dtos/user-dto";
@@ -49,8 +56,18 @@ function makeRepositories() {
     driverId: DRIVER_ID,
   } as User);
 
-  deliveryRepository.occurrenceTypeBlocking.set(TYPE_BLOCKING, true);
-  deliveryRepository.occurrenceTypeBlocking.set(TYPE_INFO, false);
+  deliveryRepository.seedOccurrenceType({
+    id: TYPE_BLOCKING,
+    businessId: BUSINESS,
+    name: "Recusa",
+    blocks_delivery: true,
+  });
+  deliveryRepository.seedOccurrenceType({
+    id: TYPE_INFO,
+    businessId: BUSINESS,
+    name: "Destinatário ausente",
+    blocks_delivery: false,
+  });
 
   deliveryRepository.driverDirectory.set(DRIVER_ID, {
     name: "João Motorista",
@@ -162,7 +179,7 @@ describe("occurrence feed", () => {
       userId: MANAGER_ID,
       page: 1,
       pageSize: 10,
-      blocksDelivery: true,
+      severity: ["blocking"],
     });
 
     expect(result.total).toBe(1);
@@ -201,7 +218,10 @@ describe("occurrence feed", () => {
     ).toBe(mine.id);
   });
 
-  it("shows a driver only their own deliveries' occurrences", async () => {
+  // Defence in depth: the route refuses driver tokens with 403
+  // (tests/E2E/occurrence-feed-http.test.ts); should a caller ever let one
+  // through, the use case still narrows the feed to their deliveries.
+  it("narrows a driver reaching the use case to their own deliveries", async () => {
     const repos = makeRepositories();
     const { mine } = await seedFeed(repos);
 
@@ -219,10 +239,81 @@ describe("occurrence feed", () => {
 });
 
 describe("operation summary", () => {
-  function makeUseCase(repos: ReturnType<typeof makeRepositories>) {
+  /**
+   * The tower's twin over the delivery twin's rows: the day's documents are
+   * the tower's (decision 7.1), the backlog and reports the delivery twin's.
+   * No business row: the default zone. The company's own zone is covered in
+   * operation-summary-day.test.ts.
+   */
+  function towerOf(
+    repos: ReturnType<typeof makeRepositories>,
+    todaysRoute: string[] = [],
+  ): InMemoryOperationDayRepository {
+    const tower = new InMemoryOperationDayRepository();
+
+    tower.rows.drivers.push(
+      { id: DRIVER_ID, businessId: BUSINESS, name: "João Motorista", cnh: "111" },
+      { id: OTHER_DRIVER_ID, businessId: BUSINESS, name: "Maria Motorista", cnh: "222" },
+    );
+
+    for (const delivery of repos.deliveryRepository.deliveries) {
+      tower.rows.deliveries.push({
+        id: delivery.id!,
+        businessId: delivery.businessId,
+        status: delivery.status as never,
+        driverId: delivery.driverId ?? null,
+        recipient_name: delivery.recipient_name,
+        city: delivery.city,
+        delivered_at: delivery.delivered_at ? new Date(delivery.delivered_at) : null,
+        updated_at: new Date(delivery.updated_at ?? Date.now()),
+      });
+    }
+
+    if (todaysRoute.length > 0) {
+      tower.rows.routes.push({
+        id: "route-today",
+        businessId: BUSINESS,
+        code: 1,
+        name: null,
+        destination: null,
+        status: "RELEASED",
+        scheduled_date: dateOnlyFromKey(
+          businessDateKey(new Date(), DEFAULT_BUSINESS_TIMEZONE),
+        ),
+        planned_departure_at: null,
+        started_at: null,
+        completed_at: null,
+        updated_at: new Date(),
+        driverId: DRIVER_ID,
+        vehicleId: null,
+      });
+
+      todaysRoute.forEach((deliveryId, index) =>
+        tower.rows.stops.push({
+          id: `stop-${index}`,
+          routeId: "route-today",
+          deliveryId,
+          sequence: (index + 1) * 10,
+          status: "PENDING",
+          on_the_way_at: null,
+          arrived_at: null,
+          completed_at: null,
+          updated_at: new Date(),
+        }),
+      );
+    }
+
+    return tower;
+  }
+
+  function makeUseCase(
+    repos: ReturnType<typeof makeRepositories>,
+    tower = towerOf(repos),
+  ) {
     return new OperationSummaryUseCase(
       repos.userRepository,
       repos.deliveryRepository,
+      tower,
     );
   }
 
@@ -230,10 +321,12 @@ describe("operation summary", () => {
     const repos = makeRepositories();
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-    // João: two in route, one designated, one failed today.
+    // João: two in route, one designated on today's route, one failed today.
     await seedDelivery(repos.deliveryRepository, { status: "IN_TRANSIT" });
     await seedDelivery(repos.deliveryRepository, { status: "IN_TRANSIT" });
-    await seedDelivery(repos.deliveryRepository, { status: "PENDING" });
+    const designated = await seedDelivery(repos.deliveryRepository, {
+      status: "PENDING",
+    });
     const failed = await seedDelivery(repos.deliveryRepository, {
       status: "FAILED",
     });
@@ -261,7 +354,10 @@ describe("operation summary", () => {
       status: "IN_TRANSIT",
     });
 
-    const summary = await makeUseCase(repos).execute({ userId: MANAGER_ID });
+    const summary = await makeUseCase(
+      repos,
+      towerOf(repos, [designated.id!]),
+    ).execute({ userId: MANAGER_ID });
 
     expect(summary.totals).toEqual({
       unassigned: 1,

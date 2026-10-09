@@ -5,14 +5,13 @@ import { updateDeleteFineSchema } from "@/schemas/update-delete-fine-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { DeleteFineUseCase } from "./delete-fine-usecase";
 
-import { FineNotFoundError } from "../errors/fine-not-found-error";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { sendFineError } from "../fine-http-errors";
 
 class DeleteFineController {
   async handle(
     request: FastifyRequest,
     reply: FastifyReply,
-  ): Promise<Response> {
+  ): Promise<FastifyReply> {
     const { id } = request.user;
     const { fineId } = updateDeleteFineSchema.parse(request.params);
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
@@ -21,17 +20,16 @@ class DeleteFineController {
 
     try {
       await deleteFineUseCase.execute(fineId, id, businessId);
+
       return reply.status(200).send({
         message: "Multa deletada com sucesso!",
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      // FineNotFoundError is an AppError: the error handler answers its 404
+      // with the code.
+      const handled = sendFineError(reply, error);
 
-      if (error instanceof FineNotFoundError) {
-        return reply.status(404).send({ message: error.message });
-      }
+      if (handled) return handled;
 
       throw error;
     }

@@ -4,51 +4,63 @@ import { z } from "zod";
 import { container } from "tsyringe";
 
 import { ListFuelUseCase } from "./list-fuel-usecase";
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { replyFuelListError } from "../errors/fuel-http-errors";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { listFuelSchema } from "@/schemas/list-fuel-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListFuelController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // The route already validated AND transformed the querystring (page is a
+    // number, each facet a list): re-parsing it against the wire schema
+    // would reject the transformed value.
+    const {
+      businessId,
+      page,
+      pageSize,
+      search,
+      sort,
+      order,
+      branchId,
+      vehicleId,
+      fuelTypeId,
+    } = request.query as z.infer<typeof listFuelSchema>;
 
     const listFuelUseCase = container.resolve(ListFuelUseCase);
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        // Try to decode, but catch errors
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        // If it fails, use the value without decoding.
-        decodedSearch = search;
-      }
-    }
-
     try {
-      const fuelsPromise = listFuelUseCase.execute(
-        id,
-        page,
-        pageSize,
-        decodedSearch,
-      );
+      const resultPromise = listFuelUseCase
+        .execute({
+          userId: id,
+          businessId,
+          page,
+          pageSize,
+          search,
+          sort,
+          order,
+          branchIds: branchId,
+          vehicleIds: vehicleId,
+          fuelTypeIds: fuelTypeId,
+        })
+        .then((result) => ({
+          data: result.data,
+          total: result.total,
+          meta: result.searchMeta,
+        }));
 
-      await sendAsNDJSON({
+      // `return await`: a bare return inside try/catch lets the rejection
+      // walk past the catch below and surface as a 500.
+      return await sendAsNDJSON({
         reply,
-        dataPromise: fuelsPromise,
+        dataPromise: resultPromise,
         page,
         pageSize,
       });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      // With a code, like the other fuel routes (decision 11.3).
+      if (replyFuelListError(reply, error)) return;
 
       throw error;
     }

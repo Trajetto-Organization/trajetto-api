@@ -1,12 +1,11 @@
 import { injectable } from "tsyringe";
 
-// AWS SDK v3 (modular). O v2 (`aws-sdk`) empacotava o cliente de TODOS os
-// servicos da AWS para usarmos dois metodos de S3, e esta em maintenance mode
-// desde 2024 — so recebe correcao critica.
+// AWS SDK v3, modular: only the S3 client is bundled.
 import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -23,7 +22,10 @@ import { getRequestContext } from "@/shared/http/request-context";
 import { env } from "@/env";
 
 import { AppError } from "@/shared/errors/AppError";
+import { logger } from "@/shared/logging/logger";
 import { signLocalUploadToken } from "@/shared/services/local-upload-token";
+
+const log = logger.child({ component: "upload-service" });
 
 /**
  * Whether storage answered "that object is not here", as opposed to not
@@ -127,43 +129,148 @@ class UploadService {
           accessKeyId: uploadConfig.r2.accessKeyId,
           secretAccessKey: uploadConfig.r2.secretAccessKey,
         },
-        endpoint: `https://${uploadConfig.r2.accountId}.r2.cloudflarestorage.com`,
+        endpoint: uploadConfig.r2.endpoint,
+        forcePathStyle: uploadConfig.r2.forcePathStyle,
         region: "auto",
       });
     }
   }
 
-  async deleteFile(filePath: string): Promise<void> {
+  /**
+   * Removes an object, and answers whether it is gone.
+   *
+   * Never throws: every caller is cleaning up after something else, and a
+   * cleanup that fails must not fail the operation it follows. But a failure
+   * is no longer silent — it is logged WITH the key, and the caller gets
+   * `false` — because a delete that failed quietly is an orphan nobody can
+   * find (R2 refuses deletes under a bucket lock, for one).
+   *
+   * `true` also when the object was already absent: the question the caller
+   * asks is whether it is gone, not whether this call removed it.
+   */
+  async tryDeleteFile(filePath: string): Promise<boolean> {
+    let normalizedFilePath = filePath;
+
     try {
-      const normalizedFilePath = this.extractFilePath(filePath);
+      normalizedFilePath = this.extractFilePath(filePath);
+
       if (uploadConfig.storage.type === "r2") {
         if (!this.s3) {
           throw new AppError("R2 não foi configurado corretamente", 500);
         }
 
+        // S3 semantics: deleting a missing key succeeds, so a success here
+        // covers "already gone" too.
         await this.s3.send(
           new DeleteObjectCommand({
             Bucket: uploadConfig.r2.bucket,
             Key: normalizedFilePath,
           }),
         );
-      } else {
-        const fullPath = path.join(
-          uploadConfig.storage.localPath,
-          normalizedFilePath,
-        );
 
-        try {
-          await fs.promises.access(fullPath);
-          await fs.promises.unlink(fullPath);
-        } catch {
-          // File doesn't exist, ignore
-        }
+        return true;
       }
+
+      const fullPath = path.join(
+        uploadConfig.storage.localPath,
+        normalizedFilePath,
+      );
+
+      try {
+        await fs.promises.unlink(fullPath);
+      } catch (error) {
+        if (!isLocalFileMissing(error)) throw error;
+      }
+
+      return true;
     } catch (error) {
-      console.error("Erro ao deletar arquivo:", error);
-      // Don't throw error for file deletion failures
+      log.error(
+        {
+          key: normalizedFilePath,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "storage object could not be deleted",
+      );
+
+      return false;
     }
+  }
+
+  /**
+   * `tryDeleteFile` for callers that only clean up and do not branch on the
+   * outcome — every use case today. The failure is still logged with its key.
+   */
+  async deleteFile(filePath: string): Promise<void> {
+    await this.tryDeleteFile(filePath);
+  }
+
+  /**
+   * One page of the keys under `prefix`, in storage's own (lexicographic)
+   * order, strictly after `startAfter`.
+   *
+   * For the orphan collector (orphan-uploads.ts), which asks for the narrow
+   * slice of a namespace whose keys fall in its time window: presigned keys
+   * start with their upload timestamp, so `startAfter` jumps straight there.
+   * Throws on a storage error — a listing that silently came back short
+   * would read as "no objects", which is the wrong thing to be sure of.
+   */
+  async listObjectKeys(
+    prefix: string,
+    startAfter?: string,
+    maxKeys = 1000,
+  ): Promise<string[]> {
+    if (uploadConfig.storage.type === "r2") {
+      if (!this.s3) {
+        throw new AppError("R2 não foi configurado corretamente", 500);
+      }
+
+      const page = await this.s3.send(
+        new ListObjectsV2Command({
+          Bucket: uploadConfig.r2.bucket,
+          Prefix: prefix,
+          StartAfter: startAfter,
+          MaxKeys: maxKeys,
+        }),
+      );
+
+      return (page.Contents ?? [])
+        .map((object) => object.Key)
+        .filter((key): key is string => Boolean(key));
+    }
+
+    // Local storage: the same answer from the filesystem. Only whole
+    // directory prefixes are meaningful here, which is all the collector
+    // asks for.
+    const root = uploadConfig.storage.localPath;
+    const keys: string[] = [];
+
+    const walk = async (directory: string): Promise<void> => {
+      let entries: fs.Dirent[];
+
+      try {
+        entries = await fs.promises.readdir(path.join(root, directory), {
+          withFileTypes: true,
+        });
+      } catch (error) {
+        if (isLocalFileMissing(error)) return;
+        throw error;
+      }
+
+      for (const entry of entries) {
+        const key = `${directory}${entry.name}`;
+
+        if (entry.isDirectory()) await walk(`${key}/`);
+        else keys.push(key);
+      }
+    };
+
+    await walk(prefix.endsWith("/") ? prefix : `${prefix}/`);
+
+    return keys
+      .filter((key) => key.startsWith(prefix))
+      .filter((key) => startAfter === undefined || key > startAfter)
+      .sort()
+      .slice(0, maxKeys);
   }
 
   extractFilePath(filePathOrUrl: string): string {
@@ -219,7 +326,12 @@ class UploadService {
    *   - `ContentType` and `ContentLength` go into the signature, which makes
    *     them signed headers. R2 rejects a PUT whose type or byte count does
    *     not match exactly — so the size limit is enforced by the bucket, not
-   *     by trust.
+   *     by trust. The type is signed only because `signableHeaders` below
+   *     overrides the presigner's default of leaving it out.
+   *   - Neither says anything about the BYTES: a PUT may still carry HTML
+   *     under `image/jpeg`. That object is served only from the bucket's own
+   *     origin under an allow-listed image/audio type, never from the app's
+   *     origin, so it cannot run as a page there.
    *   - The URL is short lived, on its own TTL rather than the read one.
    *
    * The caller must still confirm with `headUploadedObject` before persisting
@@ -318,7 +430,18 @@ class UploadService {
         ContentType: file.contentType,
         ContentLength: file.size,
       }),
-      { expiresIn: uploadConfig.presignedUploadTtlSeconds },
+      {
+        expiresIn: uploadConfig.presignedUploadTtlSeconds,
+
+        // The S3 presigner puts `content-type` in its unsignable set on every
+        // presign, so without this the URL signs only `content-length;host`
+        // and R2 stores whatever type the PUT declares. Listing it here
+        // overrides that: the type becomes a signed header, and a PUT whose
+        // Content-Type differs from the authorised one fails the signature —
+        // the same rule the local upload token already enforces in dev.
+        // The web and the app already send the presigned type verbatim.
+        signableHeaders: new Set(["content-type"]),
+      },
     );
 
     return {
@@ -618,6 +741,19 @@ class UploadService {
     }
   }
 
+  /**
+   * A short-lived read URL for a key a row already holds.
+   *
+   * The object is served with the Content-Type it was stored under, and the
+   * GET deliberately does not re-declare one. Every key that reaches a row
+   * went through `headUploadedObject`'s allow-list (images, the chat's audio,
+   * and server-written PDFs), and since the presigned PUT signs Content-Type
+   * a client can no longer re-PUT the same key under another type within the
+   * URL's lifetime. Forcing `ResponseContentType` from the key's extension
+   * would be wrong: voice notes were stored under `.jpg` keys before the
+   * extension table existed, and re-typing them as images breaks playback.
+   * The URL is on the bucket's own origin, never the app's.
+   */
   async getFileUrl(filePath: string): Promise<string> {
     const normalizedFilePath = this.extractFilePath(filePath);
 

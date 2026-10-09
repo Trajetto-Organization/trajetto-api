@@ -1,5 +1,12 @@
 import { Decimal } from "@prisma/client/runtime/library";
 
+import type { SortOrder } from "@/shared/pagination/list-query";
+
+import type {
+  PartSortKey,
+  PartSupplierCount,
+} from "../usecases/list-part/part-list";
+
 interface Part {
   id: string;
   description: string;
@@ -35,23 +42,35 @@ interface UpdatePart {
   partId: string;
 }
 
+/** A listed part: the row plus how many order lines use it. */
+interface PartListRow extends Part {
+  /** Lines of service orders that use it: a used part cannot be deleted. */
+  service_order_parts_count: number;
+}
+
+/** What the repository answers; the use case turns the counts into searchMeta. */
 interface ListPartProps {
-  data: Part[];
-  total: number;
+  data: PartListRow[];
+  /** Parts per supplier over search (no supplier facet), with names. */
+  supplierCounts: PartSupplierCount[];
 }
 
 interface ListPartByBusinessIdProps {
   page: number;
   pageSize: number;
   businessId: string;
-  currentUserRole?: string;
   search?: string;
+  supplierIds?: string[];
+  sort?: PartSortKey;
+  order?: SortOrder;
 }
 
 interface SearchPartWithCursorProps {
   limit: number;
   cursor?: string;
   businessId: string;
+  /** The picker's typed term (FLEET-SEARCH-1). */
+  search?: string;
 }
 
 interface CursorPaginatedPart {
@@ -62,6 +81,7 @@ interface CursorPaginatedPart {
 
 export {
   Part,
+  PartListRow,
   CreatePartProps,
   UpdatePart,
   ListPartProps,

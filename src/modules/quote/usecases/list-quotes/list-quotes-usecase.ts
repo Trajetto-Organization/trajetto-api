@@ -4,19 +4,43 @@ import { IQuoteRepository } from "../../repositories/IQuote-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { ListQuotesResult, QuoteStatus } from "../../dtos/quote-dto";
+import { Quote, QuoteStatus } from "../../dtos/quote-dto";
 
 import { AppError } from "@/shared/errors/AppError";
+import type { SortOrder } from "@/shared/pagination/list-query";
+
 import { QuoteAccessDeniedError } from "../errors/quote-access denied-error";
+
+import {
+  summarizeQuoteList,
+  type QuoteFleetSize,
+  type QuoteListSearchMeta,
+  type QuoteSortKey,
+} from "./quote-list";
 
 interface ListQuotesRequest {
   userId: string;
   page: number;
   pageSize: number;
   search?: string;
-  status?: QuoteStatus;
+  statuses?: QuoteStatus[];
+  fleetSizes?: QuoteFleetSize[];
+  sort?: QuoteSortKey;
+  order?: SortOrder;
 }
 
+interface ListQuotesResponse {
+  data: Quote[];
+  /** Rows of search + every facet: what the pager counts. */
+  total: number;
+  /** The NDJSON meta line's `searchMeta`: cards and facet options. */
+  searchMeta: QuoteListSearchMeta;
+}
+
+/**
+ * The quotes table of /admin (decision 8.8): the order, the stage and fleet
+ * size filters and the per-stage cards answered over every quote.
+ */
 @injectable()
 class ListQuotesUseCase {
   constructor(
@@ -31,8 +55,11 @@ class ListQuotesUseCase {
     page,
     pageSize,
     search,
-    status,
-  }: ListQuotesRequest): Promise<ListQuotesResult> {
+    statuses,
+    fleetSizes,
+    sort,
+    order,
+  }: ListQuotesRequest): Promise<ListQuotesResponse> {
     const user = await this.userRepository.findUserById(userId);
 
     if (!user) {
@@ -44,14 +71,22 @@ class ListQuotesUseCase {
     }
 
     try {
-      const quotes = await this.quoteRepository.listQuotes({
+      const result = await this.quoteRepository.listQuotes({
         page,
         pageSize,
         search,
-        status,
+        statuses,
+        fleetSizes,
+        sort,
+        order,
       });
 
-      return quotes;
+      const { total, searchMeta } = summarizeQuoteList(result.groups, {
+        statuses,
+        fleetSizes,
+      });
+
+      return { data: result.data, total, searchMeta };
     } catch (error) {
       throw new AppError(
         "Houve um erro ao tentar listar as solicitações de orçamento",
@@ -62,3 +97,4 @@ class ListQuotesUseCase {
 }
 
 export { ListQuotesUseCase };
+export type { ListQuotesRequest, ListQuotesResponse };

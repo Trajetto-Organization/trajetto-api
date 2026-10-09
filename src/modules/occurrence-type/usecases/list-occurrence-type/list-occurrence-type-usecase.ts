@@ -3,11 +3,19 @@ import { inject, injectable } from "tsyringe";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IOccurrenceTypeRepository } from "../../repositories/IOccurrence-type-repository";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { AppError } from "@/shared/errors/AppError";
+import type { SortOrder } from "@/shared/pagination/list-query";
+import type { ActiveStatus, YesNo } from "@/shared/delivery/catalog-list";
+import type { OccurrenceCategoryKey } from "../../rules/occurrence-category-rules";
+
 import { ListOccurrenceTypesResult } from "../../dtos/occurrence-type-dto";
+import {
+  summarizeOccurrenceTypeList,
+  type OccurrenceTypeSortKey,
+} from "./occurrence-type-list";
 
 interface ListOccurrenceTypesRequest {
   userId: string;
@@ -15,6 +23,12 @@ interface ListOccurrenceTypesRequest {
   page: number;
   pageSize: number;
   search?: string;
+  sort?: OccurrenceTypeSortKey;
+  order?: SortOrder;
+  statuses?: ActiveStatus[];
+  blocking?: YesNo[];
+  photo?: YesNo[];
+  categories?: OccurrenceCategoryKey[];
 }
 
 @injectable()
@@ -32,11 +46,17 @@ class ListOccurrenceTypeUseCase {
     page,
     pageSize,
     search,
+    sort,
+    order,
+    statuses,
+    blocking,
+    photo,
+    categories,
   }: ListOccurrenceTypesRequest): Promise<ListOccurrenceTypesResult> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
-      throw new ResourceNotFoundError();
+      throw callerNotFound();
     }
 
     // MASTER picks the company explicitly; everyone else is pinned to
@@ -54,17 +74,29 @@ class ListOccurrenceTypeUseCase {
     assertTenantAccess(findUser, resolvedBusinessId);
 
     try {
-      const [result, summary] = await Promise.all([
-        this.occurrenceType.listOccurrenceTypes({
-          page,
-          pageSize,
-          businessId: resolvedBusinessId,
-          search,
-        }),
-        this.occurrenceType.countOccurrenceTypesSummary(resolvedBusinessId),
-      ]);
+      const { data, groups } = await this.occurrenceType.listOccurrenceTypes({
+        page,
+        pageSize,
+        businessId: resolvedBusinessId,
+        search,
+        sort,
+        order,
+        statuses,
+        blocking,
+        photo,
+        categories,
+      });
 
-      return { ...result, meta: summary };
+      // Cards and filter counts over the whole company (decision 8.8),
+      // never the page on screen.
+      const { total, searchMeta } = summarizeOccurrenceTypeList(groups, {
+        statuses,
+        blocking,
+        photo,
+        categories,
+      });
+
+      return { data, total, meta: searchMeta };
     } catch (error) {
       if (error instanceof AppError) {
         throw error;

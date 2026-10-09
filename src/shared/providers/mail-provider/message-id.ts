@@ -1,10 +1,14 @@
 /**
  * A Message-ID that is the same every time we send the same message.
  *
- * SMTP has no idempotency key. What it has is Message-ID, and RFC 5322 makes
- * it the identity of a message rather than of a send: two transmissions
- * carrying the same one are, by the standard, the same message arriving twice.
- * Gmail and most large providers act on that and suppress the copy.
+ * Plain SMTP carries no idempotency key. Resend does accept one, and
+ * ResendMailProvider sends the delivery id as `Resend-Idempotency-Key`: a
+ * retry within 24 hours is recognised there and not sent again. This is the
+ * FALLBACK for everything else — another transport, or a retry past that
+ * window. What SMTP itself has is Message-ID, and RFC 5322 makes it the
+ * identity of a message rather than of a send: two transmissions carrying the
+ * same one are, by the standard, the same message arriving twice. Gmail and
+ * most large providers act on that and suppress the copy.
  *
  * So this is a mitigation, not a guarantee, and it is worth being exact about
  * which. The pipeline calls a provider and then marks the row delivered, and

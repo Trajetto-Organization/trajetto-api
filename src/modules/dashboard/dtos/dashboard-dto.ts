@@ -1,27 +1,20 @@
-interface CountByDateRangeParams {
-  startDate: string;
-  endDate: string;
-  entity:
-    | "vehicle"
-    | "driver"
-    | "business"
-    | "branch"
-    | "part"
-    | "supplier"
-    | "service-order"
-    | "user"
-    | "fine"
+/** Everything the dashboard counts by creation month. */
+type DashboardEntity =
+  | "vehicle"
+  | "driver"
+  | "business"
+  | "branch"
+  | "part"
+  | "supplier"
+  | "service-order"
+  | "user"
+  | "fine"
 
-    // The deliveries module. Gated twice on the way in — by the company
-    // having hired it and by the caller holding `delivery_manage` — because
-    // the overview is the one screen every login opens.
-    | "delivery"
-    | "route";
-}
-
-interface CountByDateRangeResult {
-  count: number;
-}
+  // The deliveries module. Gated twice on the way in — by the company
+  // having hired it and by the caller holding `delivery_manage` — because
+  // the overview is the one screen every login opens.
+  | "delivery"
+  | "route";
 
 /**
  * How many of one entity were created in each month of a window.
@@ -32,15 +25,27 @@ interface CountByDateRangeResult {
  * product by an order of magnitude. Grouped in the database, it is nine.
  */
 interface CountByMonthParams {
-  entity: CountByDateRangeParams["entity"];
+  entity: DashboardEntity;
 
-  /** Inclusive, as a local-timezone Date. */
+  /** [from, to): UTC instants, normally a business window's bounds. */
   from: Date;
   to: Date;
+
+  /**
+   * The company's zone (`Business.timezone`): the months are its civil
+   * months. Never the server's — the container runs in UTC.
+   */
+  timeZone: string;
+}
+
+/** A catalogue as a stock: rows now, and rows created before a cut. */
+interface EntityTotal {
+  total: number;
+  before: number;
 }
 
 interface MonthlyCountBucket {
-  /** First day of the month, local, as `YYYY-MM`. */
+  /** The company's civil month, as `YYYY-MM`. */
   month: string;
   count: number;
 }
@@ -56,15 +61,15 @@ interface MonthlyCountBucket {
 type PeriodGranularity = "day" | "month";
 
 interface PeriodCountBucket {
-  /** `YYYY-MM-DD` for a day, `YYYY-MM` for a month. Local, never UTC. */
+  /** `YYYY-MM-DD` for a day, `YYYY-MM` for a month, in the company's zone. */
   period: string;
   count: number;
 }
 
 interface PeriodCostBucket {
   period: string;
-  preventive: number;
-  corrective: number;
+  internal: number;
+  external: number;
 }
 
 /**
@@ -76,8 +81,8 @@ interface PeriodCostBucket {
  */
 interface MonthlyCostBucket {
   month: string;
-  preventive: number;
-  corrective: number;
+  internal: number;
+  external: number;
 }
 
 interface VehicleStatusCountResult {
@@ -87,20 +92,19 @@ interface VehicleStatusCountResult {
   IN_ROUTE: number;
 }
 
+/** What the maintenance card is counted against: the company's calendar. */
+interface MaintenanceStatsParams {
+  /** The company's today, "YYYY-MM-DD" (businessDateKey in Business.timezone). */
+  today: string;
+
+  /** The company's zone, in which each last maintenance falls on a day. */
+  timeZone: string;
+}
+
 interface MaintenanceStatsResult {
   pending: number;
   recent: number;
   overdue: number;
-}
-
-interface MonthlyCostsParams {
-  startDate: string;
-  endDate: string;
-}
-
-interface MonthlyCostsResult {
-  preventive: number;
-  corrective: number;
 }
 
 interface VehicleTypeCountItem {
@@ -112,24 +116,18 @@ interface VehicleTypeCountResult {
   data: VehicleTypeCountItem[];
 }
 
-interface ModelWithCount {
-  count: (args: { where: any }) => Promise<number>;
-}
-
 export {
+  DashboardEntity,
   PeriodGranularity,
   PeriodCountBucket,
   PeriodCostBucket,
-  CountByDateRangeParams,
-  CountByDateRangeResult,
   CountByMonthParams,
   MonthlyCountBucket,
   MonthlyCostBucket,
+  EntityTotal,
   VehicleStatusCountResult,
+  MaintenanceStatsParams,
   MaintenanceStatsResult,
-  MonthlyCostsParams,
-  MonthlyCostsResult,
   VehicleTypeCountItem,
   VehicleTypeCountResult,
-  ModelWithCount,
 };

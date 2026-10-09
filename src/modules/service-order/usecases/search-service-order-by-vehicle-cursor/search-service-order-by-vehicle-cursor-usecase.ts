@@ -59,8 +59,20 @@ class SearchServiceOrderByVehicleCursorUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
-    if (findUser.driverId && findVehicle.driverId !== findUser.driverId) {
-      throw new VehicleNotAssignedToDriverError();
+    // A driver reads the history of a vehicle they may operate: the one they
+    // are responsible for, or the one their released or running route uses
+    // (FLEET-ASSIGN-1, decision 4.4). Comparing only Vehicle.driverId
+    // refused the substitute who took the truck out that morning.
+    if (findUser.driverId) {
+      const allowed = await this.vehicle.canDriverOperateVehicle({
+        vehicleId,
+        driverId: findUser.driverId,
+        businessId: findVehicle.businessId,
+      });
+
+      if (!allowed) {
+        throw new VehicleNotAssignedToDriverError();
+      }
     }
 
     const findBusiness = await this.business.findBusinessById(

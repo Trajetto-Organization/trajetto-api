@@ -4,10 +4,16 @@ import { createDriverSchema } from "@/schemas/create-driver-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDriverSchema } from "@/schemas/update-driver-schema";
 
-import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
-import { listPagesSchema } from "@/schemas/list-pages-schema";
+import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
+import {
+  exportDriverSchema,
+  listDriverSchema,
+} from "@/schemas/list-driver-schema";
 
-import { exportReports } from "@/schemas/export-reports-schema";
+import { searchMetaDoc } from "@/shared/pagination/list-meta";
+import { CNH_CATEGORIES } from "@/modules/driver/usecases/list-driver/driver-list";
+
+import { errorResponse, internalErrorResponse } from "./common-responses";
 
 const driverBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
@@ -16,333 +22,142 @@ const driverBusinessParams = z.object({
 
 const driverSchemas = {
   createDriver: createDriverSchema,
-  listDriver: listPagesSchema,
-  listDriverBusiness: listPagesByBusinessSchema,
+  listDriver: listDriverSchema,
   updateDriver: updateDriverSchema,
   businessIdParam: updateDeleteBusinessSchema,
   driverBusinessParams: driverBusinessParams,
-  exportDriverQuery: exportReports,
-  searchDriverCursor: z.object({
-    limit: z
-      .string()
-      .optional()
-      .describe("Número máximo de empresas a retornar (padrão: 10)"),
-    cursor: z
-      .string()
-      .optional()
-      .describe("ID da última empresa da página anterior para paginação"),
-    search: z.string().trim().max(100).optional(),
-    businessId: z.string().describe("ID da empresa"),
-  }),
+  exportDriverQuery: exportDriverSchema,
+  searchDriverCursor: cursorPaginationByBusinessSchema,
 };
 
-const driverResponses = {
-  driverCreated: z.object({
-    message: z.string().default("Motorista criado com sucesso!"),
-  }),
-  driverList: z.object({
-    data: z.array(
-      z.object({
-        id: z.string(),
-        name: z.string(),
-        birth_date: z.union([z.string(), z.date()]),
-        cnh: z.string(),
-        cpf: z.string(),
-        rg: z.string(),
-        cep: z.string(),
-        city: z.string(),
-        uf: z.string(),
-        street: z.string(),
-        address_number: z.string(),
-        complement: z.string().nullable(),
-        status: z.string(),
-        contract_type: z.string(),
-        businessId: z.string(),
-        branchId: z.string().nullable(),
-        created_at: z.union([z.string(), z.date()]),
-        updated_at: z.union([z.string(), z.date()]),
-        business: z
-          .object({
-            corporate_reason: z.string(),
-          })
-          .optional(), // Only for MASTER role
-        branch: z
-          .object({
-            corporate_reason: z.string(),
-          })
-          .nullable()
-          .optional(),
-      }),
+const isoDate = z.union([z.string(), z.date()]);
+
+const cnhFields = {
+  cnh_category: z
+    .enum(CNH_CATEGORIES)
+    .nullable()
+    .describe("Categoria da CNH; null quando não informada."),
+  cnh_expires_at: isoDate
+    .nullable()
+    .describe(
+      "Validade da CNH: data civil, sempre AAAA-MM-DDT00:00:00.000Z (leia o dia UTC); null quando não informada.",
     ),
-    total: z.number(),
-  }),
-  driverUpdated: z.object({
-    message: z.string().default("Motorista atualizado com sucesso!"),
-  }),
+};
 
-  driverDeleted: z.object({
-    message: z.string().default("Motorista deletado com sucesso!"),
-  }),
+/** One line of GET /driver/list-driver. */
+const driverListItem = z.object({
+  id: z.string(),
+  name: z.string(),
+  birth_date: isoDate.describe(
+    "Data de nascimento: data civil, AAAA-MM-DDT00:00:00.000Z (leia o dia UTC). Registros antigos guardam a meia-noite local, que é o mesmo dia UTC no Brasil.",
+  ),
+  cnh: z.string(),
+  cpf: z.string(),
+  ...cnhFields,
+  cnh_status: z
+    .enum(["EXPIRED", "EXPIRING", "VALID"])
+    .nullable()
+    .describe(
+      "Situação da CNH no dia de negócio da empresa: EXPIRED vencida, EXPIRING vence em até 30 dias, VALID em dia; null sem validade informada.",
+    ),
+  rg: z.string(),
+  cep: z.string(),
+  city: z.string(),
+  uf: z.string(),
+  street: z.string(),
+  address_number: z.string(),
+  complement: z.string().nullable(),
+  status: z.enum(["ACTIVE", "INACTIVE"]),
+  contract_type: z.enum(["OWNED", "THIRD_PARTY"]),
+  businessId: z.string(),
+  branchId: z.string().nullable(),
+  branch: z.object({ corporate_reason: z.string() }).nullable(),
+  created_at: isoDate,
+  updated_at: isoDate,
+});
 
-  searchDriverStreamDescription: z.object({
-    description: z
-      .string()
-      .default(
-        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are driver objects.",
+/** The list's `meta.searchMeta`, as summarizeDriverList builds it. */
+const driverListSearchMeta = searchMetaDoc(
+  {
+    total: z
+      .number()
+      .int()
+      .describe(
+        "Motoristas da busca e dos demais filtros, sem o de situação (Ativos + Inativos).",
       ),
-  }),
+    active: z.number().int().describe("Dos quais ativos."),
+    inactive: z.number().int().describe("Dos quais inativos."),
+    owned: z
+      .number()
+      .int()
+      .describe("Próprios, com todos os filtros menos o de tipo de contrato."),
+    thirdParty: z
+      .number()
+      .int()
+      .describe("Terceirizados, com todos os filtros menos o de tipo de contrato."),
+  },
+  ["status", "contract_type", "cnh_category", "branchId"],
+);
 
-  // Common Error Responses
-  internalServerError: z.object({
-    message: z.string().default("Internal server error"),
-  }),
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-  validationError: z.object({
-    message: z.string().default("Validation Error"),
-    issues: z.array(z.string()),
-  }),
-  driverNotFound: z.object({
-    message: z.string().default("Motorista não encontrado!"),
-  }),
-  businessNotFound: z.object({
-    message: z
-      .string()
-      .default("Empresa não encontrada! Por favor, tente novamente."),
-  }),
-  branchNotFound: z.object({
-    message: z.string().default("Filial não encontrada!"),
-  }),
-  driverCpfAlreadyExists: z.object({
-    message: z
-      .string()
-      .default(
-        "Este CPF não está disponível para cadastro. Os CPFs de motoristas devem ser únicos em todo o sistema.",
-      ),
-  }),
-  driverLicenseAlreadyExists: z.object({
-    message: z
-      .string()
-      .default("Já existe um motorista cadastrado com esta CNH!"),
-  }),
-  driverInUse: z.object({
-    message: z
-      .string()
-      .default(
-        "Não é possível excluir este motorista pois ele está associado a veículos.",
-      ),
-  }),
-  driverCannotListDrivers: z.object({
-    message: z
-      .string()
-      .default(
-        "Motoristas não possuem permissão para visualizar a lista de motoristas.",
-      ),
-  }),
-  driverRgAlreadyExists: z.object({
-    message: z
-      .string()
-      .default(
-        "Este RG não está disponível para cadastro. Os RGs de motoristas devem ser únicos em todo o sistema.",
-      ),
-  }),
-  branchNotBelongBusiness: z.object({
-    message: z.string().default("Esta filial não pertence a esta empresa!"),
-  }),
-  driverNotBelongBusiness: z.object({
-    message: z.string().default("Este motorista não pertence a esta empresa!"),
-  }),
-  driverHasAssociatedFines: z.object({
-    message: z
-      .string()
-      .default(
-        "Não é possível deletar este motorista pois existem multa(s) associada(s).",
-      ),
-  }),
-  driverHasAssociatedChecklists: z.object({
-    message: z
-      .string()
-      .default(
-        "Não é possível deletar este motorista pois existem checklist(s) associado(s).",
-      ),
-  }),
-  driverHasAssociatedFuel: z.object({
-    message: z
-      .string()
-      .default(
-        "Não é possível deletar este motorista pois existem registro(s) de abastecimento associado(s).",
-      ),
-  }),
-  driverHasAssociatedUser: z.object({
-    message: z
-      .string()
-      .default(
-        "Este motorista possui um usuário vinculado. Desvincule o usuário antes de excluir o motorista.",
-      ),
-  }),
+/**
+ * One line of the picker. `cnh`, `branchId`, `businessId` and `created_at`
+ * come only for the driver catalogue (`driver_manage:read`); a dispatcher who
+ * reaches the picker through `delivery_manage:write` gets the rest.
+ */
+const driverPickerItem = z.object({
+  id: z.string(),
+  name: z.string(),
+  status: z.enum(["ACTIVE", "INACTIVE"]),
+  ...cnhFields,
+  cnh: z.string().optional().describe("Só para quem lê o cadastro de motoristas."),
+  branchId: z.string().nullable().optional(),
+  businessId: z.string().optional(),
+  created_at: isoDate.optional(),
+});
 
-  // Grouping errors by route
-  createDriverErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Filial não encontrada!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este CPF não está disponível para cadastro. Os CPFs de motoristas devem ser únicos em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este RG não está disponível para cadastro. Os RGs de motoristas devem ser únicos em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Já existe um motorista cadastrado com esta CNH!"),
-    }),
-  ]),
-  createDriverForbiddenErrors: z.object({
-    message: z.string().default("Esta filial não pertence a esta empresa!"),
-  }),
-  listDriverErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-  ]),
-  listDriverBusinessErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
-  updateDriverErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Motorista não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z.string().default("Filial não encontrada!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este CPF não está disponível para cadastro. Os CPFs de motoristas devem ser únicos em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este RG não está disponível para cadastro. Os RGs de motoristas devem ser únicos em todo o sistema.",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Já existe um motorista cadastrado com esta CNH!"),
-    }),
-  ]),
-  updateDriverForbiddenErrors: z.object({
-    message: z.string().default("Esta filial não pertence a esta empresa!"),
-  }),
-  deleteDriverErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Motorista não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Empresa não encontrada!"),
-    }),
-  ]),
-  deleteDriverForbiddenErrors: z.union([
-    z.object({
-      message: z
-        .string()
-        .default("Este motorista não pertence a esta empresa!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Não é possível deletar este motorista pois existem multa(s) associada(s).",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Não é possível deletar este motorista pois existem checklist(s) associado(s).",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Não é possível deletar este motorista pois existem registro(s) de abastecimento associado(s).",
-        ),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default(
-          "Este motorista possui um usuário vinculado. Desvincule o usuário antes de excluir o motorista.",
-        ),
-    }),
-  ]),
+const message = (text: string) =>
+  z.object({ message: z.string().default(text) });
 
-  // Export errors (GET /export-driver)
-  exportDriverErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Não existem motorista para exportar!"),
-    }),
-  ]),
+const driverResponses = {
+  driverCreated: message("Motorista criado com sucesso!"),
+  driverUpdated: message("Motorista atualizado com sucesso!"),
+  driverDeleted: message("Motorista deletado com sucesso!"),
+
+  driverListItem,
+  driverListSearchMeta,
+  driverPickerItem,
+
+  /**
+   * Every refusal leaves in the shared error shape, with its `code`:
+   * VALIDATION_ERROR (400, with `issues`), BUSINESS_NOT_IDENTIFIED (400),
+   * PERMISSION_DENIED / TENANT_ACCESS_DENIED (403), DRIVER_NOT_FOUND,
+   * BRANCH_NOT_FOUND, BUSINESS_NOT_FOUND (404) and the conflicts below (409).
+   */
+  error: errorResponse,
+
+  validationErrors: errorResponse.describe(
+    "VALIDATION_ERROR (campos recusados em `issues`), BUSINESS_NOT_IDENTIFIED (MASTER sem `businessId`), ordenação ou filtro inválidos.",
+  ),
+  forbidden: errorResponse.describe(
+    "PERMISSION_DENIED (perfil sem a permissão) ou TENANT_ACCESS_DENIED (empresa de outro usuário).",
+  ),
+  writeForbidden: errorResponse.describe(
+    "PERMISSION_DENIED (perfil sem a permissão de escrita), TENANT_ACCESS_DENIED (empresa de outro usuário) ou TENANT_INACTIVE (empresa desativada: cadastro só de leitura, inclusive para o MASTER).",
+  ),
+  notFound: errorResponse.describe(
+    "DRIVER_NOT_FOUND, BRANCH_NOT_FOUND, BUSINESS_NOT_FOUND ou TENANT_NOT_FOUND (empresa do caminho inexistente). O motorista ou a filial de outra empresa respondem igual a um inexistente.",
+  ),
+  writeConflicts: errorResponse.describe(
+    "DRIVER_CPF_ALREADY_EXISTS ou DRIVER_CNH_ALREADY_EXISTS: o CPF ou a CNH já é de outro motorista DESTA empresa (são únicos por empresa; a mensagem nunca fala de outra). Na edição, também DRIVER_HAS_OPEN_ROUTES: inativar um motorista com rota planejada, liberada ou em andamento é recusado, com a contagem na mensagem.",
+  ),
+  deleteConflicts: errorResponse.describe(
+    "O motorista tem histórico: DRIVER_HAS_USER, DRIVER_HAS_FINES, DRIVER_HAS_FUELS, DRIVER_HAS_CHECKLISTS, DRIVER_HAS_OPERATION (entregas ou rotas) ou DRIVER_HAS_PAUSES. Inative-o em vez de excluir.",
+  ),
+  exportErrors: errorResponse.describe(
+    "NOTHING_TO_EXPORT (nenhum motorista na busca e nos filtros), BUSINESS_NOT_IDENTIFIED (MASTER sem `businessId`) ou VALIDATION_ERROR.",
+  ),
+
+  internalServerError: internalErrorResponse,
 };
 
 export { driverSchemas, driverResponses };

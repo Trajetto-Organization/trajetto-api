@@ -25,6 +25,7 @@ import { resolve } from "node:path";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { assertDisposableDatabase } from "./lib/disposable-database";
 
 const MASTER_ID = "018fe000-0000-7000-8000-0000000000a1";
 
@@ -102,7 +103,25 @@ async function driverTokenFor(
   );
 }
 
+/**
+ * Only the load seed's own accounts, still able to sign in.
+ *
+ * Ordered by id, "every admin" picked up whatever a browser run had created
+ * since: mint-browser-users' accounts (time-ordered ids, so they sort first)
+ * and the people session-revocation and the journeys create, revoke or move.
+ * A re-mint after a full ui run then handed managers[0] to a retired account,
+ * and every responsive spec "fell through to login".
+ */
+const SEEDED = (prefix: string) => ({
+  email: { startsWith: prefix, endsWith: "@exemplo.com.br" },
+  access_revoked: false,
+  business: { is: { is_active: true } },
+});
+
 async function main(): Promise<void> {
+  // It writes a MASTER and refresh families: never outside the throwaway database.
+  assertDisposableDatabase();
+
   const existing = await prisma.user.findFirst({ where: { role: "MASTER" } });
 
   const master =
@@ -129,7 +148,7 @@ async function main(): Promise<void> {
    * one.
    */
   const admins = await prisma.user.findMany({
-    where: { role: "BUSINESS_ADMIN", businessId: { not: null } },
+    where: { role: "BUSINESS_ADMIN", businessId: { not: null }, ...SEEDED("manager-") },
     select: { id: true, businessId: true },
     orderBy: { id: "asc" },
   });
@@ -157,7 +176,7 @@ async function main(): Promise<void> {
    * "caiu no login", which reads like the product refusing a valid session.
    */
   const drivers = await prisma.user.findMany({
-    where: { role: "BUSINESS_USER", driverId: { not: null } },
+    where: { role: "BUSINESS_USER", driverId: { not: null }, ...SEEDED("driver-") },
     select: { id: true, businessId: true, driverId: true },
     orderBy: { id: "asc" },
     take: 20,

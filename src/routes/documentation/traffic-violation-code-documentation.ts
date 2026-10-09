@@ -1,70 +1,43 @@
 import { z } from "zod";
 
 import { listTrafficViolationCodeSchema } from "@/schemas/list-traffic-violation-code-schema";
+import { cursorPaginationSchema } from "@/schemas/cursor-pagination-schema";
+
+import { errorResponse } from "./common-responses";
 
 const trafficViolationCodeSchemas = {
   listTrafficViolationCode: listTrafficViolationCodeSchema,
-  searchTrafficViolationCodeCursor: z.object({
-    limit: z
-      .string()
-      .optional()
-      .describe("Número máximo de empresas a retornar (padrão: 10)"),
-    cursor: z
-      .string()
-      .optional()
-      .describe("ID da última empresa da página anterior para paginação"),
+  // The schema the controller parses, so the document names the real
+  // `search` (it used to describe "empresas" and leave the term out).
+  searchTrafficViolationCodeCursor: cursorPaginationSchema.extend({
+    search: cursorPaginationSchema.shape.search.describe(
+      "Código como impresso na notificação (`745` ou `745-50`) ou palavras da descrição; até 100 caracteres.",
+    ),
   }),
 };
 
+const trafficViolationCodeRow = z.object({
+  id: z.string().describe("ID do código."),
+  code: z.string().describe("Código da infração."),
+  sub_code: z.number().int().describe("Desdobramento."),
+  description: z.string().describe("Descrição da infração."),
+  legal_basis: z.string().describe("Amparo legal (CTB)."),
+  violator_type: z.string().describe("Infrator (condutor, proprietário…)."),
+  gravity: z
+    .enum(["LIGHT", "MEDIUM", "SERIOUS", "VERY_SERIOUS", "NO_POINTS"])
+    .describe("Gravidade."),
+  gravity_raw: z.string().describe("Gravidade como na tabela de origem."),
+  points: z.number().int().describe("Pontos na CNH."),
+  competent_agency: z.string().describe("Órgão competente."),
+  created_at: z.string().describe("Criação."),
+  updated_at: z.string().describe("Última alteração."),
+  gravityLabel: z.string().optional().describe("Gravidade em português."),
+  fullCode: z.string().optional().describe("Código completo, ex.: 745-50."),
+});
+
 const trafficViolationCodeResponses = {
-  searchTrafficViolationCodeStreamDescription: z.object({
-    description: z
-      .string()
-      .default(
-        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are traffic violation code objects.",
-      ),
-  }),
-  trafficViolationCodeList: z.object({
-    data: z.array(
-      z.object({
-        id: z.string().describe("Traffic violation code ID"),
-        code: z.string().describe("Traffic violation code number"),
-        sub_code: z.number().describe("Traffic violation sub-code number"),
-        description: z
-          .string()
-          .describe("Detailed description of the violation"),
-        legal_basis: z.string().describe("Legal basis for the violation"),
-        violator_type: z
-          .string()
-          .describe("Type of violator (driver, owner, etc.)"),
-        gravity: z
-          .enum(["LIGHT", "MEDIUM", "SERIOUS", "VERY_SERIOUS", "NO_POINTS"])
-          .describe("Violation gravity level"),
-        gravity_raw: z.string().describe("Raw gravity description"),
-        points: z.number().describe("Points deducted from driver's license"),
-        competent_agency: z
-          .string()
-          .describe("Competent agency for the violation"),
-        created_at: z.string().describe("Creation timestamp"),
-        updated_at: z.string().describe("Last update timestamp"),
-        gravityLabel: z
-          .string()
-          .optional()
-          .describe("Human-readable gravity label"),
-        fullCode: z
-          .string()
-          .optional()
-          .describe("Complete violation code (e.g., '5010-0')"),
-      }),
-    ),
-    total: z.number().describe("Total number of traffic violation codes"),
-  }),
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-  internalServerError: z.object({
-    message: z.string().default("Internal server error"),
-  }),
+  trafficViolationCodeRow,
+  error: errorResponse,
 };
 
 export { trafficViolationCodeSchemas, trafficViolationCodeResponses };

@@ -15,13 +15,17 @@ class GetRouteController {
 
     const getRouteUseCase = container.resolve(GetRouteUseCase);
 
-    const { route, progress } = await getRouteUseCase.execute({
-      userId: id,
-      businessId,
-      routeId,
-    });
+    const { route, progress, driverPosition, visitedPoints } =
+      await getRouteUseCase.execute({
+        userId: id,
+        businessId,
+        routeId,
+      });
 
-    return reply.status(200).send({ data: route, meta: { progress } });
+    return reply.status(200).send({
+      data: { ...route, driverPosition, visitedPoints },
+      meta: { progress },
+    });
   }
 }
 

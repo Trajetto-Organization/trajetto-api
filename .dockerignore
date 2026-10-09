@@ -45,13 +45,15 @@ docker-compose*.yml
 compose.yaml
 compose.*.yaml
 
-# OSRM
-osrm
-
 # Documentation
 README.md
 *.md
 docs/
+
+# The trajetto-ai OCR service builds from its own context (infra/ai-ocr,
+# ADR 0010). The API image never copies it, so its Python and the warm-up
+# JPEG stay out of this build context.
+infra/ai-ocr/
 
 # Test files
 tests/

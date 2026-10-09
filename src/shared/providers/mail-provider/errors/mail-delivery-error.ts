@@ -1,3 +1,5 @@
+import { redactEmails } from "@/shared/logging/redact-email";
+
 /**
  * Every mail failure now reaches the notification pipeline, which needs to
  * know whether a retry can ever succeed: a throttled SMTP server deserves a
@@ -105,7 +107,12 @@ function toMailDeliveryError(
   const originalMessage =
     error instanceof Error ? error.message : String(error);
 
-  const message = `${context}: ${originalMessage}`;
+  // Redacted (OBS-15): an SMTP refusal echoes the recipient ("550 5.1.1
+  // <ana@b.com>"), and this message is logged, stored in lastError for up to
+  // 90 days and listed by /health/dead-letter.
+  const message = redactEmails(`${context}: ${originalMessage}`);
+
+  const cause = redactedCause(error, originalMessage, code, responseCode);
 
   if (typeof responseCode === "number") {
     // 5xx is a permanent SMTP refusal; 4xx asks the sender to come back later.
@@ -115,7 +122,7 @@ function toMailDeliveryError(
       retryable,
       code,
       responseCode,
-      cause: error,
+      cause,
     });
   }
 
@@ -123,7 +130,7 @@ function toMailDeliveryError(
     return new MailDeliveryError(message, {
       retryable: false,
       code,
-      cause: error,
+      cause,
     });
   }
 
@@ -131,7 +138,7 @@ function toMailDeliveryError(
     return new MailDeliveryError(message, {
       retryable: true,
       code,
-      cause: error,
+      cause,
     });
   }
 
@@ -140,7 +147,34 @@ function toMailDeliveryError(
   return new MailDeliveryError(message, {
     retryable: true,
     code,
-    cause: error,
+    cause,
+  });
+}
+
+/**
+ * The transport error, minus the recipient.
+ *
+ * The raw nodemailer error repeats the address in its message, its stack and
+ * its `response`/`rejected` fields, and both pino's err serializer and
+ * console.error print `cause`. It stops here: what diagnosis needs of it — the
+ * text with the address masked, the code and the SMTP reply — is copied.
+ */
+function redactedCause(
+  error: unknown,
+  originalMessage: string,
+  code: string | undefined,
+  responseCode: number | undefined,
+): Error {
+  const sanitized = new Error(redactEmails(originalMessage));
+
+  if (error instanceof Error) {
+    sanitized.name = error.name;
+    sanitized.stack = error.stack ? redactEmails(error.stack) : sanitized.stack;
+  }
+
+  return Object.assign(sanitized, {
+    ...(code ? { code } : {}),
+    ...(typeof responseCode === "number" ? { responseCode } : {}),
   });
 }
 

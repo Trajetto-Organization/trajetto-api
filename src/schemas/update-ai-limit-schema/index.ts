@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 const updateAILimitSchema = z.object({
+  ...tenantLockedShape,
   ai_analysis_limit: z
     .number()
     .int("O limite deve ser um número inteiro.")

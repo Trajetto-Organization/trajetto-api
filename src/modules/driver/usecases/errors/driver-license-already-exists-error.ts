@@ -1,7 +1,12 @@
-class DriverLicenseAlreadyExistsError extends Error {
+import { AppError } from "@/shared/errors/AppError";
+
+/** Same rule as the CPF: the CNH is unique per company (decision 8.1). */
+class DriverLicenseAlreadyExistsError extends AppError {
   constructor() {
     super(
-      "Esta CNH não está disponível para cadastro. As CNHs de motoristas devem ser únicas em todo o sistema.",
+      "Já existe um motorista com esta CNH nesta empresa. Procure-o na listagem.",
+      409,
+      "DRIVER_CNH_ALREADY_EXISTS",
     );
   }
 }

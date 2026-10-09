@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { IAccountPayableRepository } from "@/modules/account-payable/repositories/IAccount-payable-repository";
 
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
@@ -7,15 +8,12 @@ import { IBranchRepository } from "@/modules/branch/repositories/IBranch-reposit
 import { IServiceOrderRepository } from "@/modules/service-order/repositories/IService-order-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
+import { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-repository";
+import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
+
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
-import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
-import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
-
-import { ServiceOrderNotBelongBusinessError } from "@/modules/service-order/usecases/errors/service-order-not-belong-business-error";
-
-import { ServiceOrderNotFoundError } from "@/modules/service-order/usecases/errors/service-order-not-found-error";
 import { AccountPayableInvalidAmountError } from "../errors/account-payable-invalid-amount-error";
 
 import {
@@ -26,7 +24,16 @@ import {
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { AppError } from "@/shared/errors/AppError";
+import { isUniqueViolation } from "@/shared/http/idempotency-key";
 import database from "@/../infra/database";
+
+import { assertAccountPayableReferences } from "../account-payable-references";
+import { billDateFromInput } from "../../rules/account-payable-status";
+
+import { serviceOrderOverrunWarning } from "../../rules/service-order-overrun";
+
+/** The bill, plus what the person should look at (never a refusal). */
+type CreatedAccountPayable = AccountPayable & { warnings: string[] };
 
 @injectable()
 class CreateAccountPayableUseCase {
@@ -43,17 +50,24 @@ class CreateAccountPayableUseCase {
     private accountPayable: IAccountPayableRepository,
     @inject("OutboxService")
     private outbox: OutboxService,
+    @inject("SupplierRepository")
+    private supplier: ISupplierRepository,
+    @inject("VehicleRepository")
+    private vehicle: IVehicleRepository,
   ) {}
 
   async execute(
     accountPayableData: CreateAccountPayableProps,
     userId: string,
-  ): Promise<AccountPayable> {
+  ): Promise<CreatedAccountPayable> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
       throw new ResourceNotFoundError();
     }
+
+    // Defense in depth: the route guard must not be the only wall between tenants.
+    assertTenantAccess(findUser, accountPayableData.businessId);
 
     const findBusiness = await this.business.findBusinessById(
       accountPayableData.businessId,
@@ -63,33 +77,31 @@ class CreateAccountPayableUseCase {
       throw new BusinessNotFoundError();
     }
 
-    // Check if the branch exists and belongs to the company
-    const findBranch = await this.branch.findBranchById(
-      accountPayableData.branchId,
+    // The same form sent twice — a lost answer, a second click — is the bill
+    // it already created, and notifies nobody again (IDEMP-14).
+    const replay = await this.replayOf(accountPayableData);
+
+    if (replay) return { ...replay, warnings: [] };
+
+    // Branch, service order, payee, vehicle and the responsible person (who
+    // is notified with the amount) all belong to this company.
+    const { serviceOrder } = await assertAccountPayableReferences(
+      {
+        branch: this.branch,
+        serviceOrder: this.serviceOrder,
+        supplier: this.supplier,
+        vehicle: this.vehicle,
+        user: this.user,
+      },
+      accountPayableData.businessId,
+      {
+        branchId: accountPayableData.branchId,
+        serviceOrderId: accountPayableData.serviceOrderId,
+        supplierId: accountPayableData.supplierId,
+        vehicleId: accountPayableData.vehicleId,
+        registrationUserId: accountPayableData.registrationUserId,
+      },
     );
-
-    if (!findBranch) {
-      throw new BranchNotFoundError();
-    }
-
-    if (findBranch.businessId !== accountPayableData.businessId) {
-      throw new BranchNotBelongBusinessError();
-    }
-
-    // Check the work order if provided
-    if (accountPayableData.serviceOrderId) {
-      const findServiceOrder = await this.serviceOrder.findServiceOrderById(
-        accountPayableData.serviceOrderId,
-      );
-
-      if (!findServiceOrder) {
-        throw new ServiceOrderNotFoundError();
-      }
-
-      if (findServiceOrder.businessId !== accountPayableData.businessId) {
-        throw new ServiceOrderNotBelongBusinessError();
-      }
-    }
 
     // Check that the amount paid is not greater than the total amount
     if (
@@ -99,14 +111,31 @@ class CreateAccountPayableUseCase {
       throw new AccountPayableInvalidAmountError();
     }
 
+    const timeZone = (findBusiness as { timezone?: string | null }).timezone;
+
+    const data: CreateAccountPayableProps = {
+      ...accountPayableData,
+      // A picked DAY is stored as the instant it starts in the company's
+      // zone: the status is then decided by that zone's calendar.
+      due_date: billDateFromInput(accountPayableData.due_date, timeZone ?? ""),
+      payment_date: accountPayableData.payment_date
+        ? billDateFromInput(accountPayableData.payment_date, timeZone ?? "")
+        : null,
+      // A registered supplier IS the payee; free text is for the rest.
+      payee_name: accountPayableData.supplierId
+        ? null
+        : (accountPayableData.payee_name ?? null),
+      // Who typed it, from the session — never from the body (decision 8.4).
+      createdById: userId,
+    };
+
+    let accountPayableCreated: AccountPayable;
+
     try {
       // Bill and outbox event commit together; the pipeline notifies the
       // responsible user and records the activity after the commit.
-      const accountPayableCreated = await database.$transaction(async (tx) => {
-        const created = await this.accountPayable.createAccountPayable(
-          accountPayableData,
-          tx,
-        );
+      accountPayableCreated = await database.$transaction(async (tx) => {
+        const created = await this.accountPayable.createAccountPayable(data, tx);
 
         await this.outbox.publish(tx, {
           topic: "account-payable.created",
@@ -125,15 +154,48 @@ class CreateAccountPayableUseCase {
 
         return created;
       });
-
-      return accountPayableCreated;
     } catch (error) {
+      // The twin of this submission committed after the replay check: the
+      // insert met the unique key, and the twin's bill is the answer.
+      if (isUniqueViolation(error)) {
+        const replay = await this.replayOf(accountPayableData);
+
+        if (replay) return { ...replay, warnings: [] };
+      }
+
       throw new AppError(
         "Houve um erro ao tentar criar a conta a pagar! Por favor, tente novamente.",
         500,
       );
     }
+
+    const warnings: string[] = [];
+
+    if (serviceOrder && accountPayableData.serviceOrderId) {
+      const overrun = serviceOrderOverrunWarning(
+        await this.accountPayable.sumAmountByServiceOrderId(
+          accountPayableData.serviceOrderId,
+        ),
+        serviceOrder.total_amount,
+      );
+
+      if (overrun) warnings.push(overrun);
+    }
+
+    return { ...accountPayableCreated, warnings };
+  }
+
+  private async replayOf(
+    accountPayableData: CreateAccountPayableProps,
+  ): Promise<AccountPayable | null> {
+    if (!accountPayableData.client_submission_id) return null;
+
+    return this.accountPayable.findAccountPayableBySubmissionId(
+      accountPayableData.businessId,
+      accountPayableData.client_submission_id,
+    );
   }
 }
 
 export { CreateAccountPayableUseCase };
+export type { CreatedAccountPayable };

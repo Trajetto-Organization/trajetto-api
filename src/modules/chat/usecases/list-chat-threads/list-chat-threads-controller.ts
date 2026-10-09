@@ -3,9 +3,8 @@ import { container } from "tsyringe";
 import { z } from "zod";
 
 import { ListChatThreadsUseCase } from "./list-chat-threads-usecase";
-import { getOnlineUserIdsForBusiness } from "@/websocket";
+import { getOnlineUserIds } from "@/websocket";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { listChatThreadsSchema } from "@/schemas/list-chat-threads-schema";
 
 class ListChatThreadsController {
@@ -20,46 +19,45 @@ class ListChatThreadsController {
 
     const listChatThreadsUseCase = container.resolve(ListChatThreadsUseCase);
 
-    try {
-      const {
-        data,
-        total,
-        totalUnread,
-        businessId: resolvedBusinessId,
-      } = await listChatThreadsUseCase.execute({
+    const { data, total, totalUnread } = await listChatThreadsUseCase.execute(
+      {
         userId: id,
         page,
         pageSize,
         search,
         businessId,
-      });
+      },
+    );
 
-      // Presence is transport state, so it is stitched in here: one
-      // cluster-wide adapter roundtrip answers for the whole page.
-      const onlineUserIds = new Set(
-        await getOnlineUserIdsForBusiness(resolvedBusinessId),
-      );
+    // Presence is transport state, so it is stitched in here — asked about
+    // the drivers on THIS page only. Asking about the whole company fetched
+    // every socket of the tenant through Redis to colour a page of dots,
+    // and the unread badge refetches this list on every chat message.
+    const driverUserIds = [
+      ...new Set(
+        data.flatMap((entry) =>
+          entry.driverUser ? [entry.driverUser.id] : [],
+        ),
+      ),
+    ];
 
-      return reply.status(200).send({
-        data: data.map((entry) => ({
-          ...entry,
-          driverUser: entry.driverUser
-            ? {
-                ...entry.driverUser,
-                online: onlineUserIds.has(entry.driverUser.id),
-              }
-            : null,
-        })),
-        total,
-        totalUnread,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+    const onlineUserIds = new Set(
+      driverUserIds.length > 0 ? await getOnlineUserIds(driverUserIds) : [],
+    );
 
-      throw error;
-    }
+    return reply.status(200).send({
+      data: data.map((entry) => ({
+        ...entry,
+        driverUser: entry.driverUser
+          ? {
+              ...entry.driverUser,
+              online: onlineUserIds.has(entry.driverUser.id),
+            }
+          : null,
+      })),
+      total,
+      totalUnread,
+    });
   }
 }
 

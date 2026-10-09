@@ -1,10 +1,20 @@
+import type { CountBasis } from "../../shared/count-comparison";
+
 interface DashboardOverviewRequest {
   userId: string;
 }
 
 interface EntityCount {
+  /** Created in the company's current civil month (the trend's last point). */
   currentMonth: number;
+  /** Created in the previous civil month. */
   lastMonth: number;
+  /** "total" for a catalogue, "month_to_date" for an operation (count-comparison). */
+  basis: CountBasis;
+  /** What the card shows: the current total, or this month so far. */
+  value: number;
+  /** The same measure one period back: the total at the month's start, or last month up to the same point. */
+  previous: number;
 }
 
 interface DashboardOverviewResponse {
@@ -27,19 +37,24 @@ interface DashboardOverviewResponse {
     BLOCKED: number;
     IN_ROUTE: number;
   };
+  /**
+   * One point per month of the company's calendar. A series is present only
+   * when this viewer may see it and the company hired its module; absent
+   * means "no line", not zero (DLVP-ADM-1).
+   */
   activityTrends: Array<{
     month: string;
-    vehicles: number;
-    drivers: number;
-    businesses: number;
-    branches: number;
-    parts: number;
-    suppliers: number;
-    serviceOrders: number;
-    users: number;
-    fines: number;
-    deliveries: number;
-    routes: number;
+    vehicles?: number;
+    drivers?: number;
+    businesses?: number;
+    branches?: number;
+    parts?: number;
+    suppliers?: number;
+    serviceOrders?: number;
+    users?: number;
+    fines?: number;
+    deliveries?: number;
+    routes?: number;
   }>;
   maintenanceStats: {
     pending: number;
@@ -93,8 +108,8 @@ interface DashboardOverviewResponse {
   }>;
   maintenanceCosts: Array<{
     month: string;
-    preventive: number;
-    corrective: number;
+    internal: number;
+    external: number;
   }>;
 }
 

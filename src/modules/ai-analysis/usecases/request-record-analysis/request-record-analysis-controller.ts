@@ -3,41 +3,25 @@ import { container } from "tsyringe";
 
 import { RequestRecordAnalysisUseCase } from "./request-record-analysis-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { AppError } from "@/shared/errors/AppError";
-
 import { aiAnalysisRecordSchema } from "@/schemas/ai-analysis-record-schema";
 
+/**
+ * Refusals are AppErrors with a code (AI_RECORD_NOT_FOUND 404,
+ * AI_RECORD_WITHOUT_PHOTO 400, AI_NOT_ENABLED 409, AI_QUOTA_EXHAUSTED 409,
+ * AI_NOT_COVERED 409, AI_PROVIDER_UNAVAILABLE 503), answered by the error handler with the code
+ * in the body and in x-error-code.
+ */
 class RequestRecordAnalysisController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = request.user;
     const { recordType, recordId } = aiAnalysisRecordSchema.parse(
       request.params,
     );
 
-    const requestRecordAnalysisUseCase = container.resolve(
-      RequestRecordAnalysisUseCase,
-    );
+    const result = await container
+      .resolve(RequestRecordAnalysisUseCase)
+      .execute({ principal: request.user, recordType, recordId });
 
-    try {
-      const result = await requestRecordAnalysisUseCase.execute({
-        userId: id,
-        recordType,
-        recordId,
-      });
-
-      return reply.status(200).send(result);
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof AppError) {
-        return reply.status(error.statusCode).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply.status(200).send(result);
   }
 }
 

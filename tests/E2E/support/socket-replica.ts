@@ -1,9 +1,15 @@
+// First, as in http.ts: this file is a process entry point of its own, and
+// the socket layer loads repositories and services that tsyringe decorates.
+import "reflect-metadata";
+
 import { createServer } from "node:http";
 
 import {
   initializeSocketIO,
   sendDriverPositionToBusiness,
   sendRouteEventToBusiness,
+  sendSecurityEventToBusiness,
+  sendSecurityEventToUser,
   shutdownSocketIO,
 } from "@/websocket";
 
@@ -23,7 +29,13 @@ import {
 const port = Number(process.argv[2]);
 
 interface Command {
-  kind: "routeEvent" | "driverPosition";
+  kind:
+    | "routeEvent"
+    | "driverPosition"
+
+    // What an admin's edit on THIS replica fires; `payload` is the event.
+    | "securityToBusiness"
+    | "securityToUser";
   businessId: string;
   payload: Record<string, unknown>;
 }
@@ -72,6 +84,14 @@ function run(line: string): void {
 
   if (command.kind === "routeEvent") {
     sendRouteEventToBusiness(command.businessId, command.payload as never);
+  } else if (command.kind === "securityToBusiness") {
+    sendSecurityEventToBusiness(command.businessId, {
+      reason: String(command.payload.reason),
+    });
+  } else if (command.kind === "securityToUser") {
+    sendSecurityEventToUser(String(command.payload.userId), {
+      reason: String(command.payload.reason),
+    });
   } else {
     sendDriverPositionToBusiness(command.businessId, command.payload as never);
   }

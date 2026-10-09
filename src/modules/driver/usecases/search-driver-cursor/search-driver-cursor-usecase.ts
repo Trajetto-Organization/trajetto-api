@@ -12,12 +12,16 @@ import { CursorPaginatedDriver } from "../../dtos/driver-dto";
 import { AppError } from "@/shared/errors/AppError";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
+import type { DriverPickerAccess } from "./driver-picker-access";
+
 interface SearchDriverWithCursorRequest {
   userId: string;
   limit?: number;
   cursor?: string;
   businessId: string;
   search?: string;
+  /** What the caller may see: the catalogue row or the dispatcher's choice. */
+  projection?: DriverPickerAccess;
 }
 
 @injectable()
@@ -37,6 +41,7 @@ class SearchDriverCursorUseCase {
     cursor,
     businessId,
     search,
+    projection = "catalog",
   }: SearchDriverWithCursorRequest): Promise<CursorPaginatedDriver> {
     const findUser = await this.user.findUserById(userId);
 
@@ -58,6 +63,7 @@ class SearchDriverCursorUseCase {
         cursor,
         businessId,
         search,
+        projection,
       });
 
       return result;

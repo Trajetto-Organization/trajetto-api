@@ -1,55 +1,59 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
-import { listPagesSchema } from "@/schemas/list-pages-schema";
 import { z } from "zod";
 
-import { ListFineUseCase } from "./list-fine-usecase";
+import { listFineSchema } from "@/schemas/list-fine-schema";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import { ListFineUseCase } from "./list-fine-usecase";
 
 class ListFineController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { page, pageSize, search } = request.query as z.infer<
-      typeof listPagesSchema
-    >;
+    // The route already validated AND transformed the querystring (page is a
+    // number, each facet a list): re-parsing the transformed value against
+    // the wire schema would reject it. Fastify also decoded the search term.
+    const {
+      businessId,
+      page,
+      pageSize,
+      search,
+      sort,
+      order,
+      status,
+      branchId,
+      trafficViolationCodeId,
+    } = request.query as z.infer<typeof listFineSchema>;
 
     const listFineUseCase = container.resolve(ListFineUseCase);
 
-    // Secure handling for URL decoding
-    let decodedSearch: string | undefined = undefined;
-    if (search) {
-      try {
-        decodedSearch = decodeURIComponent(search);
-      } catch (error) {
-        decodedSearch = search;
-      }
-    }
-
-    try {
-      const finesPromise = listFineUseCase.execute(
-        id,
+    const resultPromise = listFineUseCase
+      .execute({
+        userId: id,
+        businessId,
         page,
         pageSize,
-        decodedSearch,
-      );
+        search,
+        sort,
+        order,
+        statuses: status,
+        branchIds: branchId,
+        trafficViolationCodeIds: trafficViolationCodeId,
+      })
+      .then((result) => ({
+        data: result.data,
+        total: result.total,
+        meta: result.searchMeta,
+      }));
 
-      await sendAsNDJSON({
-        reply,
-        dataPromise: finesPromise,
-        page,
-        pageSize,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await sendAsNDJSON({
+      reply,
+      dataPromise: resultPromise,
+      page,
+      pageSize,
+    });
   }
 }
 

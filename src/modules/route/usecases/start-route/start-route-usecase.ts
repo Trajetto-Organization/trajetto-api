@@ -20,10 +20,11 @@ import {
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { routeEventPayload } from "@/shared/integration/announce";
 
-import { canTransitionRoute } from "@/shared/route/route-rules";
+import { canTransitionRoute, isStopOpen } from "@/shared/route/route-rules";
 import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 
 import {
+  RouteDriverBusyError,
   RouteNotFoundError,
   RouteStatusConflictError,
   RouteVehicleBusyError,
@@ -43,6 +44,12 @@ interface StartRouteRequest {
    * enough that refusing it would send drivers back to the dispatcher.
    */
   vehicleId?: string;
+
+  /**
+   * When the driver tapped "iniciar rota", for a departure the app sent later
+   * (resolveOccurredAt). Absent means now.
+   */
+  occurredAt?: Date | null;
 }
 
 /**
@@ -84,6 +91,7 @@ class StartRouteUseCase {
     businessId,
     routeId,
     vehicleId,
+    occurredAt,
   }: StartRouteRequest): Promise<Route> {
     const findUser = await this.user.findUserById(userId);
 
@@ -101,7 +109,7 @@ class StartRouteUseCase {
     // be able to learn that a route id is real by being told a different
     // refusal.
     if (!findRoute || findRoute.driverId !== findUser.driverId) {
-      throw new AppError(new RouteNotFoundError().message, 404);
+      throw new RouteNotFoundError();
     }
 
     /**
@@ -125,10 +133,31 @@ class StartRouteUseCase {
       return findRoute;
     }
 
+    // The same resend, arriving after the route already finished — the day's
+    // last proof closed it, or the dispatcher cancelled it on the road, while
+    // the departure's first answer was lost. The departure DID happen
+    // (started_at says so), so the resend is answered as the success it is;
+    // a 400 here parked a departure that worked as a permanent failure on the
+    // driver's phone. A route cancelled BEFORE it left has no started_at and
+    // is still refused below.
+    if (
+      (findRoute.status === "COMPLETED" || findRoute.status === "CANCELLED") &&
+      findRoute.started_at &&
+      (!vehicleId || vehicleId === findRoute.vehicleId)
+    ) {
+      return findRoute;
+    }
+
     const verdict = canTransitionRoute(findRoute.status, "IN_PROGRESS");
 
     if (!verdict.allowed) {
       throw new AppError(verdict.reason!, 400, "INVALID_ROUTE_TRANSITION");
+    }
+
+    // Nothing left on it (see routeWithoutStops). Refused here before the
+    // vehicle checks, and asked again under the row lock in the transaction.
+    if (!findRoute.stops.some((stop) => isStopOpen(stop.status))) {
+      throw routeWithoutStops();
     }
 
     const departingVehicleId = vehicleId ?? findRoute.vehicleId;
@@ -164,12 +193,39 @@ class StartRouteUseCase {
       );
     }
 
+    // The moment of the tap, for a departure queued in the yard's dead zone
+    // (MOB-08) — but never before the route existed: the app only knows a
+    // route id it was shown, so an earlier instant is a clock gone wrong, and
+    // the receipt is the honest fallback.
+    const startedAt =
+      occurredAt && occurredAt.getTime() >= findRoute.created_at.getTime()
+        ? occurredAt
+        : new Date();
+
+    // How many addresses actually left, for the activity line after the
+    // commit. Counted from the departure's own read, like the messages.
+    let departedCount = 0;
+
     try {
       // The transition and the "saiu para entrega" messages commit together.
       // A truck that left with the customers never told is the state this
       // exists to prevent, and a route departs once — there is no second
       // chance to publish.
       const started = await database.$transaction(async (tx) => {
+        /**
+         * One route on the street per driver (FLEET-ASSIGN-3), like one per
+         * truck. Releasing tomorrow's route while today's runs stays
+         * allowed; leaving with it does not. Under a per-driver lock taken
+         * in THIS transaction, so two taps on two released routes queue and
+         * the second one sees the first one's departure.
+         */
+        await this.route.assertDriverFreeToDepart(
+          findRoute.driverId,
+          businessId,
+          routeId,
+          tx,
+        );
+
         const moved = await this.route.transitionRoute(
           routeId,
           businessId,
@@ -177,14 +233,39 @@ class StartRouteUseCase {
             expectedStatus: findRoute.status,
             status: "IN_PROGRESS",
             vehicleId: departingVehicleId,
-            started_at: new Date(),
+            started_at: startedAt,
           },
           tx,
         );
 
-        for (const stop of findRoute.stops) {
-          const delivery = stop.delivery;
+        // The empty-route guard above, asked again now that the UPDATE holds
+        // the route row. A stop taken off between that read and this write
+        // (removeStop, or a cancellation dropping it from the plan) leaves
+        // the status alone, so the conditional UPDATE still matched after
+        // waiting for it — and the route left with nothing it could ever
+        // resolve. Every composition write locks this row first, so what is
+        // read here is what the departure carries. Refused; all of it rolls
+        // back.
+        const departing = await this.route.findRouteById(routeId, businessId, tx);
 
+        if (!departing?.stops.some((stop) => isStopOpen(stop.status))) {
+          throw routeWithoutStops();
+        }
+
+        // What left, read AFTER the transition and inside its transaction —
+        // not `findRoute.stops`, which was read before the vehicle check and
+        // could still carry a stop removed since, or a delivery cancelled
+        // while its stop waited. The customers told are the ones whose load
+        // this commit put on the street.
+        const departed = await this.route.listDepartedDeliveries(
+          routeId,
+          businessId,
+          tx,
+        );
+
+        departedCount = departed.length;
+
+        for (const delivery of departed) {
           // Most deliveries carry neither an e-mail nor a phone for the person
           // receiving them. Checked here so no outbox row is written that
           // could only ever expand into nothing — a forty-stop route would
@@ -214,7 +295,10 @@ class StartRouteUseCase {
         await this.webhooks.announce(
           "route.started",
           businessId,
-          routeEventPayload({ ...findRoute, status: "IN_PROGRESS" }),
+          routeEventPayload(
+            { ...findRoute, status: "IN_PROGRESS", started_at: startedAt },
+            startedAt,
+          ),
           tx,
         );
 
@@ -235,7 +319,7 @@ class StartRouteUseCase {
         entityId: routeId,
         description:
           `Rota ${findRoute.code} iniciada com ` +
-          `${findRoute.stops.length} parada${findRoute.stops.length === 1 ? "" : "s"}`,
+          `${departedCount} parada${departedCount === 1 ? "" : "s"}`,
         status: "Em andamento",
         performedBy: userId,
         businessId,
@@ -249,7 +333,30 @@ class StartRouteUseCase {
         throw new AppError(error.message, 409, "ROUTE_VEHICLE_BUSY");
       }
 
+      // The driver is already out with another route. A real refusal, not a
+      // race to paper over: the app shows the sentence as it is.
+      if (error instanceof RouteDriverBusyError) {
+        throw new AppError(error.message, 409, "ROUTE_DRIVER_BUSY");
+      }
+
       if (error instanceof RouteStatusConflictError) {
+        // The resend check above, made again after losing the race. The
+        // app's client gives up after 20 s while the first departure is still
+        // being written, the outbox resends at once, and both requests read
+        // the route before either commits — so the resend misses the early
+        // return and loses the status guard instead. If the route is now out
+        // with this driver on the truck this request asked for, the departure
+        // it wanted happened: success, not a 409 the outbox marks `failed`.
+        const current = await this.route.findRouteById(routeId, businessId);
+
+        if (
+          current?.status === "IN_PROGRESS" &&
+          current.driverId === findUser.driverId &&
+          current.vehicleId === departingVehicleId
+        ) {
+          return current;
+        }
+
         throw new AppError(error.message, 409, "ROUTE_STATUS_CONFLICT");
       }
 
@@ -261,6 +368,19 @@ class StartRouteUseCase {
       );
     }
   }
+}
+
+/**
+ * A released route whose stops were all taken off it afterwards. Leaving with
+ * it would never end: a route closes when its last open stop resolves, and
+ * there is none — IN_PROGRESS forever, the truck "Em rota".
+ */
+function routeWithoutStops(): AppError {
+  return new AppError(
+    "Esta rota não tem nenhuma parada para executar. Fale com o despachante.",
+    400,
+    "ROUTE_WITHOUT_STOPS",
+  );
 }
 
 export { StartRouteUseCase };

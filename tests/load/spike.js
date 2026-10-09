@@ -1,4 +1,28 @@
+import { surfaces } from "./lib/api.js";
+import { stagesDuration } from "./lib/duration.js";
 import { pause, runOneOperation } from "./lib/mix.js";
+
+/** Quiet, wall, quiet, wall, quiet (see the scenario below). */
+const RUSH = [
+  // Idle, so the caches and the pool are in the state a real morning
+  // finds them.
+  { target: 20, duration: "30s" },
+
+  // The wall: five seconds to twenty times the rate.
+  { target: 400, duration: "5s" },
+  { target: 400, duration: "30s" },
+
+  // And gone, just as fast. The drain is the measurement.
+  { target: 20, duration: "5s" },
+  { target: 20, duration: "45s" },
+
+  // Again, now that nothing is cold.
+  { target: 400, duration: "5s" },
+  { target: 400, duration: "30s" },
+
+  { target: 20, duration: "5s" },
+  { target: 20, duration: "60s" },
+];
 
 /**
  * A wall of traffic arriving at once, and what happens after it leaves.
@@ -45,26 +69,24 @@ export const options = {
       preAllocatedVUs: 200,
       maxVUs: 2000,
 
-      stages: [
-        // Idle, so the caches and the pool are in the state a real morning
-        // finds them.
-        { target: 20, duration: "30s" },
+      stages: RUSH,
+    },
 
-        // The wall: five seconds to twenty times the rate.
-        { target: 400, duration: "5s" },
-        { target: 400, duration: "30s" },
-
-        // And gone, just as fast. The drain is the measurement.
-        { target: 20, duration: "5s" },
-        { target: 20, duration: "45s" },
-
-        // Again, now that nothing is cold.
-        { target: 400, duration: "5s" },
-        { target: 400, duration: "30s" },
-
-        { target: 20, duration: "5s" },
-        { target: 20, duration: "60s" },
-      ],
+    /**
+     * The health probe, once a second through the whole run — through the
+     * walls and the quiet in between.
+     *
+     * The mix never calls `system.health` (only smoke.js did), so the health
+     * threshold below had no sample and passed whatever happened.
+     */
+    health: {
+      executor: "constant-arrival-rate",
+      exec: "health",
+      rate: 1,
+      timeUnit: "1s",
+      duration: `${stagesDuration(RUSH)}ms`,
+      preAllocatedVUs: 2,
+      maxVUs: 10,
     },
   },
 
@@ -111,4 +133,8 @@ export default function spike() {
   // Shorter than the steady load's pause: a spike is people acting at the same
   // time, not people browsing.
   pause(0.1, 0.5);
+}
+
+export function health() {
+  surfaces.health();
 }

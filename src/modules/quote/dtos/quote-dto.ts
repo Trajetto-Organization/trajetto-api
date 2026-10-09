@@ -1,3 +1,11 @@
+import type { SortOrder } from "@/shared/pagination/list-query";
+
+import type {
+  QuoteFleetSize,
+  QuoteGroupCount,
+  QuoteSortKey,
+} from "../usecases/list-quotes/quote-list";
+
 type QuoteStatus = "PENDING" | "CONTACTED" | "CLOSED" | "CONVERTED";
 
 interface Quote {
@@ -19,12 +27,20 @@ interface ListQuotesProps {
   page: number;
   pageSize: number;
   search?: string;
-  status?: QuoteStatus;
+  statuses?: QuoteStatus[];
+  fleetSizes?: QuoteFleetSize[];
+  sort?: QuoteSortKey;
+  order?: SortOrder;
 }
 
+/**
+ * One page of quotes and the breakdown the cards and filters are derived
+ * from (decision 8.8): never counted on the page.
+ */
 interface ListQuotesResult {
   data: Quote[];
-  total: number;
+  /** Quotes per (status, fleet_size): search applied, the two facets not. */
+  groups: QuoteGroupCount[];
 }
 
 interface CreateQuoteProps {

@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
+
+import { businessTimezoneField } from "@/schemas/business-timezone-schema";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -7,6 +10,7 @@ import {
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateBusinessSchema = z.object({
+  ...tenantLockedShape,
   cep: z.preprocess(
     (val) => {
       const cleaned = emptyStringToNull(val);
@@ -458,6 +462,7 @@ const updateBusinessSchema = z.object({
       .optional()
       .nullable(),
   ),
+  timezone: businessTimezoneField.optional(),
 });
 
 export { updateBusinessSchema };

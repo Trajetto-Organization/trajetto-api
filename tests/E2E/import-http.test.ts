@@ -317,9 +317,22 @@ describe("uploading a day's work", () => {
   });
 });
 
+/**
+ * The upload route allows 6 imports per minute PER USER. The describe blocks
+ * below each upload with an admin of their own, so the limiter of one block
+ * never turns another block's upload into a 429.
+ */
 describe("the listing", () => {
+  let listingToken: string;
+
+  beforeAll(async () => {
+    listingToken = await seedUser(CARRIER, "BUSINESS_ADMIN");
+  });
+
   it("streams NDJSON, newest first", async () => {
-    await upload([row("Para a listagem", "PED-050")]);
+    expect(
+      (await upload([row("Para a listagem", "PED-050")], listingToken)).statusCode,
+    ).toBe(200);
 
     const response = await app.inject({
       method: "GET",
@@ -341,7 +354,9 @@ describe("the listing", () => {
   });
 
   it("never shows another carrier's uploads", async () => {
-    await upload([row("Só minha", "PED-060")]);
+    expect(
+      (await upload([row("Só minha", "PED-060")], listingToken)).statusCode,
+    ).toBe(200);
 
     const response = await app.inject({
       method: "GET",
@@ -356,6 +371,21 @@ describe("the listing", () => {
 });
 
 describe("taking an upload back", () => {
+  let undoToken: string;
+
+  beforeAll(async () => {
+    undoToken = await seedUser(CARRIER, "BUSINESS_ADMIN");
+  });
+
+  /** An upload this block can undo; a 429 here would read as an undo bug. */
+  async function uploaded(rows: string[][]) {
+    const response = await upload(rows, undoToken);
+
+    expect(response.statusCode).toBe(200);
+
+    return response.json();
+  }
+
   it("removes what it created and nothing else", async () => {
     const untouched = await prisma.delivery.create({
       data: {
@@ -368,7 +398,7 @@ describe("taking an upload back", () => {
       },
     });
 
-    const created = (await upload([row("Da planilha", "PED-070")])).json();
+    const created = await uploaded([row("Da planilha", "PED-070")]);
 
     const response = await app.inject({
       method: "POST",
@@ -391,7 +421,7 @@ describe("taking an upload back", () => {
   });
 
   it("answers 409 on the second attempt instead of reporting zero", async () => {
-    const created = (await upload([row("Duas vezes", "PED-080")])).json();
+    const created = await uploaded([row("Duas vezes", "PED-080")]);
 
     const url = `/import/reverse-import/${created.data.id}/business/${CARRIER}`;
 
@@ -413,7 +443,7 @@ describe("taking an upload back", () => {
   it("answers 404 for another carrier's upload, not 403", async () => {
     // A distinct "exists but is not yours" would tell a caller which ids are
     // real.
-    const created = (await upload([row("Alheia", "PED-090")])).json();
+    const created = await uploaded([row("Alheia", "PED-090")]);
 
     const response = await app.inject({
       method: "POST",

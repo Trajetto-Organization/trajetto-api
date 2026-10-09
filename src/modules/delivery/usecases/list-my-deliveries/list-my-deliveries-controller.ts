@@ -3,7 +3,6 @@ import { container } from "tsyringe";
 
 import { ListMyDeliveriesUseCase } from "./list-my-deliveries-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 class ListMyDeliveriesController {
@@ -13,24 +12,20 @@ class ListMyDeliveriesController {
 
     const listMyDeliveriesUseCase = container.resolve(ListMyDeliveriesUseCase);
 
-    try {
-      const { deliveries, occurrenceTypes } =
-        await listMyDeliveriesUseCase.execute({
-          userId: id,
-          businessId,
-        });
-
-      return reply.status(200).send({
-        data: deliveries,
-        occurrence_types: occurrenceTypes,
+    const { deliveries, routes, occurrenceTypes, deliveredTypes, pauseTypes, journey } =
+      await listMyDeliveriesUseCase.execute({
+        userId: id,
+        businessId,
       });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
 
-      throw error;
-    }
+    return reply.status(200).send({
+      data: deliveries,
+      routes,
+      occurrence_types: occurrenceTypes,
+      delivered_types: deliveredTypes,
+      pause_types: pauseTypes,
+      journey,
+    });
   }
 }
 

@@ -1,0 +1,100 @@
+# Dependency updates (INFRA-16).
+#
+# Security updates also need "Dependabot alerts" and "Dependabot security
+# updates" switched on in the repository (or organization) settings; this
+# file adds the scheduled version updates that keep the pins moving:
+# - npm: minor and patch grouped into one weekly PR; majors one by one.
+# - github-actions: every action is pinned by commit SHA with its version in
+#   a comment, and Dependabot moves both together.
+# - docker: the base images are pinned by digest. Majors of Node and Postgres
+#   are decisions (LTS line, pg_dump must match the server), not updates.
+#
+# Every PR targets `staging`, never `main`: code reaches production only
+# through the staging pipeline (built once, validated, then promoted by the
+# merge into main — docs/deploy.md). A PR straight into main would have no
+# staging image to promote.
+#
+# `chore(...)` so semantic-release does not cut a release per bump.
+version: 2
+updates:
+  - package-ecosystem: npm
+    target-branch: staging
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: chore(deps)
+
+  - package-ecosystem: github-actions
+    target-branch: staging
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(ci)
+
+  - package-ecosystem: docker
+    target-branch: staging
+    directories:
+      - "/"
+      - "/infra/backup"
+      - "/infra/ai-ocr"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    ignore:
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
+      # The AI image's wheels are hashed for cp312: a new Python line is a
+      # rebuild of requirements.txt, not a digest bump.
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]
+    commit-message:
+      prefix: chore(docker)
+
+  # The AI service's hashed requirements (infra/ai-ocr). The OCR engine, its
+  # runtime and OpenCV are what the benchmark measured (ADR 0010): moving
+  # them is a new measurement, not a routine bump.
+  - package-ecosystem: pip
+    target-branch: staging
+    directory: "/infra/ai-ocr"
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: rapidocr
+      - dependency-name: onnxruntime
+      - dependency-name: opencv-python-headless
+      - dependency-name: numpy
+        update-types: [version-update:semver-major]
+    commit-message:
+      prefix: chore(ai)
+
+  # The load harness pins Traefik and k6 by digest (tests/load/compose.load.yaml).
+  # Traefik stays on the major Dokploy runs; a new major is a decision.
+  - package-ecosystem: docker-compose
+    target-branch: staging
+    directory: "/tests/load"
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: traefik
+        update-types: [version-update:semver-major]
+    commit-message:
+      prefix: chore(load)

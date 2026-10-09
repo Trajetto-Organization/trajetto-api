@@ -1,10 +1,17 @@
+import type {
+  ActivityAction,
+  ActivityActorRole,
+  ActivityStatusValue,
+  ActivityTypeValue,
+} from "../activity-catalog";
+
 interface CreateActivityProps {
   type: string; // "vehicle", "user", "service-order", etc.
   action: string; // "create", "update", "delete", etc.
   entityId: string; // Related entity ID
   description: string; // Readable description of the action
   status: string; // Action-related status
-  performedBy: string; // ID of the user who performed the action
+  performedBy: string | null; // ID of the user who performed the action; null for an API key
   businessId: string | null; // Company ID
   tenantName?: string | null; // Business name snapshot — pass explicitly when businessId is null (e.g. delete)
   visibilityLevel?: string; // "SYSTEM", "COMPANY", "USER" - controls who can see this activity
@@ -41,18 +48,38 @@ interface Activity {
   updated_at: Date | string;
 }
 
-interface ListRecentActivitiesProps {
+interface ActivityListFilters {
+  /** Canonical statuses; each also matches its stored aliases. */
+  statuses?: ActivityStatusValue[];
+  types?: ActivityTypeValue[];
+  actions?: ActivityAction[];
+  /** As the reader sees the author: DRIVER and PLATFORM included. */
+  roles?: ActivityActorRole[];
+}
+
+interface ListRecentActivitiesProps extends ActivityListFilters {
   page: number;
   pageSize: number;
   currentUserRole: string;
+  /** The MASTER may narrow to one company; everyone else is pinned. */
   businessId?: string;
   search?: string;
   userId: string;
+  /** Only `created_at` is ordered on the server (indexed); default desc. */
+  order?: "asc" | "desc";
 }
 
 interface ListActivityProps {
   data: Activity[];
   total: number;
+}
+
+/** A fixed number of the newest rows, with no page and no total. */
+interface ListRecentActivitiesPreviewProps {
+  take: number;
+  currentUserRole: string;
+  businessId?: string;
+  userId: string;
 }
 
 /**
@@ -99,6 +126,7 @@ interface ActivitySummary {
 
 export {
   Activity,
+  ActivityListFilters,
   ListActivitiesCursorProps,
   CursorPaginatedActivities,
   ActivitySummary,
@@ -106,4 +134,5 @@ export {
   CreateActivityProps,
   ListActivityProps,
   ListRecentActivitiesProps,
+  ListRecentActivitiesPreviewProps,
 };

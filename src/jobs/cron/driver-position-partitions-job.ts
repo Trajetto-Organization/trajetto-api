@@ -1,7 +1,13 @@
 import { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
+import { logger } from "@/shared/logging/logger";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
+
+const log = logger.child({
+  component: "cron",
+  job: "driver-position-partitions",
+});
 
 /**
  * How far ahead partitions are created.
@@ -24,6 +30,43 @@ const PARTITION_LOOKAHEAD_DAYS = 7;
  * this is the map.
  */
 const PARTITION_RETENTION_DAYS = 90;
+
+/**
+ * How long each partition DDL may wait for its lock on the parent.
+ *
+ * `CREATE TABLE ... PARTITION OF` and `DROP TABLE` of a partition both take
+ * ACCESS EXCLUSIVE on driver_position itself. While anything holds a lock on
+ * it — a pg_dump, an ad-hoc query, an autovacuum — the request waits, and
+ * every ping INSERT queues behind the waiting request, each one holding a pool
+ * connection. With no bound the pool drained and every route of the replica
+ * failed. Three seconds caps that stall; a partition that could not be locked
+ * is retried the next night, which the lookahead above absorbs.
+ */
+const PARTITION_LOCK_TIMEOUT = "3s";
+
+/**
+ * Yesterday, today and tomorrow: the partitions pings land in before the next
+ * run. Missing one of these is not slack being used up, it is inserts being
+ * REFUSED after midnight — so the run fails instead of logging a warning.
+ */
+const LAST_REQUIRED_OFFSET = 1;
+
+// On one line: Prisma's messages open with a blank line and span several,
+// which leaves "adiada: " alone on the line anyone greps for.
+const errorMessage = (error: unknown) =>
+  (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim();
+
+/**
+ * One DDL statement under the lock timeout. SET LOCAL lives and dies with this
+ * transaction, so it never leaks into the pooled connection the next query
+ * borrows.
+ */
+async function underLockTimeout(ddl: string): Promise<void> {
+  await database.$transaction([
+    database.$executeRawUnsafe(`SET LOCAL lock_timeout = '${PARTITION_LOCK_TIMEOUT}'`),
+    database.$executeRawUnsafe(ddl),
+  ]);
+}
 
 function partitionName(day: Date): string {
   return `driver_position_${day.toISOString().slice(0, 10).replace(/-/g, "")}`;
@@ -54,6 +97,8 @@ const driverPositionPartitionsJob: CronJobDefinition = {
 
   async handler() {
     let created = 0;
+    let postponed = 0;
+    const missingNow: string[] = [];
 
     // From yesterday, not from today: a replica whose clock is behind, or a
     // ping recorded on the device just before midnight and flushed after,
@@ -66,17 +111,29 @@ const driverPositionPartitionsJob: CronJobDefinition = {
 
       // IF NOT EXISTS rather than a check first: two replicas run this at the
       // same second, and the race between "does it exist" and "create it" is
-      // exactly the kind that only shows up in production.
+      // exactly the kind that only shows up in production. An existing
+      // partition returns before any lock on the parent is requested.
       //
       // Unsafe-by-name because DDL cannot take bind parameters — a table name
       // is not a value. Nothing here comes from a request: `name` and both
       // bounds are built from a Date this function computed.
-      await database.$executeRawUnsafe(
-        `CREATE TABLE IF NOT EXISTS "${name}" PARTITION OF "driver_position"
-           FOR VALUES FROM ('${from.toISOString()}') TO ('${to.toISOString()}')`,
-      );
+      try {
+        await underLockTimeout(
+          `CREATE TABLE IF NOT EXISTS "${name}" PARTITION OF "driver_position"
+             FOR VALUES FROM ('${from.toISOString()}') TO ('${to.toISOString()}')`,
+        );
 
-      created += 1;
+        created += 1;
+      } catch (error) {
+        postponed += 1;
+
+        if (offset <= LAST_REQUIRED_OFFSET) missingNow.push(name);
+
+        log.warn(
+          { partition: name, error: errorMessage(error) },
+          "driver_position partition creation postponed",
+        );
+      }
     }
 
     // What is actually attached, asked of the catalogue rather than computed
@@ -110,15 +167,32 @@ const driverPositionPartitionsJob: CronJobDefinition = {
       // DROP and not DELETE. This is the entire reason the table is
       // partitioned: a day is removed in milliseconds, with no dead tuples for
       // autovacuum to chase and no long transaction pinning the xmin horizon.
-      await database.$executeRawUnsafe(`DROP TABLE IF EXISTS "${relname}"`);
+      // Same lock bound as the creation; a day kept one night longer costs
+      // nothing.
+      try {
+        await underLockTimeout(`DROP TABLE IF EXISTS "${relname}"`);
 
-      dropped += 1;
+        dropped += 1;
+      } catch (error) {
+        postponed += 1;
+
+        log.warn(
+          { partition: relname, error: errorMessage(error) },
+          "driver_position partition removal postponed",
+        );
+      }
     }
 
-    console.log(
-      `[DriverPositionPartitions] ${created} partição(ões) garantida(s), ` +
-        `${dropped} removida(s) por retenção`,
+    log.info(
+      { created, dropped, postponed },
+      "driver_position partitions maintained",
     );
+
+    if (missingNow.length > 0) {
+      throw new Error(
+        `partições de driver_position necessárias agora não foram criadas: ${missingNow.join(", ")}`,
+      );
+    }
   },
 };
 

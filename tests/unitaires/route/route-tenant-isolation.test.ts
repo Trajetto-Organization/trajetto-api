@@ -168,6 +168,7 @@ function makeContext() {
       driverRepository,
       vehicleRepository,
       notificationService,
+      webhookStub.asService(),
     ),
   };
 }
@@ -258,7 +259,7 @@ describe("creating a route with someone else's resources", () => {
         scheduled_date: TOMORROW,
         deliveryIds: [foreignDelivery],
       }),
-    ).rejects.toMatchObject({ code: "DELIVERY_NOT_BELONG_BUSINESS" });
+    ).rejects.toMatchObject({ statusCode: 404, code: "DELIVERY_NOT_FOUND" });
 
     expect(context.routeRepository.routes).toHaveLength(0);
   });
@@ -278,7 +279,7 @@ describe("creating a route with someone else's resources", () => {
         scheduled_date: TOMORROW,
         deliveryIds: [mine, theirs],
       }),
-    ).rejects.toMatchObject({ code: "DELIVERY_NOT_BELONG_BUSINESS" });
+    ).rejects.toMatchObject({ statusCode: 404, code: "DELIVERY_NOT_FOUND" });
 
     expect(context.routeRepository.routes).toHaveLength(0);
     expect(context.routeRepository.stops).toHaveLength(0);
@@ -477,7 +478,7 @@ describe("the repository refuses on its own, without the use case", () => {
     const stopId = context.routeRepository.stops[0].id;
 
     await expect(
-      context.routeRepository.removeStop(route.id, B, stopId),
+      context.routeRepository.removeStops(route.id, B, [stopId]),
     ).rejects.toThrow();
 
     expect(context.routeRepository.stops).toHaveLength(1);

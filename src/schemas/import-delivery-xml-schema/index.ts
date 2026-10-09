@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { dateOnlyField } from "@/shared/delivery/date-only-field";
+
 /** One NF-e is a few KB; the cap keeps a single request bounded. */
 const MAX_FILES_PER_IMPORT = 25;
 const MAX_XML_SIZE = 512 * 1024;
@@ -28,12 +30,11 @@ const importDeliveryXmlSchema = z.object({
     .uuid("ID do embarcador é inválido.")
     .optional()
     .describe(
-      "Força o embarcador de todas as notas. Sem ele, o emitente da NF-e é usado (casado por CNPJ, criado se não existir).",
+      "Força o embarcador de todas as notas (precisa estar ativo). Sem ele, o emitente da NF-e é usado: casado por CNPJ (ou pelo nome, se o embarcador não tiver CNPJ) e criado se não existir; emitente desativado recusa a nota.",
     ),
-  scheduled_date: z.coerce
-    .date()
-    .optional()
-    .describe("Data prevista aplicada a todas as entregas importadas."),
+  scheduled_date: dateOnlyField("A data prevista").describe(
+    "Data prevista (AAAA-MM-DD, sem hora) aplicada a todas as entregas importadas.",
+  ),
 });
 
 export { importDeliveryXmlSchema, MAX_FILES_PER_IMPORT, MAX_XML_SIZE };

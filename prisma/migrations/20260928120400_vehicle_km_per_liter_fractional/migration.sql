@@ -1,0 +1,19 @@
+-- km_per_liter accepts fractions (decision 8.6).
+--
+-- A truck does 2.5 to 4 km/l; an integer column made the form round every
+-- one of them. DOUBLE PRECISION (a Float in the client), like the other
+-- measurements of the vehicle (current_mileage, maintenance_interval_km), and
+-- not a DECIMAL: a Prisma Decimal reaches the client as a string, and the GET
+-- /vehicle/:id response schema declares a number.
+--
+-- This retypes a column the serving image reads, which the expand/contract
+-- rules only allow in a contract phase. It is safe here, and was measured
+-- rather than assumed: the previous client (km_per_liter Int) reading this
+-- column back gets 3 for 3 and 2 for 2.5 — truncated, never an error — and
+-- every existing value is an integer, which widens exactly. The one cost: a
+-- fractional value written by this release shows truncated on the previous
+-- image during a rollout or after a rollback. The vehicle table is a
+-- carrier's fleet, small enough for the rewrite this ALTER performs.
+--
+-- contract-phase: widening int to double precision; the previous client reads it back truncated without error (measured), and every existing value is an integer.
+ALTER TABLE "vehicle" ALTER COLUMN "km_per_liter" TYPE DOUBLE PRECISION;

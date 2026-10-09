@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { legacyProofUseCase, businessWithoutAI as reportsWithoutAI } from "../../support/delivery-proof-usecases";
 import { InMemoryProofAuditRepository } from "@/modules/delivery/repositories/in-memory/in-memory-proof-audit-repository";
 import type { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
@@ -8,13 +9,13 @@ import { StartRouteUseCase } from "@/modules/route/usecases/start-route/start-ro
 import { CancelRouteUseCase } from "@/modules/route/usecases/cancel-route/cancel-route-usecase";
 
 import { RegisterDeliveryArrivalUseCase } from "@/modules/delivery/usecases/register-delivery-arrival/register-delivery-arrival-usecase";
-import { RegisterDeliveryProofUseCase } from "@/modules/delivery/usecases/register-delivery-proof/register-delivery-proof-usecase";
 import { ReportDeliveryOccurrenceUseCase } from "@/modules/delivery/usecases/report-delivery-occurrence/report-delivery-occurrence-usecase";
 import { UpdateDeliveryStatusUseCase } from "@/modules/delivery/usecases/update-delivery-status/update-delivery-status-usecase";
 import { StartDriverRouteUseCase } from "@/modules/delivery/usecases/start-driver-route/start-driver-route-usecase";
 
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 import { InMemoryStatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/in-memory/in-memory-status-change-reason-repository";
+import { InMemoryOccurrenceAuthorizationRepository } from "@/modules/delivery/repositories/in-memory/in-memory-occurrence-authorization-repository";
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
@@ -266,7 +267,7 @@ function makeContext() {
       notificationService,
       webhookStub.asService(),
     ),
-    proof: new RegisterDeliveryProofUseCase(
+    proof: legacyProofUseCase(
       userRepository,
       deliveryRepository,
       routeRepository,
@@ -286,6 +287,13 @@ function makeContext() {
       uploadService,
       outboxStub,
       webhookStub.asService(),
+      new InMemoryOccurrenceAuthorizationRepository(
+        deliveryRepository,
+        occurrenceTypeRepository,
+        userRepository,
+      ),
+      new InMemoryProofAuditRepository(),
+      reportsWithoutAI,
     ),
     setStatus: new UpdateDeliveryStatusUseCase(
       userRepository,
@@ -311,15 +319,6 @@ function makeContext() {
       userRepository,
       deliveryRepository,
       vehicleRepository,
-      routeRepository,
-      new StartRouteUseCase(
-        routeRepository,
-        userRepository,
-        vehicleRepository,
-        notificationService,
-        outboxStub,
-        webhookStub.asService(),
-      ),
       notificationService,
     ),
   };
@@ -918,7 +917,10 @@ describe("the departure endpoint the phones already have", () => {
    * submissions in the field still point at it, so it stays — as an adapter.
    * What it must never do is become a second, competing departure.
    */
-  it("starts the driver's released route instead of a loose batch", async () => {
+  it("never starts the driver's released route (IDEMP-17)", async () => {
+    // The app calls this door only when it shows no route, so a route found
+    // here is one the tap never saw. It leaves through its own endpoint — one
+    // departure in the system, and only the one that names the route.
     const first = await seedDelivery(A, "Cliente A");
     const second = await seedDelivery(A, "Cliente B");
 
@@ -942,12 +944,10 @@ describe("the departure endpoint the phones already have", () => {
       businessId: A,
     });
 
-    // The ROUTE started — not a batch of deliveries that happen to share a
-    // driver. One departure in the system, whichever door was used.
-    expect(routeFor(route.id).status).toBe("IN_PROGRESS");
-    expect(routeFor(route.id).started_at).not.toBeNull();
-    expect(result.started).toBe(2);
-    expect(deliveryFor(first).status).toBe("IN_TRANSIT");
+    expect(routeFor(route.id).status).toBe("RELEASED");
+    expect(routeFor(route.id).started_at).toBeNull();
+    expect(result.started).toBe(0);
+    expect(deliveryFor(first).status).toBe("PENDING");
   });
 
   it("answers started = 0 on the resend rather than failing", async () => {

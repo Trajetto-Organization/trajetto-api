@@ -12,6 +12,8 @@ interface SearchTrafficViolationCodeCursorRequest {
   userId: string;
   limit?: number;
   cursor?: string;
+  /** What the person typed in the picker, trimmed by the schema. */
+  search?: string;
 }
 
 @injectable()
@@ -27,6 +29,7 @@ class SearchTrafficViolationCodeCursorUseCase {
     userId,
     limit = 10,
     cursor,
+    search,
   }: SearchTrafficViolationCodeCursorRequest): Promise<CursorPaginatedTrafficViolationCode> {
     const findUser = await this.user.findUserById(userId);
 
@@ -35,13 +38,9 @@ class SearchTrafficViolationCodeCursorUseCase {
     }
 
     try {
-      const result =
-        await this.trafficViolationCode.searchTrafficViolationCodeWithCursor({
-          limit,
-          cursor,
-        });
-
-      return result;
+      return await this.trafficViolationCode.searchTrafficViolationCodeWithCursor(
+        { limit, cursor, search },
+      );
     } catch (error) {
       throw new AppError(
         "Não foi possível recuperar a lista de códigos de infração!",

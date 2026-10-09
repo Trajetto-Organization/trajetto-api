@@ -12,6 +12,12 @@ export default defineConfig({
     // Compiled because it runs in the production image, where tsx does not
     // exist — only production dependencies are installed there.
     "wait-for-postgres": "./infra/scripts/wait-for-postgres.ts",
+    // Run once in the production container after WEBHOOK_SECRETS_KEY is
+    // set: seals the webhook credentials written before it.
+    "seal-webhook-secrets": "./infra/scripts/seal-webhook-secrets.ts",
+    // The receipt renderer's worker thread. proof-pdf-renderer.ts loads it
+    // from next to server.js (build/proof-pdf-worker.js) by this name.
+    "proof-pdf-worker": "./src/shared/services/proof-pdf-worker.ts",
   },
   format: ["cjs"],
   target: "es2020",

@@ -12,7 +12,9 @@ class DriverTrailController {
     const { id } = request.user;
 
     const { driverId } = driverTrailParamSchema.parse(request.params);
-    const { businessId, day } = driverTrailQuerySchema.parse(request.query);
+    const { businessId, day, routeId } = driverTrailQuerySchema.parse(
+      request.query,
+    );
 
     const useCase = container.resolve(DriverTrailUseCase);
 
@@ -21,6 +23,7 @@ class DriverTrailController {
       driverId,
       businessId,
       day,
+      routeId,
     });
 
     return reply.status(200).send({ data: trail });

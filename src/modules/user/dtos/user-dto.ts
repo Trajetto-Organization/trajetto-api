@@ -1,3 +1,12 @@
+import type { SortOrder } from "@/shared/pagination/list-query";
+
+import type {
+  MasterSortKey,
+  UserGroupCount,
+  UserListFilters,
+  UserSortKey,
+} from "../usecases/list-users/user-list";
+
 type UserRole = "MASTER" | "BUSINESS_ADMIN" | "BUSINESS_USER";
 
 enum EnumUserRole {
@@ -24,14 +33,20 @@ interface CreateUserProps {
 }
 
 interface UpdateUserProps {
-  password?: string | null;
   email?: string | null;
   name?: string | null;
   role?: UserRole | null;
-  businessId: string;
+  businessId?: string | null;
   profileAccessId?: string | null;
   driverId?: string | null;
   userType?: "employee" | "driver";
+
+  /**
+   * MASTER only: e-mails the person a single-use link to set a new password
+   * (decision 4.9). Nobody types another person's password any more, and no
+   * password is ever mailed.
+   */
+  sendPasswordSetupLink?: boolean;
   whatsapp_notifications_enabled?: boolean | null;
   whatsapp_phone?: string | null;
 }
@@ -59,6 +74,11 @@ interface User {
 
   /** Last time this user was seen connected — the chat's presence line. */
   last_seen_at?: Date | null;
+
+  /** The per-account login brake (see shared/security/login-lockout-rules). */
+  failed_login_attempts?: number;
+  failed_login_at?: Date | null;
+  login_locked_until?: Date | null;
   profileAccess?: {
     name: string;
     permissions: {
@@ -72,6 +92,19 @@ interface User {
   business?: {
     is_active: boolean;
     entitlements?: { module: string; enabled: boolean }[];
+  } | null;
+
+  /**
+   * The linked driver, as the session lookup (findUserById) loads it: what
+   * assertSessionEligible needs, so a driver's request does not load the
+   * driver twice. Other lookups leave it out, or carry only id and status.
+   */
+  driver?: {
+    id: string;
+    status: string;
+    businessId?: string;
+    branchId?: string | null;
+    branch?: { is_active: boolean } | null;
   } | null;
 
   /**
@@ -148,13 +181,22 @@ interface ListUsers {
   total: number;
 }
 
-interface ListUsersByRoleAndBusinessProps {
+/** One company's users, as a page plus the counts its cards and filters need. */
+interface ListUsersByRoleAndBusinessProps extends UserListFilters {
   page: number;
   pageSize: number;
-  currentUserRole: UserRole;
-  businessId: string;
-  currentUserId: string;
-  search?: string;
+  sort?: UserSortKey;
+  order?: SortOrder;
+}
+
+interface ListUsersPage {
+  data: ListUsersProps[];
+  /** Users per faceted combination over search + tenant (summarizeUserList). */
+  groups: UserGroupCount[];
+  /** Names of the company's profiles present in the groups or selected. */
+  profileNames: Map<string, string>;
+  /** Users with a verified e-mail under search + every filter. */
+  emailVerified: number;
 }
 
 interface UpdateUser {
@@ -165,13 +207,17 @@ interface UpdateUser {
 interface CreateMasterUserProps {
   name: string;
   email: string;
+
+  /** The stored hash. The use case sets an unusable one and mails a link. */
   password: string;
 }
 
 interface UpdateMasterUserProps {
   name?: string | null;
   email?: string | null;
-  password?: string | null;
+
+  /** E-mails the master a single-use link to set a new password (4.9). */
+  sendPasswordSetupLink?: boolean;
 }
 
 interface ListMasterUsersProps {
@@ -179,16 +225,23 @@ interface ListMasterUsersProps {
   pageSize: number;
   search?: string;
   currentUserId?: string;
+  sort?: MasterSortKey;
+  order?: SortOrder;
+  access?: UserListFilters["access"];
+  twoFactor?: UserListFilters["twoFactor"];
 }
 
 interface SearchUserWithCursorProps {
   limit: number;
   cursor?: string;
   businessId: string;
+  /** The typed term: name or e-mail. */
+  search?: string;
 }
 
 interface CursorPaginatedUser {
-  data: User[];
+  // Streamed as is: never the password hash (see UserRepository).
+  data: Omit<User, "password">[];
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -207,6 +260,8 @@ export {
   UserRole,
   UpdateUserProps,
   ListUsersByRoleAndBusinessProps,
+  ListUsersPage,
+  ListUsersProps,
   EnumUserRole,
   UpdateUserAccessRevocation,
   UpdateUserWhatsAppSettings,

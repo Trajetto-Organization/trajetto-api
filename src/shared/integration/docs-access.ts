@@ -20,8 +20,17 @@ interface DocsCredentials {
 
 type DocsAccess =
   | { kind: "open" }
-  | { kind: "disabled" }
+  | { kind: "disabled"; reason?: "weak-password" }
   | { kind: "basic"; user: string; password: string };
+
+/**
+ * The shortest password that opens the map.
+ *
+ * A shared credential typed by people is the kind that ends up short, and the
+ * routes behind it are the product's full reference. Twenty characters puts
+ * guessing out of reach even at the global rate limit.
+ */
+const DOCS_PASSWORD_MIN_LENGTH = 20;
 
 function docsAccessFor(
   nodeEnv: string,
@@ -35,6 +44,12 @@ function docsAccessFor(
   // half-configured this, and opening the document on a half-configuration is
   // exactly the accident the gate exists to prevent.
   if (!user || !password) return { kind: "disabled" };
+
+  // Closed, not open on a weak one — and not a failed boot either: a docs
+  // password is not worth taking the API down over. The boot logs why.
+  if (password.length < DOCS_PASSWORD_MIN_LENGTH) {
+    return { kind: "disabled", reason: "weak-password" };
+  }
 
   return { kind: "basic", user, password };
 }
@@ -87,4 +102,9 @@ function constantTimeEquals(left: string, right: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-export { basicAuthMatches, docsAccessFor, type DocsAccess };
+export {
+  DOCS_PASSWORD_MIN_LENGTH,
+  basicAuthMatches,
+  docsAccessFor,
+  type DocsAccess,
+};

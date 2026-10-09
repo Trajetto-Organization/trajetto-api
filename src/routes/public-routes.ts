@@ -44,7 +44,7 @@ async function publicRoutes(app: FastifyInstance) {
       },
       schema: {
         tags: ["public"],
-        summary: "Verify a delivery receipt by its printed code",
+        summary: "Confere um comprovante de entrega pelo código impresso",
         description:
           "Página pública do QR do comprovante. Não exige login: o código de verificação é a autorização. Responde se os bytes que estão no armazenamento AGORA ainda batem com o hash gravado quando o documento foi gerado — que é a razão de alguém escanear o código. `intact: false` com `storedSha256: null` significa arquivo ausente, não adulterado; os dois casos são diferentes e a página os distingue. O resumo é estreito de propósito: um link vazado mostra que UM comprovante é legítimo, não vira uma janela para a operação da transportadora.",
         params: proofDocumentSchemas.verifyProofParams,
@@ -67,7 +67,7 @@ async function publicRoutes(app: FastifyInstance) {
       },
       schema: {
         tags: ["public"],
-        summary: "Follow a delivery from the link the carrier sent",
+        summary: "Acompanha uma entrega pelo link enviado ao destinatário",
         description:
           "Portal do destinatário. Sem login: o link é a autorização, e ele é encaminhado em grupo de família — por isso a resposta é escrita como uma SUBTRAÇÃO. Fica de fora tudo que é da operação: nome e telefone do motorista, placa, rota, outras paradas, embarcador e qualquer anotação interna. Sobra a resposta para a única pergunta que o destinatário tem, que é onde está a carga dele e quando chega. O tipo da ocorrência atravessa (\"destinatário ausente\" é o que ele precisa ouvir); a descrição livre não, porque é escrita por um motorista na rua, para o escritório.",
         params: proofDocumentSchemas.publicTokenParams,
@@ -91,7 +91,7 @@ async function publicRoutes(app: FastifyInstance) {
       },
       schema: {
         tags: ["public"],
-        summary: "Stop receiving messages about this delivery",
+        summary: "Deixa de receber mensagens sobre esta entrega",
         description:
           "Um clique a partir da própria mensagem, sem login — pedir que alguém se autentique para ser deixado em paz é como uma empresa ganha denúncia de spam. Responde a mesma frase com token válido ou não: uma resposta diferente transformaria isto num oráculo de quais links existem.",
         params: proofDocumentSchemas.publicTokenParams,

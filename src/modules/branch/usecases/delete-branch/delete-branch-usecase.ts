@@ -1,5 +1,5 @@
 import { inject, injectable } from "tsyringe";
-import { compare } from "bcrypt";
+import { compareSecret } from "@/shared/security/bcrypt-gate";
 
 import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
@@ -13,7 +13,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "../errors/branch-not-found-error";
-import { BranchNotBelongBusinessError } from "../errors/branch-not-belong-business-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { BranchHasChildrenError } from "../errors/branch-has-children-error";
 import { BranchDeletionCodeInvalidError } from "../errors/branch-deletion-code-invalid-error";
@@ -22,10 +22,15 @@ import { BranchDeletionCodeExpiredError } from "../errors/branch-deletion-code-e
 import { BranchNoPendingDeletionError } from "../errors/branch-no-pending-deletion-error";
 
 import { NotificationService } from "@/shared/services/notification-service";
+import { resolveTimeZone } from "@/shared/time/business-day";
+import { sendCatalogChangedEvent } from "@/websocket";
 import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 
 import { AppError } from "@/shared/errors/AppError";
+import { logger } from "@/shared/logging/logger";
 import { env } from "@/env";
+
+const log = logger.child({ component: "branch" });
 
 const dependencyLabels: Record<string, string> = {
   vehicles: "veículo(s)",
@@ -78,14 +83,13 @@ class DeleteBranchUseCase {
       throw new BusinessNotFoundError();
     }
 
+    assertTenantAccess(findUser, businessId);
+
     const findBranch = await this.branch.findBranchById(branchId);
 
-    if (!findBranch) {
+    // Another company's branch answers like a missing one (decision 11.3).
+    if (!findBranch || findBranch.businessId !== businessId) {
       throw new BranchNotFoundError();
-    }
-
-    if (findBranch.businessId !== businessId) {
-      throw new BranchNotBelongBusinessError();
     }
 
     // Re-validate dependencies (race protection)
@@ -119,7 +123,7 @@ class DeleteBranchUseCase {
       throw new BranchDeletionCodeExpiredError();
     }
 
-    const isCodeValid = await compare(code, pending.code_hash);
+    const isCodeValid = await compareSecret(code, pending.code_hash);
 
     if (!isCodeValid) {
       throw new BranchDeletionCodeInvalidError();
@@ -147,6 +151,8 @@ class DeleteBranchUseCase {
         businessId: businessId,
       });
 
+      sendCatalogChangedEvent(businessId, "branch");
+
       // Notify other business admins (excluding the deleter)
       this.notifyOtherAdmins({
         businessId,
@@ -157,8 +163,12 @@ class DeleteBranchUseCase {
         branchName: branchSnapshot.name,
         branchCnpj: branchSnapshot.cnpj,
         businessName: findBusiness.corporate_reason,
+        timeZone: resolveTimeZone(findBusiness.timezone),
       }).catch((err) => {
-        console.warn("Failed to notify admins about branch deletion:", err);
+        log.warn(
+          { err, businessId, branchId },
+          "admins could not be notified about a branch deletion",
+        );
       });
 
       return deletedBranch;
@@ -179,6 +189,8 @@ class DeleteBranchUseCase {
     branchName: string;
     branchCnpj: string;
     businessName: string;
+    /** The company's zone: the e-mail states when, on its clock. */
+    timeZone: string;
   }): Promise<void> {
     const admins = await this.user.findBusinessAdminsByBusinessId(
       params.businessId,
@@ -191,7 +203,7 @@ class DeleteBranchUseCase {
     if (recipients.length === 0) return;
 
     const deletedAt = new Date().toLocaleString("pt-BR", {
-      timeZone: "America/Sao_Paulo",
+      timeZone: params.timeZone,
     });
 
     await Promise.allSettled(

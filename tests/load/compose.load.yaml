@@ -1,0 +1,210 @@
+# The load harness: production's topology on one machine.
+#
+# Production is Dokploy + Traefik in front of N replicas of the API IMAGE
+# (NODE_ENV=production, memory-capped), sharing one Postgres and one Redis.
+# This file is that shape, locally: Traefik v3 (the docker provider instead of
+# swarm) with the same readiness check the production labels declare, the
+# production image built from ../../Dockerfile, the same memory ceilings, and
+# k6 inside the same Docker network — so a run measures the application and not
+# the WSL2/Windows boundary a host process sits behind (tests/load/README.md).
+#
+# It is NOT production: plain HTTP (host port 8080), PathPrefix instead of Host(),
+# fake R2 credentials (no scenario uploads; nothing ever reaches R2) and no
+# backup. The nginx config that used to sit here was a harness too, and
+# represented nothing that runs anywhere.
+#
+#   docker compose --env-file .env -f tests/load/compose.load.yaml up -d --build
+#   (seed: tests/load/README.md, "Como rodar")
+#   docker compose --env-file .env -f tests/load/compose.load.yaml --profile k6 run --rm k6 run /load/smoke.js
+#
+# --env-file .env: the replicas verify the tokens tests/load/seed.ts signed, so
+# they need the same JWT_SECRET pair; nothing else is read from it.
+#
+# Boot order is production's release order: `migrate` prepares load_test once
+# (the image's `./docker-entrypoint.sh migrate`, what
+# infra/scripts/run-release-migrations.sh runs before a rollout), and the
+# replicas start only after it exits 0. They run NODE_ENV=production with
+# RUN_MIGRATIONS_ON_BOOT=false, and the bootstrap guard of production refuses
+# an EMPTY database (infra/scripts/database-bootstrap-guard.ts): started
+# first, every replica exited on the fresh volume.
+name: trajetto-load
+
+# The replicas' environment, shared with `migrate` so the release step sees
+# the same database and secrets.
+x-api-environment: &api-environment
+  NODE_ENV: production
+  # Neither staging nor production: a laptop running the production image.
+  APP_ENV: development
+  NODE_OPTIONS: --max-old-space-size=${API_HEAP_MB:-768}
+  DATABASE_URL: postgresql://trajetto:${LOAD_PG_PASSWORD:-trajetto-password}@postgres:5432/load_test?schema=public&connection_limit=10&pool_timeout=20&connect_timeout=5
+  MIGRATION_DATABASE_URL: postgresql://trajetto:${LOAD_PG_PASSWORD:-trajetto-password}@postgres:5432/load_test?schema=public&connection_limit=2
+  # `migrate` below prepares the database; the replicas never migrate.
+  RUN_MIGRATIONS_ON_BOOT: "false"
+  REDIS_URL: redis://redis:6379
+  HTTP_REQUEST: http://localhost:3000
+  API_HTTP_REQUEST: http://localhost:${LOAD_EDGE_PORT:-8080}
+  JWT_SECRET: ${JWT_SECRET:?Defina JWT_SECRET (o mesmo que assinou os tokens do seed)}
+  JWT_SECRET_REFRESH_TOKEN: ${JWT_SECRET_REFRESH_TOKEN:?Defina JWT_SECRET_REFRESH_TOKEN}
+  MASTER_USER_EMAIL: load-master@example.com
+  MASTER_USER_INITIAL_PASSWORD: load-harness-only
+  # Production refuses local storage. The mix never uploads, so these are
+  # never used; the S3 client only signs URLs locally.
+  UPLOAD_STORAGE_TYPE: r2
+  R2_ACCOUNT_ID: load-harness
+  R2_BUCKET_NAME: load-harness
+  R2_ACCESS_KEY_ID: load-harness
+  R2_SECRET_ACCESS_KEY: load-harness
+  UPLOAD_ORPHAN_GC: "off"
+  # Traefik IS the edge here (no Cloudflare): the peer it appends to
+  # X-Forwarded-For is k6's container.
+  RATE_LIMIT_TRUSTED_PROXY: xff
+  WORKERS_ENABLED: "true"
+
+services:
+  traefik:
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=trajetto-load-edge
+      # :80 inside; Traefik's own entrypoint (ping) takes :8080.
+      - --entrypoints.web.address=:80
+      # The production value (infra/traefik/traefik.reference.yaml), not
+      # Traefik's 60 s default: the harness has to cut what production cuts.
+      - --entrypoints.web.transport.respondingtimeouts.readtimeout=120s
+      # One JSON line per request, with the replica that answered
+      # (ServiceURL): multi-replica.sh counts them to prove the split.
+      - --accesslog=true
+      - --accesslog.format=json
+      - --accesslog.fields.headers.defaultmode=drop
+      - --ping=true
+    ports:
+      - "127.0.0.1:${LOAD_EDGE_PORT:-8080}:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - edge
+
+  # The release step, once, before any replica: migrations and the idempotent
+  # seeds, strictly, then exit. ALLOW_EMPTY_DATABASE_BOOTSTRAP only here:
+  # load_test starts empty on purpose, and the replicas keep the guard.
+  migrate:
+    image: ${LOAD_API_IMAGE:-trajetto-api:load}
+    # Built by `api` below (same image); never pulled: it exists nowhere else.
+    pull_policy: never
+    command: ["./docker-entrypoint.sh", "migrate"]
+    environment:
+      <<: *api-environment
+      ALLOW_EMPTY_DATABASE_BOOTSTRAP: "true"
+    # The image's HEALTHCHECK probes :3333, which `migrate` never opens.
+    healthcheck:
+      disable: true
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+
+  api:
+    image: ${LOAD_API_IMAGE:-trajetto-api:load}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    deploy:
+      replicas: ${LOAD_REPLICAS:-2}
+      resources:
+        limits:
+          memory: ${API_MEMORY_LIMIT:-1024M}
+    environment: *api-environment
+    # Each replica also on its own loopback port (the first free one of the
+    # range), for the questions that must hit a SPECIFIC replica: the shared
+    # rate limit and a socket event crossing replicas (multi-replica.sh).
+    ports:
+      - "127.0.0.1:3341-3350:3333"
+    # The production labels (compose.production.yaml), minus TLS and Host():
+    # same port, same readiness check, so an unready replica leaves rotation
+    # here exactly as it does there. compose-load-harness.test.ts keeps them
+    # in step.
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.load-api.rule=PathPrefix(`/`)
+      - traefik.http.routers.load-api.entrypoints=web
+      - traefik.http.routers.load-api.service=load-api
+      - traefik.http.services.load-api.loadbalancer.server.port=3333
+      - traefik.http.services.load-api.loadbalancer.passHostHeader=true
+      - traefik.http.services.load-api.loadbalancer.healthcheck.path=/health/readiness
+      - traefik.http.services.load-api.loadbalancer.healthcheck.interval=10s
+      - traefik.http.services.load-api.loadbalancer.healthcheck.timeout=5s
+    depends_on:
+      # After the release step, never beside it: see the header.
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+
+  # The disposable database: 54321, the port tests/load/seed.ts insists on,
+  # so the seed can never touch a real one. Stop trajetto-itest-pg first if
+  # it holds the port (or set LOAD_PG_PORT and seed through that).
+  postgres:
+    image: postgres:16-alpine
+    # pg_stat_statements loaded, for the database side of a run (README).
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
+    environment:
+      POSTGRES_USER: trajetto
+      POSTGRES_PASSWORD: ${LOAD_PG_PASSWORD:-trajetto-password}
+      POSTGRES_DB: load_test
+    ports:
+      - "127.0.0.1:${LOAD_PG_PORT:-54321}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trajetto -d load_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - data
+
+  # As production runs it: nothing persisted, evicting instead of refusing.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - data
+
+  # On demand only (`--profile k6 run --rm k6 run /load/<scene>.js`): k6 on
+  # the same network as Traefik, so no request crosses into Windows.
+  k6:
+    image: grafana/k6:2.2.0@sha256:9bd01d6941fca969cb61bb57d2da5ee9b385fe2aa8881df3798c196564d6ace6
+    profiles: ["k6"]
+    environment:
+      LOAD_BASE_URL: http://traefik
+    volumes:
+      - ./:/load:ro
+    depends_on:
+      traefik:
+        condition: service_healthy
+    networks:
+      - edge
+
+networks:
+  # Traefik, the replicas and k6. Named, so the provider flag above holds
+  # whatever project name compose is given.
+  edge:
+    name: trajetto-load-edge
+  # The replicas, Postgres and Redis.
+  data:

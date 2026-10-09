@@ -66,17 +66,15 @@ class ListKanbanUseCase {
       throw new ResourceNotFoundError();
     }
 
+    // The named board first, before anything about it is looked up.
+    if (findUser.role !== "MASTER" && findUser.businessId !== businessId) {
+      throw new KanbanNotAllowedPermissionViewBusinessBoardError();
+    }
+
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
-    }
-
-    // Check if the user belongs to the company (maintain the original logic)
-    if (findUser.role !== "MASTER") {
-      if (findUser.businessId !== businessId) {
-        throw new KanbanNotAllowedPermissionViewBusinessBoardError();
-      }
     }
 
     // Check if there is permission for full reading

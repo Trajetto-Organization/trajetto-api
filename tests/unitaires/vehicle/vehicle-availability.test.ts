@@ -1,55 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-memory/in-memory-vehicle-repository";
-import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
-import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
-import { InMemoryShipperRepository } from "@/modules/shipper/repositories/in-memory/in-memory-shipper-repository";
-import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
-
-import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
-
-import { CreateDeliveryUseCase } from "@/modules/delivery/usecases/create-delivery/create-delivery-usecase";
-import { UpdateDeliveryUseCase } from "@/modules/delivery/usecases/update-delivery/update-delivery-usecase";
-import { DeliveryVehicleUnavailableError } from "@/modules/delivery/usecases/errors/delivery-errors";
 
 import {
   tallyStatuses,
   isVehicleOutOfOperation,
 } from "@/shared/vehicle/vehicle-rules";
+import { summarizeVehicleList } from "@/modules/vehicle/usecases/list-vehicle/vehicle-list";
 
 import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
-import type { User } from "@/modules/user/dtos/user-dto";
-import type { Shipper } from "@/modules/shipper/dtos/shipper-dto";
-import type { Business } from "@/modules/business/dtos/business-dto";
-import type { NotificationService } from "@/shared/services/notification-service";
-import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 
-import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
-
-// The use cases now wrap their write and the webhook they announce in one
-// transaction. Against in-memory repositories the transaction is a plain
-// passthrough — what it proves here is that the event is queued in the same
-// unit of work, not that Postgres rolled anything back.
-vi.mock("@/../infra/database", () => ({
-  default: {
-    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}),
-  },
-}));
-
-
-// Nothing here asserts on webhooks; the use cases simply require one.
-const webhookStub = new InMemoryWebhookFanOutService();
+/*
+ * "A vehicle out of operation cannot take new cargo" lived here too, through
+ * the create and edit of a delivery. Those forms no longer carry a vehicle or
+ * a driver (DLV-EDIT-4, proven by the schemas in delivery-edit-rules.test.ts):
+ * the only door is the assignment, whose refusal of a blocked vehicle is
+ * covered by the route and assignment suites.
+ */
 
 const BUSINESS = "018f0000-0000-7000-8000-00000000000b";
-const USER_ID = "018f0000-0000-7000-8000-0000000000a1";
-const SHIPPER_ID = "018f0000-0000-7000-8000-0000000000f1";
 
 const GOOD_VEHICLE = "018f0000-0000-7000-8000-0000000000c1";
-
-const notificationStub = {
-  createActivityIfEnabled: async () => {},
-} as unknown as NotificationService;
-const BAD_VEHICLE = "018f0000-0000-7000-8000-0000000000c2";
 
 function seedVehicle(
   repository: InMemoryVehicleRepository,
@@ -104,9 +75,11 @@ describe("vehicle status tally", () => {
       businessId: BUSINESS,
     });
 
+    const { total } = summarizeVehicleList(listed.statusCounts, [], {});
+
     expect(listed.data).toHaveLength(10);
-    expect(listed.total).toBe(40);
-    expect(listed.meta.statusCounts.ACTIVE).toBe(40);
+    expect(total).toBe(40);
+    expect(listed.statusCounts.ACTIVE).toBe(40);
   });
 
   it("keeps the four counts adding up to the total under a search filter", async () => {
@@ -133,10 +106,11 @@ describe("vehicle status tally", () => {
       search: "AAA",
     });
 
-    const { ACTIVE, INACTIVE, BLOCKED, IN_ROUTE } = listed.meta.statusCounts;
+    const { total } = summarizeVehicleList(listed.statusCounts, [], {});
+    const { ACTIVE, INACTIVE, BLOCKED, IN_ROUTE } = listed.statusCounts;
 
-    expect(ACTIVE + INACTIVE + BLOCKED + IN_ROUTE).toBe(listed.total);
-    expect(listed.total).toBe(2);
+    expect(ACTIVE + INACTIVE + BLOCKED + IN_ROUTE).toBe(total);
+    expect(total).toBe(2);
   });
 
   it("does not treat a vehicle already on the street as out of operation", () => {
@@ -144,138 +118,5 @@ describe("vehicle status tally", () => {
     expect(isVehicleOutOfOperation("ACTIVE")).toBe(false);
     expect(isVehicleOutOfOperation("INACTIVE")).toBe(true);
     expect(isVehicleOutOfOperation("BLOCKED")).toBe(true);
-  });
-});
-
-describe("a vehicle out of operation cannot take new cargo", () => {
-  function makeContext() {
-    const userRepository = new InMemoryUserRepository();
-    const shipperRepository = new InMemoryShipperRepository();
-    const vehicleRepository = new InMemoryVehicleRepository();
-    const driverRepository = new InMemoryDriverRepository();
-    const deliveryRepository = new InMemoryDeliveryRepository();
-
-    userRepository.user.push({
-      id: USER_ID,
-      name: "Gestora",
-      role: "BUSINESS_ADMIN",
-      businessId: BUSINESS,
-    } as User);
-
-    shipperRepository.shippers.push({
-      id: SHIPPER_ID,
-      name: "Embarcador",
-      businessId: BUSINESS,
-    } as Shipper);
-
-    seedVehicle(vehicleRepository);
-    seedVehicle(vehicleRepository, {
-      id: BAD_VEHICLE,
-      license_plate: "XYZ9W88",
-      renavam: "999",
-      status: "BLOCKED",
-    });
-
-    const businessRepository = new InMemoryBusinessRepository();
-    businessRepository.business.push({
-      id: BUSINESS,
-      corporate_reason: "Transportes Teste",
-    } as Business);
-
-    const updateDelivery = new UpdateDeliveryUseCase(
-      userRepository,
-      shipperRepository,
-      vehicleRepository,
-      driverRepository,
-      deliveryRepository,
-    );
-
-    const createDelivery = new CreateDeliveryUseCase(
-      userRepository,
-      businessRepository,
-      shipperRepository,
-      vehicleRepository,
-      driverRepository,
-      deliveryRepository,
-      notificationStub,
-      webhookStub.asService(),
-    );
-
-    return {
-      deliveryRepository,
-      vehicleRepository,
-      updateDelivery,
-      createDelivery,
-    };
-  }
-
-  async function seedDelivery(
-    repository: InMemoryDeliveryRepository,
-    overrides: Partial<CreateDeliveryProps> = {},
-  ) {
-    return repository.createDelivery({
-      recipient_name: "Cliente A",
-      city: "São Paulo",
-      uf: "SP",
-      street: "Rua Um",
-      businessId: BUSINESS,
-      shipperId: SHIPPER_ID,
-      ...overrides,
-    } as CreateDeliveryProps);
-  }
-
-  it("refuses to attach a blocked vehicle at creation", async () => {
-    const context = makeContext();
-
-    await expect(
-      context.createDelivery.execute(
-        {
-          recipient_name: "Cliente A",
-          city: "São Paulo",
-          uf: "SP",
-          street: "Rua Um",
-          businessId: BUSINESS,
-          shipperId: SHIPPER_ID,
-          vehicleId: BAD_VEHICLE,
-        } as CreateDeliveryProps,
-        USER_ID,
-      ),
-    ).rejects.toBeInstanceOf(DeliveryVehicleUnavailableError);
-  });
-
-  it("refuses to attach a blocked vehicle on edit", async () => {
-    const context = makeContext();
-    const delivery = await seedDelivery(context.deliveryRepository);
-
-    await expect(
-      context.updateDelivery.execute({
-        userId: USER_ID,
-        businessId: BUSINESS,
-        deliveryId: delivery.id!,
-        deliveryData: { vehicleId: BAD_VEHICLE },
-      }),
-    ).rejects.toBeInstanceOf(DeliveryVehicleUnavailableError);
-  });
-
-  it("still lets an unrelated field be corrected on a load whose vehicle went out of operation", async () => {
-    const context = makeContext();
-
-    const delivery = await seedDelivery(context.deliveryRepository, {
-      vehicleId: GOOD_VEHICLE,
-    });
-
-    // The vehicle is blocked AFTER the load was already attached to it, which
-    // is exactly when someone needs to fix the address. Refusing every save
-    // would trap the record.
-    context.vehicleRepository.vehicles[0].status = "BLOCKED";
-
-    const updated = await context.updateDelivery.execute({
-      userId: USER_ID,
-      businessId: BUSINESS,
-      deliveryId: delivery.id!,
-      deliveryData: { vehicleId: GOOD_VEHICLE, street: "Rua Dois" },
-    });
-
-    expect(updated.street).toBe("Rua Dois");
   });
 });

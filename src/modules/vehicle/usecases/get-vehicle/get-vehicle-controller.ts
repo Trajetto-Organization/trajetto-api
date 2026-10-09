@@ -5,11 +5,8 @@ import { container } from "tsyringe";
 
 import { GetVehicleUseCase } from "./get-vehicle-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { VehicleNotFoundError } from "../errors/vehicle-not-found-error";
 import { getVehicleSchema } from "@/schemas/get-vehicle-schema";
+import { replyVehicleError } from "../errors/vehicle-http-errors";
 
 class GetVehicleController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -30,17 +27,9 @@ class GetVehicleController {
 
       return reply.status(200).send(getVehicle);
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      // A driver asking for a truck that is not theirs used to escape as a
+      // 500; it is a 403 with its own code now.
+      if (replyVehicleError(reply, error)) return;
 
       throw error;
     }

@@ -4,12 +4,21 @@ import {
   CreateShipperProps,
   UpdateShipperProps,
   ListShippersProps,
-  ListShippersResult,
+  ListShippersPage,
   SearchShipperWithCursorProps,
   CursorPaginatedShipper,
 } from "../dtos/shipper-dto";
 
 import database from "@/../infra/database";
+import { buildSearchOr } from "@/shared/pagination/search-or";
+import { insensitiveEquals } from "@/shared/utils/like-pattern";
+import { resolveOrderBy } from "@/shared/pagination/list-query";
+
+import {
+  SHIPPER_SORT,
+  cnpjSearchDigits,
+  shipperListWhere,
+} from "../usecases/list-shipper/shipper-list";
 
 class ShipperRepository implements IShipperRepository {
   constructor(private prisma = database) {}
@@ -30,37 +39,35 @@ class ShipperRepository implements IShipperRepository {
   async listShippers({
     page,
     pageSize,
-    businessId,
-    search,
-  }: ListShippersProps): Promise<ListShippersResult> {
-    const skip = (page - 1) * pageSize;
-    const normalizedSearch = search ? search.trim() : "";
-
-    const whereCondition = {
-      businessId,
-      ...(normalizedSearch && {
-        OR: [
-          { id: { contains: normalizedSearch, mode: "insensitive" as const } },
-          { name: { contains: normalizedSearch, mode: "insensitive" as const } },
-          { cnpj: { contains: normalizedSearch, mode: "insensitive" as const } },
-          {
-            email: { contains: normalizedSearch, mode: "insensitive" as const },
-          },
-        ],
-      }),
-    };
-
-    const [data, total] = await Promise.all([
+    sort,
+    order,
+    ...filters
+  }: ListShippersProps): Promise<ListShippersPage> {
+    // Two queries in parallel, the screen's connection budget: the page, and
+    // one GROUP BY that yields the pager total, the cards and the filter.
+    const [data, grouped] = await Promise.all([
       this.prisma.shipper.findMany({
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        where: whereCondition,
-        orderBy: { created_at: "desc" },
+        where: shipperListWhere(filters, { withFacets: true }),
+        orderBy: resolveOrderBy(SHIPPER_SORT, { sort, order }),
       }),
-      this.prisma.shipper.count({ where: whereCondition }),
+      this.prisma.shipper.groupBy({
+        by: ["is_active"],
+        where: shipperListWhere(filters, { withFacets: false }),
+        // _count of a column counts its non-NULL values: the CNPJ card.
+        _count: { _all: true, cnpj: true },
+      }),
     ]);
 
-    return { data, total };
+    return {
+      data,
+      groups: grouped.map((group) => ({
+        is_active: group.is_active,
+        count: group._count._all,
+        withCnpj: group._count.cnpj,
+      })),
+    };
   }
 
   // Feeds the infinite-scroll combobox: only active shippers, because the
@@ -69,15 +76,32 @@ class ShipperRepository implements IShipperRepository {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchShipperWithCursorProps): Promise<CursorPaginatedShipper> {
+    const term = search?.trim() ?? "";
+
+    // The typed term is searched HERE, not in the loaded page: with more
+    // than one page of shippers, the one typed may not be loaded yet.
     const shippers = await this.prisma.shipper.findMany({
-      where: { businessId, is_active: true },
+      where: {
+        businessId,
+        is_active: true,
+        ...(term &&
+          buildSearchOr([
+            { name: { contains: term, mode: "insensitive" as const } },
+            // The column holds digits: a masked CNPJ is matched by its
+            // digits, a name ("Loja 2") as typed.
+            { cnpj: { contains: cnpjSearchDigits(term) ?? term } },
+            { email: { contains: term, mode: "insensitive" as const } },
+          ])),
+      },
       take: limit + 1,
       ...(cursor && {
         cursor: { id: cursor },
         skip: 1,
       }),
-      orderBy: { name: "asc" },
+      // The name is unique per company; the id only makes the order total.
+      orderBy: [{ name: "asc" }, { id: "asc" }],
     });
 
     const hasMore = shippers.length > limit;
@@ -86,20 +110,6 @@ class ShipperRepository implements IShipperRepository {
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };
-  }
-
-  async countShippersSummary(
-    businessId: string,
-  ): Promise<{ total: number; active: number; withCnpj: number }> {
-    const [total, active, withCnpj] = await Promise.all([
-      this.prisma.shipper.count({ where: { businessId } }),
-      this.prisma.shipper.count({ where: { businessId, is_active: true } }),
-      this.prisma.shipper.count({
-        where: { businessId, NOT: { cnpj: null } },
-      }),
-    ]);
-
-    return { total, active, withCnpj };
   }
 
   async findShipperById(shipperId: string): Promise<Shipper | null> {
@@ -113,7 +123,8 @@ class ShipperRepository implements IShipperRepository {
     return this.prisma.shipper.findFirst({
       where: {
         businessId,
-        name: { equals: name, mode: "insensitive" },
+        // Escaped: the value is an ILIKE pattern underneath (like-pattern.ts).
+        name: insensitiveEquals(name),
       },
     });
   }
@@ -122,8 +133,9 @@ class ShipperRepository implements IShipperRepository {
     businessId: string,
     cnpj: string,
   ): Promise<Shipper | null> {
-    return this.prisma.shipper.findFirst({
-      where: { businessId, cnpj },
+    // Unique per company since decision 5.7 (shipper_businessId_cnpj_key).
+    return this.prisma.shipper.findUnique({
+      where: { businessId_cnpj: { businessId, cnpj } },
     });
   }
 

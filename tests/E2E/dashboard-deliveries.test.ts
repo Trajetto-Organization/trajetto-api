@@ -1,57 +1,68 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
+import {
+  businessDateKey,
+  businessDayRange,
+  dateOnlyFromKey,
+} from "@/shared/time/business-day";
+
 /**
- * The overview, and the module it had never heard of.
+ * The overview, the "Operação de hoje" block and the monitoring summary,
+ * over real HTTP.
  *
- * `/dashboard/overview` is the screen every login lands on, and it counted
- * vehicles, drivers, parts, suppliers, service orders, users and fines —
- * everything the product did before Entregas existed. The word "delivery"
- * appeared in its DTO zero times. A carrier whose whole operation is
- * deliveries opened the dashboard and was told how many spare parts it had.
+ * Over HTTP rather than against the use case because the route declares a
+ * zod response schema: Fastify strips what it does not list and answers 500
+ * for a body it cannot serialize. A use-case test passed while the API
+ * answered without the new fields, once already.
  *
- * Over real HTTP rather than against the use case, and that is the point of
- * the file: the route declares a zod response schema, and Fastify STRIPS any
- * property the schema does not list. A use-case test would have passed with
- * the schema untouched and the API still answering without the new fields —
- * which is exactly what happened the first time this was wired.
+ * Every role that can reach the screen is here (DLVP-OPS-4): the dispatcher,
+ * a read-only dispatcher, the company admin, a colleague without the
+ * permission, a driver, a MASTER, and a dispatcher whose company never hired
+ * the module — with rows in that company, so a missing gate would leak.
  *
- * Three refusals are asserted next to the one acceptance, because the counts
- * are gated twice and the gates answer different questions: a permission is
- * what a PERSON may do, an entitlement is what the COMPANY bought.
+ * "Today" is the company's day: the carrier is in Rio Branco (UTC-5), which
+ * is neither the container's zone nor São Paulo's. A delivery finished one
+ * minute before its midnight is yesterday for the company and today for
+ * either of the other two calendars (DLVP-OPS-1).
  */
 const prisma = new PrismaClient();
 
 let app: Awaited<typeof import("@/http")>["app"];
+
+const RIO_BRANCO = "America/Rio_Branco";
 
 const HIRED = "018fd200-0000-7000-8000-00000000000a";
 const NOT_HIRED = "018fd200-0000-7000-8000-00000000000b";
 
 const DISPATCHER = "018fd200-0000-7000-8000-0000000000a1";
 const MECHANIC = "018fd200-0000-7000-8000-0000000000a2";
+const READER = "018fd200-0000-7000-8000-0000000000a3";
+const ADMIN = "018fd200-0000-7000-8000-0000000000a4";
+const DRIVER_USER = "018fd200-0000-7000-8000-0000000000a5";
+const WRITE_ONLY = "018fd200-0000-7000-8000-0000000000a6";
 const OUTSIDER = "018fd200-0000-7000-8000-0000000000b1";
+const MASTER = "018fd200-0000-7000-8000-0000000000c1";
 
 const DRIVER = "018fd200-0000-7000-8000-0000000000d1";
 const SHIPPER = "018fd200-0000-7000-8000-0000000000f1";
 const OTHER_SHIPPER = "018fd200-0000-7000-8000-0000000000f2";
+const OCCURRENCE_TYPE = "018fd200-0000-7000-8000-0000000000e1";
 
-let dispatcherToken = "";
-let mechanicToken = "";
-let outsiderToken = "";
+const USERS = [DISPATCHER, MECHANIC, READER, ADMIN, DRIVER_USER, WRITE_ONLY, OUTSIDER, MASTER];
 
-let dispatcherProfile = "";
-let mechanicProfile = "";
-let outsiderProfile = "";
+const profiles: string[] = [];
+const tokens = new Map<string, string>();
 
-async function tokenFor(
-  userId: string,
-  businessId: string | null,
-): Promise<string> {
+async function tokenFor(userId: string): Promise<string> {
+  const cached = tokens.get(userId);
+  if (cached) return cached;
+
   const familyId = randomUUID();
 
   await prisma.refreshToken.create({
@@ -64,35 +75,35 @@ async function tokenFor(
     },
   });
 
-  return sign(
-    {
-      tokenType: "access",
-      role: "BUSINESS_USER",
-      businessId,
-      driverId: null,
-      sessionVersion: 0,
-      familyId,
-    },
+  // The role and the company come from the user row; the claims only have
+  // to name the session.
+  const token = sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
     auth.secret_token,
     { subject: userId, expiresIn: "1h" },
   );
+
+  tokens.set(userId, token);
+
+  return token;
 }
 
-async function seedBusiness(id: string, label: string): Promise<void> {
+async function seedBusiness(id: string, label: string, timezone?: string): Promise<void> {
   await prisma.business.create({
     data: {
       id,
       corporate_reason: label,
-      cep: "01001000",
-      city: "São Paulo",
-      uf: "SP",
+      cep: "69900000",
+      city: "Rio Branco",
+      uf: "AC",
       street: "Rua",
       address_number: "1",
       cnpj: String(70000000000000 + Math.floor(Math.random() * 9000000)),
       cnae: "4930202",
       responsible_name: "Responsável",
-      telephone: "11999999999",
+      telephone: "68999999999",
       email: `painel-${randomUUID()}@exemplo.com.br`,
+      ...(timezone && { timezone }),
     },
   });
 }
@@ -101,6 +112,8 @@ async function seedProfile(
   businessId: string,
   name: string,
   permissionKey: string,
+  canWrite = true,
+  canRead = true,
 ): Promise<string> {
   const profile = await prisma.profileAccess.create({
     data: {
@@ -111,8 +124,8 @@ async function seedProfile(
           {
             permissionKey,
             action: name,
-            canRead: true,
-            canWrite: true,
+            canRead,
+            canWrite,
             businessId,
           },
         ],
@@ -120,15 +133,34 @@ async function seedProfile(
     },
   });
 
+  profiles.push(profile.id);
+
   return profile.id;
 }
 
-async function overviewFor(token: string): Promise<any> {
-  const response = await app.inject({
+async function get(userId: string, url: string) {
+  return app.inject({
     method: "GET",
-    url: "/dashboard/overview",
-    headers: { authorization: `Bearer ${token}` },
+    url,
+    headers: { authorization: `Bearer ${await tokenFor(userId)}` },
   });
+}
+
+/**
+ * A refusal with the code of its reason (decision 4.1): the status alone
+ * would pass if a module refusal answered a tenant one, or the reverse.
+ */
+function expectRefused(
+  response: Awaited<ReturnType<typeof get>>,
+  code: string,
+): void {
+  expect(response.statusCode, response.body.slice(0, 300)).toBe(403);
+  expect(response.json().code).toBe(code);
+  expect(response.body).not.toContain("totals");
+}
+
+async function overviewFor(userId: string): Promise<any> {
+  const response = await get(userId, "/dashboard/overview");
 
   expect(response.statusCode, response.body.slice(0, 300)).toBe(200);
 
@@ -136,10 +168,10 @@ async function overviewFor(token: string): Promise<any> {
 }
 
 beforeAll(async () => {
-  await seedBusiness(HIRED, "Transportadora com Entregas");
+  await seedBusiness(HIRED, "Transportadora com Entregas", RIO_BRANCO);
   await seedBusiness(NOT_HIRED, "Transportadora só de Frota");
 
-  // Only the first company hired the module.
+  // Only the first company hired Entregas; neither hired Frotas.
   await prisma.businessEntitlement.createMany({
     data: [
       { businessId: HIRED, module: "DELIVERIES", enabled: true },
@@ -147,45 +179,24 @@ beforeAll(async () => {
     ],
   });
 
-  dispatcherProfile = await seedProfile(HIRED, "Despacho", "delivery_manage");
-  mechanicProfile = await seedProfile(HIRED, "Oficina", "fuel_manage");
-  outsiderProfile = await seedProfile(
+  const dispatcherProfile = await seedProfile(HIRED, "Despacho", "delivery_manage");
+  const readerProfile = await seedProfile(HIRED, "Consulta", "delivery_manage", false);
+  const mechanicProfile = await seedProfile(HIRED, "Oficina", "fuel_manage");
+
+  // Write without read: bulk-configure still stores such rows, and legacy
+  // ones exist. verifyPermission reads it as no access at all (ROUTE-KEY-1).
+  const writeOnlyProfile = await seedProfile(
+    HIRED,
+    "Só escrita",
+    "delivery_manage",
+    true,
+    false,
+  );
+  const outsiderProfile = await seedProfile(
     NOT_HIRED,
     "Despacho sem módulo",
     "delivery_manage",
   );
-
-  await prisma.user.createMany({
-    data: [
-      {
-        id: DISPATCHER,
-        name: "Despachante",
-        email: `despacho-${randomUUID()}@exemplo.com.br`,
-        password: "nao-usado",
-        role: "BUSINESS_USER",
-        businessId: HIRED,
-        profileAccessId: dispatcherProfile,
-      },
-      {
-        id: MECHANIC,
-        name: "Mecânico",
-        email: `oficina-${randomUUID()}@exemplo.com.br`,
-        password: "nao-usado",
-        role: "BUSINESS_USER",
-        businessId: HIRED,
-        profileAccessId: mechanicProfile,
-      },
-      {
-        id: OUTSIDER,
-        name: "Despachante sem módulo",
-        email: `sem-modulo-${randomUUID()}@exemplo.com.br`,
-        password: "nao-usado",
-        role: "BUSINESS_USER",
-        businessId: NOT_HIRED,
-        profileAccessId: outsiderProfile,
-      },
-    ],
-  });
 
   await prisma.driver.create({
     data: {
@@ -195,9 +206,9 @@ beforeAll(async () => {
       cnh: `CNH${randomUUID().slice(0, 8)}`,
       cpf: String(Date.now()).slice(-11),
       rg: randomUUID().slice(0, 9),
-      cep: "01001000",
-      city: "São Paulo",
-      uf: "SP",
+      cep: "69900000",
+      city: "Rio Branco",
+      uf: "AC",
       street: "Rua",
       address_number: "1",
       status: "ACTIVE",
@@ -206,14 +217,55 @@ beforeAll(async () => {
     },
   });
 
-  /**
-   * Three deliveries in three different states, created THIS month so they
-   * land in the current card as well as in the operation block.
-   *
-   * The states are chosen to make the two numbers differ: if everything were
-   * PENDING, `unassigned` and the monthly count would be the same number and
-   * a test could not tell which one it was reading.
-   */
+  const user = (
+    id: string,
+    name: string,
+    extra: Omit<Prisma.UserCreateManyInput, "id" | "name" | "email" | "password">,
+  ): Prisma.UserCreateManyInput => ({
+    id,
+    name,
+    email: `${name.toLowerCase().replace(/\s+/g, "-")}-${randomUUID()}@exemplo.com.br`,
+    password: "nao-usado",
+    ...extra,
+  });
+
+  await prisma.user.createMany({
+    data: [
+      user(DISPATCHER, "Despachante", {
+        role: "BUSINESS_USER",
+        businessId: HIRED,
+        profileAccessId: dispatcherProfile,
+      }),
+      user(READER, "Consulta", {
+        role: "BUSINESS_USER",
+        businessId: HIRED,
+        profileAccessId: readerProfile,
+      }),
+      user(MECHANIC, "Mecanico", {
+        role: "BUSINESS_USER",
+        businessId: HIRED,
+        profileAccessId: mechanicProfile,
+      }),
+      user(ADMIN, "Administradora", { role: "BUSINESS_ADMIN", businessId: HIRED }),
+      user(WRITE_ONLY, "So escrita", {
+        role: "BUSINESS_USER",
+        businessId: HIRED,
+        profileAccessId: writeOnlyProfile,
+      }),
+      user(DRIVER_USER, "Motorista", {
+        role: "BUSINESS_USER",
+        businessId: HIRED,
+        driverId: DRIVER,
+      }),
+      user(OUTSIDER, "Sem modulo", {
+        role: "BUSINESS_USER",
+        businessId: NOT_HIRED,
+        profileAccessId: outsiderProfile,
+      }),
+      user(MASTER, "Master", { role: "MASTER", businessId: null }),
+    ],
+  });
+
   await prisma.shipper.create({
     data: { id: SHIPPER, name: "Embarcador do Painel", businessId: HIRED },
   });
@@ -222,64 +274,104 @@ beforeAll(async () => {
     businessId: HIRED,
     shipperId: SHIPPER,
     recipient_name: "Cliente",
-    cep: "01001000",
-    city: "São Paulo",
-    uf: "SP",
+    cep: "69900000",
+    city: "Rio Branco",
+    uf: "AC",
     street: "Rua",
     address_number: "10",
   };
 
-  await prisma.delivery.create({
-    data: { ...base, code: "900001", status: "PENDING" },
-  });
-
-  await prisma.delivery.create({
-    data: { ...base, code: "900002", status: "PENDING", driverId: DRIVER },
-  });
-
-  await prisma.delivery.create({
-    data: { ...base, code: "900003", status: "IN_TRANSIT", driverId: DRIVER },
-  });
+  // The company's day, from the real clock: the API reads the same one.
+  const { start } = businessDayRange(new Date(), RIO_BRANCO);
+  const minute = 60 * 1000;
 
   /**
-   * Deliveries in the company that never hired the module.
-   *
-   * Without these the refusal below proves nothing: a company with no rows
-   * counts zero whether or not the gate is there, and the mutation that
-   * deletes the gate entirely passes the test. It is only a real assertion
-   * when there is something to leak.
+   * One row per number, and different numbers per state, so a tile reading
+   * the wrong bucket shows. The two DELIVERED ones straddle the company's
+   * midnight: one minute after it (today) and one minute before (yesterday
+   * for Rio Branco, today for UTC and for São Paulo).
    */
-  await prisma.shipper.create({
+  await prisma.delivery.createMany({
+    data: [
+      { ...base, code: "900001", status: "PENDING" },
+      { ...base, code: "900002", status: "PENDING", driverId: DRIVER },
+      { ...base, code: "900003", status: "IN_TRANSIT", driverId: DRIVER },
+      {
+        ...base,
+        code: "900004",
+        status: "DELIVERED",
+        driverId: DRIVER,
+        delivered_at: new Date(start.getTime() + minute),
+      },
+      {
+        ...base,
+        code: "900005",
+        status: "DELIVERED",
+        driverId: DRIVER,
+        delivered_at: new Date(start.getTime() - minute),
+      },
+    ],
+  });
+
+  // 900002 is the day's load: on a route of the company's today (decision
+  // 7.1 — a PENDING with a driver and no route of the day is not designated).
+  const designated = await prisma.delivery.findFirstOrThrow({
+    where: { businessId: HIRED, code: "900002" },
+  });
+
+  const route = await prisma.route.create({
     data: {
-      id: OTHER_SHIPPER,
-      name: "Embarcador da outra",
-      businessId: NOT_HIRED,
+      code: 1,
+      businessId: HIRED,
+      driverId: DRIVER,
+      status: "RELEASED",
+      scheduled_date: dateOnlyFromKey(businessDateKey(new Date(), RIO_BRANCO)),
     },
   });
 
+  await prisma.routeStop.create({
+    data: { routeId: route.id, deliveryId: designated.id, sequence: 10 },
+  });
+
+  // One report by the driver today, one note from the panel: only the
+  // driver's counts as "Relatadas pelo motorista".
+  await prisma.occurrenceType.create({
+    data: { id: OCCURRENCE_TYPE, name: "Cliente ausente", businessId: HIRED },
+  });
+
+  const moving = await prisma.delivery.findFirstOrThrow({
+    where: { businessId: HIRED, code: "900003" },
+  });
+
+  await prisma.deliveryOccurrence.createMany({
+    data: [DRIVER_USER, DISPATCHER].map((reportedById) => ({
+      deliveryId: moving.id,
+      businessId: HIRED,
+      occurrenceTypeId: OCCURRENCE_TYPE,
+      reportedById,
+    })),
+  });
+
+  /**
+   * Deliveries in the company that never hired the module. Without them the
+   * refusal proves nothing: a company with no rows counts zero whether or
+   * not the gate is there.
+   */
+  await prisma.shipper.create({
+    data: { id: OTHER_SHIPPER, name: "Embarcador da outra", businessId: NOT_HIRED },
+  });
+
   await prisma.delivery.createMany({
-    data: [
-      {
-        businessId: NOT_HIRED,
-        shipperId: OTHER_SHIPPER,
-        code: "910001",
-        recipient_name: "Cliente",
-        city: "São Paulo",
-        uf: "SP",
-        street: "Rua",
-        status: "PENDING",
-      },
-      {
-        businessId: NOT_HIRED,
-        shipperId: OTHER_SHIPPER,
-        code: "910002",
-        recipient_name: "Cliente",
-        city: "São Paulo",
-        uf: "SP",
-        street: "Rua",
-        status: "IN_TRANSIT",
-      },
-    ],
+    data: ["PENDING", "IN_TRANSIT"].map((status, index) => ({
+      businessId: NOT_HIRED,
+      shipperId: OTHER_SHIPPER,
+      code: `91000${index}`,
+      recipient_name: "Cliente",
+      city: "São Paulo",
+      uf: "SP",
+      street: "Rua",
+      status: status as "PENDING" | "IN_TRANSIT",
+    })),
   });
 
   ({ app } = await import("@/http"));
@@ -287,33 +379,26 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  await prisma.deliveryOccurrence.deleteMany({
+    where: { businessId: { in: [HIRED, NOT_HIRED] } },
+  });
   await prisma.delivery.deleteMany({
     where: { businessId: { in: [HIRED, NOT_HIRED] } },
   });
+  await prisma.route.deleteMany({
+    where: { businessId: { in: [HIRED, NOT_HIRED] } },
+  });
+  await prisma.occurrenceType.deleteMany({ where: { id: OCCURRENCE_TYPE } });
   await prisma.shipper.deleteMany({
     where: { id: { in: [SHIPPER, OTHER_SHIPPER] } },
   });
+
+  await prisma.refreshToken.deleteMany({ where: { userId: { in: USERS } } });
+  await prisma.user.deleteMany({ where: { id: { in: USERS } } });
   await prisma.driver.deleteMany({ where: { id: DRIVER } });
 
-  await prisma.refreshToken.deleteMany({
-    where: { userId: { in: [DISPATCHER, MECHANIC, OUTSIDER] } },
-  });
-  await prisma.user.deleteMany({
-    where: { id: { in: [DISPATCHER, MECHANIC, OUTSIDER] } },
-  });
-
-  await prisma.permission.deleteMany({
-    where: {
-      profileAccessId: {
-        in: [dispatcherProfile, mechanicProfile, outsiderProfile],
-      },
-    },
-  });
-  await prisma.profileAccess.deleteMany({
-    where: {
-      id: { in: [dispatcherProfile, mechanicProfile, outsiderProfile] },
-    },
-  });
+  await prisma.permission.deleteMany({ where: { profileAccessId: { in: profiles } } });
+  await prisma.profileAccess.deleteMany({ where: { id: { in: profiles } } });
 
   await prisma.businessEntitlement.deleteMany({
     where: { businessId: { in: [HIRED, NOT_HIRED] } },
@@ -325,98 +410,180 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
+const TODAY = {
+  unassigned: 1,
+  // 900002, on today's route.
+  designated: 1,
+  inRoute: 1,
+  // 900004 only: 900005 was finished before the company's midnight.
+  deliveredToday: 1,
+  failedToday: 0,
+  // The driver's report; the panel note is not a driver report.
+  occurrencesToday: 1,
+};
+
 describe("a dispatcher whose company hired the module", () => {
   it("is told how many deliveries and routes the month produced", async () => {
-    dispatcherToken = await tokenFor(DISPATCHER, HIRED);
+    const overview = await overviewFor(DISPATCHER);
 
-    const overview = await overviewFor(dispatcherToken);
-
-    expect(overview.counts.deliveries).toBeDefined();
-    expect(overview.counts.deliveries.currentMonth).toBe(3);
-
-    // Routes exist as a card even at zero: the company has the module, and a
-    // missing card would read as "this product has no routes".
-    expect(overview.counts.routes).toBeDefined();
-    expect(overview.counts.routes.currentMonth).toBe(0);
+    expect(overview.counts.deliveries.currentMonth).toBe(5);
+    expect(overview.counts.routes.currentMonth).toBe(1);
   });
 
-  it("carries deliveries through the trend, under the right key", async () => {
-    const overview = await overviewFor(dispatcherToken);
+  it("carries deliveries through the trend, and no series it may not see", async () => {
+    const overview = await overviewFor(DISPATCHER);
 
     const current = overview.activityTrends.at(-1);
 
-    // `deliverys` is what the default pluralisation produces, and the chart
-    // keys off this name — a wrong one draws a line of undefined.
-    expect(current).toHaveProperty("deliveries");
-    expect(current.deliveries).toBe(3);
+    expect(overview.activityTrends).toHaveLength(6);
+    expect(current.deliveries).toBe(5);
+    expect(current).not.toHaveProperty("vehicles");
+    expect(current).not.toHaveProperty("parts");
   });
 
-  it("says what the operation is doing right now, not only its size", async () => {
-    const overview = await overviewFor(dispatcherToken);
+  it("counts the operation in the company's day", async () => {
+    const overview = await overviewFor(DISPATCHER);
 
-    expect(overview.deliveryOperation).not.toBeNull();
+    expect(overview.deliveryOperation).toEqual(TODAY);
+  });
 
-    // One PENDING with nobody on it, one PENDING with a driver, one already
-    // moving. Three different numbers out of three rows is what proves these
-    // are the operation's states and not the monthly count wearing a hat.
-    expect(overview.deliveryOperation).toMatchObject({
-      unassigned: 1,
-      designated: 1,
-      inRoute: 1,
-    });
+  it("reads the same numbers on the monitoring summary", async () => {
+    const response = await get(DISPATCHER, "/delivery/operation-summary");
+
+    expect(response.statusCode, response.body.slice(0, 300)).toBe(200);
+    expect(response.json().data.totals).toEqual(TODAY);
   });
 });
 
-describe("a colleague at the same company without delivery permission", () => {
-  it("gets no delivery counts at all", async () => {
-    mechanicToken = await tokenFor(MECHANIC, HIRED);
+describe("the other profiles of the same company", () => {
+  it("a read-only dispatcher sees the operation too", async () => {
+    const overview = await overviewFor(READER);
 
-    const overview = await overviewFor(mechanicToken);
+    expect(overview.deliveryOperation).toEqual(TODAY);
 
-    // The company HAS three deliveries this month. This person gets zero,
-    // and that is the assertion: a number that would be non-zero if the gate
-    // were not there.
+    const response = await get(READER, "/delivery/operation-summary");
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("the admin sees it, and no Frotas series or costs the company did not hire", async () => {
+    const overview = await overviewFor(ADMIN);
+
+    expect(overview.deliveryOperation).toEqual(TODAY);
+
+    for (const point of overview.activityTrends) {
+      for (const key of ["parts", "suppliers", "serviceOrders", "fines", "businesses"]) {
+        expect(point, key).not.toHaveProperty(key);
+      }
+
+      expect(typeof point.vehicles).toBe("number");
+      expect(typeof point.deliveries).toBe("number");
+    }
+
+    expect(overview.maintenanceCosts).toEqual([]);
+  });
+
+  it("a colleague without the permission gets no delivery numbers", async () => {
+    const overview = await overviewFor(MECHANIC);
+
+    // The company HAS five deliveries this month.
+    expect(overview.counts.deliveries.currentMonth).toBe(0);
+    expect(overview.deliveryOperation).toBeNull();
+
+    for (const point of overview.activityTrends) {
+      expect(point).not.toHaveProperty("deliveries");
+      expect(point).not.toHaveProperty("routes");
+    }
+
+    const response = await get(MECHANIC, "/delivery/operation-summary");
+    expectRefused(response, "PERMISSION_DENIED");
+  });
+
+  it("a write-only row is no access: nothing the summary's 403 would refuse", async () => {
+    const overview = await overviewFor(WRITE_ONLY);
+
+    // The company HAS five deliveries and a route this month.
     expect(overview.counts.deliveries.currentMonth).toBe(0);
     expect(overview.counts.routes.currentMonth).toBe(0);
+    expect(overview.deliveryOperation).toBeNull();
+
+    for (const point of overview.activityTrends) {
+      expect(point).not.toHaveProperty("deliveries");
+      expect(point).not.toHaveProperty("routes");
+    }
+
+    const response = await get(WRITE_ONLY, "/delivery/operation-summary");
+    expectRefused(response, "PERMISSION_DENIED");
+  });
+
+  it("a driver is never shown the whole operation", async () => {
+    const overview = await overviewFor(DRIVER_USER);
+
+    expect(overview.deliveryOperation).toBeNull();
+
+    const response = await get(DRIVER_USER, "/delivery/operation-summary");
+    expectRefused(response, "DRIVER_CANNOT_VIEW_PANELS");
+  });
+});
+
+describe("outside the company", () => {
+  it("a MASTER has no single company to summarise on the overview", async () => {
+    const overview = await overviewFor(MASTER);
 
     expect(overview.deliveryOperation).toBeNull();
   });
 
-  it("still gets the rest of the dashboard", async () => {
-    const overview = await overviewFor(mechanicToken);
+  it("a MASTER reads the company they pick, in that company's day", async () => {
+    const response = await get(
+      MASTER,
+      `/delivery/operation-summary?businessId=${HIRED}`,
+    );
 
-    expect(overview.counts.vehicles).toBeDefined();
-    expect(overview.recentActivity).toBeDefined();
+    expect(response.statusCode, response.body.slice(0, 300)).toBe(200);
+    expect(response.json().data.totals).toEqual(TODAY);
+  });
+
+  it("a dispatcher of another company is refused", async () => {
+    const response = await get(
+      OUTSIDER,
+      `/delivery/operation-summary?businessId=${HIRED}`,
+    );
+
+    expectRefused(response, "TENANT_ACCESS_DENIED");
+  });
+
+  it("a dispatcher cannot name another company either", async () => {
+    const response = await get(
+      DISPATCHER,
+      `/delivery/operation-summary?businessId=${NOT_HIRED}`,
+    );
+
+    expectRefused(response, "TENANT_ACCESS_DENIED");
   });
 });
 
 describe("a dispatcher whose company never hired the module", () => {
   it("is shown nothing about deliveries, permission or not", async () => {
-    outsiderToken = await tokenFor(OUTSIDER, NOT_HIRED);
+    const overview = await overviewFor(OUTSIDER);
 
-    const overview = await overviewFor(outsiderToken);
-
-    /**
-     * This user holds `delivery_manage` — the permission alone is not the
-     * question. A BUSINESS_ADMIN passes every permission check by definition
-     * and would otherwise be shown cards for a module their company never
-     * bought.
-     */
     expect(overview.counts.deliveries.currentMonth).toBe(0);
     expect(overview.deliveryOperation).toBeNull();
+
+    for (const point of overview.activityTrends) {
+      expect(point).not.toHaveProperty("deliveries");
+    }
+
+    const response = await get(OUTSIDER, "/delivery/operation-summary");
+    expectRefused(response, "MODULE_NOT_ENABLED");
   });
 
   it("does not leak the two deliveries its own database rows would count", async () => {
-    // The company has rows — somebody imported before the module was switched
-    // off, which is the ordinary way this happens. The gate has to hold on
-    // data that exists, not only on an empty table.
     const own = await prisma.delivery.count({
       where: { businessId: NOT_HIRED },
     });
 
     expect(own, "o cenário perdeu as entregas que provam a regra").toBe(2);
 
-    const overview = await overviewFor(outsiderToken);
+    const overview = await overviewFor(OUTSIDER);
 
     expect(overview.counts.deliveries.currentMonth).toBe(0);
   });

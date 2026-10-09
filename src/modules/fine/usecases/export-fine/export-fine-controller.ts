@@ -1,8 +1,10 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
+import { z } from "zod";
+
 import { ExportFineUseCase } from "./export-fine-usecase";
-import { exportReports } from "@/schemas/export-reports-schema";
+import { exportFineQuerySchema } from "@/schemas/export-fine-schema";
 
 import { ExportPipeline } from "@/shared/services/export/export-pipeline";
 import { CsvWriter } from "@/shared/services/export/writers/csv-writer";
@@ -10,51 +12,40 @@ import { CsvWriter } from "@/shared/services/export/writers/csv-writer";
 import { ExcelWriter } from "@/shared/services/export/writers/excel-writer";
 import { ExportColumn } from "@/shared/services/export/types";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { FineNoFinesToExportError } from "../errors/fine-no-fines-to-export-error";
-
 class ExportFineController {
   async handle(request: FastifyRequest, reply: FastifyReply) {
     const { id } = request.user;
-    const { search, format } = exportReports.parse(request.query);
+
+    // Validated and transformed by the route (each facet is already a list).
+    const {
+      businessId,
+      search,
+      format,
+      status,
+      branchId,
+      trafficViolationCodeId,
+    } = request.query as z.infer<typeof exportFineQuerySchema>;
 
     const exportFineUseCase = container.resolve(ExportFineUseCase);
 
-    try {
-      const { iterator, columns, filename } = await exportFineUseCase.execute(
-        id,
-        search,
-      );
+    const { iterator, columns, filename } = await exportFineUseCase.execute({
+      userId: id,
+      businessId,
+      search,
+      statuses: status,
+      branchIds: branchId,
+      trafficViolationCodeIds: trafficViolationCodeId,
+    });
 
-      // Choose writer
-      let writer;
-      switch (format) {
-        case "excel":
-          writer = new ExcelWriter();
-          break;
-        case "csv":
-        default:
-          writer = new CsvWriter();
-      }
+    const writer = format === "excel" ? new ExcelWriter() : new CsvWriter();
 
-      const pipeline = new ExportPipeline(
-        iterator,
-        columns as ExportColumn[],
-        writer,
-      );
+    const pipeline = new ExportPipeline(
+      iterator,
+      columns as ExportColumn[],
+      writer,
+    );
 
-      await pipeline.execute(reply, filename);
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof FineNoFinesToExportError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    await pipeline.execute(reply, filename);
   }
 }
 

@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateKanbanColumnSchema = z.object({
+  ...tenantLockedShape,
   title: z
     .string()
     .min(1, "O título da coluna é obrigatório.")

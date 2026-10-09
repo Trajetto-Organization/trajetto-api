@@ -8,8 +8,10 @@ import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { AppError } from "@/shared/errors/AppError";
 
+import type { SortOrder } from "@/shared/pagination/list-query";
 import type { RouteStatus } from "@/shared/route/route-rules";
 import type { ListRoutesResult } from "../../dtos/route-dto";
+import type { RouteSortKey } from "./route-list";
 
 interface ListRoutesRequest {
   userId: string;
@@ -18,19 +20,25 @@ interface ListRoutesRequest {
   page: number;
   pageSize: number;
 
-  status?: RouteStatus;
-  driverId?: string;
+  sort?: RouteSortKey;
+  order?: SortOrder;
+
+  statuses?: RouteStatus[];
+  driverIds?: string[];
+  vehicleIds?: string[];
   scheduled_date?: Date;
   search?: string;
 }
 
 /**
- * The dispatcher's board: every route of the company, newest first.
+ * The dispatcher's board: every route of the company, newest first unless
+ * the table asks for another order, with its filters and cards answered over
+ * the whole company (decision 8.8).
  *
  * A driver user asking for this gets only their own routes, whatever they put
  * in `driverId` — the app never lists the whole operation to the person
- * executing one slice of it. The override is not a filter the client can
- * widen: the user's own driver id replaces whatever was sent.
+ * executing one slice of it. The scope is not a filter the client can widen:
+ * the user's own driver id replaces whatever driver facet was sent.
  */
 @injectable()
 class ListRoutesUseCase {
@@ -44,12 +52,7 @@ class ListRoutesUseCase {
   async execute({
     userId,
     businessId,
-    page,
-    pageSize,
-    status,
-    driverId,
-    scheduled_date,
-    search,
+    ...query
   }: ListRoutesRequest): Promise<ListRoutesResult> {
     const findUser = await this.user.findUserById(userId);
 
@@ -70,13 +73,12 @@ class ListRoutesUseCase {
     assertTenantAccess(findUser, resolvedBusinessId);
 
     return this.route.listRoutes({
+      ...query,
       businessId: resolvedBusinessId,
-      page,
-      pageSize,
-      status,
-      driverId: findUser.driverId ?? driverId,
-      scheduled_date,
-      search,
+      ...(findUser.driverId && {
+        scopeDriverId: findUser.driverId,
+        driverIds: undefined,
+      }),
     });
   }
 }

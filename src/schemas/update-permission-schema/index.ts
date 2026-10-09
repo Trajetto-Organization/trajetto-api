@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { EnumPermissionKey } from "@/config/permissions";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
@@ -78,9 +79,9 @@ const updatePermissionSchema = z
     ),
     canRead: z.boolean().optional().nullable(),
     canWrite: z.boolean().default(false).optional().nullable(),
-    businessId: z
-      .string({ required_error: "ID da empresa é obrigatório!" })
-      .uuid("ID da empresa é inválido."),
+    // The permission's company is the one it was created in; the use case
+    // reads it from the row (decision 16.100).
+    ...tenantLockedShape,
     profileAccessId: z
       .string({ required_error: "ID do perfil de acesso é obrigatório!" })
       .uuid("ID do perfil de acesso é inválido."),

@@ -1,14 +1,17 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
+
+import { isPickedDateInput } from "@/shared/vehicle/record-dates";
 
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
-  isValidDateString,
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateVehicleChecklistSchema = z.object({
+  ...tenantLockedShape,
   current_mileage: z.preprocess(
     (val) => {
       if (typeof val === "string") {
@@ -33,7 +36,7 @@ const updateVehicleChecklistSchema = z.object({
     .string()
     .min(1, "A data do checklist é obrigatória.")
     .superRefine((val, ctx) => {
-      if (val && !isValidDateString(val)) {
+      if (val && !isPickedDateInput(val)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "A data do checklist deve ser uma data válida.",

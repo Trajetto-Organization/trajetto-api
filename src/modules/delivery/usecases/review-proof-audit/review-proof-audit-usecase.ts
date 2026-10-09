@@ -10,7 +10,6 @@ import { IOccurrenceTypeRepository } from "@/modules/occurrence-type/repositorie
 
 import { NotificationService } from "@/shared/services/notification-service";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
@@ -18,7 +17,11 @@ import { AppError } from "@/shared/errors/AppError";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 
+import { sendCatalogChangedEvent } from "@/websocket";
+
 import type { ProofAuditRecord } from "../../dtos/proof-audit-dto";
+
+import { checkRejectionReason } from "./rejection-reason";
 
 interface ReviewProofAuditRequest {
   userId: string;
@@ -78,12 +81,16 @@ class ReviewProofAuditUseCase {
   }: ReviewProofAuditRequest): Promise<ProofAuditRecord> {
     const findUser = await this.user.findUserById(userId);
 
-    if (!findUser) throw new ResourceNotFoundError();
+    // The session was checked by the middleware; a user row gone since then
+    // is a 404 with its code (decision 11.3), not a bare 400.
+    if (!findUser) {
+      throw new AppError("Usuário não encontrado.", 404, "USER_NOT_FOUND");
+    }
 
     assertDispatcher(findUser);
     assertTenantAccess(findUser, businessId);
 
-    const reason = rejection_reason?.trim() || null;
+    const { reason, problem } = checkRejectionReason(rejection_reason);
 
     // A receipt refused with no reason is a receipt nobody can act on: the
     // dispatcher cannot decide whether to send it back out, and the shipper
@@ -94,6 +101,12 @@ class ReviewProofAuditUseCase {
         400,
         "REJECTION_REASON_REQUIRED",
       );
+    }
+
+    // The reason becomes the description of an occurrence the shipper may
+    // read, so it follows the same text rules as every other field.
+    if (status === "REJECTED" && problem) {
+      throw new AppError(problem, 400, "INVALID_REJECTION_REASON");
     }
 
     const found = await this.audits.findById(auditId, businessId);
@@ -107,10 +120,43 @@ class ReviewProofAuditUseCase {
       );
     }
 
-    // The verdict and the event it announces in ONE transaction. A shipper
-    // that audits its own carrier acts on `proof.rejected`; an event queued
-    // after the commit is an event a crash in between erases, and the card
-    // then reads REJECTED here while their system still shows it accepted.
+    // Already decided when the request arrived (a double click, a second
+    // reviewer on a stale screen): refused before anything is written, so a
+    // verdict that was impossible from the start adds no catalogue entry and
+    // sends no hint. The `where` in the transaction still settles the real
+    // race, a decision landing after this read.
+    if (found.status !== "PENDING") {
+      throw new AppError(
+        "Este comprovante já foi revisado por outra pessoa.",
+        409,
+        "PROOF_AUDIT_ALREADY_REVIEWED",
+      );
+    }
+
+    // The type is ensured BEFORE the transaction: `ensureByName` upserts on a
+    // table every tenant shares and does not belong in the window that holds
+    // the card. It is idempotent, so a verdict that then loses the race leaves
+    // only a type the first rejection would have created anyway.
+    const rejectionType =
+      status === "REJECTED" ? await this.ensureRejectionType(businessId) : null;
+
+    const rejectionTypeId = rejectionType?.id ?? null;
+
+    // The company's first rejection adds "Comprovante rejeitado" to its
+    // occurrence types, and open catalogue screens and pickers learn it now,
+    // not on the next reload (decision 2.3). Sent here because the type is
+    // committed here, on its own: a verdict that then loses the race (409)
+    // leaves it.
+    if (rejectionType?.created) {
+      sendCatalogChangedEvent(businessId, "occurrence_type");
+    }
+
+    // The verdict, the event it announces and the rejection's occurrence in
+    // ONE transaction. A shipper that audits its own carrier acts on
+    // `proof.rejected`; an event queued after the commit is an event a crash
+    // in between erases. The occurrence was written after the commit too, and
+    // a crash there left a REJECTED card with nothing on the delivery's
+    // timeline and nothing to retry it (DLVB-08).
     const reviewed = await database.$transaction(async (tx) => {
       const settled = await this.audits.review(
         {
@@ -150,15 +196,21 @@ class ReviewProofAuditUseCase {
         tx,
       );
 
+      if (rejectionTypeId) {
+        await this.delivery.createOccurrence(
+          {
+            deliveryId: found.deliveryId,
+            occurrenceTypeId: rejectionTypeId,
+            reportedById: userId,
+            description: reason,
+            photos: [],
+          },
+          tx,
+        );
+      }
+
       return settled;
     });
-
-    // After the verdict commits, and outside it on purpose: the occurrence is
-    // a trail entry for the office, and an `ensureByName` upsert on a table
-    // every tenant shares does not belong in the window that holds the card.
-    if (status === "REJECTED") {
-      await this.recordRejection(found.deliveryId, businessId, userId, reason!);
-    }
 
     this.notificationService.createActivityIfEnabled({
       type: "Entrega",
@@ -177,7 +229,8 @@ class ReviewProofAuditUseCase {
   }
 
   /**
-   * Leaves the rejection where the operation already looks.
+   * The type the rejection's occurrence is filed under, which leaves the
+   * rejection where the operation already looks.
    *
    * The occurrence type is created on first use rather than seeded for every
    * company: a carrier that never rejects a receipt should not carry a word it
@@ -190,12 +243,17 @@ class ReviewProofAuditUseCase {
    * not show. Flipping it here would take that decision away and, worse, would
    * do it automatically on the word of a queue.
    */
-  private async recordRejection(
-    deliveryId: string,
+  private async ensureRejectionType(
     businessId: string,
-    userId: string,
-    reason: string,
-  ): Promise<void> {
+  ): Promise<{ id: string; created: boolean }> {
+    // Looked up first only to know whether the catalogue grows: ensureByName
+    // does not say. Compared by id, because the lookup ignores case and the
+    // ensure does not: a mismatch costs one extra hint, never a missed one.
+    const existing = await this.occurrenceTypes.findOccurrenceTypeByName(
+      businessId,
+      REJECTION_TYPE_NAME,
+    );
+
     const type = await this.occurrenceTypes.ensureByName(businessId, {
       name: REJECTION_TYPE_NAME,
       description:
@@ -204,13 +262,7 @@ class ReviewProofAuditUseCase {
       requires_photo: false,
     });
 
-    await this.delivery.createOccurrence({
-      deliveryId,
-      occurrenceTypeId: type.id,
-      reportedById: userId,
-      description: reason,
-      photos: [],
-    });
+    return { id: type.id, created: existing?.id !== type.id };
   }
 }
 

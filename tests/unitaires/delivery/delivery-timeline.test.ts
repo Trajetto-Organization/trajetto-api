@@ -353,3 +353,54 @@ describe("occurrences and messages, as the trail shows them", () => {
     expect(entry.detail).toBeNull();
   });
 });
+
+describe("the event types the final phase added", () => {
+  it.each([
+    ["ON_THE_WAY", "Motorista a caminho do endereço"],
+    ["OCCURRENCE", "Ocorrência registrada"],
+    // Decision 14.7: a route plan change, with the route named in the note.
+    ["ROUTE_ADDED", "Adicionada à rota"],
+    ["ROUTE_REMOVED", "Retirada da rota"],
+  ] as const)("names %s instead of a bare 'Evento'", (type, title) => {
+    const [entry] = buildDeliveryTimeline(
+      sources({
+        events: [{ id: "e1", type, created_at: AT("2026-09-15T10:00:00Z") }],
+      }),
+    );
+
+    expect(entry.kind).toBe(type);
+    expect(entry.title).toBe(title);
+  });
+});
+
+describe("a delivery proven by a DELIVERED occurrence (decision 14.3)", () => {
+  it("tells the proof once, through its PROOF entry, and keeps a pending one as an occurrence", () => {
+    const timeline = buildDeliveryTimeline(
+      sources({
+        events: [
+          {
+            id: "e-proof",
+            type: "PROOF",
+            created_at: AT("2026-10-05T13:00:00Z"),
+            photo: "https://signed/canhoto.jpg",
+            occurrenceId: "o-delivered",
+          },
+        ],
+        occurrences: [
+          {
+            id: "o-delivered",
+            created_at: AT("2026-10-05T13:00:00Z"),
+            occurrenceType: { name: "Entrega normal" },
+          },
+          {
+            id: "o-waiting",
+            created_at: AT("2026-10-05T12:00:00Z"),
+            occurrenceType: { name: "Entrega com conferência" },
+          },
+        ],
+      }),
+    );
+
+    expect(timeline.map((entry) => entry.id)).toEqual(["e-proof", "o-waiting"]);
+  });
+});

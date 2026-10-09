@@ -212,8 +212,9 @@ const MUST_CARRY: Record<string, string> = {
   "forgot-password.hbs": "url",
   "branch-deletion-code.hbs": "code",
   "business-deletion-code.hbs": "code",
-  "user-created-successfully.hbs": "password",
-  "admin-user-updated-password.hbs": "password",
+  // The link to set the password, never the password (decision 4.9).
+  "user-created-successfully.hbs": "url",
+  "password-reset-by-admin.hbs": "url",
 };
 
 describe("and the e-mail still carries the thing it exists for", () => {

@@ -1,18 +1,18 @@
 import { z } from "zod";
+import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
-import { LocationSource } from "@prisma/client";
+import { isPickedDateInput } from "@/shared/vehicle/record-dates";
 
-import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 import {
   emptyStringToNull,
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
-  isValidDateString,
 } from "@/shared/utils/zod-schema-helpers";
 
 const updateFuelSchema = z
   .object({
+    ...tenantLockedShape,
     current_mileage: z.preprocess(
       (val) => {
         if (typeof val === "string") {
@@ -68,14 +68,11 @@ const updateFuelSchema = z
         })
         .positive("O preço por litro deve ser um valor positivo.")
         .min(0.01, "O preço por litro deve ser no mínimo R$ 0,01")
-        .max(999.99, "O preço por litro não pode exceder R$ 999,99.")
+        // Sanity cap (decision 15.9): no fuel costs more than R$ 50/L; a typed
+        // 599 used to be saved as R$ 599/L. Mirrored by the web and the app.
+        .max(50, "O preço por litro não pode exceder R$ 50,00.")
         .optional(),
     ),
-    odometer_photo: z
-      .string()
-      .min(1, "A foto do odômetro deve ser fornecida.")
-      .optional(),
-    odometer_verified: z.boolean().optional(),
     notes: z.preprocess(
       emptyStringToNull,
       z
@@ -121,7 +118,7 @@ const updateFuelSchema = z
       .string()
       .min(1, "A data do abastecimento é obrigatória.")
       .superRefine((val, ctx) => {
-        if (!isValidDateString(val)) {
+        if (!isPickedDateInput(val)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: "Data do abastecimento inválida.",
@@ -130,20 +127,9 @@ const updateFuelSchema = z
           return;
         }
 
-        // Validation: refueling date cannot be in the future
-        const refuelingDate = new Date(val);
-        const today = new Date();
-
-        today.setHours(23, 59, 59, 999); // End of today
-
-        if (refuelingDate > today) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "A data do abastecimento não pode ser no futuro.",
-          });
-
-          return;
-        }
+        // "Not in the future" needs the company's calendar, which a schema
+        // does not have: the use case checks it (fuel-rules.ts). The
+        // server's end of day let tomorrow through from 21:00 in São Paulo.
       })
       .optional(),
     vehicleId: z.string().uuid("ID do veículo é inválido.").optional(),
@@ -197,57 +183,15 @@ const updateFuelSchema = z
         .nullable(),
     ),
 
-    // 📍 GEOLOCATION: Original GPS location (before any manual editing)
-    latitude_original: z
-      .number()
-      .min(-90, "A latitude original deve estar entre -90 e 90.")
-      .max(90, "A latitude original deve estar entre -90 e 90.")
-      .optional()
-      .nullable(),
-
-    longitude_original: z
-      .number()
-      .min(-180, "A longitude original deve estar entre -180 e 180.")
-      .max(180, "A longitude original deve estar entre -180 e 180.")
-      .optional()
-      .nullable(),
-
-    // 🆕 GEOLOCATION AUDIT: Track location source
-    location_source: z.nativeEnum(LocationSource).optional().nullable(),
-
-    // 🆕 AUDIT FIELDS: Who and when edited location
-    location_edited_by: z.string().uuid().optional().nullable(),
-    location_edited_at: z.string().datetime().optional().nullable(),
+    // Not accepted here, on purpose: the stored photo path, the AI's
+    // odometer verdict and the location's audit (original GPS fix, source,
+    // who edited and when) are written by the server. Accepted from the
+    // body, a user with fuel write pointed the record at any storage key —
+    // another company's photo, signed back to them by the list — marked an
+    // odometer as verified, or forged who moved the location. Unknown keys
+    // are stripped, so older clients sending them keep working.
   })
-  // 🆕 VALIDATION: Distance check for GPS_MANUAL (manual adjustment)
-  .refine(
-    (data) => {
-      // If location source is GPS_MANUAL, validate distance
-      if (
-        data.location_source === LocationSource.GPS_MANUAL &&
-        data.latitude &&
-        data.longitude &&
-        data.latitude_original &&
-        data.longitude_original
-      ) {
-        return isWithinAllowedDistance(
-          data.latitude_original,
-          data.longitude_original,
-          data.latitude,
-          data.longitude,
-          500, // 500 meters maximum allowed distance
-        );
-      }
-
-      // For other cases, validation passes
-      return true;
-    },
-    {
-      message:
-        "A localização editada está muito distante da localização capturada pelo GPS (máximo 500m permitido). Possível inconsistência detectada.",
-      path: ["latitude"], // Field where error appears
-    },
-  );
+  .strip();
 
 // The replacement photo is validated by `presignedPhotoSchema`: it never
 // reaches this API as a file, only as a key pointing at an object already in

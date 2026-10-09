@@ -3,13 +3,11 @@ import { container } from "tsyringe";
 
 import { RegisterDeliveryArrivalUseCase } from "./register-delivery-arrival-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import {
-  DeliveryNotFoundError,
-  DeliveryNotBelongBusinessError,
-} from "../errors/delivery-errors";
-
 import { deliveryArrivalSchema } from "@/schemas/delivery-arrival-schema";
+import {
+  CLIENT_SENT_AT_HEADER,
+  resolveOccurredAt,
+} from "@/shared/delivery/occurred-at";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDeleteDeliverySchema } from "@/schemas/update-delete-delivery-schema";
@@ -20,41 +18,32 @@ class RegisterDeliveryArrivalController {
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
     const { deliveryId } = updateDeleteDeliverySchema.parse(request.params);
 
-    const { client_submission_id, latitude, longitude } =
+    const { client_submission_id, latitude, longitude, occurred_at } =
       deliveryArrivalSchema.parse(request.body);
+
+    // The tap, moved onto the server's clock by the phone's own send stamp.
+    const occurredAt = resolveOccurredAt({
+      occurredAt: occurred_at,
+      clientSentAt: request.headers[CLIENT_SENT_AT_HEADER],
+    });
 
     const registerDeliveryArrivalUseCase = container.resolve(
       RegisterDeliveryArrivalUseCase,
     );
 
-    try {
-      await registerDeliveryArrivalUseCase.execute({
-        userId: id,
-        businessId,
-        deliveryId,
-        client_submission_id,
-        latitude,
-        longitude,
-      });
+    await registerDeliveryArrivalUseCase.execute({
+      userId: id,
+      businessId,
+      deliveryId,
+      client_submission_id,
+      latitude,
+      longitude,
+      occurredAt,
+    });
 
-      return reply
-        .status(201)
-        .send({ message: "Chegada registrada com sucesso!" });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof DeliveryNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof DeliveryNotBelongBusinessError) {
-        return reply.status(403).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply
+      .status(201)
+      .send({ message: "Chegada registrada com sucesso!" });
   }
 }
 

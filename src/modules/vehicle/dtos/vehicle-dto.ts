@@ -1,3 +1,11 @@
+import type { SortOrder } from "@/shared/pagination/list-query";
+
+import type {
+  VehicleBranchCount,
+  VehicleListFilters,
+  VehicleSortKey,
+} from "../usecases/list-vehicle/vehicle-list";
+
 interface Vehicle {
   id: string;
   description: string;
@@ -96,18 +104,23 @@ interface VehicleStatusCounts {
   IN_ROUTE: number;
 }
 
+/**
+ * One page of the listing plus the raw counts behind its cards and filters
+ * (see usecases/list-vehicle/vehicle-list.ts for how they are summarised).
+ */
 interface ListVehicleProps {
   data: Vehicle[];
-  total: number;
-  meta: { statusCounts: VehicleStatusCounts };
+  /** Grouped over every filter but status. */
+  statusCounts: VehicleStatusCounts;
+  /** Grouped over every filter but branch, with this company's names. */
+  branchCounts: VehicleBranchCount[];
 }
 
-interface ListVehicleByBusinessIdProps {
+interface ListVehicleByBusinessIdProps extends VehicleListFilters {
   page: number;
   pageSize: number;
-  businessId: string;
-  currentUserRole?: string;
-  search?: string;
+  sort?: VehicleSortKey;
+  order?: SortOrder;
 }
 
 interface GetVehicleByIdAndBusinessProps {
@@ -124,14 +137,50 @@ interface SearchVehicleWithCursorProps {
   limit: number;
   cursor?: string;
   businessId: string;
+  /**
+   * Only the vehicles this driver may operate: the responsible one, or one
+   * on a released or running route of theirs (shared/vehicle/driver-vehicle-access).
+   */
   driverId?: string;
   search?: string;
+  /**
+   * `choice`: only what a picker needs to choose a vehicle (DLV-COMBO-1), for
+   * a dispatcher who reaches the search through `delivery_manage:write`
+   * without reading the fleet.
+   */
+  fields?: "full" | "choice";
+}
+
+/** What a picker needs to choose a vehicle, and nothing of the fleet record. */
+interface VehicleChoice {
+  id: string;
+  description: string;
+  license_plate: string;
+  brand: string;
+  model: string;
+  status: Vehicle["status"];
+  businessId: string;
+  driverId?: string | null;
+  vehicleTypeId?: string | null;
+  /** The responsible driver's name, so the picker can say whose truck it is. */
+  driver?: { name: string } | null;
+  /** The type and the licence it requires (decision 8.5). */
+  vehicleType?: { description: string; required_cnh_category: string | null } | null;
 }
 
 interface CursorPaginatedVehicle {
-  data: Vehicle[];
+  data: Array<Vehicle | VehicleChoice>;
   nextCursor: string | null;
   hasMore: boolean;
+}
+
+/** What still points at a vehicle and blocks deleting it (FLEET-VEH-10). */
+interface VehicleUsageCounts {
+  fines: number;
+  fuels: number;
+  serviceOrders: number;
+  checklists: number;
+  accountsPayable: number;
 }
 
 export {
@@ -146,4 +195,6 @@ export {
   VehicleWithLastFuel,
   SearchVehicleWithCursorProps,
   CursorPaginatedVehicle,
+  VehicleChoice,
+  VehicleUsageCounts,
 };

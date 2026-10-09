@@ -17,6 +17,7 @@ interface SearchSupplierWithCursorRequest {
   limit?: number;
   cursor?: string;
   businessId: string;
+  search?: string;
 }
 
 @injectable()
@@ -35,6 +36,7 @@ class SearchSupplierCursorUseCase {
     limit = 10,
     cursor,
     businessId,
+    search,
   }: SearchSupplierWithCursorRequest): Promise<CursorPaginatedSupplier> {
     const findUser = await this.user.findUserById(userId);
 
@@ -55,6 +57,7 @@ class SearchSupplierCursorUseCase {
         limit,
         cursor,
         businessId,
+        search,
       });
 
       return result;

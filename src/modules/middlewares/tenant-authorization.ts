@@ -30,41 +30,103 @@ function assertTenantAccess(
  * only thing standing between two tenants is this comparison inside the use
  * case. A null businessId means the record belongs to no tenant (a MASTER
  * user), which only another MASTER may touch.
+ *
+ * The refusal is the caller's own "not found", not a 403: a 403 for another
+ * company's id next to a 404 for an unknown one told any tenant which ids
+ * exist elsewhere (found by the IDOR sweep, 10/2026). Ids leak through
+ * exports, screenshots and support tickets; knowing one must not confirm it.
  */
 function assertTenantAccessToRecord(
   principal: TenantPrincipal,
   recordBusinessId: string | null | undefined,
+  notFound: () => AppError,
 ): void {
-  if (!recordBusinessId) {
-    if (principal.role !== "MASTER") {
+  if (principal.role === "MASTER") return;
+
+  if (!recordBusinessId || principal.businessId !== recordBusinessId) {
+    throw notFound();
+  }
+}
+
+/**
+ * The refusal for a record of another company reached through a path whose
+ * :businessId the tenant guard already matched to the caller. For a tenant
+ * user that can only mean "someone else's row", which must look exactly like
+ * a missing one. A MASTER may see every company, so for them the specific
+ * mismatch stays: it tells an operator the path names the wrong company.
+ */
+function foreignRecordRefusal(
+  principal: Pick<TenantPrincipal, "role">,
+  mismatch: () => AppError,
+  notFound: () => AppError,
+): AppError {
+  return principal.role === "MASTER" ? mismatch() : notFound();
+}
+
+/**
+ * Every tenant the request names, from every place it can name one.
+ *
+ * ALL of them, never the first one found. Picking a single candidate
+ * (`params ?? query ?? body`) let the caller choose which location the guard
+ * read: `?businessId=<own>` on a POST whose body carried another company's id
+ * passed the check, and the use case — which reads the body — acted on the
+ * other company. `?businessId=` (an empty string) and a repeated
+ * `?businessId=a&businessId=b` (an array) skipped the check outright, because
+ * neither was a non-empty string.
+ *
+ * A null or absent value names no tenant. Anything else present — empty
+ * string, array element, number, object — is returned as-is so the caller can
+ * refuse it.
+ */
+function requestedTenantValues(request: FastifyRequest): unknown[] {
+  const sources = [request.params, request.query, request.body];
+  const values: unknown[] = [];
+
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+
+    const value = (source as Record<string, unknown>).businessId;
+    if (value === undefined || value === null) continue;
+
+    if (Array.isArray(value)) values.push(...value);
+    else values.push(value);
+  }
+
+  return values;
+}
+
+/**
+ * The tenant a request names, when it names exactly one well-formed tenant.
+ * Kept for callers that need the id itself; authorization goes through
+ * `authorizeRequestedTenant`, which inspects every value.
+ */
+function getRequestedTenantId(request: FastifyRequest): string | undefined {
+  const values = requestedTenantValues(request);
+  const [first] = values;
+
+  const unambiguous =
+    typeof first === "string" &&
+    first.length > 0 &&
+    values.every((value) => value === first);
+
+  return unambiguous ? first : undefined;
+}
+
+function authorizeRequestedTenant(request: FastifyRequest): void {
+  if (request.user.role === "MASTER") return;
+
+  for (const value of requestedTenantValues(request)) {
+    // A malformed tenant reference is refused like a foreign one: the use
+    // case behind it may read the same field differently than this guard.
+    if (typeof value !== "string" || value.length === 0) {
       throw new AppError(
-        "Acesso negado ao registro informado.",
+        "Acesso negado aos dados desta empresa.",
         403,
         "TENANT_ACCESS_DENIED",
       );
     }
 
-    return;
-  }
-
-  assertTenantAccess(principal, recordBusinessId);
-}
-
-function getRequestedTenantId(request: FastifyRequest): string | undefined {
-  const params = request.params as Record<string, unknown> | undefined;
-  const query = request.query as Record<string, unknown> | undefined;
-
-  const body = request.body as Record<string, unknown> | undefined;
-  const candidate = params?.businessId ?? query?.businessId ?? body?.businessId;
-
-  return typeof candidate === "string" ? candidate : undefined;
-}
-
-function authorizeRequestedTenant(request: FastifyRequest): void {
-  const requestedBusinessId = getRequestedTenantId(request);
-
-  if (requestedBusinessId) {
-    assertTenantAccess(request.user, requestedBusinessId);
+    assertTenantAccess(request.user, value);
   }
 }
 
@@ -87,6 +149,8 @@ export {
   assertTenantAccess,
   assertTenantAccessToRecord,
   authorizeRequestedTenant,
+  foreignRecordRefusal,
   enforceRequestedTenant,
   getRequestedTenantId,
+  requestedTenantValues,
 };

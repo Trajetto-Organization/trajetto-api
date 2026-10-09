@@ -11,12 +11,19 @@ import { IServiceOrderRepository } from "@/modules/service-order/repositories/IS
 
 import { UserHasAssociatedServiceOrdersError } from "../errors/user-has-associated-service-orders-error";
 import { UserHasAssociatedAccountPayablesError } from "../errors/user-has-associated-account-payables-error";
+import { UserHasRecordsError } from "../errors/user-has-records-error";
 
 import { IAccountPayableRepository } from "@/modules/account-payable/repositories/IAccount-payable-repository";
 
 import { AppError } from "@/shared/errors/AppError";
+import { permissionDenied } from "@/shared/errors/access-errors";
 import { User, UserRole } from "../../dtos/user-dto";
 import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
+
+import { announceDriverLoginChange } from "../../services/driver-login-catalog";
+
+import database from "@/../infra/database";
+import { Prisma } from "@prisma/client";
 
 interface DeleteUserProps {
   userId: string;
@@ -28,7 +35,9 @@ class DeleteUserUseCase {
   private allowedDeletion: Record<UserRole, UserRole[]> = {
     BUSINESS_USER: ["BUSINESS_USER"],
     BUSINESS_ADMIN: ["BUSINESS_USER", "BUSINESS_ADMIN"],
-    MASTER: ["BUSINESS_USER", "BUSINESS_ADMIN", "MASTER"],
+    // Masters leave only through delete-master-user, which counts and deletes
+    // in one statement so the platform never ends with zero masters.
+    MASTER: ["BUSINESS_USER", "BUSINESS_ADMIN"],
   };
 
   private roleDisplayName: Record<UserRole, string> = {
@@ -68,16 +77,25 @@ class DeleteUserUseCase {
     // The route carries no :businessId, so nothing before this point has
     // compared the target's tenant with the caller's. Same shape as
     // user-revoke-access, which already does it.
-    assertTenantAccessToRecord(findUser, findDeletedUser.businessId);
+    assertTenantAccessToRecord(findUser, findDeletedUser.businessId, () => new ResourceNotFoundError());
 
+    // Two masters deleting each other here at once could leave none:
+    // only delete-master-user keeps the last one.
+    if (findDeletedUser.role === "MASTER") {
+      throw permissionDenied(
+        "Usuários Master são removidos na área de usuários Master.",
+      );
+    }
+
+    // A role above the actor's is a permission refusal (decision 4.1): it
+    // left with the generic code and the web could not say "sem permissão".
     if (!this.allowedDeletion[findUser.role].includes(findDeletedUser.role)) {
-      throw new AppError(
+      throw permissionDenied(
         `Usuários com o nível de acesso "${
           this.roleDisplayName[findUser.role]
         }" não podem deletar usuários com o nível de acesso ${
           this.roleDisplayName[findDeletedUser.role]
         }.`,
-        403,
       );
     }
 
@@ -100,22 +118,43 @@ class DeleteUserUseCase {
     }
 
     try {
-      const userDeleted = await this.user.deleteUser(userId);
+      // The deletion and its audit entry commit together (OUTBOX-10).
+      const userDeleted = await database.$transaction(async (tx) => {
+        const deleted = await this.user.deleteUser(userId, tx);
+
+        await this.notificationService.createActivityIfEnabled(
+          {
+            type: "Usuário",
+            action: "delete",
+            entityId: deleted.id,
+            description: `Usuário ${deleted.name} | ${deleted.email} deletado | ID: ${deleted.id}`,
+            status: "Deletado",
+            performedBy: id,
+            businessId: deleted.businessId as string,
+          },
+          tx,
+        );
+
+        return deleted;
+      });
+
       sendSecurityEventToUser(userId, { reason: "access_denied" });
 
-      // Process activity asynchronously without blocking the main flow
-      this.notificationService.createActivityIfEnabled({
-        type: "Usuário",
-        action: "delete",
-        entityId: userDeleted.id,
-        description: `Usuário ${userDeleted.name} | ${userDeleted.email} deletado | ID: ${userDeleted.id}`,
-        status: "Deletado",
-        performedBy: id,
-        businessId: userDeleted.businessId as string,
-      });
+      // A driver lost its app login: the "com o app" split changed.
+      if (userDeleted.driverId) announceDriverLoginChange(userDeleted.businessId);
 
       return userDeleted;
     } catch (error) {
+      // A RESTRICT foreign key (an event, an import, a review, a message the
+      // user authored) refused the delete: a conflict the operator can act
+      // on, not a failure to retry.
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2003"
+      ) {
+        throw new UserHasRecordsError();
+      }
+
       throw new AppError(
         "Houve um erro ao tentar deletar o usuário! Por favor, tente novamente.",
         500,

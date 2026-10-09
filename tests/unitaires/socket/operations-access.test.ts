@@ -4,6 +4,7 @@ import {
   canWatchOperationsOf,
   mayReadDeliveries,
   operationsRoom,
+  readOperationsBusinessId,
   type DeliveryPrincipal,
 } from "@/shared/socket/operations-access";
 
@@ -166,5 +167,26 @@ describe("the room name", () => {
     // They are different rooms with different audiences; a refactor that
     // collapsed them would restore the leak in one line.
     expect(operationsRoom("empresa-a")).not.toBe("business:empresa-a");
+  });
+});
+
+describe("the company an operations subscription names (RT-1)", () => {
+  const BUSINESS = "018f9000-0000-7000-8000-00000000000a";
+
+  it("takes a uuid, trimmed and in the case the rooms are named in", () => {
+    expect(readOperationsBusinessId({ businessId: BUSINESS })).toBe(BUSINESS);
+    expect(readOperationsBusinessId({ businessId: `  ${BUSINESS.toUpperCase()} ` })).toBe(BUSINESS);
+  });
+
+  it("refuses anything that is not a company id", () => {
+    // The shared reader took any string up to the 16 KB frame: a MASTER
+    // could join operations:<anything>, and every emit publishes the name.
+    expect(readOperationsBusinessId({ businessId: "empresa-a" })).toBeNull();
+    expect(readOperationsBusinessId({ businessId: "x".repeat(16_000) })).toBeNull();
+    expect(readOperationsBusinessId({ businessId: `${BUSINESS}:chat` })).toBeNull();
+    expect(readOperationsBusinessId({ businessId: 42 })).toBeNull();
+    expect(readOperationsBusinessId({})).toBeNull();
+    expect(readOperationsBusinessId(null)).toBeNull();
+    expect(readOperationsBusinessId(BUSINESS)).toBeNull();
   });
 });

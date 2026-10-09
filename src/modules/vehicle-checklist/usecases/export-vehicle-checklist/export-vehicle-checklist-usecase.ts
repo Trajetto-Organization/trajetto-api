@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import { AppError } from "@/shared/errors/AppError";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IVehicleChecklistRepository } from "../../repositories/IVehicle-checklist-repository";
@@ -9,6 +10,29 @@ import { VehicleChecklistNoChecklistsToExportError } from "../errors/vehicle-che
 import { ExportFormatters } from "@/shared/services/export/formatters";
 import { ExportColumn } from "@/shared/services/export/types";
 
+import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
+import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+
+import { businessDateKey, resolveTimeZone } from "@/shared/time/business-day";
+import { formatInstant, formatPickedDay } from "@/shared/vehicle/record-dates";
+import type { ChecklistCondition } from "../list-vehicle-checklist/checklist-list";
+
+interface ExportVehicleChecklistRequest {
+  userId: string;
+  /** The MASTER names the company; everyone else exports their own. */
+  businessId?: string;
+  search?: string;
+  conditions?: ChecklistCondition[];
+  branchIds?: string[];
+  vehicleIds?: string[];
+}
+
+/**
+ * The checklist table as a file, with the SAME search and filters as the
+ * screen (decision 5.8) and for the company on screen: the MASTER's export
+ * used to put every company's inspections in one sheet.
+ */
 @injectable()
 class ExportVehicleChecklistExcelUseCase {
   constructor(
@@ -16,28 +40,71 @@ class ExportVehicleChecklistExcelUseCase {
     private user: IUserRepository,
     @inject("VehicleChecklistRepository")
     private vehicleChecklist: IVehicleChecklistRepository,
+    @inject("BusinessRepository")
+    private business: IBusinessRepository,
   ) {}
 
   /**
    * Prepare iterator (AsyncGenerator) + columns + filename
    */
-  async execute(userId: string, search?: string) {
+  async execute({
+    userId,
+    businessId,
+    search,
+    conditions,
+    branchIds,
+    vehicleIds,
+  }: ExportVehicleChecklistRequest) {
     const findUser = await this.user.findUserById(userId);
     if (!findUser) throw new ResourceNotFoundError();
 
-    const total = await this.vehicleChecklist.countChecklistForExport(
-      findUser.businessId as string,
-      findUser.role,
-    );
+    // Drivers hold fuel and checklist WRITE so the app can submit their own
+    // records. An export is the back office reading the whole company —
+    // every driver, CNH, value and position — which that grant never meant.
+    if (findUser.driverId) {
+      throw new AppError(
+        "Motoristas não exportam dados da frota.",
+        403,
+        "DRIVER_CANNOT_EXPORT",
+      );
+    }
+
+    const resolvedBusinessId = businessId ?? findUser.businessId;
+
+    if (!resolvedBusinessId) {
+      throw new AppError(
+        "Empresa não identificada. Selecione uma empresa para continuar.",
+        400,
+        "BUSINESS_NOT_IDENTIFIED",
+      );
+    }
+
+    assertTenantAccess(findUser, resolvedBusinessId);
+
+    const findBusiness = await this.business.findBusinessById(resolvedBusinessId);
+
+    if (!findBusiness) throw new BusinessNotFoundError();
+
+    const filters = {
+      businessId: resolvedBusinessId,
+      search: search?.trim() || undefined,
+      conditions,
+      branchIds,
+      vehicleIds,
+    };
+
+    const total = await this.vehicleChecklist.countChecklistForExport(filters);
 
     if (total === 0) {
       throw new VehicleChecklistNoChecklistsToExportError();
     }
 
-    const iterator = this.vehicleChecklist.streamChecklistsForExport(
-      findUser.businessId!,
-      findUser.role,
-      search,
+    const iterator = this.vehicleChecklist.streamChecklistsForExport(filters);
+
+    // The company's day, not the server's: at 22:00 in São Paulo the UTC
+    // date is already tomorrow — in the file name and in every date column.
+    const timeZone = resolveTimeZone(
+      (findBusiness as { timezone?: string | null }).timezone,
     );
 
     const columns: ExportColumn[] = [
@@ -101,7 +168,7 @@ class ExportVehicleChecklistExcelUseCase {
         header: "Data da Vistoria",
         key: "checklist_date",
         width: 18,
-        formatter: ExportFormatters.date,
+        formatter: (value) => formatPickedDay(value, timeZone),
       },
 
       {
@@ -300,35 +367,22 @@ class ExportVehicleChecklistExcelUseCase {
         formatter: ExportFormatters.fallback,
       },
 
-      ...(findUser.role === "MASTER"
-        ? [
-            {
-              header: "Empresa",
-              key: "businessName",
-              width: 25,
-              formatter: ExportFormatters.fallback,
-            },
-          ]
-        : []),
-
       {
         header: "Criado em",
         key: "created_at",
         width: 20,
-        formatter: ExportFormatters.datetime,
+        formatter: (value) => formatInstant(value, timeZone),
       },
 
       {
         header: "Atualizado em",
         key: "updated_at",
         width: 20,
-        formatter: ExportFormatters.datetime,
+        formatter: (value) => formatInstant(value, timeZone),
       },
     ];
 
-    const filename = `relatorio-checklists-veiculares-${
-      new Date().toISOString().split("T")[0]
-    }`;
+    const filename = `relatorio-checklists-veiculares-${businessDateKey(new Date(), timeZone)}`;
 
     return { iterator, columns, filename };
   }

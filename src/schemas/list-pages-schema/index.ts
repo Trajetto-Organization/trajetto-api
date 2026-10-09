@@ -1,14 +1,14 @@
 import { z } from "zod";
 
-import { pageSizeField } from "@/shared/pagination/page-size";
+import { pageField, pageSizeField } from "@/shared/pagination/page-size";
 
 const listPagesSchema = z.object({
-  page: z
-    .string()
-    .transform((val) => Number(val) || 1)
-    .refine((num) => num >= 1, "A página é obrigatória!"),
+  page: pageField(),
   pageSize: pageSizeField(2),
-  search: z.string().optional(),
+  search: z
+    .string()
+    .optional()
+    .describe("Texto livre, sem diferenciar maiúsculas, nos campos de busca da listagem."),
 });
 
 export { listPagesSchema };

@@ -1,8 +1,11 @@
 import { Prisma } from "@prisma/client";
 
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
+import { logger } from "@/shared/logging/logger";
 
 import { deleteInBatches, PURGE_RUN_BUDGET_MS } from "./batch-delete";
+
+const log = logger.child({ component: "cron", job: "cleanup-user-history" });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -57,6 +60,55 @@ const ACTIVITY_MIN_RETENTION_DAYS = 365;
 /** Activity rows are one per meaningful write; same order as notifications. */
 const MAX_ACTIVITIES_PER_RUN = 1_000_000;
 
+interface NotificationPurgePass {
+  where: Prisma.Sql;
+  orderBy: Prisma.Sql;
+}
+
+/**
+ * The bell notifications past their retention — read ones before
+ * `readBefore`, unread ones before `unreadBefore` — as two walks of
+ * notification_created_at_idx, each bounded by the index and neither reading
+ * a row it keeps on the way to a full batch.
+ *
+ * It used to be one predicate, `(read AND < readBefore) OR (NOT read AND <
+ * unreadBefore)`, walked oldest first. An OR with two different bounds is not
+ * an index bound, so every batch that did not fill (the last of every run)
+ * read to the newest notification of the table. And between the two cutoffs
+ * the unread rows are KEPT — much of that band, since plenty of users never
+ * open the bell — while the rows an ordinary night deletes are the read ones
+ * that just crossed the shorter cutoff, at the band's NEW end. Walked oldest
+ * first, every batch waded through the whole kept band again to reach them:
+ * a night cost the band times the number of batches.
+ *
+ *   1. Older than both cutoffs: everything goes, read or not. A plain range,
+ *      oldest first, where every row the walk meets is deleted.
+ *   2. Between the cutoffs: only the state with the shorter retention goes.
+ *      Walked NEWEST first, it meets the rows that just expired at once;
+ *      only the run's final, short batch crosses the kept band, once.
+ */
+function notificationPurgePasses(
+  readBefore: Date,
+  unreadBefore: Date,
+): NotificationPurgePass[] {
+  // Read rows expire first with today's windows (90 against 180 days); the
+  // passes do not depend on it.
+  const readExpiresFirst = readBefore.getTime() >= unreadBefore.getTime();
+  const older = readExpiresFirst ? unreadBefore : readBefore;
+  const newer = readExpiresFirst ? readBefore : unreadBefore;
+
+  return [
+    {
+      where: Prisma.sql`"created_at" < ${older}`,
+      orderBy: Prisma.sql`"created_at"`,
+    },
+    {
+      where: Prisma.sql`"read" = ${readExpiresFirst} AND "created_at" >= ${older} AND "created_at" < ${newer}`,
+      orderBy: Prisma.sql`"created_at" DESC`,
+    },
+  ];
+}
+
 /**
  * Returns the configured activity retention, or null when the purge should
  * stay off — which is the default and the safe answer for anything the
@@ -72,10 +124,13 @@ function resolveActivityRetentionDays(): number | null {
   const days = Number(raw);
 
   if (!Number.isInteger(days) || days < ACTIVITY_MIN_RETENTION_DAYS) {
-    console.warn(
-      `[CleanupUserHistory] ${ACTIVITY_RETENTION_ENV}="${raw}" ignorado: ` +
-        `exige inteiro >= ${ACTIVITY_MIN_RETENTION_DAYS}. ` +
-        "Trilha de auditoria mantida integralmente.",
+    log.warn(
+      {
+        variable: ACTIVITY_RETENTION_ENV,
+        value: raw,
+        minimumDays: ACTIVITY_MIN_RETENTION_DAYS,
+      },
+      "activity retention ignored: it must be an integer of at least the minimum; the audit trail is kept whole",
     );
 
     return null;
@@ -92,7 +147,8 @@ function resolveActivityRetentionDays(): number | null {
  * `activity` is only pruned when explicitly opted into — see the constants
  * above for why the two are treated so differently.
  *
- * Both deletes walk oldest-first on ("created_at") and run in bounded
+ * Both deletes walk ("created_at") within index bounds (the notification
+ * band newest first, see notificationPurgePasses) and run in bounded
  * batches, so the purge never becomes a long transaction pinning the xmin
  * horizon. Neither table is claimed by a worker, so there is nothing to race.
  *
@@ -113,28 +169,36 @@ const cleanupUserHistoryJob: CronJobDefinition = {
       Date.now() - UNREAD_NOTIFICATION_RETENTION_DAYS * DAY_MS,
     );
 
-    // Both branches in one statement so a single ordered walk of
-    // notification_created_at_idx serves them. Deleting a notification can
-    // never resurrect a duplicate through the `deliveryId` unique
-    // constraint: the delivery that created it is terminal within minutes
-    // and its row is cascade-deleted with the outbox event at 30 days, long
-    // before the shortest window here.
-    const notifications = await deleteInBatches({
-      table: Prisma.sql`"notification"`,
-      where: Prisma.sql`("read" = true AND "created_at" < ${readBefore}) OR ("read" = false AND "created_at" < ${unreadBefore})`,
-      orderBy: Prisma.sql`"created_at"`,
-      maxRows: MAX_NOTIFICATIONS_PER_RUN,
-      deadline,
-    });
+    // Two passes sharing the run's ceiling and deadline (see
+    // notificationPurgePasses). Deleting a notification can never resurrect
+    // a duplicate through the `deliveryId` unique constraint: the delivery
+    // that created it is terminal within minutes and its row is
+    // cascade-deleted with the outbox event at 30 days, long before the
+    // shortest window here.
+    const notifications = { deleted: 0, stoppedEarly: false };
 
-    console.log(
-      `[CleanupUserHistory] Expurgo: ${notifications.deleted} notificação(ões)`,
-    );
+    for (const pass of notificationPurgePasses(readBefore, unreadBefore)) {
+      const result = await deleteInBatches({
+        table: Prisma.sql`"notification"`,
+        where: pass.where,
+        orderBy: pass.orderBy,
+        maxRows: MAX_NOTIFICATIONS_PER_RUN - notifications.deleted,
+        deadline,
+      });
+
+      notifications.deleted += result.deleted;
+
+      if (result.stoppedEarly) {
+        notifications.stoppedEarly = true;
+        break;
+      }
+    }
+
+    log.info({ deleted: notifications.deleted }, "old notifications purged");
 
     if (notifications.stoppedEarly) {
-      console.warn(
-        "[CleanupUserHistory] Expurgo de notificações interrompido pelo " +
-          "teto/tempo da execução; restante fica para a próxima janela",
+      log.warn(
+        "notification purge stopped at the run's cap or deadline; the rest waits for the next window",
       );
     }
 
@@ -156,11 +220,11 @@ const cleanupUserHistoryJob: CronJobDefinition = {
       deadline,
     });
 
-    console.log(
-      `[CleanupUserHistory] Expurgo opcional da trilha: ` +
-        `${activities.deleted} atividade(s) com mais de ${activityRetentionDays} dia(s)`,
+    log.info(
+      { deleted: activities.deleted, retentionDays: activityRetentionDays },
+      "opt-in activity trail purge done",
     );
   },
 };
 
-export { cleanupUserHistoryJob };
+export { cleanupUserHistoryJob, notificationPurgePasses };

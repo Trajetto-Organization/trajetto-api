@@ -4,11 +4,6 @@ import { container } from "tsyringe";
 import { createProfileAccessSchema } from "@/schemas/create-profile-access";
 import { CreateProfileAccessUseCase } from "./create-profile-access-usecase";
 
-import { ProfileAccessAlreadyExistsError } from "../errors/profile-access-already-exists-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-
 class CreateProfileAccessController {
   async handle(
     request: FastifyRequest,
@@ -21,33 +16,17 @@ class CreateProfileAccessController {
       CreateProfileAccessUseCase,
     );
 
-    try {
-      await createProfileAccessUseCase.execute(
-        {
-          name,
-          businessId,
-        },
-        id,
-      );
+    await createProfileAccessUseCase.execute(
+      {
+        name,
+        businessId,
+      },
+      id,
+    );
 
-      return reply
-        .status(201)
-        .send({ message: "Perfil de acesso criado com sucesso!" });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof ProfileAccessAlreadyExistsError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+    return reply
+      .status(201)
+      .send({ message: "Perfil de acesso criado com sucesso!" });
   }
 }
 

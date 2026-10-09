@@ -6,7 +6,6 @@ import { z } from "zod";
 import { ListProofAuditsUseCase } from "./list-proof-audits-usecase";
 import { listProofAuditsSchema } from "@/schemas/proof-audit-schema";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class ListProofAuditsController {
@@ -19,28 +18,20 @@ class ListProofAuditsController {
 
     const useCase = container.resolve(ListProofAuditsUseCase);
 
-    try {
-      const auditsPromise = useCase.execute({
+    // Every refusal is an AppError with its code (a user row gone is 404
+    // USER_NOT_FOUND), answered by the global handler before the stream opens.
+    await sendAsNDJSON({
+      reply,
+      dataPromise: useCase.execute({
         userId: id,
         businessId,
         status,
         page,
         pageSize,
-      });
-
-      await sendAsNDJSON({
-        reply,
-        dataPromise: auditsPromise,
-        page,
-        pageSize,
-      });
-    } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      throw error;
-    }
+      }),
+      page,
+      pageSize,
+    });
   }
 }
 

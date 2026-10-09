@@ -1,12 +1,13 @@
 import { z } from "zod";
 
 import { createVehicleTypeSchema } from "@/schemas/create-vehicle-type-schema";
-
-import { listPagesSchema } from "@/schemas/list-pages-schema";
-import { listPagesByBusinessSchema } from "@/schemas/list-pages-by-business-schema";
+import { listVehicleTypeSchema } from "@/schemas/list-vehicle-type-schema";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateVehicleTypeSchema } from "@/schemas/update-vehicle-type-schema";
+import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
+
+import { errorResponse } from "./common-responses";
 
 const vehicleTypeBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
@@ -15,179 +16,63 @@ const vehicleTypeBusinessParams = z.object({
 
 const vehicleTypeSchemas = {
   createVehicleType: createVehicleTypeSchema,
-  listVehicleType: listPagesSchema,
-  listVehicleTypeBusiness: listPagesByBusinessSchema,
+  listVehicleType: listVehicleTypeSchema,
   updateVehicleType: updateVehicleTypeSchema,
   businessIdParam: updateDeleteBusinessSchema,
   vehicleTypeBusinessParams: vehicleTypeBusinessParams,
-  searchVehicleTypeCursor: z.object({
-    limit: z
-      .string()
-      .optional()
-      .describe("Número máximo de empresas a retornar (padrão: 10)"),
-    cursor: z
-      .string()
-      .optional()
-      .describe("ID da última empresa da página anterior para paginação"),
-    businessId: z.string().describe("ID da empresa"),
-  }),
+  searchVehicleTypeCursor: cursorPaginationByBusinessSchema,
 };
 
+const dateLike = z.union([z.string(), z.date()]);
+
+const cnhCategory = z
+  .enum(["A", "B", "C", "D", "E", "AB", "AC", "AD", "AE"])
+  .nullable()
+  .describe(
+    "Categoria de CNH exigida para dirigir este tipo; null = não configurada (a atribuição não confere).",
+  );
+
+const vehicleTypeItem = z.object({
+  id: z.string(),
+  description: z.string(),
+  number_of_axles: z.number().int().describe("Eixos padrão; o veículo pode sobrescrever."),
+  required_cnh_category: cnhCategory,
+  businessId: z.string(),
+  created_at: dateLike,
+  updated_at: dateLike,
+});
+
+const message = (text: string) => z.object({ message: z.string().default(text) });
+
 const vehicleTypeResponses = {
-  searchVehicleTypeStreamDescription: z.object({
-    description: z
-      .string()
-      .default(
-        "NDJSON stream. First line contains meta object with {nextCursor, hasMore}. Subsequent lines are vehicle type objects.",
-      ),
-  }),
-  vehicleTypeCreated: z.object({
-    message: z.string().default("Tipo de veículo criado com sucesso!"),
-  }),
+  vehicleTypeCreated: message("Tipo de veículo criado com sucesso!"),
+  vehicleTypeUpdated: message("Tipo de veículo atualizado com sucesso!"),
+  vehicleTypeDeleted: message("Tipo de veículo deletado com sucesso!"),
 
-  vehicleTypeList: z.object({
-    data: z.array(
-      z.object({
-        id: z.string(),
-        description: z.string(),
-        number_of_axles: z.number(),
-        businessId: z.string(),
-        created_at: z.union([z.string(), z.date()]),
-        updated_at: z.union([z.string(), z.date()]),
-        business: z
-          .object({
-            corporate_reason: z.string(),
-          })
-          .optional(), // Only for MASTER role
-      }),
-    ),
-    total: z.number(),
+  vehicleTypeItem,
+  vehicleTypeListItem: vehicleTypeItem.extend({
+    _count: z
+      .object({ vehicles: z.number().int() })
+      .describe("Veículos cadastrados com este tipo (a exclusão é recusada enquanto houver)."),
   }),
 
-  vehicleTypeUpdated: z.object({
-    message: z.string().default("Tipo de veículo atualizado com sucesso!"),
-  }),
-
-  vehicleTypeDeleted: z.object({
-    message: z.string().default("Tipo de veículo deletado com sucesso!"),
-  }),
-
-  // Common Error Responses
-  internalServerError: z.object({
-    message: z.string().default("Internal server error"),
-  }),
-
-  resourceNotFound: z.object({
-    message: z.string().default("Recurso não encontrado!"),
-  }),
-
-  validationError: z.object({
-    message: z.string().default("Validation Error"),
-    issues: z.array(z.string()),
-  }),
-
-  vehicleTypeNotFound: z.object({
-    message: z.string().default("Tipo de veículo não encontrado!"),
-  }),
-
-  businessNotFound: z.object({
-    message: z
-      .string()
-      .default("Empresa não encontrada! Por favor, tente novamente."),
-  }),
-
-  vehicleTypeAlreadyExists: z.object({
-    message: z
-      .string()
-      .default("Este tipo de veículo já foi cadastrado para esta empresa!"),
-  }),
-
-  // Grouping errors by route
-  createVehicleTypeErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este tipo de veículo já foi cadastrado para esta empresa!"),
-    }),
-  ]),
-
-  listVehicleTypeErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-  ]),
-
-  listVehicleTypeBusinessErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-  ]),
-
-  updateVehicleTypeErrors: z.union([
-    z.object({
-      message: z.string().default("Validation Error"),
-      issues: z.array(z.string()),
-    }),
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Tipo de veículo não encontrado!"),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Empresa não encontrada! Por favor, tente novamente."),
-    }),
-    z.object({
-      message: z
-        .string()
-        .default("Este tipo de veículo já foi cadastrado para esta empresa!"),
-    }),
-  ]),
-
-  deleteVehicleTypeErrors: z.union([
-    z.object({
-      message: z.string().default("Recurso não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Tipo de veículo não encontrado!"),
-    }),
-    z.object({
-      message: z.string().default("Empresa não encontrada!"),
-    }),
-  ]),
-
-  vehicleTypeNotBelongBusinessError: z.object({
-    message: z
-      .string()
-      .default("Este tipo de veículo não pertence a esta empresa!"),
-  }),
+  validationError: errorResponse.describe(
+    "VALIDATION_ERROR (campo inválido, ordenação fora da lista) ou BUSINESS_NOT_IDENTIFIED (MASTER sem empresa).",
+  ),
+  notFound: errorResponse.describe(
+    "VEHICLE_TYPE_NOT_FOUND, BUSINESS_NOT_FOUND ou USER_NOT_FOUND (o usuário da sessão não existe mais). Um tipo de outra empresa responde exatamente como um inexistente.",
+  ),
+  // The list only looks the session user up; no type id to miss.
+  sessionUserNotFound: errorResponse.describe(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
+  nameConflict: errorResponse.describe(
+    "VEHICLE_TYPE_NAME_TAKEN: já existe um tipo com este nome nesta empresa.",
+  ),
+  deleteConflict: errorResponse.describe(
+    "VEHICLE_TYPE_IN_USE: veículos ainda usam o tipo; a mensagem traz a contagem.",
+  ),
+  internalServerError: errorResponse,
 };
 
 export { vehicleTypeSchemas, vehicleTypeResponses };

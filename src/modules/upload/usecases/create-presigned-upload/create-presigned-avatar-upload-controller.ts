@@ -40,9 +40,15 @@ class CreatePresignedAvatarUploadController {
 
       return reply.status(201).send({ uploads });
     } catch (error) {
-      if (error instanceof AppError) {
-        return reply.status(error.statusCode).send({ message: error.message });
-      }
+      // Its own status and code, from the global handler (decision 11.3).
+      if (error instanceof AppError) throw error;
+
+      // See CreatePresignedUploadController: the cause reaches the log, the
+      // body stays the same (OBS-12).
+      request.log.error(
+        { err: error, uploadType: "avatars" },
+        "presigned upload authorization failed",
+      );
 
       return reply
         .status(500)

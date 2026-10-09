@@ -3,21 +3,7 @@ import { container } from "tsyringe";
 
 import { CreateVehicleChecklistUseCase } from "./create-vehicle-checklist-usecase";
 
-import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
-
-import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
-import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
-
-import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
-
-import { VehicleNotBelongBusinessError } from "@/modules/vehicle/usecases/errors/vehicle-not-belong-business-error";
-import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
-
-import { BranchNotBelongBusinessError } from "@/modules/branch/usecases/errors/branch-not-belong-business-error";
-import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
-
-import { VehicleNotAssignedToDriverError } from "@/modules/vehicle/usecases/errors/vehicle-not-assigned-to-driver-error";
+import { replyChecklistError } from "../errors/vehicle-checklist-http-errors";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { presignedPhotosSchema } from "@/schemas/presigned-photos-schema";
@@ -26,11 +12,41 @@ import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist
 
 import { PhotoValidationService } from "@/shared/services/photo-validation-service";
 import { normalizeFormFields } from "@/shared/utils/normalize-form-field";
+import { submissionKeyOf } from "@/shared/http/submission-key";
 
 class CreateVehicleChecklistController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
+
+    const createVehicleChecklistUseCase = container.resolve(
+      CreateVehicleChecklistUseCase,
+    );
+
+    // A resend of a checklist that already exists is answered with it before
+    // the body is validated: the outbox froze that body on an older version
+    // of the app, and a schema tightened since must not turn a recorded
+    // inspection into a failed one (see `submissionKeyOf`). The route's
+    // guards — tenant, branch, permission, module — have all run by now.
+    const replayKey = submissionKeyOf(
+      request.body,
+      request.headers["idempotency-key"],
+    );
+
+    if (replayKey) {
+      const replay = await createVehicleChecklistUseCase.findReplay(
+        businessId,
+        replayKey,
+        request.user.driverId,
+      );
+
+      if (replay) {
+        return reply.header("Idempotency-Key", replayKey).status(201).send({
+          message: "Checklist veicular criado com sucesso!",
+          id: replay.id,
+        });
+      }
+    }
 
     const body = (request.body ?? {}) as Record<string, unknown>;
     const { photos, ...fields } = body;
@@ -62,7 +78,11 @@ class CreateVehicleChecklistController {
     try {
       checklistData = createVehicleChecklistSchema.parse(formData);
     } catch (error) {
-      return reply.status(400).send({
+      // Codes in `x-error-code` as well: the route's response schema strips
+      // unknown body fields, and the app's queue decides from the code whether
+      // a refusal is on the merits or a contract its build no longer meets.
+      return reply.header("x-error-code", "VALIDATION_ERROR").status(400).send({
+        code: "VALIDATION_ERROR",
         message: "Dados do formulário inválidos",
         details: error instanceof Error ? error.message : "Erro de validação",
       });
@@ -75,7 +95,8 @@ class CreateVehicleChecklistController {
       );
 
     if (!photoValidation.isValid) {
-      return reply.status(400).send({
+      return reply.header("x-error-code", "PHOTOS_REQUIRED").status(400).send({
+        code: "PHOTOS_REQUIRED",
         message: "Fotos obrigatórias não fornecidas",
         errors: photoValidation.errors,
         missingPhotos: photoValidation.missingPhotos,
@@ -83,10 +104,6 @@ class CreateVehicleChecklistController {
           PhotoValidationService.validatePhotosRequired(checklistData),
       });
     }
-
-    const createVehicleChecklistUseCase = container.resolve(
-      CreateVehicleChecklistUseCase,
-    );
 
     try {
       const checklist = await createVehicleChecklistUseCase.execute(
@@ -109,45 +126,9 @@ class CreateVehicleChecklistController {
           id: checklist.id,
         });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BusinessNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof DriverNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BranchNotFoundError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotBelongBusinessError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof DriverNotBelongBusinessError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof BranchNotBelongBusinessError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleMileageInvalidError) {
-        return reply.status(400).send({ message: error.message });
-      }
-
-      if (error instanceof VehicleNotAssignedToDriverError) {
-        return reply.status(400).send({ message: error.message });
-      }
+      // Foreign ids answer like unknown ones; every refusal carries a code
+      // (vehicle-checklist-http-errors).
+      if (replyChecklistError(reply, error)) return;
 
       throw error;
     }

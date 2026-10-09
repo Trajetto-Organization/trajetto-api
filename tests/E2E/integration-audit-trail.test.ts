@@ -18,8 +18,8 @@ import auth from "@/config/auth";
  * trace at all.
  *
  * Asserted through the real path, which is the only honest way: the controller
- * publishes to the outbox, the pipeline turns it into an Activity row, and the
- * feed reads it. A test that called the service directly would prove the
+ * records the entry (written straight to the activity table since GAP2-4),
+ * and the feed reads it. A test that called the service directly would prove the
  * service works and say nothing about whether the controller calls it.
  */
 const prisma = new PrismaClient();
@@ -126,8 +126,8 @@ function call(method: "GET" | "POST" | "DELETE" | "PATCH", url: string, body?: u
 /**
  * Waits for the trail to catch up.
  *
- * The entry rides the outbox on purpose — a revoke must not fail because the
- * audit row could not be written — so it lands a moment after the response.
+ * The entry is not awaited on purpose — a revoke must not fail because the
+ * audit row could not be written — so it may land a moment after the response.
  * Polling is what a caller would do; a fixed sleep would either be flaky or
  * slow, and usually both.
  */
