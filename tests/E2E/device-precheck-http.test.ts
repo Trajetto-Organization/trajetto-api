@@ -10,7 +10,11 @@ import type { UploadService } from "@/shared/services/upload-service";
 import { ensureDefaultOccurrenceTypes } from "@/shared/delivery/default-occurrence-types";
 import { getOrCreateCurrentPeriod } from "@/shared/ai/ai-quota-service";
 
-import { fakeJpeg, seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
+import {
+  fakeJpeg,
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
 
 /**
  * The phone's offline pre-check travelling with the submission (decision
@@ -88,7 +92,10 @@ const odometerPrecheck = (overrides: Record<string, unknown> = {}) =>
 
 async function storedPhoto(
   businessId: string,
-  folder: "deliveryPhotos" | "odometerPhotos" | "checklistPhotos" = "deliveryPhotos",
+  folder:
+    | "deliveryPhotos"
+    | "odometerPhotos"
+    | "checklistPhotos" = "deliveryPhotos",
 ): Promise<string> {
   const key = `${folder}/${businessId}/${Date.now()}-test-${randomUUID()}.jpg`;
 
@@ -119,12 +126,17 @@ async function deliveryInTransit(seed: FleetDriverSeed): Promise<string> {
 async function deliveredTypeId(businessId: string): Promise<string> {
   return (
     await prisma.occurrenceType.findUniqueOrThrow({
-      where: { businessId_system_key: { businessId, system_key: "delivered_default" } },
+      where: {
+        businessId_system_key: { businessId, system_key: "delivered_default" },
+      },
     })
   ).id;
 }
 
-async function deliveredBody(seed: FleetDriverSeed, extra: Record<string, unknown> = {}) {
+async function deliveredBody(
+  seed: FleetDriverSeed,
+  extra: Record<string, unknown> = {},
+) {
   return {
     occurrenceTypeId: await deliveredTypeId(seed.businessId),
     client_submission_id: randomUUID(),
@@ -154,10 +166,17 @@ async function cardOf(deliveryId: string) {
 async function unitsSpent(businessId: string): Promise<number> {
   const rows = await prisma.aIUsagePeriod.findMany({ where: { businessId } });
 
-  return rows.reduce((sum, row) => sum + row.reservedUnits + row.consumedUnits, 0);
+  return rows.reduce(
+    (sum, row) => sum + row.reservedUnits + row.consumedUnits,
+    0,
+  );
 }
 
-function fuelBody(seed: FleetDriverSeed, mileage: number, extra: Record<string, unknown> = {}) {
+function fuelBody(
+  seed: FleetDriverSeed,
+  mileage: number,
+  extra: Record<string, unknown> = {},
+) {
   return storedPhoto(seed.businessId, "odometerPhotos").then((key) => ({
     client_submission_id: randomUUID(),
     current_mileage: mileage,
@@ -184,10 +203,12 @@ async function checklistBody(
   extra: Record<string, unknown> = {},
 ) {
   const photos = await Promise.all(
-    ["current_mileage", "fuel_level_adequate", "tires_condition"].map(async (fieldName) => ({
-      key: await storedPhoto(seed.businessId, "checklistPhotos"),
-      fieldName,
-    })),
+    ["current_mileage", "fuel_level_adequate", "tires_condition"].map(
+      async (fieldName) => ({
+        key: await storedPhoto(seed.businessId, "checklistPhotos"),
+        fieldName,
+      }),
+    ),
   );
 
   return {
@@ -238,33 +259,66 @@ const post = (url: string, token: string, body: Record<string, unknown>) =>
   });
 
 async function vehicleMileage(seed: FleetDriverSeed): Promise<number> {
-  return (await prisma.vehicle.findUniqueOrThrow({ where: { id: seed.vehicleId } }))
-    .current_mileage;
+  return (
+    await prisma.vehicle.findUniqueOrThrow({ where: { id: seed.vehicleId } })
+  ).current_mileage;
 }
 
 const me = (token: string) =>
-  app.inject({ method: "GET", url: "/user/me", headers: { authorization: `Bearer ${token}` } });
+  app.inject({
+    method: "GET",
+    url: "/user/me",
+    headers: { authorization: `Bearer ${token}` },
+  });
 
 beforeAll(async () => {
-  carrier = await seedFleetDriver(prisma, { businessId: CARRIER, cnpj: "55666990000191", mileage: 1_000 });
-  noAi = await seedFleetDriver(prisma, { businessId: NO_AI, cnpj: "55666990000272", mileage: 1_000 });
-  spent = await seedFleetDriver(prisma, { businessId: SPENT, cnpj: "55666990000353", mileage: 1_000 });
+  carrier = await seedFleetDriver(prisma, {
+    businessId: CARRIER,
+    cnpj: "55666990000191",
+    mileage: 1_000,
+  });
+  noAi = await seedFleetDriver(prisma, {
+    businessId: NO_AI,
+    cnpj: "55666990000272",
+    mileage: 1_000,
+  });
+  spent = await seedFleetDriver(prisma, {
+    businessId: SPENT,
+    cnpj: "55666990000353",
+    mileage: 1_000,
+  });
 
-  await prisma.business.update({ where: { id: CARRIER }, data: { ai_analysis_limit: 100 } });
-  await prisma.business.update({ where: { id: NO_AI }, data: { ai_analysis_limit: 0 } });
-  await prisma.business.update({ where: { id: SPENT }, data: { ai_analysis_limit: 1 } });
+  await prisma.business.update({
+    where: { id: CARRIER },
+    data: { ai_analysis_limit: 100 },
+  });
+  await prisma.business.update({
+    where: { id: NO_AI },
+    data: { ai_analysis_limit: 0 },
+  });
+  await prisma.business.update({
+    where: { id: SPENT },
+    data: { ai_analysis_limit: 1 },
+  });
 
   for (const businessId of [CARRIER, NO_AI, SPENT]) {
     await ensureDefaultOccurrenceTypes(prisma, businessId);
     shippers.set(
       businessId,
-      (await prisma.shipper.create({ data: { name: "Embarcador", businessId } })).id,
+      (
+        await prisma.shipper.create({
+          data: { name: "Embarcador", businessId },
+        })
+      ).id,
     );
   }
 
   // SPENT used its only unit this month.
   const period = await getOrCreateCurrentPeriod(prisma, SPENT);
-  await prisma.aIUsagePeriod.update({ where: { id: period.id }, data: { consumedUnits: 1 } });
+  await prisma.aIUsagePeriod.update({
+    where: { id: period.id },
+    data: { consumedUnits: 1 },
+  });
 
   readerOn(true);
   env.WORKERS_ENABLED = false;
@@ -292,7 +346,9 @@ describe("the receipt pre-check on a delivered report", () => {
     const before = await unitsSpent(CARRIER);
 
     const sentPrecheck = precheck();
-    const body = await deliveredBody(carrier, { device_precheck: sentPrecheck });
+    const body = await deliveredBody(carrier, {
+      device_precheck: sentPrecheck,
+    });
     const first = await report(deliveryId, carrier.driverToken, body, CARRIER);
 
     expect(first.statusCode, first.body).toBe(201);
@@ -320,14 +376,21 @@ describe("the receipt pre-check on a delivered report", () => {
 
     const card = await cardOf(deliveryId);
 
-    expect(card?.device_precheck).toMatchObject({ invoice_number_found: true, outcome: "ok" });
+    expect(card?.device_precheck).toMatchObject({
+      invoice_number_found: true,
+      outcome: "ok",
+    });
     expect(card?.device_agreement).toBeNull();
 
     // One photo, one unit — the pre-check reserved nothing of its own.
     expect(await unitsSpent(CARRIER)).toBe(before + 1);
     expect(
       await prisma.aIAnalysisRequest.count({
-        where: { businessId: CARRIER, recordId: deliveryId, type: "DELIVERY_PROOF" },
+        where: {
+          businessId: CARRIER,
+          recordId: deliveryId,
+          type: "DELIVERY_PROOF",
+        },
       }),
     ).toBe(1);
   });
@@ -403,11 +466,19 @@ describe("the receipt pre-check on a delivered report", () => {
   it("rides the installed app's proof route too", async () => {
     const deliveryId = await deliveryInTransit(carrier);
 
-    const response = await post(`/delivery/proof/${deliveryId}/business/${CARRIER}`, carrier.driverToken, {
-      client_submission_id: randomUUID(),
-      photo: await storedPhoto(CARRIER),
-      device_precheck: precheck({ invoice_number_found: false, outcome: "warned", driver_overrode: true }),
-    });
+    const response = await post(
+      `/delivery/proof/${deliveryId}/business/${CARRIER}`,
+      carrier.driverToken,
+      {
+        client_submission_id: randomUUID(),
+        photo: await storedPhoto(CARRIER),
+        device_precheck: precheck({
+          invoice_number_found: false,
+          outcome: "warned",
+          driver_overrode: true,
+        }),
+      },
+    );
 
     expect(response.statusCode, response.body).toBe(201);
     expect((await cardOf(deliveryId))?.device_precheck).toMatchObject({
@@ -426,7 +497,9 @@ describe("the receipt pre-check on a delivered report", () => {
       CARRIER,
     );
 
-    expect(`${foreign.statusCode} ${foreign.json().code}`).toBe("403 TENANT_ACCESS_DENIED");
+    expect(`${foreign.statusCode} ${foreign.json().code}`).toBe(
+      "403 TENANT_ACCESS_DENIED",
+    );
 
     const office = await report(
       deliveryId,
@@ -435,7 +508,9 @@ describe("the receipt pre-check on a delivered report", () => {
       CARRIER,
     );
 
-    expect(`${office.statusCode} ${office.json().code}`).toBe("403 DRIVER_ONLY");
+    expect(`${office.statusCode} ${office.json().code}`).toBe(
+      "403 DRIVER_ONLY",
+    );
     expect(await cardOf(deliveryId)).toBeNull();
   });
 });
@@ -448,7 +523,11 @@ describe("the audit queue", () => {
       deliveryId,
       carrier.driverToken,
       await deliveredBody(carrier, {
-        device_precheck: precheck({ date_out_of_window: true, outcome: "warned", driver_overrode: true }),
+        device_precheck: precheck({
+          date_out_of_window: true,
+          outcome: "warned",
+          driver_overrode: true,
+        }),
       }),
       CARRIER,
     );
@@ -482,8 +561,13 @@ describe("the audit queue", () => {
 
     // Still untouched a moment later: nothing on this replica claimed it.
     await new Promise((resolve) => setTimeout(resolve, 500));
-    const queued = await prisma.aIAnalysisRequest.findFirstOrThrow({ where: { recordId: deliveryId } });
-    expect({ status: queued.status, attempts: queued.attempts }).toEqual({ status: "PENDING", attempts: 0 });
+    const queued = await prisma.aIAnalysisRequest.findFirstOrThrow({
+      where: { recordId: deliveryId },
+    });
+    expect({ status: queued.status, attempts: queued.attempts }).toEqual({
+      status: "PENDING",
+      attempts: 0,
+    });
 
     const otherCompany = await app.inject({
       method: "GET",
@@ -505,23 +589,43 @@ describe("the audit queue", () => {
 
 describe("the odometer pre-check", () => {
   it("is kept on the fueling once, and a resend does not rewrite it", async () => {
-    const body = await fuelBody(carrier, (await vehicleMileage(carrier)) + 100, {
-      device_precheck: odometerPrecheck(),
-    });
+    const body = await fuelBody(
+      carrier,
+      (await vehicleMileage(carrier)) + 100,
+      {
+        device_precheck: odometerPrecheck(),
+      },
+    );
 
-    const first = await post(`/fuel/create-fuel/${CARRIER}`, carrier.driverToken, body);
+    const first = await post(
+      `/fuel/create-fuel/${CARRIER}`,
+      carrier.driverToken,
+      body,
+    );
     expect(first.statusCode, first.body).toBe(201);
 
-    const resend = await post(`/fuel/create-fuel/${CARRIER}`, carrier.driverToken, {
-      ...body,
-      device_precheck: odometerPrecheck({ typed_mileage_found: false, outcome: "warned" }),
-    });
+    const resend = await post(
+      `/fuel/create-fuel/${CARRIER}`,
+      carrier.driverToken,
+      {
+        ...body,
+        device_precheck: odometerPrecheck({
+          typed_mileage_found: false,
+          outcome: "warned",
+        }),
+      },
+    );
     expect(resend.statusCode, resend.body).toBe(201);
     expect(resend.json().id).toBe(first.json().id);
 
-    const fuel = await prisma.fuel.findUniqueOrThrow({ where: { id: first.json().id } });
+    const fuel = await prisma.fuel.findUniqueOrThrow({
+      where: { id: first.json().id },
+    });
 
-    expect(fuel.odometer_device_precheck).toMatchObject({ kind: "odometer", typed_mileage_found: true });
+    expect(fuel.odometer_device_precheck).toMatchObject({
+      kind: "odometer",
+      typed_mileage_found: true,
+    });
     expect(fuel.odometer_device_agreement).toBeNull();
   });
 
@@ -529,30 +633,44 @@ describe("the odometer pre-check", () => {
     const wrongKind = await post(
       `/fuel/create-fuel/${CARRIER}`,
       carrier.driverToken,
-      await fuelBody(carrier, (await vehicleMileage(carrier)) + 100, { device_precheck: precheck() }),
+      await fuelBody(carrier, (await vehicleMileage(carrier)) + 100, {
+        device_precheck: precheck(),
+      }),
     );
     expect(wrongKind.statusCode, wrongKind.body).toBe(201);
     expect(
-      (await prisma.fuel.findUniqueOrThrow({ where: { id: wrongKind.json().id } }))
-        .odometer_device_precheck,
+      (
+        await prisma.fuel.findUniqueOrThrow({
+          where: { id: wrongKind.json().id },
+        })
+      ).odometer_device_precheck,
     ).toBeNull();
 
     const notBought = await post(
       `/fuel/create-fuel/${NO_AI}`,
       noAi.driverToken,
-      await fuelBody(noAi, (await vehicleMileage(noAi)) + 100, { device_precheck: odometerPrecheck() }),
+      await fuelBody(noAi, (await vehicleMileage(noAi)) + 100, {
+        device_precheck: odometerPrecheck(),
+      }),
     );
     expect(notBought.statusCode, notBought.body).toBe(201);
     expect(
-      (await prisma.fuel.findUniqueOrThrow({ where: { id: notBought.json().id } }))
-        .odometer_device_precheck,
+      (
+        await prisma.fuel.findUniqueOrThrow({
+          where: { id: notBought.json().id },
+        })
+      ).odometer_device_precheck,
     ).toBeNull();
   });
 
   it("is kept on the checklist with the odometer photo, once", async () => {
-    const body = await checklistBody(carrier, (await vehicleMileage(carrier)) + 50, {
-      device_precheck: odometerPrecheck(),
-    });
+    const body = await checklistBody(
+      carrier,
+      (await vehicleMileage(carrier)) + 50,
+      {
+        device_precheck: odometerPrecheck(),
+      },
+    );
 
     const first = await post(
       `/vehicle-checklist/create-vehicle-checklist/${CARRIER}`,
@@ -564,7 +682,10 @@ describe("the odometer pre-check", () => {
     const resend = await post(
       `/vehicle-checklist/create-vehicle-checklist/${CARRIER}`,
       carrier.driverToken,
-      { ...body, device_precheck: odometerPrecheck({ typed_mileage_found: null }) },
+      {
+        ...body,
+        device_precheck: odometerPrecheck({ typed_mileage_found: null }),
+      },
     );
     expect(resend.statusCode, resend.body).toBe(201);
     expect(resend.json().id).toBe(first.json().id);
@@ -573,15 +694,23 @@ describe("the odometer pre-check", () => {
       where: { id: first.json().id },
     });
 
-    expect(checklist.mileage_device_precheck).toMatchObject({ typed_mileage_found: true });
+    expect(checklist.mileage_device_precheck).toMatchObject({
+      typed_mileage_found: true,
+    });
 
     // The AI request's input is hashed for idempotency: the pre-check must
     // not be in it, or the same photo would be a different request.
     const request = await prisma.aIAnalysisRequest.findFirst({
-      where: { businessId: CARRIER, recordId: first.json().id, type: "CHECKLIST" },
+      where: {
+        businessId: CARRIER,
+        recordId: first.json().id,
+        type: "CHECKLIST",
+      },
     });
 
-    expect(JSON.stringify(request?.input ?? {})).not.toContain("device_precheck");
+    expect(JSON.stringify(request?.input ?? {})).not.toContain(
+      "device_precheck",
+    );
   });
 
   it("refuses another company's fueling as before, writing nothing", async () => {
@@ -599,7 +728,10 @@ describe("the odometer pre-check", () => {
 
 describe("the session flag (/user/me)", () => {
   it("turns the pre-check on only with the reading bought, on, and with quota left", async () => {
-    expect((await me(carrier.driverToken)).json().user.ai).toEqual({ precheck: true, reason: null });
+    expect((await me(carrier.driverToken)).json().user.ai).toEqual({
+      precheck: true,
+      reason: null,
+    });
     expect((await me(noAi.driverToken)).json().user.ai).toEqual({
       precheck: false,
       reason: "not_contracted",

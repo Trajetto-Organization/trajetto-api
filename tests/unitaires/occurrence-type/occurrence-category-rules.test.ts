@@ -28,19 +28,30 @@ interface SharedCases {
 }
 
 const CASES = JSON.parse(
-  readFileSync(join(__dirname, "fixtures/occurrence-requirements-cases.json"), "utf8"),
+  readFileSync(
+    join(__dirname, "fixtures/occurrence-requirements-cases.json"),
+    "utf8",
+  ),
 ) as SharedCases;
 
 describe("the category matrix", () => {
-  it.each(CASES.matrix.map((entry) => [entry.name, entry] as const))("%s", (_name, entry) => {
-    expect(categoryIssues(entry.shape)).toEqual(entry.issues);
-  });
+  it.each(CASES.matrix.map((entry) => [entry.name, entry] as const))(
+    "%s",
+    (_name, entry) => {
+      expect(categoryIssues(entry.shape)).toEqual(entry.issues);
+    },
+  );
 });
 
 describe("the requirements a driver's report leaves unmet", () => {
-  it.each(CASES.missing.map((entry) => [entry.name, entry] as const))("%s", (_name, entry) => {
-    expect(missingRequirements(entry.type, entry.sent)).toEqual(entry.missing);
-  });
+  it.each(CASES.missing.map((entry) => [entry.name, entry] as const))(
+    "%s",
+    (_name, entry) => {
+      expect(missingRequirements(entry.type, entry.sent)).toEqual(
+        entry.missing,
+      );
+    },
+  );
 });
 
 describe("what each category takes", () => {

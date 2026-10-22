@@ -95,7 +95,10 @@ function serviceOrderPartListWhere(
     );
   }
 
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /**
@@ -103,8 +106,12 @@ function serviceOrderPartListWhere(
  * service_order_part sop JOIN part p JOIN service_order so JOIN vehicle v.
  * ILIKE with the same escaping Prisma's `contains` gets from buildSearchOr.
  */
-function serviceOrderPartListSql(filters: ServiceOrderPartListFilters): Prisma.Sql {
-  const clauses: Prisma.Sql[] = [Prisma.sql`sop."businessId" = ${filters.businessId}`];
+function serviceOrderPartListSql(
+  filters: ServiceOrderPartListFilters,
+): Prisma.Sql {
+  const clauses: Prisma.Sql[] = [
+    Prisma.sql`sop."businessId" = ${filters.businessId}`,
+  ];
 
   if (filters.partIds?.length) {
     clauses.push(Prisma.sql`sop."partId" IN (${Prisma.join(filters.partIds)})`);
@@ -164,7 +171,9 @@ function summarizeServiceOrderPartList(
       withDiscount: aggregate.withDiscount,
       totalValue: round2(aggregate.totalValue),
       averageValue:
-        aggregate.count > 0 ? round2(aggregate.totalValue / aggregate.count) : 0,
+        aggregate.count > 0
+          ? round2(aggregate.totalValue / aggregate.count)
+          : 0,
       facets: {
         partId: [...partCounts].sort((a, b) =>
           (a.label ?? "").localeCompare(b.label ?? "", "pt-BR"),

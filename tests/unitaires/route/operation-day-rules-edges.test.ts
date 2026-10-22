@@ -33,7 +33,9 @@ describe("factInstant", () => {
 
 describe("failureInstant", () => {
   it("takes the latest failure fact", () => {
-    expect(failureInstant(T, [earlier, null, later]).getTime()).toBe(later.getTime());
+    expect(failureInstant(T, [earlier, null, later]).getTime()).toBe(
+      later.getTime(),
+    );
     expect(failureInstant(T, [null])).toBe(T);
   });
 });
@@ -43,7 +45,14 @@ describe("isFailureOccurrence", () => {
     expect(FAILURE_AUTHORIZATIONS).toEqual(["NOT_REQUIRED", "APPROVED"]);
     expect(isFailureOccurrence(true, "NOT_REQUIRED")).toBe(true);
     expect(isFailureOccurrence(true, "APPROVED")).toBe(true);
-    for (const status of ["PENDING", "DENIED", "SUPERSEDED", null, undefined, ""]) {
+    for (const status of [
+      "PENDING",
+      "DENIED",
+      "SUPERSEDED",
+      null,
+      undefined,
+      "",
+    ]) {
       expect(isFailureOccurrence(true, status)).toBe(false);
     }
     expect(isFailureOccurrence(false, "APPROVED")).toBe(false);
@@ -81,13 +90,16 @@ describe("operationDay", () => {
   });
 
   it("reads today's key as today", () => {
-    expect(operationDay("America/Sao_Paulo", T, "2026-10-06").isToday).toBe(true);
+    expect(operationDay("America/Sao_Paulo", T, "2026-10-06").isToday).toBe(
+      true,
+    );
   });
 });
 
 describe("routeMoveEntry", () => {
-  const entry = (kind: "ROUTE_STARTED" | "ROUTE_COMPLETED" | "ROUTE_CANCELLED") =>
-    routeMoveEntry({ id: "r1", code: 7, kind, at: T, driverName: "Ana" });
+  const entry = (
+    kind: "ROUTE_STARTED" | "ROUTE_COMPLETED" | "ROUTE_CANCELLED",
+  ) => routeMoveEntry({ id: "r1", code: 7, kind, at: T, driverName: "Ana" });
 
   it("writes one feed line per move, with its actor", () => {
     expect(entry("ROUTE_STARTED")).toEqual({
@@ -105,7 +117,11 @@ describe("routeMoveEntry", () => {
       occurredAt: T,
       receivedAt: T,
     });
-    expect([entry("ROUTE_COMPLETED"), entry("ROUTE_CANCELLED")].map(({ id, actor }) => ({ id, actor }))).toEqual([
+    expect(
+      [entry("ROUTE_COMPLETED"), entry("ROUTE_CANCELLED")].map(
+        ({ id, actor }) => ({ id, actor }),
+      ),
+    ).toEqual([
       { id: "route:r1:completed", actor: "SYSTEM" },
       { id: "route:r1:cancelled", actor: "USER" },
     ]);

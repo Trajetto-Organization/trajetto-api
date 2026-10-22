@@ -52,7 +52,9 @@ describe("parsePartitionBound", () => {
     expect(parsePartitionBound("DEFAULT")).toBeNull();
     expect(parsePartitionBound("FOR VALUES IN ('a')")).toBeNull();
     expect(
-      parsePartitionBound("FOR VALUES FROM ('not a date') TO ('2026-09-15 00:00:00')"),
+      parsePartitionBound(
+        "FOR VALUES FROM ('not a date') TO ('2026-09-15 00:00:00')",
+      ),
     ).toBeNull();
   });
 });
@@ -89,7 +91,10 @@ describe("splitByPartition", () => {
   it("finds nothing writable when there are no partitions at all", () => {
     const points = [at("2026-09-24T10:00:00Z")];
 
-    expect(splitByPartition(points, [])).toEqual({ writable: [], orphaned: points });
+    expect(splitByPartition(points, [])).toEqual({
+      writable: [],
+      orphaned: points,
+    });
   });
 });
 
@@ -98,15 +103,23 @@ describe("partitionMayStillBeCreated", () => {
   const now = new Date("2026-09-24T02:30:00Z");
 
   it("is true from yesterday's UTC midnight on, including the future", () => {
-    expect(partitionMayStillBeCreated(new Date("2026-09-23T00:00:00Z"), now)).toBe(true);
-    expect(partitionMayStillBeCreated(new Date("2026-09-24T02:00:00Z"), now)).toBe(true);
-    expect(partitionMayStillBeCreated(new Date("2026-10-10T00:00:00Z"), now)).toBe(true);
+    expect(
+      partitionMayStillBeCreated(new Date("2026-09-23T00:00:00Z"), now),
+    ).toBe(true);
+    expect(
+      partitionMayStillBeCreated(new Date("2026-09-24T02:00:00Z"), now),
+    ).toBe(true);
+    expect(
+      partitionMayStillBeCreated(new Date("2026-10-10T00:00:00Z"), now),
+    ).toBe(true);
   });
 
   it("is false for anything before yesterday: no run will ever create it", () => {
     expect(
       partitionMayStillBeCreated(new Date("2026-09-22T23:59:59.999Z"), now),
     ).toBe(false);
-    expect(partitionMayStillBeCreated(new Date("2026-08-15T06:38:36Z"), now)).toBe(false);
+    expect(
+      partitionMayStillBeCreated(new Date("2026-08-15T06:38:36Z"), now),
+    ).toBe(false);
   });
 });

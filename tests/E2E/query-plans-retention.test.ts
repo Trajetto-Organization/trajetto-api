@@ -24,7 +24,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** The DATE of `daysAgo` days before today, as Prisma writes a @db.Date. */
 function utcDay(daysAgo: number): Date {
   const today = new Date();
-  return new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()) - daysAgo * DAY_MS);
+  return new Date(
+    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()) -
+      daysAgo * DAY_MS,
+  );
 }
 
 beforeAll(async () => {
@@ -74,7 +77,9 @@ afterAll(async () => {
 
 describe("the nightly API usage purge", () => {
   it("keeps 400 days and removes what is older", async () => {
-    const { cleanupApiUsageJob, API_USAGE_RETENTION_DAYS } = await import("@/jobs/cron/cleanup-api-usage-job");
+    const { cleanupApiUsageJob, API_USAGE_RETENTION_DAYS } = await import(
+      "@/jobs/cron/cleanup-api-usage-job"
+    );
 
     expect(API_USAGE_RETENTION_DAYS).toBe(400);
 
@@ -87,30 +92,42 @@ describe("the nightly API usage purge", () => {
     });
 
     // The screen's longest window (90 days) is always whole.
-    expect(kept.some((row) => row.day.getTime() === utcDay(89).getTime())).toBe(true);
+    expect(kept.some((row) => row.day.getTime() === utcDay(89).getTime())).toBe(
+      true,
+    );
     expect(kept).toHaveLength(API_USAGE_RETENTION_DAYS);
-    expect(kept[0].day.getTime()).toBe(utcDay(API_USAGE_RETENTION_DAYS - 1).getTime());
+    expect(kept[0].day.getTime()).toBe(
+      utcDay(API_USAGE_RETENTION_DAYS - 1).getTime(),
+    );
   });
 
   it("walks the oldest days through the day index, not the table", async () => {
-    const { apiUsageRowsBefore } = await import("@/jobs/cron/cleanup-api-usage-job");
+    const { apiUsageRowsBefore } = await import(
+      "@/jobs/cron/cleanup-api-usage-job"
+    );
 
     const cutoff = new Date(Date.now() - 400 * DAY_MS);
 
-    const rows = await prisma.$queryRaw<Array<{ "QUERY PLAN": unknown }>>(Prisma.sql`
+    const rows = await prisma.$queryRaw<
+      Array<{ "QUERY PLAN": unknown }>
+    >(Prisma.sql`
       EXPLAIN (FORMAT JSON)
       SELECT "id" FROM "api_key_usage_daily" WHERE ${apiUsageRowsBefore(cutoff)} ORDER BY "day" LIMIT 5000
     `);
 
     const raw = rows[0]["QUERY PLAN"];
-    const plan = JSON.stringify(typeof raw === "string" ? JSON.parse(raw) : raw);
+    const plan = JSON.stringify(
+      typeof raw === "string" ? JSON.parse(raw) : raw,
+    );
 
     expect(plan).toContain("api_key_usage_daily_day_idx");
     expect(plan).not.toContain('"Seq Scan"');
   });
 
   it("is scheduled", async () => {
-    const { CronSchedulerService } = await import("@/shared/services/cron-scheduler-service");
+    const { CronSchedulerService } = await import(
+      "@/shared/services/cron-scheduler-service"
+    );
     const { registerCronJobs } = await import("@/jobs/cron");
 
     const names: string[] = [];

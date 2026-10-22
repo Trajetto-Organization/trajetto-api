@@ -33,7 +33,10 @@ const cleanupOrphanUploadsJob: CronJobDefinition = {
     if (summary.failed > 0) {
       // Each failure was logged with its key by tryDeleteFile; this is the
       // count, for the alert to key on.
-      log.warn({ failed: summary.failed }, "orphan uploads could not be deleted");
+      log.warn(
+        { failed: summary.failed },
+        "orphan uploads could not be deleted",
+      );
     }
 
     if (summary.errors > 0) {

@@ -173,7 +173,11 @@ async function seedVehicle(businessId: string): Promise<string> {
   return vehicle.id;
 }
 
-async function patch(actor: Seeded, url: string, payload: Record<string, unknown>) {
+async function patch(
+  actor: Seeded,
+  url: string,
+  payload: Record<string, unknown>,
+) {
   return app.inject({
     method: "PATCH",
     url,
@@ -182,13 +186,18 @@ async function patch(actor: Seeded, url: string, payload: Record<string, unknown
   });
 }
 
-function expectValidationRefusal(response: { statusCode: number; body: string }) {
+function expectValidationRefusal(response: {
+  statusCode: number;
+  body: string;
+}) {
   expect(response.statusCode, response.body).toBe(400);
 
   const body = JSON.parse(response.body);
 
   expect(body.code).toBe("VALIDATION_ERROR");
-  expect(body.issues.join(" ")).toContain("A empresa de um registro não muda pela edição");
+  expect(body.issues.join(" ")).toContain(
+    "A empresa de um registro não muda pela edição",
+  );
 }
 
 let admin: Seeded;
@@ -219,7 +228,11 @@ afterAll(async () => {
 
 describe("moving a user to another company", () => {
   it("is refused for the MASTER, and the user stays in their company", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA,
+    });
 
     const response = await patch(master, `/user/update-user/${target.id}`, {
       role: "BUSINESS_USER",
@@ -229,7 +242,9 @@ describe("moving a user to another company", () => {
 
     expectValidationRefusal(response);
 
-    const after = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: target.id },
+    });
 
     expect(after.businessId).toBe(A);
     expect(after.profileAccessId).toBe(profileA);
@@ -238,7 +253,11 @@ describe("moving a user to another company", () => {
   });
 
   it("is refused for a company administrator", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA,
+    });
 
     const response = await patch(admin, `/user/update-user/${target.id}`, {
       businessId: B,
@@ -246,11 +265,18 @@ describe("moving a user to another company", () => {
     });
 
     expectValidationRefusal(response);
-    expect((await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).businessId).toBe(A);
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: target.id } }))
+        .businessId,
+    ).toBe(A);
   });
 
   it("refuses the field even when it names the user's own company", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA,
+    });
 
     const response = await patch(master, `/user/update-user/${target.id}`, {
       name: "Nome Novo Completo",
@@ -258,20 +284,26 @@ describe("moving a user to another company", () => {
     });
 
     expectValidationRefusal(response);
-    expect((await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).name).toBe(
-      "Pessoa Cadastrada",
-    );
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).name,
+    ).toBe("Pessoa Cadastrada");
   });
 
   it("still edits the user when the body does not name a company", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA,
+    });
 
     const response = await patch(master, `/user/update-user/${target.id}`, {
       name: "Nome Novo Completo",
     });
 
     expect(response.statusCode, response.body).toBe(200);
-    expect(await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).toMatchObject({
+    expect(
+      await prisma.user.findUniqueOrThrow({ where: { id: target.id } }),
+    ).toMatchObject({
       name: "Nome Novo Completo",
       businessId: A,
     });
@@ -285,13 +317,19 @@ describe("moving a driver to another company", () => {
   ])("is refused for the %s", async (_role, actor) => {
     const driverId = await seedDriver(A);
 
-    const response = await patch(actor(), `/driver/update-driver/${driverId}/business/${A}`, {
-      name: "Motorista Renomeado",
-      businessId: B,
-    });
+    const response = await patch(
+      actor(),
+      `/driver/update-driver/${driverId}/business/${A}`,
+      {
+        name: "Motorista Renomeado",
+        businessId: B,
+      },
+    );
 
     expectValidationRefusal(response);
-    expect(await prisma.driver.findUniqueOrThrow({ where: { id: driverId } })).toMatchObject({
+    expect(
+      await prisma.driver.findUniqueOrThrow({ where: { id: driverId } }),
+    ).toMatchObject({
       name: "Motorista Cadastrado",
       businessId: A,
     });
@@ -305,13 +343,19 @@ describe("moving a vehicle to another company", () => {
   ])("is refused for the %s", async (_role, actor) => {
     const vehicleId = await seedVehicle(A);
 
-    const response = await patch(actor(), `/vehicle/update-vehicle/${vehicleId}/business/${A}`, {
-      brand: "Volvo",
-      businessId: B,
-    });
+    const response = await patch(
+      actor(),
+      `/vehicle/update-vehicle/${vehicleId}/business/${A}`,
+      {
+        brand: "Volvo",
+        businessId: B,
+      },
+    );
 
     expectValidationRefusal(response);
-    expect(await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } })).toMatchObject({
+    expect(
+      await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } }),
+    ).toMatchObject({
       brand: "Scania",
       businessId: A,
     });
@@ -320,60 +364,102 @@ describe("moving a vehicle to another company", () => {
 
 describe("moving a permission or a profile to another company", () => {
   it("refuses a MASTER re-homing a permission onto another company's profile", async () => {
-    const permission = await prisma.permission.findFirstOrThrow({ where: { profileAccessId: profileA } });
-
-    const response = await patch(master, `/permission/update-permission/${permission.id}`, {
-      action: "kanban_manage",
-      canRead: true,
-      businessId: B,
-      profileAccessId: profileB,
+    const permission = await prisma.permission.findFirstOrThrow({
+      where: { profileAccessId: profileA },
     });
 
+    const response = await patch(
+      master,
+      `/permission/update-permission/${permission.id}`,
+      {
+        action: "kanban_manage",
+        canRead: true,
+        businessId: B,
+        profileAccessId: profileB,
+      },
+    );
+
     expectValidationRefusal(response);
-    expect(await prisma.permission.findUniqueOrThrow({ where: { id: permission.id } })).toMatchObject({
+    expect(
+      await prisma.permission.findUniqueOrThrow({
+        where: { id: permission.id },
+      }),
+    ).toMatchObject({
       businessId: A,
       profileAccessId: profileA,
     });
   });
 
   it("refuses another company's profile even without a businessId in the body", async () => {
-    const permission = await prisma.permission.findFirstOrThrow({ where: { profileAccessId: profileA } });
-
-    const response = await patch(master, `/permission/update-permission/${permission.id}`, {
-      action: "kanban_manage",
-      canRead: true,
-      profileAccessId: profileB,
+    const permission = await prisma.permission.findFirstOrThrow({
+      where: { profileAccessId: profileA },
     });
+
+    const response = await patch(
+      master,
+      `/permission/update-permission/${permission.id}`,
+      {
+        action: "kanban_manage",
+        canRead: true,
+        profileAccessId: profileB,
+      },
+    );
 
     expect(response.statusCode, response.body).toBe(400);
     expect(JSON.parse(response.body).code).toBe("PROFILE_ACCESS_NOT_FOUND");
-    expect((await prisma.permission.findUniqueOrThrow({ where: { id: permission.id } })).businessId).toBe(A);
+    expect(
+      (
+        await prisma.permission.findUniqueOrThrow({
+          where: { id: permission.id },
+        })
+      ).businessId,
+    ).toBe(A);
   });
 
   it("edits a permission with no businessId in the body, in its own company", async () => {
-    const permission = await prisma.permission.findFirstOrThrow({ where: { profileAccessId: profileA } });
-
-    const response = await patch(master, `/permission/update-permission/${permission.id}`, {
-      action: "kanban_manage",
-      canRead: true,
-      canWrite: true,
-      profileAccessId: profileA,
+    const permission = await prisma.permission.findFirstOrThrow({
+      where: { profileAccessId: profileA },
     });
 
+    const response = await patch(
+      master,
+      `/permission/update-permission/${permission.id}`,
+      {
+        action: "kanban_manage",
+        canRead: true,
+        canWrite: true,
+        profileAccessId: profileA,
+      },
+    );
+
     expect(response.statusCode, response.body).toBe(200);
-    expect(await prisma.permission.findUniqueOrThrow({ where: { id: permission.id } })).toMatchObject({
+    expect(
+      await prisma.permission.findUniqueOrThrow({
+        where: { id: permission.id },
+      }),
+    ).toMatchObject({
       businessId: A,
       canWrite: true,
     });
   });
 
   it("refuses a businessId on the profile edit", async () => {
-    const response = await patch(master, `/profile-access/update-profile-access/${profileA}`, {
-      name: "Perfil Renomeado",
-      businessId: B,
-    });
+    const response = await patch(
+      master,
+      `/profile-access/update-profile-access/${profileA}`,
+      {
+        name: "Perfil Renomeado",
+        businessId: B,
+      },
+    );
 
     expectValidationRefusal(response);
-    expect((await prisma.profileAccess.findUniqueOrThrow({ where: { id: profileA } })).businessId).toBe(A);
+    expect(
+      (
+        await prisma.profileAccess.findUniqueOrThrow({
+          where: { id: profileA },
+        })
+      ).businessId,
+    ).toBe(A);
   });
 });

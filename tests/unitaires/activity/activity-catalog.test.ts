@@ -85,7 +85,10 @@ describe("the activity catalog", () => {
     expect(statuses.size).toBeGreaterThan(10);
 
     const unknown = [...statuses].filter(
-      (status) => !(ACTIVITY_STATUS_VALUES as readonly string[]).includes(canonicalStatus(status)),
+      (status) =>
+        !(ACTIVITY_STATUS_VALUES as readonly string[]).includes(
+          canonicalStatus(status),
+        ),
     );
 
     expect(unknown).toEqual([]);
@@ -107,11 +110,15 @@ describe("the activity catalog", () => {
     const labels = [
       ...Object.values(DELIVERY_STATUS_LABELS),
       ...Object.values(ROUTE_STATUS_LABELS),
-      ...(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"] as const).map(translateVehicleStatus),
+      ...(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"] as const).map(
+        translateVehicleStatus,
+      ),
     ];
 
     for (const label of labels) {
-      expect(ACTIVITY_STATUS_VALUES as readonly string[]).toContain(canonicalStatus(label));
+      expect(ACTIVITY_STATUS_VALUES as readonly string[]).toContain(
+        canonicalStatus(label),
+      );
     }
   });
 
@@ -152,26 +159,50 @@ describe("activity actor presentation", () => {
   it("presents a driver acting from the app as DRIVER, for every reader, without the link", () => {
     const row = {
       id: "1",
-      user: { name: "João", email: "joao@empresa.com", role: "BUSINESS_USER", driverId: "drv-1" },
+      user: {
+        name: "João",
+        email: "joao@empresa.com",
+        role: "BUSINESS_USER",
+        driverId: "drv-1",
+      },
     };
 
     for (const viewer of ["MASTER", "BUSINESS_ADMIN"]) {
       const seen = presentActivityActor(row, viewer);
 
-      expect(seen.user).toEqual({ name: "João", email: "joao@empresa.com", role: DRIVER_ROLE });
+      expect(seen.user).toEqual({
+        name: "João",
+        email: "joao@empresa.com",
+        role: DRIVER_ROLE,
+      });
     }
   });
 
   it("keeps a collaborator as BUSINESS_USER and the platform masked for a company", () => {
     const collaborator = presentActivityActor(
-      { id: "2", user: { name: "Ana", email: "a@e.com", role: "BUSINESS_USER", driverId: null } },
+      {
+        id: "2",
+        user: {
+          name: "Ana",
+          email: "a@e.com",
+          role: "BUSINESS_USER",
+          driverId: null,
+        },
+      },
       "BUSINESS_ADMIN",
     );
 
-    expect(collaborator.user).toEqual({ name: "Ana", email: "a@e.com", role: "BUSINESS_USER" });
+    expect(collaborator.user).toEqual({
+      name: "Ana",
+      email: "a@e.com",
+      role: "BUSINESS_USER",
+    });
 
     const master = presentActivityActor(
-      { id: "3", user: { name: "Op", email: "op@t.com", role: "MASTER", driverId: null } },
+      {
+        id: "3",
+        user: { name: "Op", email: "op@t.com", role: "MASTER", driverId: null },
+      },
       "BUSINESS_ADMIN",
     );
 
@@ -189,7 +220,10 @@ describe("activity actor presentation", () => {
 
     const company = presentActivityActor(row, "BUSINESS_ADMIN");
 
-    expect(company).toMatchObject({ performedBy: null, performingUserRole: null });
+    expect(company).toMatchObject({
+      performedBy: null,
+      performingUserRole: null,
+    });
     expect(JSON.stringify(company)).not.toContain("operator-id");
     expect(JSON.stringify(company)).not.toContain("op@t.com");
 
@@ -220,8 +254,16 @@ describe("the author-role facet agrees with the presentation", () => {
       email: "j@empresa.com",
     });
 
-    repository.addActivity({ id: "a1", performedBy: "admin-driver", businessId: "biz-1" });
-    repository.addActivity({ id: "a2", performedBy: "app-driver", businessId: "biz-1" });
+    repository.addActivity({
+      id: "a1",
+      performedBy: "admin-driver",
+      businessId: "biz-1",
+    });
+    repository.addActivity({
+      id: "a2",
+      performedBy: "app-driver",
+      businessId: "biz-1",
+    });
 
     const list = (role: "DRIVER" | "BUSINESS_ADMIN") =>
       repository.listAllActivities({
@@ -238,8 +280,12 @@ describe("the author-role facet agrees with the presentation", () => {
     expect(drivers.data.map((row) => row.id)).toEqual(["a2"]);
     expect(admins.data.map((row) => row.id)).toEqual(["a1"]);
     // Each row is presented as the facet that found it.
-    expect((drivers.data[0] as { user?: { role: string } }).user?.role).toBe(DRIVER_ROLE);
-    expect((admins.data[0] as { user?: { role: string } }).user?.role).toBe("BUSINESS_ADMIN");
+    expect((drivers.data[0] as { user?: { role: string } }).user?.role).toBe(
+      DRIVER_ROLE,
+    );
+    expect((admins.data[0] as { user?: { role: string } }).user?.role).toBe(
+      "BUSINESS_ADMIN",
+    );
   });
 });
 
@@ -268,7 +314,11 @@ describe("the search does not confirm the platform operator's identity", () => {
       businessId: "biz-1",
       visibilityLevel: "TENANT_VISIBLE",
     });
-    repository.addActivity({ id: "own", performedBy: "manager", businessId: "biz-1" });
+    repository.addActivity({
+      id: "own",
+      performedBy: "manager",
+      businessId: "biz-1",
+    });
 
     const search = (term: string, role: "MASTER" | "BUSINESS_ADMIN") =>
       repository.listAllActivities({
@@ -281,8 +331,12 @@ describe("the search does not confirm the platform operator's identity", () => {
 
     expect((await search("operadora.pessoal", "BUSINESS_ADMIN")).total).toBe(0);
     expect((await search("operator", "BUSINESS_ADMIN")).total).toBe(0);
-    expect((await search("gestora@", "BUSINESS_ADMIN")).data.map((row) => row.id)).toEqual(["own"]);
+    expect(
+      (await search("gestora@", "BUSINESS_ADMIN")).data.map((row) => row.id),
+    ).toEqual(["own"]);
 
-    expect((await search("operadora.pessoal", "MASTER")).data.map((row) => row.id)).toEqual(["plan"]);
+    expect(
+      (await search("operadora.pessoal", "MASTER")).data.map((row) => row.id),
+    ).toEqual(["plan"]);
   });
 });

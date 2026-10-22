@@ -322,7 +322,10 @@ describe("the assignment preview", () => {
 
 describe("the routes board", () => {
   it(`holds at most ${BUDGET} connections with every facet and the search`, async () => {
-    const list = new ListRoutesUseCase(new RouteRepository(), new UserRepository());
+    const list = new ListRoutesUseCase(
+      new RouteRepository(),
+      new UserRepository(),
+    );
 
     const { peak, result } = await peakOf(() =>
       list.execute({

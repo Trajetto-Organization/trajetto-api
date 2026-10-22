@@ -102,13 +102,38 @@ describe("judgeConnection", () => {
   it.each([
     ["the user is gone", null, true, "access_denied"],
     ["the family was revoked or expired", userRow(), false, "session_expired"],
-    ["the session version moved", userRow({ session_version: 4 }), true, "user_updated"],
-    ["the role changed", userRow({ role: "BUSINESS_ADMIN" }), true, "user_updated"],
-    ["the company changed", userRow({ businessId: "carrier-2" }), true, "user_updated"],
-    ["access was revoked", userRow({ access_revoked: true }), true, "access_revoked"],
+    [
+      "the session version moved",
+      userRow({ session_version: 4 }),
+      true,
+      "user_updated",
+    ],
+    [
+      "the role changed",
+      userRow({ role: "BUSINESS_ADMIN" }),
+      true,
+      "user_updated",
+    ],
+    [
+      "the company changed",
+      userRow({ businessId: "carrier-2" }),
+      true,
+      "user_updated",
+    ],
+    [
+      "access was revoked",
+      userRow({ access_revoked: true }),
+      true,
+      "access_revoked",
+    ],
     // Its own reason (decision 4.1): the app says "empresa desativada" rather
     // than "acesso revogado"; the web re-reads /user/me and gets the code.
-    ["the company was deactivated", userRow({ business: { is_active: false } }), true, "business_inactive"],
+    [
+      "the company was deactivated",
+      userRow({ business: { is_active: false } }),
+      true,
+      "business_inactive",
+    ],
     [
       "the profile has no permissions left",
       userRow({ profileAccess: { name: "Vazio", permissions: [] } }),
@@ -117,7 +142,12 @@ describe("judgeConnection", () => {
     ],
   ] as const)("ends it when %s", async (_label, user, familyActive, reason) => {
     expect(
-      await judgeConnection(subject, user as User | null, noDrivers, familyActive),
+      await judgeConnection(
+        subject,
+        user as User | null,
+        noDrivers,
+        familyActive,
+      ),
     ).toEqual({ keep: false, reason });
   });
 
@@ -128,21 +158,37 @@ describe("judgeConnection", () => {
     it("is kept while the driver and the branch are active, never as dispatch", async () => {
       const drivers = { findDriverById: async () => driverRow() };
 
-      expect(await judgeConnection(driverSubject, driverUser, drivers, true)).toEqual({
+      expect(
+        await judgeConnection(driverSubject, driverUser, drivers, true),
+      ).toEqual({
         keep: true,
         isDeliveryStaff: false,
       });
     });
 
     it.each([
-      ["the driver was deactivated", driverRow({ status: "INACTIVE" }), "driver_inactive"],
+      [
+        "the driver was deactivated",
+        driverRow({ status: "INACTIVE" }),
+        "driver_inactive",
+      ],
       // The app has its own words for it ("filial desativada").
-      ["the branch was deactivated", driverRow({ branch: { is_active: false } }), "branch_inactive"],
-      ["the driver moved to another company", driverRow({ businessId: "carrier-2" }), "driver_inactive"],
+      [
+        "the branch was deactivated",
+        driverRow({ branch: { is_active: false } }),
+        "branch_inactive",
+      ],
+      [
+        "the driver moved to another company",
+        driverRow({ businessId: "carrier-2" }),
+        "driver_inactive",
+      ],
     ])("is ended when %s", async (_label, driver, reason) => {
       const drivers = { findDriverById: async () => driver };
 
-      expect(await judgeConnection(driverSubject, driverUser, drivers, true)).toEqual({
+      expect(
+        await judgeConnection(driverSubject, driverUser, drivers, true),
+      ).toEqual({
         keep: false,
         reason,
       });
@@ -179,7 +225,10 @@ describe("sweepConnections", () => {
   }
 
   it("ends nobody when the rows cannot be read", async () => {
-    const sockets = [socketFor("user-1", "family-1"), socketFor("user-2", "family-2")];
+    const sockets = [
+      socketFor("user-1", "family-1"),
+      socketFor("user-2", "family-2"),
+    ];
     const ended: string[] = [];
     const kept: string[] = [];
 
@@ -217,7 +266,8 @@ describe("sweepConnections", () => {
           ["user-1:family-1"],
         ),
       {
-        end: (socket, reason) => ended.push([String(socket.data.userId), reason]),
+        end: (socket, reason) =>
+          ended.push([String(socket.data.userId), reason]),
         keep: (socket, staff) => kept.push([String(socket.data.userId), staff]),
       },
     );
@@ -230,10 +280,14 @@ describe("sweepConnections", () => {
   it("does not query at all with no authenticated socket", async () => {
     let loads = 0;
 
-    await sweepConnections([], async () => {
-      loads += 1;
-      return rows([], []);
-    }, { end: () => undefined, keep: () => undefined });
+    await sweepConnections(
+      [],
+      async () => {
+        loads += 1;
+        return rows([], []);
+      },
+      { end: () => undefined, keep: () => undefined },
+    );
 
     expect(loads).toBe(0);
   });
@@ -242,7 +296,9 @@ describe("sweepConnections", () => {
 describe("jitteredInterval", () => {
   it("stays within ±25% of the base", () => {
     expect(jitteredInterval(180_000, () => 0)).toBe(135_000);
-    expect(jitteredInterval(180_000, () => 0.999999)).toBeLessThanOrEqual(225_000);
+    expect(jitteredInterval(180_000, () => 0.999999)).toBeLessThanOrEqual(
+      225_000,
+    );
     expect(jitteredInterval(180_000, () => 0.5)).toBe(180_000);
   });
 });

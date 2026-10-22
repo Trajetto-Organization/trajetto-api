@@ -236,7 +236,10 @@ beforeAll(async () => {
       businessId: B,
       periodId: period.id,
       requestedById: driverB,
-      input: { odometerPhotoPath: "fuelOdometer/b/foto.webp", reportedMileage: 10_500 },
+      input: {
+        odometerPhotoPath: "fuelOdometer/b/foto.webp",
+        reportedMileage: 10_500,
+      },
       status: "PROCESSING",
       attempts: 1,
     },
@@ -251,13 +254,25 @@ beforeAll(async () => {
 
   A_OWNED.routeId = (
     await prisma.route.create({
-      data: { code: 1, name: "Rota da A", scheduled_date: new Date(), businessId: A, driverId: driverA },
+      data: {
+        code: 1,
+        name: "Rota da A",
+        scheduled_date: new Date(),
+        businessId: A,
+        driverId: driverA,
+      },
     })
   ).id;
 
   B_OWNED.routeId = (
     await prisma.route.create({
-      data: { code: 1, name: "Rota da B", scheduled_date: new Date(), businessId: B, driverId: driverB },
+      data: {
+        code: 1,
+        name: "Rota da B",
+        scheduled_date: new Date(),
+        businessId: B,
+        driverId: driverB,
+      },
     })
   ).id;
 
@@ -406,8 +421,11 @@ describe("another carrier's kanban cards", () => {
     expectRefused(response, "editar card da B");
 
     expect(
-      (await prisma.kanbanCard.findUniqueOrThrow({ where: { id: B_OWNED.cardId } }))
-        .title,
+      (
+        await prisma.kanbanCard.findUniqueOrThrow({
+          where: { id: B_OWNED.cardId },
+        })
+      ).title,
     ).toBe("Card da B");
   });
 
@@ -433,7 +451,9 @@ describe("another carrier's kanban cards", () => {
 
     expectRefused(response, "apagar card da B");
 
-    expect(await prisma.kanbanCard.count({ where: { id: B_OWNED.cardId } })).toBe(1);
+    expect(
+      await prisma.kanbanCard.count({ where: { id: B_OWNED.cardId } }),
+    ).toBe(1);
   });
 });
 
@@ -484,7 +504,9 @@ describe("the platform's own records", () => {
     });
 
     expect(response.statusCode, response.body.slice(0, 200)).toBe(403);
-    expect(await prisma.quote.count({ where: { id: B_OWNED.quoteId } })).toBe(1);
+    expect(await prisma.quote.count({ where: { id: B_OWNED.quoteId } })).toBe(
+      1,
+    );
   });
 
   it("do not let a company admin edit a platform operator", async () => {
@@ -498,8 +520,11 @@ describe("the platform's own records", () => {
     expect(response.statusCode, response.body.slice(0, 200)).toBe(403);
 
     expect(
-      (await prisma.user.findUniqueOrThrow({ where: { id: B_OWNED.masterUserId } }))
-        .name,
+      (
+        await prisma.user.findUniqueOrThrow({
+          where: { id: B_OWNED.masterUserId },
+        })
+      ).name,
     ).toBe("Operadora da Plataforma");
   });
 
@@ -511,6 +536,8 @@ describe("the platform's own records", () => {
     });
 
     expect(response.statusCode, response.body.slice(0, 200)).toBe(403);
-    expect(await prisma.user.count({ where: { id: B_OWNED.masterUserId } })).toBe(1);
+    expect(
+      await prisma.user.count({ where: { id: B_OWNED.masterUserId } }),
+    ).toBe(1);
   });
 });

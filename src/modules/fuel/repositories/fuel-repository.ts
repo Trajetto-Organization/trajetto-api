@@ -592,9 +592,7 @@ class FuelRepository implements IFuelRepository {
     return fuel;
   }
 
-  async *streamFuelsForExport(
-    filters: FuelListFilters,
-  ): AsyncGenerator<any> {
+  async *streamFuelsForExport(filters: FuelListFilters): AsyncGenerator<any> {
     // The list's own where (decision 5.8): the file holds what the screen
     // filtered, never the whole company behind the operator's back.
     const whereCondition = fuelListWhere(filters, { withFacets: true });
@@ -689,7 +687,11 @@ class FuelRepository implements IFuelRepository {
       },
       // The later record, then the id, break a same-moment tie: without them
       // Postgres returned either of two refuelings typed for the same time.
-      orderBy: [{ refueling_date: "desc" }, { created_at: "desc" }, { id: "desc" }],
+      orderBy: [
+        { refueling_date: "desc" },
+        { created_at: "desc" },
+        { id: "desc" },
+      ],
     });
 
     return previousFuel;

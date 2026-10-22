@@ -41,7 +41,10 @@ describe("partitionRunway", () => {
   });
 
   it("has no limit with an unbounded partition", () => {
-    const runway = partitionRunway([day(0), { from: day(1).from, to: Infinity }], NOW);
+    const runway = partitionRunway(
+      [day(0), { from: day(1).from, to: Infinity }],
+      NOW,
+    );
 
     expect(runway.runway_ok).toBe(true);
     expect(runway.partition_runway_days).toBeNull();

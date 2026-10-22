@@ -8,7 +8,10 @@ import type {
   TowerRouteWithStops,
 } from "../../repositories/IOperation-day-repository";
 
-import { TOWER_DRIVER_REFUSAL, resolveOperationsBusiness } from "./operations-viewer";
+import {
+  TOWER_DRIVER_REFUSAL,
+  resolveOperationsBusiness,
+} from "./operations-viewer";
 
 import {
   ENDED_ROUTE_VISIBLE_MS,
@@ -196,9 +199,16 @@ class ControlTowerUseCase {
       new Date(now.getTime() - ENDED_ROUTE_VISIBLE_MS),
     );
 
-    const counts = await this.operation.countDayDeliveries(resolvedBusinessId, day);
+    const counts = await this.operation.countDayDeliveries(
+      resolvedBusinessId,
+      day,
+    );
 
-    const feed = await this.operation.listFeed(resolvedBusinessId, day, EVENT_LIMIT);
+    const feed = await this.operation.listFeed(
+      resolvedBusinessId,
+      day,
+      EVENT_LIMIT,
+    );
 
     const placed = positions.flatMap((position) => {
       const vehicle = placeVehicle(position, routes, now);
@@ -274,29 +284,28 @@ class ControlTowerUseCase {
       lastSignal.set(signal.driverId, signal.recorded_at);
     }
 
-    const activeRoutes = running
-      .map((route) => {
-        const progress = routeProgress(route.stops);
+    const activeRoutes = running.map((route) => {
+      const progress = routeProgress(route.stops);
 
-        return {
-          routeId: route.id,
-          routeCode: route.code,
-          routeName: route.name,
-          destination: route.destination,
+      return {
+        routeId: route.id,
+        routeCode: route.code,
+        routeName: route.name,
+        destination: route.destination,
 
-          driverId: route.driverId,
-          driverName: route.driverName,
-          vehiclePlate: route.vehiclePlate,
+        driverId: route.driverId,
+        driverName: route.driverName,
+        vehiclePlate: route.vehiclePlate,
 
-          startedAt: route.started_at?.toISOString() ?? null,
-          lastSignalAt: lastSignal.get(route.driverId)?.toISOString() ?? null,
+        startedAt: route.started_at?.toISOString() ?? null,
+        lastSignalAt: lastSignal.get(route.driverId)?.toISOString() ?? null,
 
-          progress: {
-            resolved: progress.delivered + progress.failed,
-            total: progress.total - progress.cancelled,
-          },
-        } satisfies TowerActiveRoute;
-      });
+        progress: {
+          resolved: progress.delivered + progress.failed,
+          total: progress.total - progress.cancelled,
+        },
+      } satisfies TowerActiveRoute;
+    });
 
     // Punctuality is about the day's plan only: tomorrow's routes are not
     // "não saíram" today, and a cancelled route has no departure to judge.

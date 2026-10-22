@@ -44,11 +44,13 @@ describe("how often the key's last use is written", () => {
 
     throttle.shouldWrite("key-1", start);
 
-    expect(throttle.shouldWrite("key-1", start + LAST_USED_INTERVAL_MS - 1))
-      .toBe(false);
+    expect(
+      throttle.shouldWrite("key-1", start + LAST_USED_INTERVAL_MS - 1),
+    ).toBe(false);
 
-    expect(throttle.shouldWrite("key-1", start + LAST_USED_INTERVAL_MS))
-      .toBe(true);
+    expect(throttle.shouldWrite("key-1", start + LAST_USED_INTERVAL_MS)).toBe(
+      true,
+    );
   });
 
   it("throttles each key on its own clock", () => {

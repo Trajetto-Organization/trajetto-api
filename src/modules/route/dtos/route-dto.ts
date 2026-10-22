@@ -1,7 +1,4 @@
-import type {
-  RouteStatus,
-  RouteStopStatus,
-} from "@/shared/route/route-rules";
+import type { RouteStatus, RouteStopStatus } from "@/shared/route/route-rules";
 import type { SortOrder } from "@/shared/pagination/list-query";
 
 import type {
@@ -268,7 +265,10 @@ interface AssignmentPreview {
          * The latest checklist, to warn when it was rejected (8.5). Null when
          * there is none, or when not read (no FLEET module).
          */
-        lastChecklist: { overall_condition: string; checklist_date: Date } | null;
+        lastChecklist: {
+          overall_condition: string;
+          checklist_date: Date;
+        } | null;
       })
     | null;
 

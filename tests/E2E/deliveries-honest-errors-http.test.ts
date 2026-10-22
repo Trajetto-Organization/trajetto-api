@@ -328,7 +328,8 @@ const CASES: Case[] = [
   {
     route: "update-occurrence-type",
     method: "PATCH",
-    url: (id) => `/occurrence-type/update-occurrence-type/${id}/business/${CARRIER}`,
+    url: (id) =>
+      `/occurrence-type/update-occurrence-type/${id}/business/${CARRIER}`,
     payload: { name: "Nome Novo" },
     code: "OCCURRENCE_TYPE_NOT_FOUND",
     otherId: OTHER_TYPE,
@@ -336,7 +337,8 @@ const CASES: Case[] = [
   {
     route: "delete-occurrence-type",
     method: "DELETE",
-    url: (id) => `/occurrence-type/delete-occurrence-type/${id}/business/${CARRIER}`,
+    url: (id) =>
+      `/occurrence-type/delete-occurrence-type/${id}/business/${CARRIER}`,
     code: "OCCURRENCE_TYPE_NOT_FOUND",
     otherId: OTHER_TYPE,
   },
@@ -400,7 +402,12 @@ describe("an id that does not exist, or is another company's (decision 11.3)", (
   it.each(CASES)(
     "$route answers 404 $code for a made-up id",
     async ({ method, url, payload, code }) => {
-      const response = await call(method, url(randomUUID()), tokens.admin, payload);
+      const response = await call(
+        method,
+        url(randomUUID()),
+        tokens.admin,
+        payload,
+      );
 
       expect(response.statusCode, response.body).toBe(404);
       expect(body(response).code).toBe(code);
@@ -411,7 +418,12 @@ describe("an id that does not exist, or is another company's (decision 11.3)", (
   it.each(CASES)(
     "$route answers another company's id exactly like a missing one",
     async ({ method, url, payload, code, otherId }) => {
-      const missing = await call(method, url(randomUUID()), tokens.admin, payload);
+      const missing = await call(
+        method,
+        url(randomUUID()),
+        tokens.admin,
+        payload,
+      );
       const foreign = await call(method, url(otherId), tokens.admin, payload);
 
       expect(foreign.statusCode, foreign.body).toBe(404);
@@ -425,7 +437,9 @@ describe("an id that does not exist, or is another company's (decision 11.3)", (
       await prisma.shipper.findUniqueOrThrow({ where: { id: OTHER_SHIPPER } }),
     ).toMatchObject({ name: "Embarcador Alheio", is_active: true });
     expect(
-      await prisma.occurrenceType.findUniqueOrThrow({ where: { id: OTHER_TYPE } }),
+      await prisma.occurrenceType.findUniqueOrThrow({
+        where: { id: OTHER_TYPE },
+      }),
     ).toMatchObject({ name: "Tipo Alheio" });
     expect(
       await prisma.statusChangeReason.findUniqueOrThrow({
@@ -433,7 +447,9 @@ describe("an id that does not exist, or is another company's (decision 11.3)", (
       }),
     ).toMatchObject({ name: "Motivo Alheio" });
     expect(
-      await prisma.delivery.findUniqueOrThrow({ where: { id: OTHER_DELIVERY } }),
+      await prisma.delivery.findUniqueOrThrow({
+        where: { id: OTHER_DELIVERY },
+      }),
     ).toMatchObject({ recipient_name: "Cliente Alheio", status: "PENDING" });
     expect(
       await prisma.import.findUniqueOrThrow({ where: { id: OTHER_IMPORT } }),
@@ -441,22 +457,32 @@ describe("an id that does not exist, or is another company's (decision 11.3)", (
   });
 
   it("refuses another company's shipper on a new delivery with the same 404", async () => {
-    const foreign = await call("POST", `/delivery/create-delivery/${CARRIER}`, tokens.admin, {
-      recipient_name: "Cliente",
-      cep: "01001000",
-      ...address,
-      shipperId: OTHER_SHIPPER,
-    });
+    const foreign = await call(
+      "POST",
+      `/delivery/create-delivery/${CARRIER}`,
+      tokens.admin,
+      {
+        recipient_name: "Cliente",
+        cep: "01001000",
+        ...address,
+        shipperId: OTHER_SHIPPER,
+      },
+    );
 
     expect(foreign.statusCode, foreign.body).toBe(404);
     expect(body(foreign).code).toBe("SHIPPER_NOT_FOUND");
 
-    const missing = await call("POST", `/delivery/create-delivery/${CARRIER}`, tokens.admin, {
-      recipient_name: "Cliente",
-      cep: "01001000",
-      ...address,
-      shipperId: randomUUID(),
-    });
+    const missing = await call(
+      "POST",
+      `/delivery/create-delivery/${CARRIER}`,
+      tokens.admin,
+      {
+        recipient_name: "Cliente",
+        cep: "01001000",
+        ...address,
+        shipperId: randomUUID(),
+      },
+    );
 
     expect(body(missing)).toEqual(body(foreign));
   });
@@ -494,12 +520,15 @@ describe("a conflict is a 409 with a code (decision 11.3)", () => {
       payload: { name: "Cliente confirmou" },
       code: "STATUS_CHANGE_REASON_NAME_TAKEN",
     },
-  ])("refuses $label with a name the company already uses", async ({ url, payload, code }) => {
-    const response = await call("POST", url, tokens.admin, payload);
+  ])(
+    "refuses $label with a name the company already uses",
+    async ({ url, payload, code }) => {
+      const response = await call("POST", url, tokens.admin, payload);
 
-    expect(response.statusCode, response.body).toBe(409);
-    expect(body(response).code).toBe(code);
-  });
+      expect(response.statusCode, response.body).toBe(409);
+      expect(body(response).code).toBe(code);
+    },
+  );
 
   it.each([
     {
@@ -520,17 +549,22 @@ describe("a conflict is a 409 with a code (decision 11.3)", () => {
       payload: { name: "Cliente confirmou" },
       code: "STATUS_CHANGE_REASON_NAME_TAKEN",
     },
-  ])("refuses renaming a $label to a name the company already uses", async ({ url, payload, code }) => {
-    const response = await call("PATCH", url, tokens.admin, payload);
+  ])(
+    "refuses renaming a $label to a name the company already uses",
+    async ({ url, payload, code }) => {
+      const response = await call("PATCH", url, tokens.admin, payload);
 
-    expect(response.statusCode, response.body).toBe(409);
-    expect(body(response).code).toBe(code);
-  });
+      expect(response.statusCode, response.body).toBe(409);
+      expect(body(response).code).toBe(code);
+    },
+  );
 
   it("answers a name taken between the check and the write with the same 409", async () => {
     // The pre-check is blinded to open the window a twin request would hit;
     // the unique index that closes it is the real one.
-    const { UserRepository } = await import("@/modules/user/repositories/user-repository");
+    const { UserRepository } = await import(
+      "@/modules/user/repositories/user-repository"
+    );
     const { BusinessRepository } = await import(
       "@/modules/business/repositories/business-repository"
     );
@@ -609,9 +643,14 @@ describe("a conflict is a 409 with a code (decision 11.3)", () => {
   });
 
   it("takes a name another company uses: uniqueness is per company", async () => {
-    const response = await call("POST", `/shipper/create-shipper/${CARRIER}`, tokens.admin, {
-      name: "Embarcador Alheio",
-    });
+    const response = await call(
+      "POST",
+      `/shipper/create-shipper/${CARRIER}`,
+      tokens.admin,
+      {
+        name: "Embarcador Alheio",
+      },
+    );
 
     expect(response.statusCode, response.body).toBe(201);
   });
@@ -632,12 +671,15 @@ describe("a conflict is a 409 with a code (decision 11.3)", () => {
       url: `/status-change-reason/delete-status-change-reason/${USED_REASON}/business/${CARRIER}`,
       code: "STATUS_CHANGE_REASON_IN_USE",
     },
-  ])("refuses deleting $label, which is part of the record", async ({ url, code }) => {
-    const response = await call("DELETE", url, tokens.admin);
+  ])(
+    "refuses deleting $label, which is part of the record",
+    async ({ url, code }) => {
+      const response = await call("DELETE", url, tokens.admin);
 
-    expect(response.statusCode, response.body).toBe(409);
-    expect(body(response).code).toBe(code);
-  });
+      expect(response.statusCode, response.body).toBe(409);
+      expect(body(response).code).toBe(code);
+    },
+  );
 
   it("refuses editing a delivery that already ended", async () => {
     const response = await call(
@@ -654,32 +696,65 @@ describe("a conflict is a 409 with a code (decision 11.3)", () => {
 
 describe("who may write to the catalogue", () => {
   const WRITES = [
-    { method: "PATCH" as const, url: `/shipper/update-shipper/${SHIPPER}/business/${CARRIER}`, payload: { name: "X Novo" } },
-    { method: "DELETE" as const, url: `/shipper/delete-shipper/${SECOND_SHIPPER}/business/${CARRIER}` },
-    { method: "PATCH" as const, url: `/occurrence-type/update-occurrence-type/${TYPE}/business/${CARRIER}`, payload: { name: "X Novo" } },
-    { method: "DELETE" as const, url: `/occurrence-type/delete-occurrence-type/${SECOND_TYPE}/business/${CARRIER}` },
-    { method: "PATCH" as const, url: `/status-change-reason/update-status-change-reason/${REASON}/business/${CARRIER}`, payload: { name: "X Novo" } },
-    { method: "DELETE" as const, url: `/status-change-reason/delete-status-change-reason/${SECOND_REASON}/business/${CARRIER}` },
+    {
+      method: "PATCH" as const,
+      url: `/shipper/update-shipper/${SHIPPER}/business/${CARRIER}`,
+      payload: { name: "X Novo" },
+    },
+    {
+      method: "DELETE" as const,
+      url: `/shipper/delete-shipper/${SECOND_SHIPPER}/business/${CARRIER}`,
+    },
+    {
+      method: "PATCH" as const,
+      url: `/occurrence-type/update-occurrence-type/${TYPE}/business/${CARRIER}`,
+      payload: { name: "X Novo" },
+    },
+    {
+      method: "DELETE" as const,
+      url: `/occurrence-type/delete-occurrence-type/${SECOND_TYPE}/business/${CARRIER}`,
+    },
+    {
+      method: "PATCH" as const,
+      url: `/status-change-reason/update-status-change-reason/${REASON}/business/${CARRIER}`,
+      payload: { name: "X Novo" },
+    },
+    {
+      method: "DELETE" as const,
+      url: `/status-change-reason/delete-status-change-reason/${SECOND_REASON}/business/${CARRIER}`,
+    },
   ];
 
-  it.each(WRITES)("refuses a read-only profile: $method $url", async ({ method, url, payload }) => {
-    const response = await call(method, url, tokens.readOnly, payload);
+  it.each(WRITES)(
+    "refuses a read-only profile: $method $url",
+    async ({ method, url, payload }) => {
+      const response = await call(method, url, tokens.readOnly, payload);
 
-    expect(response.statusCode).toBe(403);
-    expect(body(response).code).toBe("PERMISSION_DENIED");
-  });
+      expect(response.statusCode).toBe(403);
+      expect(body(response).code).toBe("PERMISSION_DENIED");
+    },
+  );
 
-  it.each(WRITES)("refuses another company's manager naming this one: $method $url", async ({ method, url, payload }) => {
-    const response = await call(method, url, tokens.otherAdmin, payload);
+  it.each(WRITES)(
+    "refuses another company's manager naming this one: $method $url",
+    async ({ method, url, payload }) => {
+      const response = await call(method, url, tokens.otherAdmin, payload);
 
-    expect(response.statusCode).toBe(403);
-    expect(body(response).code).toBeTruthy();
-  });
+      expect(response.statusCode).toBe(403);
+      expect(body(response).code).toBeTruthy();
+    },
+  );
 
   it("changed nothing on the refused writes", async () => {
-    expect(await prisma.shipper.count({ where: { id: SECOND_SHIPPER } })).toBe(1);
-    expect(await prisma.occurrenceType.count({ where: { id: SECOND_TYPE } })).toBe(1);
-    expect(await prisma.statusChangeReason.count({ where: { id: SECOND_REASON } })).toBe(1);
+    expect(await prisma.shipper.count({ where: { id: SECOND_SHIPPER } })).toBe(
+      1,
+    );
+    expect(
+      await prisma.occurrenceType.count({ where: { id: SECOND_TYPE } }),
+    ).toBe(1);
+    expect(
+      await prisma.statusChangeReason.count({ where: { id: SECOND_REASON } }),
+    ).toBe(1);
     expect(
       (await prisma.shipper.findUniqueOrThrow({ where: { id: SHIPPER } })).name,
     ).toBe("Atacado Sul");
@@ -710,8 +785,14 @@ describe("the platform's own occurrence type is not the company's to change (DLV
     expect(body(deleted).code).toBe("OCCURRENCE_TYPE_SYSTEM");
 
     expect(
-      await prisma.occurrenceType.findUniqueOrThrow({ where: { id: SYSTEM_TYPE } }),
-    ).toMatchObject({ name: "Comprovante rejeitado", is_active: true, is_system: true });
+      await prisma.occurrenceType.findUniqueOrThrow({
+        where: { id: SYSTEM_TYPE },
+      }),
+    ).toMatchObject({
+      name: "Comprovante rejeitado",
+      is_active: true,
+      is_system: true,
+    });
   });
 
   it("leaves a company type with the same name alone and takes the fallback name", async () => {
@@ -734,7 +815,10 @@ describe("the platform's own occurrence type is not the company's to change (DLV
     expect(again.id).toBe(first.id);
 
     const rows = await prisma.occurrenceType.findMany({
-      where: { businessId: OTHER, name: { startsWith: "Comprovante recusado" } },
+      where: {
+        businessId: OTHER,
+        name: { startsWith: "Comprovante recusado" },
+      },
       orderBy: { name: "asc" },
     });
 
@@ -756,7 +840,9 @@ describe("the platform's own occurrence type is not the company's to change (DLV
     expect(twinFirst.name).toBe("Comprovante recusado (sistema)");
     expect(twinAgain.id).toBe(twinFirst.id);
     expect(twinFirst.id).not.toBe(own.id);
-    expect(twin.occurrenceTypes.find((row) => row.id === own.id)?.is_system).toBeFalsy();
+    expect(
+      twin.occurrenceTypes.find((row) => row.id === own.id)?.is_system,
+    ).toBeFalsy();
   });
 
   it("finds the platform's row again by its flag, not by the first free name", async () => {

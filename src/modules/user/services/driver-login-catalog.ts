@@ -14,7 +14,9 @@ function announceDriverLoginChange(
   ...businessIds: Array<string | null | undefined>
 ): void {
   const companies = new Set(
-    businessIds.filter((id): id is string => typeof id === "string" && id !== ""),
+    businessIds.filter(
+      (id): id is string => typeof id === "string" && id !== "",
+    ),
   );
 
   for (const businessId of companies) {

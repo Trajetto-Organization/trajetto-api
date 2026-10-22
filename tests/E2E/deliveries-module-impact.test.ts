@@ -36,7 +36,11 @@ beforeAll(async () => {
   await ensureDefaultOccurrenceTypes(prisma, BUSINESS);
 
   await prisma.occurrenceType.create({
-    data: { businessId: BUSINESS, name: "Cliente ausente", blocks_delivery: true },
+    data: {
+      businessId: BUSINESS,
+      name: "Cliente ausente",
+      blocks_delivery: true,
+    },
   });
 });
 
@@ -48,10 +52,15 @@ afterAll(async () => {
 
 describe("the impact of switching the deliveries module off", () => {
   it("counts the company's own occurrence types, not the seeded defaults", async () => {
-    expect(await prisma.occurrenceType.count({ where: { businessId: BUSINESS } })).toBe(5);
+    expect(
+      await prisma.occurrenceType.count({ where: { businessId: BUSINESS } }),
+    ).toBe(5);
 
     const impact = await getModuleImpact(BUSINESS, "DELIVERIES");
 
-    expect(impact.records).toContainEqual({ label: "Tipos de ocorrência", count: 1 });
+    expect(impact.records).toContainEqual({
+      label: "Tipos de ocorrência",
+      count: 1,
+    });
   });
 });

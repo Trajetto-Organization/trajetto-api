@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -85,18 +93,27 @@ async function seedUser(
   return {
     id,
     email,
-    token: sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-      subject: id,
-      expiresIn: "30m",
-    }),
+    token: sign(
+      { tokenType: "access", sessionVersion: 0, familyId },
+      auth.secret_token,
+      {
+        subject: id,
+        expiresIn: "30m",
+      },
+    ),
   };
 }
 
-async function mailTo(email: string, template: string): Promise<Mail | undefined> {
+async function mailTo(
+  email: string,
+  template: string,
+): Promise<Mail | undefined> {
   const deadline = Date.now() + 3_000;
 
   for (;;) {
-    const found = mails.find((mail) => mail.to === email && mail.path.endsWith(template));
+    const found = mails.find(
+      (mail) => mail.to === email && mail.path.endsWith(template),
+    );
 
     if (found || Date.now() > deadline) return found;
 
@@ -106,8 +123,12 @@ async function mailTo(email: string, template: string): Promise<Mail | undefined
 
 function expectLinkWithoutPassword(mail: Mail | undefined, typed?: string) {
   expect(mail).toBeDefined();
-  expect(String(mail!.variables.url)).toMatch(/\/forgot\/password\?token=[0-9a-f-]{36}$/);
-  expect(Object.keys(mail!.variables).some((key) => /password|senha/i.test(key))).toBe(false);
+  expect(String(mail!.variables.url)).toMatch(
+    /\/forgot\/password\?token=[0-9a-f-]{36}$/,
+  );
+  expect(
+    Object.keys(mail!.variables).some((key) => /password|senha/i.test(key)),
+  ).toBe(false);
 
   if (typed) expect(JSON.stringify(mail!.variables)).not.toContain(typed);
 }
@@ -136,7 +157,9 @@ beforeAll(async () => {
   });
 
   profile = (
-    await prisma.profileAccess.create({ data: { name: "Operação", businessId: A } })
+    await prisma.profileAccess.create({
+      data: { name: "Operação", businessId: A },
+    })
   ).id;
 
   admin = await seedUser("BUSINESS_ADMIN", A);
@@ -196,11 +219,15 @@ describe("a company user created by an administrator", () => {
       "SenhaQueNaoVale1",
     );
 
-    const token = await prisma.forgotPasswordVerificationToken.findUnique({ where: { email } });
+    const token = await prisma.forgotPasswordVerificationToken.findUnique({
+      where: { email },
+    });
 
     expect(token).not.toBeNull();
     // A welcome may be read days later: 72 hours, not the hour of a reset.
-    expect(token!.expires.getTime()).toBeGreaterThan(Date.now() + 71 * 60 * 60 * 1000);
+    expect(token!.expires.getTime()).toBeGreaterThan(
+      Date.now() + 71 * 60 * 60 * 1000,
+    );
   });
 });
 
@@ -220,12 +247,16 @@ describe("a master", () => {
     const created_ = await prisma.user.findFirstOrThrow({ where: { email } });
     created.push(created_.id);
 
-    expectLinkWithoutPassword(await mailTo(email, "user-created-successfully.hbs"));
+    expectLinkWithoutPassword(
+      await mailTo(email, "user-created-successfully.hbs"),
+    );
   });
 
   it("reset by another master receives a link; the password stays until used", async () => {
     const target = await seedUser("MASTER", null);
-    const before = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    const before = await prisma.user.findUniqueOrThrow({
+      where: { id: target.id },
+    });
 
     const response = await app.inject({
       method: "PATCH",
@@ -236,9 +267,13 @@ describe("a master", () => {
 
     expect(response.statusCode, response.body).toBe(200);
 
-    expectLinkWithoutPassword(await mailTo(target.email, "password-reset-by-admin.hbs"));
+    expectLinkWithoutPassword(
+      await mailTo(target.email, "password-reset-by-admin.hbs"),
+    );
 
-    const after = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: target.id },
+    });
 
     expect(after.password).toBe(before.password);
     expect(after.session_version).toBe(before.session_version);
@@ -283,7 +318,10 @@ describe("a master", () => {
       method: "POST",
       url: "/user/create-master-user",
       headers: { authorization: `Bearer ${admin.token}` },
-      payload: { email: `x-${randomUUID()}@exemplo.com.br`, name: "Master Indevida Aqui" },
+      payload: {
+        email: `x-${randomUUID()}@exemplo.com.br`,
+        name: "Master Indevida Aqui",
+      },
     });
 
     expect(create.statusCode).toBe(403);

@@ -119,7 +119,9 @@ const DELIVERY_PROOF_DOCUMENT_COLUMN_DEFAULTS = {
   cert_issuer: null,
   cert_not_after: null,
   signed_at: null,
-} as const satisfies Record<string, unknown> & { signature_status: ProofSignatureStatus };
+} as const satisfies Record<string, unknown> & {
+  signature_status: ProofSignatureStatus;
+};
 
 const DELIVERY_PROOF_AUDIT_COLUMN_DEFAULTS = {
   device_precheck: null,

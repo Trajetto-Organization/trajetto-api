@@ -31,7 +31,12 @@ function build() {
   const deliveries = new InMemoryDeliveryRepository();
 
   users.user.push(
-    { id: MANAGER, name: "Gestora", role: "BUSINESS_ADMIN", businessId: BUSINESS } as User,
+    {
+      id: MANAGER,
+      name: "Gestora",
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+    } as User,
     {
       id: DRIVER_USER,
       name: "João",
@@ -44,7 +49,10 @@ function build() {
   deliveries.shipperNames.set(SHIPPER, "Atacado Sul");
   deliveries.shipperNames.set(OTHER_SHIPPER, "Bebidas Norte");
   deliveries.shipperNames.set(FOREIGN_SHIPPER, "Embarcador de outra empresa");
-  deliveries.driverDirectory.set(DRIVER, { name: "João Motorista", cnh: "12345678900" });
+  deliveries.driverDirectory.set(DRIVER, {
+    name: "João Motorista",
+    cnh: "12345678900",
+  });
 
   const rows: Array<[string, string, string | null]> = [
     ["PENDING", SHIPPER, null],
@@ -91,7 +99,11 @@ describe("the pager total and the cards", () => {
   it("come from the whole company, not from the loaded page", async () => {
     const { useCase, listing } = build();
 
-    const result = await useCase.execute({ userId: MANAGER, page: 1, pageSize: 2 });
+    const result = await useCase.execute({
+      userId: MANAGER,
+      page: 1,
+      pageSize: 2,
+    });
 
     expect(listing).toHaveBeenCalledTimes(1);
     expect(result.data).toHaveLength(2);
@@ -204,9 +216,16 @@ describe("the order", () => {
   it("defaults to the newest first and sorts on the server by a column", async () => {
     const { useCase } = build();
 
-    const newest = await useCase.execute({ userId: MANAGER, page: 1, pageSize: 2 });
+    const newest = await useCase.execute({
+      userId: MANAGER,
+      page: 1,
+      pageSize: 2,
+    });
 
-    expect(newest.data.map((row) => row.id)).toEqual(["delivery-4", "delivery-3"]);
+    expect(newest.data.map((row) => row.id)).toEqual([
+      "delivery-4",
+      "delivery-3",
+    ]);
 
     const byShipper = await useCase.execute({
       userId: MANAGER,

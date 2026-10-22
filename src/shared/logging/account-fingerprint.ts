@@ -21,7 +21,13 @@ import auth from "@/config/auth";
  * on, which only breaks grouping across the rotation.
  */
 const key = Buffer.from(
-  hkdfSync("sha256", auth.secret_token, "", "trajetto/log-account-fingerprint", 32),
+  hkdfSync(
+    "sha256",
+    auth.secret_token,
+    "",
+    "trajetto/log-account-fingerprint",
+    32,
+  ),
 );
 
 function accountFingerprint(email: string): string {

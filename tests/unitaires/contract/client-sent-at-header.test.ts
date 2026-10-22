@@ -58,7 +58,9 @@ describe("the X-Client-Sent-At header", () => {
     ];
 
     const readers = published
-      .filter((route) => String(route.handler).includes("CLIENT_SENT_AT_HEADER"))
+      .filter((route) =>
+        String(route.handler).includes("CLIENT_SENT_AT_HEADER"),
+      )
       .map(({ id }) => id)
       .sort();
 

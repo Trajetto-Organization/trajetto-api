@@ -80,7 +80,9 @@ function withoutTrailingSlash(url: string): string {
 /** Read per call, so a test can stub the environment. */
 function publicDocsOptionsFromEnv(): PublicDocsOptions {
   return {
-    serverUrl: env.API_HTTP_REQUEST ? withoutTrailingSlash(env.API_HTTP_REQUEST) : undefined,
+    serverUrl: env.API_HTTP_REQUEST
+      ? withoutTrailingSlash(env.API_HTTP_REQUEST)
+      : undefined,
     portalUrl: env.HTTP_REQUEST
       ? `${withoutTrailingSlash(env.HTTP_REQUEST)}/docs`
       : undefined,
@@ -147,25 +149,38 @@ const DEFAULT_DESCRIPTIONS: Record<string, string> = {
     "Requisição recusada: VALIDATION_ERROR (um campo ou parâmetro inválido; uma frase por campo em `issues`) ou MALFORMED_REQUEST (corpo que não é JSON válido).",
 };
 
-const HTTP_METHODS = new Set(["get", "put", "post", "delete", "patch", "head", "options"]);
+const HTTP_METHODS = new Set([
+  "get",
+  "put",
+  "post",
+  "delete",
+  "patch",
+  "head",
+  "options",
+]);
 
 /**
  * A zod `.describe()` on a response body becomes the response's description
  * AND stays on the body schema; renderers then print the sentence twice.
  */
-function withoutEchoedDescription(content: unknown, description: unknown): unknown {
+function withoutEchoedDescription(
+  content: unknown,
+  description: unknown,
+): unknown {
   if (!content || typeof content !== "object") return content;
 
   return Object.fromEntries(
-    Object.entries(content as Record<string, JsonObject>).map(([type, media]) => {
-      const schema = media?.schema as JsonObject | undefined;
+    Object.entries(content as Record<string, JsonObject>).map(
+      ([type, media]) => {
+        const schema = media?.schema as JsonObject | undefined;
 
-      if (!schema || schema.description !== description) return [type, media];
+        if (!schema || schema.description !== description) return [type, media];
 
-      const { description: _echo, ...rest } = schema;
+        const { description: _echo, ...rest } = schema;
 
-      return [type, { ...media, schema: rest }];
-    }),
+        return [type, { ...media, schema: rest }];
+      },
+    ),
   );
 }
 
@@ -181,48 +196,53 @@ function withRequestExample(operation: JsonObject): JsonObject {
     | undefined;
   const media = requestBody?.content?.["application/json"];
 
-  if (example === undefined || !media || media.example !== undefined) return operation;
+  if (example === undefined || !media || media.example !== undefined)
+    return operation;
 
   return {
     ...operation,
     requestBody: {
       ...requestBody,
-      content: { ...requestBody!.content, "application/json": { ...media, example } },
+      content: {
+        ...requestBody!.content,
+        "application/json": { ...media, example },
+      },
     },
   };
 }
 
 function finishOperation(path: string, operation: JsonObject): JsonObject {
   const responses = Object.fromEntries(
-    Object.entries((operation.responses as Record<string, JsonObject>) ?? {}).map(
-      ([status, response]) => {
-        const headers: JsonObject = {
-          ...((response.headers as JsonObject | undefined) ?? {}),
-          "x-request-id": REQUEST_ID_HEADER,
-        };
+    Object.entries(
+      (operation.responses as Record<string, JsonObject>) ?? {},
+    ).map(([status, response]) => {
+      const headers: JsonObject = {
+        ...((response.headers as JsonObject | undefined) ?? {}),
+        "x-request-id": REQUEST_ID_HEADER,
+      };
 
-        if (status === "503" && !headers["retry-after"]) {
-          headers["retry-after"] = RETRY_AFTER_HEADER;
-        }
+      if (status === "503" && !headers["retry-after"]) {
+        headers["retry-after"] = RETRY_AFTER_HEADER;
+      }
 
-        const description =
-          response.description === "Default Response" && DEFAULT_DESCRIPTIONS[status]
-            ? DEFAULT_DESCRIPTIONS[status]
-            : response.description;
+      const description =
+        response.description === "Default Response" &&
+        DEFAULT_DESCRIPTIONS[status]
+          ? DEFAULT_DESCRIPTIONS[status]
+          : response.description;
 
-        return [
-          status,
-          {
-            ...response,
-            description,
-            headers,
-            ...(response.content !== undefined && {
-              content: withoutEchoedDescription(response.content, description),
-            }),
-          },
-        ];
-      },
-    ),
+      return [
+        status,
+        {
+          ...response,
+          description,
+          headers,
+          ...(response.content !== undefined && {
+            content: withoutEchoedDescription(response.content, description),
+          }),
+        },
+      ];
+    }),
   );
 
   const scopes = operation["x-scopes"];
@@ -352,7 +372,9 @@ function trajettoExtensions(): JsonObject {
     "x-trajetto-webhooks": {
       version: WEBHOOK_API_VERSION,
       timeout_seconds: WEBHOOK_TIMEOUT_MS / 1000,
-      retry_delays_seconds: WEBHOOK_RETRY_DELAYS_MS.map((delay) => delay / 1000),
+      retry_delays_seconds: WEBHOOK_RETRY_DELAYS_MS.map(
+        (delay) => delay / 1000,
+      ),
       max_attempts: WEBHOOK_MAX_ATTEMPTS,
       max_consecutive_failures: MAX_CONSECUTIVE_FAILURES,
       replay_window_days: REPLAY_WINDOW_DAYS,
@@ -441,7 +463,10 @@ function toOpenApi31(node: unknown): unknown {
   return out;
 }
 
-const ENVIRONMENT_LABELS: Record<NonNullable<PublicDocsOptions["environment"]>, string> = {
+const ENVIRONMENT_LABELS: Record<
+  NonNullable<PublicDocsOptions["environment"]>,
+  string
+> = {
   production: "Produção",
   staging: "Homologação",
   development: "Desenvolvimento",
@@ -466,9 +491,7 @@ function finishPublicDocument(
     ]),
   );
 
-  const usedTags = new Set(
-    Object.keys(paths).map((path) => tagFor(path).name),
-  );
+  const usedTags = new Set(Object.keys(paths).map((path) => tagFor(path).name));
 
   const tags = [...Object.values(RESOURCE_TAGS), OTHER_TAG].filter((tag) =>
     usedTags.has(tag.name),

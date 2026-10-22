@@ -162,10 +162,9 @@ describe("proving a call came from us", () => {
 
   it("refuses a header that is not a header", () => {
     for (const header of ["", "garbage", "t=abc,v1=def", "v1=only"]) {
-      expect(
-        verifyWebhookSignature({ secret, body, header }),
-        header,
-      ).toBe(false);
+      expect(verifyWebhookSignature({ secret, body, header }), header).toBe(
+        false,
+      );
     }
   });
 

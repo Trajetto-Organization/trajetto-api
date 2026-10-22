@@ -8,9 +8,12 @@ const cursorPaginationSchema = z.object({
     .regex(/^\d+$/, "O limite deve conter apenas dígitos.")
     .optional()
     .transform((val) => (val ? parseInt(val, 10) : 10))
-    .refine((val) => Number.isInteger(val) && val >= 1 && val <= MAX_PAGE_SIZE, {
-      message: `O limite deve ser um inteiro entre 1 e ${MAX_PAGE_SIZE}.`,
-    })
+    .refine(
+      (val) => Number.isInteger(val) && val >= 1 && val <= MAX_PAGE_SIZE,
+      {
+        message: `O limite deve ser um inteiro entre 1 e ${MAX_PAGE_SIZE}.`,
+      },
+    )
     .describe(`Itens por página, de 1 a ${MAX_PAGE_SIZE}; padrão 10.`),
   cursor: z
     .string()

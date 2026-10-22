@@ -7,7 +7,10 @@ import { EndDriverPauseUseCase } from "@/modules/driver-pause/usecases/end-drive
 import { CurrentDriverPauseUseCase } from "@/modules/driver-pause/usecases/current-driver-pause/current-driver-pause-usecase";
 import { DriverPauseReportUseCase } from "@/modules/driver-pause/usecases/driver-pause-report/driver-pause-report-usecase";
 
-import { normalizePauseNote, pauseEndedAt } from "@/modules/driver-pause/rules/pause-rules";
+import {
+  normalizePauseNote,
+  pauseEndedAt,
+} from "@/modules/driver-pause/rules/pause-rules";
 
 import { AppError } from "@/shared/errors/AppError";
 
@@ -23,10 +26,12 @@ const OTHER_COMPANY = "018f1000-0000-7000-8000-00000000000b";
 const ANA = "018f1000-0000-7000-8000-0000000000a1";
 const BIA = "018f1000-0000-7000-8000-0000000000b2";
 
-const key = (n: number) => `018f1000-0000-7000-8000-${String(n).padStart(12, "0")}`;
+const key = (n: number) =>
+  `018f1000-0000-7000-8000-${String(n).padStart(12, "0")}`;
 
 const NOW = new Date("2026-09-29T18:00:00.000Z"); // 15:00 in São Paulo
-const minutesBefore = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000);
+const minutesBefore = (minutes: number) =>
+  new Date(NOW.getTime() - minutes * 60_000);
 
 let repo: InMemoryDriverPauseRepository;
 let start: StartDriverPauseUseCase;
@@ -461,13 +466,18 @@ describe("the driver's current pause", () => {
     expect(current.day).toBe("2026-09-29");
     expect(current.timeZone).toBe("America/Sao_Paulo");
     expect(current.open?.start_submission_id).toBe(key(2));
-    expect(current.today.map((pause) => pause.start_submission_id)).toEqual([key(2)]);
+    expect(current.today.map((pause) => pause.start_submission_id)).toEqual([
+      key(2),
+    ]);
   });
 
   it("refuses a user who is not a driver", async () => {
     expect(
       await codeOf(
-        new CurrentDriverPauseUseCase(repo).execute({ businessId: COMPANY, driverId: null }),
+        new CurrentDriverPauseUseCase(repo).execute({
+          businessId: COMPANY,
+          driverId: null,
+        }),
       ),
     ).toBe("403 PERMISSION_DENIED");
   });
@@ -489,14 +499,24 @@ describe("the office report", () => {
 
     const useCase = new DriverPauseReportUseCase(repo);
 
-    const first = await useCase.execute({ businessId: COMPANY, page: 1, pageSize: 1, now: NOW });
+    const first = await useCase.execute({
+      businessId: COMPANY,
+      page: 1,
+      pageSize: 1,
+      now: NOW,
+    });
 
     expect(first.total).toBe(2);
     expect(first.data.map((row) => row.driverName)).toEqual(["Ana"]);
     expect(first.from).toBe("2026-09-23");
     expect(first.to).toBe("2026-09-29");
 
-    const second = await useCase.execute({ businessId: COMPANY, page: 2, pageSize: 1, now: NOW });
+    const second = await useCase.execute({
+      businessId: COMPANY,
+      page: 2,
+      pageSize: 1,
+      now: NOW,
+    });
 
     expect(second.data.map((row) => row.driverName)).toEqual(["Bia"]);
 
@@ -517,10 +537,19 @@ describe("the office report", () => {
   it("answers a day the date helpers cannot move with a 400, not a crash", async () => {
     const useCase = new DriverPauseReportUseCase(repo);
 
-    for (const range of [{ to: "9999-12-31" }, { from: "0001-01-01", to: "0001-01-02" }]) {
+    for (const range of [
+      { to: "9999-12-31" },
+      { from: "0001-01-01", to: "0001-01-02" },
+    ]) {
       expect(
         await codeOf(
-          useCase.execute({ businessId: COMPANY, ...range, page: 1, pageSize: 10, now: NOW }),
+          useCase.execute({
+            businessId: COMPANY,
+            ...range,
+            page: 1,
+            pageSize: 10,
+            now: NOW,
+          }),
         ),
         JSON.stringify(range),
       ).toBe("400 PAUSE_REPORT_RANGE_INVALID");
@@ -542,7 +571,9 @@ describe("the office report", () => {
 
 describe("pause rules", () => {
   it("cleans the note instead of refusing it", () => {
-    expect(normalizePauseNote("  Almoço   no\n posto  ")).toBe("Almoço no posto");
+    expect(normalizePauseNote("  Almoço   no\n posto  ")).toBe(
+      "Almoço no posto",
+    );
     expect(normalizePauseNote("   ")).toBeNull();
     expect(normalizePauseNote(undefined)).toBeNull();
   });
@@ -558,7 +589,9 @@ describe("pause rules", () => {
 describe("pauses as PAUSE occurrence types inside a journey (decision 14.4)", () => {
   const CAIO = "018f1000-0000-7000-8000-0000000000c3";
 
-  const pauseType = (overrides: Partial<(typeof repo.occurrenceTypes)[number]> = {}) => {
+  const pauseType = (
+    overrides: Partial<(typeof repo.occurrenceTypes)[number]> = {},
+  ) => {
     const type = {
       id: `018f1000-0000-7000-8000-0000000${String(repo.occurrenceTypes.length + 1).padStart(5, "0")}`,
       businessId: COMPANY,
@@ -716,7 +749,11 @@ describe("pauses as PAUSE occurrence types inside a journey (decision 14.4)", ()
   });
 
   it("accepts a deactivated pause type: the pause happened", async () => {
-    const old = pauseType({ name: "Café", pause_kind: "OTHER", is_active: false });
+    const old = pauseType({
+      name: "Café",
+      pause_kind: "OTHER",
+      is_active: false,
+    });
 
     const { pause } = await start.execute({
       businessId: COMPANY,
@@ -732,7 +769,11 @@ describe("pauses as PAUSE occurrence types inside a journey (decision 14.4)", ()
 
   it("answers another company's type like a missing one, and refuses a type that is not a pause", async () => {
     const foreign = pauseType({ businessId: OTHER_COMPANY });
-    const delivered = pauseType({ category: "DELIVERED", pause_kind: null, name: "Entrega" });
+    const delivered = pauseType({
+      category: "DELIVERED",
+      pause_kind: null,
+      name: "Entrega",
+    });
 
     const startWith = (occurrenceTypeId: string, n: number) =>
       start.execute({
@@ -744,8 +785,12 @@ describe("pauses as PAUSE occurrence types inside a journey (decision 14.4)", ()
         now: NOW,
       });
 
-    expect(await codeOf(startWith(foreign.id, 1))).toBe("404 OCCURRENCE_TYPE_NOT_FOUND");
-    expect(await codeOf(startWith(delivered.id, 2))).toBe("400 OCCURRENCE_TYPE_WRONG_CATEGORY");
+    expect(await codeOf(startWith(foreign.id, 1))).toBe(
+      "404 OCCURRENCE_TYPE_NOT_FOUND",
+    );
+    expect(await codeOf(startWith(delivered.id, 2))).toBe(
+      "400 OCCURRENCE_TYPE_WRONG_CATEGORY",
+    );
     expect(repo.pauses).toHaveLength(0);
   });
 
@@ -754,8 +799,16 @@ describe("pauses as PAUSE occurrence types inside a journey (decision 14.4)", ()
 
     await startAna(1, minutesBefore(10));
 
-    const ana = await current.execute({ businessId: COMPANY, driverId: ANA, now: NOW });
-    const caio = await current.execute({ businessId: COMPANY, driverId: CAIO, now: NOW });
+    const ana = await current.execute({
+      businessId: COMPANY,
+      driverId: ANA,
+      now: NOW,
+    });
+    const caio = await current.execute({
+      businessId: COMPANY,
+      driverId: CAIO,
+      now: NOW,
+    });
 
     expect(ana.pauseAllowed).toBe(true);
     expect(ana.journeyRouteId).toBe(`journey-${ANA}`);

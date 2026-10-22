@@ -274,7 +274,10 @@ describe("without a token", () => {
   });
 
   it("refuses the listing too", async () => {
-    const response = await app.inject({ method: "GET", url: "/route/list-routes" });
+    const response = await app.inject({
+      method: "GET",
+      url: "/route/list-routes",
+    });
 
     expect(response.statusCode).toBe(401);
   });
@@ -310,7 +313,9 @@ describe("with a token of the other carrier", () => {
     expect(route.name).toBeNull();
     expect(route.cancellation_reason).toBeNull();
 
-    const stops = await prisma.routeStop.findMany({ where: { routeId: routeOfA } });
+    const stops = await prisma.routeStop.findMany({
+      where: { routeId: routeOfA },
+    });
 
     expect(stops).toHaveLength(1);
     expect(stops[0].status).toBe("PENDING");

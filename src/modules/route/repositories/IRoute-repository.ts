@@ -216,7 +216,9 @@ interface IRouteRepository {
    * three dialogs ask it on every driver, vehicle, day or selection change.
    * A driver or vehicle that is not the company's ends the read there.
    */
-  assignmentPreview:(props: AssignmentPreviewProps) => Promise<AssignmentPreview>;
+  assignmentPreview: (
+    props: AssignmentPreviewProps,
+  ) => Promise<AssignmentPreview>;
 
   listRoutes: (props: ListRoutesProps) => Promise<ListRoutesResult>;
 

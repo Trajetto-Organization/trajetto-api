@@ -111,7 +111,9 @@ describe("CronSchedulerService.shutdown", () => {
 
     expect(
       updates.some(
-        (args) => (args.data as { status?: string } | undefined)?.status === "SUCCEEDED",
+        (args) =>
+          (args.data as { status?: string } | undefined)?.status ===
+          "SUCCEEDED",
       ),
       "the run did not record how it ended before shutdown returned",
     ).toBe(true);

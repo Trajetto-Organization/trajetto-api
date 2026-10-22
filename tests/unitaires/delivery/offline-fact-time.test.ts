@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { legacyProofUseCase, businessWithoutAI as reportsWithoutAI } from "../../support/delivery-proof-usecases";
+import {
+  legacyProofUseCase,
+  businessWithoutAI as reportsWithoutAI,
+} from "../../support/delivery-proof-usecases";
 
 import { CreateRouteUseCase } from "@/modules/route/usecases/create-route/create-route-usecase";
 import { ReleaseRouteUseCase } from "@/modules/route/usecases/release-route/release-route-usecase";
@@ -282,7 +285,9 @@ const stopOf = (deliveryId: string) =>
   context.routeRepository.stops.find((stop) => stop.deliveryId === deliveryId)!;
 
 const deliveryOf = (deliveryId: string) =>
-  context.deliveryRepository.deliveries.find((entry) => entry.id === deliveryId)!;
+  context.deliveryRepository.deliveries.find(
+    (entry) => entry.id === deliveryId,
+  )!;
 
 const routeOf = (routeId: string) =>
   context.routeRepository.routes.find((route) => route.id === routeId)!;
@@ -590,7 +595,9 @@ describe("what the customer's systems hear about a driver's outcome", () => {
       client_submission_id: submission(),
     });
 
-    expect(announced("occurrence.reported")[0]?.payload.status).toBe("IN_TRANSIT");
+    expect(announced("occurrence.reported")[0]?.payload.status).toBe(
+      "IN_TRANSIT",
+    );
     expect(announced("delivery.failed")).toHaveLength(0);
     expect(context.published.map((event) => event.topic)).not.toContain(
       "delivery.failed",

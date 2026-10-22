@@ -158,7 +158,10 @@ function applyWhatsAppTemplateLaneChange(change: unknown): boolean {
 
     return true;
   } catch (error) {
-    log.error({ err: error, ...change }, "whatsapp template lane change not applied");
+    log.error(
+      { err: error, ...change },
+      "whatsapp template lane change not applied",
+    );
     return false;
   }
 }

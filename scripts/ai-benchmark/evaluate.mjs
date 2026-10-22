@@ -33,7 +33,12 @@ function validated(kind, parsed) {
 
 // --- scoring ----------------------------------------------------------------
 
-const PROOF_CRITERIA = ["legible", "hasSignature", "dateVisible", "documentMatches"];
+const PROOF_CRITERIA = [
+  "legible",
+  "hasSignature",
+  "dateVisible",
+  "documentMatches",
+];
 
 function scoreOdometer(item, parsed) {
   const expected = item.truth.expected;
@@ -56,9 +61,13 @@ function scoreOdometer(item, parsed) {
     status: result.status,
     statusOk: expected.includes(result.status),
     readValue: answer.valor_lido ?? null,
-    readExact: item.truth.reading === null ? null : Number(answer.valor_lido) === item.truth.reading,
+    readExact:
+      item.truth.reading === null
+        ? null
+        : Number(answer.valor_lido) === item.truth.reading,
     // Fraud or a wrong number going through as "verified" is the costly miss.
-    falseVerified: result.status === "verified" && !expected.includes("verified"),
+    falseVerified:
+      result.status === "verified" && !expected.includes("verified"),
     falseAlarm: expected.includes("verified") && result.status !== "verified",
   };
 }
@@ -129,7 +138,9 @@ function scoreProof(item, parsed) {
 
   const expected = item.truth.expected;
   const suggestionOk =
-    expected === "not_good" ? suggestion !== "looks_good" : suggestion === expected;
+    expected === "not_good"
+      ? suggestion !== "looks_good"
+      : suggestion === expected;
 
   return {
     suggestion,
@@ -137,15 +148,19 @@ function scoreProof(item, parsed) {
     criteria,
     isReceipt: reading?.isReceipt ?? null,
     isReceiptOk:
-      item.truth.isReceipt === null || item.truth.isReceipt === undefined || !reading
+      item.truth.isReceipt === null ||
+      item.truth.isReceipt === undefined ||
+      !reading
         ? null
         : reading.isReceipt === item.truth.isReceipt,
     readNumber: reading?.extracted?.documentNumber ?? null,
     readDate: reading?.extracted?.receiptDate ?? null,
     numberExact:
-      item.truth.printedNumber === null || item.truth.printedNumber === undefined
+      item.truth.printedNumber === null ||
+      item.truth.printedNumber === undefined
         ? null
-        : (reading?.extracted?.documentNumber ?? null) === item.truth.printedNumber,
+        : (reading?.extracted?.documentNumber ?? null) ===
+          item.truth.printedNumber,
   };
 }
 

@@ -136,7 +136,10 @@ beforeAll(async () => {
   });
 
   const fuelType = await prisma.fuelType.create({
-    data: { description: `Diesel ${randomUUID().slice(0, 6)}`, businessId: CARRIER },
+    data: {
+      description: `Diesel ${randomUUID().slice(0, 6)}`,
+      businessId: CARRIER,
+    },
   });
 
   await prisma.vehicle.create({
@@ -222,7 +225,11 @@ describe("a departure racing the removal of the last stop", () => {
       method: "PATCH",
       url: `/delivery/assign-deliveries/${CARRIER}`,
       headers: { authorization: `Bearer ${dispatcherToken}` },
-      payload: { deliveryIds: [delivery.id], driverId: DRIVER, vehicleId: TRUCK },
+      payload: {
+        deliveryIds: [delivery.id],
+        driverId: DRIVER,
+        vehicleId: TRUCK,
+      },
     });
 
     expect(assigned.statusCode, assigned.body.slice(0, 300)).toBe(200);
@@ -284,12 +291,16 @@ describe("a departure racing the removal of the last stop", () => {
     expect(response.statusCode, response.body.slice(0, 300)).toBe(400);
     expect(response.json().code).toBe("ROUTE_WITHOUT_STOPS");
 
-    const route = await prisma.route.findUniqueOrThrow({ where: { id: routeId } });
+    const route = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
 
     expect(route.status, "rota vazia saiu").toBe("RELEASED");
     expect(route.started_at).toBeNull();
 
-    const truck = await prisma.vehicle.findUniqueOrThrow({ where: { id: TRUCK } });
+    const truck = await prisma.vehicle.findUniqueOrThrow({
+      where: { id: TRUCK },
+    });
 
     expect(truck.status, "caminhão preso em rota vazia").toBe("ACTIVE");
 

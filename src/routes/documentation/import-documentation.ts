@@ -129,14 +129,41 @@ const importResponses = {
 
   // Not found (caller or company): 404 with a code (decision 11.3).
   lookupNotFound: z
-    .object({ code: z.string().describe("USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."), message: z.string() })
-    .describe("USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."),
+    .object({
+      code: z
+        .string()
+        .describe(
+          "USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
+        ),
+      message: z.string(),
+    })
+    .describe(
+      "USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
+    ),
   spreadsheetNotFound: z
-    .object({ code: z.string().describe("SHIPPER_NOT_FOUND (o embarcador informado não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."), message: z.string() })
-    .describe("SHIPPER_NOT_FOUND (o embarcador informado não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."),
+    .object({
+      code: z
+        .string()
+        .describe(
+          "SHIPPER_NOT_FOUND (o embarcador informado não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
+        ),
+      message: z.string(),
+    })
+    .describe(
+      "SHIPPER_NOT_FOUND (o embarcador informado não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
+    ),
   importNotFound: z
-    .object({ code: z.string().describe("IMPORT_NOT_FOUND (a importação não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."), message: z.string() })
-    .describe("IMPORT_NOT_FOUND (a importação não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."),
+    .object({
+      code: z
+        .string()
+        .describe(
+          "IMPORT_NOT_FOUND (a importação não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
+        ),
+      message: z.string(),
+    })
+    .describe(
+      "IMPORT_NOT_FOUND (a importação não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
+    ),
   codedError: z.object({ code: z.string(), message: z.string() }),
   internalServerError: z.object({
     message: z.string().default("Internal server error"),

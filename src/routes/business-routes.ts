@@ -29,7 +29,11 @@ import {
   businessSchemas,
 } from "./documentation/business-documentation";
 import { errorResponse } from "./documentation/common-responses";
-import { ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
 
 const createBusinessController = new CreateBusinessController();
 const listBusinessController = new ListBusinessController();
@@ -64,7 +68,7 @@ async function businessRoutes(app: FastifyInstance) {
         tags: ["business"],
         summary: "Cadastra uma empresa",
         description:
-          "Cadastra uma transportadora (tenant) e a filial matriz com os mesmos dados. CNPJ, razão social, e-mail e código ERP da empresa são únicos na plataforma. `timezone` (opcional) é um dos fusos do Brasil e define o \"hoje\" da empresa; ausente, America/Sao_Paulo. Só o MASTER.",
+          'Cadastra uma transportadora (tenant) e a filial matriz com os mesmos dados. CNPJ, razão social, e-mail e código ERP da empresa são únicos na plataforma. `timezone` (opcional) é um dos fusos do Brasil e define o "hoje" da empresa; ausente, America/Sao_Paulo. Só o MASTER.',
         body: businessSchemas.createBusiness,
         response: {
           201: businessResponses.businessCreated,
@@ -147,7 +151,7 @@ async function businessRoutes(app: FastifyInstance) {
         tags: ["business"],
         summary: "Atualiza uma empresa",
         description:
-          "Atualiza os campos enviados da empresa e os espelha na filial matriz (exceto o fuso, que é só da empresa). `timezone` aceita apenas fusos do Brasil; trocá-lo muda o \"hoje\" de todos os painéis e relatórios da empresa. Só o MASTER.",
+          'Atualiza os campos enviados da empresa e os espelha na filial matriz (exceto o fuso, que é só da empresa). `timezone` aceita apenas fusos do Brasil; trocá-lo muda o "hoje" de todos os painéis e relatórios da empresa. Só o MASTER.',
         params: businessSchemas.updateDeleteBusiness,
         body: businessSchemas.updateBusiness,
         response: {
@@ -244,7 +248,8 @@ async function businessRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["business"],
-        summary: "Consulta o plano da empresa: módulos contratados e uso da frota",
+        summary:
+          "Consulta o plano da empresa: módulos contratados e uso da frota",
         description:
           "Módulos contratados (FLEET, DELIVERIES), o limite de veículos contratado e quantos veículos estão cadastrados. O admin da empresa lê a própria empresa; o MASTER lê qualquer uma.",
         params: businessSchemas.updateDeleteBusiness,

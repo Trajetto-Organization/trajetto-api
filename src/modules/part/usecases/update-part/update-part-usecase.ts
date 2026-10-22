@@ -77,10 +77,7 @@ class UpdatePartUseCase {
 
     // Moving a part between companies is a business decision with history
     // behind it, not a form field: refused, with the part left as it was.
-    if (
-      partData.businessId &&
-      partData.businessId !== currentBusinessId
-    ) {
+    if (partData.businessId && partData.businessId !== currentBusinessId) {
       throw new PartBusinessReadOnlyError();
     }
 

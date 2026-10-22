@@ -48,10 +48,16 @@ const SERVICE_ORDER_CARD_DAYS = 7;
  * which put a date-only order on the evening before. The company's midnight is
  * what a card whose date was picked on the web carries.
  */
-function serviceOrderCardDueDate(orderDate: Date | string, timeZone: string): Date {
+function serviceOrderCardDueDate(
+  orderDate: Date | string,
+  timeZone: string,
+): Date {
   const orderDay = pickedDayKey(new Date(orderDate), timeZone);
 
-  return businessDayStart(shiftDateKey(orderDay, SERVICE_ORDER_CARD_DAYS), timeZone);
+  return businessDayStart(
+    shiftDateKey(orderDay, SERVICE_ORDER_CARD_DAYS),
+    timeZone,
+  );
 }
 
 interface CreateCardFromEntityProps {
@@ -146,7 +152,10 @@ class KanbanService {
         );
 
         if (newColumns.data.length === 0) {
-          log.error({ businessId }, "kanban columns missing right after creation");
+          log.error(
+            { businessId },
+            "kanban columns missing right after creation",
+          );
           return null;
         }
       }

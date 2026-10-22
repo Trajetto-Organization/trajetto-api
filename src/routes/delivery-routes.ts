@@ -222,7 +222,7 @@ async function deliveryRoutes(app: FastifyInstance) {
         tags: ["delivery"],
         summary: "Lista as ocorrências da operação",
         description:
-          "Todas as ocorrências da empresa numa tabela paginada: tipo (com a gravidade), entrega, quem registrou e as fotos em URLs assinadas. Ordena no servidor (`sort`/`order`) e filtra por gravidade, tipo e status da entrega, cada filtro com um ou mais valores separados por vírgula, além da busca livre (ID da ocorrência, ID da entrega, destinatário ou nome do tipo). `sort=created_at` ordena pela chegada da ocorrência ao servidor (coluna \"Recebida em\"); `occurred_at` é a hora registrada no aparelho (o toque do motorista, enviada também com sinal); num envio que esperou na fila sem sinal fica até 7 dias antes da chegada, e não é chave de ordenação. A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões e as opções dos filtros com as contagens. Motoristas recebem 403 (`PERMISSION_DENIED`): o app lê as ocorrências pelas rotas da própria entrega.",
+          'Todas as ocorrências da empresa numa tabela paginada: tipo (com a gravidade), entrega, quem registrou e as fotos em URLs assinadas. Ordena no servidor (`sort`/`order`) e filtra por gravidade, tipo e status da entrega, cada filtro com um ou mais valores separados por vírgula, além da busca livre (ID da ocorrência, ID da entrega, destinatário ou nome do tipo). `sort=created_at` ordena pela chegada da ocorrência ao servidor (coluna "Recebida em"); `occurred_at` é a hora registrada no aparelho (o toque do motorista, enviada também com sinal); num envio que esperou na fila sem sinal fica até 7 dias antes da chegada, e não é chave de ordenação. A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões e as opções dos filtros com as contagens. Motoristas recebem 403 (`PERMISSION_DENIED`): o app lê as ocorrências pelas rotas da própria entrega.',
         querystring: deliverySchemas.listOccurrences,
         response: {
           200: ndjsonList(
@@ -370,9 +370,10 @@ async function deliveryRoutes(app: FastifyInstance) {
         // older web image may call it; removed after 14 days without the
         // `assign_deliveries_deprecated_call` log line.
         deprecated: true,
-        summary: "Atribuir motorista e veículo às entregas, como rota liberada (descontinuado)",
+        summary:
+          "Atribuir motorista e veículo às entregas, como rota liberada (descontinuado)",
         description:
-          "DESCONTINUADO (decisão 14.7): use POST /route/add-stops, POST /route/move-stops ou POST /route/create-route, e libere a rota com PATCH /route/release-route. Cada chamada grava o log `assign_deliveries_deprecated_call`; o endpoint sai depois de 14 dias sem nenhuma. Atalho para \"criar uma rota para este motorista com estas paradas e liberá-la\". Em lote sobre entregas PENDING, tudo ou nada: uma entrega fora de PENDING, ou motorista/veículo inativo ou de outra empresa, recusa o lote inteiro nomeando os culpados. O veículo é OBRIGATÓRIO — uma rota liberada precisa de um. Atribuir nunca muda o status: uma entrega PENDING com motorista aparece como \"Designada\", e o motorista a leva a IN_TRANSIT ao iniciar a rota no aplicativo. Reatribuir move os documentos para uma rota nova e libera a parada que eles tinham, o que responde 409 DELIVERY_ON_STARTED_ROUTE depois que a rota anterior saiu; uma rota liberada que fica sem paradas é cancelada (route.cancelled). Uma unidade de trabalho: todas as checagens rodam antes de qualquer escrita, e qualquer recusa deixa a rota anterior exatamente como estava; o status do motorista é relido dentro da transação, com trava compartilhada na linha dele (400 ROUTE_DRIVER_INACTIVE para um motorista inativado no mesmo instante). Reenviar a mesma seleção para o mesmo motorista e veículo responde 200 com a rota já criada e não libera nada duas vezes; se o reenvio trouxer outro plano (dia, destino ou horários), ele é aplicado a essa mesma rota, com as regras da edição de rota. A mensagem diz o que aconteceu: rota criada e liberada, já liberada antes (nada alterado) ou atualizada com o novo planejamento. Devolve a rota para o cliente poder abri-la. O plano da rota vem junto (decisão 6.5): scheduled_date (AAAA-MM-DD; ausente, hoje no fuso da empresa), destination (texto livre, até 160) e planned_departure_at/planned_arrival_at (ISO 8601 COM fuso; saída no dia da rota no fuso da empresa, retorno não anterior à saída nem ao dia da rota — 400 VALIDATION_ERROR ou ROUTE_PLAN_INVALID). Motorista ou veículo de outra empresa responde 404, igual a um que não existe.",
+          'DESCONTINUADO (decisão 14.7): use POST /route/add-stops, POST /route/move-stops ou POST /route/create-route, e libere a rota com PATCH /route/release-route. Cada chamada grava o log `assign_deliveries_deprecated_call`; o endpoint sai depois de 14 dias sem nenhuma. Atalho para "criar uma rota para este motorista com estas paradas e liberá-la". Em lote sobre entregas PENDING, tudo ou nada: uma entrega fora de PENDING, ou motorista/veículo inativo ou de outra empresa, recusa o lote inteiro nomeando os culpados. O veículo é OBRIGATÓRIO — uma rota liberada precisa de um. Atribuir nunca muda o status: uma entrega PENDING com motorista aparece como "Designada", e o motorista a leva a IN_TRANSIT ao iniciar a rota no aplicativo. Reatribuir move os documentos para uma rota nova e libera a parada que eles tinham, o que responde 409 DELIVERY_ON_STARTED_ROUTE depois que a rota anterior saiu; uma rota liberada que fica sem paradas é cancelada (route.cancelled). Uma unidade de trabalho: todas as checagens rodam antes de qualquer escrita, e qualquer recusa deixa a rota anterior exatamente como estava; o status do motorista é relido dentro da transação, com trava compartilhada na linha dele (400 ROUTE_DRIVER_INACTIVE para um motorista inativado no mesmo instante). Reenviar a mesma seleção para o mesmo motorista e veículo responde 200 com a rota já criada e não libera nada duas vezes; se o reenvio trouxer outro plano (dia, destino ou horários), ele é aplicado a essa mesma rota, com as regras da edição de rota. A mensagem diz o que aconteceu: rota criada e liberada, já liberada antes (nada alterado) ou atualizada com o novo planejamento. Devolve a rota para o cliente poder abri-la. O plano da rota vem junto (decisão 6.5): scheduled_date (AAAA-MM-DD; ausente, hoje no fuso da empresa), destination (texto livre, até 160) e planned_departure_at/planned_arrival_at (ISO 8601 COM fuso; saída no dia da rota no fuso da empresa, retorno não anterior à saída nem ao dia da rota — 400 VALIDATION_ERROR ou ROUTE_PLAN_INVALID). Motorista ou veículo de outra empresa responde 404, igual a um que não existe.',
         params: deliverySchemas.businessIdParam,
         body: deliverySchemas.assignDeliveries,
         response: {
@@ -506,9 +507,10 @@ async function deliveryRoutes(app: FastifyInstance) {
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["delivery"],
-        summary: "Motorista comprova a entrega (aplicativo anterior aos tipos de entrega)",
+        summary:
+          "Motorista comprova a entrega (aplicativo anterior aos tipos de entrega)",
         description:
-          "Rota do aplicativo de contrato 2, mantida como adaptador (decisão 14.3): comprovar passou a ser registrar uma ocorrência da categoria entrega, e este corpo é registrado no tipo padrão \"Entrega normal\" da empresa (o mesmo efeito de `POST /delivery/report-occurrence`: entrega ENTREGUE, evento de COMPROVANTE ligado à ocorrência, parada fechada, aviso ao destinatário, webhooks `proof.registered` e `delivery.delivered`, auditoria e IA do canhoto). O tipo padrão é usado mesmo desativado, porque este aplicativo não tem seletor. A foto do canhoto (e a assinatura na tela, opcional) sobe direto para o armazenamento por PUT pré-assinado; esta rota confere as chaves. Se a empresa passou a exigir no tipo padrão assinatura, fotos ou formulário, responde 400 CLIENT_OUTDATED com `missing` (o aplicativo guarda o comprovante até ser atualizado); se exige autorização da torre, responde 201 com a entrega aguardando a decisão. Idempotente por client_submission_id. Entrega inexistente, de outra empresa ou de outro motorista: 404 DELIVERY_NOT_FOUND, a mesma resposta nos três casos. Cada uso fica no log `legacy_proof_adapter`; a rota sai depois de 14 dias sem uso.",
+          'Rota do aplicativo de contrato 2, mantida como adaptador (decisão 14.3): comprovar passou a ser registrar uma ocorrência da categoria entrega, e este corpo é registrado no tipo padrão "Entrega normal" da empresa (o mesmo efeito de `POST /delivery/report-occurrence`: entrega ENTREGUE, evento de COMPROVANTE ligado à ocorrência, parada fechada, aviso ao destinatário, webhooks `proof.registered` e `delivery.delivered`, auditoria e IA do canhoto). O tipo padrão é usado mesmo desativado, porque este aplicativo não tem seletor. A foto do canhoto (e a assinatura na tela, opcional) sobe direto para o armazenamento por PUT pré-assinado; esta rota confere as chaves. Se a empresa passou a exigir no tipo padrão assinatura, fotos ou formulário, responde 400 CLIENT_OUTDATED com `missing` (o aplicativo guarda o comprovante até ser atualizado); se exige autorização da torre, responde 201 com a entrega aguardando a decisão. Idempotente por client_submission_id. Entrega inexistente, de outra empresa ou de outro motorista: 404 DELIVERY_NOT_FOUND, a mesma resposta nos três casos. Cada uso fica no log `legacy_proof_adapter`; a rota sai depois de 14 dias sem uso.',
         params: deliverySchemas.deliveryBusinessParams,
         body: deliverySchemas.deliveryProof,
         response: {
@@ -616,7 +618,7 @@ async function deliveryRoutes(app: FastifyInstance) {
         tags: ["delivery"],
         summary: "Autoriza ou nega uma ocorrência pendente",
         description:
-          "A torre decide um relato PENDING (decisão 6.3). `APPROVED` aplica agora o efeito do tipo, como um relato sem autorização: impeditivo leva a entrega a Insucesso (com evento STATUS_CHANGE no instante da aprovação), fecha a parada e dispara `occurrence.reported`/`delivery.failed`. Num pedido de ENTREGA (tipo da categoria DELIVERED, decisão 14.3), `APPROVED` comprova a entrega com o canhoto, a assinatura e o \"quem recebeu\" do relato, no instante do relato (não no da aprovação): entrega ENTREGUE, evento PROOF ligado à ocorrência, parada fechada, aviso ao destinatário, webhooks `proof.registered` e `delivery.delivered`, auditoria e IA do canhoto; uma entrega que já não pode ser entregue torna o pedido SUPERSEDED. `DENIED` não aplica nada e exige `note` (o motorista lê o motivo). O motorista recebe a decisão em tempo real (`deliveryEvent` na sala do usuário) e por push. Uma decisão por pedido: se outra pessoa decidiu antes, ou a tentativa do pedido terminou de outro jeito (comprovação, mudança de status pelo painel, cancelamento, rota cancelada, entrega em outra rota ou com outro motorista — conferido sob trava da entrega), 409 OCCURRENCE_ALREADY_DECIDED com a decisão que vale (SUPERSEDED nesse caso, sem efeito algum); a mesma pessoa repetindo a mesma decisão recebe 200 com `replayed: true`. Relato que não pede autorização → 409 OCCURRENCE_AUTHORIZATION_NOT_REQUIRED. Ocorrência inexistente ou de outra empresa → 404 OCCURRENCE_NOT_FOUND; entrega da ocorrência não encontrada nesta empresa → 404 DELIVERY_NOT_FOUND. Motorista recebe 403 PERMISSION_DENIED; mais de 60 decisões por minuto → 429.",
+          'A torre decide um relato PENDING (decisão 6.3). `APPROVED` aplica agora o efeito do tipo, como um relato sem autorização: impeditivo leva a entrega a Insucesso (com evento STATUS_CHANGE no instante da aprovação), fecha a parada e dispara `occurrence.reported`/`delivery.failed`. Num pedido de ENTREGA (tipo da categoria DELIVERED, decisão 14.3), `APPROVED` comprova a entrega com o canhoto, a assinatura e o "quem recebeu" do relato, no instante do relato (não no da aprovação): entrega ENTREGUE, evento PROOF ligado à ocorrência, parada fechada, aviso ao destinatário, webhooks `proof.registered` e `delivery.delivered`, auditoria e IA do canhoto; uma entrega que já não pode ser entregue torna o pedido SUPERSEDED. `DENIED` não aplica nada e exige `note` (o motorista lê o motivo). O motorista recebe a decisão em tempo real (`deliveryEvent` na sala do usuário) e por push. Uma decisão por pedido: se outra pessoa decidiu antes, ou a tentativa do pedido terminou de outro jeito (comprovação, mudança de status pelo painel, cancelamento, rota cancelada, entrega em outra rota ou com outro motorista — conferido sob trava da entrega), 409 OCCURRENCE_ALREADY_DECIDED com a decisão que vale (SUPERSEDED nesse caso, sem efeito algum); a mesma pessoa repetindo a mesma decisão recebe 200 com `replayed: true`. Relato que não pede autorização → 409 OCCURRENCE_AUTHORIZATION_NOT_REQUIRED. Ocorrência inexistente ou de outra empresa → 404 OCCURRENCE_NOT_FOUND; entrega da ocorrência não encontrada nesta empresa → 404 DELIVERY_NOT_FOUND. Motorista recebe 403 PERMISSION_DENIED; mais de 60 decisões por minuto → 429.',
         params: deliverySchemas.occurrenceAuthorizationParams,
         body: deliverySchemas.decideOccurrenceAuthorization,
         response: {
@@ -702,7 +704,10 @@ async function deliveryRoutes(app: FastifyInstance) {
     "/proof-document/:deliveryId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
 
       // A render is real CPU work (on the render worker, not this thread),
       // and `regenerate=true` repeats it on demand: one client looping on it
@@ -721,7 +726,9 @@ async function deliveryRoutes(app: FastifyInstance) {
           // The refusals carry `code` (decision 11.3): what the error
           // handler really sends, not the bare `{ message }`.
           400: proofDocumentResponses.proofDocumentError,
-          401: errorResponse.describe("Sem sessão válida (token ausente, expirado ou revogado)."),
+          401: errorResponse.describe(
+            "Sem sessão válida (token ausente, expirado ou revogado).",
+          ),
           403: proofDocumentResponses.proofDocumentError,
           404: proofDocumentResponses.proofDocumentError,
           409: proofDocumentResponses.proofDocumentError,
@@ -741,7 +748,10 @@ async function deliveryRoutes(app: FastifyInstance) {
       onRequest: [ensureAuthenticated],
       // What the company writes to its customers is the office's, not the
       // driver's (decision 4.4).
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read", { allowDriver: false })],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read", { allowDriver: false }),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["delivery"],

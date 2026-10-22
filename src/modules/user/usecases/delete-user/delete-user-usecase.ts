@@ -77,7 +77,11 @@ class DeleteUserUseCase {
     // The route carries no :businessId, so nothing before this point has
     // compared the target's tenant with the caller's. Same shape as
     // user-revoke-access, which already does it.
-    assertTenantAccessToRecord(findUser, findDeletedUser.businessId, () => new ResourceNotFoundError());
+    assertTenantAccessToRecord(
+      findUser,
+      findDeletedUser.businessId,
+      () => new ResourceNotFoundError(),
+    );
 
     // Two masters deleting each other here at once could leave none:
     // only delete-master-user keeps the last one.
@@ -141,7 +145,8 @@ class DeleteUserUseCase {
       sendSecurityEventToUser(userId, { reason: "access_denied" });
 
       // A driver lost its app login: the "com o app" split changed.
-      if (userDeleted.driverId) announceDriverLoginChange(userDeleted.businessId);
+      if (userDeleted.driverId)
+        announceDriverLoginChange(userDeleted.businessId);
 
       return userDeleted;
     } catch (error) {

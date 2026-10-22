@@ -300,7 +300,9 @@ afterAll(async () => {
     where: { userId: { in: [USER_A, DRIVER_USER_A] } },
   });
 
-  await prisma.user.deleteMany({ where: { id: { in: [USER_A, DRIVER_USER_A] } } });
+  await prisma.user.deleteMany({
+    where: { id: { in: [USER_A, DRIVER_USER_A] } },
+  });
 
   await prisma.driver.deleteMany({
     where: { id: { in: [DRIVER_A, DRIVER_A2, DRIVER_B] } },
@@ -341,7 +343,10 @@ const call = (
  * So 422/VALIDATION_ERROR is a FAILURE here: it means the request never got
  * where it needed to go.
  */
-function expectRefused(response: { statusCode: number; body: string }, what: string) {
+function expectRefused(
+  response: { statusCode: number; body: string },
+  what: string,
+) {
   expect(
     response.statusCode,
     `${what} respondeu ${response.statusCode}: ${response.body.slice(0, 200)}`,
@@ -380,9 +385,7 @@ describe("deleting another company’s fine", () => {
     expectRefused(response, "delete-fine");
 
     // What matters is not the status code: it is that the row is still there.
-    expect(
-      await prisma.fine.count({ where: { id: created.fineB } }),
-    ).toBe(1);
+    expect(await prisma.fine.count({ where: { id: created.fineB } })).toBe(1);
   });
 
   it("is refused too when the route carries the victim’s company id", async () => {
@@ -524,9 +527,14 @@ describe("a driver reading a colleague’s proof", () => {
 
 describe("a driver managing the operation’s catalogue", () => {
   it("does not create a shipper", async () => {
-    const response = await call("POST", `/shipper/create-shipper/${A}`, driverTokenA, {
-      name: "Embarcador do motorista",
-    });
+    const response = await call(
+      "POST",
+      `/shipper/create-shipper/${A}`,
+      driverTokenA,
+      {
+        name: "Embarcador do motorista",
+      },
+    );
 
     expectRefused(response, "create-shipper como motorista");
 

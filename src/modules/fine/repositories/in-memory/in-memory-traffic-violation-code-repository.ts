@@ -24,7 +24,11 @@ const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** code asc, sub_code asc, id asc: the repository's order. */
 function byCodeOrder(a: TrafficViolationCode, b: TrafficViolationCode): number {
-  return compareText(a.code, b.code) || a.sub_code - b.sub_code || compareText(a.id, b.id);
+  return (
+    compareText(a.code, b.code) ||
+    a.sub_code - b.sub_code ||
+    compareText(a.id, b.id)
+  );
 }
 
 // Same shape as the repository's search: "745-50" as printed.
@@ -130,7 +134,10 @@ class InMemoryTrafficViolationCodeRepository
     ].some((value) => value.toLowerCase().includes(needle));
   }
 
-  private matches(code: TrafficViolationCode, search: string | undefined): boolean {
+  private matches(
+    code: TrafficViolationCode,
+    search: string | undefined,
+  ): boolean {
     const term = search?.trim() ?? "";
 
     if (!term) return true;

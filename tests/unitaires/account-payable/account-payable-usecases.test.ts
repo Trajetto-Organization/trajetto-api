@@ -85,11 +85,19 @@ beforeEach(() => {
   branches.branches.push({ id: BRANCH, businessId: CARRIER } as Branch);
   suppliers.suppliers.push(
     { id: SUPPLIER, name: "Oficina Central", businessId: CARRIER } as never,
-    { id: FOREIGN_SUPPLIER, name: "Oficina Alheia", businessId: OTHER } as never,
+    {
+      id: FOREIGN_SUPPLIER,
+      name: "Oficina Alheia",
+      businessId: OTHER,
+    } as never,
   );
   vehicles.vehicles.push(
     { id: VEHICLE, license_plate: "ABC1D23", businessId: CARRIER } as Vehicle,
-    { id: FOREIGN_VEHICLE, license_plate: "XYZ9K88", businessId: OTHER } as Vehicle,
+    {
+      id: FOREIGN_VEHICLE,
+      license_plate: "XYZ9K88",
+      businessId: OTHER,
+    } as Vehicle,
   );
   orders.serviceOrders.push({
     id: ORDER,
@@ -224,7 +232,12 @@ describe("an edit", () => {
 
     // The old use case filled an absent responsible with whoever saved the
     // form — handing the bill over (and notifying) on an unrelated edit.
-    await update().execute({ document_number: "NF 4513" }, created.id, CARRIER, ADMIN);
+    await update().execute(
+      { document_number: "NF 4513" },
+      created.id,
+      CARRIER,
+      ADMIN,
+    );
 
     expect(bills.accountPayables[0]).toMatchObject({
       registrationUserId: CLERK,
@@ -275,10 +288,18 @@ describe("an edit", () => {
     const created = await create().execute(bill(), ADMIN);
 
     // What rows from before decision 8.4 look like.
-    Object.assign(bills.accountPayables[0], { supplierId: null, payee_name: null });
+    Object.assign(bills.accountPayables[0], {
+      supplierId: null,
+      payee_name: null,
+    });
 
     await update().execute(
-      { supplierId: null, payee_name: null, amount_paid: 600, payment_date: "2026-10-01" },
+      {
+        supplierId: null,
+        payee_name: null,
+        amount_paid: 600,
+        payment_date: "2026-10-01",
+      },
       created.id,
       CARRIER,
       ADMIN,
@@ -327,8 +348,10 @@ describe("the list", () => {
     // Due yesterday, today and tomorrow in São Paulo.
     const today = new Date();
     const key = (offset: number) =>
-      new Date(today.getTime() + offset * 86_400_000)
-        .toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+      new Date(today.getTime() + offset * 86_400_000).toLocaleDateString(
+        "sv-SE",
+        { timeZone: "America/Sao_Paulo" },
+      );
 
     await create().execute(bill({ due_date: key(-1) }), ADMIN);
     await create().execute(bill({ due_date: key(0) }), ADMIN);
@@ -338,13 +361,24 @@ describe("the list", () => {
       users,
       businesses,
       bills,
-    ).execute({ userId: ADMIN, page: 1, pageSize: 10, sort: "due_date", order: "asc" });
+    ).execute({
+      userId: ADMIN,
+      page: 1,
+      pageSize: 10,
+      sort: "due_date",
+      order: "asc",
+    });
 
     expect(result.data.map((row) => row.status)).toEqual([
       "OVERDUE",
       "PENDING", // due today: not overdue yet
       "PENDING",
     ]);
-    expect(result.searchMeta).toMatchObject({ total: 3, open: 2, overdue: 1, paid: 0 });
+    expect(result.searchMeta).toMatchObject({
+      total: 3,
+      open: 2,
+      overdue: 1,
+      paid: 0,
+    });
   });
 });

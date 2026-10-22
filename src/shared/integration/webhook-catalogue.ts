@@ -152,10 +152,7 @@ function topicMatches(subscription: string, topic: string): boolean {
   return topic.startsWith(prefix);
 }
 
-function endpointWantsTopic(
-  subscriptions: string[],
-  topic: string,
-): boolean {
+function endpointWantsTopic(subscriptions: string[], topic: string): boolean {
   return subscriptions.some((subscription) =>
     topicMatches(subscription, topic),
   );

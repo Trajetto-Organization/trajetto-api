@@ -66,7 +66,11 @@ async function seedBusiness(
   });
 
   await prisma.businessEntitlement.create({
-    data: { businessId: id, module: "DELIVERIES", enabled: options.deliveries ?? true },
+    data: {
+      businessId: id,
+      module: "DELIVERIES",
+      enabled: options.deliveries ?? true,
+    },
   });
 }
 
@@ -85,7 +89,9 @@ async function seedKey(
       scopes,
       businessId,
       revoked_at: options.revoked ? new Date() : null,
-      ...(options.ratePerMinute && { rate_limit_per_minute: options.ratePerMinute }),
+      ...(options.ratePerMinute && {
+        rate_limit_per_minute: options.ratePerMinute,
+      }),
     },
   });
 
@@ -100,9 +106,24 @@ beforeAll(async () => {
 
   await prisma.shipper.createMany({
     data: [
-      { id: SHIPPER, name: "Embarcador", cnpj: SHIPPER_CNPJ, businessId: CARRIER },
-      { id: INACTIVE_SHIPPER, name: "Desativado", businessId: CARRIER, is_active: false },
-      { id: OTHER_SHIPPER, name: "Alheio", cnpj: OTHER_SHIPPER_CNPJ, businessId: OTHER },
+      {
+        id: SHIPPER,
+        name: "Embarcador",
+        cnpj: SHIPPER_CNPJ,
+        businessId: CARRIER,
+      },
+      {
+        id: INACTIVE_SHIPPER,
+        name: "Desativado",
+        businessId: CARRIER,
+        is_active: false,
+      },
+      {
+        id: OTHER_SHIPPER,
+        name: "Alheio",
+        cnpj: OTHER_SHIPPER_CNPJ,
+        businessId: OTHER,
+      },
     ],
   });
 
@@ -123,7 +144,8 @@ beforeAll(async () => {
   writeKeyId = write.id;
 
   readKey = (await seedKey(CARRIER, ["deliveries:read"])).token;
-  revokedKey = (await seedKey(CARRIER, ["deliveries:write"], { revoked: true })).token;
+  revokedKey = (await seedKey(CARRIER, ["deliveries:write"], { revoked: true }))
+    .token;
   otherWriteKey = (await seedKey(OTHER, ["deliveries:write"])).token;
   noModuleKey = (await seedKey(NO_MODULE, ["deliveries:write"])).token;
   inactiveKey = (await seedKey(INACTIVE, ["deliveries:write"])).token;
@@ -137,7 +159,9 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-function document(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function document(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     shipper_id: SHIPPER,
     code: `PED-${randomUUID().slice(0, 8)}`,
@@ -179,7 +203,8 @@ async function announcementsOf(deliveryId: string): Promise<number> {
     select: { payload: true },
   });
 
-  return rows.filter((row) => JSON.stringify(row.payload).includes(deliveryId)).length;
+  return rows.filter((row) => JSON.stringify(row.payload).includes(deliveryId))
+    .length;
 }
 
 const deliveriesWithKey = (businessId: string, key: string) =>
@@ -189,7 +214,11 @@ describe("creating a delivery", () => {
   it("answers 201 with the public document, marks the origin and announces it once", async () => {
     const key = `pedido-${randomUUID()}`;
 
-    const response = await post(writeKey, document({ code: "PED-ORIGEM" }), key);
+    const response = await post(
+      writeKey,
+      document({ code: "PED-ORIGEM" }),
+      key,
+    );
 
     expect(response.statusCode).toBe(201);
     expect(response.headers["idempotent-replayed"]).toBe("false");
@@ -209,7 +238,12 @@ describe("creating a delivery", () => {
     });
 
     // Nothing internal leaks into the answer.
-    for (const internal of ["businessId", "shipperId", "apiKeyId", "client_submission_id"]) {
+    for (const internal of [
+      "businessId",
+      "shipperId",
+      "apiKeyId",
+      "client_submission_id",
+    ]) {
       expect(JSON.stringify(body), internal).not.toContain(internal);
     }
 
@@ -237,7 +271,9 @@ describe("creating a delivery", () => {
 
     expect(response.statusCode).toBe(201);
 
-    const row = await prisma.delivery.findUniqueOrThrow({ where: { id: response.json().id } });
+    const row = await prisma.delivery.findUniqueOrThrow({
+      where: { id: response.json().id },
+    });
 
     expect(row.shipperId).toBe(SHIPPER);
   });
@@ -282,7 +318,9 @@ describe("the Idempotency-Key", () => {
     });
 
     // The first document stands as it was sent.
-    const row = await prisma.delivery.findUniqueOrThrow({ where: { id: first.json().id } });
+    const row = await prisma.delivery.findUniqueOrThrow({
+      where: { id: first.json().id },
+    });
 
     expect(row.city).toBe("Campinas");
     expect(await deliveriesWithKey(CARRIER, key)).toBe(1);
@@ -294,7 +332,11 @@ describe("the Idempotency-Key", () => {
     const shipperId = randomUUID();
 
     await prisma.shipper.create({
-      data: { id: shipperId, name: `Temporário ${shipperId}`, businessId: CARRIER },
+      data: {
+        id: shipperId,
+        name: `Temporário ${shipperId}`,
+        businessId: CARRIER,
+      },
     });
 
     const key = randomUUID();
@@ -304,7 +346,10 @@ describe("the Idempotency-Key", () => {
 
     expect(first.statusCode).toBe(201);
 
-    await prisma.shipper.update({ where: { id: shipperId }, data: { is_active: false } });
+    await prisma.shipper.update({
+      where: { id: shipperId },
+      data: { is_active: false },
+    });
 
     const retry = await post(writeKey, body, key);
 
@@ -322,7 +367,11 @@ describe("the Idempotency-Key", () => {
     const key = randomUUID();
     const body = document({
       items: [
-        { description: "Óleo", quantity: 1.0004999999999999, unit_value: 3 * 1.115 },
+        {
+          description: "Óleo",
+          quantity: 1.0004999999999999,
+          unit_value: 3 * 1.115,
+        },
         { description: "Farinha", quantity: 2.0005, unit_value: 0.1 + 0.2 },
       ],
     });
@@ -334,7 +383,10 @@ describe("the Idempotency-Key", () => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const replay = await post(writeKey, body, key);
 
-      expect(replay.statusCode, `repetição ${attempt + 1}: ${replay.body}`).toBe(200);
+      expect(
+        replay.statusCode,
+        `repetição ${attempt + 1}: ${replay.body}`,
+      ).toBe(200);
       expect(replay.json().id).toBe(first.json().id);
     }
 
@@ -348,7 +400,11 @@ describe("the Idempotency-Key", () => {
     });
 
     expect(
-      items.map((item) => [item.description, item.quantity.toFixed(3), item.unit_value?.toFixed(2)]),
+      items.map((item) => [
+        item.description,
+        item.quantity.toFixed(3),
+        item.unit_value?.toFixed(2),
+      ]),
     ).toEqual([
       ["Farinha", "2.001", "0.30"],
       ["Óleo", "1.001", "3.35"],
@@ -423,17 +479,28 @@ describe("the Idempotency-Key", () => {
     const shipperId = randomUUID();
 
     await prisma.shipper.create({
-      data: { id: shipperId, name: `CNPJ editado ${shipperId}`, cnpj: "11222333000181", businessId: CARRIER },
+      data: {
+        id: shipperId,
+        name: `CNPJ editado ${shipperId}`,
+        cnpj: "11222333000181",
+        businessId: CARRIER,
+      },
     });
 
     const key = randomUUID();
-    const body = document({ shipper_id: undefined, shipper_cnpj: "11222333000181" });
+    const body = document({
+      shipper_id: undefined,
+      shipper_cnpj: "11222333000181",
+    });
 
     const first = await post(writeKey, body, key);
 
     expect(first.statusCode).toBe(201);
 
-    await prisma.shipper.update({ where: { id: shipperId }, data: { cnpj: "11444777000161" } });
+    await prisma.shipper.update({
+      where: { id: shipperId },
+      data: { cnpj: "11444777000161" },
+    });
 
     const retry = await post(writeKey, body, key);
 
@@ -449,7 +516,10 @@ describe("the Idempotency-Key", () => {
 
     expect((await post(writeKey, byId, byIdKey)).statusCode).toBe(201);
 
-    await prisma.shipper.update({ where: { id: shipperId }, data: { cnpj: "11222333000181" } });
+    await prisma.shipper.update({
+      where: { id: shipperId },
+      data: { cnpj: "11222333000181" },
+    });
 
     expect((await post(writeKey, byId, byIdKey)).statusCode).toBe(200);
   });
@@ -503,7 +573,9 @@ describe("the Idempotency-Key", () => {
     const statuses = responses.map((response) => response.statusCode).sort();
 
     // One created it; the unique index turned the other nine into replays.
-    expect(statuses).toEqual([200, 200, 200, 200, 200, 200, 200, 200, 200, 201]);
+    expect(statuses).toEqual([
+      200, 200, 200, 200, 200, 200, 200, 200, 200, 201,
+    ]);
 
     const ids = new Set(responses.map((response) => response.json().id));
 
@@ -516,7 +588,11 @@ describe("the Idempotency-Key", () => {
     const key = randomUUID();
 
     const ours = await post(writeKey, document(), key);
-    const theirs = await post(otherWriteKey, document({ shipper_id: OTHER_SHIPPER }), key);
+    const theirs = await post(
+      otherWriteKey,
+      document({ shipper_id: OTHER_SHIPPER }),
+      key,
+    );
 
     // Not a replay of ours and not a 409: a different company, a different
     // document. The lookup is scoped by the key's company, like the index.
@@ -537,7 +613,10 @@ describe("the manual create's rules", () => {
 
     expect(first.statusCode).toBe(201);
 
-    const duplicate = await post(writeKey, document({ invoice_key: invoiceKey }));
+    const duplicate = await post(
+      writeKey,
+      document({ invoice_key: invoiceKey }),
+    );
 
     expect(duplicate.statusCode).toBe(409);
     expect(duplicate.json()).toEqual({
@@ -546,7 +625,9 @@ describe("the manual create's rules", () => {
       delivery_id: first.json().id,
     });
 
-    expect(await prisma.delivery.count({ where: { invoice_key: invoiceKey } })).toBe(1);
+    expect(
+      await prisma.delivery.count({ where: { invoice_key: invoiceKey } }),
+    ).toBe(1);
   });
 
   it("refuse an unknown field inside an item and write nothing", async () => {
@@ -555,13 +636,18 @@ describe("the manual create's rules", () => {
 
     const response = await post(
       writeKey,
-      document({ code, items: [{ description: "Caixa", quantity: 1, unitValue: 99 }] }),
+      document({
+        code,
+        items: [{ description: "Caixa", quantity: 1, unitValue: 99 }],
+      }),
     );
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({
       code: "VALIDATION_ERROR",
-      issues: ["items.0: campo não reconhecido: unitValue. Confira os nomes na documentação."],
+      issues: [
+        "items.0: campo não reconhecido: unitValue. Confira os nomes na documentação.",
+      ],
     });
 
     expect(await prisma.delivery.count({ where: { code } })).toBe(0);
@@ -572,13 +658,18 @@ describe("the manual create's rules", () => {
 
     expect(response.statusCode, response.body).toBe(201);
 
-    const row = await prisma.delivery.findUniqueOrThrow({ where: { id: response.json().id } });
+    const row = await prisma.delivery.findUniqueOrThrow({
+      where: { id: response.json().id },
+    });
 
     expect(row.shipperId).toBe(SHIPPER);
   });
 
   it("refuse an inactive shipper with the panel's code", async () => {
-    const response = await post(writeKey, document({ shipper_id: INACTIVE_SHIPPER }));
+    const response = await post(
+      writeKey,
+      document({ shipper_id: INACTIVE_SHIPPER }),
+    );
 
     expect(response.statusCode).toBe(400);
     expect(response.json().code).toBe("SHIPPER_INACTIVE");
@@ -607,10 +698,18 @@ describe("the manual create's rules", () => {
 
 describe("the tenant boundary", () => {
   it("answers another company's shipper exactly like one that does not exist", async () => {
-    const before = await prisma.delivery.count({ where: { shipperId: OTHER_SHIPPER } });
+    const before = await prisma.delivery.count({
+      where: { shipperId: OTHER_SHIPPER },
+    });
 
-    const theirs = await post(writeKey, document({ shipper_id: OTHER_SHIPPER }));
-    const unknown = await post(writeKey, document({ shipper_id: randomUUID() }));
+    const theirs = await post(
+      writeKey,
+      document({ shipper_id: OTHER_SHIPPER }),
+    );
+    const unknown = await post(
+      writeKey,
+      document({ shipper_id: randomUUID() }),
+    );
     const theirsByCnpj = await post(
       writeKey,
       document({ shipper_id: undefined, shipper_cnpj: OTHER_SHIPPER_CNPJ }),
@@ -625,7 +724,9 @@ describe("the tenant boundary", () => {
     expect(theirs.body).toBe(unknown.body);
     expect(theirsByCnpj.body).toBe(unknown.body);
 
-    expect(await prisma.delivery.count({ where: { shipperId: OTHER_SHIPPER } })).toBe(before);
+    expect(
+      await prisma.delivery.count({ where: { shipperId: OTHER_SHIPPER } }),
+    ).toBe(before);
   });
 
   it("takes no company from the request", async () => {
@@ -692,9 +793,13 @@ describe("the key", () => {
   });
 
   it("spends the same per-key budget as the reads", async () => {
-    const { token } = await seedKey(CARRIER, ["deliveries:read", "deliveries:write"], {
-      ratePerMinute: 10,
-    });
+    const { token } = await seedKey(
+      CARRIER,
+      ["deliveries:read", "deliveries:write"],
+      {
+        ratePerMinute: 10,
+      },
+    );
 
     for (let call = 0; call < 5; call += 1) {
       await app.inject({
@@ -716,7 +821,9 @@ describe("the key", () => {
   });
 
   it("is counted on the usage monitor under the route pattern", async () => {
-    const { apiUsageRecorder } = await import("@/shared/integration/api-usage-recorder");
+    const { apiUsageRecorder } = await import(
+      "@/shared/integration/api-usage-recorder"
+    );
 
     await post(writeKey, document());
     await apiUsageRecorder.flush();
@@ -725,7 +832,9 @@ describe("the key", () => {
       where: { apiKeyId: writeKeyId, method: "POST" },
     });
 
-    expect(rows.map((row) => row.route)).toContain("/integration/v1/deliveries");
+    expect(rows.map((row) => row.route)).toContain(
+      "/integration/v1/deliveries",
+    );
   });
 });
 
@@ -738,13 +847,17 @@ describe("the audit trail of an API-created delivery", () => {
     expect(created.statusCode).toBe(201);
 
     // A replay creates nothing, so it records nothing either.
-    expect((await post(writeKey, document({ code: "PED-AUDIT" }), key)).statusCode).toBe(200);
+    expect(
+      (await post(writeKey, document({ code: "PED-AUDIT" }), key)).statusCode,
+    ).toBe(200);
 
     const deliveryId = created.json().id;
 
     // Written right after the commit, outside the request's answer path.
     await vi.waitFor(async () => {
-      expect(await prisma.activity.count({ where: { entityId: deliveryId } })).toBe(1);
+      expect(
+        await prisma.activity.count({ where: { entityId: deliveryId } }),
+      ).toBe(1);
     });
 
     const activity = await prisma.activity.findFirstOrThrow({

@@ -13,10 +13,18 @@ import { formatInstant, formatPickedDay } from "@/shared/vehicle/record-dates";
  */
 const BUSINESS = "0198a8d0-70c0-7000-8000-0000000000ab";
 
-const stub = <T>(value: T) => async () => value;
+const stub =
+  <T>(value: T) =>
+  async () =>
+    value;
 
 const deps = (timezone: string) => ({
-  user: stub({ id: "admin", role: "BUSINESS_ADMIN", businessId: BUSINESS, driverId: null }),
+  user: stub({
+    id: "admin",
+    role: "BUSINESS_ADMIN",
+    businessId: BUSINESS,
+    driverId: null,
+  }),
   business: stub({ id: BUSINESS, timezone }),
 });
 
@@ -32,19 +40,25 @@ const cell = (columns: Column[], key: string, value: unknown) => {
 
 describe("formatPickedDay", () => {
   it("reads a date-only value (00:00 UTC) as its own day in any zone", () => {
-    expect(formatPickedDay("2026-09-17T00:00:00.000Z", "America/Rio_Branco")).toBe("17/09/2026");
+    expect(
+      formatPickedDay("2026-09-17T00:00:00.000Z", "America/Rio_Branco"),
+    ).toBe("17/09/2026");
   });
 
   it("reads an instant on the company's calendar", () => {
     // 22:30 on the 17th in São Paulo, already the 18th in UTC.
-    expect(formatPickedDay("2026-09-18T01:30:00.000Z", "America/Sao_Paulo")).toBe("17/09/2026");
+    expect(
+      formatPickedDay("2026-09-18T01:30:00.000Z", "America/Sao_Paulo"),
+    ).toBe("17/09/2026");
     expect(formatPickedDay(null, "America/Sao_Paulo")).toBe("N/A");
   });
 });
 
 describe("formatInstant", () => {
   it("prints the hour in the company's zone", () => {
-    expect(formatInstant("2026-09-18T01:30:00.000Z", "America/Manaus")).toBe("17/09/2026, 21:30");
+    expect(formatInstant("2026-09-18T01:30:00.000Z", "America/Manaus")).toBe(
+      "17/09/2026, 21:30",
+    );
   });
 });
 
@@ -65,7 +79,9 @@ describe("the vehicle export", () => {
     const lateNight = "2026-09-18T03:30:00.000Z";
 
     expect(cell(columns, "acquisition_date", lateNight)).toBe("17/09/2026");
-    expect(cell(columns, "last_maintenance_date", lateNight)).toBe("17/09/2026");
+    expect(cell(columns, "last_maintenance_date", lateNight)).toBe(
+      "17/09/2026",
+    );
     expect(cell(columns, "last_maintenance_date", null)).toBe("N/A");
     expect(cell(columns, "created_at", lateNight)).toBe("17/09/2026, 23:30");
   });
@@ -84,8 +100,14 @@ describe("the checklist export", () => {
 
     const { columns } = await useCase.execute({ userId: "admin" });
 
-    expect(cell(columns, "checklist_date", "2026-09-18T03:30:00.000Z")).toBe("17/09/2026");
-    expect(cell(columns, "checklist_date", "2026-09-18T00:00:00.000Z")).toBe("18/09/2026");
-    expect(cell(columns, "updated_at", "2026-09-18T03:30:00.000Z")).toBe("17/09/2026, 23:30");
+    expect(cell(columns, "checklist_date", "2026-09-18T03:30:00.000Z")).toBe(
+      "17/09/2026",
+    );
+    expect(cell(columns, "checklist_date", "2026-09-18T00:00:00.000Z")).toBe(
+      "18/09/2026",
+    );
+    expect(cell(columns, "updated_at", "2026-09-18T03:30:00.000Z")).toBe(
+      "17/09/2026, 23:30",
+    );
   });
 });

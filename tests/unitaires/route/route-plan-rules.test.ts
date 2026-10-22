@@ -109,7 +109,12 @@ describe("the plan's window, on the company's clock", () => {
     const at = new Date("2026-09-17T15:00:00.000Z");
 
     expect(
-      routePlanIssues({ scheduledDate: DAY_17, departure: at, arrival: at, timeZone: SP }),
+      routePlanIssues({
+        scheduledDate: DAY_17,
+        departure: at,
+        arrival: at,
+        timeZone: SP,
+      }),
     ).toEqual([]);
 
     // A return alone is not judged against a departure nobody planned.
@@ -209,7 +214,9 @@ describe("the create schema", () => {
       destination: "CD Cajamar",
     });
 
-    expect(parsed.scheduled_date.toISOString()).toBe("2026-09-17T00:00:00.000Z");
+    expect(parsed.scheduled_date.toISOString()).toBe(
+      "2026-09-17T00:00:00.000Z",
+    );
     expect(parsed.planned_departure_at?.toISOString()).toBe(
       "2026-09-17T11:00:00.000Z",
     );
@@ -242,12 +249,14 @@ describe("the create schema", () => {
     ).toEqual(["A data da rota deve estar no formato AAAA-MM-DD."]);
 
     expect(
-      issuesOf(createRouteSchema.safeParse({ ...base, scheduled_date: "2026-02-30" })),
+      issuesOf(
+        createRouteSchema.safeParse({ ...base, scheduled_date: "2026-02-30" }),
+      ),
     ).toEqual(["A data da rota é inválida."]);
 
-    expect(
-      issuesOf(createRouteSchema.safeParse({ driverId: DRIVER })),
-    ).toEqual(["A data da rota é obrigatória."]);
+    expect(issuesOf(createRouteSchema.safeParse({ driverId: DRIVER }))).toEqual(
+      ["A data da rota é obrigatória."],
+    );
   });
 
   it("refuses a return before the departure with the shared message", () => {
@@ -272,19 +281,27 @@ describe("the create schema", () => {
     ).toEqual(["O nome da rota não deve conter espaços consecutivos."]);
     expect(
       issuesOf(createRouteSchema.safeParse({ ...base, name: " Zona Sul" })),
-    ).toEqual(["O nome da rota não pode começar ou terminar com espaço em branco."]);
+    ).toEqual([
+      "O nome da rota não pode começar ou terminar com espaço em branco.",
+    ]);
   });
 
   it("applies the same rules and a 160-character cap to the destination", () => {
     expect(
-      issuesOf(createRouteSchema.safeParse({ ...base, destination: "CD  Cajamar" })),
+      issuesOf(
+        createRouteSchema.safeParse({ ...base, destination: "CD  Cajamar" }),
+      ),
     ).toEqual(["O destino não deve conter espaços consecutivos."]);
     expect(
-      issuesOf(createRouteSchema.safeParse({ ...base, destination: "x".repeat(161) })),
+      issuesOf(
+        createRouteSchema.safeParse({ ...base, destination: "x".repeat(161) }),
+      ),
     ).toEqual(["O destino deve ter no máximo 160 caracteres."]);
 
     // Empty is "none".
-    expect(createRouteSchema.parse({ ...base, destination: "" }).destination).toBeNull();
+    expect(
+      createRouteSchema.parse({ ...base, destination: "" }).destination,
+    ).toBeNull();
   });
 
   it("parses its own output again (Fastify validates, the controller re-parses)", () => {
@@ -296,7 +313,9 @@ describe("the create schema", () => {
     const twice = createRouteSchema.parse(once);
 
     expect(twice.scheduled_date.toISOString()).toBe("2026-09-17T00:00:00.000Z");
-    expect(twice.planned_departure_at?.toISOString()).toBe("2026-09-17T11:00:00.000Z");
+    expect(twice.planned_departure_at?.toISOString()).toBe(
+      "2026-09-17T11:00:00.000Z",
+    );
   });
 });
 
@@ -333,12 +352,18 @@ describe("the list query", () => {
       scheduled_date: "2026-09-17",
     });
 
-    expect(parsed.scheduled_date?.toISOString()).toBe("2026-09-17T00:00:00.000Z");
+    expect(parsed.scheduled_date?.toISOString()).toBe(
+      "2026-09-17T00:00:00.000Z",
+    );
   });
 });
 
 describe("the assignment schema", () => {
-  const base = { deliveryIds: [DELIVERY], driverId: DRIVER, vehicleId: VEHICLE };
+  const base = {
+    deliveryIds: [DELIVERY],
+    driverId: DRIVER,
+    vehicleId: VEHICLE,
+  };
 
   it("still takes the three ids alone (the day defaults on the server)", () => {
     const parsed = assignDeliveriesSchema.parse(base);
@@ -356,7 +381,9 @@ describe("the assignment schema", () => {
       planned_arrival_at: "2026-09-17T17:00:00-03:00",
     });
 
-    expect(parsed.scheduled_date?.toISOString()).toBe("2026-09-17T00:00:00.000Z");
+    expect(parsed.scheduled_date?.toISOString()).toBe(
+      "2026-09-17T00:00:00.000Z",
+    );
     expect(parsed.destination).toBe("Zona Leste");
 
     const refused = assignDeliveriesSchema.safeParse({
@@ -365,9 +392,9 @@ describe("the assignment schema", () => {
       planned_arrival_at: "2026-09-17T08:00:00-03:00",
     });
 
-    expect(refused.success ? [] : refused.error.issues.map((i) => i.message)).toEqual([
-      ROUTE_PLAN_MESSAGES.arrivalBeforeDeparture,
-    ]);
+    expect(
+      refused.success ? [] : refused.error.issues.map((i) => i.message),
+    ).toEqual([ROUTE_PLAN_MESSAGES.arrivalBeforeDeparture]);
   });
 });
 
@@ -389,7 +416,9 @@ describe("what the assignment dialog is warned about", () => {
     ...overrides,
   });
 
-  const preview = (overrides: Partial<AssignmentPreview> = {}): AssignmentPreview => ({
+  const preview = (
+    overrides: Partial<AssignmentPreview> = {},
+  ): AssignmentPreview => ({
     driver: {
       id: DRIVER,
       name: "João",
@@ -414,7 +443,11 @@ describe("what the assignment dialog is warned about", () => {
     ...extra,
   });
 
-  const ref = (id: string, code: number, driverName: string | null = "João") => ({
+  const ref = (
+    id: string,
+    code: number,
+    driverName: string | null = "João",
+  ) => ({
     id,
     code,
     status: "RELEASED" as const,
@@ -455,9 +488,16 @@ describe("what the assignment dialog is warned about", () => {
           status: "IN_ROUTE",
           responsible: { id: DRIVER, name: "João" },
         }),
-        vehicleRunningRoute: { ...ref("r-7", 7, "Maria"), status: "IN_PROGRESS" },
+        vehicleRunningRoute: {
+          ...ref("r-7", 7, "Maria"),
+          status: "IN_PROGRESS",
+        },
         // r-12 is the driver's own, already named above.
-        vehicleRoutesOnDay: [ref("r-12", 12), ref("r-14", 14, "Maria"), ref("r-15", 15, "Ana")],
+        vehicleRoutesOnDay: [
+          ref("r-12", 12),
+          ref("r-14", 14, "Maria"),
+          ref("r-15", 15, "Ana"),
+        ],
       }),
       options(),
     );
@@ -523,7 +563,10 @@ describe("what the assignment dialog is warned about", () => {
       );
 
       expect(expiredBefore).toEqual([
-        { code: "DRIVER_CNH_EXPIRED", message: "A CNH de João venceu em 16/09/2026." },
+        {
+          code: "DRIVER_CNH_EXPIRED",
+          message: "A CNH de João venceu em 16/09/2026.",
+        },
       ]);
 
       // Valid THROUGH its last day.
@@ -549,7 +592,8 @@ describe("what the assignment dialog is warned about", () => {
       expect(incompatible).toEqual([
         {
           code: "DRIVER_CNH_INCOMPATIBLE",
-          message: "O veículo ABC1D23 exige CNH categoria C, e a CNH de João é categoria B.",
+          message:
+            "O veículo ABC1D23 exige CNH categoria C, e a CNH de João é categoria B.",
         },
       ]);
 
@@ -579,7 +623,10 @@ describe("what the assignment dialog is warned about", () => {
         preview({
           vehicle: vehicleOf({
             // 01:30Z of the 15th is still the 14th in São Paulo.
-            openServiceOrders: { count: 1, oldest: new Date("2026-09-15T01:30:00.000Z") },
+            openServiceOrders: {
+              count: 1,
+              oldest: new Date("2026-09-15T01:30:00.000Z"),
+            },
           }),
         }),
         options(),
@@ -588,14 +635,18 @@ describe("what the assignment dialog is warned about", () => {
       expect(one).toEqual([
         {
           code: "VEHICLE_OPEN_SERVICE_ORDER",
-          message: "O veículo ABC1D23 tem 1 ordem de serviço aberta desde 14/09/2026.",
+          message:
+            "O veículo ABC1D23 tem 1 ordem de serviço aberta desde 14/09/2026.",
         },
       ]);
 
       const several = assignmentWarnings(
         preview({
           vehicle: vehicleOf({
-            openServiceOrders: { count: 3, oldest: new Date("2026-09-10T12:00:00.000Z") },
+            openServiceOrders: {
+              count: 3,
+              oldest: new Date("2026-09-10T12:00:00.000Z"),
+            },
           }),
         }),
         options(),
@@ -631,7 +682,8 @@ describe("what the assignment dialog is warned about", () => {
       expect(rejected).toEqual([
         {
           code: "VEHICLE_CHECKLIST_REJECTED",
-          message: "O último checklist do veículo ABC1D23, de 16/09/2026, foi reprovado.",
+          message:
+            "O último checklist do veículo ABC1D23, de 16/09/2026, foi reprovado.",
         },
       ]);
 

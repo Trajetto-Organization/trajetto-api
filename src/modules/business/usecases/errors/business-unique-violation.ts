@@ -27,11 +27,15 @@ function businessUniqueViolation(error: unknown): BusinessConflict | null {
   }
 
   const target = error.meta?.target;
-  const fields = Array.isArray(target) ? target.join(",") : String(target ?? "");
+  const fields = Array.isArray(target)
+    ? target.join(",")
+    : String(target ?? "");
 
-  if (fields.includes("corporate_reason")) return new BusinessCorporateReasonAlreadyExistsError();
+  if (fields.includes("corporate_reason"))
+    return new BusinessCorporateReasonAlreadyExistsError();
   if (fields.includes("email")) return new BusinessEmailAlreadyExistsError();
-  if (fields.includes("erp_code")) return new BusinessErpCodeAlreadyExistsError();
+  if (fields.includes("erp_code"))
+    return new BusinessErpCodeAlreadyExistsError();
   if (fields.includes("cnpj")) return new BusinessCnpjAlreadyExistsError();
 
   return null;

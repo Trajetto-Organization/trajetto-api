@@ -15,14 +15,22 @@ const isoDateTime = z.string().describe("Instante ISO 8601 (UTC).");
 
 const pauseView = z.object({
   id: z.string(),
-  kind: z.enum(DRIVER_PAUSE_KINDS).describe("MEAL (refeição), REST (descanso) ou OTHER."),
-  started_at: isoDateTime.describe("Início, pelo relógio do aparelho corrigido (occurred_at)."),
-  ended_at: isoDateTime.nullable().describe("Fim; nulo enquanto a pausa está aberta."),
+  kind: z
+    .enum(DRIVER_PAUSE_KINDS)
+    .describe("MEAL (refeição), REST (descanso) ou OTHER."),
+  started_at: isoDateTime.describe(
+    "Início, pelo relógio do aparelho corrigido (occurred_at).",
+  ),
+  ended_at: isoDateTime
+    .nullable()
+    .describe("Fim; nulo enquanto a pausa está aberta."),
   duration_minutes: z
     .number()
     .int()
     .nullable()
-    .describe("Minutos inteiros (arredondados para baixo); nulo enquanto aberta."),
+    .describe(
+      "Minutos inteiros (arredondados para baixo); nulo enquanto aberta.",
+    ),
   note: z.string().nullable(),
   routeId: z
     .string()
@@ -39,14 +47,18 @@ const pauseView = z.object({
   occurrence_type: z
     .object({ id: z.string(), name: z.string() })
     .nullable()
-    .describe("O tipo de pausa escolhido (decisão 14.4); `kind` é a natureza legal dele."),
+    .describe(
+      "O tipo de pausa escolhido (decisão 14.4); `kind` é a natureza legal dele.",
+    ),
 });
 
 const pauseWrite = z.object({
   pause: pauseView,
   replayed: z
     .boolean()
-    .describe("true quando a mesma chave já tinha feito este gesto (reenvio da fila): nada novo foi gravado."),
+    .describe(
+      "true quando a mesma chave já tinha feito este gesto (reenvio da fila): nada novo foi gravado.",
+    ),
 });
 
 const currentPause = z.object({
@@ -54,14 +66,18 @@ const currentPause = z.object({
   day: z.string().describe("O dia de hoje da empresa (AAAA-MM-DD)."),
   open: pauseView
     .nullable()
-    .describe("A pausa aberta do motorista, de qualquer dia; nula quando não há. É por ela que o app sabe que está em pausa."),
+    .describe(
+      "A pausa aberta do motorista, de qualquer dia; nula quando não há. É por ela que o app sabe que está em pausa.",
+    ),
   today: z
     .array(pauseView)
-    .describe("As pausas iniciadas hoje no fuso da empresa, da mais antiga para a mais nova."),
+    .describe(
+      "As pausas iniciadas hoje no fuso da empresa, da mais antiga para a mais nova.",
+    ),
   pause_allowed: z
     .boolean()
     .describe(
-      "Decisão 14.4: verdadeiro quando o motorista tem agora uma rota liberada ou em andamento do dia — só então o app mostra \"Iniciar pausa\". Encerrar uma pausa aberta é sempre possível.",
+      'Decisão 14.4: verdadeiro quando o motorista tem agora uma rota liberada ou em andamento do dia — só então o app mostra "Iniciar pausa". Encerrar uma pausa aberta é sempre possível.',
     ),
   journey_route_id: z
     .string()
@@ -75,7 +91,9 @@ const reportPause = z.object({
   occurrence_type_name: z
     .string()
     .nullable()
-    .describe("O nome do tipo de pausa escolhido (decisão 14.4); `kind` é a natureza legal que os alertas leem."),
+    .describe(
+      "O nome do tipo de pausa escolhido (decisão 14.4); `kind` é a natureza legal que os alertas leem.",
+    ),
   status: z
     .enum(["ENDED", "ONGOING", "NOT_ENDED", "TOO_LONG"])
     .describe(
@@ -98,12 +116,18 @@ const flagCode = z.enum(PAUSE_FLAG_CODES);
 
 const driverDay = z.object({
   id: z.string().describe("`<driverId>:<dia>`, estável entre páginas."),
-  day: z.string().describe("O dia da jornada (AAAA-MM-DD), no fuso da empresa: o dia em que ela começou."),
+  day: z
+    .string()
+    .describe(
+      "O dia da jornada (AAAA-MM-DD), no fuso da empresa: o dia em que ela começou.",
+    ),
   driverId: z.string(),
   driverName: z.string(),
   inProgress: z
     .boolean()
-    .describe("Rota em andamento ou pausa aberta: a jornada ainda não terminou, e os alertas de refeição esperam o fim."),
+    .describe(
+      "Rota em andamento ou pausa aberta: a jornada ainda não terminou, e os alertas de refeição esperam o fim.",
+    ),
   workday: z.object({
     start: isoDateTime.describe("Primeiro início de rota ou de pausa."),
     end: isoDateTime.describe(
@@ -116,30 +140,49 @@ const driverDay = z.object({
     pauseMinutes: z
       .number()
       .int()
-      .describe("Tempo total em pausa (sobreposições contadas uma vez; pausas esquecidas fora)."),
-    mealMinutes: z.number().int().describe("Tempo em refeição (sobreposições contadas uma vez)."),
-    longestMealMinutes: z.number().int().describe("O maior intervalo contínuo de refeição."),
+      .describe(
+        "Tempo total em pausa (sobreposições contadas uma vez; pausas esquecidas fora).",
+      ),
+    mealMinutes: z
+      .number()
+      .int()
+      .describe("Tempo em refeição (sobreposições contadas uma vez)."),
+    longestMealMinutes: z
+      .number()
+      .int()
+      .describe("O maior intervalo contínuo de refeição."),
     restMinutes: z.number().int(),
     otherMinutes: z.number().int(),
     drivingMinutes: z
       .number()
       .int()
-      .describe("Direção ESTIMADA: tempo de rota em andamento menos as pausas (inclui o tempo parado nos clientes)."),
+      .describe(
+        "Direção ESTIMADA: tempo de rota em andamento menos as pausas (inclui o tempo parado nos clientes).",
+      ),
     longestDrivingWithoutRestMinutes: z
       .number()
       .int()
-      .describe("O maior trecho de direção estimada antes de somar 30 min de descanso."),
+      .describe(
+        "O maior trecho de direção estimada antes de somar 30 min de descanso.",
+      ),
   }),
   previousWorkdayEnd: isoDateTime
     .nullable()
-    .describe("Fim da jornada anterior do motorista, quando há uma nos dois dias antes."),
+    .describe(
+      "Fim da jornada anterior do motorista, quando há uma nos dois dias antes.",
+    ),
   restBeforeMinutes: z
     .number()
     .int()
     .nullable()
     .describe("Descanso desde a jornada anterior (interjornada)."),
   flags: z
-    .array(z.object({ code: flagCode, message: z.string().describe("A explicação, em português.") }))
+    .array(
+      z.object({
+        code: flagCode,
+        message: z.string().describe("A explicação, em português."),
+      }),
+    )
     .describe(
       "Alertas da Lei 13.103/2015 — só sinalizam, nada é bloqueado. MEAL_MISSING: jornada acima de 6 h sem pausa de refeição. MEAL_SHORT: a maior refeição teve menos de 1 h. DRIVING_REST_SHORT: mais de 6 h de direção estimada sem somar 30 min de descanso. INTERJORNADA_SHORT: menos de 11 h desde o fim da jornada anterior. PAUSE_NOT_ENDED: pausa aberta há mais de 12 h. PAUSE_TOO_LONG: pausa encerrada só depois de mais de 12 h (esquecida aberta); a duração fica fora dos cálculos.",
     ),
@@ -147,12 +190,17 @@ const driverDay = z.object({
 
 const facetCount = z.object({
   value: z.string(),
-  label: z.string().optional().describe("Nome do motorista (só na faceta de motoristas)."),
+  label: z
+    .string()
+    .optional()
+    .describe("Nome do motorista (só na faceta de motoristas)."),
   count: z.number().int(),
 });
 
 const pauseReport = z.object({
-  timeZone: z.string().describe("O fuso da empresa em que os dias são contados."),
+  timeZone: z
+    .string()
+    .describe("O fuso da empresa em que os dias são contados."),
   from: z.string().describe("Primeiro dia do período (AAAA-MM-DD)."),
   to: z.string().describe("Último dia do período (AAAA-MM-DD)."),
   rules: z
@@ -165,7 +213,10 @@ const pauseReport = z.object({
       forgottenPauseMinutes: z.number().int(),
     })
     .describe("Os limites que os alertas usam, em minutos."),
-  total: z.number().int().describe("Dias de jornada com todos os filtros (paginador)."),
+  total: z
+    .number()
+    .int()
+    .describe("Dias de jornada com todos os filtros (paginador)."),
   page: z.number().int(),
   pageSize: z.number().int(),
   searchMeta: z.object({
@@ -175,19 +226,27 @@ const pauseReport = z.object({
     daysWithAlerts: z
       .number()
       .int()
-      .describe("Dias com ao menos um alerta, com o filtro de motorista e sem o de alerta."),
+      .describe(
+        "Dias com ao menos um alerta, com o filtro de motorista e sem o de alerta.",
+      ),
     facets: z.object({
       driverId: z
         .array(facetCount)
-        .describe("Motoristas com jornada no período, contados com o filtro de alerta (nunca o próprio)."),
+        .describe(
+          "Motoristas com jornada no período, contados com o filtro de alerta (nunca o próprio).",
+        ),
       flag: z
         .array(facetCount)
-        .describe("Cada alerta, contado com o filtro de motorista (nunca o próprio)."),
+        .describe(
+          "Cada alerta, contado com o filtro de motorista (nunca o próprio).",
+        ),
     }),
   }),
   data: z
     .array(driverDay)
-    .describe("Um dia de jornada por linha: o dia mais recente primeiro, depois o nome do motorista."),
+    .describe(
+      "Um dia de jornada por linha: o dia mais recente primeiro, depois o nome do motorista.",
+    ),
 });
 
 const withCodes = (description: string) =>

@@ -1,4 +1,7 @@
-import type { GpsAddress, ProofDocumentSource } from "@/shared/delivery/proof-document";
+import type {
+  GpsAddress,
+  ProofDocumentSource,
+} from "@/shared/delivery/proof-document";
 
 type ProofSignatureStatus = "SIGNED" | "UNSIGNED";
 

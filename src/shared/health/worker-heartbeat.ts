@@ -47,7 +47,10 @@ interface HeartbeatEntry {
 }
 
 class WorkerHeartbeatRegistry {
-  private entries = new Map<string, { lastBeatAt: Date; runningSince: Date | null }>();
+  private entries = new Map<
+    string,
+    { lastBeatAt: Date; runningSince: Date | null }
+  >();
 
   /** The clock is injectable so the rules can be tested without timers. */
   constructor(private readonly clock: () => Date = () => new Date()) {}
@@ -141,7 +144,9 @@ async function flushHeartbeats(
  * fail-open: a flush that fails (the database, again) is logged and retried on
  * the next tick — the heartbeat must never be what takes a worker down.
  */
-function startHeartbeatFlush(intervalMs: number = FLUSH_INTERVAL_MS): () => void {
+function startHeartbeatFlush(
+  intervalMs: number = FLUSH_INTERVAL_MS,
+): () => void {
   const timer = setInterval(() => {
     flushHeartbeats().catch((error) => {
       log.warn({ err: error }, "worker heartbeat flush failed");

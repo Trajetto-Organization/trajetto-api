@@ -38,22 +38,40 @@ import type { CreateBranchProps } from "@/modules/branch/dtos/branch-dto";
 const A = "018feb00-0000-7000-8000-00000000000a";
 const B = "018feb00-0000-7000-8000-00000000000b";
 
-const people: Record<string, { id: string; role: string; businessId: string | null }> = {
+const people: Record<
+  string,
+  { id: string; role: string; businessId: string | null }
+> = {
   adminA: { id: "adminA", role: "BUSINESS_ADMIN", businessId: A },
   adminB: { id: "adminB", role: "BUSINESS_ADMIN", businessId: B },
   master: { id: "master", role: "MASTER", businessId: null },
 };
 
-const companies: Record<string, { id: string; corporate_reason: string; cnpj: string; email: string }> = {
-  [A]: { id: A, corporate_reason: "Transportadora A", cnpj: "11111111000111", email: "a@a.com" },
-  [B]: { id: B, corporate_reason: "Transportadora Beta Segredo", cnpj: "22222222000122", email: "b@b.com" },
+const companies: Record<
+  string,
+  { id: string; corporate_reason: string; cnpj: string; email: string }
+> = {
+  [A]: {
+    id: A,
+    corporate_reason: "Transportadora A",
+    cnpj: "11111111000111",
+    email: "a@a.com",
+  },
+  [B]: {
+    id: B,
+    corporate_reason: "Transportadora Beta Segredo",
+    cnpj: "22222222000122",
+    email: "b@b.com",
+  },
 };
 
 let branches: InMemoryBranchRepository;
 
 const users = {
   findUserById: async (id: string) =>
-    people[id] ? { ...people[id], name: id, email: `${id}@exemplo.com.br` } : null,
+    people[id]
+      ? { ...people[id], name: id, email: `${id}@exemplo.com.br` }
+      : null,
   findBusinessAdminsByBusinessId: async () => [],
 } as never;
 
@@ -65,7 +83,9 @@ const business = {
 
 const notifications = { createActivityIfEnabled: vi.fn() } as never;
 
-const branch = (overrides: Partial<CreateBranchProps> = {}): CreateBranchProps => ({
+const branch = (
+  overrides: Partial<CreateBranchProps> = {},
+): CreateBranchProps => ({
   corporate_reason: "Filial Campinas",
   fantasy_name: "",
   cep: "13010000",
@@ -87,7 +107,12 @@ const branch = (overrides: Partial<CreateBranchProps> = {}): CreateBranchProps =
 const setup = () => ({
   create: new CreateBranchUseCase(users, business, branches, notifications),
   update: new UpdateBranchUseCase(users, business, branches, notifications),
-  toggle: new ToggleBranchActiveUseCase(users, business, branches, notifications),
+  toggle: new ToggleBranchActiveUseCase(
+    users,
+    business,
+    branches,
+    notifications,
+  ),
   list: new ListBranchUseCase(users, branches),
 });
 
@@ -105,8 +130,15 @@ describe("uniqueness inside one company (decision 8.1)", () => {
     // Globally checked, B's registration was refused and told B that the
     // name belonged to someone.
     await expect(
-      create.execute(branch({ cnpj: "44444444000144", businessId: B }), B, "adminB"),
-    ).resolves.toMatchObject({ corporate_reason: "Filial Campinas", businessId: B });
+      create.execute(
+        branch({ cnpj: "44444444000144", businessId: B }),
+        B,
+        "adminB",
+      ),
+    ).resolves.toMatchObject({
+      corporate_reason: "Filial Campinas",
+      businessId: B,
+    });
   });
 
   it("refuses the same name (ignoring case), e-mail or ERP code in the same company, with a 409 code", async () => {
@@ -115,12 +147,20 @@ describe("uniqueness inside one company (decision 8.1)", () => {
     await create.execute(branch(), A, "adminA");
 
     await expect(
-      create.execute(branch({ corporate_reason: "FILIAL CAMPINAS", cnpj: "55555555000155" }), A, "adminA"),
+      create.execute(
+        branch({ corporate_reason: "FILIAL CAMPINAS", cnpj: "55555555000155" }),
+        A,
+        "adminA",
+      ),
     ).rejects.toMatchObject({ statusCode: 409, code: "BRANCH_NAME_TAKEN" });
 
     await expect(
       create.execute(
-        branch({ corporate_reason: "Outra", cnpj: "55555555000155", erp_code: "002" }),
+        branch({
+          corporate_reason: "Outra",
+          cnpj: "55555555000155",
+          erp_code: "002",
+        }),
         A,
         "adminA",
       ),
@@ -128,7 +168,11 @@ describe("uniqueness inside one company (decision 8.1)", () => {
 
     await expect(
       create.execute(
-        branch({ corporate_reason: "Outra", cnpj: "55555555000155", email: "outra@exemplo.com.br" }),
+        branch({
+          corporate_reason: "Outra",
+          cnpj: "55555555000155",
+          email: "outra@exemplo.com.br",
+        }),
         A,
         "adminA",
       ),
@@ -140,14 +184,23 @@ describe("uniqueness inside one company (decision 8.1)", () => {
 
     await create.execute(branch({ businessId: B }), B, "adminB");
 
-    const byBranch = create.execute(branch({ corporate_reason: "X", email: "x@x.com", erp_code: "9" }), A, "adminA");
+    const byBranch = create.execute(
+      branch({ corporate_reason: "X", email: "x@x.com", erp_code: "9" }),
+      A,
+      "adminA",
+    );
 
     await expect(byBranch).rejects.toBeInstanceOf(BranchCnpjAlreadyExistsError);
 
     // A company's own CNPJ used by another carrier: the same answer, not
     // "cadastrado em uma empresa".
     const byCompany = create.execute(
-      branch({ cnpj: companies[B].cnpj, corporate_reason: "Y", email: "y@y.com", erp_code: "8" }),
+      branch({
+        cnpj: companies[B].cnpj,
+        corporate_reason: "Y",
+        email: "y@y.com",
+        erp_code: "8",
+      }),
       A,
       "adminA",
     );
@@ -167,10 +220,16 @@ describe("uniqueness inside one company (decision 8.1)", () => {
     await create.execute(branch(), A, "adminA");
 
     // Both requests looked before either wrote: the check found nothing.
-    vi.spyOn(branches, "findBranchByCorporateReason").mockResolvedValueOnce(null);
+    vi.spyOn(branches, "findBranchByCorporateReason").mockResolvedValueOnce(
+      null,
+    );
 
     await expect(
-      create.execute(branch({ cnpj: "66666666000166", email: "z@z.com", erp_code: "7" }), A, "adminA"),
+      create.execute(
+        branch({ cnpj: "66666666000166", email: "z@z.com", erp_code: "7" }),
+        A,
+        "adminA",
+      ),
     ).rejects.toBeInstanceOf(BranchNameAlreadyExistsError);
   });
 });
@@ -179,15 +238,19 @@ describe("another company's branch", () => {
   it("answers like a missing one (404), for the MASTER too, and is not written", async () => {
     const { create, update, toggle } = setup();
 
-    const foreign = await create.execute(branch({ businessId: B }), B, "adminB");
+    const foreign = await create.execute(
+      branch({ businessId: B }),
+      B,
+      "adminB",
+    );
 
     await expect(
       update.execute({ corporate_reason: "Tomada" }, foreign.id, A, "master"),
     ).rejects.toMatchObject({ statusCode: 404, code: "BRANCH_NOT_FOUND" });
 
-    await expect(toggle.execute(foreign.id, A, "adminA")).rejects.toBeInstanceOf(
-      BranchNotFoundError,
-    );
+    await expect(
+      toggle.execute(foreign.id, A, "adminA"),
+    ).rejects.toBeInstanceOf(BranchNotFoundError);
 
     expect(branches.branches[0]).toMatchObject({
       corporate_reason: "Filial Campinas",
@@ -201,7 +264,12 @@ describe("catalogChanged branch", () => {
     const { create, update, toggle } = setup();
 
     const created = await create.execute(branch(), A, "adminA");
-    await update.execute({ corporate_reason: "Filial Centro" }, created.id, A, "adminA");
+    await update.execute(
+      { corporate_reason: "Filial Centro" },
+      created.id,
+      A,
+      "adminA",
+    );
     await toggle.execute(created.id, A, "adminA");
 
     // The toggle also tells the driver pickers: a driver of an inactive
@@ -220,9 +288,9 @@ describe("catalogChanged branch", () => {
     await create.execute(branch(), A, "adminA");
     sendCatalogChangedEvent.mockClear();
 
-    await expect(create.execute(branch({ cnpj: "77777777000177" }), A, "adminA")).rejects.toBeInstanceOf(
-      BranchNameAlreadyExistsError,
-    );
+    await expect(
+      create.execute(branch({ cnpj: "77777777000177" }), A, "adminA"),
+    ).rejects.toBeInstanceOf(BranchNameAlreadyExistsError);
 
     expect(sendCatalogChangedEvent).not.toHaveBeenCalled();
   });
@@ -232,7 +300,9 @@ describe("the list", () => {
   it("makes the MASTER name the company and refuses another company's manager", async () => {
     const { list } = setup();
 
-    await expect(list.execute({ userId: "master", page: 1, pageSize: 10 })).rejects.toMatchObject({
+    await expect(
+      list.execute({ userId: "master", page: 1, pageSize: 10 }),
+    ).rejects.toMatchObject({
       statusCode: 400,
       code: "BUSINESS_NOT_IDENTIFIED",
     });
@@ -262,7 +332,11 @@ describe("the list", () => {
       if (index === 11) await toggle.execute(created.id, A, "adminA");
     }
 
-    const page = await list.execute({ userId: "adminA", page: 1, pageSize: 10 });
+    const page = await list.execute({
+      userId: "adminA",
+      page: 1,
+      pageSize: 10,
+    });
 
     expect(page.data).toHaveLength(10);
     expect(page.searchMeta).toMatchObject({
@@ -273,7 +347,12 @@ describe("the list", () => {
     });
 
     // One facet narrows the table; its own options keep counting the rest.
-    const rj = await list.execute({ userId: "adminA", page: 1, pageSize: 10, ufs: ["RJ"] });
+    const rj = await list.execute({
+      userId: "adminA",
+      page: 1,
+      pageSize: 10,
+      ufs: ["RJ"],
+    });
 
     expect(rj.total).toBe(4);
     expect(rj.searchMeta.facets.uf).toEqual([
@@ -316,7 +395,10 @@ describe("InMemoryBranchRepository answers like the repository", () => {
   it("keeps the columns a partial update did not send", async () => {
     const created = await branches.createBranch(branch());
 
-    await branches.updateBranch({ branchId: created.id, branchData: { city: "Jundiaí" } });
+    await branches.updateBranch({
+      branchId: created.id,
+      branchData: { city: "Jundiaí" },
+    });
 
     expect(branches.branches[0]).toMatchObject({
       city: "Jundiaí",
@@ -328,10 +410,22 @@ describe("InMemoryBranchRepository answers like the repository", () => {
   it("orders by the key asked, NULLs last, and breaks ties newest first", async () => {
     const first = await branches.createBranch(branch({ fantasy_name: "Beta" }));
     const second = await branches.createBranch(
-      branch({ corporate_reason: "B", cnpj: "1", email: "1@x.com", erp_code: "1", fantasy_name: "" }),
+      branch({
+        corporate_reason: "B",
+        cnpj: "1",
+        email: "1@x.com",
+        erp_code: "1",
+        fantasy_name: "",
+      }),
     );
     const third = await branches.createBranch(
-      branch({ corporate_reason: "C", cnpj: "2", email: "2@x.com", erp_code: "2", fantasy_name: "Alfa" }),
+      branch({
+        corporate_reason: "C",
+        cnpj: "2",
+        email: "2@x.com",
+        erp_code: "2",
+        fantasy_name: "Alfa",
+      }),
     );
 
     const { data } = await branches.listAllBranches({
@@ -349,7 +443,11 @@ describe("InMemoryBranchRepository answers like the repository", () => {
 describe("deleting a branch", () => {
   const CODE = "123456";
 
-  const armed = async (pending: InMemoryPendingDeletionProvider, branchId: string, userId: string) =>
+  const armed = async (
+    pending: InMemoryPendingDeletionProvider,
+    branchId: string,
+    userId: string,
+  ) =>
     pending.upsertPendingDeletion({
       entity_type: "branch",
       entity_id: branchId,
@@ -361,7 +459,13 @@ describe("deleting a branch", () => {
   it("emits catalogChanged for the company once the branch is gone", async () => {
     const { create } = setup();
     const pending = new InMemoryPendingDeletionProvider();
-    const remove = new DeleteBranchUseCase(users, business, branches, pending, notifications);
+    const remove = new DeleteBranchUseCase(
+      users,
+      business,
+      branches,
+      pending,
+      notifications,
+    );
 
     const created = await create.execute(branch(), A, "adminA");
     await armed(pending, created.id, "adminA");
@@ -376,42 +480,67 @@ describe("deleting a branch", () => {
   it("answers another company's branch like a missing one, on both steps, and emits nothing", async () => {
     const { create } = setup();
     const pending = new InMemoryPendingDeletionProvider();
-    const request = new RequestBranchDeletionUseCase(users, business, branches, pending);
-    const remove = new DeleteBranchUseCase(users, business, branches, pending, notifications);
+    const request = new RequestBranchDeletionUseCase(
+      users,
+      business,
+      branches,
+      pending,
+    );
+    const remove = new DeleteBranchUseCase(
+      users,
+      business,
+      branches,
+      pending,
+      notifications,
+    );
 
     const created = await create.execute(branch(), A, "adminA");
     await armed(pending, created.id, "adminB");
     sendCatalogChangedEvent.mockClear();
 
     // Through their own path: not found, exactly as an id that does not exist.
-    await expect(request.execute(created.id, B, "adminB")).rejects.toBeInstanceOf(BranchNotFoundError);
-    await expect(remove.execute(created.id, B, "adminB", CODE)).rejects.toBeInstanceOf(
-      BranchNotFoundError,
-    );
+    await expect(
+      request.execute(created.id, B, "adminB"),
+    ).rejects.toBeInstanceOf(BranchNotFoundError);
+    await expect(
+      remove.execute(created.id, B, "adminB", CODE),
+    ).rejects.toBeInstanceOf(BranchNotFoundError);
 
     // Through A's path: the tenant refusal, before the branch is looked at.
-    await expect(request.execute(created.id, A, "adminB")).rejects.toMatchObject({ statusCode: 403 });
-    await expect(remove.execute(created.id, A, "adminB", CODE)).rejects.toMatchObject({
+    await expect(
+      request.execute(created.id, A, "adminB"),
+    ).rejects.toMatchObject({ statusCode: 403 });
+    await expect(
+      remove.execute(created.id, A, "adminB", CODE),
+    ).rejects.toMatchObject({
       statusCode: 403,
     });
 
     expect(await branches.findBranchById(created.id)).not.toBeNull();
-    expect(pending.pendingDeletions.filter((entry) => entry.userId === "adminB")).toHaveLength(1);
+    expect(
+      pending.pendingDeletions.filter((entry) => entry.userId === "adminB"),
+    ).toHaveLength(1);
     expect(sendCatalogChangedEvent).not.toHaveBeenCalled();
   });
 
   it("emits nothing when the code is wrong", async () => {
     const { create } = setup();
     const pending = new InMemoryPendingDeletionProvider();
-    const remove = new DeleteBranchUseCase(users, business, branches, pending, notifications);
+    const remove = new DeleteBranchUseCase(
+      users,
+      business,
+      branches,
+      pending,
+      notifications,
+    );
 
     const created = await create.execute(branch(), A, "adminA");
     await armed(pending, created.id, "adminA");
     sendCatalogChangedEvent.mockClear();
 
-    await expect(remove.execute(created.id, A, "adminA", "000000")).rejects.toBeInstanceOf(
-      BranchDeletionCodeInvalidError,
-    );
+    await expect(
+      remove.execute(created.id, A, "adminA", "000000"),
+    ).rejects.toBeInstanceOf(BranchDeletionCodeInvalidError);
 
     expect(await branches.findBranchById(created.id)).not.toBeNull();
     expect(sendCatalogChangedEvent).not.toHaveBeenCalled();

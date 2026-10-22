@@ -560,7 +560,6 @@ async function userRoutes(app: FastifyInstance) {
     updateTwoFactorAuthenticationController.handle,
   );
 
-
   app.patch(
     "/revoke-access/:userId",
     {

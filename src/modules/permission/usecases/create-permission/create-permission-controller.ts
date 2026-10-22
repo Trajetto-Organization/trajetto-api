@@ -40,9 +40,7 @@ class CreatePermissionController {
       throw toHttpError(error, PERMISSION_BODY_LINK_RULES);
     }
 
-    return reply
-      .status(201)
-      .send({ message: "Permissão criada com sucesso!" });
+    return reply.status(201).send({ message: "Permissão criada com sucesso!" });
   }
 }
 

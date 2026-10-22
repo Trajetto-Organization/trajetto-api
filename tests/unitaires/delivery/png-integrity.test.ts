@@ -16,7 +16,12 @@ function chunk(type: string, data: Buffer): Buffer {
   length.writeUInt32BE(data.length);
 
   // png-js does not check CRCs, and neither does the gate; zeros will do.
-  return Buffer.concat([length, Buffer.from(type, "latin1"), data, Buffer.alloc(4)]);
+  return Buffer.concat([
+    length,
+    Buffer.from(type, "latin1"),
+    data,
+    Buffer.alloc(4),
+  ]);
 }
 
 function png(options: {
@@ -78,7 +83,11 @@ describe("isDecodablePng", () => {
   it("refuses a header that claims more pixels than it is worth decoding", () => {
     expect(
       isDecodablePng(
-        png({ width: 100_000, height: 100_000, pixels: deflateSync(validRows) }),
+        png({
+          width: 100_000,
+          height: 100_000,
+          pixels: deflateSync(validRows),
+        }),
       ),
     ).toBe(false);
   });
@@ -96,5 +105,3 @@ describe("isDecodablePng", () => {
     expect(isDecodablePng(Buffer.from("isto não é uma imagem"))).toBe(false);
   });
 });
-
-

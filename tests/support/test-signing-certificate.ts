@@ -17,7 +17,11 @@ interface TestCertificateOptions {
   organization?: string;
   notBefore?: Date;
   notAfter?: Date;
-  keyUsage?: { digitalSignature?: boolean; nonRepudiation?: boolean; keyEncipherment?: boolean } | null;
+  keyUsage?: {
+    digitalSignature?: boolean;
+    nonRepudiation?: boolean;
+    keyEncipherment?: boolean;
+  } | null;
   password?: string;
   /** Put a certificate for ANOTHER key in the PFX (key/cert mismatch). */
   mismatchedKey?: boolean;
@@ -35,7 +39,10 @@ const DAY = 24 * 60 * 60 * 1000;
 
 let cachedKeys: Array<{ privateKeyPem: string; publicKeyPem: string }> = [];
 
-function keyPair(index: number): { privateKeyPem: string; publicKeyPem: string } {
+function keyPair(index: number): {
+  privateKeyPem: string;
+  publicKeyPem: string;
+} {
   // Two keys are enough for every case; generated once per test file.
   while (cachedKeys.length <= index) {
     const { privateKey, publicKey } = generateKeyPairSync("rsa", {
@@ -44,7 +51,10 @@ function keyPair(index: number): { privateKeyPem: string; publicKeyPem: string }
       publicKeyEncoding: { type: "spki", format: "pem" },
     });
 
-    cachedKeys = [...cachedKeys, { privateKeyPem: privateKey, publicKeyPem: publicKey }];
+    cachedKeys = [
+      ...cachedKeys,
+      { privateKeyPem: privateKey, publicKeyPem: publicKey },
+    ];
   }
 
   return cachedKeys[index];
@@ -74,7 +84,8 @@ function makeTestSigningCertificate(
     { shortName: "OU", value: "Assinatura Tipo A1" },
     {
       shortName: "CN",
-      value: options.commonName ?? "TRAJETTO SISTEMAS TESTE LTDA:11222333000181",
+      value:
+        options.commonName ?? "TRAJETTO SISTEMAS TESTE LTDA:11222333000181",
     },
   ];
 

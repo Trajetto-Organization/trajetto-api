@@ -75,7 +75,11 @@ describe("presigning a batch of uploads", () => {
         scopeId: BUSINESS,
         files: [
           photo("painel.jpg"),
-          { originalFilename: "pagina.html", contentType: "text/html", size: 100 },
+          {
+            originalFilename: "pagina.html",
+            contentType: "text/html",
+            size: 100,
+          },
         ],
       }),
     ).rejects.toMatchObject({ statusCode: 400, code: "UNSUPPORTED_FILE_TYPE" });
@@ -104,8 +108,17 @@ describe("presigning a batch of uploads", () => {
       useCase.execute({
         uploadType: "deliveryProofs",
         scopeId: BUSINESS,
-        files: [{ originalFilename: "c.pdf", contentType: "application/pdf", size: 100 }],
+        files: [
+          {
+            originalFilename: "c.pdf",
+            contentType: "application/pdf",
+            size: 100,
+          },
+        ],
       }),
-    ).rejects.toMatchObject({ statusCode: 403, code: "SERVER_ONLY_UPLOAD_TYPE" });
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      code: "SERVER_ONLY_UPLOAD_TYPE",
+    });
   });
 });

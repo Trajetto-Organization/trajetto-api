@@ -15,9 +15,11 @@ const COMPANY_A = "0198a8d0-70c0-7000-8000-00000000000a";
 const COMPANY_B = "0198a8d0-70c0-7000-8000-00000000000b";
 const FOREIGN_DELIVERY = "0198a8d0-70c0-7000-8000-0000000000ff";
 
-const OWN_PHOTOS = ["current_mileage", "fuel_level_adequate", "tires_condition"].map(
-  (field) => `checklistPhotos/${COMPANY_A}/1-${field}-abcd1234.jpg`,
-);
+const OWN_PHOTOS = [
+  "current_mileage",
+  "fuel_level_adequate",
+  "tires_condition",
+].map((field) => `checklistPhotos/${COMPANY_A}/1-${field}-abcd1234.jpg`);
 
 const OWN_BY_FIELD = `checklistPhotos/${COMPANY_A}/1-brakes-ef567890.jpg`;
 
@@ -34,7 +36,9 @@ function build() {
         driverId: null,
       }),
     } as never,
-    { findBusinessById: async () => ({ id: COMPANY_A, ai_analysis_limit: 0 }) } as never,
+    {
+      findBusinessById: async () => ({ id: COMPANY_A, ai_analysis_limit: 0 }),
+    } as never,
     {
       findVehicleById: async () => ({
         id: "v1",
@@ -54,7 +58,10 @@ function build() {
         photos: OWN_PHOTOS,
         photos_by_field: { brakes: [OWN_BY_FIELD] },
       }),
-      updateVehicleChecklistAndMileage: async () => ({ id: "c1", vehicleId: "v1" }),
+      updateVehicleChecklistAndMileage: async () => ({
+        id: "c1",
+        vehicleId: "v1",
+      }),
     } as never,
     { createActivityIfEnabled: () => undefined } as never,
     uploads,
@@ -63,7 +70,10 @@ function build() {
   return { useCase, deleteFile };
 }
 
-const run = (useCase: UpdateVehicleChecklistUseCase, photosToRemove: string[]) =>
+const run = (
+  useCase: UpdateVehicleChecklistUseCase,
+  photosToRemove: string[],
+) =>
   useCase.execute({} as never, "u1", "c1", COMPANY_A, {}, photosToRemove, []);
 
 describe("removing photos from a checklist", () => {

@@ -22,7 +22,10 @@ import { AppError } from "@/shared/errors/AppError";
 import type { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 import type { NotificationService } from "@/shared/services/notification-service";
 import type { UploadService } from "@/shared/services/upload-service";
-import type { OutboxService, PublishEventInput } from "@/shared/notifications/outbox-service";
+import type {
+  OutboxService,
+  PublishEventInput,
+} from "@/shared/notifications/outbox-service";
 import type { NotificationTopic } from "@/shared/notifications/notification-types";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
@@ -55,7 +58,8 @@ const OPERATOR = "018f5100-0000-7000-8000-0000000000a2";
 const DRIVER_ID = "018f5100-0000-7000-8000-0000000000d1";
 const SHIPPER = "018f5100-0000-7000-8000-0000000000f1";
 
-const key = (n: number) => `018f5100-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const key = (n: number) =>
+  `018f5100-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 const notificationStub = {
   createActivityIfEnabled: async () => {},
@@ -73,7 +77,11 @@ function makeContext({ aiLimit = 0 }: { aiLimit?: number } = {}) {
   const routes = new InMemoryRouteRepository();
   const types = new InMemoryOccurrenceTypeRepository();
   const audits = new InMemoryProofAuditRepository();
-  const authorizations = new InMemoryOccurrenceAuthorizationRepository(deliveries, types, users);
+  const authorizations = new InMemoryOccurrenceAuthorizationRepository(
+    deliveries,
+    types,
+    users,
+  );
 
   deliveries.routeStops = routes.stops;
 
@@ -85,12 +93,20 @@ function makeContext({ aiLimit = 0 }: { aiLimit?: number } = {}) {
       businessId: BUSINESS,
       driverId: DRIVER_ID,
     } as User,
-    { id: OPERATOR, name: "Olga Torre", role: "BUSINESS_ADMIN", businessId: BUSINESS } as User,
+    {
+      id: OPERATOR,
+      name: "Olga Torre",
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+    } as User,
   );
 
   const published: Array<PublishEventInput<NotificationTopic>> = [];
   const outbox = {
-    publish: async (_tx: unknown, input: PublishEventInput<NotificationTopic>) => {
+    publish: async (
+      _tx: unknown,
+      input: PublishEventInput<NotificationTopic>,
+    ) => {
       published.push(input);
     },
   } as unknown as OutboxService;
@@ -162,7 +178,10 @@ async function seedDelivery(context: Context) {
   return delivery.id!;
 }
 
-async function deliveredType(context: Context, overrides: Record<string, unknown> = {}) {
+async function deliveredType(
+  context: Context,
+  overrides: Record<string, unknown> = {},
+) {
   const type = await context.types.createOccurrenceType({
     businessId: BUSINESS,
     name: `Entrega ${context.types.occurrenceTypes.length}`,
@@ -179,7 +198,8 @@ async function refusal(promise: Promise<unknown>): Promise<string> {
     await promise;
   } catch (error) {
     if (error instanceof AppError) return `${error.statusCode} ${error.code}`;
-    if (error instanceof Error && error.name === "ZodError") return "400 VALIDATION_ERROR";
+    if (error instanceof Error && error.name === "ZodError")
+      return "400 VALIDATION_ERROR";
     throw error;
   }
 
@@ -223,8 +243,12 @@ describe("a driver reporting a DELIVERED type", () => {
       replayed: false,
     });
 
-    const occurrence = context.deliveries.occurrences.find((row) => row.id === result.id)!;
-    const proof = context.deliveries.events.find((event) => event.type === "PROOF")!;
+    const occurrence = context.deliveries.occurrences.find(
+      (row) => row.id === result.id,
+    )!;
+    const proof = context.deliveries.events.find(
+      (event) => event.type === "PROOF",
+    )!;
 
     expect(occurrence).toMatchObject({
       category: "DELIVERED",
@@ -242,7 +266,9 @@ describe("a driver reporting a DELIVERED type", () => {
       client_submission_id: key(1),
     });
     // The fact's event is the PROOF: no OCCURRENCE event for it.
-    expect(context.deliveries.events.filter((event) => event.type === "OCCURRENCE")).toHaveLength(0);
+    expect(
+      context.deliveries.events.filter((event) => event.type === "OCCURRENCE"),
+    ).toHaveLength(0);
 
     const delivery = context.deliveries.deliveries[0];
 
@@ -250,8 +276,13 @@ describe("a driver reporting a DELIVERED type", () => {
     expect(delivery.received_by).toBe("Maria (portaria)");
     expect(delivery.delivered_at).toEqual(new Date("2026-10-05T13:00:00.000Z"));
 
-    expect(context.webhooks.topics()).toEqual(["proof.registered", "delivery.delivered"]);
-    expect(context.published.map((event) => event.topic)).toEqual(["delivery.delivered"]);
+    expect(context.webhooks.topics()).toEqual([
+      "proof.registered",
+      "delivery.delivered",
+    ]);
+    expect(context.published.map((event) => event.topic)).toEqual([
+      "delivery.delivered",
+    ]);
     expect(context.audits.audits).toHaveLength(1);
     expect(requestAnalysis).toHaveBeenCalledTimes(1);
   });
@@ -259,7 +290,9 @@ describe("a driver reporting a DELIVERED type", () => {
   it("asks no AI and queues no audit card when the type asks for no receipt and none came", async () => {
     const context = makeContext({ aiLimit: 10 });
     const deliveryId = await seedDelivery(context);
-    const typeId = await deliveredType(context, { requires_receipt_photo: false });
+    const typeId = await deliveredType(context, {
+      requires_receipt_photo: false,
+    });
 
     await context.report.execute({
       userId: DRIVER_USER,
@@ -292,13 +325,15 @@ describe("a driver reporting a DELIVERED type", () => {
         ...extra,
       });
 
-    expect(await refusal(send({}, 1))).toBe("400 OCCURRENCE_RECEIPT_PHOTO_REQUIRED");
+    expect(await refusal(send({}, 1))).toBe(
+      "400 OCCURRENCE_RECEIPT_PHOTO_REQUIRED",
+    );
     expect(await refusal(send({ receipt_photo: "c.jpg" }, 2))).toBe(
       "400 OCCURRENCE_SIGNATURE_REQUIRED",
     );
-    expect(await refusal(send({ receipt_photo: "c.jpg", signature: "s.png" }, 3))).toBe(
-      "400 OCCURRENCE_PHOTO_REQUIRED",
-    );
+    expect(
+      await refusal(send({ receipt_photo: "c.jpg", signature: "s.png" }, 3)),
+    ).toBe("400 OCCURRENCE_PHOTO_REQUIRED");
     expect(context.deliveries.occurrences).toHaveLength(0);
     expect(context.deliveries.deliveries[0].status).toBe("IN_TRANSIT");
   });
@@ -360,7 +395,9 @@ describe("a driver reporting a DELIVERED type", () => {
     const context = makeContext();
     const deliveryId = await seedDelivery(context);
     const typeId = await deliveredType(context);
-    const type = context.types.occurrenceTypes.find((entry) => entry.id === typeId)!;
+    const type = context.types.occurrenceTypes.find(
+      (entry) => entry.id === typeId,
+    )!;
 
     type.is_active = false;
     type.deactivated_at = new Date("2026-10-05T14:00:00.000Z");
@@ -403,16 +440,24 @@ describe("a driver reporting a DELIVERED type", () => {
     const first = await send(1);
     const again = await send(1);
 
-    expect(again).toMatchObject({ id: first.id, replayed: true, delivery_status: "DELIVERED" });
+    expect(again).toMatchObject({
+      id: first.id,
+      replayed: true,
+      delivery_status: "DELIVERED",
+    });
     expect(await refusal(send(2))).toBe("400 INVALID_STATUS_TRANSITION");
-    expect(context.deliveries.events.filter((event) => event.type === "PROOF")).toHaveLength(1);
+    expect(
+      context.deliveries.events.filter((event) => event.type === "PROOF"),
+    ).toHaveLength(1);
   });
 });
 
 describe("a DELIVERED type that asks the tower", () => {
   async function pendingDelivery(context: Context) {
     const deliveryId = await seedDelivery(context);
-    const typeId = await deliveredType(context, { requires_authorization: true });
+    const typeId = await deliveredType(context, {
+      requires_authorization: true,
+    });
 
     const result = await context.report.execute({
       userId: DRIVER_USER,
@@ -438,7 +483,9 @@ describe("a DELIVERED type that asks the tower", () => {
       delivery_status: "IN_TRANSIT",
     });
     expect(context.deliveries.deliveries[0].status).toBe("IN_TRANSIT");
-    expect(context.deliveries.events.map((event) => event.type)).toEqual(["OCCURRENCE"]);
+    expect(context.deliveries.events.map((event) => event.type)).toEqual([
+      "OCCURRENCE",
+    ]);
     expect(context.webhooks.topics()).toEqual([]);
     expect(context.audits.audits).toHaveLength(0);
 
@@ -469,10 +516,17 @@ describe("a DELIVERED type that asks the tower", () => {
       decision: "APPROVED",
     });
 
-    expect(decided).toMatchObject({ authorization_status: "APPROVED", deliveryStatus: "DELIVERED" });
+    expect(decided).toMatchObject({
+      authorization_status: "APPROVED",
+      deliveryStatus: "DELIVERED",
+    });
 
-    const occurrence = context.deliveries.occurrences.find((row) => row.id === result.id)!;
-    const proof = context.deliveries.events.find((event) => event.type === "PROOF")!;
+    const occurrence = context.deliveries.occurrences.find(
+      (row) => row.id === result.id,
+    )!;
+    const proof = context.deliveries.events.find(
+      (event) => event.type === "PROOF",
+    )!;
 
     expect(occurrence.authorization_status).toBe("APPROVED");
     expect(proof).toMatchObject({
@@ -484,7 +538,10 @@ describe("a DELIVERED type that asks the tower", () => {
     expect(context.deliveries.deliveries[0].delivered_at).toEqual(
       new Date("2026-10-05T13:00:00.000Z"),
     );
-    expect(context.webhooks.topics()).toEqual(["proof.registered", "delivery.delivered"]);
+    expect(context.webhooks.topics()).toEqual([
+      "proof.registered",
+      "delivery.delivered",
+    ]);
     expect(context.audits.audits).toHaveLength(1);
     expect(requestAnalysis).toHaveBeenCalledTimes(1);
   });
@@ -502,7 +559,9 @@ describe("a DELIVERED type that asks the tower", () => {
     });
 
     expect(context.deliveries.deliveries[0].status).toBe("IN_TRANSIT");
-    expect(context.deliveries.events.some((event) => event.type === "PROOF")).toBe(false);
+    expect(
+      context.deliveries.events.some((event) => event.type === "PROOF"),
+    ).toBe(false);
     expect(context.webhooks.topics()).toEqual([]);
 
     // "Entrega não autorizada" on the phone (design §10).
@@ -515,7 +574,10 @@ describe("a DELIVERED type that asks the tower", () => {
       (event) => event.topic === "delivery-occurrence.authorization_decided",
     );
 
-    expect(decidedNotice?.payload).toMatchObject({ decision: "DENIED", category: "DELIVERED" });
+    expect(decidedNotice?.payload).toMatchObject({
+      decision: "DENIED",
+      category: "DELIVERED",
+    });
   });
 
   it("is superseded by another delivered report that needs no tower", async () => {
@@ -533,13 +595,18 @@ describe("a DELIVERED type that asks the tower", () => {
     });
 
     expect(
-      context.deliveries.occurrences.find((row) => row.id === result.id)!.authorization_status,
+      context.deliveries.occurrences.find((row) => row.id === result.id)!
+        .authorization_status,
     ).toBe("SUPERSEDED");
   });
 });
 
 describe("the installed app's proof route (legacy adapter)", () => {
-  const legacyProof = (context: Context, deliveryId: string, extra: Record<string, unknown> = {}) =>
+  const legacyProof = (
+    context: Context,
+    deliveryId: string,
+    extra: Record<string, unknown> = {},
+  ) =>
     context.legacy.execute({
       userId: DRIVER_USER,
       businessId: BUSINESS,
@@ -559,10 +626,18 @@ describe("the installed app's proof route (legacy adapter)", () => {
       (type) => type.system_key === "delivered_default",
     )!;
 
-    expect(result).toMatchObject({ authorization_status: "NOT_REQUIRED", category: "DELIVERED" });
-    expect(context.deliveries.occurrences[0].occurrenceTypeId).toBe(fallback.id);
+    expect(result).toMatchObject({
+      authorization_status: "NOT_REQUIRED",
+      category: "DELIVERED",
+    });
+    expect(context.deliveries.occurrences[0].occurrenceTypeId).toBe(
+      fallback.id,
+    );
     expect(context.deliveries.deliveries[0].status).toBe("DELIVERED");
-    expect(context.webhooks.topics()).toEqual(["proof.registered", "delivery.delivered"]);
+    expect(context.webhooks.topics()).toEqual([
+      "proof.registered",
+      "delivery.delivered",
+    ]);
   });
 
   it("is CLIENT_OUTDATED, naming what is missing, once the default asks for more", async () => {
@@ -577,7 +652,9 @@ describe("the installed app's proof route (legacy adapter)", () => {
 
     fallback.requires_signature = true;
     fallback.requires_photo = true;
-    fallback.form_fields = [{ key: "lacre", label: "Lacre", type: "text", required: true }];
+    fallback.form_fields = [
+      { key: "lacre", label: "Lacre", type: "text", required: true },
+    ];
 
     await expect(legacyProof(context, deliveryId)).rejects.toMatchObject({
       code: "CLIENT_OUTDATED",
@@ -590,7 +667,9 @@ describe("the installed app's proof route (legacy adapter)", () => {
     fallback.form_fields = null;
 
     await expect(
-      legacyProof(context, deliveryId, { signature: "deliveryPhotos/assinatura.png" }),
+      legacyProof(context, deliveryId, {
+        signature: "deliveryPhotos/assinatura.png",
+      }),
     ).resolves.toMatchObject({ category: "DELIVERED" });
   });
 

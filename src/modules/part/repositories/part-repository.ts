@@ -76,7 +76,10 @@ class PartRepository implements IPartRepository {
   }
 
   private async countBySupplier(
-    filters: Omit<ListPartByBusinessIdProps, "page" | "pageSize" | "sort" | "order">,
+    filters: Omit<
+      ListPartByBusinessIdProps,
+      "page" | "pageSize" | "sort" | "order"
+    >,
   ): Promise<ListPartProps["supplierCounts"]> {
     const grouped = await this.prisma.part.groupBy({
       by: ["supplierId"],
@@ -87,7 +90,9 @@ class PartRepository implements IPartRepository {
 
     const ids = Array.from(
       new Set([
-        ...grouped.flatMap((group) => (group.supplierId ? [group.supplierId] : [])),
+        ...grouped.flatMap((group) =>
+          group.supplierId ? [group.supplierId] : [],
+        ),
         ...(filters.supplierIds ?? []),
       ]),
     );
@@ -101,7 +106,9 @@ class PartRepository implements IPartRepository {
         })
       : [];
 
-    const nameOf = new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
+    const nameOf = new Map(
+      suppliers.map((supplier) => [supplier.id, supplier.name]),
+    );
 
     const counts: ListPartProps["supplierCounts"] = grouped.map((group) => ({
       supplierId: group.supplierId,
@@ -113,7 +120,12 @@ class PartRepository implements IPartRepository {
     // A selected supplier with nothing left keeps its chip, with a zero.
     for (const id of filters.supplierIds ?? []) {
       if (nameOf.has(id) && !counts.some((entry) => entry.supplierId === id)) {
-        counts.push({ supplierId: id, label: nameOf.get(id), count: 0, priceSum: 0 });
+        counts.push({
+          supplierId: id,
+          label: nameOf.get(id),
+          count: 0,
+          priceSum: 0,
+        });
       }
     }
 

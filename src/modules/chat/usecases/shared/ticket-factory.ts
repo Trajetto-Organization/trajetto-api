@@ -39,7 +39,9 @@ function deliverySubject(recipientName: string): string {
 }
 
 function routeSubject(route: { code: number; name: string | null }): string {
-  return truncateSubject(route.name ? `Rota ${route.code} · ${route.name}` : `Rota ${route.code}`);
+  return truncateSubject(
+    route.name ? `Rota ${route.code} · ${route.name}` : `Rota ${route.code}`,
+  );
 }
 
 function driverSubject(driverName: string): string {
@@ -155,7 +157,10 @@ async function resolveDeliveryTicket(
 
   if (existing) await retireHandedOverTicket(deps, existing, "DELIVERY");
 
-  const thread = await deps.chat.getOrCreateThread(input.businessId, input.driverId);
+  const thread = await deps.chat.getOrCreateThread(
+    input.businessId,
+    input.driverId,
+  );
 
   try {
     const ticket = await deps.tickets.create({
@@ -204,7 +209,10 @@ async function resolveRouteTicket(
     clientSubmissionId?: string | null;
   },
 ): Promise<TicketResolution | null> {
-  const existing = await deps.tickets.findOpenForRoute(input.route.id, input.businessId);
+  const existing = await deps.tickets.findOpenForRoute(
+    input.route.id,
+    input.businessId,
+  );
 
   if (existing && existing.driverId === input.driverId) {
     return { ticket: existing, created: false };
@@ -214,7 +222,10 @@ async function resolveRouteTicket(
 
   if (existing) await retireHandedOverTicket(deps, existing, "ROUTE");
 
-  const thread = await deps.chat.getOrCreateThread(input.businessId, input.driverId);
+  const thread = await deps.chat.getOrCreateThread(
+    input.businessId,
+    input.driverId,
+  );
 
   try {
     const ticket = await deps.tickets.create({
@@ -235,7 +246,10 @@ async function resolveRouteTicket(
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
 
-    const winner = await deps.tickets.findOpenForRoute(input.route.id, input.businessId);
+    const winner = await deps.tickets.findOpenForRoute(
+      input.route.id,
+      input.businessId,
+    );
 
     if (!winner || winner.driverId !== input.driverId) throw error;
 
@@ -255,7 +269,10 @@ async function createDriverTicket(
     occurrence?: { id: string; deliveryId: string } | null;
   },
 ): Promise<SupportTicket> {
-  const thread = await deps.chat.getOrCreateThread(input.businessId, input.driverId);
+  const thread = await deps.chat.getOrCreateThread(
+    input.businessId,
+    input.driverId,
+  );
 
   const ticket = await deps.tickets.create({
     businessId: input.businessId,

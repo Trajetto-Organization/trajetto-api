@@ -36,7 +36,9 @@ const OTHER = "018f0000-0000-7000-8000-00000000000b";
 const USER = "018f0000-0000-7000-8000-0000000000a1";
 const SUPPLIER = "018f0000-0000-7000-8000-0000000000c1";
 
-const activities = { createActivityIfEnabled: vi.fn() } as unknown as NotificationService;
+const activities = {
+  createActivityIfEnabled: vi.fn(),
+} as unknown as NotificationService;
 
 function makeContext() {
   const users = new InMemoryUserRepository();
@@ -44,17 +46,37 @@ function makeContext() {
   const suppliers = new InMemorySupplierRepository();
   const parts = new InMemoryPartRepository();
 
-  users.user.push({ id: USER, role: "BUSINESS_ADMIN", businessId: COMPANY } as User);
+  users.user.push({
+    id: USER,
+    role: "BUSINESS_ADMIN",
+    businessId: COMPANY,
+  } as User);
   businesses.business.push(
     { ...BUSINESS_COLUMN_DEFAULTS, id: COMPANY } as unknown as Business,
     { ...BUSINESS_COLUMN_DEFAULTS, id: OTHER } as unknown as Business,
   );
-  suppliers.suppliers.push({ id: SUPPLIER, name: "Oficina Alfa", businessId: COMPANY } as Supplier);
+  suppliers.suppliers.push({
+    id: SUPPLIER,
+    name: "Oficina Alfa",
+    businessId: COMPANY,
+  } as Supplier);
 
   return {
     parts,
-    create: new CreatePartUseCase(users, businesses, suppliers, parts, activities),
-    update: new UpdatePartUseCase(users, businesses, suppliers, parts, activities),
+    create: new CreatePartUseCase(
+      users,
+      businesses,
+      suppliers,
+      parts,
+      activities,
+    ),
+    update: new UpdatePartUseCase(
+      users,
+      businesses,
+      suppliers,
+      parts,
+      activities,
+    ),
     remove: new DeletePartUseCase(users, businesses, parts, activities),
   };
 }
@@ -67,21 +89,33 @@ describe("one description per company", () => {
   it("refuses the same description in another case or with edge spaces", async () => {
     const context = makeContext();
 
-    await context.create.execute({ description: "Filtro de óleo", unit_price: 30, businessId: COMPANY }, USER);
+    await context.create.execute(
+      { description: "Filtro de óleo", unit_price: 30, businessId: COMPANY },
+      USER,
+    );
 
     await expect(
-      context.create.execute({ description: "FILTRO DE ÓLEO", unit_price: 31, businessId: COMPANY }, USER),
+      context.create.execute(
+        { description: "FILTRO DE ÓLEO", unit_price: 31, businessId: COMPANY },
+        USER,
+      ),
     ).rejects.toMatchObject({ statusCode: 409, code: "PART_ALREADY_EXISTS" });
 
     // A legacy row saved with a trailing space is the same part too.
     context.parts.parts[0].description = "Filtro de óleo ";
 
     await expect(
-      context.create.execute({ description: "filtro de óleo", unit_price: 31, businessId: COMPANY }, USER),
+      context.create.execute(
+        { description: "filtro de óleo", unit_price: 31, businessId: COMPANY },
+        USER,
+      ),
     ).rejects.toMatchObject({ code: "PART_ALREADY_EXISTS" });
 
     // Another company may have its own.
-    await context.create.execute({ description: "Filtro de óleo", unit_price: 30, businessId: OTHER }, USER);
+    await context.create.execute(
+      { description: "Filtro de óleo", unit_price: 30, businessId: OTHER },
+      USER,
+    );
 
     expect(context.parts.parts).toHaveLength(2);
   });
@@ -94,7 +128,12 @@ describe("one description per company", () => {
       USER,
     );
 
-    await context.update.execute({ description: "Pastilha de Freio" }, part.id, USER, COMPANY);
+    await context.update.execute(
+      { description: "Pastilha de Freio" },
+      part.id,
+      USER,
+      COMPANY,
+    );
 
     expect(context.parts.parts[0].description).toBe("Pastilha de Freio");
   });
@@ -102,14 +141,22 @@ describe("one description per company", () => {
   it("refuses renaming onto another part's description", async () => {
     const context = makeContext();
 
-    await context.create.execute({ description: "Correia", unit_price: 50, businessId: COMPANY }, USER);
+    await context.create.execute(
+      { description: "Correia", unit_price: 50, businessId: COMPANY },
+      USER,
+    );
     const other = await context.create.execute(
       { description: "Tensor", unit_price: 70, businessId: COMPANY },
       USER,
     );
 
     await expect(
-      context.update.execute({ description: "correia" }, other.id, USER, COMPANY),
+      context.update.execute(
+        { description: "correia" },
+        other.id,
+        USER,
+        COMPANY,
+      ),
     ).rejects.toMatchObject({ code: "PART_ALREADY_EXISTS" });
   });
 });
@@ -118,12 +165,27 @@ describe("deleting a part", () => {
   it("keeps a part used by service orders, saying how many", async () => {
     const context = makeContext();
 
-    const part = await context.create.execute({ description: "Vela", unit_price: 20, businessId: COMPANY }, USER);
+    const part = await context.create.execute(
+      { description: "Vela", unit_price: 20, businessId: COMPANY },
+      USER,
+    );
 
-    context.parts.addServiceOrderPart({ partId: part.id, serviceOrderId: "os-1", quantity: 4, unit_price: "20" });
-    context.parts.addServiceOrderPart({ partId: part.id, serviceOrderId: "os-2", quantity: 4, unit_price: "20" });
+    context.parts.addServiceOrderPart({
+      partId: part.id,
+      serviceOrderId: "os-1",
+      quantity: 4,
+      unit_price: "20",
+    });
+    context.parts.addServiceOrderPart({
+      partId: part.id,
+      serviceOrderId: "os-2",
+      quantity: 4,
+      unit_price: "20",
+    });
 
-    await expect(context.remove.execute(part.id, USER, COMPANY)).rejects.toMatchObject({
+    await expect(
+      context.remove.execute(part.id, USER, COMPANY),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "PART_IN_USE",
       message: expect.stringContaining("2 lançamento(s)"),
@@ -133,11 +195,16 @@ describe("deleting a part", () => {
   it("answers 409 PART_IN_USE when a line lands between the count and the delete", async () => {
     const context = makeContext();
 
-    const part = await context.create.execute({ description: "Junta", unit_price: 12, businessId: COMPANY }, USER);
+    const part = await context.create.execute(
+      { description: "Junta", unit_price: 12, businessId: COMPANY },
+      USER,
+    );
 
     // Another request saves a line right after this one counted none: the
     // foreign key refuses the delete, and that is "in use", not a 500.
-    const count = context.parts.countServiceOrderPartsByPartId.bind(context.parts);
+    const count = context.parts.countServiceOrderPartsByPartId.bind(
+      context.parts,
+    );
     let raced = false;
 
     context.parts.countServiceOrderPartsByPartId = async (partId: string) => {
@@ -145,13 +212,20 @@ describe("deleting a part", () => {
 
       if (!raced) {
         raced = true;
-        context.parts.addServiceOrderPart({ partId, serviceOrderId: "os-9", quantity: 1, unit_price: "12" });
+        context.parts.addServiceOrderPart({
+          partId,
+          serviceOrderId: "os-9",
+          quantity: 1,
+          unit_price: "12",
+        });
       }
 
       return lines;
     };
 
-    await expect(context.remove.execute(part.id, USER, COMPANY)).rejects.toMatchObject({
+    await expect(
+      context.remove.execute(part.id, USER, COMPANY),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "PART_IN_USE",
       message: expect.stringContaining("1 lançamento(s)"),
@@ -168,10 +242,18 @@ describe("deleting a part", () => {
       USER,
     );
 
-    const notFound = { statusCode: 404, code: "PART_NOT_FOUND", message: "Peça não encontrada!" };
+    const notFound = {
+      statusCode: 404,
+      code: "PART_NOT_FOUND",
+      message: "Peça não encontrada!",
+    };
 
-    await expect(context.remove.execute(foreign.id, USER, COMPANY)).rejects.toMatchObject(notFound);
-    await expect(context.remove.execute("missing", USER, COMPANY)).rejects.toMatchObject(notFound);
+    await expect(
+      context.remove.execute(foreign.id, USER, COMPANY),
+    ).rejects.toMatchObject(notFound);
+    await expect(
+      context.remove.execute("missing", USER, COMPANY),
+    ).rejects.toMatchObject(notFound);
     await expect(
       context.update.execute({ unit_price: 1 }, foreign.id, USER, COMPANY),
     ).rejects.toMatchObject(notFound);
@@ -183,11 +265,17 @@ describe("deleting a part", () => {
   it("refuses moving a part to another company with its own code", async () => {
     const context = makeContext();
 
-    const part = await context.create.execute({ description: "Farol", unit_price: 40, businessId: COMPANY }, USER);
+    const part = await context.create.execute(
+      { description: "Farol", unit_price: 40, businessId: COMPANY },
+      USER,
+    );
 
     await expect(
       context.update.execute({ businessId: OTHER }, part.id, USER, COMPANY),
-    ).rejects.toMatchObject({ statusCode: 400, code: "PART_BUSINESS_READ_ONLY" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "PART_BUSINESS_READ_ONLY",
+    });
 
     expect(context.parts.parts[0].businessId).toBe(COMPANY);
   });
@@ -198,7 +286,12 @@ describe("catalogChanged part (decision 2.3)", () => {
     const context = makeContext();
 
     const part = await context.create.execute(
-      { description: "Lâmpada", unit_price: 15, businessId: COMPANY, supplierId: SUPPLIER },
+      {
+        description: "Lâmpada",
+        unit_price: 15,
+        businessId: COMPANY,
+        supplierId: SUPPLIER,
+      },
       USER,
     );
 
@@ -215,11 +308,17 @@ describe("catalogChanged part (decision 2.3)", () => {
   it("is not sent when the write is refused", async () => {
     const context = makeContext();
 
-    await context.create.execute({ description: "Espelho", unit_price: 90, businessId: COMPANY }, USER);
+    await context.create.execute(
+      { description: "Espelho", unit_price: 90, businessId: COMPANY },
+      USER,
+    );
     catalog.changed.mockClear();
 
     await expect(
-      context.create.execute({ description: "espelho", unit_price: 90, businessId: COMPANY }, USER),
+      context.create.execute(
+        { description: "espelho", unit_price: 90, businessId: COMPANY },
+        USER,
+      ),
     ).rejects.toBeTruthy();
 
     expect(catalog.changed).not.toHaveBeenCalled();
@@ -233,10 +332,32 @@ describe("the catalog listing on the twin", () => {
     context.parts.supplierNames.set(SUPPLIER, "Oficina Alfa");
     context.parts.supplierBusiness.set(SUPPLIER, COMPANY);
 
-    await context.create.execute({ description: "Filtro", unit_price: 10, businessId: COMPANY, supplierId: SUPPLIER }, USER);
-    await context.create.execute({ description: "Óleo", unit_price: 30, businessId: COMPANY, supplierId: SUPPLIER }, USER);
-    await context.create.execute({ description: "Estopa", unit_price: 5, businessId: COMPANY }, USER);
-    await context.create.execute({ description: "Alheia", unit_price: 999, businessId: OTHER }, USER);
+    await context.create.execute(
+      {
+        description: "Filtro",
+        unit_price: 10,
+        businessId: COMPANY,
+        supplierId: SUPPLIER,
+      },
+      USER,
+    );
+    await context.create.execute(
+      {
+        description: "Óleo",
+        unit_price: 30,
+        businessId: COMPANY,
+        supplierId: SUPPLIER,
+      },
+      USER,
+    );
+    await context.create.execute(
+      { description: "Estopa", unit_price: 5, businessId: COMPANY },
+      USER,
+    );
+    await context.create.execute(
+      { description: "Alheia", unit_price: 999, businessId: OTHER },
+      USER,
+    );
 
     const result = await context.parts.listParts({
       businessId: COMPANY,
@@ -247,7 +368,10 @@ describe("the catalog listing on the twin", () => {
       order: "desc",
     });
 
-    expect(result.data.map((part) => part.description)).toEqual(["Óleo", "Filtro"]);
+    expect(result.data.map((part) => part.description)).toEqual([
+      "Óleo",
+      "Filtro",
+    ]);
 
     const { total, searchMeta } = summarizePartList(result.supplierCounts, {
       supplierIds: [SUPPLIER],
@@ -269,14 +393,27 @@ describe("the catalog listing on the twin", () => {
 describe("the part twin against Prisma's semantics", () => {
   it("refuses deleting a part that lines still use, as the RESTRICT foreign key does", async () => {
     const parts = new InMemoryPartRepository();
-    const part = await parts.createPart({ description: "Rolamento", unit_price: 60, businessId: COMPANY });
+    const part = await parts.createPart({
+      description: "Rolamento",
+      unit_price: 60,
+      businessId: COMPANY,
+    });
 
-    parts.addServiceOrderPart({ partId: part.id, serviceOrderId: "os-1", quantity: 1, unit_price: "60" });
+    parts.addServiceOrderPart({
+      partId: part.id,
+      serviceOrderId: "os-1",
+      quantity: 1,
+      unit_price: "60",
+    });
 
-    await expect(parts.deletePart(part.id)).rejects.toMatchObject({ code: "P2003" });
+    await expect(parts.deletePart(part.id)).rejects.toMatchObject({
+      code: "P2003",
+    });
     expect(parts.parts).toHaveLength(1);
 
-    await expect(parts.deletePart("missing")).rejects.toMatchObject({ code: "P2025" });
+    await expect(parts.deletePart("missing")).rejects.toMatchObject({
+      code: "P2025",
+    });
   });
 
   it("brings the supplier with the part, as the real include does", async () => {
@@ -290,9 +427,15 @@ describe("the part twin against Prisma's semantics", () => {
       businessId: COMPANY,
       supplierId: SUPPLIER,
     });
-    const loose = await parts.createPart({ description: "Estopa", unit_price: 5, businessId: COMPANY });
+    const loose = await parts.createPart({
+      description: "Estopa",
+      unit_price: 5,
+      businessId: COMPANY,
+    });
 
-    expect((await parts.findPartById(supplied.id))?.supplier).toEqual({ name: "Oficina Alfa" });
+    expect((await parts.findPartById(supplied.id))?.supplier).toEqual({
+      name: "Oficina Alfa",
+    });
     expect((await parts.findPartById(loose.id))?.supplier).toBeNull();
   });
 });

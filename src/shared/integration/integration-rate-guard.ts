@@ -60,7 +60,11 @@ function createIntegrationRateGuard(
 
     async recordAuthFailure(address) {
       try {
-        await countInFixedWindow(redis, authFailureKey(address), WINDOW_SECONDS);
+        await countInFixedWindow(
+          redis,
+          authFailureKey(address),
+          WINDOW_SECONDS,
+        );
       } catch {
         // Fail open: the refusal itself still goes out.
       }
@@ -69,8 +73,11 @@ function createIntegrationRateGuard(
     async allowBusiness(businessId, max) {
       try {
         return (
-          (await countInFixedWindow(redis, businessKey(businessId), WINDOW_SECONDS)) <=
-          max
+          (await countInFixedWindow(
+            redis,
+            businessKey(businessId),
+            WINDOW_SECONDS,
+          )) <= max
         );
       } catch {
         return true;

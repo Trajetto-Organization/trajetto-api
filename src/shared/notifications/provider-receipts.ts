@@ -111,7 +111,11 @@ async function advanceProviderStatus(
 
 /** The furthest-along report per delivery, by the provider's ranking. */
 function furthestPerDelivery(
-  reports: Array<{ deliveryId: string | null; status: string; occurredAt: Date }>,
+  reports: Array<{
+    deliveryId: string | null;
+    status: string;
+    occurredAt: Date;
+  }>,
   rank: Record<string, number>,
 ): Map<string, { status: string; occurredAt: Date }> {
   const latest = new Map<string, { status: string; occurredAt: Date }>();

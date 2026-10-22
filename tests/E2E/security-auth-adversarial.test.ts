@@ -49,7 +49,9 @@ async function seedUser(): Promise<{ id: string; email: string }> {
   return { id, email };
 }
 
-async function login(email: string): Promise<{ token: string; refresh_token: string }> {
+async function login(
+  email: string,
+): Promise<{ token: string; refresh_token: string }> {
   const response = await app.inject({
     method: "POST",
     url: "/user/session",
@@ -135,7 +137,9 @@ describe("a forged access token", () => {
     const claims = decode(token) as object;
 
     for (const key of [auth.secret_refresh_token, "chave-adivinhada", ""]) {
-      const response = await me(forge(claims, { alg: "HS256", typ: "JWT" }, key));
+      const response = await me(
+        forge(claims, { alg: "HS256", typ: "JWT" }, key),
+      );
       expect(response.statusCode).toBe(401);
     }
   });
@@ -159,7 +163,12 @@ describe("a forged access token", () => {
     const { familyId } = decode(token) as { familyId: string };
 
     const expired = sign(
-      { tokenType: "access", sessionVersion: 0, familyId, exp: Math.floor(Date.now() / 1000) - 10 },
+      {
+        tokenType: "access",
+        sessionVersion: 0,
+        familyId,
+        exp: Math.floor(Date.now() / 1000) - 10,
+      },
       auth.secret_token,
       { subject: user.id },
     );
@@ -176,7 +185,11 @@ describe("a forged access token", () => {
 
     expect((await me(refresh_token)).statusCode).toBe(401);
 
-    const challenge = issueTwoFactorChallenge({ id: user.id, email: user.email, session_version: 0 });
+    const challenge = issueTwoFactorChallenge({
+      id: user.id,
+      email: user.email,
+      session_version: 0,
+    });
     expect((await me(challenge)).statusCode).toBe(401);
   });
 
@@ -188,7 +201,9 @@ describe("a forged access token", () => {
       { tokenType: "access", familyId: randomUUID() },
       { sessionVersion: 0, familyId: randomUUID() },
     ]) {
-      const response = await me(sign(claims, auth.secret_token, { subject: user.id, expiresIn: "5m" }));
+      const response = await me(
+        sign(claims, auth.secret_token, { subject: user.id, expiresIn: "5m" }),
+      );
       expect(response.statusCode, JSON.stringify(claims)).toBe(401);
     }
   });
@@ -241,7 +256,10 @@ describe("a session that ended", () => {
     const user = await seedUser();
     const { token } = await login(user.email);
 
-    await prisma.user.update({ where: { id: user.id }, data: { session_version: { increment: 1 } } });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { session_version: { increment: 1 } },
+    });
 
     const response = await me(token);
 
@@ -253,7 +271,10 @@ describe("a session that ended", () => {
     const user = await seedUser();
     const { token } = await login(user.email);
 
-    await prisma.user.update({ where: { id: user.id }, data: { access_revoked: true } });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { access_revoked: true },
+    });
 
     const response = await me(token);
 
@@ -283,7 +304,9 @@ describe("a session that ended", () => {
         uf: "SP",
         street: "Rua",
         address_number: "1",
-        cnpj: String(Date.now() + 1).padStart(14, "6").slice(-14),
+        cnpj: String(Date.now() + 1)
+          .padStart(14, "6")
+          .slice(-14),
         cnae: "4930202",
         responsible_name: "Responsável",
         telephone: "11999999999",
@@ -309,7 +332,10 @@ describe("a session that ended", () => {
     const { token } = await login(email);
     expect((await me(token)).statusCode).toBe(200);
 
-    await prisma.business.update({ where: { id: other }, data: { is_active: false } });
+    await prisma.business.update({
+      where: { id: other },
+      data: { is_active: false },
+    });
 
     const response = await me(token);
 

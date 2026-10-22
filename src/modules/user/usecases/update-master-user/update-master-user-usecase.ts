@@ -151,7 +151,10 @@ class UpdateMasterUserUseCase {
    * stored the request fails whole and changes nothing, instead of telling
    * the master a link went out that never existed (SEC-MAIL-1).
    */
-  private async issuePasswordLink(email: string, userId: string): Promise<string> {
+  private async issuePasswordLink(
+    email: string,
+    userId: string,
+  ): Promise<string> {
     try {
       return await issuePasswordSetupLink(
         this.usersTokens,
@@ -159,7 +162,10 @@ class UpdateMasterUserUseCase {
         ADMIN_RESET_LINK_TTL_MS,
       );
     } catch (error) {
-      log.error({ err: error, userId }, "password setup link could not be stored");
+      log.error(
+        { err: error, userId },
+        "password setup link could not be stored",
+      );
 
       throw new PasswordLinkUnavailableError();
     }
@@ -309,7 +315,9 @@ class UpdateMasterUserUseCase {
       // The session stays valid through a new e-mail; the client re-reads
       // /user/me to show it. Nobody is logged out for a rename.
       if (emailChanged) {
-        sendSecurityEventToUser(masterUserId, { reason: "permissions_changed" });
+        sendSecurityEventToUser(masterUserId, {
+          reason: "permissions_changed",
+        });
       }
 
       if (nameChanged || emailChanged) {

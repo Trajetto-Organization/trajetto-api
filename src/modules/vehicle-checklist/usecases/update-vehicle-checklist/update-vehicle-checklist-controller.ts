@@ -43,11 +43,14 @@ class UpdateVehicleChecklistController {
     try {
       checklistData = updateVehicleChecklistSchema.parse(formData);
     } catch (error) {
-      return reply.header("x-error-code", "VALIDATION_ERROR").status(400).send({
-        code: "VALIDATION_ERROR",
-        message: "Dados do formulário inválidos",
-        details: error instanceof Error ? error.message : "Erro de validação",
-      });
+      return reply
+        .header("x-error-code", "VALIDATION_ERROR")
+        .status(400)
+        .send({
+          code: "VALIDATION_ERROR",
+          message: "Dados do formulário inválidos",
+          details: error instanceof Error ? error.message : "Erro de validação",
+        });
     }
 
     // Photos the edit is dropping, sent as an array of stored URLs.
@@ -79,18 +82,21 @@ class UpdateVehicleChecklistController {
       if (replyChecklistError(reply, error)) return;
 
       if (error instanceof VehicleChecklistRequiredPhotosMissingError) {
-        return reply.header("x-error-code", "PHOTOS_REQUIRED").status(400).send({
-          code: "PHOTOS_REQUIRED",
-          message: error.message,
-          errors: error.errors,
-          missingPhotos: error.missingPhotos,
-          photoRequirements:
-            PhotoValidationService.validatePhotosRequired(checklistData),
-          fieldsSent: error.fieldsSent,
-          photosSent: error.photosSent,
-          existingPhotos: error.existingPhotos,
-          photosToRemove: error.photosToRemove,
-        });
+        return reply
+          .header("x-error-code", "PHOTOS_REQUIRED")
+          .status(400)
+          .send({
+            code: "PHOTOS_REQUIRED",
+            message: error.message,
+            errors: error.errors,
+            missingPhotos: error.missingPhotos,
+            photoRequirements:
+              PhotoValidationService.validatePhotosRequired(checklistData),
+            fieldsSent: error.fieldsSent,
+            photosSent: error.photosSent,
+            existingPhotos: error.existingPhotos,
+            photosToRemove: error.photosToRemove,
+          });
       }
 
       throw error;

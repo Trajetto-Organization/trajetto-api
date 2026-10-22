@@ -80,7 +80,6 @@ const supplierResponses = {
 
   supplierRow,
 
-
   supplierListSearchMeta: supplierListSearchMetaDoc,
 
   supplierUpdated: z.object({

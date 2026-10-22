@@ -102,7 +102,9 @@ afterAll(async () => {
   await prisma.refreshToken.deleteMany({ where: { userId: ADMIN } });
   await prisma.user.deleteMany({ where: { id: ADMIN } });
 
-  await prisma.businessEntitlement.deleteMany({ where: { businessId: CARRIER } });
+  await prisma.businessEntitlement.deleteMany({
+    where: { businessId: CARRIER },
+  });
   await prisma.business.deleteMany({ where: { id: CARRIER } });
 
   await app?.close();
@@ -124,12 +126,16 @@ describe("editing an endpoint", () => {
     // through it used to write `headers: null`, wiping the Authorization the
     // integrator configured through the API: the receiver started answering
     // 401 and, twenty events later, the endpoint was switched off.
-    const created = await call("POST", `/integrations/webhook-endpoint/${CARRIER}`, {
-      name: "ERP com gateway",
-      url: "https://erp.exemplo.com.br/webhooks",
-      topics: ["delivery.created"],
-      headers: { Authorization: "Bearer do-gateway" },
-    });
+    const created = await call(
+      "POST",
+      `/integrations/webhook-endpoint/${CARRIER}`,
+      {
+        name: "ERP com gateway",
+        url: "https://erp.exemplo.com.br/webhooks",
+        topics: ["delivery.created"],
+        headers: { Authorization: "Bearer do-gateway" },
+      },
+    );
 
     expect(created.statusCode, created.body).toBe(201);
 
@@ -148,7 +154,9 @@ describe("editing an endpoint", () => {
 
     expect(edited.statusCode, edited.body).toBe(200);
 
-    const row = await prisma.webhookEndpoint.findUniqueOrThrow({ where: { id } });
+    const row = await prisma.webhookEndpoint.findUniqueOrThrow({
+      where: { id },
+    });
 
     expect(row.name).toBe("ERP com gateway (renomeado)");
     // Sealed at rest (WH-18): opened to compare.
@@ -158,12 +166,16 @@ describe("editing an endpoint", () => {
   });
 
   it("clears them when the caller says so, with null", async () => {
-    const created = await call("POST", `/integrations/webhook-endpoint/${CARRIER}`, {
-      name: "ERP que troca de gateway",
-      url: "https://erp.exemplo.com.br/outro",
-      topics: ["delivery.created"],
-      headers: { "X-Api-Key": "antiga" },
-    });
+    const created = await call(
+      "POST",
+      `/integrations/webhook-endpoint/${CARRIER}`,
+      {
+        name: "ERP que troca de gateway",
+        url: "https://erp.exemplo.com.br/outro",
+        topics: ["delivery.created"],
+        headers: { "X-Api-Key": "antiga" },
+      },
+    );
 
     expect(created.statusCode, created.body).toBe(201);
 
@@ -182,7 +194,9 @@ describe("editing an endpoint", () => {
 
     expect(edited.statusCode, edited.body).toBe(200);
 
-    const row = await prisma.webhookEndpoint.findUniqueOrThrow({ where: { id } });
+    const row = await prisma.webhookEndpoint.findUniqueOrThrow({
+      where: { id },
+    });
 
     expect(row.headers).toBeNull();
   });
@@ -190,11 +204,15 @@ describe("editing an endpoint", () => {
 
 describe("saving an endpoint our breaker switched off", () => {
   it("sends what it was holding", async () => {
-    const created = await call("POST", `/integrations/webhook-endpoint/${CARRIER}`, {
-      name: "ERP que caiu",
-      url: "https://erp.exemplo.com.br/caiu",
-      topics: ["delivery.*"],
-    });
+    const created = await call(
+      "POST",
+      `/integrations/webhook-endpoint/${CARRIER}`,
+      {
+        name: "ERP que caiu",
+        url: "https://erp.exemplo.com.br/caiu",
+        topics: ["delivery.*"],
+      },
+    );
 
     expect(created.statusCode, created.body).toBe(201);
 
@@ -231,7 +249,9 @@ describe("saving an endpoint our breaker switched off", () => {
 
     expect(edited.statusCode, edited.body).toBe(200);
 
-    const rows = await prisma.webhookDelivery.findMany({ where: { endpointId: id } });
+    const rows = await prisma.webhookDelivery.findMany({
+      where: { endpointId: id },
+    });
 
     expect(rows).toHaveLength(2);
 
@@ -247,12 +267,16 @@ describe("saving an endpoint our breaker switched off", () => {
 
 describe("resending to an endpoint that is switched off", () => {
   it("is held for the endpoint's return, and says so", async () => {
-    const created = await call("POST", `/integrations/webhook-endpoint/${CARRIER}`, {
-      name: "ERP pausado",
-      url: "https://erp.exemplo.com.br/pausado",
-      topics: ["delivery.*"],
-      is_active: false,
-    });
+    const created = await call(
+      "POST",
+      `/integrations/webhook-endpoint/${CARRIER}`,
+      {
+        name: "ERP pausado",
+        url: "https://erp.exemplo.com.br/pausado",
+        topics: ["delivery.*"],
+        is_active: false,
+      },
+    );
 
     expect(created.statusCode, created.body).toBe(201);
 
@@ -285,6 +309,8 @@ describe("resending to an endpoint that is switched off", () => {
     });
 
     expect(row.status).toBe("PENDING");
-    expect(row.availableAt.getTime()).toBeGreaterThan(Date.now() + 29 * 24 * 60 * 60 * 1000);
+    expect(row.availableAt.getTime()).toBeGreaterThan(
+      Date.now() + 29 * 24 * 60 * 60 * 1000,
+    );
   });
 });

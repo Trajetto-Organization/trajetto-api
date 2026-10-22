@@ -39,7 +39,9 @@ const TICKETS_BACKFILL_MIGRATION = "20261005120600_support_tickets_backfill";
 const rowInclude = {
   thread: {
     select: {
-      driver: { select: { id: true, name: true, User: { select: { id: true } } } },
+      driver: {
+        select: { id: true, name: true, User: { select: { id: true } } },
+      },
     },
   },
   delivery: { select: { id: true, recipient_name: true, status: true } },
@@ -57,7 +59,9 @@ const rowInclude = {
   closedBy: { select: { id: true, name: true } },
 } satisfies Prisma.SupportTicketInclude;
 
-type RowPayload = Prisma.SupportTicketGetPayload<{ include: typeof rowInclude }>;
+type RowPayload = Prisma.SupportTicketGetPayload<{
+  include: typeof rowInclude;
+}>;
 
 function toRow(payload: RowPayload): SupportTicketRow {
   const {
@@ -76,7 +80,11 @@ function toRow(payload: RowPayload): SupportTicketRow {
     driver: { id: thread.driver.id, name: thread.driver.name },
     driverUserId: thread.driver.User?.id ?? null,
     delivery: delivery
-      ? { id: delivery.id, recipient_name: delivery.recipient_name, status: delivery.status }
+      ? {
+          id: delivery.id,
+          recipient_name: delivery.recipient_name,
+          status: delivery.status,
+        }
       : null,
     route: route ? { id: route.id, code: route.code, name: route.name } : null,
     occurrence: occurrence
@@ -129,12 +137,17 @@ class SupportTicketRepository implements ISupportTicketRepository {
     return (tx as Prisma.TransactionClient | undefined) ?? this.prisma;
   }
 
-  async create(props: CreateSupportTicketProps, tx?: unknown): Promise<SupportTicket> {
+  async create(
+    props: CreateSupportTicketProps,
+    tx?: unknown,
+  ): Promise<SupportTicket> {
     const run = async (client: Prisma.TransactionClient) => {
       // One statement allocates the number: concurrent creates of the same
       // company serialize on the counter row only for the commit, and a
       // create inside the report's transaction never needs a retry.
-      const [{ last_number }] = await client.$queryRaw<Array<{ last_number: number }>>`
+      const [{ last_number }] = await client.$queryRaw<
+        Array<{ last_number: number }>
+      >`
         INSERT INTO "support_ticket_counter" ("businessId", last_number)
         VALUES (${props.businessId}, 1)
         ON CONFLICT ("businessId")
@@ -162,18 +175,25 @@ class SupportTicketRepository implements ISupportTicketRepository {
 
     // Without a caller transaction the counter and the row still commit
     // together: a P2002 on the row rolls the number back, leaving no hole.
-    return (tx
-      ? run(tx as Prisma.TransactionClient)
-      : this.prisma.$transaction(run)) as Promise<SupportTicket>;
+    return (
+      tx ? run(tx as Prisma.TransactionClient) : this.prisma.$transaction(run)
+    ) as Promise<SupportTicket>;
   }
 
-  async findById(id: string, businessId: string, tx?: unknown): Promise<SupportTicket | null> {
+  async findById(
+    id: string,
+    businessId: string,
+    tx?: unknown,
+  ): Promise<SupportTicket | null> {
     return (await this.client(tx).supportTicket.findFirst({
       where: { id, businessId },
     })) as SupportTicket | null;
   }
 
-  async findRowById(id: string, businessId: string): Promise<SupportTicketRow | null> {
+  async findRowById(
+    id: string,
+    businessId: string,
+  ): Promise<SupportTicketRow | null> {
     const row = await this.prisma.supportTicket.findFirst({
       where: { id, businessId },
       include: rowInclude,
@@ -213,7 +233,10 @@ class SupportTicketRepository implements ISupportTicketRepository {
     })) as SupportTicket | null;
   }
 
-  async findOpenForRoute(routeId: string, businessId: string): Promise<SupportTicket | null> {
+  async findOpenForRoute(
+    routeId: string,
+    businessId: string,
+  ): Promise<SupportTicket | null> {
     return (await this.prisma.supportTicket.findFirst({
       where: { routeId, businessId, kind: "ROUTE", status: "OPEN" },
     })) as SupportTicket | null;
@@ -272,10 +295,16 @@ class SupportTicketRepository implements ISupportTicketRepository {
 
     if (locked.length === 0) return null;
 
-    return (await client.supportTicket.findUnique({ where: { id } })) as SupportTicket;
+    return (await client.supportTicket.findUnique({
+      where: { id },
+    })) as SupportTicket;
   }
 
-  async linkOccurrence(id: string, occurrenceId: string, tx?: unknown): Promise<SupportTicket> {
+  async linkOccurrence(
+    id: string,
+    occurrenceId: string,
+    tx?: unknown,
+  ): Promise<SupportTicket> {
     return (await this.client(tx).supportTicket.update({
       where: { id },
       data: { kind: "OCCURRENCE", occurrenceId, version: { increment: 1 } },
@@ -298,7 +327,10 @@ class SupportTicketRepository implements ISupportTicketRepository {
     return result.count > 0;
   }
 
-  async assign(props: AssignSupportTicketProps, tx?: unknown): Promise<boolean> {
+  async assign(
+    props: AssignSupportTicketProps,
+    tx?: unknown,
+  ): Promise<boolean> {
     const result = await this.client(tx).supportTicket.updateMany({
       where: {
         id: props.id,
@@ -318,7 +350,12 @@ class SupportTicketRepository implements ISupportTicketRepository {
     return result.count > 0;
   }
 
-  async autoAssign(id: string, assigneeId: string, at: Date, tx?: unknown): Promise<boolean> {
+  async autoAssign(
+    id: string,
+    assigneeId: string,
+    at: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
     const result = await this.client(tx).supportTicket.updateMany({
       where: { id, assigneeId: null, status: "OPEN" },
       data: { assigneeId, assigned_at: at, version: { increment: 1 } },
@@ -350,14 +387,19 @@ class SupportTicketRepository implements ISupportTicketRepository {
   ): Promise<SupportTicket> {
     const client = this.client(tx);
     const sideColumn =
-      props.side === "DRIVER" ? "last_driver_message_at" : "last_staff_message_at";
+      props.side === "DRIVER"
+        ? "last_driver_message_at"
+        : "last_staff_message_at";
 
     // Each column is a conditional write: advance-only, so a repaired older
     // message never moves the ticket back in the list order. Each statement
     // is atomic on its own; the send path also holds the row lock.
     const advance = (column: "last_message_at" | typeof sideColumn) =>
       client.supportTicket.updateMany({
-        where: { id: props.id, OR: [{ [column]: null }, { [column]: { lt: props.at } }] },
+        where: {
+          id: props.id,
+          OR: [{ [column]: null }, { [column]: { lt: props.at } }],
+        },
         data: { [column]: props.at },
       });
 
@@ -369,7 +411,10 @@ class SupportTicketRepository implements ISupportTicketRepository {
       await client.supportTicket.updateMany({
         where: {
           id: props.id,
-          OR: [{ first_staff_reply_at: null }, { first_staff_reply_at: { gt: props.at } }],
+          OR: [
+            { first_staff_reply_at: null },
+            { first_staff_reply_at: { gt: props.at } },
+          ],
         },
         data: { first_staff_reply_at: props.at },
       });
@@ -475,7 +520,9 @@ class SupportTicketRepository implements ISupportTicketRepository {
     const search = props.search?.trim() ?? "";
     const numberMatch = /^#?(\d{1,9})$/.exec(search);
 
-    const and: Prisma.SupportTicketWhereInput[] = [{ businessId: props.businessId }];
+    const and: Prisma.SupportTicketWhereInput[] = [
+      { businessId: props.businessId },
+    ];
 
     if (props.driverId) and.push({ driverId: props.driverId });
     if (props.status !== "ALL") and.push({ status: props.status });
@@ -487,15 +534,20 @@ class SupportTicketRepository implements ISupportTicketRepository {
 
     // The driver has no queue to filter: these narrow the tower's view only.
     if (!props.driverId) {
-      if (props.scope === "MINE") and.push({ assigneeId: props.requesterUserId });
-      if (props.scope === "UNASSIGNED") and.push({ assigneeId: null, status: "OPEN" });
+      if (props.scope === "MINE")
+        and.push({ assigneeId: props.requesterUserId });
+      if (props.scope === "UNASSIGNED")
+        and.push({ assigneeId: null, status: "OPEN" });
       if (props.scope === "PENDING_AUTHORIZATION") {
         and.push({ occurrence: { is: { authorization_status: "PENDING" } } });
       }
     }
 
     if (search) {
-      const contains = { contains: escapeLikePattern(search), mode: "insensitive" as const };
+      const contains = {
+        contains: escapeLikePattern(search),
+        mode: "insensitive" as const,
+      };
 
       // An empty `in` would match nothing, so an empty list drops its arm.
       const joinedArms: Prisma.SupportTicketWhereInput[] = matches
@@ -567,7 +619,9 @@ class SupportTicketRepository implements ISupportTicketRepository {
       ...(driverId && { driverId }),
     };
 
-    const driverScope = driverId ? Prisma.sql`AND t."driverId" = ${driverId}` : Prisma.empty;
+    const driverScope = driverId
+      ? Prisma.sql`AND t."driverId" = ${driverId}`
+      : Prisma.empty;
 
     // Two at a time: at most two of the replica's ten connections (the
     // budget of tests/E2E/connection-fan-out.test.ts); it took five at once.
@@ -578,13 +632,20 @@ class SupportTicketRepository implements ISupportTicketRepository {
     ]);
 
     const [mine, pendingAuthorization] = await Promise.all([
-      this.prisma.supportTicket.count({ where: { ...open, assigneeId: requesterUserId } }),
       this.prisma.supportTicket.count({
-        where: { ...open, occurrence: { is: { authorization_status: "PENDING" } } },
+        where: { ...open, assigneeId: requesterUserId },
+      }),
+      this.prisma.supportTicket.count({
+        where: {
+          ...open,
+          occurrence: { is: { authorization_status: "PENDING" } },
+        },
       }),
     ]);
 
-    const unreadRows = await this.prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+    const unreadRows = await this.prisma.$queryRaw<
+      Array<{ total: number }>
+    >(Prisma.sql`
       SELECT COUNT(*)::int AS "total" FROM (
         SELECT 1
         FROM "support_ticket" t
@@ -616,7 +677,9 @@ class SupportTicketRepository implements ISupportTicketRepository {
   ): Promise<Map<string, number>> {
     if (ticketIds.length === 0) return new Map();
 
-    const rows = await this.prisma.$queryRaw<Array<{ ticketId: string; unread: number }>>(
+    const rows = await this.prisma.$queryRaw<
+      Array<{ ticketId: string; unread: number }>
+    >(
       Prisma.sql`
         SELECT t."id" AS "ticketId", capped."unread"
         FROM "support_ticket" t
@@ -691,7 +754,8 @@ class SupportTicketRepository implements ISupportTicketRepository {
     viewerIsDriverSide: boolean,
   ): Promise<Map<string, Date>> {
     // A driver with no account never read anything.
-    if (ticketIds.length === 0 || (!viewerIsDriverSide && !driverUserId)) return new Map();
+    if (ticketIds.length === 0 || (!viewerIsDriverSide && !driverUserId))
+      return new Map();
 
     const rows = await this.prisma.supportTicketRead.groupBy({
       by: ["ticketId"],
@@ -707,7 +771,8 @@ class SupportTicketRepository implements ISupportTicketRepository {
     const result = new Map<string, Date>();
 
     for (const row of rows) {
-      if (row._max.last_read_at) result.set(row.ticketId, row._max.last_read_at);
+      if (row._max.last_read_at)
+        result.set(row.ticketId, row._max.last_read_at);
     }
 
     return result;
@@ -728,7 +793,10 @@ class SupportTicketRepository implements ISupportTicketRepository {
     }
   }
 
-  async findManyRows(ids: string[], businessId: string): Promise<SupportTicketRow[]> {
+  async findManyRows(
+    ids: string[],
+    businessId: string,
+  ): Promise<SupportTicketRow[]> {
     if (ids.length === 0) return [];
 
     const rows = await this.prisma.supportTicket.findMany({
@@ -770,7 +838,9 @@ class SupportTicketRepository implements ISupportTicketRepository {
   }
 
   async ticketsBackfilledAt(): Promise<Date | null> {
-    const rows = await this.prisma.$queryRaw<Array<{ finished_at: Date | null }>>`
+    const rows = await this.prisma.$queryRaw<
+      Array<{ finished_at: Date | null }>
+    >`
       SELECT finished_at FROM _prisma_migrations
       WHERE migration_name = ${TICKETS_BACKFILL_MIGRATION}
         AND rolled_back_at IS NULL
@@ -782,7 +852,11 @@ class SupportTicketRepository implements ISupportTicketRepository {
     return rows[0]?.finished_at ?? null;
   }
 
-  async attachMessage(messageId: string, ticketId: string, tx?: unknown): Promise<boolean> {
+  async attachMessage(
+    messageId: string,
+    ticketId: string,
+    tx?: unknown,
+  ): Promise<boolean> {
     const result = await this.client(tx).chatMessage.updateMany({
       where: { id: messageId, ticketId: null },
       data: { ticketId },
@@ -792,4 +866,7 @@ class SupportTicketRepository implements ISupportTicketRepository {
   }
 }
 
-export { SupportTicketRepository, UNREAD_DISPLAY_CAP as SUPPORT_TICKET_UNREAD_CAP };
+export {
+  SupportTicketRepository,
+  UNREAD_DISPLAY_CAP as SUPPORT_TICKET_UNREAD_CAP,
+};

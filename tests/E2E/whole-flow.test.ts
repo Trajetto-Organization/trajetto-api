@@ -266,7 +266,8 @@ beforeAll(async () => {
   container.registerInstance("UploadService", {
     resolvePresignedUploads: async (
       photos: Array<{ key: string; fieldName?: string }>,
-    ) => photos.map((photo) => ({ path: photo.key, fieldName: photo.fieldName })),
+    ) =>
+      photos.map((photo) => ({ path: photo.key, fieldName: photo.fieldName })),
     deleteFile: async () => undefined,
     getSignedUrl: async (path: string) => `https://storage.invalid/${path}`,
     getFileUrl: async (path: string) => `https://storage.invalid/${path}`,
@@ -280,15 +281,12 @@ beforeAll(async () => {
       stored.set(key, Buffer.from(bytes));
     },
   });
-
 }, 120_000);
 
 afterAll(async () => {
   await app?.close();
   await prisma.$disconnect();
 });
-
-
 
 /**
  * A function, not a constant.
@@ -602,8 +600,12 @@ describe("a carrier's day, from the spreadsheet to the webhook", () => {
     expect(topics, `vistos: ${topics.join(", ")}`).toContain("route.released");
     expect(topics, `vistos: ${topics.join(", ")}`).toContain("route.started");
     expect(topics, `vistos: ${topics.join(", ")}`).toContain("route.completed");
-    expect(topics, `vistos: ${topics.join(", ")}`).toContain("delivery.delivered");
-    expect(topics, `vistos: ${topics.join(", ")}`).toContain("proof.registered");
+    expect(topics, `vistos: ${topics.join(", ")}`).toContain(
+      "delivery.delivered",
+    );
+    expect(topics, `vistos: ${topics.join(", ")}`).toContain(
+      "proof.registered",
+    );
 
     // Every row is signed before it is queued: the signature is what the
     // receiver checks, and a row queued without one can never be verified.

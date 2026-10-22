@@ -48,8 +48,7 @@ function compareColumn(
 
   if (key === "created_at" || key === "updated_at") {
     return (
-      direction *
-      (new Date(a[key]).getTime() - new Date(b[key]).getTime())
+      direction * (new Date(a[key]).getTime() - new Date(b[key]).getTime())
     );
   }
 
@@ -217,7 +216,9 @@ class InMemorySupplierRepository implements ISupplierRepository {
   }
 
   async findSupplierById(supplierId: string): Promise<Supplier | null> {
-    return this.suppliers.find((supplier) => supplier.id === supplierId) ?? null;
+    return (
+      this.suppliers.find((supplier) => supplier.id === supplierId) ?? null
+    );
   }
 
   async findSupplierByCnpjAndBusinessId(

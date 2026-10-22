@@ -44,7 +44,9 @@ export const options = {
       timeUnit: "1s",
 
       preAllocatedVUs: 100,
-      maxVUs: Number(__ENV.STRESS_MAX_VUS || Math.max(1500, Math.max(...TARGETS) * 2)),
+      maxVUs: Number(
+        __ENV.STRESS_MAX_VUS || Math.max(1500, Math.max(...TARGETS) * 2),
+      ),
 
       stages: RAMP,
     },

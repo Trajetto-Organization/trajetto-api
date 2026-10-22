@@ -33,34 +33,128 @@ interface Seed {
 
 // The same fourteen companies as the E2E, tie pairs included.
 const SEEDS: Seed[] = [
-  { key: "E01", city: "São Paulo", uf: "SP", erp: "ERP-01", fantasy: "Alfa", at: 1 },
+  {
+    key: "E01",
+    city: "São Paulo",
+    uf: "SP",
+    erp: "ERP-01",
+    fantasy: "Alfa",
+    at: 1,
+  },
   { key: "E02", city: "São Paulo", uf: "SP", erp: null, fantasy: null, at: 2 },
-  { key: "E03", city: "São Paulo", uf: "SP", erp: "ERP-03", fantasy: "Bravo", at: 3 },
-  { key: "E04", city: "São Paulo", uf: "SP", erp: null, fantasy: "Charlie", at: 4 },
-  { key: "E05", city: "Campinas", uf: "SP", erp: "ERP-05", fantasy: null, at: 5 },
-  { key: "E06", city: "São José", uf: "SC", erp: null, fantasy: "Delta", at: 6 },
-  { key: "E07", city: "São José", uf: "SC", erp: "ERP-07", fantasy: "Echo", at: 7 },
+  {
+    key: "E03",
+    city: "São Paulo",
+    uf: "SP",
+    erp: "ERP-03",
+    fantasy: "Bravo",
+    at: 3,
+  },
+  {
+    key: "E04",
+    city: "São Paulo",
+    uf: "SP",
+    erp: null,
+    fantasy: "Charlie",
+    at: 4,
+  },
+  {
+    key: "E05",
+    city: "Campinas",
+    uf: "SP",
+    erp: "ERP-05",
+    fantasy: null,
+    at: 5,
+  },
+  {
+    key: "E06",
+    city: "São José",
+    uf: "SC",
+    erp: null,
+    fantasy: "Delta",
+    at: 6,
+  },
+  {
+    key: "E07",
+    city: "São José",
+    uf: "SC",
+    erp: "ERP-07",
+    fantasy: "Echo",
+    at: 7,
+  },
   { key: "E08", city: "São José", uf: "SP", erp: null, fantasy: null, at: 8 },
-  { key: "E09", city: "Cuiabá", uf: "MT", erp: "ERP-09", fantasy: "Foxtrot", at: 9 },
-  { key: "A1", city: "Cuiabá", uf: "MT", erp: null, fantasy: "Golf", at: 10, id: "018fed10-0000-7000-8000-0000000000a9" },
-  { key: "A2", city: "Cuiabá", uf: "MT", erp: "ERP-A2", fantasy: "Hotel", at: 10, id: "018fed10-0000-7000-8000-0000000000a1" },
-  { key: "B1", city: "Manaus", uf: "AM", active: false, erp: null, fantasy: "India", at: 11, id: "018fed10-0000-7000-8000-0000000000b1" },
-  { key: "B2", city: "Manaus", uf: "AM", active: false, erp: "ERP-B2", fantasy: null, at: 11, id: "018fed10-0000-7000-8000-0000000000b9" },
-  { key: "E14", city: "Rio de Janeiro", uf: "RJ", active: false, erp: null, fantasy: "Juliet", at: 12 },
+  {
+    key: "E09",
+    city: "Cuiabá",
+    uf: "MT",
+    erp: "ERP-09",
+    fantasy: "Foxtrot",
+    at: 9,
+  },
+  {
+    key: "A1",
+    city: "Cuiabá",
+    uf: "MT",
+    erp: null,
+    fantasy: "Golf",
+    at: 10,
+    id: "018fed10-0000-7000-8000-0000000000a9",
+  },
+  {
+    key: "A2",
+    city: "Cuiabá",
+    uf: "MT",
+    erp: "ERP-A2",
+    fantasy: "Hotel",
+    at: 10,
+    id: "018fed10-0000-7000-8000-0000000000a1",
+  },
+  {
+    key: "B1",
+    city: "Manaus",
+    uf: "AM",
+    active: false,
+    erp: null,
+    fantasy: "India",
+    at: 11,
+    id: "018fed10-0000-7000-8000-0000000000b1",
+  },
+  {
+    key: "B2",
+    city: "Manaus",
+    uf: "AM",
+    active: false,
+    erp: "ERP-B2",
+    fantasy: null,
+    at: 11,
+    id: "018fed10-0000-7000-8000-0000000000b9",
+  },
+  {
+    key: "E14",
+    city: "Rio de Janeiro",
+    uf: "RJ",
+    active: false,
+    erp: null,
+    fantasy: "Juliet",
+    at: 12,
+  },
 ];
 
 let repository: InMemoryBusinessRepository;
 let useCase: ListBusinessUseCase;
 
 const master = { id: "master", role: "MASTER", businessId: null };
-const users = { findUserById: async (id: string) => (id === "master" ? master : null) } as never;
+const users = {
+  findUserById: async (id: string) => (id === "master" ? master : null),
+} as never;
 
 beforeEach(() => {
   repository = new InMemoryBusinessRepository();
 
   repository.business = SEEDS.map(
     (seed, index): Business => ({
-      id: seed.id ?? `018fed20-0000-7000-8000-${String(index).padStart(12, "0")}`,
+      id:
+        seed.id ?? `018fed20-0000-7000-8000-${String(index).padStart(12, "0")}`,
       corporate_reason: `Empresa ${seed.key}`,
       fantasy_name: seed.fantasy ?? null,
       cep: "01001000",
@@ -84,11 +178,24 @@ beforeEach(() => {
   useCase = new ListBusinessUseCase(users, repository);
 });
 
-const keysOf = (rows: Business[]) => rows.map((row) => row.corporate_reason.replace("Empresa ", ""));
+const keysOf = (rows: Business[]) =>
+  rows.map((row) => row.corporate_reason.replace("Empresa ", ""));
 
-async function allPages(request: Partial<Parameters<ListBusinessUseCase["execute"]>[0]> = {}) {
-  const first = await useCase.execute({ userId: "master", page: 1, pageSize: 10, ...request });
-  const second = await useCase.execute({ userId: "master", page: 2, pageSize: 10, ...request });
+async function allPages(
+  request: Partial<Parameters<ListBusinessUseCase["execute"]>[0]> = {},
+) {
+  const first = await useCase.execute({
+    userId: "master",
+    page: 1,
+    pageSize: 10,
+    ...request,
+  });
+  const second = await useCase.execute({
+    userId: "master",
+    page: 2,
+    pageSize: 10,
+    ...request,
+  });
 
   return [...keysOf(first.data), ...keysOf(second.data)];
 }
@@ -96,11 +203,37 @@ async function allPages(request: Partial<Parameters<ListBusinessUseCase["execute
 describe("the twin answers like Postgres", () => {
   it("orders newest first, the created_at ties broken by id desc in both pairs", async () => {
     expect(await allPages()).toEqual([
-      "E14", "B2", "B1", "A1", "A2", "E09", "E08", "E07", "E06", "E05", "E04", "E03", "E02", "E01",
+      "E14",
+      "B2",
+      "B1",
+      "A1",
+      "A2",
+      "E09",
+      "E08",
+      "E07",
+      "E06",
+      "E05",
+      "E04",
+      "E03",
+      "E02",
+      "E01",
     ]);
 
     expect(await allPages({ sort: "created_at", order: "asc" })).toEqual([
-      "E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E09", "A1", "A2", "B2", "B1", "E14",
+      "E01",
+      "E02",
+      "E03",
+      "E04",
+      "E05",
+      "E06",
+      "E07",
+      "E08",
+      "E09",
+      "A1",
+      "A2",
+      "B2",
+      "B1",
+      "E14",
     ]);
   });
 
@@ -110,7 +243,9 @@ describe("the twin answers like Postgres", () => {
       const withoutErp = SEEDS.filter((seed) => !seed.erp).length;
 
       expect(
-        keys.slice(keys.length - withoutErp).every((key) => !SEEDS.find((seed) => seed.key === key)?.erp),
+        keys
+          .slice(keys.length - withoutErp)
+          .every((key) => !SEEDS.find((seed) => seed.key === key)?.erp),
         order,
       ).toBe(true);
     }
@@ -144,7 +279,11 @@ describe("the twin answers like Postgres", () => {
   });
 
   it("gives the cards and the facets of the E2E", async () => {
-    const all = await useCase.execute({ userId: "master", page: 1, pageSize: 10 });
+    const all = await useCase.execute({
+      userId: "master",
+      page: 1,
+      pageSize: 10,
+    });
 
     expect(all.total).toBe(14);
     expect(all.searchMeta.topStates).toEqual([
@@ -216,13 +355,22 @@ describe("summarizeBusinessList — the disjunctive rule", () => {
 
   it("both statuses selected is no status filter", () => {
     expect(
-      summarizeBusinessList(groups, [], { statuses: ["active", "inactive"] }).total,
+      summarizeBusinessList(groups, [], { statuses: ["active", "inactive"] })
+        .total,
     ).toBe(11);
   });
 
   it("names at most three places, most first, the name breaking a tie", () => {
     expect(
-      topPlaces(new Map([["SC", 2], ["AM", 2], ["SP", 6], ["RJ", 1], ["PR", 0]])),
+      topPlaces(
+        new Map([
+          ["SC", 2],
+          ["AM", 2],
+          ["SP", 6],
+          ["RJ", 1],
+          ["PR", 0],
+        ]),
+      ),
     ).toEqual([
       { value: "SP", count: 6 },
       { value: "AM", count: 2 },
@@ -248,7 +396,10 @@ describe("the twin's update answers like Prisma's", () => {
 
   it("raises P2025 for a company that is not there", async () => {
     await expect(
-      repository.updateBusiness({ businessId: "missing", businessData: { city: "X" } }),
+      repository.updateBusiness({
+        businessId: "missing",
+        businessData: { city: "X" },
+      }),
     ).rejects.toMatchObject({ code: "P2025" });
   });
 });

@@ -11,7 +11,9 @@ import { errorResponse } from "./common-responses";
 const clientError = z.object({
   kind: z
     .enum(["upload", "api", "network", "unknown"])
-    .describe("upload = PUT ao storage; api = resposta da API; network = sem resposta."),
+    .describe(
+      "upload = PUT ao storage; api = resposta da API; network = sem resposta.",
+    ),
   event: z
     .string()
     .max(40)
@@ -34,9 +36,19 @@ const clientError = z.object({
     .string()
     .max(100)
     .optional()
-    .describe("Host chamado (sem caminho nem query: uma URL assinada é segredo)."),
-  message: z.string().max(200).describe("Mensagem curta, já sem dados pessoais."),
-  count: z.number().int().min(1).max(1_000_000).describe("Ocorrências desde o último relato."),
+    .describe(
+      "Host chamado (sem caminho nem query: uma URL assinada é segredo).",
+    ),
+  message: z
+    .string()
+    .max(200)
+    .describe("Mensagem curta, já sem dados pessoais."),
+  count: z
+    .number()
+    .int()
+    .min(1)
+    .max(1_000_000)
+    .describe("Ocorrências desde o último relato."),
 });
 
 const counter = z.number().int().min(0).max(1_000_000_000);
@@ -53,8 +65,12 @@ const diagnosticsSchemas = {
       .object({
         pending: counter,
         failed: counter,
-        stuck: counter.describe("Pendentes com várias tentativas ou antigos demais."),
-        oldestAgeSec: counter.describe("Idade do item mais antigo da fila, em segundos."),
+        stuck: counter.describe(
+          "Pendentes com várias tentativas ou antigos demais.",
+        ),
+        oldestAgeSec: counter.describe(
+          "Idade do item mais antigo da fila, em segundos.",
+        ),
       })
       .optional()
       .describe("Fila offline do app (só mobile)."),

@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -9,13 +15,19 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
 
 import { integrationDeliveryListSchema } from "@/schemas/integration-schema";
-import { deliveryEventPayload, routeEventPayload } from "@/shared/integration/announce";
+import {
+  deliveryEventPayload,
+  routeEventPayload,
+} from "@/shared/integration/announce";
 import {
   NODE_VERIFICATION_SAMPLE,
   PHP_VERIFICATION_SAMPLE,
   PYTHON_VERIFICATION_SAMPLE,
 } from "@/shared/integration/public-docs";
-import { ALL_TOPICS, TOPIC_FAMILY } from "@/shared/integration/webhook-catalogue";
+import {
+  ALL_TOPICS,
+  TOPIC_FAMILY,
+} from "@/shared/integration/webhook-catalogue";
 import {
   TOPIC_PAYLOAD,
   WEBHOOK_PAYLOAD_SCHEMAS,
@@ -53,8 +65,18 @@ if (!HAS_WEB) {
  * against the same bytes. Each repository's CI checks its half on its own;
  * with both checked out, the two files are also compared.
  */
-const VECTORS_FILE = resolve(__dirname, "fixtures", "webhook-signature-vectors.json");
-const WEB_VECTORS_FILE = join(WEB, "tests", "unitaires", "fixtures", "webhook-signature-vectors.json");
+const VECTORS_FILE = resolve(
+  __dirname,
+  "fixtures",
+  "webhook-signature-vectors.json",
+);
+const WEB_VECTORS_FILE = join(
+  WEB,
+  "tests",
+  "unitaires",
+  "fixtures",
+  "webhook-signature-vectors.json",
+);
 
 interface SignatureVector {
   name: string;
@@ -85,9 +107,17 @@ describe("the published signature vectors", () => {
   );
 
   it("cover a rotation and a body outside ASCII", () => {
-    expect(VECTORS.some((vector) => vector.previous_secrets.length > 0)).toBe(true);
-    expect(VECTORS.some((vector) => [...vector.body].some((char) => char.charCodeAt(0) > 127))).toBe(true);
-    expect(VECTORS.every((vector) => vector.secret.startsWith("whsec_"))).toBe(true);
+    expect(VECTORS.some((vector) => vector.previous_secrets.length > 0)).toBe(
+      true,
+    );
+    expect(
+      VECTORS.some((vector) =>
+        [...vector.body].some((char) => char.charCodeAt(0) > 127),
+      ),
+    ).toBe(true);
+    expect(VECTORS.every((vector) => vector.secret.startsWith("whsec_"))).toBe(
+      true,
+    );
   });
 
   /**
@@ -113,18 +143,25 @@ describe("the published signature vectors", () => {
       );
       expect(ALL_TOPICS, vector.name).toContain(body.topic);
       expect(Number.isInteger(body.sequence), vector.name).toBe(true);
-      expect(new Date(body.created_at).toISOString(), vector.name).toBe(body.created_at);
+      expect(new Date(body.created_at).toISOString(), vector.name).toBe(
+        body.created_at,
+      );
 
       const payload = TOPIC_PAYLOAD[body.topic as keyof typeof TOPIC_PAYLOAD];
       const properties = schemas[payload].properties;
 
-      expect(Object.keys(body.data), vector.name).toEqual(Object.keys(properties));
-      expect(Object.keys(body.data), vector.name).toEqual(Object.keys(builders[payload] ?? {}));
+      expect(Object.keys(body.data), vector.name).toEqual(
+        Object.keys(properties),
+      );
+      expect(Object.keys(body.data), vector.name).toEqual(
+        Object.keys(builders[payload] ?? {}),
+      );
 
       for (const [key, value] of Object.entries(body.data)) {
         if (value === null) continue;
 
-        const type = properties[key].type === "integer" ? "number" : properties[key].type;
+        const type =
+          properties[key].type === "integer" ? "number" : properties[key].type;
 
         expect(typeof value, `${vector.name}: data.${key}`).toBe(type);
       }
@@ -132,13 +169,25 @@ describe("the published signature vectors", () => {
 
     // One of each family, so a parser for either is covered.
     expect(
-      new Set(VECTORS.map((vector) => TOPIC_FAMILY[JSON.parse(vector.body).topic as keyof typeof TOPIC_FAMILY])),
+      new Set(
+        VECTORS.map(
+          (vector) =>
+            TOPIC_FAMILY[
+              JSON.parse(vector.body).topic as keyof typeof TOPIC_FAMILY
+            ],
+        ),
+      ),
     ).toEqual(new Set(["document", "route"]));
   });
 
-  it.runIf(HAS_WEB)("are the same bytes the web suite runs the samples against", () => {
-    expect(readFileSync(WEB_VECTORS_FILE, "utf8")).toBe(readFileSync(VECTORS_FILE, "utf8"));
-  });
+  it.runIf(HAS_WEB)(
+    "are the same bytes the web suite runs the samples against",
+    () => {
+      expect(readFileSync(WEB_VECTORS_FILE, "utf8")).toBe(
+        readFileSync(VECTORS_FILE, "utf8"),
+      );
+    },
+  );
 });
 
 function guide(name: string): string {
@@ -146,13 +195,17 @@ function guide(name: string): string {
 }
 
 function blocks(mdx: string, language: string): string[] {
-  return [...mdx.matchAll(new RegExp("```" + language + "\\r?\\n([\\s\\S]*?)```", "g"))].map(
-    (match) => match[1],
-  );
+  return [
+    ...mdx.matchAll(
+      new RegExp("```" + language + "\\r?\\n([\\s\\S]*?)```", "g"),
+    ),
+  ].map((match) => match[1]);
 }
 
 function sample(language: string, marker: string): string {
-  const found = blocks(guide("assinatura"), language).filter((block) => block.includes(marker));
+  const found = blocks(guide("assinatura"), language).filter((block) =>
+    block.includes(marker),
+  );
 
   expect(found, `um exemplo ${language} com ${marker}`).toHaveLength(1);
 
@@ -162,7 +215,11 @@ function sample(language: string, marker: string): string {
 type Verify = (secret: string, rawBody: string, header: unknown) => boolean;
 
 describe.runIf(HAS_WEB)("the Node.js sample of the signature guide", () => {
-  const body = JSON.stringify({ id: "evt-1", topic: "delivery.delivered", data: {} });
+  const body = JSON.stringify({
+    id: "evt-1",
+    topic: "delivery.delivered",
+    data: {},
+  });
 
   function verifier(): Verify {
     const sandbox: Record<string, unknown> = {
@@ -173,7 +230,10 @@ describe.runIf(HAS_WEB)("the Node.js sample of the signature guide", () => {
       Math,
     };
 
-    runInNewContext(`${sample("js", "function verifyTrajetto")}\nthis.verify = verifyTrajetto;`, sandbox);
+    runInNewContext(
+      `${sample("js", "function verifyTrajetto")}\nthis.verify = verifyTrajetto;`,
+      sandbox,
+    );
 
     return sandbox.verify as Verify;
   }
@@ -181,13 +241,17 @@ describe.runIf(HAS_WEB)("the Node.js sample of the signature guide", () => {
   it("accepts a call this API signed", () => {
     const secret = newWebhookSecret();
 
-    expect(verifier()(secret, body, signWebhookPayload(secret, body).header)).toBe(true);
+    expect(
+      verifier()(secret, body, signWebhookPayload(secret, body).header),
+    ).toBe(true);
   });
 
   it("accepts either secret while a rotation signs with both", () => {
     const current = newWebhookSecret();
     const previous = newWebhookSecret();
-    const { header } = signWebhookPayload(current, body, new Date(), [previous]);
+    const { header } = signWebhookPayload(current, body, new Date(), [
+      previous,
+    ]);
 
     expect(verifier()(current, body, header)).toBe(true);
     expect(verifier()(previous, body, header)).toBe(true);
@@ -213,7 +277,8 @@ function pythonCommand(): string | null {
   for (const command of ["python3", "python"]) {
     const probe = spawnSync(command, ["--version"], { encoding: "utf8" });
 
-    if (probe.status === 0 && /Python 3/.test(`${probe.stdout}${probe.stderr}`)) return command;
+    if (probe.status === 0 && /Python 3/.test(`${probe.stdout}${probe.stderr}`))
+      return command;
   }
 
   return null;
@@ -223,7 +288,11 @@ const python = HAS_WEB ? pythonCommand() : null;
 
 describe.runIf(python)("the Python sample of the signature guide", () => {
   it("accepts what this API signed and refuses a stripped prefix", () => {
-    const body = JSON.stringify({ id: "evt-2", topic: "proof.approved", data: {} });
+    const body = JSON.stringify({
+      id: "evt-2",
+      topic: "proof.approved",
+      data: {},
+    });
     const secret = newWebhookSecret();
     const { header } = signWebhookPayload(secret, body);
 
@@ -235,7 +304,11 @@ describe.runIf(python)("the Python sample of the signature guide", () => {
     ].join("\n");
 
     const result = spawnSync(python as string, ["-c", script], {
-      input: JSON.stringify({ body, header, secrets: [secret, secret.replace(/^whsec_/, "")] }),
+      input: JSON.stringify({
+        body,
+        header,
+        secrets: [secret, secret.replace(/^whsec_/, "")],
+      }),
       encoding: "utf8",
     });
 
@@ -245,11 +318,17 @@ describe.runIf(python)("the Python sample of the signature guide", () => {
 });
 
 const php =
-  HAS_WEB && spawnSync("php", ["-v"], { encoding: "utf8" }).status === 0 ? "php" : null;
+  HAS_WEB && spawnSync("php", ["-v"], { encoding: "utf8" }).status === 0
+    ? "php"
+    : null;
 
 describe.runIf(php)("the PHP sample of the signature guide", () => {
   it("accepts what this API signed and refuses a stripped prefix", () => {
-    const body = JSON.stringify({ id: "evt-3", topic: "route.started", data: {} });
+    const body = JSON.stringify({
+      id: "evt-3",
+      topic: "route.started",
+      data: {},
+    });
     const secret = newWebhookSecret();
     const { header } = signWebhookPayload(secret, body);
 
@@ -260,7 +339,11 @@ describe.runIf(php)("the PHP sample of the signature guide", () => {
     ].join("\n");
 
     const result = spawnSync(php as string, ["-r", script], {
-      input: JSON.stringify({ body, header, secrets: [secret, secret.replace(/^whsec_/, "")] }),
+      input: JSON.stringify({
+        body,
+        header,
+        secrets: [secret, secret.replace(/^whsec_/, "")],
+      }),
       encoding: "utf8",
     });
 
@@ -278,9 +361,15 @@ describe.runIf(HAS_WEB)("the samples the console's introduction prints", () => {
   it("are the guide's, character for character", () => {
     const text = (code: string) => code.replace(/\r\n/g, "\n").trimEnd();
 
-    expect(text(sample("js", "function verifyTrajetto"))).toBe(NODE_VERIFICATION_SAMPLE);
-    expect(text(sample("python", "def verify_trajetto"))).toBe(PYTHON_VERIFICATION_SAMPLE);
-    expect(text(sample("php", "function verifyTrajetto"))).toBe(PHP_VERIFICATION_SAMPLE);
+    expect(text(sample("js", "function verifyTrajetto"))).toBe(
+      NODE_VERIFICATION_SAMPLE,
+    );
+    expect(text(sample("python", "def verify_trajetto"))).toBe(
+      PYTHON_VERIFICATION_SAMPLE,
+    );
+    expect(text(sample("php", "function verifyTrajetto"))).toBe(
+      PHP_VERIFICATION_SAMPLE,
+    );
   });
 });
 
@@ -293,12 +382,16 @@ describe.runIf(HAS_WEB)("the numbers the guides write by hand", () => {
       [/tolerance: int = (\d+)/, "python"],
       [/int \$tolerance = (\d+)/, "php"],
     ] as const) {
-      expect(Number(mdx.match(pattern)?.[1]), language).toBe(SIGNATURE_TOLERANCE_SECONDS);
+      expect(Number(mdx.match(pattern)?.[1]), language).toBe(
+        SIGNATURE_TOLERANCE_SECONDS,
+      );
     }
   });
 
   it("use the largest page the lists accept", () => {
-    const largest = integrationDeliveryListSchema.parse({ limit: "1000000" }).limit;
+    const largest = integrationDeliveryListSchema.parse({
+      limit: "1000000",
+    }).limit;
 
     for (const name of ["paginacao"]) {
       for (const match of guide(name).matchAll(/limit[=", ]+(\d+)/g)) {
@@ -312,7 +405,11 @@ describe.runIf(HAS_WEB)("the numbers the guides write by hand", () => {
       readdirSync(dir).flatMap((name) => {
         const path = join(dir, name);
 
-        return statSync(path).isDirectory() ? source(path) : name.endsWith(".ts") ? [path] : [];
+        return statSync(path).isDirectory()
+          ? source(path)
+          : name.endsWith(".ts")
+            ? [path]
+            : [];
       });
 
     const code = source(resolve(process.cwd(), "src"))
@@ -320,7 +417,9 @@ describe.runIf(HAS_WEB)("the numbers the guides write by hand", () => {
       .join("\n");
 
     const named = new Set(
-      [...guide("erros").matchAll(/`([A-Z][A-Z0-9_]{3,})`/g)].map((match) => match[1]),
+      [...guide("erros").matchAll(/`([A-Z][A-Z0-9_]{3,})`/g)].map(
+        (match) => match[1],
+      ),
     );
 
     expect(named.size).toBeGreaterThan(8);
@@ -355,16 +454,23 @@ describe.runIf(HAS_WEB)("the errors guide", () => {
   it("explains every code the public document publishes", () => {
     const published = new Set<string>();
 
-    for (const item of Object.values(publicDocument!.paths as Record<string, any>)) {
+    for (const item of Object.values(
+      publicDocument!.paths as Record<string, any>,
+    )) {
       for (const operation of Object.values(item) as any[]) {
-        for (const [status, response] of Object.entries(operation.responses ?? {}) as any[]) {
+        for (const [status, response] of Object.entries(
+          operation.responses ?? {},
+        ) as any[]) {
           if (Number(status) < 400) continue;
 
-          const property = response.content?.["application/json"]?.schema?.properties?.code;
+          const property =
+            response.content?.["application/json"]?.schema?.properties?.code;
 
           for (const value of property?.enum ?? []) published.add(value);
 
-          for (const match of String(property?.description ?? "").matchAll(/[A-Z][A-Z0-9_]{3,}/g)) {
+          for (const match of String(property?.description ?? "").matchAll(
+            /[A-Z][A-Z0-9_]{3,}/g,
+          )) {
             published.add(match[0]);
           }
         }
@@ -388,13 +494,22 @@ describe.runIf(HAS_WEB)("the errors guide", () => {
  * serves; this compares it with the live document, addresses pinned the way
  * the copy has them. UPDATE_PUBLIC_OPENAPI_FIXTURE=1 rewrites it.
  */
-const OPENAPI_FIXTURE = join(WEB, "tests", "unitaires", "fixtures", "public-openapi.json");
+const OPENAPI_FIXTURE = join(
+  WEB,
+  "tests",
+  "unitaires",
+  "fixtures",
+  "public-openapi.json",
+);
 
 function pinnedAddresses(document: Record<string, any>): Record<string, any> {
   return {
     ...document,
     servers: [{ url: "https://api.exemplo.com.br", description: "Produção" }],
-    externalDocs: { ...document.externalDocs, url: "https://www.exemplo.com.br/docs" },
+    externalDocs: {
+      ...document.externalDocs,
+      url: "https://www.exemplo.com.br/docs",
+    },
   };
 }
 

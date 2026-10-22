@@ -93,11 +93,17 @@ class RegisterDeliveryProofUseCase {
 
     // Seeded with the company (create-business) and by the migration; this
     // is the safety net for a company that slipped between the two.
-    let type = await this.occurrenceType.findDefaultType(businessId, DELIVERED_DEFAULT_TYPE_KEY);
+    let type = await this.occurrenceType.findDefaultType(
+      businessId,
+      DELIVERED_DEFAULT_TYPE_KEY,
+    );
 
     if (!type) {
       await this.occurrenceType.ensureDefaultTypes(businessId);
-      type = await this.occurrenceType.findDefaultType(businessId, DELIVERED_DEFAULT_TYPE_KEY);
+      type = await this.occurrenceType.findDefaultType(
+        businessId,
+        DELIVERED_DEFAULT_TYPE_KEY,
+      );
     }
 
     if (!type) {
@@ -112,9 +118,12 @@ class RegisterDeliveryProofUseCase {
     // company changed since (the report's replay answers it first).
     const missing: Array<"signature" | "photos" | "form"> = [];
 
-    if (type.requires_signature === true && !signature) missing.push("signature");
+    if (type.requires_signature === true && !signature)
+      missing.push("signature");
     if (type.requires_photo === true) missing.push("photos");
-    if ((readFormFields(type.form_fields) ?? []).some((field) => field.required)) {
+    if (
+      (readFormFields(type.form_fields) ?? []).some((field) => field.required)
+    ) {
       missing.push("form");
     }
 

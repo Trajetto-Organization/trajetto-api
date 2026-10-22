@@ -6,7 +6,6 @@ import { UpdateProfileAccessUseCase } from "./update-profile-access-usecase";
 import { updateProfileAccessSchema } from "@/schemas/update-profile-access";
 import { updateDeleteProfileAccessSchema } from "@/schemas/update-delete-profile-access-schema";
 
-
 class UpdateProfileAccessController {
   async handle(
     request: FastifyRequest,

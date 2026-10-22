@@ -28,10 +28,16 @@ class ListTicketAssigneesUseCase {
     businessId?: string;
     search?: string;
   }): Promise<{ data: Array<{ id: string; name: string }> }> {
-    const scope = await resolveTicketScope(this.user, request.userId, request.businessId);
+    const scope = await resolveTicketScope(
+      this.user,
+      request.userId,
+      request.businessId,
+    );
 
     if (scope.driverId) {
-      throw permissionDenied("Motoristas não possuem permissão para acessar este recurso.");
+      throw permissionDenied(
+        "Motoristas não possuem permissão para acessar este recurso.",
+      );
     }
 
     const search = request.search?.trim().toLowerCase() ?? "";
@@ -39,9 +45,14 @@ class ListTicketAssigneesUseCase {
 
     return {
       data: operators
-        .filter((operator) => !search || operator.name.toLowerCase().includes(search))
+        .filter(
+          (operator) => !search || operator.name.toLowerCase().includes(search),
+        )
         .map((operator) => ({ id: operator.id, name: operator.name }))
-        .sort((a, b) => compareCodePoints(a.name, b.name) || compareCodePoints(a.id, b.id))
+        .sort(
+          (a, b) =>
+            compareCodePoints(a.name, b.name) || compareCodePoints(a.id, b.id),
+        )
         .slice(0, ASSIGNEES_LIMIT),
     };
   }

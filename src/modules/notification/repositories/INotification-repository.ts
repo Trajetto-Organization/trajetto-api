@@ -41,4 +41,8 @@ interface INotificationRepository {
   ) => Promise<void>;
 }
 
-export { INotificationRepository, ListNotificationsParams, UpsertPreferenceInput };
+export {
+  INotificationRepository,
+  ListNotificationsParams,
+  UpsertPreferenceInput,
+};

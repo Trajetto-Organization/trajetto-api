@@ -38,7 +38,12 @@ interface ActorRow {
 }
 
 type ActivityRow = Activity & {
-  user?: { email: string; role: string; name: string; driverId: string | null } | null;
+  user?: {
+    email: string;
+    role: string;
+    name: string;
+    driverId: string | null;
+  } | null;
   business?: { corporate_reason: string } | null;
 };
 
@@ -49,7 +54,8 @@ const containsInsensitive = (value: string | null | undefined, term: string) =>
 const time = (value: Date | string) => new Date(value).getTime();
 
 /** `orderBy: { id: "desc" }` (uuid v7: creation order). */
-const byIdDesc = (a: Activity, b: Activity) => compareForOrder(a.id, b.id, "desc");
+const byIdDesc = (a: Activity, b: Activity) =>
+  compareForOrder(a.id, b.id, "desc");
 
 /**
  * The activity table in memory, answering as ActivityRepository does
@@ -65,7 +71,10 @@ class InMemoryActivityRepository implements IActivityRepository {
   public users = new Map<string, ActorRow>();
 
   /** The business table: zone for the period, name for the MASTER column. */
-  public businesses = new Map<string, { timezone?: string; corporate_reason: string }>();
+  public businesses = new Map<
+    string,
+    { timezone?: string; corporate_reason: string }
+  >();
 
   // The transaction is the real repository's concern; here every write lands.
   async createActivity(
@@ -97,7 +106,8 @@ class InMemoryActivityRepository implements IActivityRepository {
       tenantName:
         activityData.tenantName ??
         (activityData.businessId
-          ? (this.businesses.get(activityData.businessId)?.corporate_reason ?? null)
+          ? (this.businesses.get(activityData.businessId)?.corporate_reason ??
+            null)
           : null),
       visibilityLevel: activityData.visibilityLevel || "COMPANY",
       performingUserRole: activityData.performingUserRole || null,
@@ -145,7 +155,9 @@ class InMemoryActivityRepository implements IActivityRepository {
   }
 
   private author(activity: Activity): ActorRow | null {
-    return activity.performedBy ? (this.users.get(activity.performedBy) ?? null) : null;
+    return activity.performedBy
+      ? (this.users.get(activity.performedBy) ?? null)
+      : null;
   }
 
   private matchesRole(activity: Activity, role: string): boolean {
@@ -200,7 +212,8 @@ class InMemoryActivityRepository implements IActivityRepository {
     if (currentUserRole === "MASTER") {
       scopeBusinessId = businessId ?? null;
 
-      if (businessId) rows = rows.filter((row) => row.businessId === businessId);
+      if (businessId)
+        rows = rows.filter((row) => row.businessId === businessId);
     } else if (currentUserRole === "BUSINESS_ADMIN") {
       scopeBusinessId = viewer?.businessId;
 
@@ -212,7 +225,9 @@ class InMemoryActivityRepository implements IActivityRepository {
     } else if (currentUserRole === "BUSINESS_USER") {
       scopeBusinessId = viewer?.businessId;
 
-      rows = rows.filter((row) => row.performedBy === (userId && viewer ? userId : "__none__"));
+      rows = rows.filter(
+        (row) => row.performedBy === (userId && viewer ? userId : "__none__"),
+      );
     } else {
       scopeBusinessId = businessId;
 
@@ -233,7 +248,8 @@ class InMemoryActivityRepository implements IActivityRepository {
 
         // A platform row is not found by the operator's id or e-mail for a
         // company reader, as in the repository.
-        const identityShown = currentUserRole === "MASTER" || author?.role !== "MASTER";
+        const identityShown =
+          currentUserRole === "MASTER" || author?.role !== "MASTER";
 
         return [
           row.id,
@@ -256,11 +272,15 @@ class InMemoryActivityRepository implements IActivityRepository {
     }
 
     if (filters.types?.length) {
-      rows = rows.filter((row) => (filters.types as string[]).includes(row.type));
+      rows = rows.filter((row) =>
+        (filters.types as string[]).includes(row.type),
+      );
     }
 
     if (filters.actions?.length) {
-      rows = rows.filter((row) => (filters.actions as string[]).includes(row.action));
+      rows = rows.filter((row) =>
+        (filters.actions as string[]).includes(row.action),
+      );
     }
 
     if (filters.roles?.length) {
@@ -297,7 +317,10 @@ class InMemoryActivityRepository implements IActivityRepository {
         : null,
       ...(currentUserRole === "MASTER" && {
         business: row.businessId
-          ? { corporate_reason: this.businesses.get(row.businessId)?.corporate_reason ?? "" }
+          ? {
+              corporate_reason:
+                this.businesses.get(row.businessId)?.corporate_reason ?? "",
+            }
           : null,
       }),
     };
@@ -312,8 +335,11 @@ class InMemoryActivityRepository implements IActivityRepository {
     const rows = this.scope({ currentUserRole, businessId, userId })
       .sort(
         (a, b) =>
-          compareForOrder(new Date(a.created_at), new Date(b.created_at), "desc") ||
-          compareForOrder(a.id, b.id, "desc"),
+          compareForOrder(
+            new Date(a.created_at),
+            new Date(b.created_at),
+            "desc",
+          ) || compareForOrder(a.id, b.id, "desc"),
       )
       .slice(0, take)
       .map((row) => this.joined(row, currentUserRole));
@@ -343,15 +369,20 @@ class InMemoryActivityRepository implements IActivityRepository {
       filters: { statuses, types, actions, roles },
     }).sort(
       (a, b) =>
-        compareForOrder(new Date(a.created_at), new Date(b.created_at), order) ||
-        compareForOrder(a.id, b.id, order),
+        compareForOrder(
+          new Date(a.created_at),
+          new Date(b.created_at),
+          order,
+        ) || compareForOrder(a.id, b.id, order),
     );
 
     const start = (page - 1) * pageSize;
 
     return {
       data: presentActivityActors(
-        rows.slice(start, start + pageSize).map((row) => this.joined(row, currentUserRole)),
+        rows
+          .slice(start, start + pageSize)
+          .map((row) => this.joined(row, currentUserRole)),
         currentUserRole,
       ),
       total: rows.length,
@@ -381,7 +412,12 @@ class InMemoryActivityRepository implements IActivityRepository {
 
     // Prisma positions on the cursor ROW (wherever it is) and skips one; an
     // unknown cursor used to restart the feed from the top here (index -1 + 1).
-    const window = afterCursor(ordered, this.activities, cursor, byIdDesc).slice(0, limit + 1);
+    const window = afterCursor(
+      ordered,
+      this.activities,
+      cursor,
+      byIdDesc,
+    ).slice(0, limit + 1);
 
     const hasMore = window.length > limit;
     const data = hasMore ? window.slice(0, limit) : window;
@@ -402,7 +438,12 @@ class InMemoryActivityRepository implements IActivityRepository {
     userId,
     periodDays,
   }: ActivitySummaryProps): Promise<ActivitySummary> {
-    const scoped = this.scope({ currentUserRole, businessId, userId, periodDays });
+    const scoped = this.scope({
+      currentUserRole,
+      businessId,
+      userId,
+      periodDays,
+    });
 
     const countFor = (action: string): number =>
       scoped.filter((activity) => activity.action === action).length;

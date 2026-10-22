@@ -36,10 +36,19 @@ import type {
  */
 interface OperationRows {
   businesses: Array<{ id: string; timezone?: string }>;
-  drivers: Array<{ id: string; businessId: string; name: string; cnh?: string }>;
+  drivers: Array<{
+    id: string;
+    businessId: string;
+    name: string;
+    cnh?: string;
+  }>;
   vehicles: Array<{ id: string; license_plate: string }>;
 
-  occurrenceTypes: Array<{ id: string; name: string; blocks_delivery: boolean }>;
+  occurrenceTypes: Array<{
+    id: string;
+    name: string;
+    blocks_delivery: boolean;
+  }>;
 
   routes: Array<{
     id: string;
@@ -184,13 +193,20 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
 
         return (
           occurrence.deliveryId === delivery.id &&
-          isFailureOccurrence(type?.blocks_delivery, occurrence.authorization_status)
+          isFailureOccurrence(
+            type?.blocks_delivery,
+            occurrence.authorization_status,
+          )
         );
       })
-      .map((occurrence) => factInstant(occurrence.occurred_at, occurrence.created_at));
+      .map((occurrence) =>
+        factInstant(occurrence.occurred_at, occurrence.created_at),
+      );
 
     const failedStops = this.rows.stops
-      .filter((stop) => stop.deliveryId === delivery.id && stop.status === "FAILED")
+      .filter(
+        (stop) => stop.deliveryId === delivery.id && stop.status === "FAILED",
+      )
       .map((stop) => stopSettledAt(stop.completed_at, stop.updated_at));
 
     return failureInstant(delivery.updated_at, [
@@ -208,25 +224,34 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
 
     // The day's stops, with what the SQL's day_stop carries.
     const dayStops = this.rows.stops
-      .filter((stop) => routeIds.has(stop.routeId) && stop.status !== "CANCELLED")
+      .filter(
+        (stop) => routeIds.has(stop.routeId) && stop.status !== "CANCELLED",
+      )
       .map((stop) => {
-        const route = this.rows.routes.find((candidate) => candidate.id === stop.routeId);
+        const route = this.rows.routes.find(
+          (candidate) => candidate.id === stop.routeId,
+        );
 
         return {
           stop,
-          ofDay: route !== undefined && dateOnlyKey(route.scheduled_date) === day.date,
+          ofDay:
+            route !== undefined &&
+            dateOnlyKey(route.scheduled_date) === day.date,
           routeDriverId: route?.driverId ?? null,
           settledAt: stopSettledAt(stop.completed_at, stop.updated_at),
         };
       });
 
-    const isOpenStop = (status: string) => status === "PENDING" || status === "ARRIVED";
+    const isOpenStop = (status: string) =>
+      status === "PENDING" || status === "ARRIVED";
 
     const active = new Set<string>();
 
     for (const { stop, ofDay } of dayStops) {
       // The inner join drops a missing delivery, as in the SQL.
-      const delivery = this.rows.deliveries.find((row) => row.id === stop.deliveryId);
+      const delivery = this.rows.deliveries.find(
+        (row) => row.id === stop.deliveryId,
+      );
 
       if (!delivery) continue;
 
@@ -235,24 +260,36 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
         delivery.status === "FAILED" ||
         delivery.status === "CANCELLED";
 
-      if (isOpenStop(stop.status) || (ofDay && resolved)) active.add(stop.deliveryId);
+      if (isOpenStop(stop.status) || (ofDay && resolved))
+        active.add(stop.deliveryId);
     }
 
     // Failed on a route of the day, in the day, and back in the queue with
     // no open stop on the day's routes: that route driver's Insucesso.
-    const requeued = new Map<string, { driverId: string | null; settledAt: Date }>();
+    const requeued = new Map<
+      string,
+      { driverId: string | null; settledAt: Date }
+    >();
 
     for (const { stop, routeDriverId, settledAt } of dayStops) {
       if (stop.status !== "FAILED" || !isWithinDay(settledAt, day)) continue;
 
-      const delivery = this.rows.deliveries.find((row) => row.id === stop.deliveryId);
+      const delivery = this.rows.deliveries.find(
+        (row) => row.id === stop.deliveryId,
+      );
 
-      if (!delivery || delivery.businessId !== businessId || delivery.status !== "PENDING") {
+      if (
+        !delivery ||
+        delivery.businessId !== businessId ||
+        delivery.status !== "PENDING"
+      ) {
         continue;
       }
 
       const reopened = dayStops.some(
-        (other) => other.stop.deliveryId === stop.deliveryId && isOpenStop(other.stop.status),
+        (other) =>
+          other.stop.deliveryId === stop.deliveryId &&
+          isOpenStop(other.stop.status),
       );
 
       if (reopened) continue;
@@ -268,9 +305,13 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
     for (const delivery of this.rows.deliveries) {
       if (delivery.businessId !== businessId) continue;
 
-      if (day.isToday && delivery.status === "IN_TRANSIT") active.add(delivery.id);
+      if (day.isToday && delivery.status === "IN_TRANSIT")
+        active.add(delivery.id);
 
-      if (delivery.status === "DELIVERED" && isWithinDay(delivery.delivered_at, day)) {
+      if (
+        delivery.status === "DELIVERED" &&
+        isWithinDay(delivery.delivered_at, day)
+      ) {
         active.add(delivery.id);
       }
 
@@ -289,9 +330,11 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
         event.type === "STATUS_CHANGE" &&
         event.status_to === "CANCELLED" &&
         event.created_at.getTime() >= day.start.getTime() &&
-        factInstant(event.occurred_at, event.created_at).getTime() < day.end.getTime() &&
+        factInstant(event.occurred_at, event.created_at).getTime() <
+          day.end.getTime() &&
         this.rows.deliveries.some(
-          (delivery) => delivery.id === event.deliveryId && delivery.status === "CANCELLED",
+          (delivery) =>
+            delivery.id === event.deliveryId && delivery.status === "CANCELLED",
         )
       ) {
         active.add(event.deliveryId);
@@ -302,7 +345,8 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
 
     for (const delivery of this.rows.deliveries) {
       // The tenant lock of the final join.
-      if (delivery.businessId !== businessId || !active.has(delivery.id)) continue;
+      if (delivery.businessId !== businessId || !active.has(delivery.id))
+        continue;
 
       const key = `${delivery.driverId ?? ""}|${delivery.status}`;
       const entry = counts.get(key) ?? {
@@ -317,7 +361,11 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
 
     for (const { driverId } of requeued.values()) {
       const key = `${driverId ?? ""}|FAILED`;
-      const entry = counts.get(key) ?? { driverId, status: "FAILED" as const, total: 0 };
+      const entry = counts.get(key) ?? {
+        driverId,
+        status: "FAILED" as const,
+        total: 0,
+      };
 
       entry.total += 1;
       counts.set(key, entry);
@@ -331,8 +379,15 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
     driverIds: string[],
   ): Promise<Array<{ id: string; name: string; cnh: string }>> {
     return this.rows.drivers
-      .filter((driver) => driver.businessId === businessId && driverIds.includes(driver.id))
-      .map((driver) => ({ id: driver.id, name: driver.name, cnh: driver.cnh ?? "" }));
+      .filter(
+        (driver) =>
+          driver.businessId === businessId && driverIds.includes(driver.id),
+      )
+      .map((driver) => ({
+        id: driver.id,
+        name: driver.name,
+        cnh: driver.cnh ?? "",
+      }));
   }
 
   private toTowerRoute(route: OperationRows["routes"][number]): TowerRoute {
@@ -354,7 +409,8 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
             : null,
       driverId: route.driverId,
       driverName:
-        this.rows.drivers.find((driver) => driver.id === route.driverId)?.name ?? null,
+        this.rows.drivers.find((driver) => driver.id === route.driverId)
+          ?.name ?? null,
       vehiclePlate:
         this.rows.vehicles.find((vehicle) => vehicle.id === route.vehicleId)
           ?.license_plate ?? null,
@@ -375,7 +431,8 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
         const recent = route.scheduled_date.getTime() >= lookback;
 
         return (
-          (dateOnlyKey(route.scheduled_date) === day.date && route.status !== "CANCELLED") ||
+          (dateOnlyKey(route.scheduled_date) === day.date &&
+            route.status !== "CANCELLED") ||
           (day.isToday && route.status === "IN_PROGRESS") ||
           (route.status === "COMPLETED" &&
             recent &&
@@ -408,7 +465,9 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
     day: OperationDay,
     limit: number,
   ): Promise<FeedEntry[]> {
-    const newestFirst = <T extends { id: string; created_at: Date }>(rows: T[]) =>
+    const newestFirst = <T extends { id: string; created_at: Date }>(
+      rows: T[],
+    ) =>
       rows
         .sort(
           (a, b) =>
@@ -422,7 +481,8 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
 
     const driverNameOf = (driverId: string | null | undefined) =>
       driverId
-        ? (this.rows.drivers.find((driver) => driver.id === driverId)?.name ?? null)
+        ? (this.rows.drivers.find((driver) => driver.id === driverId)?.name ??
+          null)
         : null;
 
     const typeOf = (id: string | undefined) =>
@@ -442,7 +502,9 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
 
     for (const event of events) {
       const delivery = deliveryOf(event.deliveryId);
-      const occurrence = this.rows.occurrences.find((row) => row.id === event.occurrenceId);
+      const occurrence = this.rows.occurrences.find(
+        (row) => row.id === event.occurrenceId,
+      );
       const type = typeOf(occurrence?.occurrenceTypeId);
 
       entries.push({
@@ -454,13 +516,17 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
         recipientName: delivery?.recipient_name ?? null,
         routeId: event.routeId,
         routeCode:
-          this.rows.routes.find((route) => route.id === event.routeId)?.code ?? null,
+          this.rows.routes.find((route) => route.id === event.routeId)?.code ??
+          null,
         driverName: driverNameOf(delivery?.driverId),
         detail: type?.name ?? event.status_to ?? null,
         failure:
           event.status_to === "FAILED" ||
           (event.type === "OCCURRENCE" &&
-            isFailureOccurrence(type?.blocks_delivery, occurrence?.authorization_status)),
+            isFailureOccurrence(
+              type?.blocks_delivery,
+              occurrence?.authorization_status,
+            )),
         occurredAt: factInstant(event.occurred_at, event.created_at),
         receivedAt: event.created_at,
       });
@@ -473,7 +539,9 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
           isWithinDay(occurrence.created_at, day) &&
           (occurrence.category ?? "NOT_DELIVERED") === "NOT_DELIVERED" &&
           !this.rows.events.some(
-            (event) => event.occurrenceId === occurrence.id && event.type === "OCCURRENCE",
+            (event) =>
+              event.occurrenceId === occurrence.id &&
+              event.type === "OCCURRENCE",
           ),
       ),
     );
@@ -493,7 +561,10 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
         routeCode: null,
         driverName: driverNameOf(delivery?.driverId),
         detail: type?.name ?? null,
-        failure: isFailureOccurrence(type?.blocks_delivery, occurrence.authorization_status),
+        failure: isFailureOccurrence(
+          type?.blocks_delivery,
+          occurrence.authorization_status,
+        ),
         occurredAt: factInstant(occurrence.occurred_at, occurrence.created_at),
         receivedAt: occurrence.created_at,
       });
@@ -502,7 +573,9 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
     const lookback = lookbackFrom(day);
 
     const recent = this.rows.routes.filter(
-      (route) => route.businessId === businessId && route.scheduled_date.getTime() >= lookback,
+      (route) =>
+        route.businessId === businessId &&
+        route.scheduled_date.getTime() >= lookback,
     );
 
     // One arm per move, each newest first and cut at `limit`, as in the SQL.
@@ -512,7 +585,11 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
       instantOf: (route: OperationRows["routes"][number]) => Date | null,
     ) =>
       recent
-        .filter((route) => statuses.includes(route.status) && isWithinDay(instantOf(route), day))
+        .filter(
+          (route) =>
+            statuses.includes(route.status) &&
+            isWithinDay(instantOf(route), day),
+        )
         .map((route) => ({ route, at: instantOf(route) as Date }))
         .sort(
           (a, b) =>
@@ -531,7 +608,11 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
         );
 
     entries.push(
-      ...arm("ROUTE_STARTED", ["IN_PROGRESS", "COMPLETED", "CANCELLED"], (route) => route.started_at),
+      ...arm(
+        "ROUTE_STARTED",
+        ["IN_PROGRESS", "COMPLETED", "CANCELLED"],
+        (route) => route.started_at,
+      ),
       ...arm("ROUTE_COMPLETED", ["COMPLETED"], (route) => route.completed_at),
       ...arm("ROUTE_CANCELLED", ["CANCELLED"], (route) => route.updated_at),
     );
@@ -550,34 +631,39 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
       .filter((route) => ids.has(route.id))
       .sort(
         (a, b) =>
-          (MONITORING_ORDER[a.status] ?? 3) - (MONITORING_ORDER[b.status] ?? 3) ||
+          (MONITORING_ORDER[a.status] ?? 3) -
+            (MONITORING_ORDER[b.status] ?? 3) ||
           // NULLS LAST, as in the SQL.
           (a.planned_departure_at?.getTime() ?? Infinity) -
             (b.planned_departure_at?.getTime() ?? Infinity) ||
           a.code - b.code,
       );
 
-    const routes = ordered.slice(page.skip, page.skip + page.take).map((route) => ({
-      ...this.toTowerRoute(route),
-      stops: this.rows.stops
-        .filter((stop) => stop.routeId === route.id)
-        .sort((a, b) => a.sequence - b.sequence)
-        .map((stop) => {
-          const delivery = this.rows.deliveries.find((row) => row.id === stop.deliveryId);
+    const routes = ordered
+      .slice(page.skip, page.skip + page.take)
+      .map((route) => ({
+        ...this.toTowerRoute(route),
+        stops: this.rows.stops
+          .filter((stop) => stop.routeId === route.id)
+          .sort((a, b) => a.sequence - b.sequence)
+          .map((stop) => {
+            const delivery = this.rows.deliveries.find(
+              (row) => row.id === stop.deliveryId,
+            );
 
-          return {
-            id: stop.id,
-            sequence: stop.sequence,
-            status: stop.status,
-            deliveryId: stop.deliveryId,
-            recipientName: delivery?.recipient_name ?? "",
-            city: delivery?.city ?? "",
-            on_the_way_at: stop.on_the_way_at,
-            arrived_at: stop.arrived_at,
-            completed_at: stop.completed_at,
-          };
-        }),
-    }));
+            return {
+              id: stop.id,
+              sequence: stop.sequence,
+              status: stop.status,
+              deliveryId: stop.deliveryId,
+              recipientName: delivery?.recipient_name ?? "",
+              city: delivery?.city ?? "",
+              on_the_way_at: stop.on_the_way_at,
+              arrived_at: stop.arrived_at,
+              completed_at: stop.completed_at,
+            };
+          }),
+      }));
 
     return { total: ordered.length, routes };
   }

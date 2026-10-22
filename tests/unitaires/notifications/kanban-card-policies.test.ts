@@ -65,11 +65,13 @@ describe("kanban card renders", () => {
       "Card Atualizado",
     );
 
-    expect(renderKanbanCardUpdatedInApp(payload(), ctx, {
-      id: "user-9",
-      role: "BUSINESS_ADMIN",
-      driverId: null,
-    }).title).toBe("Card Atualizado e Atribuído");
+    expect(
+      renderKanbanCardUpdatedInApp(payload(), ctx, {
+        id: "user-9",
+        role: "BUSINESS_ADMIN",
+        driverId: null,
+      }).title,
+    ).toBe("Card Atualizado e Atribuído");
   });
 
   it("words the activity by origin: manual versus from a service order", () => {

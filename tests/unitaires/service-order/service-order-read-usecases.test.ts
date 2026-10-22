@@ -77,7 +77,12 @@ beforeEach(() => {
   users.user.push(
     { id: ADMIN, role: "BUSINESS_ADMIN", businessId: CARRIER } as User,
     { id: MASTER, role: "MASTER", businessId: null } as unknown as User,
-    { id: DRIVER_USER, role: "BUSINESS_USER", businessId: CARRIER, driverId: DRIVER } as User,
+    {
+      id: DRIVER_USER,
+      role: "BUSINESS_USER",
+      businessId: CARRIER,
+      driverId: DRIVER,
+    } as User,
     {
       id: COLLEAGUE_USER,
       role: "BUSINESS_USER",
@@ -85,38 +90,94 @@ beforeEach(() => {
       driverId: COLLEAGUE,
     } as User,
   );
-  businesses.business.push({ id: CARRIER } as Business, { id: OTHER } as Business);
+  businesses.business.push(
+    { id: CARRIER } as Business,
+    { id: OTHER } as Business,
+  );
 
   vehicles.vehicles.push(
-    { id: TRUCK, businessId: CARRIER, driverId: DRIVER, status: "ACTIVE" } as Vehicle,
-    { id: VAN, businessId: CARRIER, driverId: COLLEAGUE, status: "ACTIVE" } as Vehicle,
-    { id: FOREIGN_TRUCK, businessId: OTHER, driverId: null, status: "ACTIVE" } as unknown as Vehicle,
+    {
+      id: TRUCK,
+      businessId: CARRIER,
+      driverId: DRIVER,
+      status: "ACTIVE",
+    } as Vehicle,
+    {
+      id: VAN,
+      businessId: CARRIER,
+      driverId: COLLEAGUE,
+      status: "ACTIVE",
+    } as Vehicle,
+    {
+      id: FOREIGN_TRUCK,
+      businessId: OTHER,
+      driverId: null,
+      status: "ACTIVE",
+    } as unknown as Vehicle,
   );
-  orders.vehicles.set(TRUCK, { license_plate: "ABC1D23", description: "Truck Volvo" });
-  orders.vehicles.set(VAN, { license_plate: "XYZ9K88", description: "Van Sprinter" });
+  orders.vehicles.set(TRUCK, {
+    license_plate: "ABC1D23",
+    description: "Truck Volvo",
+  });
+  orders.vehicles.set(VAN, {
+    license_plate: "XYZ9K88",
+    description: "Van Sprinter",
+  });
 
   orders.serviceOrders.push(
-    orderOf("018f3100-0000-7000-8000-000000000001", CARRIER, TRUCK, "2026-09-01T12:00:00Z", {
-      description: "Troca de óleo",
-    }),
-    orderOf("018f3100-0000-7000-8000-000000000002", CARRIER, TRUCK, "2026-09-02T12:00:00Z", {
-      completion_date: "2026-09-03T12:00:00Z",
-      maintenance_type: "EXTERNAL",
-      total_amount: "250",
-    }),
-    orderOf("018f3100-0000-7000-8000-000000000003", CARRIER, VAN, "2026-09-03T12:00:00Z"),
-    orderOf("018f3100-0000-7000-8000-000000000004", OTHER, FOREIGN_TRUCK, "2026-09-04T12:00:00Z"),
+    orderOf(
+      "018f3100-0000-7000-8000-000000000001",
+      CARRIER,
+      TRUCK,
+      "2026-09-01T12:00:00Z",
+      {
+        description: "Troca de óleo",
+      },
+    ),
+    orderOf(
+      "018f3100-0000-7000-8000-000000000002",
+      CARRIER,
+      TRUCK,
+      "2026-09-02T12:00:00Z",
+      {
+        completion_date: "2026-09-03T12:00:00Z",
+        maintenance_type: "EXTERNAL",
+        total_amount: "250",
+      },
+    ),
+    orderOf(
+      "018f3100-0000-7000-8000-000000000003",
+      CARRIER,
+      VAN,
+      "2026-09-03T12:00:00Z",
+    ),
+    orderOf(
+      "018f3100-0000-7000-8000-000000000004",
+      OTHER,
+      FOREIGN_TRUCK,
+      "2026-09-04T12:00:00Z",
+    ),
   );
 });
 
 const list = () => new ListServiceOrderUseCase(users, orders);
-const search = () => new SearchServiceOrderCursorUseCase(users, orders, businesses);
+const search = () =>
+  new SearchServiceOrderCursorUseCase(users, orders, businesses);
 const byVehicle = () =>
-  new SearchServiceOrderByVehicleCursorUseCase(orders, vehicles, users, businesses);
+  new SearchServiceOrderByVehicleCursorUseCase(
+    orders,
+    vehicles,
+    users,
+    businesses,
+  );
 
 describe("the service order list", () => {
   it("answers only the caller's company, with cards over the whole company", async () => {
-    const result = await list().execute({ userId: ADMIN, page: 1, pageSize: 2 });
+    const result = await list().execute({
+      userId: ADMIN,
+      page: 1,
+      pageSize: 2,
+    });
 
     expect(result.total).toBe(3);
     expect(result.data).toHaveLength(2);
@@ -131,20 +192,30 @@ describe("the service order list", () => {
       statuses: ["completed"],
     });
 
-    expect(result.data.map((row) => row.id)).toEqual(["018f3100-0000-7000-8000-000000000002"]);
+    expect(result.data.map((row) => row.id)).toEqual([
+      "018f3100-0000-7000-8000-000000000002",
+    ]);
     expect(result.total).toBe(1);
   });
 
   it("refuses a company user naming another company (403)", async () => {
     await expect(
-      list().execute({ userId: ADMIN, businessId: OTHER, page: 1, pageSize: 10 }),
+      list().execute({
+        userId: ADMIN,
+        businessId: OTHER,
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
   });
 
   it("asks the MASTER for a company, then serves only that one", async () => {
     await expect(
       list().execute({ userId: MASTER, page: 1, pageSize: 10 }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "BUSINESS_NOT_IDENTIFIED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BUSINESS_NOT_IDENTIFIED",
+    });
 
     const result = await list().execute({
       userId: MASTER,
@@ -165,7 +236,11 @@ describe("the service order list", () => {
 
 describe("the service order picker (cursor)", () => {
   it("pages newest first within the company and finds by plate", async () => {
-    const first = await search().execute({ userId: ADMIN, businessId: CARRIER, limit: 2 });
+    const first = await search().execute({
+      userId: ADMIN,
+      businessId: CARRIER,
+      limit: 2,
+    });
 
     expect(first.data.map((row) => row.id)).toEqual([
       "018f3100-0000-7000-8000-000000000003",
@@ -180,7 +255,9 @@ describe("the service order picker (cursor)", () => {
       cursor: first.nextCursor as string,
     });
 
-    expect(second.data.map((row) => row.id)).toEqual(["018f3100-0000-7000-8000-000000000001"]);
+    expect(second.data.map((row) => row.id)).toEqual([
+      "018f3100-0000-7000-8000-000000000001",
+    ]);
     expect(second.hasMore).toBe(false);
 
     const byPlate = await search().execute({
@@ -215,7 +292,10 @@ describe("the service order picker (cursor)", () => {
 
 describe("a vehicle's service history (the app)", () => {
   it("serves the driver the vehicle they are responsible for", async () => {
-    const result = await byVehicle().execute({ userId: DRIVER_USER, vehicleId: TRUCK });
+    const result = await byVehicle().execute({
+      userId: DRIVER_USER,
+      vehicleId: TRUCK,
+    });
 
     expect(result.data.map((row) => row.id)).toEqual([
       "018f3100-0000-7000-8000-000000000002",

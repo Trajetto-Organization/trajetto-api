@@ -17,10 +17,14 @@ vi.mock("@/../infra/database", () => ({
   },
 }));
 
-const emitted: Array<{ businessId: string; event: Record<string, unknown> }> = [];
+const emitted: Array<{ businessId: string; event: Record<string, unknown> }> =
+  [];
 
 vi.mock("@/websocket", () => ({
-  sendRouteEventToBusiness: (businessId: string, event: Record<string, unknown>) => {
+  sendRouteEventToBusiness: (
+    businessId: string,
+    event: Record<string, unknown>,
+  ) => {
     emitted.push({ businessId, event });
   },
 }));
@@ -66,7 +70,11 @@ let routes: InMemoryRouteRepository;
 let deliveries: InMemoryDeliveryRepository;
 let users: InMemoryUserRepository;
 let stops: InMemoryStopOnTheWayRepository;
-let published: Array<{ topic: string; eventKey?: string; payload: Record<string, unknown> }>;
+let published: Array<{
+  topic: string;
+  eventKey?: string;
+  payload: Record<string, unknown>;
+}>;
 let useCase: MarkStopOnTheWayUseCase;
 
 function route(overrides: Partial<Route> = {}): Route {
@@ -107,7 +115,10 @@ function stop(id: string, deliveryId: string, sequence: number): RouteStop {
   } as RouteStop;
 }
 
-function delivery(id: string, contact: { telephone?: string | null }): Delivery {
+function delivery(
+  id: string,
+  contact: { telephone?: string | null },
+): Delivery {
   return {
     id,
     recipient_name: `Destinatário ${id.slice(-2)}`,
@@ -124,9 +135,11 @@ function delivery(id: string, contact: { telephone?: string | null }): Delivery 
 }
 
 const onTheWayOf = (stopId: string) =>
-  (routes.stops.find((entry) => entry.id === stopId) as RouteStop & {
-    on_the_way_at?: Date | null;
-  }).on_the_way_at ?? null;
+  (
+    routes.stops.find((entry) => entry.id === stopId) as RouteStop & {
+      on_the_way_at?: Date | null;
+    }
+  ).on_the_way_at ?? null;
 
 const eventsOfType = (type: string) =>
   deliveries.events.filter((event) => event.type === type);
@@ -160,15 +173,30 @@ beforeEach(() => {
   users = new InMemoryUserRepository();
 
   users.user.push(
-    { id: DRIVER_USER_A, role: "BUSINESS_USER", businessId: A, driverId: DRIVER_A } as User,
+    {
+      id: DRIVER_USER_A,
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId: DRIVER_A,
+    } as User,
     {
       id: OTHER_DRIVER_USER_A,
       role: "BUSINESS_USER",
       businessId: A,
       driverId: OTHER_DRIVER_A,
     } as User,
-    { id: DISPATCHER_A, role: "BUSINESS_ADMIN", businessId: A, driverId: null } as User,
-    { id: DRIVER_USER_B, role: "BUSINESS_USER", businessId: B, driverId: DRIVER_B } as User,
+    {
+      id: DISPATCHER_A,
+      role: "BUSINESS_ADMIN",
+      businessId: A,
+      driverId: null,
+    } as User,
+    {
+      id: DRIVER_USER_B,
+      role: "BUSINESS_USER",
+      businessId: B,
+      driverId: DRIVER_B,
+    } as User,
   );
 
   stops = new InMemoryStopOnTheWayRepository(
@@ -181,7 +209,11 @@ beforeEach(() => {
   const outbox = {
     publish: async (
       _tx: unknown,
-      event: { topic: string; eventKey?: string; payload: Record<string, unknown> },
+      event: {
+        topic: string;
+        eventKey?: string;
+        payload: Record<string, unknown>;
+      },
     ) => {
       published.push(event);
     },
@@ -191,10 +223,17 @@ beforeEach(() => {
     createActivityIfEnabled: () => undefined,
   } as unknown as NotificationService;
 
-  useCase = new MarkStopOnTheWayUseCase(users, stops, outbox, notificationService);
+  useCase = new MarkStopOnTheWayUseCase(
+    users,
+    stops,
+    outbox,
+    notificationService,
+  );
 });
 
-const mark = (overrides: Partial<Parameters<MarkStopOnTheWayUseCase["execute"]>[0]> = {}) =>
+const mark = (
+  overrides: Partial<Parameters<MarkStopOnTheWayUseCase["execute"]>[0]> = {},
+) =>
   useCase.execute({
     userId: DRIVER_USER_A,
     businessId: A,
@@ -208,7 +247,11 @@ describe("the driver marks a pending stop of their running route", () => {
   it("stamps the stop, records the event and tells the operation", async () => {
     const result = await mark({ latitude: -15.6, longitude: -56.1 });
 
-    expect(result).toMatchObject({ stopId: STOP_1, routeId: ROUTE, deliveryId: DELIVERY_1 });
+    expect(result).toMatchObject({
+      stopId: STOP_1,
+      routeId: ROUTE,
+      deliveryId: DELIVERY_1,
+    });
     expect(onTheWayOf(STOP_1)).toEqual(result.on_the_way_at);
 
     const [event] = eventsOfType("ON_THE_WAY");
@@ -226,7 +269,9 @@ describe("the driver marks a pending stop of their running route", () => {
     });
 
     // The stop's status does not move: "a caminho" is not an outcome.
-    expect(routes.stops.find((entry) => entry.id === STOP_1)?.status).toBe("PENDING");
+    expect(routes.stops.find((entry) => entry.id === STOP_1)?.status).toBe(
+      "PENDING",
+    );
 
     expect(emitted).toEqual([
       {
@@ -261,7 +306,9 @@ describe("the driver marks a pending stop of their running route", () => {
   });
 
   it("keeps the previous stop's instant when the driver turns to another one", async () => {
-    const first = await mark({ occurredAt: new Date(STARTED_AT.getTime() + 60_000) });
+    const first = await mark({
+      occurredAt: new Date(STARTED_AT.getTime() + 60_000),
+    });
     await mark({
       stopId: STOP_2,
       client_submission_id: SUBMISSION_2,
@@ -269,7 +316,9 @@ describe("the driver marks a pending stop of their running route", () => {
     });
 
     expect(onTheWayOf(STOP_1)).toEqual(first.on_the_way_at);
-    expect(onTheWayOf(STOP_2)!.getTime()).toBeGreaterThan(first.on_the_way_at.getTime());
+    expect(onTheWayOf(STOP_2)!.getTime()).toBeGreaterThan(
+      first.on_the_way_at.getTime(),
+    );
     expect(eventsOfType("ON_THE_WAY")).toHaveLength(2);
   });
 
@@ -278,7 +327,10 @@ describe("the driver marks a pending stop of their running route", () => {
     const early = new Date(STARTED_AT.getTime() + 60_000);
 
     await mark({ occurredAt: late });
-    const older = await mark({ client_submission_id: SUBMISSION_2, occurredAt: early });
+    const older = await mark({
+      client_submission_id: SUBMISSION_2,
+      occurredAt: early,
+    });
 
     // The event records its own tap; the stop keeps the latest.
     expect(older.on_the_way_at).toEqual(early);
@@ -365,7 +417,9 @@ describe("who may mark", () => {
   });
 
   it("answers a caller deleted since the token with USER_NOT_FOUND", async () => {
-    const error = await refusal(mark({ userId: "018f0000-0000-7000-8000-0000000000ff" }));
+    const error = await refusal(
+      mark({ userId: "018f0000-0000-7000-8000-0000000000ff" }),
+    );
 
     expect(error.statusCode).toBe(404);
     expect(error.code).toBe("USER_NOT_FOUND");

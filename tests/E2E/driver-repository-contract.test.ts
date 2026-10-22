@@ -7,7 +7,11 @@ import { DriverRepository } from "@/modules/driver/repositories/driver-repositor
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
 
 import type { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
-import type { CreateDriverProps, Driver, ListDriversProps } from "@/modules/driver/dtos/driver-dto";
+import type {
+  CreateDriverProps,
+  Driver,
+  ListDriversProps,
+} from "@/modules/driver/dtos/driver-dto";
 
 import { DriverHasOpenRoutesError } from "@/modules/driver/usecases/errors/driver-has-open-routes-error";
 import { summarizeDriverList } from "@/modules/driver/usecases/list-driver/driver-list";
@@ -50,11 +54,51 @@ async function seedBusiness(id: string) {
 }
 
 const SEED = [
-  { name: "Bia Rocha", status: "ACTIVE", contract: "OWNED", category: "E", expires: "2027-03-01", branch: NORTE, city: "Campinas" },
-  { name: "Ana Souza", status: "INACTIVE", contract: "THIRD_PARTY", category: "AB", expires: null, branch: null, city: "São Paulo" },
-  { name: "Caio Lima", status: "ACTIVE", contract: "THIRD_PARTY", category: null, expires: "2026-01-10", branch: NORTE, city: "Santos" },
-  { name: "Duda Reis", status: "ACTIVE", contract: "OWNED", category: "AB", expires: "2027-03-01", branch: null, city: "Campinas" },
-  { name: "Enzo Melo", status: "ACTIVE", contract: "OWNED", category: "A", expires: null, branch: NORTE, city: "Sorocaba" },
+  {
+    name: "Bia Rocha",
+    status: "ACTIVE",
+    contract: "OWNED",
+    category: "E",
+    expires: "2027-03-01",
+    branch: NORTE,
+    city: "Campinas",
+  },
+  {
+    name: "Ana Souza",
+    status: "INACTIVE",
+    contract: "THIRD_PARTY",
+    category: "AB",
+    expires: null,
+    branch: null,
+    city: "São Paulo",
+  },
+  {
+    name: "Caio Lima",
+    status: "ACTIVE",
+    contract: "THIRD_PARTY",
+    category: null,
+    expires: "2026-01-10",
+    branch: NORTE,
+    city: "Santos",
+  },
+  {
+    name: "Duda Reis",
+    status: "ACTIVE",
+    contract: "OWNED",
+    category: "AB",
+    expires: "2027-03-01",
+    branch: null,
+    city: "Campinas",
+  },
+  {
+    name: "Enzo Melo",
+    status: "ACTIVE",
+    contract: "OWNED",
+    category: "A",
+    expires: null,
+    branch: NORTE,
+    city: "Sorocaba",
+  },
 ] as const;
 
 const prismaRepo = new DriverRepository(prisma as never);
@@ -104,7 +148,9 @@ beforeAll(async () => {
         cnh: `5000000000${index}`,
         cpf: `6000000000${index}`,
         cnh_category: entry.category,
-        cnh_expires_at: entry.expires ? new Date(`${entry.expires}T00:00:00.000Z`) : null,
+        cnh_expires_at: entry.expires
+          ? new Date(`${entry.expires}T00:00:00.000Z`)
+          : null,
         rg: "123456789",
         cep: `0100100${index}`,
         city: entry.city,
@@ -157,7 +203,10 @@ const page = (props: Partial<ListDriversProps> = {}): ListDriversProps => ({
   ...props,
 });
 
-async function names(repo: IDriverRepository, props: Partial<ListDriversProps>) {
+async function names(
+  repo: IDriverRepository,
+  props: Partial<ListDriversProps>,
+) {
   const result = await repo.listDrivers(page(props));
 
   return result.data.map((row) => row.name);
@@ -175,10 +224,9 @@ describe.each(both)("listDrivers (%s)", (_label, repo) => {
   });
 
   it("sorts by name and pages after sorting", async () => {
-    expect(await names(repo, { sort: "name", order: "asc", pageSize: 2, page: 2 })).toEqual([
-      "Caio Lima",
-      "Duda Reis",
-    ]);
+    expect(
+      await names(repo, { sort: "name", order: "asc", pageSize: 2, page: 2 }),
+    ).toEqual(["Caio Lima", "Duda Reis"]);
   });
 
   it("sorts categories in the enum's order with blanks last, both ways", async () => {
@@ -199,7 +247,9 @@ describe.each(both)("listDrivers (%s)", (_label, repo) => {
   });
 
   it("sorts the expiry with blanks last and the tiebreaker inside equal days", async () => {
-    expect(await names(repo, { sort: "cnh_expires_at", order: "desc" })).toEqual([
+    expect(
+      await names(repo, { sort: "cnh_expires_at", order: "desc" }),
+    ).toEqual([
       "Duda Reis",
       "Bia Rocha",
       "Caio Lima",
@@ -209,20 +259,36 @@ describe.each(both)("listDrivers (%s)", (_label, repo) => {
   });
 
   it("filters by every facet and searches digits and text", async () => {
-    expect(await names(repo, { statuses: ["ACTIVE"], contractTypes: ["OWNED"], cnhCategories: ["AB", "NONE"] })).toEqual([
-      "Duda Reis",
+    expect(
+      await names(repo, {
+        statuses: ["ACTIVE"],
+        contractTypes: ["OWNED"],
+        cnhCategories: ["AB", "NONE"],
+      }),
+    ).toEqual(["Duda Reis"]);
+    expect(await names(repo, { branchIds: [NORTE], search: "camp" })).toEqual([
+      "Bia Rocha",
     ]);
-    expect(await names(repo, { branchIds: [NORTE], search: "camp" })).toEqual(["Bia Rocha"]);
     expect(await names(repo, { search: "01001-002" })).toEqual(["Caio Lima"]);
     expect(await names(repo, { search: "%" })).toEqual([]);
   });
 
   it("groups the same counts and names only this company's branches", async () => {
     const result = await repo.listDrivers(page({ search: "a" }));
-    const summary = summarizeDriverList(result.groups, { statuses: ["ACTIVE"] }, result.branchNames);
+    const summary = summarizeDriverList(
+      result.groups,
+      { statuses: ["ACTIVE"] },
+      result.branchNames,
+    );
 
     expect(summary.total).toBe(4);
-    expect(summary.searchMeta).toMatchObject({ total: 5, active: 4, inactive: 1, owned: 3, thirdParty: 1 });
+    expect(summary.searchMeta).toMatchObject({
+      total: 5,
+      active: 4,
+      inactive: 1,
+      owned: 3,
+      thirdParty: 1,
+    });
     expect(summary.searchMeta.facets.branchId).toEqual([
       { value: NORTE, label: "Filial Norte", count: 3 },
     ]);
@@ -240,7 +306,9 @@ describe.each(both)("lookups and uniqueness (%s)", (_label, repo) => {
     const missing = "018fe900-0000-7000-8000-0000000000ff";
     const before = await repo.countDriversForExport({ businessId: A });
 
-    await expect(repo.deleteDriver(missing)).rejects.toMatchObject({ code: "P2025" });
+    await expect(repo.deleteDriver(missing)).rejects.toMatchObject({
+      code: "P2025",
+    });
     await expect(
       repo.updateDriver({ driverId: missing, driverData: { city: "Nenhuma" } }),
     ).rejects.toMatchObject({ code: "P2025" });
@@ -265,7 +333,9 @@ describe.each(both)("lookups and uniqueness (%s)", (_label, repo) => {
       businessId: A,
     } as CreateDriverProps);
 
-    await expect(attempt).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    await expect(attempt).rejects.toBeInstanceOf(
+      Prisma.PrismaClientKnownRequestError,
+    );
     await expect(attempt).rejects.toMatchObject({ code: "P2002" });
 
     const error = await attempt.catch((reason) => reason);
@@ -281,8 +351,20 @@ describe.each(both)("the deactivation guard (%s)", (label, repo) => {
     if (label === "prisma") {
       await prisma.route.createMany({
         data: [
-          { code: 1, scheduled_date: new Date("2026-09-28"), businessId: A, driverId, status: "RELEASED" },
-          { code: 2, scheduled_date: new Date("2026-09-28"), businessId: A, driverId, status: "COMPLETED" },
+          {
+            code: 1,
+            scheduled_date: new Date("2026-09-28"),
+            businessId: A,
+            driverId,
+            status: "RELEASED",
+          },
+          {
+            code: 2,
+            scheduled_date: new Date("2026-09-28"),
+            businessId: A,
+            driverId,
+            status: "COMPLETED",
+          },
         ],
       });
     } else {
@@ -292,22 +374,36 @@ describe.each(both)("the deactivation guard (%s)", (label, repo) => {
       );
     }
 
-    expect(await repo.countOpenRoutes(driverId)).toEqual({ PLANNED: 0, RELEASED: 1, IN_PROGRESS: 0 });
+    expect(await repo.countOpenRoutes(driverId)).toEqual({
+      PLANNED: 0,
+      RELEASED: 1,
+      IN_PROGRESS: 0,
+    });
 
     const refused = await repo
       .updateDriver({ driverId, driverData: { status: "INACTIVE" } })
       .catch((reason) => reason);
 
     expect(refused).toBeInstanceOf(DriverHasOpenRoutesError);
-    expect(refused.openRoutes).toEqual({ PLANNED: 0, RELEASED: 1, IN_PROGRESS: 0 });
+    expect(refused.openRoutes).toEqual({
+      PLANNED: 0,
+      RELEASED: 1,
+      IN_PROGRESS: 0,
+    });
 
     if (label === "prisma") {
-      await prisma.route.updateMany({ where: { driverId }, data: { status: "CANCELLED" } });
+      await prisma.route.updateMany({
+        where: { driverId },
+        data: { status: "CANCELLED" },
+      });
     } else {
       for (const route of memoryRoutes) route.status = "CANCELLED";
     }
 
-    const updated = await repo.updateDriver({ driverId, driverData: { status: "INACTIVE", complement: null } });
+    const updated = await repo.updateDriver({
+      driverId,
+      driverData: { status: "INACTIVE", complement: null },
+    });
 
     expect(updated.status).toBe("INACTIVE");
     expect(updated.complement).toBeNull();
@@ -326,7 +422,10 @@ describe.each(both)("the deactivation guard (%s)", (label, repo) => {
 
     expect(set.cnh_expires_at?.toISOString()).toBe("2031-07-09T00:00:00.000Z");
 
-    const cleared = await repo.updateDriver({ driverId, driverData: { cnh_expires_at: null } });
+    const cleared = await repo.updateDriver({
+      driverId,
+      driverData: { cnh_expires_at: null },
+    });
 
     expect(cleared.cnh_expires_at).toBeNull();
   });
@@ -334,17 +433,33 @@ describe.each(both)("the deactivation guard (%s)", (label, repo) => {
 
 describe.each(both)("the picker (%s)", (_label, repo) => {
   it("lists active drivers alphabetically, with the projection asked for", async () => {
-    const catalog = await repo.searchDriverWithCursor({ businessId: A, limit: 10 });
-    const choice = await repo.searchDriverWithCursor({ businessId: A, limit: 10, projection: "choice" });
+    const catalog = await repo.searchDriverWithCursor({
+      businessId: A,
+      limit: 10,
+    });
+    const choice = await repo.searchDriverWithCursor({
+      businessId: A,
+      limit: 10,
+      projection: "choice",
+    });
 
-    expect(catalog.data.map((row) => row.name)).toEqual(["Bia Rocha", "Caio Lima", "Duda Reis", "Enzo Melo"]);
+    expect(catalog.data.map((row) => row.name)).toEqual([
+      "Bia Rocha",
+      "Caio Lima",
+      "Duda Reis",
+      "Enzo Melo",
+    ]);
     expect(Object.keys(choice.data[0]).sort()).toEqual(
       ["cnh_category", "cnh_expires_at", "id", "name", "status"].sort(),
     );
   });
 
   it("searches the CNH for the catalogue only", async () => {
-    const catalog = await repo.searchDriverWithCursor({ businessId: A, limit: 10, search: "50000000002" });
+    const catalog = await repo.searchDriverWithCursor({
+      businessId: A,
+      limit: 10,
+      search: "50000000002",
+    });
     const choice = await repo.searchDriverWithCursor({
       businessId: A,
       limit: 10,
@@ -357,7 +472,10 @@ describe.each(both)("the picker (%s)", (_label, repo) => {
   });
 
   it("continues after the cursor in the same order", async () => {
-    const first = await repo.searchDriverWithCursor({ businessId: A, limit: 2 });
+    const first = await repo.searchDriverWithCursor({
+      businessId: A,
+      limit: 2,
+    });
     const second = await repo.searchDriverWithCursor({
       businessId: A,
       limit: 2,
@@ -365,7 +483,10 @@ describe.each(both)("the picker (%s)", (_label, repo) => {
     });
 
     expect(first.hasMore).toBe(true);
-    expect(second.data.map((row) => row.name)).toEqual(["Duda Reis", "Enzo Melo"]);
+    expect(second.data.map((row) => row.name)).toEqual([
+      "Duda Reis",
+      "Enzo Melo",
+    ]);
   });
 });
 
@@ -382,14 +503,26 @@ describe.each(both)("the export stream (%s)", (_label, repo) => {
       rows.push(row);
     }
 
-    expect(rows.map((row) => row.name)).toEqual(["Enzo Melo", "Duda Reis", "Caio Lima", "Bia Rocha"]);
+    expect(rows.map((row) => row.name)).toEqual([
+      "Enzo Melo",
+      "Duda Reis",
+      "Caio Lima",
+      "Bia Rocha",
+    ]);
   });
 
   it("counts a company's drivers and pauses", async () => {
     expect(await repo.countDriversForExport({ businessId: A })).toBe(5);
     // The export's count follows the list's filter, as the stream does.
-    expect(await repo.countDriversForExport({ businessId: A, statuses: ["ACTIVE"] })).toBe(4);
-    expect(await repo.countDriversForExport({ businessId: A, search: "nenhum-motorista-assim" })).toBe(0);
+    expect(
+      await repo.countDriversForExport({ businessId: A, statuses: ["ACTIVE"] }),
+    ).toBe(4);
+    expect(
+      await repo.countDriversForExport({
+        businessId: A,
+        search: "nenhum-motorista-assim",
+      }),
+    ).toBe(0);
     expect(await repo.countDriverPauses(ids[1])).toBe(0);
   });
 });
@@ -404,7 +537,14 @@ describe.each(both)("the export stream (%s)", (_label, repo) => {
  * instead of leaving the twin quietly wrong.
  */
 const C = "018fe900-0000-7000-8000-00000000000c";
-const ACCENTED = ["Élio Ramos", "bia Costa", "Zeca Lima", "Ágata Nunes", "Ana Prado", "Bruno Dias"];
+const ACCENTED = [
+  "Élio Ramos",
+  "bia Costa",
+  "Zeca Lima",
+  "Ágata Nunes",
+  "Ana Prado",
+  "Bruno Dias",
+];
 const accentedIds: string[] = [];
 
 let accentedSeed: Promise<void> | null = null;
@@ -444,60 +584,90 @@ function seedAccented(): Promise<void> {
 describe("text order with accents and case", () => {
   beforeAll(seedAccented);
 
-  const CODE_POINT_ORDER = ["Ana Prado", "Bruno Dias", "Zeca Lima", "bia Costa", "Ágata Nunes", "Élio Ramos"];
+  const CODE_POINT_ORDER = [
+    "Ana Prado",
+    "Bruno Dias",
+    "Zeca Lima",
+    "bia Costa",
+    "Ágata Nunes",
+    "Élio Ramos",
+  ];
 
-  it.each(both)("sorts names as the database does (%s)", async (_label, repo) => {
-    const asc = await repo.listDrivers(page({ businessId: C, sort: "name", order: "asc" }));
-    const desc = await repo.listDrivers(page({ businessId: C, sort: "name", order: "desc" }));
+  it.each(both)(
+    "sorts names as the database does (%s)",
+    async (_label, repo) => {
+      const asc = await repo.listDrivers(
+        page({ businessId: C, sort: "name", order: "asc" }),
+      );
+      const desc = await repo.listDrivers(
+        page({ businessId: C, sort: "name", order: "desc" }),
+      );
 
-    expect(asc.data.map((row) => row.name)).toEqual(CODE_POINT_ORDER);
-    expect(desc.data.map((row) => row.name)).toEqual([...CODE_POINT_ORDER].reverse());
-  });
+      expect(asc.data.map((row) => row.name)).toEqual(CODE_POINT_ORDER);
+      expect(desc.data.map((row) => row.name)).toEqual(
+        [...CODE_POINT_ORDER].reverse(),
+      );
+    },
+  );
 
-  it.each(both)("pages the picker in the same order (%s)", async (_label, repo) => {
-    const first = await repo.searchDriverWithCursor({ businessId: C, limit: 3 });
-    const second = await repo.searchDriverWithCursor({
-      businessId: C,
-      limit: 3,
-      cursor: first.nextCursor ?? undefined,
-    });
+  it.each(both)(
+    "pages the picker in the same order (%s)",
+    async (_label, repo) => {
+      const first = await repo.searchDriverWithCursor({
+        businessId: C,
+        limit: 3,
+      });
+      const second = await repo.searchDriverWithCursor({
+        businessId: C,
+        limit: 3,
+        cursor: first.nextCursor ?? undefined,
+      });
 
-    expect([...first.data, ...second.data].map((row) => row.name)).toEqual(CODE_POINT_ORDER);
-  });
+      expect([...first.data, ...second.data].map((row) => row.name)).toEqual(
+        CODE_POINT_ORDER,
+      );
+    },
+  );
 });
 
 describe("the delete re-checks the history itself", () => {
   beforeAll(seedAccented);
 
-  it.each(both)("refuses a driver with a pause even when nobody asked before (%s)", async (label, repo) => {
-    const driverId = label === "prisma" ? accentedIds[0] : accentedIds[1];
+  it.each(both)(
+    "refuses a driver with a pause even when nobody asked before (%s)",
+    async (label, repo) => {
+      const driverId = label === "prisma" ? accentedIds[0] : accentedIds[1];
 
-    if (label === "prisma") {
-      await prisma.driverPause.create({
-        data: {
-          kind: "MEAL",
-          started_at: new Date("2026-09-28T15:00:00.000Z"),
-          start_submission_id: randomUUID(),
-          driverId,
-          businessId: C,
-          occurrenceTypeId: await pauseTypeId(prisma, C, "MEAL"),
-        },
+      if (label === "prisma") {
+        await prisma.driverPause.create({
+          data: {
+            kind: "MEAL",
+            started_at: new Date("2026-09-28T15:00:00.000Z"),
+            start_submission_id: randomUUID(),
+            driverId,
+            businessId: C,
+            occurrenceTypeId: await pauseTypeId(prisma, C, "MEAL"),
+          },
+        });
+      } else {
+        memoryPauses.push({ driverId });
+      }
+
+      await expect(repo.deleteDriver(driverId)).rejects.toMatchObject({
+        code: "DRIVER_HAS_PAUSES",
+        statusCode: 409,
       });
-    } else {
-      memoryPauses.push({ driverId });
-    }
+      expect(await repo.findDriverById(driverId)).not.toBeNull();
+    },
+  );
 
-    await expect(repo.deleteDriver(driverId)).rejects.toMatchObject({
-      code: "DRIVER_HAS_PAUSES",
-      statusCode: 409,
-    });
-    expect(await repo.findDriverById(driverId)).not.toBeNull();
-  });
+  it.each(both)(
+    "deletes a driver without history (%s)",
+    async (label, repo) => {
+      const driverId = label === "prisma" ? accentedIds[2] : accentedIds[3];
 
-  it.each(both)("deletes a driver without history (%s)", async (label, repo) => {
-    const driverId = label === "prisma" ? accentedIds[2] : accentedIds[3];
-
-    expect((await repo.deleteDriver(driverId)).id).toBe(driverId);
-    expect(await repo.findDriverById(driverId)).toBeNull();
-  });
+      expect((await repo.deleteDriver(driverId)).id).toBe(driverId);
+      expect(await repo.findDriverById(driverId)).toBeNull();
+    },
+  );
 });

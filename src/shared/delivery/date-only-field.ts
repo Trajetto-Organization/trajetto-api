@@ -19,11 +19,15 @@ function dateOnlyField(label: string) {
     // A Date is this field's own output: the route validates the body and the
     // controller parses it again, so the second pass must accept it as is.
     (val) =>
-      val === "" ? null : val instanceof Date && !Number.isNaN(val.getTime())
-        ? dateOnlyKey(val)
-        : val,
+      val === ""
+        ? null
+        : val instanceof Date && !Number.isNaN(val.getTime())
+          ? dateOnlyKey(val)
+          : val,
     z
-      .string({ invalid_type_error: `${label} deve estar no formato AAAA-MM-DD.` })
+      .string({
+        invalid_type_error: `${label} deve estar no formato AAAA-MM-DD.`,
+      })
       .transform((value, ctx) => {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
           ctx.addIssue({

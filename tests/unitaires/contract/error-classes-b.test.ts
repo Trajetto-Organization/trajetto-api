@@ -107,10 +107,7 @@ async function loadErrorClasses(): Promise<Array<[string, ErrorClass]>> {
       >;
 
       for (const [name, value] of Object.entries(exported)) {
-        if (
-          typeof value === "function" &&
-          value.prototype instanceof Error
-        ) {
+        if (typeof value === "function" && value.prototype instanceof Error) {
           found.push([`${module}/${name}`, value as ErrorClass]);
         }
       }
@@ -174,20 +171,42 @@ describe("I–Z domain errors carry an honest status and a code", () => {
 
     return Promise.all([
       import("@/modules/user/usecases/errors/resource-not-found-error"),
-      import("@/modules/notification/usecases/errors/notification-not-authorized-error"),
+      import(
+        "@/modules/notification/usecases/errors/notification-not-authorized-error"
+      ),
       import("@/modules/quote/usecases/errors/quote-already-finalized-error"),
-      import("@/modules/whatsapp/usecases/errors/whatsapp-phone-already-in-use-error"),
-      import("@/modules/profile-access/usecases/errors/profile-access-in-use-error"),
+      import(
+        "@/modules/whatsapp/usecases/errors/whatsapp-phone-already-in-use-error"
+      ),
+      import(
+        "@/modules/profile-access/usecases/errors/profile-access-in-use-error"
+      ),
       import("@/modules/user/usecases/errors/user-invalid-credentials-error"),
     ]).then(([user, notification, quote, whatsapp, profile, credentials]) => {
       cases.push(
         [new user.ResourceNotFoundError(), 404, "USER_NOT_FOUND"],
         // Someone else's notification: the same answer as a missing one.
-        [new notification.NotificationNotAuthorizedError(), 404, "NOTIFICATION_NOT_FOUND"],
-        [new quote.QuoteAlreadyFinalizedError(), 409, "QUOTE_ALREADY_FINALIZED"],
-        [new whatsapp.WhatsAppPhoneAlreadyInUseError(), 409, "WHATSAPP_PHONE_TAKEN"],
+        [
+          new notification.NotificationNotAuthorizedError(),
+          404,
+          "NOTIFICATION_NOT_FOUND",
+        ],
+        [
+          new quote.QuoteAlreadyFinalizedError(),
+          409,
+          "QUOTE_ALREADY_FINALIZED",
+        ],
+        [
+          new whatsapp.WhatsAppPhoneAlreadyInUseError(),
+          409,
+          "WHATSAPP_PHONE_TAKEN",
+        ],
         [new profile.ProfileAccessInUseError(2), 409, "PROFILE_ACCESS_IN_USE"],
-        [new credentials.UserInvalidCredentialsError(), 401, "AUTH_INVALID_CREDENTIALS"],
+        [
+          new credentials.UserInvalidCredentialsError(),
+          401,
+          "AUTH_INVALID_CREDENTIALS",
+        ],
       );
 
       for (const [error, status, code] of cases) {
@@ -215,16 +234,26 @@ describe("I–Z domain errors carry an honest status and a code", () => {
   });
 
   it("answers another company's access profile exactly like a missing one", async () => {
-    const [{ UserProfileAccessNotFoundError }, { UserProfileNotMatchBusinessError }, { PermissionBusinessError }] =
-      await Promise.all([
-        import("@/modules/user/usecases/errors/user-profile-access-not-found-error"),
-        import("@/modules/user/usecases/errors/user-profile-not-match-business-error"),
-        import("@/modules/permission/usecases/errors/permission-business-error"),
-      ]);
+    const [
+      { UserProfileAccessNotFoundError },
+      { UserProfileNotMatchBusinessError },
+      { PermissionBusinessError },
+    ] = await Promise.all([
+      import(
+        "@/modules/user/usecases/errors/user-profile-access-not-found-error"
+      ),
+      import(
+        "@/modules/user/usecases/errors/user-profile-not-match-business-error"
+      ),
+      import("@/modules/permission/usecases/errors/permission-business-error"),
+    ]);
 
     const missing = new UserProfileAccessNotFoundError();
 
-    for (const foreign of [new UserProfileNotMatchBusinessError(), new PermissionBusinessError()]) {
+    for (const foreign of [
+      new UserProfileNotMatchBusinessError(),
+      new PermissionBusinessError(),
+    ]) {
       expect(foreign).toMatchObject({
         statusCode: missing.statusCode,
         code: missing.code,

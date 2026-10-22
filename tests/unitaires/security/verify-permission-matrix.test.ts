@@ -93,17 +93,30 @@ describe("who passes", () => {
 describe("who is refused, and with which code", () => {
   it.each([
     ["read-only user writing", READ_ONLY_USER, "delivery_manage", "write"],
-    ["read-only user on another key", READ_ONLY_USER, "occurrence_manage", "read"],
+    [
+      "read-only user on another key",
+      READ_ONLY_USER,
+      "occurrence_manage",
+      "read",
+    ],
     ["full user on a key it lacks", FULL_USER, "fine_manage", "read"],
-    ["driver reading the occurrence catalogue", DRIVER, "occurrence_manage", "read"],
+    [
+      "driver reading the occurrence catalogue",
+      DRIVER,
+      "occurrence_manage",
+      "read",
+    ],
     ["driver on payables", DRIVER, "account_payable_manage", "read"],
     ["driver writing service orders", DRIVER, "service_order_manage", "write"],
-  ] as const)("%s → 403 PERMISSION_DENIED", (_label, principal, key, access) => {
-    const refusal = run(principal, key, access);
+  ] as const)(
+    "%s → 403 PERMISSION_DENIED",
+    (_label, principal, key, access) => {
+      const refusal = run(principal, key, access);
 
-    expect(refusal?.statusCode).toBe(403);
-    expect(refusal?.code).toBe("PERMISSION_DENIED");
-  });
+      expect(refusal?.statusCode).toBe(403);
+      expect(refusal?.code).toBe("PERMISSION_DENIED");
+    },
+  );
 
   it("refuses a key that is present but not readable (canRead false)", () => {
     // The bulk permission screen could store canRead:false; the gate must
@@ -113,7 +126,11 @@ describe("who is refused, and with which code", () => {
         role: "BUSINESS_USER",
         profileAccess: {
           permissions: [
-            { permissionKey: "delivery_manage", canRead: false, canWrite: false },
+            {
+              permissionKey: "delivery_manage",
+              canRead: false,
+              canWrite: false,
+            },
           ],
         },
       },
@@ -133,7 +150,11 @@ describe("who is refused, and with which code", () => {
         role: "BUSINESS_USER",
         profileAccess: {
           permissions: [
-            { permissionKey: "delivery_manage", canRead: false, canWrite: true },
+            {
+              permissionKey: "delivery_manage",
+              canRead: false,
+              canWrite: true,
+            },
           ],
         },
       },
@@ -150,7 +171,11 @@ describe("who is refused, and with which code", () => {
     // A 401 makes both clients throw the session away; this is a
     // configuration problem of the account, named like the session check
     // names it.
-    const refusal = run({ role: "BUSINESS_USER", profileAccess: null }, "delivery_manage", "read");
+    const refusal = run(
+      { role: "BUSINESS_USER", profileAccess: null },
+      "delivery_manage",
+      "read",
+    );
 
     expect(refusal?.statusCode).toBe(403);
     expect(refusal?.code).toBe("AUTH_PROFILE_NOT_CONFIGURED");
@@ -171,7 +196,9 @@ describe("the route-level driver opt-out", () => {
     // can refuse driver tokens without touching the shared map.
     expect(run(DRIVER, "vehicle_manage", "read")).toBeUndefined();
 
-    const refusal = run(DRIVER, "vehicle_manage", "read", { allowDriver: false });
+    const refusal = run(DRIVER, "vehicle_manage", "read", {
+      allowDriver: false,
+    });
 
     expect(refusal?.code).toBe("PERMISSION_DENIED");
   });
@@ -180,6 +207,8 @@ describe("the route-level driver opt-out", () => {
     expect(
       run(FULL_USER, "delivery_manage", "read", { allowDriver: false }),
     ).toBeUndefined();
-    expect(run(ADMIN, "vehicle_manage", "read", { allowDriver: false })).toBeUndefined();
+    expect(
+      run(ADMIN, "vehicle_manage", "read", { allowDriver: false }),
+    ).toBeUndefined();
   });
 });

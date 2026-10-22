@@ -38,7 +38,11 @@ type ClientSocket = { on: Function; disconnect: () => void };
 
 let connect: (url: string, options: unknown) => ClientSocket;
 
-function accessToken(userId: string, familyId: string, sessionVersion: number): string {
+function accessToken(
+  userId: string,
+  familyId: string,
+  sessionVersion: number,
+): string {
   return sign(
     {
       tokenType: "access",
@@ -67,9 +71,12 @@ function handshake(auth: Record<string, string>): Promise<string> {
       done("connected");
     });
 
-    socket.on("connect_error", (error: Error & { data?: { code?: string } }) => {
-      done(error.data?.code ?? error.message);
-    });
+    socket.on(
+      "connect_error",
+      (error: Error & { data?: { code?: string } }) => {
+        done(error.data?.code ?? error.message);
+      },
+    );
   });
 }
 
@@ -169,13 +176,20 @@ describe("socket handshake after a session_version bump", () => {
     const before = accessToken(userId, familyId, 0);
 
     expect((await me(before)).status).toBe(200);
-    expect(await handshake({ ticket: await ticketFor(before) })).toBe("connected");
+    expect(await handshake({ ticket: await ticketFor(before) })).toBe(
+      "connected",
+    );
 
-    await prisma.user.update({ where: { id: userId }, data: { session_version: 1 } });
+    await prisma.user.update({
+      where: { id: userId },
+      data: { session_version: 1 },
+    });
     const after = accessToken(userId, familyId, 1);
 
     expect((await me(after)).status).toBe(200);
-    expect(await handshake({ ticket: await ticketFor(after) })).toBe("connected");
+    expect(await handshake({ ticket: await ticketFor(after) })).toBe(
+      "connected",
+    );
   });
 
   it("accepts a bearer token of the new session version", async () => {
@@ -185,7 +199,10 @@ describe("socket handshake after a session_version bump", () => {
     expect((await me(before)).status).toBe(200);
     expect(await handshake({ token: before })).toBe("connected");
 
-    await prisma.user.update({ where: { id: userId }, data: { session_version: 1 } });
+    await prisma.user.update({
+      where: { id: userId },
+      data: { session_version: 1 },
+    });
     const after = accessToken(userId, familyId, 1);
 
     expect((await me(after)).status).toBe(200);
@@ -199,7 +216,10 @@ describe("socket handshake after a session_version bump", () => {
     expect((await me(before)).status).toBe(200);
     expect(await handshake({ token: before })).toBe("connected");
 
-    await prisma.user.update({ where: { id: userId }, data: { session_version: 1 } });
+    await prisma.user.update({
+      where: { id: userId },
+      data: { session_version: 1 },
+    });
 
     expect(await handshake({ token: before })).toBe("AUTH_SESSION_INVALIDATED");
   });

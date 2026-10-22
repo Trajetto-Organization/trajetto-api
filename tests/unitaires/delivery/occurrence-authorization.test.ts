@@ -16,7 +16,10 @@ import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-
 
 import type { NotificationService } from "@/shared/services/notification-service";
 import type { UploadService } from "@/shared/services/upload-service";
-import type { OutboxService, PublishEventInput } from "@/shared/notifications/outbox-service";
+import type {
+  OutboxService,
+  PublishEventInput,
+} from "@/shared/notifications/outbox-service";
 import type { NotificationTopic } from "@/shared/notifications/notification-types";
 
 import type { User } from "@/modules/user/dtos/user-dto";
@@ -96,7 +99,12 @@ function makeContext() {
       businessId: BUSINESS,
       driverId: DRIVER_ID,
     } as User,
-    { id: OPERATOR, name: "Olga Torre", role: "BUSINESS_ADMIN", businessId: BUSINESS } as User,
+    {
+      id: OPERATOR,
+      name: "Olga Torre",
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+    } as User,
     {
       id: SECOND_OPERATOR,
       name: "Otto Torre",
@@ -124,8 +132,20 @@ function makeContext() {
       profileAccess: {
         name: "Escritório",
         permissions: [
-          { id: "p1", permissionKey: "occurrence_manage", action: "occurrence_manage", canRead: true, canWrite: true },
-          { id: "p2", permissionKey: "delivery_manage", action: "delivery_manage", canRead: true, canWrite: false },
+          {
+            id: "p1",
+            permissionKey: "occurrence_manage",
+            action: "occurrence_manage",
+            canRead: true,
+            canWrite: true,
+          },
+          {
+            id: "p2",
+            permissionKey: "delivery_manage",
+            action: "delivery_manage",
+            canRead: true,
+            canWrite: false,
+          },
         ],
       },
     } as unknown as User,
@@ -134,7 +154,10 @@ function makeContext() {
   const published: Array<PublishEventInput<NotificationTopic>> = [];
 
   const outbox = {
-    publish: async (_tx: unknown, input: PublishEventInput<NotificationTopic>) => {
+    publish: async (
+      _tx: unknown,
+      input: PublishEventInput<NotificationTopic>,
+    ) => {
       published.push(input);
     },
   } as unknown as OutboxService;
@@ -173,14 +196,24 @@ function makeContext() {
       new InMemoryProofAuditRepository(),
       reportsWithoutAI,
     ),
-    list: new ListPendingAuthorizationsUseCase(users, authorizations, uploadStub),
-    escalate: new EscalateOccurrenceAuthorizationsUseCase(authorizations, outbox),
+    list: new ListPendingAuthorizationsUseCase(
+      users,
+      authorizations,
+      uploadStub,
+    ),
+    escalate: new EscalateOccurrenceAuthorizationsUseCase(
+      authorizations,
+      outbox,
+    ),
   };
 }
 
 type Context = ReturnType<typeof makeContext>;
 
-async function seedDelivery(context: Context, status: "IN_TRANSIT" | "DELIVERED" = "IN_TRANSIT") {
+async function seedDelivery(
+  context: Context,
+  status: "IN_TRANSIT" | "DELIVERED" = "IN_TRANSIT",
+) {
   const delivery = await context.deliveries.createDelivery({
     recipient_name: "Cliente Autorização",
     city: "São Paulo",
@@ -198,7 +231,10 @@ async function seedDelivery(context: Context, status: "IN_TRANSIT" | "DELIVERED"
 
 async function seedTowerType(
   context: Context,
-  overrides: { blocks_delivery?: boolean; requires_authorization?: boolean } = {},
+  overrides: {
+    blocks_delivery?: boolean;
+    requires_authorization?: boolean;
+  } = {},
 ) {
   const type = await context.types.createOccurrenceType({
     businessId: BUSINESS,
@@ -206,8 +242,20 @@ async function seedTowerType(
     blocks_delivery: overrides.blocks_delivery ?? true,
     requires_authorization: overrides.requires_authorization ?? true,
     form_fields: [
-      { key: "quem_atendeu", label: "Quem atendeu", type: "text", required: true, max_length: 60, multiline: false },
-      { key: "ligou_cliente", label: "Ligou para o cliente", type: "boolean", required: true },
+      {
+        key: "quem_atendeu",
+        label: "Quem atendeu",
+        type: "text",
+        required: true,
+        max_length: 60,
+        multiline: false,
+      },
+      {
+        key: "ligou_cliente",
+        label: "Ligou para o cliente",
+        type: "boolean",
+        required: true,
+      },
     ],
   });
 
@@ -236,9 +284,14 @@ describe("a driver's report of a type that asks the tower", () => {
       form_version: 1,
     });
 
-    expect(result).toMatchObject({ authorization_status: "PENDING", replayed: false });
+    expect(result).toMatchObject({
+      authorization_status: "PENDING",
+      replayed: false,
+    });
 
-    const stored = context.deliveries.occurrences.find((row) => row.id === result.id)!;
+    const stored = context.deliveries.occurrences.find(
+      (row) => row.id === result.id,
+    )!;
 
     expect(stored.form_answers).toEqual(ANSWERS);
     expect(stored.form_version).toBe(1);
@@ -246,7 +299,9 @@ describe("a driver's report of a type that asks the tower", () => {
     // No effect: the delivery still on the street, no webhook, no insucesso.
     expect(context.deliveries.deliveries[0].status).toBe("IN_TRANSIT");
     expect(context.webhooks.topics()).toEqual([]);
-    expect(context.topics()).toEqual(["delivery-occurrence.authorization_requested"]);
+    expect(context.topics()).toEqual([
+      "delivery-occurrence.authorization_requested",
+    ]);
 
     // The notice carries the answers as the tower reads them.
     expect(context.published[0].payload).toMatchObject({
@@ -265,14 +320,17 @@ describe("a driver's report of a type that asks the tower", () => {
       { type: "OCCURRENCE", occurrenceId: result.id, actor: "DRIVER_APP" },
     ]);
 
-    expect(sendOccurrenceAuthorizationToBusiness).toHaveBeenCalledWith(BUSINESS, {
-      type: "occurrence.authorization_requested",
-      occurrenceId: result.id,
-      deliveryId,
-      status: "PENDING",
-      // Decision 14.3: the tower tells a delivery request from a problem.
-      category: "NOT_DELIVERED",
-    });
+    expect(sendOccurrenceAuthorizationToBusiness).toHaveBeenCalledWith(
+      BUSINESS,
+      {
+        type: "occurrence.authorization_requested",
+        occurrenceId: result.id,
+        deliveryId,
+        status: "PENDING",
+        // Decision 14.3: the tower tells a delivery request from a problem.
+        category: "NOT_DELIVERED",
+      },
+    );
   });
 
   it("refuses answers that do not fit the form, naming the field", async () => {
@@ -306,8 +364,22 @@ describe("a driver's report of a type that asks the tower", () => {
     // The company edits the form after the phone cached version 1.
     await context.types.updateOccurrenceType(typeId, {
       form_fields: [
-        { key: "quem_atendeu", label: "Quem atendeu", type: "text", required: true, max_length: 60, multiline: false },
-        { key: "protocolo", label: "Protocolo", type: "text", required: true, max_length: 20, multiline: false },
+        {
+          key: "quem_atendeu",
+          label: "Quem atendeu",
+          type: "text",
+          required: true,
+          max_length: 60,
+          multiline: false,
+        },
+        {
+          key: "protocolo",
+          label: "Protocolo",
+          type: "text",
+          required: true,
+          max_length: 20,
+          multiline: false,
+        },
       ],
     });
 
@@ -338,7 +410,8 @@ describe("a driver's report of a type that asks the tower", () => {
     });
 
     expect(
-      context.deliveries.occurrences.find((row) => row.id === result.id)?.form_version,
+      context.deliveries.occurrences.find((row) => row.id === result.id)
+        ?.form_version,
     ).toBe(2);
   });
 
@@ -380,7 +453,10 @@ describe("a driver's report of a type that asks the tower", () => {
     expect(stored.authorizedById).toBe(OPERATOR);
     expect(stored.authorized_at).toBeInstanceOf(Date);
     expect(context.deliveries.deliveries[0].status).toBe("FAILED");
-    expect(context.webhooks.topics()).toEqual(["occurrence.reported", "delivery.failed"]);
+    expect(context.webhooks.topics()).toEqual([
+      "occurrence.reported",
+      "delivery.failed",
+    ]);
   });
 
   it("answers a resend with where the first one stands", async () => {
@@ -401,7 +477,11 @@ describe("a driver's report of a type that asks the tower", () => {
     const first = await send();
     const again = await send();
 
-    expect(again).toMatchObject({ id: first.id, authorization_status: "PENDING", replayed: true });
+    expect(again).toMatchObject({
+      id: first.id,
+      authorization_status: "PENDING",
+      replayed: true,
+    });
     expect(context.deliveries.occurrences).toHaveLength(1);
     expect(context.topics()).toHaveLength(1);
   });
@@ -426,7 +506,10 @@ describe("what a report may name", () => {
         deliveryId,
         occurrenceTypeId: system.id,
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "OCCURRENCE_TYPE_NOT_REPORTABLE" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "OCCURRENCE_TYPE_NOT_REPORTABLE",
+    });
   });
 
   it("answers another company's type exactly like a missing one", async () => {
@@ -439,14 +522,26 @@ describe("what a report may name", () => {
     });
 
     const answers = await Promise.all(
-      [foreign.id!, "018f5000-0000-7000-8000-0000000000ff"].map((occurrenceTypeId) =>
-        context.report
-          .execute({ userId: DRIVER_USER, businessId: BUSINESS, deliveryId, occurrenceTypeId })
-          .catch((error) => ({ statusCode: error.statusCode, code: error.code })),
+      [foreign.id!, "018f5000-0000-7000-8000-0000000000ff"].map(
+        (occurrenceTypeId) =>
+          context.report
+            .execute({
+              userId: DRIVER_USER,
+              businessId: BUSINESS,
+              deliveryId,
+              occurrenceTypeId,
+            })
+            .catch((error) => ({
+              statusCode: error.statusCode,
+              code: error.code,
+            })),
       ),
     );
 
-    expect(answers[0]).toEqual({ statusCode: 404, code: "OCCURRENCE_TYPE_NOT_FOUND" });
+    expect(answers[0]).toEqual({
+      statusCode: 404,
+      code: "OCCURRENCE_TYPE_NOT_FOUND",
+    });
     expect(answers[1]).toEqual(answers[0]);
   });
 });
@@ -488,14 +583,19 @@ describe("the tower's decision", () => {
     });
 
     expect(context.deliveries.deliveries[0].status).toBe("FAILED");
-    expect(context.webhooks.topics()).toEqual(["occurrence.reported", "delivery.failed"]);
+    expect(context.webhooks.topics()).toEqual([
+      "occurrence.reported",
+      "delivery.failed",
+    ]);
     expect(context.topics()).toEqual([
       "delivery-occurrence.reported",
       "delivery-occurrence.authorization_decided",
     ]);
 
     // The insucesso is a fact of the approval's instant (dash-time/tower).
-    expect(context.deliveries.events[context.deliveries.events.length - 1]).toMatchObject({
+    expect(
+      context.deliveries.events[context.deliveries.events.length - 1],
+    ).toMatchObject({
       type: "STATUS_CHANGE",
       status_from: "IN_TRANSIT",
       status_to: "FAILED",
@@ -526,7 +626,10 @@ describe("the tower's decision", () => {
         decision: "DENIED",
         note: "   ",
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "AUTHORIZATION_NOTE_REQUIRED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "AUTHORIZATION_NOTE_REQUIRED",
+    });
 
     const result = await context.decide.execute({
       userId: OPERATOR,
@@ -536,7 +639,10 @@ describe("the tower's decision", () => {
       note: "Deixe com o porteiro.",
     });
 
-    expect(result).toMatchObject({ authorization_status: "DENIED", deliveryStatus: "IN_TRANSIT" });
+    expect(result).toMatchObject({
+      authorization_status: "DENIED",
+      deliveryStatus: "IN_TRANSIT",
+    });
     expect(context.deliveries.deliveries[0].status).toBe("IN_TRANSIT");
     expect(context.webhooks.topics()).toEqual([]);
     expect(context.published).toHaveLength(1);
@@ -569,7 +675,10 @@ describe("the tower's decision", () => {
     ).rejects.toMatchObject({
       statusCode: 409,
       code: "OCCURRENCE_ALREADY_DECIDED",
-      decision: { status: "APPROVED", authorizedBy: { id: OPERATOR, name: "Olga Torre" } },
+      decision: {
+        status: "APPROVED",
+        authorizedBy: { id: OPERATOR, name: "Olga Torre" },
+      },
     });
 
     // The same person's same answer again is a replay, with no second effect.
@@ -593,7 +702,9 @@ describe("the tower's decision", () => {
       "IN_TRANSIT",
     );
 
-    expect(context.deliveries.occurrences[0].authorization_status).toBe("SUPERSEDED");
+    expect(context.deliveries.occurrences[0].authorization_status).toBe(
+      "SUPERSEDED",
+    );
 
     await expect(
       context.decide.execute({
@@ -670,7 +781,10 @@ describe("the tower's decision", () => {
         occurrenceId: report.id,
         decision: "APPROVED",
       }),
-    ).rejects.toMatchObject({ statusCode: 409, code: "OCCURRENCE_AUTHORIZATION_NOT_REQUIRED" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "OCCURRENCE_AUTHORIZATION_NOT_REQUIRED",
+    });
   });
 
   it("a driver never decides", async () => {
@@ -704,13 +818,21 @@ describe("the queue and the escalation", () => {
       });
     }
 
-    context.deliveries.occurrences[0].created_at = new Date(Date.now() - 60_000);
+    context.deliveries.occurrences[0].created_at = new Date(
+      Date.now() - 60_000,
+    );
 
     const queue = await context.list.execute({ userId: OPERATOR });
 
     expect(queue.total).toBe(2);
-    expect(queue.data.map((row) => row.answers[0].value)).toEqual(["Primeiro", "Segundo"]);
-    expect(queue.data[0].answers[1]).toEqual({ label: "Ligou para o cliente", value: "Não" });
+    expect(queue.data.map((row) => row.answers[0].value)).toEqual([
+      "Primeiro",
+      "Segundo",
+    ]);
+    expect(queue.data[0].answers[1]).toEqual({
+      label: "Ligou para o cliente",
+      value: "Não",
+    });
 
     const foreign = await context.list.execute({ userId: FOREIGN_ADMIN });
 
@@ -739,9 +861,9 @@ describe("the queue and the escalation", () => {
 
     const now = new Date();
 
-    context.deliveries.occurrences.find((row) => row.id === old.id)!.created_at = new Date(
-      now.getTime() - 11 * 60_000,
-    );
+    context.deliveries.occurrences.find(
+      (row) => row.id === old.id,
+    )!.created_at = new Date(now.getTime() - 11 * 60_000);
     context.published.length = 0;
 
     const first = await context.escalate.execute({ now });
@@ -749,7 +871,9 @@ describe("the queue and the escalation", () => {
 
     expect(first.map((row) => row.id)).toEqual([old.id]);
     expect(second).toEqual([]);
-    expect(context.topics()).toEqual(["delivery-occurrence.authorization_escalated"]);
+    expect(context.topics()).toEqual([
+      "delivery-occurrence.authorization_escalated",
+    ]);
     expect(context.published[0].payload).toMatchObject({ waitingMinutes: 11 });
   });
 });
@@ -758,7 +882,12 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
   const ROUTE_A = "018f5000-0000-7000-8000-0000000000b1";
   const ROUTE_B = "018f5000-0000-7000-8000-0000000000b2";
 
-  function onStop(context: Context, deliveryId: string, routeId: string, createdAt: Date) {
+  function onStop(
+    context: Context,
+    deliveryId: string,
+    routeId: string,
+    createdAt: Date,
+  ) {
     const stop = {
       deliveryId,
       status: "PENDING",
@@ -805,7 +934,10 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
 
     // Not the driver's request: the driver's card does not show it.
-    const [card] = (await context.deliveries.listDriverDeliveries(BUSINESS, DRIVER_ID)) as Array<{
+    const [card] = (await context.deliveries.listDriverDeliveries(
+      BUSINESS,
+      DRIVER_ID,
+    )) as Array<{
       authorization_request: unknown;
     }>;
 
@@ -848,7 +980,10 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
       statusCode: 400,
       code: "CLIENT_OUTDATED",
       formVersion: 1,
-      formFields: [expect.objectContaining({ key: "quem_atendeu" }), expect.anything()],
+      formFields: [
+        expect.objectContaining({ key: "quem_atendeu" }),
+        expect.anything(),
+      ],
     });
 
     // The panel, which deploys with the API, still gets the field errors.
@@ -859,7 +994,10 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
         deliveryId,
         occurrenceTypeId: typeId,
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "OCCURRENCE_FORM_INVALID" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "OCCURRENCE_FORM_INVALID",
+    });
 
     expect(context.deliveries.occurrences).toHaveLength(0);
   });
@@ -888,9 +1026,8 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
       status_from: "IN_TRANSIT",
       status_to: "PENDING",
     });
-    context.deliveries.events[context.deliveries.events.length - 1].created_at = new Date(
-      filedAt.getTime() + 1_000,
-    );
+    context.deliveries.events[context.deliveries.events.length - 1].created_at =
+      new Date(filedAt.getTime() + 1_000);
 
     expect((await context.list.execute({ userId: OPERATOR })).total).toBe(0);
 
@@ -902,13 +1039,18 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
 
     expect(escalated).toEqual([]);
     expect(context.topics()).toEqual([]);
-    expect(context.deliveries.occurrences[0].authorization_status).toBe("SUPERSEDED");
-    expect(sendOccurrenceAuthorizationToBusiness).toHaveBeenCalledWith(BUSINESS, {
-      type: "occurrence.authorization_superseded",
-      occurrenceId: request.id,
-      deliveryId,
-      status: "SUPERSEDED",
-    });
+    expect(context.deliveries.occurrences[0].authorization_status).toBe(
+      "SUPERSEDED",
+    );
+    expect(sendOccurrenceAuthorizationToBusiness).toHaveBeenCalledWith(
+      BUSINESS,
+      {
+        type: "occurrence.authorization_superseded",
+        occurrenceId: request.id,
+        deliveryId,
+        status: "SUPERSEDED",
+      },
+    );
   });
 
   it("a late approval after the delivery went to another route is refused and applies nothing", async () => {
@@ -916,7 +1058,12 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     const deliveryId = await seedDelivery(context);
     const typeId = await seedTowerType(context);
 
-    const first = onStop(context, deliveryId, ROUTE_A, new Date(Date.now() - 60 * 60_000));
+    const first = onStop(
+      context,
+      deliveryId,
+      ROUTE_A,
+      new Date(Date.now() - 60 * 60_000),
+    );
 
     const request = await context.report.execute({
       userId: DRIVER_USER,
@@ -926,7 +1073,10 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
       form_answers: ANSWERS,
     });
 
-    expect(context.deliveries.events[0]).toMatchObject({ type: "OCCURRENCE", routeId: ROUTE_A });
+    expect(context.deliveries.events[0]).toMatchObject({
+      type: "OCCURRENCE",
+      routeId: ROUTE_A,
+    });
 
     // Route A cancelled (its open stop cancelled, the load back to the pool),
     // then the delivery leaves again on route B with the same driver.
@@ -950,7 +1100,9 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
 
     expect(context.deliveries.deliveries[0].status).toBe("IN_TRANSIT");
     expect(context.webhooks.topics()).toEqual([]);
-    expect(context.deliveries.events.some((event) => event.type === "STATUS_CHANGE")).toBe(false);
+    expect(
+      context.deliveries.events.some((event) => event.type === "STATUS_CHANGE"),
+    ).toBe(false);
   });
 
   it("the driver's card shows only their own request, not the one of who held it before", async () => {
@@ -968,10 +1120,18 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     });
 
     const cardOf = async (driverId: string) =>
-      ((await context.deliveries.listDriverDeliveries(BUSINESS, driverId)) as Array<{
-        id: string;
-        authorization_request: { occurrenceId: string; status: string } | null;
-      }>).find((card) => card.id === deliveryId);
+      (
+        (await context.deliveries.listDriverDeliveries(
+          BUSINESS,
+          driverId,
+        )) as Array<{
+          id: string;
+          authorization_request: {
+            occurrenceId: string;
+            status: string;
+          } | null;
+        }>
+      ).find((card) => card.id === deliveryId);
 
     expect((await cardOf(DRIVER_ID))?.authorization_request).toMatchObject({
       occurrenceId: request.id,

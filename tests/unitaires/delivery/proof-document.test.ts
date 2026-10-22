@@ -17,7 +17,12 @@ function corruptPng(): Buffer {
   const chunk = (type: string, data: Buffer) => {
     const length = Buffer.alloc(4);
     length.writeUInt32BE(data.length);
-    return Buffer.concat([length, Buffer.from(type, "latin1"), data, Buffer.alloc(4)]);
+    return Buffer.concat([
+      length,
+      Buffer.from(type, "latin1"),
+      data,
+      Buffer.alloc(4),
+    ]);
   };
 
   const header = Buffer.alloc(13);
@@ -54,7 +59,9 @@ const SIGNED: ProofSigningIntent = {
 };
 
 /** Explicit key presence, not a spread: a null override must stay null. */
-function source(overrides: Partial<ProofDocumentSource> = {}): ProofDocumentSource {
+function source(
+  overrides: Partial<ProofDocumentSource> = {},
+): ProofDocumentSource {
   const base: ProofDocumentSource = {
     delivery: {
       id: "018f0000-0000-7000-8000-0000000000e1",
@@ -73,7 +80,11 @@ function source(overrides: Partial<ProofDocumentSource> = {}): ProofDocumentSour
       cep: "29106-100",
       delivered_at: new Date("2026-09-30T16:30:26.000Z"),
       received_by: null,
-      shipper: { name: "Multipla", corporate_reason: "Multipla Distribuidora de Alimentos Ltda", cnpj: null },
+      shipper: {
+        name: "Multipla",
+        corporate_reason: "Multipla Distribuidora de Alimentos Ltda",
+        cnpj: null,
+      },
     },
     business: {
       corporate_reason: "Transportes Silva Ltda",
@@ -155,10 +166,9 @@ describe("the sections, in the model's order and words", () => {
     ]);
 
     // Number and type share a row, as in the model.
-    expect(model.sections.document.blocks[0].lines[0].map((field) => field.label)).toEqual([
-      "Nº do documento",
-      "Tipo",
-    ]);
+    expect(
+      model.sections.document.blocks[0].lines[0].map((field) => field.label),
+    ).toEqual(["Nº do documento", "Tipo"]);
   });
 
   it("reproduces 'Dados da entrega' with the company's date and clock", () => {
@@ -201,7 +211,10 @@ describe("the sections, in the model's order and words", () => {
       "Identificação do Celular: 23be03c084165505",
     ]);
 
-    expect(model.map).toEqual({ latitude: -20.3502181, longitude: -40.3038332 });
+    expect(model.map).toEqual({
+      latitude: -20.3502181,
+      longitude: -40.3038332,
+    });
   });
 
   it("puts every text in the model's sequence", () => {
@@ -224,7 +237,9 @@ describe("the sections, in the model's order and words", () => {
   it("adds 'Recebido por' after Ocorrência only when somebody was named", () => {
     expect(value(build().sections.delivery, "Recebido por")).toBeUndefined();
 
-    const named = build({ delivery: { ...source().delivery, received_by: " Maria Souza " } });
+    const named = build({
+      delivery: { ...source().delivery, received_by: " Maria Souza " },
+    });
 
     expect(fields(named.sections.delivery).slice(-2)).toEqual([
       "Ocorrência: Entrega normal",
@@ -244,7 +259,12 @@ describe("the yellow stamp under the photo", () => {
 
   it("falls back to the delivery moment without a photo time, and says when there was no GPS", () => {
     const model = build({
-      proof: { ...source().proof!, photo_taken_at: null, latitude: null, longitude: null },
+      proof: {
+        ...source().proof!,
+        photo_taken_at: null,
+        latitude: null,
+        longitude: null,
+      },
     });
 
     expect(model.receipt.stamp).toBe(
@@ -294,7 +314,10 @@ describe("what it says when the data is not there", () => {
 
   it("never invents a CNPJ: a key with bad check digits and no shipper CNPJ is 'Não informado'", () => {
     const model = build({
-      delivery: { ...source().delivery, invoice_key: NFE_KEY.replace("31358035000120", "31358035000121") },
+      delivery: {
+        ...source().delivery,
+        invoice_key: NFE_KEY.replace("31358035000120", "31358035000121"),
+      },
     });
 
     expect(fields(model.sections.document)[4]).toBe(`CNPJ: ${MISSING}`);
@@ -310,13 +333,21 @@ describe("what it says when the data is not there", () => {
     });
 
     expect(fields(model.sections.document)).toContain("CNPJ: 11222333000181");
-    expect(fields(model.sections.document)).toContain("Razão Social Emitente: Multipla");
-    expect(fields(model.sections.document).slice(-1)).toEqual(["CPF: 09797417778"]);
+    expect(fields(model.sections.document)).toContain(
+      "Razão Social Emitente: Multipla",
+    );
+    expect(fields(model.sections.document).slice(-1)).toEqual([
+      "CPF: 09797417778",
+    ]);
   });
 
   it("labels the registered address when the GPS address is unavailable, never passing it off as GPS", () => {
     for (const proof of [
-      { ...source().proof!, gps_address: null, gps_address_source: "UNAVAILABLE" as const },
+      {
+        ...source().proof!,
+        gps_address: null,
+        gps_address_source: "UNAVAILABLE" as const,
+      },
       { ...source().proof!, gps_address: null, gps_address_source: null },
     ]) {
       const gps = build({ proof }).sections.protocol.blocks[0];
@@ -330,7 +361,9 @@ describe("what it says when the data is not there", () => {
   });
 
   it("says the GPS was not captured, with no coordinates, address or map", () => {
-    const model = build({ proof: { ...source().proof!, latitude: null, longitude: null } });
+    const model = build({
+      proof: { ...source().proof!, latitude: null, longitude: null },
+    });
     const gps = model.sections.protocol.blocks[0];
 
     expect(gps.lines).toEqual([]);
@@ -338,13 +371,17 @@ describe("what it says when the data is not there", () => {
     expect(model.map).toBeNull();
 
     // (0,0) is a phone without a fix, not a place in the Atlantic.
-    expect(build({ proof: { ...source().proof!, latitude: 0, longitude: 0 } }).map).toBeNull();
+    expect(
+      build({ proof: { ...source().proof!, latitude: 0, longitude: 0 } }).map,
+    ).toBeNull();
   });
 
   it("prints 'Entrega realizada' rather than a type nobody registered", () => {
     const model = build({ deliveredTypeName: null });
 
-    expect(value(model.sections.delivery, "Ocorrência")).toBe("Entrega realizada");
+    expect(value(model.sections.delivery, "Ocorrência")).toBe(
+      "Entrega realizada",
+    );
   });
 
   it("still builds a document when there is no proof event at all", () => {
@@ -385,10 +422,16 @@ describe("a delivery that FAILED", () => {
   it("is the record of the blocking occurrence: its title, type, moment, GPS and photo", () => {
     const model = failed();
 
-    expect(model.header.title).toBe("Certificado Digital do Registro de Ocorrência");
+    expect(model.header.title).toBe(
+      "Certificado Digital do Registro de Ocorrência",
+    );
     expect(model.sections.delivery.title).toBe("Dados da ocorrência:");
-    expect(value(model.sections.delivery, "Ocorrência")).toBe("Destinatário ausente");
-    expect(value(model.sections.delivery, "Hora")).toBe("12:10:05 (horário de Brasília, UTC-3)");
+    expect(value(model.sections.delivery, "Ocorrência")).toBe(
+      "Destinatário ausente",
+    );
+    expect(value(model.sections.delivery, "Hora")).toBe(
+      "12:10:05 (horário de Brasília, UTC-3)",
+    );
     expect(model.map).toEqual({ latitude: -20.31, longitude: -40.29 });
     expect(model.receipt.photoKey).toBe("occurrences/portaria.jpg");
     expect(model.receipt.signatureKey).toBeNull();
@@ -401,7 +444,9 @@ describe("a delivery that FAILED", () => {
     const gps = failed().sections.protocol.blocks[0];
 
     expect(gps.heading).toBe("GPS coletado no local da ocorrência:");
-    expect(gps.notes?.[0]).toBe("Endereço cadastrado da entrega (geocodificação indisponível):");
+    expect(gps.notes?.[0]).toBe(
+      "Endereço cadastrado da entrega (geocodificação indisponível):",
+    );
   });
 
   it("falls back to the status change that set FAILED when no occurrence blocked it", () => {
@@ -409,7 +454,11 @@ describe("a delivery that FAILED", () => {
     // "Não informado" for Data, Hora and Ocorrência despite a known reason.
     const model = build(
       {
-        delivery: { ...source().delivery, status: "FAILED", delivered_at: null },
+        delivery: {
+          ...source().delivery,
+          status: "FAILED",
+          delivered_at: null,
+        },
         occurrences: [
           {
             created_at: new Date("2026-09-30T14:00:00.000Z"),
@@ -426,9 +475,13 @@ describe("a delivery that FAILED", () => {
       SIGNED,
     );
 
-    expect(value(model.sections.delivery, "Ocorrência")).toBe("Cliente cancelou o pedido");
+    expect(value(model.sections.delivery, "Ocorrência")).toBe(
+      "Cliente cancelou o pedido",
+    );
     expect(value(model.sections.delivery, "Data")).toBe("2026-09-30");
-    expect(value(model.sections.delivery, "Hora")).toBe("15:45:10 (horário de Brasília, UTC-3)");
+    expect(value(model.sections.delivery, "Hora")).toBe(
+      "15:45:10 (horário de Brasília, UTC-3)",
+    );
     expect(model.receipt.stamp).toContain("Trajetto - 30/09/2026 15:45:10");
   });
 
@@ -445,12 +498,17 @@ describe("a delivery that FAILED", () => {
           },
         ],
         // An earlier panel FAILED, reopened, then the driver's occurrence.
-        failure: { occurred_at: new Date("2026-09-30T12:00:00.000Z"), reasonName: "Outro" },
+        failure: {
+          occurred_at: new Date("2026-09-30T12:00:00.000Z"),
+          reasonName: "Outro",
+        },
       },
       SIGNED,
     );
 
-    expect(value(model.sections.delivery, "Ocorrência")).toBe("Destinatário ausente");
+    expect(value(model.sections.delivery, "Ocorrência")).toBe(
+      "Destinatário ausente",
+    );
   });
 
   it("prints a manual FAILED made after the blocking occurrence, not the stale occurrence", () => {
@@ -467,7 +525,11 @@ describe("a delivery that FAILED", () => {
     ];
     const later = build(
       {
-        delivery: { ...source().delivery, status: "FAILED", delivered_at: null },
+        delivery: {
+          ...source().delivery,
+          status: "FAILED",
+          delivered_at: null,
+        },
         occurrences,
         failure: {
           occurred_at: new Date("2026-09-30T21:00:00.000Z"),
@@ -478,14 +540,22 @@ describe("a delivery that FAILED", () => {
       SIGNED,
     );
 
-    expect(value(later.sections.delivery, "Ocorrência")).toBe("Cliente cancelou");
-    expect(value(later.sections.delivery, "Hora")).toBe("18:00:00 (horário de Brasília, UTC-3)");
+    expect(value(later.sections.delivery, "Ocorrência")).toBe(
+      "Cliente cancelou",
+    );
+    expect(value(later.sections.delivery, "Hora")).toBe(
+      "18:00:00 (horário de Brasília, UTC-3)",
+    );
     expect(later.receipt.stamp).not.toContain("-20,3100");
 
     // The tower's approval writes a later change pointing at the occurrence.
     const approved = build(
       {
-        delivery: { ...source().delivery, status: "FAILED", delivered_at: null },
+        delivery: {
+          ...source().delivery,
+          status: "FAILED",
+          delivered_at: null,
+        },
         occurrences,
         failure: {
           occurred_at: new Date("2026-09-30T13:05:00.000Z"),
@@ -496,8 +566,12 @@ describe("a delivery that FAILED", () => {
       SIGNED,
     );
 
-    expect(value(approved.sections.delivery, "Ocorrência")).toBe("Destinatário ausente");
-    expect(value(approved.sections.delivery, "Hora")).toBe("10:00:00 (horário de Brasília, UTC-3)");
+    expect(value(approved.sections.delivery, "Ocorrência")).toBe(
+      "Destinatário ausente",
+    );
+    expect(value(approved.sections.delivery, "Hora")).toBe(
+      "10:00:00 (horário de Brasília, UTC-3)",
+    );
   });
 
   it("is titled 'Registro de Ocorrência' when unsigned", () => {
@@ -529,14 +603,20 @@ describe("signed and unsigned: the document never claims what it is not", () => 
     for (const claim of CLAIMS) expect(texts).not.toContain(claim);
 
     // "ICP-Brasil" only inside the sentence that denies it.
-    for (const text of proofDocumentTexts(model).filter((entry) => entry.includes("ICP-Brasil"))) {
+    for (const text of proofDocumentTexts(model).filter((entry) =>
+      entry.includes("ICP-Brasil"),
+    )) {
       expect(text).toMatch(/sem assinatura digital ICP-Brasil/);
     }
 
     expect(model.signed).toBe(false);
     expect(model.header.title).toBe("Comprovante de Entrega");
-    expect(model.info.title).toBe("Comprovante de entrega (sem assinatura digital)");
-    expect(model.authentication.qrUrl).toBe(`${VERIFY_BASE}/verificar/${TOKEN}`);
+    expect(model.info.title).toBe(
+      "Comprovante de entrega (sem assinatura digital)",
+    );
+    expect(model.authentication.qrUrl).toBe(
+      `${VERIFY_BASE}/verificar/${TOKEN}`,
+    );
     expect(texts).toContain("Este documento não foi assinado digitalmente.");
   });
 
@@ -546,8 +626,8 @@ describe("signed and unsigned: the document never claims what it is not", () => 
     );
 
     expect(
-      build({}, { status: "UNSIGNED" }, { cnpj: "11222333000181" }).authentication.paragraphs[0]
-        .text,
+      build({}, { status: "UNSIGNED" }, { cnpj: "11222333000181" })
+        .authentication.paragraphs[0].text,
     ).toContain("(Trajetto Sistemas Ltda – CNPJ 11.222.333/0001-81)");
   });
 
@@ -566,7 +646,9 @@ describe("signed and unsigned: the document never claims what it is not", () => 
     expect(model.authentication.paragraphs[0].text).toBe(
       "A TRAJETTO (TRAJETTO SISTEMAS LTDA – CNPJ 11.222.333/0001-81) garante a autenticidade e integridade deste documento e declara que as informações neste documento são fidedignas às informações capturadas e recebidas em campo. Assina-se com Certificado Digital ICP-Brasil.",
     );
-    expect(proofDocumentTexts(model).join("\n")).not.toContain("99.999.999/0001-91");
+    expect(proofDocumentTexts(model).join("\n")).not.toContain(
+      "99.999.999/0001-91",
+    );
     expect(model.authentication.steps).toEqual([
       "A. Acesse o site: https://validar.iti.gov.br ou leia o qrcode ao lado.",
       "B. Submeta este arquivo pdf para consultar validade jurídica deste documento.",
@@ -580,18 +662,27 @@ describe("signed and unsigned: the document never claims what it is not", () => 
   });
 
   it("signed by a certificate without a CNPJ: the name alone, no number invented", () => {
-    const model = build({}, { status: "SIGNED", signer: { name: "EMPRESA X", cnpj: null } });
+    const model = build(
+      {},
+      { status: "SIGNED", signer: { name: "EMPRESA X", cnpj: null } },
+    );
 
-    expect(model.authentication.paragraphs[0].text).toMatch(/^A TRAJETTO \(EMPRESA X\) garante/);
+    expect(model.authentication.paragraphs[0].text).toMatch(
+      /^A TRAJETTO \(EMPRESA X\) garante/,
+    );
   });
 });
 
 describe("the moments it prints", () => {
   it("are the company's own clock, labelled, when it has a zone", () => {
-    const model = build({ business: { ...source().business, timezone: "America/Manaus" } });
+    const model = build({
+      business: { ...source().business, timezone: "America/Manaus" },
+    });
 
     expect(value(model.sections.delivery, "Data")).toBe("2026-09-30");
-    expect(value(model.sections.delivery, "Hora")).toBe("12:30:26 (horário de Manaus, UTC-4)");
+    expect(value(model.sections.delivery, "Hora")).toBe(
+      "12:30:26 (horário de Manaus, UTC-4)",
+    );
     expect(model.receipt.stamp).toMatch(/^Trajetto - 30\/09\/2026 12:30:08 /);
   });
 
@@ -599,7 +690,10 @@ describe("the moments it prints", () => {
     // 02:00 UTC on the 1st is still the 30th in Manaus.
     const model = build({
       business: { ...source().business, timezone: "America/Manaus" },
-      proof: { ...source().proof!, created_at: new Date("2026-10-01T02:00:00.000Z") },
+      proof: {
+        ...source().proof!,
+        created_at: new Date("2026-10-01T02:00:00.000Z"),
+      },
     });
 
     expect(value(model.sections.delivery, "Data")).toBe("2026-09-30");
@@ -609,7 +703,9 @@ describe("the moments it prints", () => {
     for (const timezone of ["", "Not/A_Zone"]) {
       const model = build({ business: { ...source().business, timezone } });
 
-      expect(value(model.sections.delivery, "Hora")).toBe("13:30:26 (horário de Brasília, UTC-3)");
+      expect(value(model.sections.delivery, "Hora")).toBe(
+        "13:30:26 (horário de Brasília, UTC-3)",
+      );
     }
   });
 
@@ -641,16 +737,24 @@ describe("the verification link", () => {
 
 describe("the bytes", () => {
   it("are a PDF, and the hash is of exactly those bytes", async () => {
-    const rendered = await renderProofPdf(build(), { photo: null, signature: null });
+    const rendered = await renderProofPdf(build(), {
+      photo: null,
+      signature: null,
+    });
 
     expect(rendered.bytes.subarray(0, 4).toString()).toBe("%PDF");
     expect(rendered.sha256).toMatch(/^[0-9a-f]{64}$/);
   }, 30_000);
 
   it("changes when the content changes", async () => {
-    const first = await renderProofPdf(build(), { photo: null, signature: null });
+    const first = await renderProofPdf(build(), {
+      photo: null,
+      signature: null,
+    });
     const second = await renderProofPdf(
-      build({ delivery: { ...source().delivery, recipient_name: "Outro cliente" } }),
+      build({
+        delivery: { ...source().delivery, recipient_name: "Outro cliente" },
+      }),
       { photo: null, signature: null },
     );
 

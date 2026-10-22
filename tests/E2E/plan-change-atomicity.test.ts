@@ -1,4 +1,12 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -90,7 +98,10 @@ function eventsOf(businessId: string, topic: string) {
   });
 }
 
-async function moduleEnabled(businessId: string, module: "DELIVERIES" | "FLEET") {
+async function moduleEnabled(
+  businessId: string,
+  module: "DELIVERIES" | "FLEET",
+) {
   const row = await prisma.businessEntitlement.findUnique({
     where: { businessId_module: { businessId, module } },
   });
@@ -196,7 +207,9 @@ describe("two masters switching the same module off at the same moment", () => {
       ]);
 
       expect(await moduleEnabled(businessId, "FLEET")).toBe(false);
-      expect(await eventsOf(businessId, "business-module.changed")).toHaveLength(1);
+      expect(
+        await eventsOf(businessId, "business-module.changed"),
+      ).toHaveLength(1);
     }
   });
 });
@@ -262,7 +275,11 @@ describe("changing a limit when the event insert fails", () => {
         .ai_analysis_limit,
     ).toBe(5);
 
-    await useCase().execute({ userId: MASTER, businessId, ai_analysis_limit: 50 });
+    await useCase().execute({
+      userId: MASTER,
+      businessId,
+      ai_analysis_limit: 50,
+    });
 
     const events = await eventsOf(businessId, "business-limit.changed");
 
@@ -283,7 +300,9 @@ describe("changing a limit when the event insert fails", () => {
       new OutboxService(),
     ).execute({ userId: MASTER, businessId, vehicle_limit: 10 });
 
-    expect(await eventsOf(businessId, "business-limit.changed")).toHaveLength(0);
+    expect(await eventsOf(businessId, "business-limit.changed")).toHaveLength(
+      0,
+    );
   });
 });
 

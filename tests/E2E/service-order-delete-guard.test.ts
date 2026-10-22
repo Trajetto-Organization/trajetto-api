@@ -67,7 +67,11 @@ beforeAll(async () => {
   await seedCarrier(prisma, OTHER);
 
   branchId = await seedBranch(prisma, CARRIER, "Filial Oficina");
-  vehicleId = await seedVehicle(prisma, CARRIER, { plate: "PQR4S44", branchId, mileage: 42_000 });
+  vehicleId = await seedVehicle(prisma, CARRIER, {
+    plate: "PQR4S44",
+    branchId,
+    mileage: 42_000,
+  });
 
   const admin = await seedUser(prisma, "Gestora", "BUSINESS_ADMIN", CARRIER);
   adminId = admin.id;
@@ -77,7 +81,10 @@ beforeAll(async () => {
   otherToken = other.token;
 
   const otherBranch = await seedBranch(prisma, OTHER, "Filial da Outra");
-  const otherVehicle = await seedVehicle(prisma, OTHER, { plate: "XYZ5W55", branchId: otherBranch });
+  const otherVehicle = await seedVehicle(prisma, OTHER, {
+    plate: "XYZ5W55",
+    branchId: otherBranch,
+  });
 
   otherOrderId = (
     await prisma.serviceOrder.create({
@@ -109,7 +116,9 @@ describe("DELETE /service-order/delete-service-order — the guard (FLEET-SO-1)"
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({ code: "SERVICE_ORDER_COMPLETED" });
-    expect(await prisma.serviceOrder.findUnique({ where: { id } })).not.toBeNull();
+    expect(
+      await prisma.serviceOrder.findUnique({ where: { id } }),
+    ).not.toBeNull();
   });
 
   it("refuses an order a bill points at, and the bill keeps its origin", async () => {
@@ -136,7 +145,9 @@ describe("DELETE /service-order/delete-service-order — the guard (FLEET-SO-1)"
     });
     expect(response.json().message).toContain("1 conta(s) a pagar");
 
-    const kept = await prisma.accountPayable.findUniqueOrThrow({ where: { id: bill.id } });
+    const kept = await prisma.accountPayable.findUniqueOrThrow({
+      where: { id: bill.id },
+    });
 
     expect(kept.serviceOrderId).toBe(id);
   });
@@ -145,13 +156,29 @@ describe("DELETE /service-order/delete-service-order — the guard (FLEET-SO-1)"
     const id = await order();
 
     const part = await prisma.part.create({
-      data: { description: `Pastilha ${id.slice(-4)}`, unit_price: 80, businessId: CARRIER },
+      data: {
+        description: `Pastilha ${id.slice(-4)}`,
+        unit_price: 80,
+        businessId: CARRIER,
+      },
     });
 
     await prisma.serviceOrderPart.createMany({
       data: [
-        { serviceOrderId: id, partId: part.id, unit_price: 80, quantity: 4, businessId: CARRIER },
-        { serviceOrderId: id, partId: part.id, unit_price: 10, quantity: 1, businessId: CARRIER },
+        {
+          serviceOrderId: id,
+          partId: part.id,
+          unit_price: 80,
+          quantity: 4,
+          businessId: CARRIER,
+        },
+        {
+          serviceOrderId: id,
+          partId: part.id,
+          unit_price: 10,
+          quantity: 1,
+          businessId: CARRIER,
+        },
       ],
     });
 
@@ -159,9 +186,13 @@ describe("DELETE /service-order/delete-service-order — the guard (FLEET-SO-1)"
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ partsRemoved: 2 });
-    expect(await prisma.serviceOrderPart.count({ where: { serviceOrderId: id } })).toBe(0);
+    expect(
+      await prisma.serviceOrderPart.count({ where: { serviceOrderId: id } }),
+    ).toBe(0);
     // The catalog keeps the part.
-    expect(await prisma.part.findUnique({ where: { id: part.id } })).not.toBeNull();
+    expect(
+      await prisma.part.findUnique({ where: { id: part.id } }),
+    ).not.toBeNull();
   });
 
   it("sees a bill linked while the delete waits for its lock", async () => {
@@ -210,7 +241,9 @@ describe("DELETE /service-order/delete-service-order — the guard (FLEET-SO-1)"
     const response = await deleting;
 
     expect(response.statusCode).toBe(409);
-    expect(await prisma.serviceOrder.findUnique({ where: { id } })).not.toBeNull();
+    expect(
+      await prisma.serviceOrder.findUnique({ where: { id } }),
+    ).not.toBeNull();
     expect(
       await prisma.accountPayable.count({ where: { serviceOrderId: id } }),
     ).toBe(1);
@@ -234,7 +267,9 @@ describe("DELETE /service-order/delete-service-order — the guard (FLEET-SO-1)"
 
     // Through the other company's path the tenant gate refuses the company.
     expect((await remove(otherOrderId, OTHER)).statusCode).toBe(403);
-    expect((await remove(otherOrderId, OTHER, otherToken)).statusCode).toBe(200);
+    expect((await remove(otherOrderId, OTHER, otherToken)).statusCode).toBe(
+      200,
+    );
   });
 });
 
@@ -266,12 +301,16 @@ describe("finishing an order at the same mileage (FLEET-SO-4)", () => {
 
     expect(response.statusCode, response.body).toBe(201);
 
-    const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
+    const vehicle = await prisma.vehicle.findUniqueOrThrow({
+      where: { id: vehicleId },
+    });
 
     // The odometer stays; the maintenance is recorded at that reading.
     expect(vehicle.current_mileage).toBe(42_000);
     expect(vehicle.last_maintenance_mileage).toBe(42_000);
-    expect(vehicle.last_maintenance_date?.toISOString()).toBe("2026-09-21T12:00:00.000Z");
+    expect(vehicle.last_maintenance_date?.toISOString()).toBe(
+      "2026-09-21T12:00:00.000Z",
+    );
   });
 
   it("finishes an open order at the same reading", async () => {
@@ -292,10 +331,14 @@ describe("finishing an order at the same mileage (FLEET-SO-4)", () => {
 
     expect(response.statusCode, response.body).toBe(200);
 
-    const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
+    const vehicle = await prisma.vehicle.findUniqueOrThrow({
+      where: { id: vehicleId },
+    });
 
     expect(vehicle.current_mileage).toBe(42_000);
-    expect(vehicle.last_maintenance_date?.toISOString()).toBe(finishedAt.toISOString());
+    expect(vehicle.last_maintenance_date?.toISOString()).toBe(
+      finishedAt.toISOString(),
+    );
   });
 
   it("still refuses a reading behind the odometer", async () => {
@@ -311,9 +354,13 @@ describe("finishing an order at the same mileage (FLEET-SO-4)", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({ code: "SERVICE_ORDER_MILEAGE_BEHIND" });
+    expect(response.json()).toMatchObject({
+      code: "SERVICE_ORDER_MILEAGE_BEHIND",
+    });
 
-    const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
+    const vehicle = await prisma.vehicle.findUniqueOrThrow({
+      where: { id: vehicleId },
+    });
 
     expect(vehicle.current_mileage).toBe(42_000);
   });
@@ -356,7 +403,11 @@ describe("editing a finished order after the odometer moved on", () => {
   });
 
   beforeAll(async () => {
-    truck = await seedVehicle(prisma, CARRIER, { plate: "FRZ6T66", branchId, mileage: 44_000 });
+    truck = await seedVehicle(prisma, CARRIER, {
+      plate: "FRZ6T66",
+      branchId,
+      mileage: 44_000,
+    });
     orderId = await order({ vehicle: truck });
 
     // Opened at 44 000 km: the snapshot a correction is judged against.
@@ -375,16 +426,25 @@ describe("editing a finished order after the odometer moved on", () => {
     expect(finished.statusCode, finished.body).toBe(200);
 
     // The next fuel-up moves the odometer on.
-    await prisma.vehicle.update({ where: { id: truck }, data: { current_mileage: 50_000 } });
+    await prisma.vehicle.update({
+      where: { id: truck },
+      data: { current_mileage: 50_000 },
+    });
   });
 
   it("saves a change of description with the stored reading unchanged", async () => {
-    const response = await update(formPayload({ description: "Troca de pastilhas e discos" }));
+    const response = await update(
+      formPayload({ description: "Troca de pastilhas e discos" }),
+    );
 
     expect(response.statusCode, response.body).toBe(200);
 
-    const saved = await prisma.serviceOrder.findUniqueOrThrow({ where: { id: orderId } });
-    const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: truck } });
+    const saved = await prisma.serviceOrder.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    const vehicle = await prisma.vehicle.findUniqueOrThrow({
+      where: { id: truck },
+    });
 
     expect(saved.description).toBe("Troca de pastilhas e discos");
     expect(saved.new_mileage_after_service).toBe(45_000);
@@ -397,12 +457,18 @@ describe("editing a finished order after the odometer moved on", () => {
     // Judged against the live odometer, this honest correction was refused
     // (400 SERVICE_ORDER_MILEAGE_BEHIND): only a false value above 50 000
     // could be saved.
-    const response = await update(formPayload({ new_mileage_after_service: 45_500 }));
+    const response = await update(
+      formPayload({ new_mileage_after_service: 45_500 }),
+    );
 
     expect(response.statusCode, response.body).toBe(200);
 
-    const saved = await prisma.serviceOrder.findUniqueOrThrow({ where: { id: orderId } });
-    const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: truck } });
+    const saved = await prisma.serviceOrder.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    const vehicle = await prisma.vehicle.findUniqueOrThrow({
+      where: { id: truck },
+    });
 
     expect(saved.new_mileage_after_service).toBe(45_500);
     expect(vehicle.current_mileage).toBe(50_000);
@@ -410,13 +476,19 @@ describe("editing a finished order after the odometer moved on", () => {
   });
 
   it("still refuses a correction behind the order's opening reading", async () => {
-    const response = await update(formPayload({ new_mileage_after_service: 43_000 }));
+    const response = await update(
+      formPayload({ new_mileage_after_service: 43_000 }),
+    );
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({ code: "SERVICE_ORDER_MILEAGE_BEHIND" });
+    expect(response.json()).toMatchObject({
+      code: "SERVICE_ORDER_MILEAGE_BEHIND",
+    });
     expect(response.json().message).toContain("abertura da ordem (44000 km)");
 
-    const saved = await prisma.serviceOrder.findUniqueOrThrow({ where: { id: orderId } });
+    const saved = await prisma.serviceOrder.findUniqueOrThrow({
+      where: { id: orderId },
+    });
 
     expect(saved.new_mileage_after_service).toBe(45_500);
   });
@@ -437,21 +509,29 @@ describe("editing a finished order after the odometer moved on", () => {
 
     expect(later.statusCode, later.body).toBe(200);
 
-    const corrected = await update(formPayload({ new_mileage_after_service: 46_000 }));
+    const corrected = await update(
+      formPayload({ new_mileage_after_service: 46_000 }),
+    );
 
     expect(corrected.statusCode, corrected.body).toBe(200);
 
-    let vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: truck } });
+    let vehicle = await prisma.vehicle.findUniqueOrThrow({
+      where: { id: truck },
+    });
 
     expect(vehicle.current_mileage).toBe(52_000);
     expect(vehicle.last_maintenance_mileage).toBe(52_000);
 
-    const ahead = await update(formPayload({ new_mileage_after_service: 53_000 }));
+    const ahead = await update(
+      formPayload({ new_mileage_after_service: 53_000 }),
+    );
 
     expect(ahead.statusCode).toBe(400);
     expect(ahead.json()).toMatchObject({ code: "SERVICE_ORDER_MILEAGE_AHEAD" });
 
-    const saved = await prisma.serviceOrder.findUniqueOrThrow({ where: { id: orderId } });
+    const saved = await prisma.serviceOrder.findUniqueOrThrow({
+      where: { id: orderId },
+    });
     vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: truck } });
 
     expect(saved.new_mileage_after_service).toBe(46_000);

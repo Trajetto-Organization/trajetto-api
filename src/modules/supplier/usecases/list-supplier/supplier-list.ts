@@ -12,8 +12,32 @@ import type { SortOrder, SortSpec } from "@/shared/pagination/list-query";
 
 /** The 27 federative units; the UF facet refuses anything else. */
 const BRAZILIAN_UFS = [
-  "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT",
-  "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP",
+  "AC",
+  "AL",
+  "AM",
+  "AP",
+  "BA",
+  "CE",
+  "DF",
+  "ES",
+  "GO",
+  "MA",
+  "MG",
+  "MS",
+  "MT",
+  "PA",
+  "PB",
+  "PE",
+  "PI",
+  "PR",
+  "RJ",
+  "RN",
+  "RO",
+  "RR",
+  "RS",
+  "SC",
+  "SE",
+  "SP",
   "TO",
 ] as const;
 
@@ -110,7 +134,10 @@ function supplierListWhere(
 
   // The tenant stays a top-level key: the (businessId, created_at) index
   // serves every read of the list.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Suppliers per UF over the base (search applied, UF facet not). */

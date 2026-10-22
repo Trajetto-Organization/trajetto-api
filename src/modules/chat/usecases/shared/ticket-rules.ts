@@ -27,7 +27,10 @@ function truncateSubject(subject: string): string {
 }
 
 /** "{tipo} — {destinatário}", the occurrence ticket's subject. */
-function occurrenceTicketSubject(typeName: string, recipientName: string): string {
+function occurrenceTicketSubject(
+  typeName: string,
+  recipientName: string,
+): string {
   return truncateSubject(`${typeName} — ${recipientName}`);
 }
 
@@ -66,7 +69,9 @@ function closeOutcomesFor(
 ): Array<Exclude<SupportTicketOutcome, "MIGRATED">> {
   if (status === "CLOSED") return [];
 
-  return authorizationStatus === "PENDING" ? ["APPROVED", "DENIED"] : ["RESOLVED"];
+  return authorizationStatus === "PENDING"
+    ? ["APPROVED", "DENIED"]
+    : ["RESOLVED"];
 }
 
 type CloseOutcomeProblem =
@@ -80,9 +85,11 @@ function closeOutcomeProblem(
 ): CloseOutcomeProblem | null {
   const pending = authorizationStatus === "PENDING";
 
-  if (pending && outcome === "RESOLVED") return "SUPPORT_TICKET_AUTHORIZATION_PENDING";
+  if (pending && outcome === "RESOLVED")
+    return "SUPPORT_TICKET_AUTHORIZATION_PENDING";
 
-  if (!pending && outcome !== "RESOLVED") return "SUPPORT_TICKET_NOT_AUTHORIZATION";
+  if (!pending && outcome !== "RESOLVED")
+    return "SUPPORT_TICKET_NOT_AUTHORIZATION";
 
   return null;
 }
@@ -147,7 +154,8 @@ function routeLegacyMessage(input: LegacyRoutingInput): LegacyRoute {
     return { target: "TICKET", ticketId: recent.id };
   }
 
-  if (input.deliveryId) return { target: "DELIVERY", deliveryId: input.deliveryId };
+  if (input.deliveryId)
+    return { target: "DELIVERY", deliveryId: input.deliveryId };
 
   const routeId = input.explicitRouteId ?? input.derivedRouteId;
 
@@ -183,4 +191,9 @@ export {
   messageSide,
   canReopen,
 };
-export type { OccurrenceTicketInput, LegacyRoutingInput, LegacyRoute, CloseOutcomeProblem };
+export type {
+  OccurrenceTicketInput,
+  LegacyRoutingInput,
+  LegacyRoute,
+  CloseOutcomeProblem,
+};

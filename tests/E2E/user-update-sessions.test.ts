@@ -1,4 +1,13 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -181,16 +190,30 @@ async function seedDriver(businessId: string, name: string): Promise<string> {
 }
 
 /** The inbox, the push devices and an activity, so the purge has something to do. */
-async function seedBelongings(userId: string, businessId: string): Promise<void> {
+async function seedBelongings(
+  userId: string,
+  businessId: string,
+): Promise<void> {
   await prisma.notification.createMany({
     data: [
-      { type: "delivery", title: "Sua entrega", message: "Rota do dia", userId, businessId, link: "/driver/deliveries" },
+      {
+        type: "delivery",
+        title: "Sua entrega",
+        message: "Rota do dia",
+        userId,
+        businessId,
+        link: "/driver/deliveries",
+      },
       { type: "plan", title: "Plano", message: "Limite", userId, businessId },
     ],
   });
 
   await prisma.pushDeviceToken.create({
-    data: { userId, token: `ExponentPushToken[${randomUUID()}]`, platform: "android" },
+    data: {
+      userId,
+      token: `ExponentPushToken[${randomUUID()}]`,
+      platform: "android",
+    },
   });
 
   await prisma.activity.create({
@@ -218,7 +241,11 @@ async function belongings(userId: string) {
   return { user, refresh, push, notifications, activities };
 }
 
-async function patch(actor: Seeded, target: string, payload: Record<string, unknown>) {
+async function patch(
+  actor: Seeded,
+  target: string,
+  payload: Record<string, unknown>,
+) {
   return app.inject({
     method: "PATCH",
     url: `/user/update-user/${target}`,
@@ -235,11 +262,17 @@ async function me(user: Seeded) {
   });
 }
 
-async function mailsTo(email: string, template: string, wait = 2_000): Promise<Mail[]> {
+async function mailsTo(
+  email: string,
+  template: string,
+  wait = 2_000,
+): Promise<Mail[]> {
   const deadline = Date.now() + wait;
 
   for (;;) {
-    const found = mails.filter((mail) => mail.to === email && mail.path.endsWith(template));
+    const found = mails.filter(
+      (mail) => mail.to === email && mail.path.endsWith(template),
+    );
 
     if (found.length > 0 || Date.now() > deadline) return found;
 
@@ -264,8 +297,16 @@ beforeAll(async () => {
   profileA2 = await seedProfile(A, "Financeiro A", kanban);
   profileB1 = await seedProfile(B, "Operação B", kanban);
 
-  admin = await seedUser({ role: "BUSINESS_ADMIN", businessId: A, name: "Gestora da Empresa" });
-  master = await seedUser({ role: "MASTER", businessId: null, name: "Master da Plataforma" });
+  admin = await seedUser({
+    role: "BUSINESS_ADMIN",
+    businessId: A,
+    name: "Gestora da Empresa",
+  });
+  master = await seedUser({
+    role: "MASTER",
+    businessId: null,
+    name: "Master da Plataforma",
+  });
 
   ({ app } = await import("@/http"));
   await app.ready();
@@ -291,7 +332,11 @@ afterAll(async () => {
 
 describe("an edit that changes nothing sensitive (USR-EDIT-1)", () => {
   it("renaming, with the whole form sent back, keeps the person logged in", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
     await seedBelongings(target.id, A);
 
     const response = await patch(admin, target.id, {
@@ -319,9 +364,16 @@ describe("an edit that changes nothing sensitive (USR-EDIT-1)", () => {
   });
 
   it("sending exactly the stored values writes nothing and audits nothing", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
-    const before = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
-    const audits = () => prisma.activity.count({ where: { entityId: target.id } });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
+    const before = await prisma.user.findUniqueOrThrow({
+      where: { id: target.id },
+    });
+    const audits = () =>
+      prisma.activity.count({ where: { entityId: target.id } });
     const auditsBefore = await audits();
 
     const response = await patch(admin, target.id, {
@@ -335,7 +387,9 @@ describe("an edit that changes nothing sensitive (USR-EDIT-1)", () => {
 
     expect(response.statusCode, response.body).toBe(200);
 
-    const after = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: target.id },
+    });
 
     // The early return: no UPDATE (updated_at untouched), no audit entry,
     // no socket event, the session intact.
@@ -346,8 +400,14 @@ describe("an edit that changes nothing sensitive (USR-EDIT-1)", () => {
   });
 
   it("an e-mail sent back in another case is written, but is not a session change", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
-    const before = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
+    const before = await prisma.user.findUniqueOrThrow({
+      where: { id: target.id },
+    });
 
     const response = await patch(admin, target.id, {
       name: before.name,
@@ -358,15 +418,23 @@ describe("an edit that changes nothing sensitive (USR-EDIT-1)", () => {
 
     expect(response.statusCode, response.body).toBe(200);
 
-    const after = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: target.id },
+    });
 
     expect(after.email).toBe(before.email.toUpperCase());
     expect(after.session_version).toBe(0);
-    expect(events.user.every((event) => event.reason !== "role_changed")).toBe(true);
+    expect(events.user.every((event) => event.reason !== "role_changed")).toBe(
+      true,
+    );
   });
 
   it("changing only the profile keeps the session and asks the client to re-read", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
     await seedBelongings(target.id, A);
 
     const response = await patch(admin, target.id, {
@@ -384,14 +452,20 @@ describe("an edit that changes nothing sensitive (USR-EDIT-1)", () => {
     expect(after.user.session_version).toBe(0);
     expect(after.refresh).toBe(1);
     expect(after.notifications).toBe(2);
-    expect(events.user).toEqual([{ userId: target.id, reason: "permissions_changed" }]);
+    expect(events.user).toEqual([
+      { userId: target.id, reason: "permissions_changed" },
+    ]);
     expect((await me(target)).statusCode).toBe(200);
   });
 });
 
 describe("a change of role or driver link (USR-EDIT-2, NOTIF-ROLE-1)", () => {
   it("a new role ends every session and empties the inbox, keeping the activities", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
     await seedBelongings(target.id, A);
 
     expect((await me(target)).statusCode).toBe(200);
@@ -414,7 +488,9 @@ describe("a change of role or driver link (USR-EDIT-2, NOTIF-ROLE-1)", () => {
     expect(after.notifications).toBe(0);
     expect(after.activities).toBeGreaterThanOrEqual(1);
 
-    expect(events.user).toEqual([{ userId: target.id, reason: "role_changed" }]);
+    expect(events.user).toEqual([
+      { userId: target.id, reason: "role_changed" },
+    ]);
 
     // The token issued under the old role is dead: new login required.
     expect((await me(target)).statusCode).toBe(401);
@@ -422,7 +498,11 @@ describe("a change of role or driver link (USR-EDIT-2, NOTIF-ROLE-1)", () => {
 
   // Decision 16.100: the MASTER used to move people this way. Nobody does now.
   it("the MASTER cannot move someone to another company, and nothing ends", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
     await seedBelongings(target.id, A);
 
     const response = await patch(master, target.id, {
@@ -447,7 +527,11 @@ describe("a change of role or driver link (USR-EDIT-2, NOTIF-ROLE-1)", () => {
   });
 
   it("what was fanned out and not delivered yet goes too on a role change; the ledger stays", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
 
     // An event fanned out to the person under the old role. availableAt in
     // the future: the running pipeline must not claim it before the change —
@@ -468,9 +552,30 @@ describe("a change of role or driver link (USR-EDIT-2, NOTIF-ROLE-1)", () => {
 
     await prisma.notificationDelivery.createMany({
       data: [
-        { outboxEventId: event.id, userId: target.id, channel: "IN_APP", status: "PENDING", availableAt: later },
-        { outboxEventId: event.id, userId: target.id, channel: "EMAIL", status: "PROCESSING", availableAt: later, leaseExpiresAt: later, attempts: 1 },
-        { outboxEventId: event.id, userId: target.id, channel: "PUSH", status: "DELIVERED", deliveredAt: new Date(), attempts: 1 },
+        {
+          outboxEventId: event.id,
+          userId: target.id,
+          channel: "IN_APP",
+          status: "PENDING",
+          availableAt: later,
+        },
+        {
+          outboxEventId: event.id,
+          userId: target.id,
+          channel: "EMAIL",
+          status: "PROCESSING",
+          availableAt: later,
+          leaseExpiresAt: later,
+          attempts: 1,
+        },
+        {
+          outboxEventId: event.id,
+          userId: target.id,
+          channel: "PUSH",
+          status: "DELIVERED",
+          deliveredAt: new Date(),
+          attempts: 1,
+        },
       ],
     });
 
@@ -489,7 +594,11 @@ describe("a change of role or driver link (USR-EDIT-2, NOTIF-ROLE-1)", () => {
   });
 
   it("a profile change alone keeps what is on its way", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
 
     const event = await prisma.domainOutboxEvent.create({
       data: {
@@ -513,16 +622,24 @@ describe("a change of role or driver link (USR-EDIT-2, NOTIF-ROLE-1)", () => {
       },
     });
 
-    const response = await patch(admin, target.id, { profileAccessId: profileA2 });
+    const response = await patch(admin, target.id, {
+      profileAccessId: profileA2,
+    });
 
     expect(response.statusCode, response.body).toBe(200);
-    expect(await prisma.notificationDelivery.count({ where: { userId: target.id } })).toBe(1);
+    expect(
+      await prisma.notificationDelivery.count({ where: { userId: target.id } }),
+    ).toBe(1);
   });
 
   it("linking another driver ends the sessions of the login", async () => {
     const first = await seedDriver(A, "Motorista Um");
     const second = await seedDriver(A, "Motorista Dois");
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, driverId: first });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId: first,
+    });
     await seedBelongings(target.id, A);
 
     const response = await patch(admin, target.id, {
@@ -539,18 +656,28 @@ describe("a change of role or driver link (USR-EDIT-2, NOTIF-ROLE-1)", () => {
     expect(after.user.driverId).toBe(second);
     expect(after.user.session_version).toBe(1);
     expect(after.notifications).toBe(0);
-    expect(events.user).toEqual([{ userId: target.id, reason: "role_changed" }]);
+    expect(events.user).toEqual([
+      { userId: target.id, reason: "role_changed" },
+    ]);
   });
 
   it("a profile alone replaces the driver link instead of keeping both (USR-EDIT-3)", async () => {
     const driver = await seedDriver(A, "Motorista Três");
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, driverId: driver });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId: driver,
+    });
 
-    const response = await patch(admin, target.id, { profileAccessId: profileA1 });
+    const response = await patch(admin, target.id, {
+      profileAccessId: profileA1,
+    });
 
     expect(response.statusCode, response.body).toBe(200);
 
-    const after = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: target.id },
+    });
 
     expect(after.profileAccessId).toBe(profileA1);
     expect(after.driverId).toBeNull();
@@ -564,8 +691,15 @@ describe("who may edit whom", () => {
     const editorProfile = await seedProfile(A, "Cadastros", [
       { key: "user_registration_manage", read: true, write: true },
     ]);
-    const editor = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: editorProfile });
-    const targetAdmin = await seedUser({ role: "BUSINESS_ADMIN", businessId: A });
+    const editor = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: editorProfile,
+    });
+    const targetAdmin = await seedUser({
+      role: "BUSINESS_ADMIN",
+      businessId: A,
+    });
 
     const response = await patch(editor, targetAdmin.id, {
       role: "BUSINESS_USER",
@@ -575,17 +709,25 @@ describe("who may edit whom", () => {
     expect(response.statusCode).toBe(403);
     // The refusal a client reads as "sem permissão" (decision 4.1).
     expect(JSON.parse(response.body).code).toBe("PERMISSION_DENIED");
-    expect((await prisma.user.findUniqueOrThrow({ where: { id: targetAdmin.id } })).role).toBe(
-      "BUSINESS_ADMIN",
-    );
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: targetAdmin.id } }))
+        .role,
+    ).toBe("BUSINESS_ADMIN");
   });
 
   it("nor delete one, and the refusal says it is a permission", async () => {
     const editorProfile = await seedProfile(A, "Cadastros Exclusão", [
       { key: "user_registration_manage", read: true, write: true },
     ]);
-    const editor = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: editorProfile });
-    const targetAdmin = await seedUser({ role: "BUSINESS_ADMIN", businessId: A });
+    const editor = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: editorProfile,
+    });
+    const targetAdmin = await seedUser({
+      role: "BUSINESS_ADMIN",
+      businessId: A,
+    });
 
     const response = await app.inject({
       method: "DELETE",
@@ -603,22 +745,35 @@ describe("who may edit whom", () => {
   });
 
   it("an administrator of another company cannot edit this one's users", async () => {
-    const otherAdmin = await seedUser({ role: "BUSINESS_ADMIN", businessId: B });
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
+    const otherAdmin = await seedUser({
+      role: "BUSINESS_ADMIN",
+      businessId: B,
+    });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
 
-    const response = await patch(otherAdmin, target.id, { name: "Nome Sequestrado Aqui" });
+    const response = await patch(otherAdmin, target.id, {
+      name: "Nome Sequestrado Aqui",
+    });
 
     // The same answer as an id that does not exist: 403 confirmed the user
     // is real in some other company (IDOR sweep, 10/2026).
     expect(response.statusCode).toBe(404);
     expect(response.json().code).toBe("USER_NOT_FOUND");
-    expect((await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).name).toBe(
-      "Pessoa Cadastrada",
-    );
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).name,
+    ).toBe("Pessoa Cadastrada");
   });
 
   it("a master who left a record behind is kept, as a conflict (409), not a 500", async () => {
-    const other = await seedUser({ role: "MASTER", businessId: null, name: "Master Com Registro" });
+    const other = await seedUser({
+      role: "MASTER",
+      businessId: null,
+      name: "Master Com Registro",
+    });
 
     try {
       // An upload is a record of something a person did (RESTRICT FK).
@@ -648,11 +803,17 @@ describe("who may edit whom", () => {
   });
 
   it("a master is neither edited nor deleted through the company-user routes", async () => {
-    const other = await seedUser({ role: "MASTER", businessId: null, name: "Outro Master Aqui" });
+    const other = await seedUser({
+      role: "MASTER",
+      businessId: null,
+      name: "Outro Master Aqui",
+    });
 
     try {
       // update-user would skip the master notices: refused for a master target.
-      const updated = await patch(master, other.id, { name: "Master Renomeado" });
+      const updated = await patch(master, other.id, {
+        name: "Master Renomeado",
+      });
 
       expect(updated.statusCode).toBe(403);
       expect(JSON.parse(updated.body).code).toBe("PERMISSION_DENIED");
@@ -667,8 +828,14 @@ describe("who may edit whom", () => {
       expect(deleted.statusCode).toBe(403);
       expect(JSON.parse(deleted.body).code).toBe("PERMISSION_DENIED");
 
-      const row = await prisma.user.findUniqueOrThrow({ where: { id: other.id } });
-      expect(row).toMatchObject({ name: "Outro Master Aqui", businessId: null, role: "MASTER" });
+      const row = await prisma.user.findUniqueOrThrow({
+        where: { id: other.id },
+      });
+      expect(row).toMatchObject({
+        name: "Outro Master Aqui",
+        businessId: null,
+        role: "MASTER",
+      });
     } finally {
       await prisma.user.deleteMany({ where: { id: other.id } });
     }
@@ -677,7 +844,11 @@ describe("who may edit whom", () => {
 
 describe("a password reset by the MASTER (SEC-MAIL-1, decision 4.9)", () => {
   it("mails a single-use link, never a password, and leaves the current one in place", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
 
     const response = await patch(master, target.id, {
       sendPasswordSetupLink: true,
@@ -690,18 +861,26 @@ describe("a password reset by the MASTER (SEC-MAIL-1, decision 4.9)", () => {
     const [mail] = await mailsTo(target.email, "password-reset-by-admin.hbs");
 
     expect(mail).toBeDefined();
-    expect(String(mail.variables.url)).toMatch(/\/forgot\/password\?token=[0-9a-f-]{36}$/);
+    expect(String(mail.variables.url)).toMatch(
+      /\/forgot\/password\?token=[0-9a-f-]{36}$/,
+    );
     expect(JSON.stringify(mail.variables)).not.toContain("SenhaDigitada123");
-    expect(Object.keys(mail.variables).some((key) => /password|senha/i.test(key))).toBe(false);
+    expect(
+      Object.keys(mail.variables).some((key) => /password|senha/i.test(key)),
+    ).toBe(false);
 
     const token = await prisma.forgotPasswordVerificationToken.findUnique({
       where: { email: target.email },
     });
 
     expect(token).not.toBeNull();
-    expect(token!.expires.getTime()).toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
+    expect(token!.expires.getTime()).toBeGreaterThan(
+      Date.now() + 23 * 60 * 60 * 1000,
+    );
 
-    const after = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: target.id },
+    });
 
     expect(after.password).toBe(HASH);
     expect(after.session_version).toBe(0);
@@ -711,18 +890,26 @@ describe("a password reset by the MASTER (SEC-MAIL-1, decision 4.9)", () => {
     const reset = await app.inject({
       method: "POST",
       url: `/user/reset/password?token=${raw}`,
-      payload: { password: "NovaSenha#2026", confirmPassword: "NovaSenha#2026" },
+      payload: {
+        password: "NovaSenha#2026",
+        confirmPassword: "NovaSenha#2026",
+      },
     });
 
     expect(reset.statusCode, reset.body).toBe(200);
-    expect((await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).password).not.toBe(HASH);
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: target.id } }))
+        .password,
+    ).not.toBe(HASH);
   });
 
   describe("when the link cannot be stored", () => {
     let original: IUsersTokensRepository;
 
     beforeEach(() => {
-      original = container.resolve<IUsersTokensRepository>("UsersTokensRepository");
+      original = container.resolve<IUsersTokensRepository>(
+        "UsersTokensRepository",
+      );
 
       // The real repository, with the one write the link needs failing.
       const failing = new Proxy(original, {
@@ -745,7 +932,11 @@ describe("a password reset by the MASTER (SEC-MAIL-1, decision 4.9)", () => {
     });
 
     it("says so, and changes nothing, instead of answering success", async () => {
-      const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
+      const target = await seedUser({
+        role: "BUSINESS_USER",
+        businessId: A,
+        profileAccessId: profileA1,
+      });
 
       const response = await patch(master, target.id, {
         name: "Nome Que Não Fica",
@@ -756,27 +947,41 @@ describe("a password reset by the MASTER (SEC-MAIL-1, decision 4.9)", () => {
       expect(JSON.parse(response.body).code).toBe("PASSWORD_LINK_UNAVAILABLE");
 
       // Failed whole: the rename did not commit either, so a retry is safe.
-      const after = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+      const after = await prisma.user.findUniqueOrThrow({
+        where: { id: target.id },
+      });
       expect(after.name).toBe("Pessoa Cadastrada");
-      expect(await mailsTo(target.email, "password-reset-by-admin.hbs", 300)).toEqual([]);
+      expect(
+        await mailsTo(target.email, "password-reset-by-admin.hbs", 300),
+      ).toEqual([]);
     });
 
     it("does the same on the master route", async () => {
-      const other = await seedUser({ role: "MASTER", businessId: null, name: "Master Sem Link" });
+      const other = await seedUser({
+        role: "MASTER",
+        businessId: null,
+        name: "Master Sem Link",
+      });
 
       try {
         const response = await app.inject({
           method: "PATCH",
           url: `/user/update-master-user/${other.id}`,
           headers: { authorization: `Bearer ${master.token}` },
-          payload: { name: "Master Renomeado Agora", sendPasswordSetupLink: true },
+          payload: {
+            name: "Master Renomeado Agora",
+            sendPasswordSetupLink: true,
+          },
         });
 
         expect(response.statusCode).toBe(503);
-        expect(JSON.parse(response.body).code).toBe("PASSWORD_LINK_UNAVAILABLE");
-        expect((await prisma.user.findUniqueOrThrow({ where: { id: other.id } })).name).toBe(
-          "Master Sem Link",
+        expect(JSON.parse(response.body).code).toBe(
+          "PASSWORD_LINK_UNAVAILABLE",
         );
+        expect(
+          (await prisma.user.findUniqueOrThrow({ where: { id: other.id } }))
+            .name,
+        ).toBe("Master Sem Link");
       } finally {
         await prisma.user.deleteMany({ where: { id: other.id } });
       }
@@ -784,11 +989,21 @@ describe("a password reset by the MASTER (SEC-MAIL-1, decision 4.9)", () => {
   });
 
   it("is refused to anyone but the MASTER", async () => {
-    const target = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA1 });
+    const target = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA1,
+    });
 
-    const response = await patch(admin, target.id, { sendPasswordSetupLink: true });
+    const response = await patch(admin, target.id, {
+      sendPasswordSetupLink: true,
+    });
 
     expect(response.statusCode).toBe(403);
-    expect(await prisma.forgotPasswordVerificationToken.count({ where: { email: target.email } })).toBe(0);
+    expect(
+      await prisma.forgotPasswordVerificationToken.count({
+        where: { email: target.email },
+      }),
+    ).toBe(0);
   });
 });

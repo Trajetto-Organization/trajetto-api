@@ -103,13 +103,18 @@ function checklistListWhere(
         { vehicle: { brand: { contains: term, mode: "insensitive" } } },
         { vehicle: { model: { contains: term, mode: "insensitive" } } },
         { driver: { name: { contains: term, mode: "insensitive" } } },
-        { branch: { corporate_reason: { contains: term, mode: "insensitive" } } },
+        {
+          branch: { corporate_reason: { contains: term, mode: "insensitive" } },
+        },
         { branch: { fantasy_name: { contains: term, mode: "insensitive" } } },
       ]),
     );
   }
 
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 type ConditionCounts = Record<ChecklistCondition, number>;
@@ -135,7 +140,11 @@ interface ChecklistListSearchMeta {
 
 function toOptions(counts: NamedCount[]): FacetCount[] {
   return counts
-    .map((entry) => ({ value: entry.id, label: entry.name, count: entry.count }))
+    .map((entry) => ({
+      value: entry.id,
+      label: entry.name,
+      count: entry.count,
+    }))
     .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
 }
 
@@ -160,10 +169,9 @@ function summarizeChecklistList(
   );
 
   const total = selected
-    ? CHECKLIST_CONDITIONS.filter((condition) => selected.has(condition)).reduce(
-        (sum, condition) => sum + conditionCounts[condition],
-        0,
-      )
+    ? CHECKLIST_CONDITIONS.filter((condition) =>
+        selected.has(condition),
+      ).reduce((sum, condition) => sum + conditionCounts[condition], 0)
     : cardTotal;
 
   return {
@@ -196,7 +204,11 @@ function tallyConditions(
   };
 
   for (const group of groups) {
-    if ((CHECKLIST_CONDITIONS as readonly string[]).includes(group.overall_condition)) {
+    if (
+      (CHECKLIST_CONDITIONS as readonly string[]).includes(
+        group.overall_condition,
+      )
+    ) {
       counts[group.overall_condition as ChecklistCondition] = group._count._all;
     }
   }

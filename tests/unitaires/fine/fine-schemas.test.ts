@@ -47,17 +47,19 @@ describe("createFineSchema", () => {
   });
 
   it("still refuses repeated spaces and spaces at the ends", () => {
-    expect(createFineSchema.safeParse({ ...valid, location: "Av.  Brasil" }).success).toBe(
-      false,
-    );
-    expect(createFineSchema.safeParse({ ...valid, observation: " Radar" }).success).toBe(
-      false,
-    );
+    expect(
+      createFineSchema.safeParse({ ...valid, location: "Av.  Brasil" }).success,
+    ).toBe(false);
+    expect(
+      createFineSchema.safeParse({ ...valid, observation: " Radar" }).success,
+    ).toBe(false);
   });
 
   it("takes zero points and refuses negative ones", () => {
     expect(createFineSchema.parse({ ...valid, points: "0" }).points).toBe(0);
-    expect(createFineSchema.safeParse({ ...valid, points: "-1" }).success).toBe(false);
+    expect(createFineSchema.safeParse({ ...valid, points: "-1" }).success).toBe(
+      false,
+    );
   });
 
   it("leaves the points out when the client does not send them (the code's apply)", () => {
@@ -110,11 +112,17 @@ describe("updateFineSchema", () => {
   });
 
   it("reads an empty payment date as undoing the payment", () => {
-    expect(updateFineSchema.parse({ payment_date: "" }).payment_date).toBeNull();
+    expect(
+      updateFineSchema.parse({ payment_date: "" }).payment_date,
+    ).toBeNull();
   });
 
   it("takes days and refuses one that does not exist", () => {
-    expect(updateFineSchema.parse({ due_date: "2026-10-10" }).due_date).toBe("2026-10-10");
-    expect(updateFineSchema.safeParse({ due_date: "2026-04-31" }).success).toBe(false);
+    expect(updateFineSchema.parse({ due_date: "2026-10-10" }).due_date).toBe(
+      "2026-10-10",
+    );
+    expect(updateFineSchema.safeParse({ due_date: "2026-04-31" }).success).toBe(
+      false,
+    );
   });
 });

@@ -134,10 +134,14 @@ class ListOccurrencesUseCase {
           // Decision 14.3: a DELIVERED row's receipt and signature, signed
           // like the photos (null on a problem without them).
           receipt_photo: occurrence.receipt_photo
-            ? await this.uploadService.getFileUrl(occurrence.receipt_photo as string)
+            ? await this.uploadService.getFileUrl(
+                occurrence.receipt_photo as string,
+              )
             : null,
           signature: occurrence.signature
-            ? await this.uploadService.getFileUrl(occurrence.signature as string)
+            ? await this.uploadService.getFileUrl(
+                occurrence.signature as string,
+              )
             : null,
         })),
       );

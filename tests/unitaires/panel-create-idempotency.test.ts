@@ -90,8 +90,15 @@ function fleet() {
   const drivers = new InMemoryDriverRepository();
   const vehicles = new InMemoryVehicleRepository();
 
-  users.user.push({ id: USER, role: "BUSINESS_ADMIN", businessId: BUSINESS } as User);
-  business.business.push({ ...BUSINESS_COLUMN_DEFAULTS, id: BUSINESS } as Business);
+  users.user.push({
+    id: USER,
+    role: "BUSINESS_ADMIN",
+    businessId: BUSINESS,
+  } as User);
+  business.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
+    id: BUSINESS,
+  } as Business);
   branches.branches.push({ id: BRANCH, businessId: BUSINESS } as Branch);
   drivers.drivers.push({
     id: DRIVER,
@@ -133,7 +140,10 @@ describe("a fine saved twice with the same key", () => {
     const outbox = outboxRecorder();
 
     const codes = {
-      findTrafficViolationCodeById: async () => ({ id: TRAFFIC_CODE, points: 5 }),
+      findTrafficViolationCodeById: async () => ({
+        id: TRAFFIC_CODE,
+        points: 5,
+      }),
     } as unknown as ITrafficViolationCodeRepository;
 
     return {
@@ -236,7 +246,11 @@ describe("a service order saved twice with the same key", () => {
 
     const cards: string[] = [];
     const kanban = {
-      createCardFromServiceOrder: ({ serviceOrderId }: { serviceOrderId: string }) => {
+      createCardFromServiceOrder: ({
+        serviceOrderId,
+      }: {
+        serviceOrderId: string;
+      }) => {
         cards.push(serviceOrderId);
       },
     } as unknown as KanbanService;
@@ -356,7 +370,10 @@ describe("a mass chat notice retried after failing halfway", () => {
         driverId,
       } as User);
 
-      chat.driverDirectory.set(driverId, { name: `Motorista ${index}`, cnh: `${index}` });
+      chat.driverDirectory.set(driverId, {
+        name: `Motorista ${index}`,
+        cnh: `${index}`,
+      });
     }
 
     chat.userDirectory.set(USER, { name: "Gestora", driverId: null });
@@ -401,7 +418,10 @@ describe("a mass chat notice retried after failing halfway", () => {
     const perThread = new Map<string, number>();
 
     for (const message of chat.messages) {
-      perThread.set(message.threadId, (perThread.get(message.threadId) ?? 0) + 1);
+      perThread.set(
+        message.threadId,
+        (perThread.get(message.threadId) ?? 0) + 1,
+      );
     }
 
     expect([...perThread.values()]).toEqual([1, 1, 1]);

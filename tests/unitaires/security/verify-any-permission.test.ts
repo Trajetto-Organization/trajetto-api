@@ -38,9 +38,7 @@ const PICKER: PermissionAlternative[] = [
   { key: "delivery_manage", access: "write", options: { allowDriver: false } },
 ];
 
-const profile = (
-  ...rows: Array<[string, boolean, boolean]>
-): Principal => ({
+const profile = (...rows: Array<[string, boolean, boolean]>): Principal => ({
   role: "BUSINESS_USER",
   profileAccess: {
     permissions: rows.map(([permissionKey, canRead, canWrite]) => ({
@@ -107,9 +105,9 @@ describe("either of the grants", () => {
 
   it("refuses to be wired with no grant at all", () => {
     expect(() => verifyAnyPermission([])).toThrow(/at least one/);
-    expect("refusal" in decideAnyPermission({ role: "BUSINESS_USER" }, [])).toBe(
-      true,
-    );
+    expect(
+      "refusal" in decideAnyPermission({ role: "BUSINESS_USER" }, []),
+    ).toBe(true);
   });
 });
 
@@ -149,7 +147,9 @@ describe("the published contract of a route with alternatives", () => {
     expect(schema.description).toContain(
       "uma entre `driver_manage` (leitura) ou `delivery_manage` (escrita)",
     );
-    expect(JSON.stringify(schema.response["403"])).toContain("PERMISSION_DENIED");
+    expect(JSON.stringify(schema.response["403"])).toContain(
+      "PERMISSION_DENIED",
+    );
   });
 
   it("is what a hand-written guard attaches too", () => {

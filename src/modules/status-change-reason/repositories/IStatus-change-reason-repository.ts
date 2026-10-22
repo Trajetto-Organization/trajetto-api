@@ -27,9 +27,9 @@ interface IStatusChangeReasonRepository {
   ) => Promise<ListStatusChangeReasonsPage>;
 
   /** The picker's vocabulary: active reasons only, lean payload. */
-  listActiveStatusChangeReasons: (businessId: string) => Promise<
-    Array<{ id: string; name: string; description: string | null }>
-  >;
+  listActiveStatusChangeReasons: (
+    businessId: string,
+  ) => Promise<Array<{ id: string; name: string; description: string | null }>>;
 
   findStatusChangeReasonById: (
     reasonId: string,

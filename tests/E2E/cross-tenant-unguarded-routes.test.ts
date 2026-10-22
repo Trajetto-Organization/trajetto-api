@@ -569,10 +569,9 @@ describe("reading another carrier's operation", () => {
     });
 
     if (response.statusCode === 200) {
-      expect(
-        response.body,
-        "o último abastecimento da B vazou",
-      ).not.toContain("10500");
+      expect(response.body, "o último abastecimento da B vazou").not.toContain(
+        "10500",
+      );
 
       return;
     }
@@ -588,10 +587,9 @@ describe("reading another carrier's operation", () => {
     });
 
     if (response.statusCode === 200) {
-      expect(
-        response.body,
-        "a ordem de serviço da B vazou",
-      ).not.toContain("Revisão da B");
+      expect(response.body, "a ordem de serviço da B vazou").not.toContain(
+        "Revisão da B",
+      );
 
       return;
     }

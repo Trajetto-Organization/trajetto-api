@@ -37,7 +37,10 @@ import {
   sendOccurrenceDecisionToDriver,
 } from "@/websocket";
 
-import { DeliveryNotFoundError, DeliveryStatusConflictError } from "../errors/delivery-errors";
+import {
+  DeliveryNotFoundError,
+  DeliveryStatusConflictError,
+} from "../errors/delivery-errors";
 
 import {
   announceOccurrenceEffect,
@@ -155,7 +158,9 @@ class DecideOccurrenceAuthorizationUseCase {
     // The route's guard, restated for any other caller: the same rule the
     // panel report uses to decide whether its author self-authorizes.
     if (!canDecideAuthorizations(findUser as unknown as PermissionPrincipal)) {
-      throw permissionDenied("Seu perfil de acesso permite apenas a leitura desta seção.");
+      throw permissionDenied(
+        "Seu perfil de acesso permite apenas a leitura desta seção.",
+      );
     }
 
     const reason = note?.trim() ? note : null;
@@ -164,7 +169,10 @@ class DecideOccurrenceAuthorizationUseCase {
       throw new AuthorizationNoteRequiredError();
     }
 
-    const found = await this.authorizations.findForDecision(occurrenceId, businessId);
+    const found = await this.authorizations.findForDecision(
+      occurrenceId,
+      businessId,
+    );
 
     if (!found) {
       throw new OccurrenceNotFoundError();
@@ -210,7 +218,11 @@ class DecideOccurrenceAuthorizationUseCase {
         // The route first, then the delivery, then the occurrence: the order
         // a cancellation and a proof take them in.
         if (decision === "APPROVED" && (blocks || delivers)) {
-          await this.route.lockRouteOfOpenStop(found.deliveryId, businessId, tx);
+          await this.route.lockRouteOfOpenStop(
+            found.deliveryId,
+            businessId,
+            tx,
+          );
         }
 
         // Is there still an attempt to authorize? Read under the delivery's
@@ -236,7 +248,11 @@ class DecideOccurrenceAuthorizationUseCase {
         if (!attempt.live || !deliverable) {
           // Nothing left to authorize: the request closes instead, and the
           // operator hears SUPERSEDED like after a proof.
-          const closed = await this.authorizations.supersede(occurrenceId, businessId, tx);
+          const closed = await this.authorizations.supersede(
+            occurrenceId,
+            businessId,
+            tx,
+          );
 
           if (!closed) throw new DecisionLostError();
 
@@ -284,7 +300,11 @@ class DecideOccurrenceAuthorizationUseCase {
           // APPROVED is written above, before the proof: the proof's
           // supersede of PENDING requests reaches only the others.
           settled = await applyDeliveryProof(
-            { ...this.effectDeps, audits: this.audits, tickets: this.occurrenceTickets },
+            {
+              ...this.effectDeps,
+              audits: this.audits,
+              tickets: this.occurrenceTickets,
+            },
             {
               tx,
               businessId,
@@ -377,7 +397,9 @@ class DecideOccurrenceAuthorizationUseCase {
             occurrenceId,
             deliveryId: found.deliveryId,
             businessId,
-            driverUserId: found.reportedBy.driverId ? found.reportedBy.id : null,
+            driverUserId: found.reportedBy.driverId
+              ? found.reportedBy.id
+              : null,
             recipientName: findDelivery.recipient_name,
             occurrenceTypeName: found.occurrenceType.name,
             decision,
@@ -394,7 +416,10 @@ class DecideOccurrenceAuthorizationUseCase {
       // The delivery moved under the approval (the proof committed first and
       // superseded the request), or another operator won: answer with what
       // stands now.
-      if (error instanceof DecisionLostError || error instanceof DeliveryStatusConflictError) {
+      if (
+        error instanceof DecisionLostError ||
+        error instanceof DeliveryStatusConflictError
+      ) {
         const current = await this.reread(occurrenceId, businessId);
 
         if (current.authorization_status !== "PENDING") {
@@ -429,7 +454,11 @@ class DecideOccurrenceAuthorizationUseCase {
         status: "SUPERSEDED",
       });
 
-      return this.answerSettled(await this.reread(occurrenceId, businessId), decision, userId);
+      return this.answerSettled(
+        await this.reread(occurrenceId, businessId),
+        decision,
+        userId,
+      );
     }
 
     // The receipt is read once the delivery is proven, with the instant of
@@ -530,7 +559,10 @@ class DecideOccurrenceAuthorizationUseCase {
     occurrenceId: string,
     businessId: string,
   ): Promise<OccurrenceForDecision> {
-    const current = await this.authorizations.findForDecision(occurrenceId, businessId);
+    const current = await this.authorizations.findForDecision(
+      occurrenceId,
+      businessId,
+    );
 
     if (!current) throw new OccurrenceNotFoundError();
 

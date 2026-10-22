@@ -17,11 +17,12 @@ import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
  */
 const SITEVERIFY = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
-const siteverify = vi.fn(async () =>
-  new Response(JSON.stringify({ success: false }), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  }),
+const siteverify = vi.fn(
+  async () =>
+    new Response(JSON.stringify({ success: false }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
 );
 
 let app: Awaited<typeof import("@/http")>["app"];

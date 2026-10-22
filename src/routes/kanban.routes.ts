@@ -187,7 +187,7 @@ async function kanbanRoutes(app: FastifyInstance) {
         tags: ["kanban"],
         summary: "Cria um card numa coluna",
         description:
-          "Cria o card no fim da coluna (posições sem colisão mesmo com criações simultâneas). O responsável precisa ser da empresa do quadro, inclusive quando quem cria é o MASTER: o MASTER recebe \"Este usuário não pertence a esta empresa!\", os demais recebem \"Usuário atribuído não encontrado.\", como para um id inexistente." +
+          'Cria o card no fim da coluna (posições sem colisão mesmo com criações simultâneas). O responsável precisa ser da empresa do quadro, inclusive quando quem cria é o MASTER: o MASTER recebe "Este usuário não pertence a esta empresa!", os demais recebem "Usuário atribuído não encontrado.", como para um id inexistente.' +
           NOT_FOUND_RULE,
         body: kanbanSchemas.createCard,
         response: {

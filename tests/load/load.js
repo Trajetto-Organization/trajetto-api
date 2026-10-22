@@ -27,8 +27,14 @@ export const options = {
       // VU sustains under one iteration a second: 400 VUs capped the run near
       // 300/s whatever LOAD_RATE asked, and the excess showed up only as
       // dropped_iterations. The budget now follows the rate.
-      preAllocatedVUs: Number(__ENV.LOAD_PRE_VUS || Math.max(60, Math.ceil(Number(__ENV.LOAD_RATE || 120) * 0.5))),
-      maxVUs: Number(__ENV.LOAD_MAX_VUS || Math.max(400, Math.ceil(Number(__ENV.LOAD_RATE || 120) * 3))),
+      preAllocatedVUs: Number(
+        __ENV.LOAD_PRE_VUS ||
+          Math.max(60, Math.ceil(Number(__ENV.LOAD_RATE || 120) * 0.5)),
+      ),
+      maxVUs: Number(
+        __ENV.LOAD_MAX_VUS ||
+          Math.max(400, Math.ceil(Number(__ENV.LOAD_RATE || 120) * 3)),
+      ),
     },
   },
 

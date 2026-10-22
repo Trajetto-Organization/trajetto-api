@@ -10,7 +10,10 @@ import {
 
 import { AppError } from "@/shared/errors/AppError";
 
-import { routeProgress, type RouteProgress } from "@/shared/route/control-tower-rules";
+import {
+  routeProgress,
+  type RouteProgress,
+} from "@/shared/route/control-tower-rules";
 import { operationDay } from "@/shared/route/operation-day-rules";
 import { dateOnlyKey, resolveTimeZone } from "@/shared/time/business-day";
 
@@ -106,7 +109,9 @@ class RouteMonitoringUseCase {
       driverRefusal: PANEL_DRIVER_REFUSAL,
     });
 
-    const timeZone = resolveTimeZone(await this.operation.timeZoneOf(resolvedBusinessId));
+    const timeZone = resolveTimeZone(
+      await this.operation.timeZoneOf(resolvedBusinessId),
+    );
 
     let window;
 

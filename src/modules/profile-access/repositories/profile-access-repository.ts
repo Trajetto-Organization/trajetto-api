@@ -30,12 +30,14 @@ class ProfileAccessRepository implements IProfileAccessRepository {
     { name, businessId }: CreateProfileAccessProps,
     tx?: Prisma.TransactionClient,
   ): Promise<ProfileAccess> {
-    const createdProfileAccess = await (tx ?? this.prisma).profileAccess.create({
-      data: {
-        name: name,
-        businessId: businessId,
+    const createdProfileAccess = await (tx ?? this.prisma).profileAccess.create(
+      {
+        data: {
+          name: name,
+          businessId: businessId,
+        },
       },
-    });
+    );
 
     return createdProfileAccess;
   }

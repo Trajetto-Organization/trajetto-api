@@ -113,7 +113,8 @@ function fineDateIssue(
     if (payment < violation) {
       return {
         code: "FINE_PAYMENT_DATE_BEFORE_VIOLATION",
-        message: "A data de pagamento não pode ser anterior à data da infração.",
+        message:
+          "A data de pagamento não pode ser anterior à data da infração.",
       };
     }
 

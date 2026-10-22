@@ -83,7 +83,10 @@ class ExportFineUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
-    const timeZone = await loadBusinessTimeZone(this.business, resolvedBusinessId);
+    const timeZone = await loadBusinessTimeZone(
+      this.business,
+      resolvedBusinessId,
+    );
 
     const query = {
       businessId: resolvedBusinessId,
@@ -113,12 +116,18 @@ class ExportFineUseCase {
       timeStyle: "short",
     });
 
-    const date = (value?: Date | null) => (value ? day.format(new Date(value)) : "N/A");
+    const date = (value?: Date | null) =>
+      value ? day.format(new Date(value)) : "N/A";
     const dateTime = (value?: Date | null) =>
       value ? dayAndTime.format(new Date(value)) : "N/A";
 
     const columns: ExportColumn[] = [
-      { header: "ID", key: "id", width: 38, formatter: ExportFormatters.fallback },
+      {
+        header: "ID",
+        key: "id",
+        width: 38,
+        formatter: ExportFormatters.fallback,
+      },
       {
         header: "Situação",
         key: "status",
@@ -167,34 +176,83 @@ class ExportFineUseCase {
         width: 15,
         formatter: ExportFormatters.currency,
       },
-      { header: "Pontos", key: "points", width: 8, formatter: ExportFormatters.fallback },
-      { header: "Data da Infração", key: "violation_date", width: 18, formatter: date },
-      { header: "Data de Vencimento", key: "due_date", width: 18, formatter: date },
+      {
+        header: "Pontos",
+        key: "points",
+        width: 8,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Data da Infração",
+        key: "violation_date",
+        width: 18,
+        formatter: date,
+      },
+      {
+        header: "Data de Vencimento",
+        key: "due_date",
+        width: 18,
+        formatter: date,
+      },
       {
         header: "Data de Pagamento",
         key: "payment_date",
         width: 18,
         formatter: (value?: Date | null) => (value ? date(value) : "Não paga"),
       },
-      { header: "Filial", key: "branchName", width: 25, formatter: ExportFormatters.fallback },
-      { header: "Local", key: "location", width: 25, formatter: ExportFormatters.fallback },
-      { header: "Latitude", key: "latitude", width: 14, formatter: ExportFormatters.fallback },
-      { header: "Longitude", key: "longitude", width: 14, formatter: ExportFormatters.fallback },
+      {
+        header: "Filial",
+        key: "branchName",
+        width: 25,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Local",
+        key: "location",
+        width: 25,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Latitude",
+        key: "latitude",
+        width: 14,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Longitude",
+        key: "longitude",
+        width: 14,
+        formatter: ExportFormatters.fallback,
+      },
       {
         header: "Observações",
         key: "observation",
         width: 30,
         formatter: ExportFormatters.fallback,
       },
-      { header: "Criado em", key: "created_at", width: 20, formatter: dateTime },
-      { header: "Atualizado em", key: "updated_at", width: 20, formatter: dateTime },
+      {
+        header: "Criado em",
+        key: "created_at",
+        width: 20,
+        formatter: dateTime,
+      },
+      {
+        header: "Atualizado em",
+        key: "updated_at",
+        width: 20,
+        formatter: dateTime,
+      },
     ];
 
     // Dated with the company's day: the UTC day named tomorrow's file from
     // 21:00 in São Paulo.
     const filename = `relatorio-multas-${businessDateKey(now, timeZone)}`;
 
-    return { iterator: this.fine.streamFinesForExport(query), columns, filename };
+    return {
+      iterator: this.fine.streamFinesForExport(query),
+      columns,
+      filename,
+    };
   }
 }
 

@@ -70,7 +70,10 @@ const FLUSH_CHUNK_SIZE = 500;
 const MAX_FLUSH_ATTEMPTS = 3;
 
 function bucketKey(
-  bucket: Pick<UsageBucket, "apiKeyId" | "day" | "method" | "route" | "statusClass">,
+  bucket: Pick<
+    UsageBucket,
+    "apiKeyId" | "day" | "method" | "route" | "statusClass"
+  >,
 ): string {
   return [
     bucket.apiKeyId,
@@ -233,7 +236,12 @@ class ApiUsageRecorder {
 
     if (failures >= MAX_FLUSH_ATTEMPTS) {
       log.error(
-        { err: error, apiKeyId: bucket.apiKeyId, day: bucket.day, count: bucket.count },
+        {
+          err: error,
+          apiKeyId: bucket.apiKeyId,
+          day: bucket.day,
+          count: bucket.count,
+        },
         "API usage counter dropped after repeated write failures",
       );
       return;

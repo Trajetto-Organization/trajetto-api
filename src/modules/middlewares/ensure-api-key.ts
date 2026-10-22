@@ -17,7 +17,10 @@ import {
   rateLimitExceeded,
 } from "@/config/rate-limit";
 import { AppError } from "@/shared/errors/AppError";
-import { moduleNotEnabled, tenantInactive } from "@/shared/errors/access-errors";
+import {
+  moduleNotEnabled,
+  tenantInactive,
+} from "@/shared/errors/access-errors";
 import { hasModule } from "@/shared/entitlements/entitlement-service";
 import {
   API_KEY_AUTH_FAILURE_WINDOW_SECONDS,
@@ -72,11 +75,7 @@ function touchLastUsed(apiKeyId: string): void {
 }
 
 function refuse(): never {
-  throw new AppError(
-    "Chave de API inválida.",
-    401,
-    "INVALID_API_KEY",
-  );
+  throw new AppError("Chave de API inválida.", 401, "INVALID_API_KEY");
 }
 
 /**

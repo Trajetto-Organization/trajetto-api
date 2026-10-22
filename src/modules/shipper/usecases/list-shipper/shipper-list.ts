@@ -94,7 +94,10 @@ function shipperListWhere(
   }
 
   // The tenant stays a top-level key: the (businessId, …) indexes serve it.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Shippers per status over the base, with how many of them carry a CNPJ. */

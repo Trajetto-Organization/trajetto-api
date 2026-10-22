@@ -1,12 +1,15 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
 import { PrismaClient } from "@prisma/client";
 import { afterAll, describe, expect, it } from "vitest";
 
+import {
+  productionDatabaseUrlFor,
+  type ProductionDatabaseVariable,
+} from "../support/production-database-url";
+
 /**
- * The production connection strings, as written in compose.production.yaml,
- * opened by Prisma against a real Postgres.
+ * The production connection strings, as modelled in .env.example (the API
+ * Application's environment in Dokploy is filled from it), opened by Prisma
+ * against a real Postgres.
  *
  * Production ran with no statement_timeout, lock_timeout or
  * idle_in_transaction_session_timeout anywhere: a runaway query had no
@@ -15,30 +18,21 @@ import { afterAll, describe, expect, it } from "vitest";
  * `options` — only on the runtime URL, because a migration cancelled halfway
  * is worse than a slow one.
  *
- * Reading the compose text would not prove the encoding survives Prisma's
+ * Reading the template's text would not prove the encoding survives Prisma's
  * URL parsing; opening the connection does.
  */
-const compose = readFileSync(resolve(process.cwd(), "compose.production.yaml"), "utf8");
 
-function apiVariable(name: string): string | undefined {
-  const api = compose.slice(compose.indexOf("\n  api:"));
-
-  return api.match(new RegExp(`^\\s+${name}: (.+?)\\s*$`, "m"))?.[1];
-}
-
-/** The compose value with ${...} filled in from this test's own database. */
-function materialise(template: string): string {
+/** The production template pointed at this test's own database. */
+function materialise(name: ProductionDatabaseVariable): string {
   const own = new URL(process.env.DATABASE_URL as string);
 
-  const values: Record<string, string> = {
-    POSTGRES_USERNAME: own.username,
-    POSTGRES_PASSWORD: own.password,
-    POSTGRES_HOST: own.hostname,
-    POSTGRES_PORT: own.port || "5432",
-    POSTGRES_DATABASE: own.pathname.slice(1),
-  };
-
-  return template.replace(/\$\{(\w+)(?::?-[^}]*)?\}/g, (_, key: string) => values[key] ?? "");
+  return productionDatabaseUrlFor(name, {
+    username: own.username,
+    password: own.password,
+    host: own.hostname,
+    port: own.port || "5432",
+    database: own.pathname.slice(1),
+  }).toString();
 }
 
 const clients: PrismaClient[] = [];
@@ -64,11 +58,7 @@ async function settingsOf(url: string) {
 
 describe("the API's runtime connection in production", () => {
   it("has a ceiling on statements, lock waits and idle transactions", async () => {
-    const template = apiVariable("DATABASE_URL");
-
-    expect(template, "DATABASE_URL do serviço api").toBeTruthy();
-
-    const settings = await settingsOf(materialise(template!));
+    const settings = await settingsOf(materialise("DATABASE_URL"));
 
     expect(settings.statement).toBe("30s");
     expect(settings.lock).toBe("5s");
@@ -78,11 +68,7 @@ describe("the API's runtime connection in production", () => {
 
 describe("the migration connection", () => {
   it("exists, and carries none of the runtime ceilings", async () => {
-    const template = apiVariable("MIGRATION_DATABASE_URL");
-
-    expect(template, "MIGRATION_DATABASE_URL do serviço api").toBeTruthy();
-
-    const settings = await settingsOf(materialise(template!));
+    const settings = await settingsOf(materialise("MIGRATION_DATABASE_URL"));
 
     expect(settings.statement).toBe("0");
     expect(settings.lock).toBe("0");

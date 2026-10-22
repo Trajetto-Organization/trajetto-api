@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import fs from "node:fs";
@@ -133,7 +141,11 @@ beforeAll(async () => {
   });
 
   const occurrenceType = await prisma.occurrenceType.create({
-    data: { name: "Cliente ausente", blocks_delivery: false, businessId: BUSINESS },
+    data: {
+      name: "Cliente ausente",
+      blocks_delivery: false,
+      businessId: BUSINESS,
+    },
   });
 
   const delivery = await prisma.delivery.create({
@@ -295,7 +307,11 @@ describe("a delete run over live rows", () => {
     // The chat listing fails (a storage error that outlived the SDK's own
     // retries); every other scope answers normally.
     const flaky = {
-      listObjectKeys: (prefix: string, startAfter?: string, maxKeys?: number) =>
+      listObjectKeys: (
+        prefix: string,
+        startAfter?: string,
+        maxKeys?: number,
+      ) =>
         prefix.startsWith("chatAttachments/")
           ? Promise.reject(new Error("ListObjectsV2: 503 SlowDown"))
           : real.listObjectKeys(prefix, startAfter, maxKeys),

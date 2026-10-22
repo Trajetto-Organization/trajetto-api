@@ -129,28 +129,42 @@ describe("what a Resend event says", () => {
   });
 
   it("ignores events that are not about delivering an e-mail", () => {
-    expect(extractResendEvent({ type: "email.opened", data: { email_id: "x" } })).toBeNull();
+    expect(
+      extractResendEvent({ type: "email.opened", data: { email_id: "x" } }),
+    ).toBeNull();
     expect(extractResendEvent({ type: "domain.updated", data: {} })).toBeNull();
-    expect(extractResendEvent({ type: "email.delivered", data: {} })).toBeNull();
+    expect(
+      extractResendEvent({ type: "email.delivered", data: {} }),
+    ).toBeNull();
     expect(extractResendEvent(null)).toBeNull();
   });
 
   it("ranks the statuses so none moves a delivery backwards", () => {
-    expect(RESEND_STATUS_RANK.delivered).toBeGreaterThan(RESEND_STATUS_RANK.sent);
-    expect(RESEND_STATUS_RANK.bounced).toBeGreaterThan(RESEND_STATUS_RANK.delivered);
-    expect(RESEND_STATUS_RANK.complained).toBeGreaterThan(RESEND_STATUS_RANK.delivered);
+    expect(RESEND_STATUS_RANK.delivered).toBeGreaterThan(
+      RESEND_STATUS_RANK.sent,
+    );
+    expect(RESEND_STATUS_RANK.bounced).toBeGreaterThan(
+      RESEND_STATUS_RANK.delivered,
+    );
+    expect(RESEND_STATUS_RANK.complained).toBeGreaterThan(
+      RESEND_STATUS_RANK.delivered,
+    );
   });
 });
 
 describe("the delivery a Message-ID names", () => {
   it("is the id the pipeline put in the local part", () => {
     expect(
-      deliveryIdFromMessageId("<018f0000-0000-7000-8000-0000000000d1@intrajetto.com>"),
+      deliveryIdFromMessageId(
+        "<018f0000-0000-7000-8000-0000000000d1@intrajetto.com>",
+      ),
     ).toBe("018f0000-0000-7000-8000-0000000000d1");
   });
 
   it("is nobody for a Message-ID we did not build", () => {
-    expect(deliveryIdFromMessageId("<111-222-333@email.example.com>")).toBeNull();
+    expect(
+      deliveryIdFromMessageId("<111-222-333@email.example.com>"),
+    ).toBeNull();
     expect(deliveryIdFromMessageId(null)).toBeNull();
   });
 });

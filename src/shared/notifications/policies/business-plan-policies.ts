@@ -74,7 +74,9 @@ async function resolvePlanAudience(
 
   const admins = companyUsers.filter(
     (user) =>
-      user.role === "BUSINESS_ADMIN" && !user.access_revoked && user.id !== actorId,
+      user.role === "BUSINESS_ADMIN" &&
+      !user.access_revoked &&
+      user.id !== actorId,
   );
 
   // A master who also belongs to the company would otherwise be paged twice.

@@ -42,13 +42,14 @@ afterAll(async () => {
 });
 
 function writes(): Array<{ id: string; operation: Json }> {
-  return Object.entries(document.paths as Record<string, Json>).flatMap(([path, item]) =>
-    Object.entries(item)
-      .filter(([, operation]) => (operation as Json)?.requestBody)
-      .map(([method, operation]) => ({
-        id: `${method.toUpperCase()} ${path}`,
-        operation: operation as Json,
-      })),
+  return Object.entries(document.paths as Record<string, Json>).flatMap(
+    ([path, item]) =>
+      Object.entries(item)
+        .filter(([, operation]) => (operation as Json)?.requestBody)
+        .map(([method, operation]) => ({
+          id: `${method.toUpperCase()} ${path}`,
+          operation: operation as Json,
+        })),
   );
 }
 
@@ -67,7 +68,9 @@ function publishedSchemaErrors(schema: Json, value: unknown): string[] {
 
   return validate(value)
     ? []
-    : (validate.errors ?? []).map((error) => `${error.instancePath || "corpo"} ${error.message}`);
+    : (validate.errors ?? []).map(
+        (error) => `${error.instancePath || "corpo"} ${error.message}`,
+      );
 }
 
 /** The JSON inside the `-d '…'` of the operation description's curl block. */
@@ -82,7 +85,9 @@ describe("the request examples of the public reference", () => {
   it("exist on every write, so no renderer has to invent a body", () => {
     const found = writes();
 
-    expect(found.map(({ id }) => id)).toContain("POST /integration/v1/deliveries");
+    expect(found.map(({ id }) => id)).toContain(
+      "POST /integration/v1/deliveries",
+    );
 
     for (const { id, operation } of found) {
       expect(jsonBody(operation).example, id).toBeDefined();
@@ -93,7 +98,9 @@ describe("the request examples of the public reference", () => {
     for (const { id, operation } of writes()) {
       const media = jsonBody(operation);
 
-      expect(publishedSchemaErrors(media.schema, media.example), id).toEqual([]);
+      expect(publishedSchemaErrors(media.schema, media.example), id).toEqual(
+        [],
+      );
     }
   });
 
@@ -102,7 +109,10 @@ describe("the request examples of the public reference", () => {
     const media = jsonBody(document.paths["/integration/v1/deliveries"].post);
 
     expect(
-      publishedSchemaErrors(media.schema, { ...media.example, cep: "13010-000" }),
+      publishedSchemaErrors(media.schema, {
+        ...media.example,
+        cep: "13010-000",
+      }),
     ).not.toEqual([]);
     expect(
       publishedSchemaErrors(media.schema, { ...media.example, uf: "texto" }),
@@ -110,11 +120,15 @@ describe("the request examples of the public reference", () => {
   });
 
   it("are a body the API parses, naming the shipper once", () => {
-    const { example } = jsonBody(document.paths["/integration/v1/deliveries"].post);
+    const { example } = jsonBody(
+      document.paths["/integration/v1/deliveries"].post,
+    );
 
     expect(() => parseIntegrationDeliveryBody(example)).not.toThrow();
     expect(
-      [example.shipper_id, example.shipper_cnpj].filter((value) => value != null),
+      [example.shipper_id, example.shipper_cnpj].filter(
+        (value) => value != null,
+      ),
     ).toHaveLength(1);
   });
 

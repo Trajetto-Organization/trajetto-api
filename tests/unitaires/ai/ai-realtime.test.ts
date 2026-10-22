@@ -31,13 +31,22 @@ describe("the end-of-analysis hint", () => {
 
   it("goes to the operations room for a receipt", () => {
     expect(
-      aiAnalysisHint({ ...base, recordType: "proof", step: "completed" })?.audience,
+      aiAnalysisHint({ ...base, recordType: "proof", step: "completed" })
+        ?.audience,
     ).toBe("operations");
   });
 
   it("is only sent when the analysis ends", () => {
-    for (const step of ["queued", "analyzing", "analyzing_field", "reading_odometer"]) {
-      expect(aiAnalysisHint({ ...base, recordType: "checklist", step }), step).toBeNull();
+    for (const step of [
+      "queued",
+      "analyzing",
+      "analyzing_field",
+      "reading_odometer",
+    ]) {
+      expect(
+        aiAnalysisHint({ ...base, recordType: "checklist", step }),
+        step,
+      ).toBeNull();
     }
 
     expect(
@@ -46,8 +55,12 @@ describe("the end-of-analysis hint", () => {
   });
 
   it("is not sent for an event it cannot place", () => {
-    expect(aiAnalysisHint({ ...base, recordType: "other", step: "completed" })).toBeNull();
-    expect(aiAnalysisHint({ recordType: "fuel", step: "completed" })).toBeNull();
+    expect(
+      aiAnalysisHint({ ...base, recordType: "other", step: "completed" }),
+    ).toBeNull();
+    expect(
+      aiAnalysisHint({ recordType: "fuel", step: "completed" }),
+    ).toBeNull();
     expect(aiAnalysisHint(null)).toBeNull();
   });
 });

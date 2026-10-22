@@ -54,7 +54,12 @@ function windowOrderIssues(
   if (!departure || !arrival) return [];
 
   return arrival.getTime() < departure.getTime()
-    ? [{ field: "planned_arrival_at", message: ROUTE_PLAN_MESSAGES.arrivalBeforeDeparture }]
+    ? [
+        {
+          field: "planned_arrival_at",
+          message: ROUTE_PLAN_MESSAGES.arrivalBeforeDeparture,
+        },
+      ]
     : [];
 }
 
@@ -73,7 +78,10 @@ function routePlanIssues({
 }: RoutePlanInput): RoutePlanIssue[] {
   const issues: RoutePlanIssue[] = [];
 
-  if (departure && businessDateKey(departure, timeZone) !== dateOnlyKey(scheduledDate)) {
+  if (
+    departure &&
+    businessDateKey(departure, timeZone) !== dateOnlyKey(scheduledDate)
+  ) {
     issues.push({
       field: "planned_departure_at",
       message: ROUTE_PLAN_MESSAGES.departureOffDay,

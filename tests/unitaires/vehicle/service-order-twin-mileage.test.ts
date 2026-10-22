@@ -58,9 +58,16 @@ function makeContext() {
   const branches = new InMemoryBranchRepository();
   const orders = new InMemoryServiceOrderRepository();
 
-  users.user.push({ id: USER, role: "BUSINESS_ADMIN", businessId: BUSINESS } as User);
+  users.user.push({
+    id: USER,
+    role: "BUSINESS_ADMIN",
+    businessId: BUSINESS,
+  } as User);
   // With the column defaults (timezone), as the real row has them.
-  business.business.push({ ...BUSINESS_COLUMN_DEFAULTS, id: BUSINESS } as unknown as Business);
+  business.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
+    id: BUSINESS,
+  } as unknown as Business);
   branches.branches.push({ id: BRANCH, businessId: BUSINESS } as Branch);
 
   vehicles.vehicles.push({
@@ -110,7 +117,9 @@ const finishedOrder = (clientSubmissionId?: string) => ({
  * committed, and the vehicle was read before its odometer moved.
  */
 function asTheTwinSawIt(context: ReturnType<typeof makeContext>) {
-  const find = context.orders.findServiceOrderBySubmissionId.bind(context.orders);
+  const find = context.orders.findServiceOrderBySubmissionId.bind(
+    context.orders,
+  );
   let lookups = 0;
 
   context.orders.findServiceOrderBySubmissionId = async (...args) => {

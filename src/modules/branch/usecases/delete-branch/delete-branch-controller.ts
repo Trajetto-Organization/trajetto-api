@@ -22,9 +22,7 @@ class DeleteBranchController {
     // BRANCH_NOT_FOUND (404, also for another company's branch) is an
     // AppError and reaches the error handler with its code.
     await deleteBranchUseCase.execute(branchId, businessId, id, code);
-    return reply
-      .status(200)
-      .send({ message: "Filial deletada com sucesso!" });
+    return reply.status(200).send({ message: "Filial deletada com sucesso!" });
   }
 }
 

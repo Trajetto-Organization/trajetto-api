@@ -74,13 +74,33 @@ function makeContext() {
   } as User);
 
   driverRepository.drivers.push(
-    { id: DRIVER_JOAO, name: "João", status: "ACTIVE", businessId: A } as Driver,
-    { id: DRIVER_MARIA, name: "Maria", status: "ACTIVE", businessId: A } as Driver,
+    {
+      id: DRIVER_JOAO,
+      name: "João",
+      status: "ACTIVE",
+      businessId: A,
+    } as Driver,
+    {
+      id: DRIVER_MARIA,
+      name: "Maria",
+      status: "ACTIVE",
+      businessId: A,
+    } as Driver,
   );
 
   vehicleRepository.vehicles.push(
-    { id: VEHICLE_ONE, license_plate: "AAA1A11", status: "ACTIVE", businessId: A } as Vehicle,
-    { id: VEHICLE_TWO, license_plate: "BBB2B22", status: "ACTIVE", businessId: A } as Vehicle,
+    {
+      id: VEHICLE_ONE,
+      license_plate: "AAA1A11",
+      status: "ACTIVE",
+      businessId: A,
+    } as Vehicle,
+    {
+      id: VEHICLE_TWO,
+      license_plate: "BBB2B22",
+      status: "ACTIVE",
+      businessId: A,
+    } as Vehicle,
   );
 
   return {

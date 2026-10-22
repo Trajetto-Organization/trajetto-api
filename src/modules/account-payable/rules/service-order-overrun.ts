@@ -16,7 +16,10 @@ function serviceOrderOverrunWarning(
   if (order <= 0 || bills <= order) return null;
 
   const money = (value: number) =>
-    (value / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    (value / 100).toLocaleString("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    });
 
   return `As contas desta ordem de serviço somam ${money(bills)}, acima do total da ordem (${money(order)}). Confira se não há conta em duplicidade.`;
 }

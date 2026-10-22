@@ -9,8 +9,14 @@ import {
   ListStatusChangeReasonsPage,
 } from "../../dtos/status-change-reason-dto";
 
-import { compareCodePoints, compareForOrder } from "@/shared/pagination/in-memory-order";
-import { requireIndex, uniqueViolation } from "@/shared/in-memory/prisma-errors";
+import {
+  compareCodePoints,
+  compareForOrder,
+} from "@/shared/pagination/in-memory-order";
+import {
+  requireIndex,
+  uniqueViolation,
+} from "@/shared/in-memory/prisma-errors";
 import { isActiveFilter } from "@/shared/delivery/catalog-list";
 import {
   STATUS_REASON_SORT_FALLBACK,
@@ -91,7 +97,8 @@ class InMemoryStatusChangeReasonRepository
     const isActive = isActiveFilter(statuses);
 
     const key = sort ?? STATUS_REASON_SORT_FALLBACK.sort;
-    const direction = order ?? (sort ? "asc" : STATUS_REASON_SORT_FALLBACK.order);
+    const direction =
+      order ?? (sort ? "asc" : STATUS_REASON_SORT_FALLBACK.order);
 
     const time = (value: Date | string | undefined) =>
       value === undefined ? undefined : new Date(value);
@@ -134,17 +141,20 @@ class InMemoryStatusChangeReasonRepository
   async listActiveStatusChangeReasons(
     businessId: string,
   ): Promise<Array<{ id: string; name: string; description: string | null }>> {
-    return this.statusChangeReasons
-      .filter(
-        (reason) => reason.businessId === businessId && reason.is_active !== false,
-      )
-      // `orderBy: { name: "asc" }`: code point order, as Postgres sorts it.
-      .sort((left, right) => compareCodePoints(left.name, right.name))
-      .map((reason) => ({
-        id: reason.id!,
-        name: reason.name,
-        description: reason.description ?? null,
-      }));
+    return (
+      this.statusChangeReasons
+        .filter(
+          (reason) =>
+            reason.businessId === businessId && reason.is_active !== false,
+        )
+        // `orderBy: { name: "asc" }`: code point order, as Postgres sorts it.
+        .sort((left, right) => compareCodePoints(left.name, right.name))
+        .map((reason) => ({
+          id: reason.id!,
+          name: reason.name,
+          description: reason.description ?? null,
+        }))
+    );
   }
 
   async findStatusChangeReasonById(
@@ -172,7 +182,9 @@ class InMemoryStatusChangeReasonRepository
   ): Promise<StatusChangeReason> {
     // P2025 like Prisma; `find(...)!` used to crash with a TypeError.
     const reason =
-      this.statusChangeReasons[requireIndex(this.statusChangeReasons, (entry) => entry.id === reasonId)];
+      this.statusChangeReasons[
+        requireIndex(this.statusChangeReasons, (entry) => entry.id === reasonId)
+      ];
 
     if (reasonData.name !== undefined && reasonData.name !== null) {
       this.assertUniqueName({ ...reason, name: reasonData.name });

@@ -33,12 +33,7 @@ const DRIVER = "018fe200-0000-7000-8000-0000000000d1";
 const SP = "America/Sao_Paulo";
 
 const tokens: Record<
-  | "admin"
-  | "readOnly"
-  | "noPayables"
-  | "driver"
-  | "otherAdmin"
-  | "master",
+  "admin" | "readOnly" | "noPayables" | "driver" | "otherAdmin" | "master",
   string
 > = {} as never;
 
@@ -163,7 +158,9 @@ async function seedBranch(businessId: string): Promise<string> {
       uf: "SP",
       street: "Rua",
       address_number: "1",
-      cnpj: `77${Math.floor(Math.random() * 1e12)}`.padEnd(14, "0").slice(0, 14),
+      cnpj: `77${Math.floor(Math.random() * 1e12)}`
+        .padEnd(14, "0")
+        .slice(0, 14),
       cnae: "4930202",
       responsible_name: "Responsável",
       telephone: "11999999999",
@@ -286,12 +283,20 @@ beforeAll(async () => {
 
   ids.supplier = (
     await prisma.supplier.create({
-      data: { name: "Oficina Central", cnpj: "11222333000181", businessId: CARRIER },
+      data: {
+        name: "Oficina Central",
+        cnpj: "11222333000181",
+        businessId: CARRIER,
+      },
     })
   ).id;
   ids.otherSupplier = (
     await prisma.supplier.create({
-      data: { name: "Oficina Alheia", cnpj: "11222333000181", businessId: OTHER },
+      data: {
+        name: "Oficina Alheia",
+        cnpj: "11222333000181",
+        businessId: OTHER,
+      },
     })
   ).id;
 
@@ -333,7 +338,11 @@ beforeAll(async () => {
   tokens.driver = driverUser.token;
   tokens.readOnly = (
     await seedUser("Leitura", "BUSINESS_USER", CARRIER, {
-      profileAccessId: await seedProfile(CARRIER, "account_payable_manage", false),
+      profileAccessId: await seedProfile(
+        CARRIER,
+        "account_payable_manage",
+        false,
+      ),
     })
   ).token;
   tokens.noPayables = (
@@ -385,7 +394,12 @@ beforeAll(async () => {
   // OPEN: due today (the edge) and later.
   await seed("B-EDGE-2", todayStart, {}, 120);
   for (let index = 0; index < 5; index += 1) {
-    await seed(`B-OPEN-${index}`, new Date(todayStart.getTime() + (index + 1) * DAY), {}, 110 - index);
+    await seed(
+      `B-OPEN-${index}`,
+      new Date(todayStart.getTime() + (index + 1) * DAY),
+      {},
+      110 - index,
+    );
   }
 
   // OVERDUE: the edge, and a partially paid one.
@@ -421,15 +435,27 @@ beforeAll(async () => {
   );
 
   // Responsible: the driver. Another one: the admin.
-  await seed("B-DRIVER", new Date(todayStart.getTime() + 3 * DAY), {
-    registrationUserId: ids.driverUser,
-  }, 96);
-  await seed("B-ADMIN", new Date(todayStart.getTime() + 3 * DAY), {
-    registrationUserId: ids.admin,
-  }, 95);
+  await seed(
+    "B-DRIVER",
+    new Date(todayStart.getTime() + 3 * DAY),
+    {
+      registrationUserId: ids.driverUser,
+    },
+    96,
+  );
+  await seed(
+    "B-ADMIN",
+    new Date(todayStart.getTime() + 3 * DAY),
+    {
+      registrationUserId: ids.admin,
+    },
+    95,
+  );
 
   // Another company's bill, due long ago, with a document to look for.
-  const otherUser = await prisma.user.findFirstOrThrow({ where: { businessId: OTHER } });
+  const otherUser = await prisma.user.findFirstOrThrow({
+    where: { businessId: OTHER },
+  });
   await prisma.accountPayable.create({
     data: {
       document_number: "B-FOREIGN",
@@ -458,11 +484,19 @@ describe("the status is the server's, by the company's business day", () => {
 
     expect(status).toBe(200);
 
-    const byDoc = Object.fromEntries(rows.map((row) => [row.document_number, row]));
+    const byDoc = Object.fromEntries(
+      rows.map((row) => [row.document_number, row]),
+    );
 
     // The web's old rule marked B-EDGE-2 "Vencido" all day long.
-    expect(byDoc["B-EDGE-2"]).toMatchObject({ status: "PENDING", status_group: "OPEN" });
-    expect(byDoc["B-EDGE-1"]).toMatchObject({ status: "OVERDUE", status_group: "OVERDUE" });
+    expect(byDoc["B-EDGE-2"]).toMatchObject({
+      status: "PENDING",
+      status_group: "OPEN",
+    });
+    expect(byDoc["B-EDGE-1"]).toMatchObject({
+      status: "OVERDUE",
+      status_group: "OVERDUE",
+    });
   });
 
   it("filters in SQL exactly where the row's status puts the line", async () => {
@@ -476,7 +510,9 @@ describe("the status is the server's, by the company's business day", () => {
   it("tells paid on time from paid late by days, not by hours", async () => {
     const { rows } = await list("status=PAID");
 
-    const byDoc = Object.fromEntries(rows.map((row) => [row.document_number, row.status]));
+    const byDoc = Object.fromEntries(
+      rows.map((row) => [row.document_number, row.status]),
+    );
 
     expect(byDoc).toEqual({ "B-PAID-ONTIME": "PAID", "B-PAID-LATE": "LATE" });
   });
@@ -585,7 +621,10 @@ describe("'minhas contas a pagar' is self-scoped (AP-DRV-1, decision 4.5)", () =
 
     expect(status).toBe(200);
     expect(docs(rows)).toEqual(["B-DRIVER"]);
-    expect(rows[0]).toMatchObject({ status: "PENDING", registrationUserId: ids.driverUser });
+    expect(rows[0]).toMatchObject({
+      status: "PENDING",
+      registrationUserId: ids.driverUser,
+    });
   });
 
   it("works without the profile permission and never shows someone else's bills", async () => {
@@ -603,7 +642,11 @@ describe("'minhas contas a pagar' is self-scoped (AP-DRV-1, decision 4.5)", () =
 });
 
 describe("creating a bill (decision 8.4)", () => {
-  const post = (body: Record<string, unknown>, token = tokens.admin, business = CARRIER) =>
+  const post = (
+    body: Record<string, unknown>,
+    token = tokens.admin,
+    business = CARRIER,
+  ) =>
     app.inject({
       method: "POST",
       url: `/account-payable/create-account-payable/${business}`,
@@ -663,7 +706,9 @@ describe("creating a bill (decision 8.4)", () => {
       code: "ACCOUNT_PAYABLE_INVALID_REFERENCE",
       message: "Fornecedor não encontrado nesta empresa.",
     });
-    expect(vehicle.json().message).toBe("Veículo não encontrado nesta empresa.");
+    expect(vehicle.json().message).toBe(
+      "Veículo não encontrado nesta empresa.",
+    );
   });
 });
 
@@ -687,7 +732,11 @@ describe("editing and deleting", () => {
     ).id;
   });
 
-  const patch = (payload: Record<string, unknown>, token: string, business = CARRIER) =>
+  const patch = (
+    payload: Record<string, unknown>,
+    token: string,
+    business = CARRIER,
+  ) =>
     app.inject({
       method: "PATCH",
       url: `/account-payable/update-account-payable/${billId}/business/${business}`,
@@ -701,7 +750,9 @@ describe("editing and deleting", () => {
     expect(response.statusCode).toBe(403);
     expect(response.json().code).toBe("ACCOUNT_PAYABLE_TENANT_MISMATCH");
 
-    const row = await prisma.accountPayable.findUniqueOrThrow({ where: { id: billId } });
+    const row = await prisma.accountPayable.findUniqueOrThrow({
+      where: { id: billId },
+    });
 
     expect(row.businessId).toBe(CARRIER);
     expect(Number(row.amount)).toBe(300);
@@ -712,7 +763,9 @@ describe("editing and deleting", () => {
 
     expect(response.statusCode).toBe(200);
 
-    const row = await prisma.accountPayable.findUniqueOrThrow({ where: { id: billId } });
+    const row = await prisma.accountPayable.findUniqueOrThrow({
+      where: { id: billId },
+    });
 
     expect(row.registrationUserId).toBe(ids.clerk);
     expect(row.document_number).toBe("B-EDIT-2");
@@ -827,7 +880,9 @@ describe("bills above their service order's total (FLEET-AP-5)", () => {
     expect(raised.statusCode).toBe(200);
     expect(raised.json().warnings).toHaveLength(1);
     expect(
-      await prisma.accountPayable.count({ where: { serviceOrderId: ids.serviceOrder } }),
+      await prisma.accountPayable.count({
+        where: { serviceOrderId: ids.serviceOrder },
+      }),
     ).toBe(2);
   });
 });
@@ -871,8 +926,11 @@ describe("an edit never leaves a bill without its payee (decision 8.4)", () => {
     expect(cleared.statusCode).toBe(400);
     expect(cleared.json().code).toBe("ACCOUNT_PAYABLE_PAYEE_REQUIRED");
     expect(
-      (await prisma.accountPayable.findUniqueOrThrow({ where: { id: withPayee.id } }))
-        .supplierId,
+      (
+        await prisma.accountPayable.findUniqueOrThrow({
+          where: { id: withPayee.id },
+        })
+      ).supplierId,
     ).toBe(ids.supplier);
 
     // Registering a payment on a bill from before the column needs no payee.
@@ -918,7 +976,9 @@ describe("who may write bills, and where (roles and tenants)", () => {
 
   const unchanged = async () =>
     expect(
-      await prisma.accountPayable.findUniqueOrThrow({ where: { id: targetId } }),
+      await prisma.accountPayable.findUniqueOrThrow({
+        where: { id: targetId },
+      }),
     ).toMatchObject({ businessId: CARRIER, document_number: "B-GUARDED" });
 
   it.each([
@@ -926,42 +986,51 @@ describe("who may write bills, and where (roles and tenants)", () => {
     ["a profile without the key", "noPayables", "PERMISSION_DENIED"],
     ["a driver", "driver", "PERMISSION_DENIED"],
     ["another company's admin", "otherAdmin", "TENANT_ACCESS_DENIED"],
-  ] as const)("refuses %s on create, update, delete and export", async (_who, token, code) => {
-    const headers = { authorization: `Bearer ${tokens[token]}` };
+  ] as const)(
+    "refuses %s on create, update, delete and export",
+    async (_who, token, code) => {
+      const headers = { authorization: `Bearer ${tokens[token]}` };
 
-    const create = await app.inject({
-      method: "POST",
-      url: `/account-payable/create-account-payable/${CARRIER}`,
-      headers,
-      payload: { ...createBody, branchId: ids.branch, registrationUserId: ids.clerk },
-    });
-    const update = await app.inject({
-      method: "PATCH",
-      url: `/account-payable/update-account-payable/${targetId}/business/${CARRIER}`,
-      headers,
-      payload: { document_number: "B-HIJACKED" },
-    });
-    const remove = await app.inject({
-      method: "DELETE",
-      url: `/account-payable/delete-account-payable/${targetId}/business/${CARRIER}`,
-      headers,
-    });
-    const exported = await app.inject({
-      method: "GET",
-      url: `/account-payable/export-account-payable?format=csv&businessId=${CARRIER}`,
-      headers,
-    });
+      const create = await app.inject({
+        method: "POST",
+        url: `/account-payable/create-account-payable/${CARRIER}`,
+        headers,
+        payload: {
+          ...createBody,
+          branchId: ids.branch,
+          registrationUserId: ids.clerk,
+        },
+      });
+      const update = await app.inject({
+        method: "PATCH",
+        url: `/account-payable/update-account-payable/${targetId}/business/${CARRIER}`,
+        headers,
+        payload: { document_number: "B-HIJACKED" },
+      });
+      const remove = await app.inject({
+        method: "DELETE",
+        url: `/account-payable/delete-account-payable/${targetId}/business/${CARRIER}`,
+        headers,
+      });
+      const exported = await app.inject({
+        method: "GET",
+        url: `/account-payable/export-account-payable?format=csv&businessId=${CARRIER}`,
+        headers,
+      });
 
-    for (const response of [create, update, remove, exported]) {
-      expect(response.statusCode).toBe(403);
-      expect(response.json().code).toBe(code);
-    }
+      for (const response of [create, update, remove, exported]) {
+        expect(response.statusCode).toBe(403);
+        expect(response.json().code).toBe(code);
+      }
 
-    expect(
-      await prisma.accountPayable.count({ where: { document_number: "B-INTRUDER" } }),
-    ).toBe(0);
-    await unchanged();
-  });
+      expect(
+        await prisma.accountPayable.count({
+          where: { document_number: "B-INTRUDER" },
+        }),
+      ).toBe(0);
+      await unchanged();
+    },
+  );
 
   it("refuses another company's admin naming their own company for this bill", async () => {
     const headers = { authorization: `Bearer ${tokens.otherAdmin}` };
@@ -993,13 +1062,19 @@ describe("who may write bills, and where (roles and tenants)", () => {
       method: "POST",
       url: `/account-payable/create-account-payable/${CARRIER}`,
       headers: { authorization: `Bearer ${tokens.admin}` },
-      payload: { ...createBody, branchId: ids.otherBranch, registrationUserId: ids.clerk },
+      payload: {
+        ...createBody,
+        branchId: ids.otherBranch,
+        registrationUserId: ids.clerk,
+      },
     });
 
     expect(response.statusCode).toBe(404);
     expect(response.json().code).toBe("BRANCH_NOT_FOUND");
     expect(
-      await prisma.accountPayable.count({ where: { document_number: "B-INTRUDER" } }),
+      await prisma.accountPayable.count({
+        where: { document_number: "B-INTRUDER" },
+      }),
     ).toBe(0);
   });
 
@@ -1048,6 +1123,8 @@ describe("a switched-off company is not operated (decision 4.1)", () => {
     // The delete route had no company check: it answered 200.
     expect(response.statusCode).toBe(403);
     expect(response.json().code).toBe("TENANT_INACTIVE");
-    expect(await prisma.accountPayable.findUnique({ where: { id: bill.id } })).not.toBeNull();
+    expect(
+      await prisma.accountPayable.findUnique({ where: { id: bill.id } }),
+    ).not.toBeNull();
   });
 });

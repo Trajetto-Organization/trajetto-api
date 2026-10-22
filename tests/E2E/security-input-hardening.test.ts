@@ -4,7 +4,11 @@ import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { APP_BOOT_TIMEOUT_MS } from "../support/app-boot";
-import { seedSweepCarrier, sweepToken, type CarrierIds } from "./support/idor-sweep-seed";
+import {
+  seedSweepCarrier,
+  sweepToken,
+  type CarrierIds,
+} from "./support/idor-sweep-seed";
 
 /**
  * Hostile input on the real stack: what reaches PostgreSQL, what the parser
@@ -22,7 +26,12 @@ let app: Awaited<typeof import("@/http")>["app"];
 let A: CarrierIds;
 let token = "";
 
-async function send(method: "GET" | "POST", url: string, payload?: string, auth = true) {
+async function send(
+  method: "GET" | "POST",
+  url: string,
+  payload?: string,
+  auth = true,
+) {
   const started = Date.now();
 
   const response = await app.inject({
@@ -54,9 +63,21 @@ afterAll(async () => {
 
 describe("text PostgreSQL cannot store", () => {
   const cases: Array<[string, string, Record<string, unknown>]> = [
-    ["shipper name with NUL", "/shipper/create-shipper/{b}", { name: "Emb\u0000arcador" }],
-    ["shipper name with a lone surrogate", "/shipper/create-shipper/{b}", { name: "Emb\ud800arcador" }],
-    ["status reason with NUL", "/status-change-reason/create-status-change-reason/{b}", { name: "Mo\u0000tivo" }],
+    [
+      "shipper name with NUL",
+      "/shipper/create-shipper/{b}",
+      { name: "Emb\u0000arcador" },
+    ],
+    [
+      "shipper name with a lone surrogate",
+      "/shipper/create-shipper/{b}",
+      { name: "Emb\ud800arcador" },
+    ],
+    [
+      "status reason with NUL",
+      "/status-change-reason/create-status-change-reason/{b}",
+      { name: "Mo\u0000tivo" },
+    ],
     [
       "occurrence type with NUL",
       "/occurrence-type/create-occurrence-type/{b}",
@@ -66,7 +87,9 @@ describe("text PostgreSQL cannot store", () => {
 
   for (const [label, path, body] of cases) {
     it(`refuses a ${label} with 400, not 500, and stores nothing`, async () => {
-      const before = await prisma.shipper.count({ where: { businessId: A.businessId } });
+      const before = await prisma.shipper.count({
+        where: { businessId: A.businessId },
+      });
 
       const { response } = await send(
         "POST",
@@ -79,7 +102,9 @@ describe("text PostgreSQL cannot store", () => {
         code: "VALIDATION_ERROR",
         message: "O texto enviado contém um caractere inválido.",
       });
-      expect(await prisma.shipper.count({ where: { businessId: A.businessId } })).toBe(before);
+      expect(
+        await prisma.shipper.count({ where: { businessId: A.businessId } }),
+      ).toBe(before);
     });
   }
 
@@ -140,7 +165,11 @@ describe("the JSON parser", () => {
       `{"name":"Proto Um","__proto__":{"isAdmin":true}}`,
       `{"name":"Proto Dois","constructor":{"prototype":{"isAdmin":true}}}`,
     ]) {
-      const { response } = await send("POST", `/shipper/create-shipper/${A.businessId}`, payload);
+      const { response } = await send(
+        "POST",
+        `/shipper/create-shipper/${A.businessId}`,
+        payload,
+      );
 
       expect(response.statusCode, payload).toBe(400);
       expect(response.json().code).toBe("MALFORMED_REQUEST");
@@ -179,12 +208,17 @@ describe("headers on every answer", () => {
     const response = await app.inject({
       method: "GET",
       url: "/user/me",
-      headers: { authorization: `Bearer ${token}`, origin: "https://atacante.example" },
+      headers: {
+        authorization: `Bearer ${token}`,
+        origin: "https://atacante.example",
+      },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["x-content-type-options"]).toBe("nosniff");
-    expect(response.headers["strict-transport-security"]).toMatch(/max-age=\d+/);
+    expect(response.headers["strict-transport-security"]).toMatch(
+      /max-age=\d+/,
+    );
     expect(response.headers["x-frame-options"]).toBeDefined();
     expect(response.headers["x-powered-by"]).toBeUndefined();
     expect(response.headers["access-control-allow-origin"]).toBeUndefined();

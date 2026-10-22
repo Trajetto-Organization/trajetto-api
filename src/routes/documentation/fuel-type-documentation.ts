@@ -7,7 +7,6 @@ import { updateFuelTypeSchema } from "@/schemas/update-fuel-type-schema";
 
 import { errorResponse, internalErrorResponse } from "./common-responses";
 
-
 const fuelTypeBusinessParams = z.object({
   businessId: z.string().uuid("O ID da empresa é obrigatório!"),
   fuelTypeId: z.string().uuid("O ID do tipo de combustível é obrigatório!"),
@@ -22,11 +21,15 @@ const fuelTypeSchemas = {
     limit: z
       .string()
       .optional()
-      .describe("Número máximo de tipos de combustível a retornar (padrão: 10)"),
+      .describe(
+        "Número máximo de tipos de combustível a retornar (padrão: 10)",
+      ),
     cursor: z
       .string()
       .optional()
-      .describe("ID do último tipo de combustível da página anterior (paginação)"),
+      .describe(
+        "ID do último tipo de combustível da página anterior (paginação)",
+      ),
     search: z
       .string()
       .trim()

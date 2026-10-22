@@ -250,10 +250,7 @@ describe("the outbox numbers", () => {
     const before = (await metrics(masterToken)).json().outbox;
 
     await prisma.domainOutboxEvent.createMany({
-      data: [
-        probe({ status: "PENDING" }),
-        probe({ status: "FAILED" }),
-      ],
+      data: [probe({ status: "PENDING" }), probe({ status: "FAILED" })],
     });
 
     const after = (await metrics(masterToken)).json().outbox;
@@ -307,7 +304,9 @@ describe("the outbox numbers", () => {
      * an hour into the future is invisible to `eligible_seconds` — and it is
      * precisely the shape of a retry storm.
      */
-    await prisma.domainOutboxEvent.deleteMany({ where: { businessId: CARRIER } });
+    await prisma.domainOutboxEvent.deleteMany({
+      where: { businessId: CARRIER },
+    });
 
     const createdAt = new Date(Date.now() - OLDEST_AGE_SECONDS * 1000);
 
@@ -367,7 +366,9 @@ describe("the queue tables", () => {
   it("report the three the product actually queues on", async () => {
     const body = (await metrics(masterToken)).json();
 
-    const tables = body.queue_tables.map((entry: { table: string }) => entry.table);
+    const tables = body.queue_tables.map(
+      (entry: { table: string }) => entry.table,
+    );
 
     expect(tables).toContain("domain_outbox_event");
     expect(tables).toContain("notification_delivery");
@@ -411,14 +412,18 @@ describe("the queue tables", () => {
  */
 describe("the meeting-wave numbers", () => {
   it("count the legacy app contracts this replica served", async () => {
-    const { countLegacyContractUse } = await import("@/shared/http/legacy-contract-usage");
+    const { countLegacyContractUse } = await import(
+      "@/shared/http/legacy-contract-usage"
+    );
     const before = (await metrics(masterToken)).json().legacy_contracts;
 
     countLegacyContractUse("legacy_proof_adapter");
 
     const after = (await metrics(masterToken)).json().legacy_contracts;
 
-    expect(after.legacy_proof_adapter.count).toBe(before.legacy_proof_adapter.count + 1);
+    expect(after.legacy_proof_adapter.count).toBe(
+      before.legacy_proof_adapter.count + 1,
+    );
     expect(after.legacy_proof_adapter.last_use_at).toEqual(expect.any(String));
     expect(after.legacy_pause_kind).toEqual({
       count: expect.any(Number),
@@ -427,15 +432,24 @@ describe("the meeting-wave numbers", () => {
   });
 
   it("count the device pre-check's agreement per kind and result", async () => {
-    const { countDeviceAgreement } = await import("@/shared/ai-precheck/device-agreement-metrics");
-    const before = (await metrics(masterToken)).json().ai_device_agreement_total;
+    const { countDeviceAgreement } = await import(
+      "@/shared/ai-precheck/device-agreement-metrics"
+    );
+    const before = (await metrics(masterToken)).json()
+      .ai_device_agreement_total;
 
     countDeviceAgreement("fuel_odometer", "DISAGREE");
 
     const after = (await metrics(masterToken)).json().ai_device_agreement_total;
 
-    expect(after.fuel_odometer.DISAGREE).toBe(before.fuel_odometer.DISAGREE + 1);
-    expect(Object.keys(after).sort()).toEqual(["checklist_mileage", "fuel_odometer", "proof"]);
+    expect(after.fuel_odometer.DISAGREE).toBe(
+      before.fuel_odometer.DISAGREE + 1,
+    );
+    expect(Object.keys(after).sort()).toEqual([
+      "checklist_mileage",
+      "fuel_odometer",
+      "proof",
+    ]);
   });
 
   it("show the proof signing certificate's state without its serial or CNPJ", async () => {

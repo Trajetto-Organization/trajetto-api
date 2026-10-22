@@ -14,10 +14,7 @@ import {
 } from "@/shared/integration/webhook-dispatch-rules";
 import { FAMILY_WILDCARDS } from "@/shared/integration/webhook-catalogue";
 import { generateApiKey } from "@/shared/integration/api-key-rules";
-import {
-  businessToday,
-  dateOnlyKey,
-} from "@/shared/time/business-day";
+import { businessToday, dateOnlyKey } from "@/shared/time/business-day";
 
 /**
  * The integrations admin routes, over HTTP against the real database.
@@ -65,10 +62,14 @@ async function tokenFor(userId: string): Promise<string> {
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: userId,
-    expiresIn: "1h",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: userId,
+      expiresIn: "1h",
+    },
+  );
 }
 
 async function seedBusiness(
@@ -172,7 +173,10 @@ async function seedEndpoint(
   return endpoint.id;
 }
 
-async function heldRow(businessId: string, endpointId: string): Promise<string> {
+async function heldRow(
+  businessId: string,
+  endpointId: string,
+): Promise<string> {
   const row = await prisma.webhookDelivery.create({
     data: {
       businessId,
@@ -258,22 +262,42 @@ beforeAll(async () => {
 
 afterAll(async () => {
   const businesses = [CARRIER, OTHER, FLEET];
-  const users = [ADMIN, OTHER_ADMIN, FLEET_ADMIN, READER, OUTSIDER, DRIVER_USER, MASTER];
+  const users = [
+    ADMIN,
+    OTHER_ADMIN,
+    FLEET_ADMIN,
+    READER,
+    OUTSIDER,
+    DRIVER_USER,
+    MASTER,
+  ];
 
-  await prisma.activity.deleteMany({ where: { businessId: { in: businesses } } });
-  await prisma.apiKeyUsageDaily.deleteMany({ where: { businessId: { in: businesses } } });
+  await prisma.activity.deleteMany({
+    where: { businessId: { in: businesses } },
+  });
+  await prisma.apiKeyUsageDaily.deleteMany({
+    where: { businessId: { in: businesses } },
+  });
   await prisma.apiKey.deleteMany({ where: { businessId: { in: businesses } } });
-  await prisma.webhookDelivery.deleteMany({ where: { businessId: { in: businesses } } });
-  await prisma.webhookEndpoint.deleteMany({ where: { businessId: { in: businesses } } });
+  await prisma.webhookDelivery.deleteMany({
+    where: { businessId: { in: businesses } },
+  });
+  await prisma.webhookEndpoint.deleteMany({
+    where: { businessId: { in: businesses } },
+  });
 
   await prisma.refreshToken.deleteMany({ where: { userId: { in: users } } });
   await prisma.user.deleteMany({ where: { id: { in: users } } });
 
-  await prisma.permission.deleteMany({ where: { profileAccessId: { in: profiles } } });
+  await prisma.permission.deleteMany({
+    where: { profileAccessId: { in: profiles } },
+  });
   await prisma.profileAccess.deleteMany({ where: { id: { in: profiles } } });
   await prisma.driver.deleteMany({ where: { id: DRIVER } });
 
-  await prisma.businessEntitlement.deleteMany({ where: { businessId: { in: businesses } } });
+  await prisma.businessEntitlement.deleteMany({
+    where: { businessId: { in: businesses } },
+  });
   await prisma.business.deleteMany({ where: { id: { in: businesses } } });
 
   await app?.close();
@@ -315,26 +339,57 @@ describe("a company without Entregas (INT-MOD-1, decision 4.3)", () => {
       routes: [
         ["GET", `/integrations/api-keys${query}`],
         ["GET", `/integrations/webhook-endpoints${query}`],
-        ["GET", `/integrations/webhook-deliveries?page=1&pageSize=5${query.replace("?", "&")}`],
+        [
+          "GET",
+          `/integrations/webhook-deliveries?page=1&pageSize=5${query.replace("?", "&")}`,
+        ],
         ["GET", `/integrations/api-usage?days=7${query.replace("?", "&")}`],
-        ["POST", `/integrations/api-key/${FLEET}`, { name: "ERP sem módulo", scopes: ["deliveries:read"] }],
+        [
+          "POST",
+          `/integrations/api-key/${FLEET}`,
+          { name: "ERP sem módulo", scopes: ["deliveries:read"] },
+        ],
         ["DELETE", `/integrations/api-key/${apiKey.id}/business/${FLEET}`],
         ["POST", `/integrations/webhook-endpoint/${FLEET}`, endpointBody()],
-        ["PUT", `/integrations/webhook-endpoint/${endpointId}/business/${FLEET}`, endpointBody()],
-        ["POST", `/integrations/webhook-endpoint/${endpointId}/business/${FLEET}/reactivate`],
-        ["POST", `/integrations/webhook-endpoint/${endpointId}/business/${FLEET}/rotate-secret`],
-        ["DELETE", `/integrations/webhook-endpoint/${endpointId}/business/${FLEET}`],
-        ["POST", `/integrations/webhook-delivery/${delivery.id}/business/${FLEET}/resend`],
+        [
+          "PUT",
+          `/integrations/webhook-endpoint/${endpointId}/business/${FLEET}`,
+          endpointBody(),
+        ],
+        [
+          "POST",
+          `/integrations/webhook-endpoint/${endpointId}/business/${FLEET}/reactivate`,
+        ],
+        [
+          "POST",
+          `/integrations/webhook-endpoint/${endpointId}/business/${FLEET}/rotate-secret`,
+        ],
+        [
+          "DELETE",
+          `/integrations/webhook-endpoint/${endpointId}/business/${FLEET}`,
+        ],
+        [
+          "POST",
+          `/integrations/webhook-delivery/${delivery.id}/business/${FLEET}/resend`,
+        ],
       ] as Array<["GET" | "POST" | "PUT" | "DELETE", string, unknown?]>,
     };
   }
 
   async function expectUntouched(endpointId: string): Promise<void> {
     // Nothing was issued, registered, changed or removed on the way.
-    expect(await prisma.apiKey.count({ where: { businessId: FLEET, revoked_at: null } })).toBe(1);
-    expect(await prisma.webhookEndpoint.count({ where: { businessId: FLEET } })).toBe(1);
+    expect(
+      await prisma.apiKey.count({
+        where: { businessId: FLEET, revoked_at: null },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.webhookEndpoint.count({ where: { businessId: FLEET } }),
+    ).toBe(1);
 
-    const endpoint = await prisma.webhookEndpoint.findUniqueOrThrow({ where: { id: endpointId } });
+    const endpoint = await prisma.webhookEndpoint.findUniqueOrThrow({
+      where: { id: endpointId },
+    });
 
     expect(endpoint.disabled_at).not.toBeNull();
     expect(endpoint.secret).toBe("whsec_teste");
@@ -354,8 +409,12 @@ describe("a company without Entregas (INT-MOD-1, decision 4.3)", () => {
     for (const [method, url, payload] of routes) {
       const response = await call(FLEET_ADMIN, method, url, payload);
 
-      expect(response.statusCode, `${method} ${url}: ${response.body}`).toBe(403);
-      expect(response.json().code, `${method} ${url}`).toBe("MODULE_NOT_ENABLED");
+      expect(response.statusCode, `${method} ${url}: ${response.body}`).toBe(
+        403,
+      );
+      expect(response.json().code, `${method} ${url}`).toBe(
+        "MODULE_NOT_ENABLED",
+      );
     }
 
     await expectUntouched(endpointId);
@@ -368,8 +427,12 @@ describe("a company without Entregas (INT-MOD-1, decision 4.3)", () => {
     for (const [method, url, payload] of routes) {
       const response = await call(MASTER, method, url, payload);
 
-      expect(response.statusCode, `${method} ${url}: ${response.body}`).toBe(403);
-      expect(response.json().code, `${method} ${url}`).toBe("MODULE_NOT_ENABLED");
+      expect(response.statusCode, `${method} ${url}: ${response.body}`).toBe(
+        403,
+      );
+      expect(response.json().code, `${method} ${url}`).toBe(
+        "MODULE_NOT_ENABLED",
+      );
       expect(response.json().message).toMatch(/Módulos Contratados/);
     }
 
@@ -378,7 +441,11 @@ describe("a company without Entregas (INT-MOD-1, decision 4.3)", () => {
   });
 
   it("lets the MASTER through for a company that has the module", async () => {
-    const response = await call(MASTER, "GET", `/integrations/api-keys?businessId=${CARRIER}`);
+    const response = await call(
+      MASTER,
+      "GET",
+      `/integrations/api-keys?businessId=${CARRIER}`,
+    );
 
     expect(response.statusCode, response.body).toBe(200);
   });
@@ -386,13 +453,22 @@ describe("a company without Entregas (INT-MOD-1, decision 4.3)", () => {
 
 describe("the endpoint cap (DLVB-24)", () => {
   it("lets exactly one of three simultaneous creates take the tenth place", async () => {
-    for (let index = 0; index < MAX_WEBHOOK_ENDPOINTS_PER_BUSINESS - 1; index += 1) {
+    for (
+      let index = 0;
+      index < MAX_WEBHOOK_ENDPOINTS_PER_BUSINESS - 1;
+      index += 1
+    ) {
       await seedEndpoint(CARRIER, { is_active: index % 2 === 0 });
     }
 
     const answers = await Promise.all(
       [0, 1, 2].map(() =>
-        call(ADMIN, "POST", `/integrations/webhook-endpoint/${CARRIER}`, endpointBody()),
+        call(
+          ADMIN,
+          "POST",
+          `/integrations/webhook-endpoint/${CARRIER}`,
+          endpointBody(),
+        ),
       ),
     );
 
@@ -404,9 +480,9 @@ describe("the endpoint cap (DLVB-24)", () => {
       expect(answer.json().code).toBe("WEBHOOK_ENDPOINT_LIMIT_REACHED");
     }
 
-    expect(await prisma.webhookEndpoint.count({ where: { businessId: CARRIER } })).toBe(
-      MAX_WEBHOOK_ENDPOINTS_PER_BUSINESS,
-    );
+    expect(
+      await prisma.webhookEndpoint.count({ where: { businessId: CARRIER } }),
+    ).toBe(MAX_WEBHOOK_ENDPOINTS_PER_BUSINESS);
   });
 
   it("counts per company: another company still has room", async () => {
@@ -421,17 +497,27 @@ describe("the endpoint cap (DLVB-24)", () => {
   });
 
   it("refuses a URL past 2,048 characters and an internal address at save", async () => {
-    const long = await call(OTHER_ADMIN, "POST", `/integrations/webhook-endpoint/${OTHER}`, {
-      ...endpointBody(),
-      url: `https://erp.exemplo.com.br/${"a".repeat(2048)}`,
-    });
+    const long = await call(
+      OTHER_ADMIN,
+      "POST",
+      `/integrations/webhook-endpoint/${OTHER}`,
+      {
+        ...endpointBody(),
+        url: `https://erp.exemplo.com.br/${"a".repeat(2048)}`,
+      },
+    );
 
     expect(long.statusCode).toBe(400);
 
-    const internal = await call(OTHER_ADMIN, "POST", `/integrations/webhook-endpoint/${OTHER}`, {
-      ...endpointBody(),
-      url: "https://169.254.169.254/latest/meta-data",
-    });
+    const internal = await call(
+      OTHER_ADMIN,
+      "POST",
+      `/integrations/webhook-endpoint/${OTHER}`,
+      {
+        ...endpointBody(),
+        url: "https://169.254.169.254/latest/meta-data",
+      },
+    );
 
     expect(internal.statusCode).toBe(400);
     expect(internal.body).toMatch(/alcançável pela internet/);
@@ -440,12 +526,18 @@ describe("the endpoint cap (DLVB-24)", () => {
 
 describe("all the events of the Documentos family (DLVB-22)", () => {
   it("is published in the catalogue as the three prefixes", async () => {
-    const response = await app.inject({ method: "GET", url: "/integration/v1/catalogue" });
+    const response = await app.inject({
+      method: "GET",
+      url: "/integration/v1/catalogue",
+    });
 
     expect(response.statusCode).toBe(200);
     expect(response.json().families).toEqual([
       { family: "route", wildcards: ["route.*"] },
-      { family: "document", wildcards: ["delivery.*", "occurrence.*", "proof.*"] },
+      {
+        family: "document",
+        wildcards: ["delivery.*", "occurrence.*", "proof.*"],
+      },
     ]);
   });
 
@@ -477,8 +569,16 @@ describe("all the events of the Documentos family (DLVB-22)", () => {
     // migration had rewritten the stored ones.
     const legacy = await seedEndpoint(OTHER, { topics: ["document.*"] });
 
-    for (const topic of ["delivery.created", "occurrence.reported", "proof.registered"] as const) {
-      await fanOutWebhookEvent({ topic, businessId: OTHER, payload: { id: randomUUID() } });
+    for (const topic of [
+      "delivery.created",
+      "occurrence.reported",
+      "proof.registered",
+    ] as const) {
+      await fanOutWebhookEvent({
+        topic,
+        businessId: OTHER,
+        payload: { id: randomUUID() },
+      });
     }
 
     for (const endpointId of [family, legacy]) {
@@ -526,7 +626,9 @@ describe("reactivating an endpoint our breaker switched off (decision 2.5)", () 
 
     expect(foreignId.statusCode).toBe(404);
 
-    const row = await prisma.webhookEndpoint.findUniqueOrThrow({ where: { id: endpointId } });
+    const row = await prisma.webhookEndpoint.findUniqueOrThrow({
+      where: { id: endpointId },
+    });
 
     expect(row.disabled_at).not.toBeNull();
     expect(row.consecutive_failures).toBe(20);
@@ -539,7 +641,10 @@ describe("reactivating an endpoint our breaker switched off (decision 2.5)", () 
       consecutive_failures: 20,
     });
 
-    const held = [await heldRow(CARRIER, endpointId), await heldRow(CARRIER, endpointId)];
+    const held = [
+      await heldRow(CARRIER, endpointId),
+      await heldRow(CARRIER, endpointId),
+    ];
 
     const response = await call(
       ADMIN,
@@ -548,20 +653,30 @@ describe("reactivating an endpoint our breaker switched off (decision 2.5)", () 
     );
 
     expect(response.statusCode, response.body).toBe(200);
-    expect(response.json().data).toEqual({ id: endpointId, reactivated: true, released: 2 });
+    expect(response.json().data).toEqual({
+      id: endpointId,
+      reactivated: true,
+      released: 2,
+    });
 
-    const endpoint = await prisma.webhookEndpoint.findUniqueOrThrow({ where: { id: endpointId } });
+    const endpoint = await prisma.webhookEndpoint.findUniqueOrThrow({
+      where: { id: endpointId },
+    });
 
     expect(endpoint.disabled_at).toBeNull();
     expect(endpoint.consecutive_failures).toBe(0);
     expect(endpoint.topics).toEqual(["route.*"]);
 
-    const rows = await prisma.webhookDelivery.findMany({ where: { id: { in: held } } });
+    const rows = await prisma.webhookDelivery.findMany({
+      where: { id: { in: held } },
+    });
 
     // Due now instead of parked for the replay window. Compared loosely: a
     // dispatcher sweeping in another test file may already have taken one.
     for (const row of rows) {
-      expect(row.availableAt.getTime()).toBeLessThan(Date.now() + 10 * 60 * 1000);
+      expect(row.availableAt.getTime()).toBeLessThan(
+        Date.now() + 10 * 60 * 1000,
+      );
       expect(row.lastError).not.toBe(ENDPOINT_PAUSED_REASON);
     }
 
@@ -574,7 +689,9 @@ describe("reactivating an endpoint our breaker switched off (decision 2.5)", () 
 
     expect(again.statusCode).toBe(200);
     expect(again.json().data.reactivated).toBe(false);
-    expect(again.json().message).toBe("Este endpoint já estava recebendo eventos.");
+    expect(again.json().message).toBe(
+      "Este endpoint já estava recebendo eventos.",
+    );
   });
 
   it("leaves a paused endpoint paused, holding its events", async () => {
@@ -593,14 +710,21 @@ describe("reactivating an endpoint our breaker switched off (decision 2.5)", () 
     );
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().data).toMatchObject({ reactivated: true, released: 0 });
+    expect(response.json().data).toMatchObject({
+      reactivated: true,
+      released: 0,
+    });
     expect(response.json().message).toMatch(/continua pausado/);
 
-    const endpoint = await prisma.webhookEndpoint.findUniqueOrThrow({ where: { id: endpointId } });
+    const endpoint = await prisma.webhookEndpoint.findUniqueOrThrow({
+      where: { id: endpointId },
+    });
 
     expect(endpoint.is_active).toBe(false);
 
-    const row = await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: held } });
+    const row = await prisma.webhookDelivery.findUniqueOrThrow({
+      where: { id: held },
+    });
 
     expect(row.availableAt.getTime()).toBeGreaterThan(Date.now());
 
@@ -613,7 +737,10 @@ describe("reactivating an endpoint our breaker switched off (decision 2.5)", () 
     );
 
     expect(again.statusCode).toBe(200);
-    expect(again.json().data).toMatchObject({ reactivated: false, released: 0 });
+    expect(again.json().data).toMatchObject({
+      reactivated: false,
+      released: 0,
+    });
     expect(again.json().message).not.toMatch(/recebendo eventos\./);
     expect(again.json().message).toMatch(/pausado/);
   });
@@ -646,13 +773,15 @@ describe("the monitor and the usage reads", () => {
   });
 
   it("are open to a read-only profile and closed to a profile without integrations", async () => {
-    const url = "/integrations/webhook-deliveries?page=1&pageSize=5&status=QUEUED";
+    const url =
+      "/integrations/webhook-deliveries?page=1&pageSize=5&status=QUEUED";
 
     expect((await call(READER, "GET", url)).statusCode).toBe(200);
     expect((await call(OUTSIDER, "GET", url)).statusCode).toBe(403);
-    expect((await call(DRIVER_USER, "GET", "/integrations/api-usage?days=1")).statusCode).toBe(
-      403,
-    );
+    expect(
+      (await call(DRIVER_USER, "GET", "/integrations/api-usage?days=1"))
+        .statusCode,
+    ).toBe(403);
   });
 
   it("count today's usage in the company's own calendar (DLVB-33)", async () => {
@@ -696,7 +825,9 @@ describe("the monitor and the usage reads", () => {
     expect(data.totals.ok).toBe(5);
     expect(data.byDay).toEqual([{ day: dateOnlyKey(today), total: 5 }]);
 
-    const twoDays = (await call(ADMIN, "GET", "/integrations/api-usage?days=2")).json().data;
+    const twoDays = (
+      await call(ADMIN, "GET", "/integrations/api-usage?days=2")
+    ).json().data;
 
     expect(twoDays.byDay).toEqual([
       { day: dateOnlyKey(yesterday), total: 7 },

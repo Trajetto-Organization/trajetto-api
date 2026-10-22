@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -8,8 +16,15 @@ import { quotaPeriodFor } from "@/shared/ai/ai-period";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { seedProofCard } from "./support/proof-card-seed";
-import { seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
-import { FakeProviderError, fakeAnalyzer, resetCircuit } from "./support/fake-vision";
+import {
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
+import {
+  FakeProviderError,
+  fakeAnalyzer,
+  resetCircuit,
+} from "./support/fake-vision";
 
 /**
  * The AI pipeline under a slow provider and more than one replica
@@ -213,7 +228,9 @@ describe("a replica with receipts queued", () => {
     }
 
     // Newer than every one of A's.
-    await queueProof(CARRIER_B, "B/only", { created_at: new Date(base + 60_000) });
+    await queueProof(CARRIER_B, "B/only", {
+      created_at: new Date(base + 60_000),
+    });
 
     await pipeline.runCycle();
 
@@ -227,15 +244,13 @@ describe("the fair claim", () => {
     let claim: Prisma.Sql | null = null;
 
     const database = (await import("@/../infra/database")).default;
-    const spy = vi
-      .spyOn(database, "$queryRaw")
-      .mockImplementationOnce((async (
-        strings: TemplateStringsArray,
-        ...values: unknown[]
-      ) => {
-        claim = Prisma.sql(strings, ...values);
-        return [];
-      }) as never);
+    const spy = vi.spyOn(database, "$queryRaw").mockImplementationOnce((async (
+      strings: TemplateStringsArray,
+      ...values: unknown[]
+    ) => {
+      claim = Prisma.sql(strings, ...values);
+      return [];
+    }) as never);
 
     pipeline.provider = fakeAnalyzer({});
 
@@ -324,7 +339,10 @@ describe("a stale owner, after another replica took the request over", () => {
 
 describe("a request whose process kept dying mid-call", () => {
   it("is failed once the retry budget is spent, without calling the provider again", async () => {
-    const provider = vi.fn(async () => ({ parsed: PROOF_ANSWER, usage: USAGE }));
+    const provider = vi.fn(async () => ({
+      parsed: PROOF_ANSWER,
+      usage: USAGE,
+    }));
 
     pipeline.provider = fakeAnalyzer({ analyzeDeliveryProof: provider });
 
@@ -373,7 +391,11 @@ describe("a checklist whose lease is lost between two photos", () => {
       },
     });
 
-    const fields = ["tires_condition", "bumpers_condition", "windshield_condition"];
+    const fields = [
+      "tires_condition",
+      "bumpers_condition",
+      "windshield_condition",
+    ];
 
     const request = await prisma.aIAnalysisRequest.create({
       data: {
@@ -384,7 +406,9 @@ describe("a checklist whose lease is lost between two photos", () => {
         periodId: await periodOf(FLEET),
         requestedById: randomUUID(),
         input: {
-          photosByField: Object.fromEntries(fields.map((f) => [f, [`${f}.jpg`]])),
+          photosByField: Object.fromEntries(
+            fields.map((f) => [f, [`${f}.jpg`]]),
+          ),
           checklistData: Object.fromEntries(fields.map((f) => [f, "good"])),
         },
       },
@@ -408,7 +432,11 @@ describe("a checklist whose lease is lost between two photos", () => {
         });
 
         return {
-          parsed: { condicao_observada: "good", confianca: 0.9, observacao: "ok" },
+          parsed: {
+            condicao_observada: "good",
+            confianca: 0.9,
+            observacao: "ok",
+          },
           usage: USAGE,
         };
       },
@@ -425,6 +453,8 @@ describe("a checklist whose lease is lost between two photos", () => {
 
     // Left to the new owner, as it left it.
     expect(row.status).toBe("PROCESSING");
-    expect(row.units.filter((unit) => unit.status === "RESERVED")).toHaveLength(2);
+    expect(row.units.filter((unit) => unit.status === "RESERVED")).toHaveLength(
+      2,
+    );
   });
 });

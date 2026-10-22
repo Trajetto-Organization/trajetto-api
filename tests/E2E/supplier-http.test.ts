@@ -69,7 +69,13 @@ async function seedProfile(
       businessId,
       permissions: {
         create: [
-          { permissionKey, action: permissionKey, canRead: true, canWrite, businessId },
+          {
+            permissionKey,
+            action: permissionKey,
+            canRead: true,
+            canWrite,
+            businessId,
+          },
         ],
       },
     },
@@ -152,7 +158,11 @@ async function list(query: string, token = tokens.admin) {
   );
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, meta: {} as SupplierMeta, names: [] as string[] };
+    return {
+      status: response.statusCode,
+      meta: {} as SupplierMeta,
+      names: [] as string[],
+    };
   }
 
   const [first, ...rest] = response.body
@@ -203,19 +213,42 @@ beforeAll(async () => {
   adminId = admin.id;
   tokens.admin = admin.token;
   tokens.readOnly = (
-    await seedUser("BUSINESS_USER", CARRIER, await seedProfile(CARRIER, "supplier_manage", false))
+    await seedUser(
+      "BUSINESS_USER",
+      CARRIER,
+      await seedProfile(CARRIER, "supplier_manage", false),
+    )
   ).token;
   tokens.noSuppliers = (
-    await seedUser("BUSINESS_USER", CARRIER, await seedProfile(CARRIER, "vehicle_manage", true))
+    await seedUser(
+      "BUSINESS_USER",
+      CARRIER,
+      await seedProfile(CARRIER, "vehicle_manage", true),
+    )
   ).token;
-  tokens.driver = (await seedUser("BUSINESS_USER", CARRIER, null, DRIVER)).token;
+  tokens.driver = (
+    await seedUser("BUSINESS_USER", CARRIER, null, DRIVER)
+  ).token;
   tokens.otherAdmin = (await seedUser("BUSINESS_ADMIN", OTHER)).token;
   tokens.master = (await seedUser("MASTER", null)).token;
 
   // Twelve suppliers of the carrier for the list: names S00..S11, UF by
   // index (SP×6, MG×3, RJ×2, none×1), a phone on even indexes, an e-mail on
   // the first four.
-  const ufs = ["SP", "SP", "SP", "SP", "SP", "SP", "MG", "MG", "MG", "RJ", "RJ", null];
+  const ufs = [
+    "SP",
+    "SP",
+    "SP",
+    "SP",
+    "SP",
+    "SP",
+    "MG",
+    "MG",
+    "MG",
+    "RJ",
+    "RJ",
+    null,
+  ];
 
   for (const [index, uf] of ufs.entries()) {
     await prisma.supplier.create({
@@ -232,7 +265,12 @@ beforeAll(async () => {
   }
 
   await prisma.supplier.create({
-    data: { name: "Fornecedor Alheio Secreto", cnpj: "33444555000166", uf: "AC", businessId: OTHER },
+    data: {
+      name: "Fornecedor Alheio Secreto",
+      cnpj: "33444555000166",
+      uf: "AC",
+      businessId: OTHER,
+    },
   });
 
   ({ app } = await import("@/http"));
@@ -246,7 +284,12 @@ afterAll(async () => {
 
 describe("uniqueness lives inside one company (FLEET-SUP-2, decision 8.1)", () => {
   it("lets two carriers register the same workshop with the same e-mail", async () => {
-    const mine = await send("POST", `/supplier/create-supplier/${CARRIER}`, tokens.admin, body());
+    const mine = await send(
+      "POST",
+      `/supplier/create-supplier/${CARRIER}`,
+      tokens.admin,
+      body(),
+    );
     // The old global lookup refused this one: "e-mail não disponível".
     const theirs = await send(
       "POST",
@@ -295,16 +338,25 @@ describe("a supplier never changes company", () => {
     expect(response.statusCode).toBe(403);
     expect(response.json().code).toBe("SUPPLIER_TENANT_MISMATCH");
 
-    const after = await prisma.supplier.findUniqueOrThrow({ where: { id: mine.id } });
+    const after = await prisma.supplier.findUniqueOrThrow({
+      where: { id: mine.id },
+    });
 
-    expect(after).toMatchObject({ businessId: CARRIER, name: "Oficina Compartilhada Diesel" });
+    expect(after).toMatchObject({
+      businessId: CARRIER,
+      name: "Oficina Compartilhada Diesel",
+    });
   });
 });
 
 describe("a supplier with history is not deleted (FLEET-SUP-1)", () => {
   it("refuses with what depends on it, and keeps it", async () => {
     const supplier = await prisma.supplier.create({
-      data: { name: "Oficina Com Historico", cnpj: "12121212000112", businessId: CARRIER },
+      data: {
+        name: "Oficina Com Historico",
+        cnpj: "12121212000112",
+        businessId: CARRIER,
+      },
     });
 
     const branch = await prisma.branch.create({
@@ -357,12 +409,18 @@ describe("a supplier with history is not deleted (FLEET-SUP-1)", () => {
       message:
         "Não é possível excluir este fornecedor: ele está vinculado a 1 peça e 2 contas a pagar. Excluí-lo apagaria o fornecedor desse histórico.",
     });
-    expect(await prisma.supplier.findUnique({ where: { id: supplier.id } })).not.toBeNull();
+    expect(
+      await prisma.supplier.findUnique({ where: { id: supplier.id } }),
+    ).not.toBeNull();
   });
 
   it("deletes a supplier nothing references", async () => {
     const supplier = await prisma.supplier.create({
-      data: { name: "Oficina Sem Historico", cnpj: "13131313000113", businessId: CARRIER },
+      data: {
+        name: "Oficina Sem Historico",
+        cnpj: "13131313000113",
+        businessId: CARRIER,
+      },
     });
 
     const response = await send(
@@ -371,7 +429,9 @@ describe("a supplier with history is not deleted (FLEET-SUP-1)", () => {
     );
 
     expect(response.statusCode).toBe(200);
-    expect(await prisma.supplier.findUnique({ where: { id: supplier.id } })).toBeNull();
+    expect(
+      await prisma.supplier.findUnique({ where: { id: supplier.id } }),
+    ).toBeNull();
   });
 });
 
@@ -439,7 +499,10 @@ describe("the list is the company's, counted by the server (8.8)", () => {
     expect((await list(`businessId=${OTHER}`)).status).toBe(403);
     expect((await list("", tokens.master)).status).toBe(400);
 
-    const other = await list(`businessId=${OTHER}&search=Alheio`, tokens.master);
+    const other = await list(
+      `businessId=${OTHER}&search=Alheio`,
+      tokens.master,
+    );
 
     expect(other.names).toEqual(["Fornecedor Alheio Secreto"]);
   });
@@ -507,7 +570,11 @@ async function waitForSupplierLockWaiter(): Promise<void> {
 describe("a link made while the delete runs is kept (FLEET-SUP-1)", () => {
   it("refuses the delete when a part naming the supplier commits while it waits", async () => {
     const supplier = await prisma.supplier.create({
-      data: { name: "Oficina Em Disputa", cnpj: "14141414000114", businessId: CARRIER },
+      data: {
+        name: "Oficina Em Disputa",
+        cnpj: "14141414000114",
+        businessId: CARRIER,
+      },
     });
 
     let release!: () => void;
@@ -562,7 +629,9 @@ describe("a link made while the delete runs is kept (FLEET-SUP-1)", () => {
     });
 
     expect(part.supplierId).toBe(supplier.id);
-    expect(await prisma.supplier.findUnique({ where: { id: supplier.id } })).not.toBeNull();
+    expect(
+      await prisma.supplier.findUnique({ where: { id: supplier.id } }),
+    ).not.toBeNull();
   });
 });
 
@@ -572,13 +641,19 @@ describe("who may write suppliers, and where (roles and tenants)", () => {
   beforeAll(async () => {
     targetId = (
       await prisma.supplier.create({
-        data: { name: "Oficina Protegida", cnpj: "15151515000115", businessId: CARRIER },
+        data: {
+          name: "Oficina Protegida",
+          cnpj: "15151515000115",
+          businessId: CARRIER,
+        },
       })
     ).id;
   });
 
   const unchanged = async () =>
-    expect(await prisma.supplier.findUniqueOrThrow({ where: { id: targetId } })).toMatchObject({
+    expect(
+      await prisma.supplier.findUniqueOrThrow({ where: { id: targetId } }),
+    ).toMatchObject({
       name: "Oficina Protegida",
       businessId: CARRIER,
     });
@@ -588,35 +663,44 @@ describe("who may write suppliers, and where (roles and tenants)", () => {
     ["a profile without the key", "noSuppliers", "PERMISSION_DENIED"],
     ["a driver", "driver", "PERMISSION_DENIED"],
     ["another company's admin", "otherAdmin", "TENANT_ACCESS_DENIED"],
-  ] as const)("refuses %s on create, update and delete", async (_who, token, code) => {
-    const create = await send(
-      "POST",
-      `/supplier/create-supplier/${CARRIER}`,
-      tokens[token],
-      body({ name: "Oficina Intrusa Ltda", cnpj: "16161616000116", email: null }),
-    );
-    const update = await send(
-      "PATCH",
-      `/supplier/update-supplier/${targetId}/business/${CARRIER}`,
-      tokens[token],
-      { name: "Oficina Renomeada Ltda", cnpj: "15151515000115" },
-    );
-    const remove = await send(
-      "DELETE",
-      `/supplier/delete-supplier/${targetId}/business/${CARRIER}`,
-      tokens[token],
-    );
+  ] as const)(
+    "refuses %s on create, update and delete",
+    async (_who, token, code) => {
+      const create = await send(
+        "POST",
+        `/supplier/create-supplier/${CARRIER}`,
+        tokens[token],
+        body({
+          name: "Oficina Intrusa Ltda",
+          cnpj: "16161616000116",
+          email: null,
+        }),
+      );
+      const update = await send(
+        "PATCH",
+        `/supplier/update-supplier/${targetId}/business/${CARRIER}`,
+        tokens[token],
+        { name: "Oficina Renomeada Ltda", cnpj: "15151515000115" },
+      );
+      const remove = await send(
+        "DELETE",
+        `/supplier/delete-supplier/${targetId}/business/${CARRIER}`,
+        tokens[token],
+      );
 
-    for (const response of [create, update, remove]) {
-      expect(response.statusCode).toBe(403);
-      expect(response.json().code).toBe(code);
-    }
+      for (const response of [create, update, remove]) {
+        expect(response.statusCode).toBe(403);
+        expect(response.json().code).toBe(code);
+      }
 
-    expect(
-      await prisma.supplier.count({ where: { name: "Oficina Intrusa Ltda" } }),
-    ).toBe(0);
-    await unchanged();
-  });
+      expect(
+        await prisma.supplier.count({
+          where: { name: "Oficina Intrusa Ltda" },
+        }),
+      ).toBe(0);
+      await unchanged();
+    },
+  );
 
   it("refuses another company's admin naming their own company for this supplier", async () => {
     const update = await send(
@@ -642,7 +726,11 @@ describe("who may write suppliers, and where (roles and tenants)", () => {
 
   it("keeps the picker search to readers of the company", async () => {
     const search = (token: string, business = CARRIER) =>
-      send("GET", `/supplier/search-supplier-business?businessId=${business}&limit=5`, token);
+      send(
+        "GET",
+        `/supplier/search-supplier-business?businessId=${business}&limit=5`,
+        token,
+      );
 
     expect((await search(tokens.readOnly)).statusCode).toBe(200);
     expect((await search(tokens.noSuppliers)).statusCode).toBe(403);
@@ -661,7 +749,11 @@ describe("a switched-off company is not operated (decision 4.1)", () => {
   beforeAll(async () => {
     inactiveSupplierId = (
       await prisma.supplier.create({
-        data: { name: "Oficina Da Desativada", cnpj: "17171717000117", businessId: INACTIVE },
+        data: {
+          name: "Oficina Da Desativada",
+          cnpj: "17171717000117",
+          businessId: INACTIVE,
+        },
       })
     ).id;
   });

@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -161,9 +169,13 @@ beforeEach(() => {
 afterAll(async () => {
   await prisma.notificationDelivery.deleteMany({});
   await prisma.domainOutboxEvent.deleteMany({});
-  await prisma.externalRecipient.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.externalRecipient.deleteMany({
+    where: { businessId: BUSINESS },
+  });
   await prisma.delivery.deleteMany({ where: { businessId: BUSINESS } });
-  await prisma.deliveryMessageTemplate.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.deliveryMessageTemplate.deleteMany({
+    where: { businessId: BUSINESS },
+  });
   await prisma.shipper.deleteMany({ where: { businessId: BUSINESS } });
   await prisma.business.deleteMany({ where: { id: BUSINESS } });
 
@@ -205,7 +217,9 @@ describe("a company template the pipeline cannot render", () => {
       });
     }
 
-    await useTemplate('{{log "[ERROR] FORGED: pagamento estornado" level="error"}} {{link}}');
+    await useTemplate(
+      '{{log "[ERROR] FORGED: pagamento estornado" level="error"}} {{link}}',
+    );
 
     const eventId = await dispatch(await seedDelivery());
 

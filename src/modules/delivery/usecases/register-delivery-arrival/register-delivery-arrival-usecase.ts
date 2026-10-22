@@ -9,9 +9,7 @@ import database from "@/../infra/database";
 import { NotificationService } from "@/shared/services/notification-service";
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 
-import {
-  DeliveryNotFoundError,
-} from "../errors/delivery-errors";
+import { DeliveryNotFoundError } from "../errors/delivery-errors";
 
 import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
 import { arrivalStopOutcome } from "@/shared/route/route-rules";
@@ -82,8 +80,10 @@ class RegisterDeliveryArrivalUseCase {
     }
 
     // Outbox resend: the same submission never becomes a second event.
-    const alreadyRecorded =
-      await this.delivery.findEventBySubmissionId(client_submission_id, businessId);
+    const alreadyRecorded = await this.delivery.findEventBySubmissionId(
+      client_submission_id,
+      businessId,
+    );
 
     if (alreadyRecorded) {
       return;
@@ -181,7 +181,10 @@ class RegisterDeliveryArrivalUseCase {
       // driver an arrival that worked had failed.
       if (
         isUniqueViolation(error) &&
-        (await this.delivery.findEventBySubmissionId(client_submission_id, businessId))
+        (await this.delivery.findEventBySubmissionId(
+          client_submission_id,
+          businessId,
+        ))
       ) {
         return;
       }

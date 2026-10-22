@@ -16,9 +16,7 @@ class DeleteUserController {
     const deleteUserUseCase = container.resolve(DeleteUserUseCase);
 
     await deleteUserUseCase.execute({ userId, id });
-    return reply
-      .status(200)
-      .send({ message: "Usuário deletado com sucesso!" });
+    return reply.status(200).send({ message: "Usuário deletado com sucesso!" });
   }
 }
 

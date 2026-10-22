@@ -68,7 +68,10 @@ async function refusal(promise: Promise<unknown>): Promise<AppError> {
 describe("an .xlsx that inflates far beyond its size", () => {
   it("is refused before the parser sees it, quickly", async () => {
     // 64 MiB of XML-ish zeros in a few kilobytes of upload.
-    const bomb = zipWith("xl/worksheets/sheet1.xml", Buffer.alloc(64 * 1024 * 1024));
+    const bomb = zipWith(
+      "xl/worksheets/sheet1.xml",
+      Buffer.alloc(64 * 1024 * 1024),
+    );
 
     expect(bomb.length).toBeLessThan(200 * 1024);
 
@@ -86,7 +89,12 @@ describe("an .xlsx that inflates far beyond its size", () => {
 describe("a spreadsheet with more rows than a day of deliveries", () => {
   it("is refused as a CSV", async () => {
     const csv = ["pedido,destinatario"]
-      .concat(Array.from({ length: MAX_SPREADSHEET_ROWS + 1 }, (_, i) => `P${i},Cliente ${i}`))
+      .concat(
+        Array.from(
+          { length: MAX_SPREADSHEET_ROWS + 1 },
+          (_, i) => `P${i},Cliente ${i}`,
+        ),
+      )
       .join("\n");
 
     const error = await refusal(
@@ -125,7 +133,10 @@ describe("an ordinary spreadsheet", () => {
 
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
-    const rows = await readSpreadsheet("entregas.xlsx", buffer.toString("base64"));
+    const rows = await readSpreadsheet(
+      "entregas.xlsx",
+      buffer.toString("base64"),
+    );
 
     expect(rows).toEqual([
       ["pedido", "destinatario"],

@@ -61,7 +61,9 @@ class ListMasterUsersUseCase {
     // Checked here too, like its create/update/delete siblings: a job or
     // another route reaching this without verifyUserRole would list them all.
     if (findUser.role !== "MASTER") {
-      throw permissionDenied("Apenas usuários Master podem listar usuários Master.");
+      throw permissionDenied(
+        "Apenas usuários Master podem listar usuários Master.",
+      );
     }
 
     try {

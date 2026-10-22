@@ -80,7 +80,10 @@ interface IWebhookDeliveryRepository {
   releaseParked: (endpointId: string) => Promise<number>;
 
   /** Releases one held row when its endpoint is back on since it was read. */
-  releaseHeldIfEndpointBack: (rowId: string, endpointId: string) => Promise<void>;
+  releaseHeldIfEndpointBack: (
+    rowId: string,
+    endpointId: string,
+  ) => Promise<void>;
 }
 
 export type {

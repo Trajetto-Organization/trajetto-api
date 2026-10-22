@@ -18,7 +18,8 @@ import { ZodError } from "zod";
  * is ever typed by a person; both only arrive on purpose or from a corrupted
  * client. One check for every route, before validation, answers 400.
  */
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 function isUnstorable(text: string): boolean {
   return text.includes("\u0000") || LONE_SURROGATE.test(text);
@@ -74,7 +75,11 @@ function findUnstorableText(root: unknown): Array<string | number> | null {
 
     for (const key of Object.keys(value)) {
       if (isUnstorable(key)) return pathOf(node, key);
-      stack.push({ value: (value as Record<string, unknown>)[key], key, parent: node });
+      stack.push({
+        value: (value as Record<string, unknown>)[key],
+        key,
+        parent: node,
+      });
     }
   }
 
@@ -97,7 +102,9 @@ async function rejectUnstorableText(request: FastifyRequest): Promise<void> {
     const path = findUnstorableText(value);
 
     if (path) {
-      throw new ZodError([{ code: "custom", path: [source, ...path], message: MESSAGE }]);
+      throw new ZodError([
+        { code: "custom", path: [source, ...path], message: MESSAGE },
+      ]);
     }
   }
 }

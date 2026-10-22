@@ -120,7 +120,10 @@ describe("retry backoff", () => {
    * permanent failure.
    */
   it("outlasts a provider outage of a few hours", () => {
-    const total = DELIVERY_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
+    const total = DELIVERY_RETRY_DELAYS_MS.reduce(
+      (sum, delay) => sum + delay,
+      0,
+    );
 
     expect(total).toBeGreaterThan(4 * 60 * 60_000);
   });
@@ -323,9 +326,9 @@ describe("preference layering", () => {
 
     expect(flags.hasWhatsAppPhone).toBe(true);
 
-    expect(
-      channelsForRecipient(flags, fullContent),
-    ).not.toContain(NotificationChannel.WHATSAPP);
+    expect(channelsForRecipient(flags, fullContent)).not.toContain(
+      NotificationChannel.WHATSAPP,
+    );
   });
 
   /**

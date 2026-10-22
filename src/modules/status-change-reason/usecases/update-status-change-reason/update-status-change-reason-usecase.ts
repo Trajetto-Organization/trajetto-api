@@ -67,7 +67,10 @@ class UpdateStatusChangeReasonUseCase {
     >;
 
     try {
-      updated = await this.reason.updateStatusChangeReason(reasonId, reasonData);
+      updated = await this.reason.updateStatusChangeReason(
+        reasonId,
+        reasonData,
+      );
     } catch (error) {
       // A twin request committed between the check and the write: the unique
       // index decided, and the answer is the check's 409.

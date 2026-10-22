@@ -167,7 +167,12 @@ async function feed(
   });
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, meta: {} as FeedMeta, rows: [], body: response.body };
+    return {
+      status: response.statusCode,
+      meta: {} as FeedMeta,
+      rows: [],
+      body: response.body,
+    };
   }
 
   const [first, ...rest] = response.body
@@ -178,7 +183,8 @@ async function feed(
   return { status: 200, meta: first.meta, rows: rest, body: response.body };
 }
 
-const recipients = (rows: FeedLine[]) => rows.map((row) => row.delivery.recipient_name);
+const recipients = (rows: FeedLine[]) =>
+  rows.map((row) => row.delivery.recipient_name);
 
 /** Both pages of the twelve, in the order the server streamed them. */
 async function bothPages(query: string): Promise<FeedLine[]> {
@@ -227,9 +233,9 @@ const TIE_MINUTES: Record<number, number> = { 5: 100, 8: 85 };
 const OFFLINE_DAYS = 3;
 
 const SEED = Array.from({ length: 12 }, (_, index) => {
-  const typeId =
-    index % 3 === 0 ? RECUSA : index % 3 === 1 ? AUSENTE : AVARIA;
-  const status = index % 4 === 0 ? "FAILED" : index % 4 === 1 ? "DELIVERED" : "IN_TRANSIT";
+  const typeId = index % 3 === 0 ? RECUSA : index % 3 === 1 ? AUSENTE : AVARIA;
+  const status =
+    index % 4 === 0 ? "FAILED" : index % 4 === 1 ? "DELIVERED" : "IN_TRANSIT";
 
   return {
     recipient: `R${String(index).padStart(2, "0")}`,
@@ -257,10 +263,30 @@ beforeAll(async () => {
 
   await prisma.occurrenceType.createMany({
     data: [
-      { id: AUSENTE, name: "Destinatário ausente", blocks_delivery: false, businessId: CARRIER },
-      { id: RECUSA, name: "Recusa", blocks_delivery: true, businessId: CARRIER },
-      { id: AVARIA, name: "Avaria", blocks_delivery: true, businessId: CARRIER },
-      { id: FOREIGN_TYPE, name: "Tipo secreto alheio", blocks_delivery: true, businessId: OTHER },
+      {
+        id: AUSENTE,
+        name: "Destinatário ausente",
+        blocks_delivery: false,
+        businessId: CARRIER,
+      },
+      {
+        id: RECUSA,
+        name: "Recusa",
+        blocks_delivery: true,
+        businessId: CARRIER,
+      },
+      {
+        id: AVARIA,
+        name: "Avaria",
+        blocks_delivery: true,
+        businessId: CARRIER,
+      },
+      {
+        id: FOREIGN_TYPE,
+        name: "Tipo secreto alheio",
+        blocks_delivery: true,
+        businessId: OTHER,
+      },
     ],
   });
 
@@ -351,7 +377,9 @@ beforeAll(async () => {
     },
   });
 
-  const otherUser = await prisma.user.findFirstOrThrow({ where: { businessId: OTHER } });
+  const otherUser = await prisma.user.findFirstOrThrow({
+    where: { businessId: OTHER },
+  });
 
   await prisma.deliveryOccurrence.create({
     data: {
@@ -379,9 +407,18 @@ describe("GET /delivery/list-occurrences — order", () => {
     expect(meta.total).toBe(12);
     // Each tie pair larger id first (the id desc tiebreaker): R04 before
     // R05, R08 before R07.
-    expect(recipients(rows)).toEqual(
-      ["R11", "R10", "R09", "R08", "R07", "R06", "R04", "R05", "R03", "R02"],
-    );
+    expect(recipients(rows)).toEqual([
+      "R11",
+      "R10",
+      "R09",
+      "R08",
+      "R07",
+      "R06",
+      "R04",
+      "R05",
+      "R03",
+      "R02",
+    ]);
   });
 
   it("breaks a tie on the date by id, the same way on every request", async () => {
@@ -409,9 +446,13 @@ describe("GET /delivery/list-occurrences — order", () => {
 
       // R11 was written three days before anything else arrived, and still
       // sorts as the newest: occurred_at is not the key.
-      const offline = rows.find((row) => row.delivery.recipient_name === "R11")!;
+      const offline = rows.find(
+        (row) => row.delivery.recipient_name === "R11",
+      )!;
 
-      expect(Date.parse(offline.occurred_at!)).toBeLessThan(Math.min(...arrivals));
+      expect(Date.parse(offline.occurred_at!)).toBeLessThan(
+        Math.min(...arrivals),
+      );
       expect(rows.indexOf(offline)).toBe(order === "desc" ? 0 : 11);
     }
   });
@@ -427,7 +468,11 @@ describe("GET /delivery/list-occurrences — order", () => {
       headers: { authorization: `Bearer ${tokens.admin}` },
     });
 
-    const secondRows = second.body.trim().split("\n").slice(1).map((line) => JSON.parse(line));
+    const secondRows = second.body
+      .trim()
+      .split("\n")
+      .slice(1)
+      .map((line) => JSON.parse(line));
 
     expect(recipients(secondRows)).toEqual(["R10", "R11"]);
   });
@@ -444,32 +489,66 @@ describe("GET /delivery/list-occurrences — order", () => {
     // Avaria (2, 5, 8, 11), Destinatário ausente (1, 4, 7, 10), Recusa
     // (0, 3, 6, 9); newest first inside each. Page two continues the last.
     expect(recipients(await bothPages("sort=typeName&order=asc"))).toEqual([
-      "R11", "R08", "R05", "R02",
-      "R10", "R07", "R04", "R01",
-      "R09", "R06",
-      "R03", "R00",
+      "R11",
+      "R08",
+      "R05",
+      "R02",
+      "R10",
+      "R07",
+      "R04",
+      "R01",
+      "R09",
+      "R06",
+      "R03",
+      "R00",
     ]);
 
     expect(recipients(await bothPages("sort=typeName&order=desc"))).toEqual([
-      "R09", "R06", "R03", "R00",
-      "R10", "R07", "R04", "R01",
-      "R11", "R08",
-      "R05", "R02",
+      "R09",
+      "R06",
+      "R03",
+      "R00",
+      "R10",
+      "R07",
+      "R04",
+      "R01",
+      "R11",
+      "R08",
+      "R05",
+      "R02",
     ]);
   });
 
   it("sorts by severity both ways across pages", async () => {
     // Informational first on asc (false before true), newest first inside.
     expect(recipients(await bothPages("sort=blocking&order=asc"))).toEqual([
-      "R10", "R07", "R04", "R01",
-      "R11", "R09", "R08", "R06", "R05", "R03",
-      "R02", "R00",
+      "R10",
+      "R07",
+      "R04",
+      "R01",
+      "R11",
+      "R09",
+      "R08",
+      "R06",
+      "R05",
+      "R03",
+      "R02",
+      "R00",
     ]);
 
     expect(recipients(await bothPages("sort=blocking&order=desc"))).toEqual([
-      "R11", "R09", "R08", "R06", "R05", "R03", "R02", "R00",
-      "R10", "R07",
-      "R04", "R01",
+      "R11",
+      "R09",
+      "R08",
+      "R06",
+      "R05",
+      "R03",
+      "R02",
+      "R00",
+      "R10",
+      "R07",
+      "R04",
+      "R01",
     ]);
   });
 
@@ -477,7 +556,9 @@ describe("GET /delivery/list-occurrences — order", () => {
     const { rows } = await feed("sort=reporter&order=asc");
 
     // Six by Abel, then Zélia's.
-    expect(rows.slice(0, 6).every((row) => row.reportedBy.name === "Abel Relator")).toBe(true);
+    expect(
+      rows.slice(0, 6).every((row) => row.reportedBy.name === "Abel Relator"),
+    ).toBe(true);
     expect(rows[6].reportedBy.name).toBe("Zélia Gestora");
 
     const desc = await feed("sort=reporter&order=desc");
@@ -497,7 +578,9 @@ describe("GET /delivery/list-occurrences — filters and cards", () => {
   it("filters by severity over the whole company and keeps the cards whole", async () => {
     const { meta, rows } = await feed("severity=blocking");
 
-    const blockingSeeded = SEED.filter((entry) => BLOCKING_TYPES.has(entry.typeId)).length;
+    const blockingSeeded = SEED.filter((entry) =>
+      BLOCKING_TYPES.has(entry.typeId),
+    ).length;
 
     expect(meta.total).toBe(blockingSeeded);
     expect(rows.every((row) => row.occurrenceType.blocks_delivery)).toBe(true);
@@ -524,18 +607,28 @@ describe("GET /delivery/list-occurrences — filters and cards", () => {
     ]);
 
     // The cards follow the type filter: everything left is blocking.
-    expect(meta.searchMeta).toMatchObject({ total: 8, blocking: 8, informational: 0 });
+    expect(meta.searchMeta).toMatchObject({
+      total: 8,
+      blocking: 8,
+      informational: 0,
+    });
   });
 
   it("filters by delivery status, in the comma and the repeated form alike", async () => {
-    const expected = SEED.filter((entry) => entry.status !== "IN_TRANSIT").length;
+    const expected = SEED.filter(
+      (entry) => entry.status !== "IN_TRANSIT",
+    ).length;
 
     const comma = await feed("deliveryStatus=FAILED,DELIVERED");
-    const repeated = await feed("deliveryStatus=FAILED&deliveryStatus=DELIVERED");
+    const repeated = await feed(
+      "deliveryStatus=FAILED&deliveryStatus=DELIVERED",
+    );
 
     expect(comma.meta.total).toBe(expected);
     expect(repeated.meta.total).toBe(expected);
-    expect(comma.rows.every((row) => row.delivery.status !== "IN_TRANSIT")).toBe(true);
+    expect(
+      comma.rows.every((row) => row.delivery.status !== "IN_TRANSIT"),
+    ).toBe(true);
   });
 
   it("combines search, facets and sort", async () => {
@@ -565,7 +658,9 @@ describe("GET /delivery/list-occurrences — tenant and roles", () => {
   it("never lists, counts or names another company's occurrences", async () => {
     const { meta, rows, body } = await feed("");
 
-    expect(rows.some((row) => row.delivery.recipient_name.startsWith("R99"))).toBe(false);
+    expect(
+      rows.some((row) => row.delivery.recipient_name.startsWith("R99")),
+    ).toBe(false);
     expect(meta.searchMeta.total).toBe(12);
     expect(body).not.toContain("Tipo secreto alheio");
   });
@@ -577,7 +672,9 @@ describe("GET /delivery/list-occurrences — tenant and roles", () => {
     expect(meta.total).toBe(0);
     expect(body).not.toContain("Tipo secreto alheio");
     expect(
-      meta.searchMeta.facets.occurrenceTypeId.some((option) => option.value === FOREIGN_TYPE),
+      meta.searchMeta.facets.occurrenceTypeId.some(
+        (option) => option.value === FOREIGN_TYPE,
+      ),
     ).toBe(false);
   });
 
@@ -601,7 +698,9 @@ describe("GET /delivery/list-occurrences — tenant and roles", () => {
     );
 
     expect(status).toBe(200);
-    expect(meta.total).toBe(SEED.filter((entry) => entry.typeId === AUSENTE).length);
+    expect(meta.total).toBe(
+      SEED.filter((entry) => entry.typeId === AUSENTE).length,
+    );
   });
 
   it("asks a master to pick a company", async () => {
@@ -612,7 +711,9 @@ describe("GET /delivery/list-occurrences — tenant and roles", () => {
   });
 
   it("serves a read-only profile", async () => {
-    expect((await feed("sort=recipient&order=asc", tokens.readOnly)).status).toBe(200);
+    expect(
+      (await feed("sort=recipient&order=asc", tokens.readOnly)).status,
+    ).toBe(200);
   });
 
   it("refuses a profile without the occurrence permission and a driver", async () => {

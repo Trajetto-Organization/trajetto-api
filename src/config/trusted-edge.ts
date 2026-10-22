@@ -62,7 +62,9 @@ function edgeMatcher(cidrs: readonly string[]): (address: string) => boolean {
 
   return (address) => {
     // An IPv4 peer on a dual-stack socket reads as ::ffff:a.b.c.d.
-    const plain = address.trim().replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, "");
+    const plain = address
+      .trim()
+      .replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, "");
     const family = isIP(plain);
 
     if (family === 0) return false;

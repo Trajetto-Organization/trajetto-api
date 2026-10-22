@@ -27,7 +27,8 @@ const FILE_DOCS = new WeakMap<object, FileDoc>();
 const DOCUMENTED_AS = new WeakMap<object, ZodTypeAny>();
 
 const CSV = "text/csv";
-const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const XLSX =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 /** A download. The returned schema is a marker the serializer never runs. */
 function fileResponse(doc: FileDoc): ZodTypeAny {
@@ -54,7 +55,10 @@ function exportFileResponse(filename: string): ZodTypeAny {
  * `.describe()` clones the runtime schema without changing what it accepts,
  * so a schema shared by two routes is never marked for both.
  */
-function documentedAs<T extends ZodTypeAny>(runtime: T, documented: ZodTypeAny): T {
+function documentedAs<T extends ZodTypeAny>(
+  runtime: T,
+  documented: ZodTypeAny,
+): T {
   const marked = runtime.describe(runtime.description ?? "") as T;
 
   DOCUMENTED_AS.set(marked, documented);
@@ -63,7 +67,9 @@ function documentedAs<T extends ZodTypeAny>(runtime: T, documented: ZodTypeAny):
 }
 
 function fileDocFor(schema: unknown): FileDoc | undefined {
-  return schema && typeof schema === "object" ? FILE_DOCS.get(schema) : undefined;
+  return schema && typeof schema === "object"
+    ? FILE_DOCS.get(schema)
+    : undefined;
 }
 
 function documentedDocFor(schema: unknown): ZodTypeAny | undefined {

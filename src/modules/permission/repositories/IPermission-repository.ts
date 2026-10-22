@@ -17,7 +17,13 @@ import {
  */
 interface IPermissionRepository {
   createPermission: (
-    { action, canRead, canWrite, businessId, profileAccessId }: CreatePermissionProps,
+    {
+      action,
+      canRead,
+      canWrite,
+      businessId,
+      profileAccessId,
+    }: CreatePermissionProps,
     tx?: Prisma.TransactionClient,
   ) => Promise<Permission>;
   listPermission: (

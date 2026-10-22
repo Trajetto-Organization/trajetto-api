@@ -36,7 +36,10 @@ const deleteFile = vi.fn(async () => undefined);
 const createFuelWithMileage = vi.fn();
 
 function useCase(): CreateFuelUseCase {
-  const stub = <T>(value: T) => async () => value;
+  const stub =
+    <T>(value: T) =>
+    async () =>
+      value;
 
   return new CreateFuelUseCase(
     {
@@ -69,9 +72,15 @@ function useCase(): CreateFuelUseCase {
         branchId: BRANCH,
       }),
     } as never,
-    { findFuelTypeById: stub({ id: FUEL_TYPE, businessId: BUSINESS }) } as never,
     {
-      findBranchById: stub({ id: BRANCH, businessId: BUSINESS, is_active: true }),
+      findFuelTypeById: stub({ id: FUEL_TYPE, businessId: BUSINESS }),
+    } as never,
+    {
+      findBranchById: stub({
+        id: BRANCH,
+        businessId: BUSINESS,
+        is_active: true,
+      }),
     } as never,
     {
       findBySubmissionId: stub(null),
@@ -106,7 +115,9 @@ beforeEach(() => {
 describe("a fueling that fails for a reason the retry can outlive", () => {
   it("keeps the photo the retry is going to point at", async () => {
     createFuelWithMileage.mockRejectedValue(
-      new Error("Timed out fetching a new connection from the connection pool (P2024)"),
+      new Error(
+        "Timed out fetching a new connection from the connection pool (P2024)",
+      ),
     );
 
     await expect(
@@ -133,7 +144,11 @@ describe("a replay that finds the original already committed", () => {
   it("still cleans up a key the committed record does not use", async () => {
     createFuelWithMileage.mockResolvedValue({
       created: false,
-      fuel: { id: "fuel-1", driverId: DRIVER, odometer_photo: "outra-chave.jpg" },
+      fuel: {
+        id: "fuel-1",
+        driverId: DRIVER,
+        odometer_photo: "outra-chave.jpg",
+      },
     });
 
     await useCase().execute(fueling(), "admin", { key: KEY });
@@ -160,7 +175,9 @@ describe("the ownership rules", () => {
     expect(isFinalRejection(new AppError("x", 503))).toBe(false);
     expect(isFinalRejection(new Error("P2034 write conflict"))).toBe(false);
     expect(
-      isFinalRejection(new VehicleMileageInvalidError(), [VehicleMileageInvalidError]),
+      isFinalRejection(new VehicleMileageInvalidError(), [
+        VehicleMileageInvalidError,
+      ]),
     ).toBe(true);
   });
 
@@ -188,7 +205,10 @@ describe("a checklist, the same two ways", () => {
       "@/modules/vehicle-checklist/usecases/create-vehicle-checklist/create-vehicle-checklist-usecase"
     );
 
-    const stub = <T>(value: T) => async () => value;
+    const stub =
+      <T>(value: T) =>
+      async () =>
+        value;
 
     return new CreateVehicleChecklistUseCase(
       {
@@ -199,7 +219,9 @@ describe("a checklist, the same two ways", () => {
           driverId: null,
         }),
       } as never,
-      { findBusinessById: stub({ id: BUSINESS, ai_analysis_limit: 0 }) } as never,
+      {
+        findBusinessById: stub({ id: BUSINESS, ai_analysis_limit: 0 }),
+      } as never,
       {
         findVehicleById: stub({
           id: VEHICLE,
@@ -221,7 +243,11 @@ describe("a checklist, the same two ways", () => {
         }),
       } as never,
       {
-        findBranchById: stub({ id: BRANCH, businessId: BUSINESS, is_active: true }),
+        findBranchById: stub({
+          id: BRANCH,
+          businessId: BUSINESS,
+          is_active: true,
+        }),
       } as never,
       {
         findBySubmissionId: stub(null),
@@ -231,7 +257,11 @@ describe("a checklist, the same two ways", () => {
       {
         resolvePresignedUploads: async (
           photos: Array<{ key: string; fieldName?: string }>,
-        ) => photos.map((photo) => ({ path: photo.key, fieldName: photo.fieldName })),
+        ) =>
+          photos.map((photo) => ({
+            path: photo.key,
+            fieldName: photo.fieldName,
+          })),
         deleteFile,
       } as never,
     );

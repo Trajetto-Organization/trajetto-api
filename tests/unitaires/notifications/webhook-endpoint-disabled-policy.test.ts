@@ -32,10 +32,14 @@ describe("webhook-endpoint.disabled", () => {
     const findBusinessAdminsByBusinessId = vi.fn(async () => []);
 
     await webhookEndpointDisabledPolicy.resolveRecipients(payload, {
-      userRepository: { findBusinessAdminsByBusinessId } as unknown as IUserRepository,
+      userRepository: {
+        findBusinessAdminsByBusinessId,
+      } as unknown as IUserRepository,
     });
 
-    expect(findBusinessAdminsByBusinessId).toHaveBeenCalledWith(payload.businessId);
+    expect(findBusinessAdminsByBusinessId).toHaveBeenCalledWith(
+      payload.businessId,
+    );
     expect(webhookEndpointDisabledPolicy.mandatory).toBe(true);
   });
 

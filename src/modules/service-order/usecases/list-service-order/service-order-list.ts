@@ -37,7 +37,10 @@ const SERVICE_ORDER_SORT_KEYS = [
 
 type ServiceOrderSortKey = (typeof SERVICE_ORDER_SORT_KEYS)[number];
 
-const SERVICE_ORDER_SORT_FALLBACK = { sort: "created_at", order: "desc" } as const;
+const SERVICE_ORDER_SORT_FALLBACK = {
+  sort: "created_at",
+  order: "desc",
+} as const;
 
 type OrderBy = Prisma.ServiceOrderOrderByWithRelationInput;
 
@@ -153,7 +156,10 @@ function serviceOrderListWhere(
 
   // The tenant stays a top-level key: the (businessId, created_at) index
   // serves every read of the list, and isolation never depends on the OR.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Orders and money per status × maintenance type, over search + branch facet. */
@@ -191,7 +197,10 @@ function round2(value: number): number {
 function summarizeServiceOrderList(
   cells: ServiceOrderTypeCount[],
   branchCounts: FacetCount[],
-  filters: Pick<ServiceOrderListFilters, "statuses" | "maintenanceTypes" | "branchIds">,
+  filters: Pick<
+    ServiceOrderListFilters,
+    "statuses" | "maintenanceTypes" | "branchIds"
+  >,
 ): { total: number; searchMeta: ServiceOrderListSearchMeta } {
   const statusSet = new Set(filters.statuses ?? []);
   const typeSet = new Set(filters.maintenanceTypes ?? []);
@@ -210,7 +219,9 @@ function summarizeServiceOrderList(
   const rowCells = cardCells.filter(keptByStatus);
 
   const open = sum(cardCells.filter((cell) => cell.status === "open"));
-  const completed = sum(cardCells.filter((cell) => cell.status === "completed"));
+  const completed = sum(
+    cardCells.filter((cell) => cell.status === "completed"),
+  );
 
   const statusOptions: FacetCount[] = SERVICE_ORDER_STATUSES.map((status) => ({
     value: status,

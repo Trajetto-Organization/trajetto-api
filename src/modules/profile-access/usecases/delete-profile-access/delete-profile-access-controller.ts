@@ -30,14 +30,11 @@ class DeleteProfileAccessController {
       // The only inline answer: the web says how many people hold the
       // profile, and the global handler sends message and code only.
       if (error instanceof ProfileAccessInUseError) {
-        return reply
-          .header("x-error-code", error.code)
-          .status(409)
-          .send({
-            code: error.code,
-            message: error.message,
-            usersCount: error.usersCount,
-          });
+        return reply.header("x-error-code", error.code).status(409).send({
+          code: error.code,
+          message: error.message,
+          usersCount: error.usersCount,
+        });
       }
 
       throw error;

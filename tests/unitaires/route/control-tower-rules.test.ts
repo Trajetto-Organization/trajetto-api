@@ -210,7 +210,9 @@ describe("the document funnel", () => {
     expect(funnel.map((entry) => entry.status)).toEqual([...FUNNEL_ORDER]);
 
     expect(funnel.find((entry) => entry.status === "FAILED")?.total).toBe(0);
-    expect(funnel.find((entry) => entry.status === "DELIVERED")?.total).toBe(12);
+    expect(funnel.find((entry) => entry.status === "DELIVERED")?.total).toBe(
+      12,
+    );
   });
 
   it("adds up the per-driver rows of one status", () => {
@@ -279,12 +281,18 @@ describe("which truck the map draws (TWR-8)", () => {
     driverId: "d1",
     status,
     ended_at:
-      endedMinutesAgo === null ? null : new Date(now.getTime() - endedMinutesAgo * 60_000),
+      endedMinutesAgo === null
+        ? null
+        : new Date(now.getTime() - endedMinutesAgo * 60_000),
   });
 
   it("draws a running route's truck as moving, then silent", () => {
-    expect(placeVehicle(position(2), [route("IN_PROGRESS")], now)?.state).toBe("moving");
-    expect(placeVehicle(position(30), [route("IN_PROGRESS")], now)?.state).toBe("silent");
+    expect(placeVehicle(position(2), [route("IN_PROGRESS")], now)?.state).toBe(
+      "moving",
+    );
+    expect(placeVehicle(position(30), [route("IN_PROGRESS")], now)?.state).toBe(
+      "silent",
+    );
   });
 
   it("uses the running route even for a point stored without one", () => {
@@ -295,20 +303,30 @@ describe("which truck the map draws (TWR-8)", () => {
   });
 
   it("shows a finished route as ended, never as 'sem reportar'", () => {
-    expect(placeVehicle(position(90), [route("COMPLETED", 60)], now)?.state).toBe("ended");
+    expect(
+      placeVehicle(position(90), [route("COMPLETED", 60)], now)?.state,
+    ).toBe("ended");
   });
 
   it("takes the truck off the map two hours after the route ended", () => {
     const ended = ENDED_ROUTE_VISIBLE_MS / 60_000;
 
-    expect(placeVehicle(position(200), [route("COMPLETED", ended)], now)).not.toBeNull();
-    expect(placeVehicle(position(200), [route("COMPLETED", ended + 1)], now)).toBeNull();
+    expect(
+      placeVehicle(position(200), [route("COMPLETED", ended)], now),
+    ).not.toBeNull();
+    expect(
+      placeVehicle(position(200), [route("COMPLETED", ended + 1)], now),
+    ).toBeNull();
   });
 
   it("does not draw a phone that is on no route", () => {
     expect(placeVehicle(position(5), [], now)).toBeNull();
     expect(
-      placeVehicle(position(5), [{ ...route("IN_PROGRESS"), driverId: "d2" }], now),
+      placeVehicle(
+        position(5),
+        [{ ...route("IN_PROGRESS"), driverId: "d2" }],
+        now,
+      ),
     ).toBeNull();
   });
 
@@ -327,8 +345,14 @@ describe("how far a route got (DLVP-MON-2)", () => {
   it("counts insucessos as resolved, not as missing", () => {
     // 3 delivered + 7 refused used to read 100% (failures left both sides).
     const progress = routeProgress([
-      ...Array.from({ length: 3 }, (_, i) => ({ id: `c${i}`, status: "COMPLETED" })),
-      ...Array.from({ length: 7 }, (_, i) => ({ id: `f${i}`, status: "FAILED" })),
+      ...Array.from({ length: 3 }, (_, i) => ({
+        id: `c${i}`,
+        status: "COMPLETED",
+      })),
+      ...Array.from({ length: 7 }, (_, i) => ({
+        id: `f${i}`,
+        status: "FAILED",
+      })),
     ]);
 
     expect(progress.completion).toBe(100);
@@ -353,7 +377,12 @@ describe("how far a route got (DLVP-MON-2)", () => {
       { id: "s3", status: "PENDING", on_the_way_at: null },
     ]);
 
-    expect(progress).toMatchObject({ pending: 3, arrived: 1, onTheWay: 1, completion: 0 });
+    expect(progress).toMatchObject({
+      pending: 3,
+      arrived: 1,
+      onTheWay: 1,
+      completion: 0,
+    });
   });
 
   /**
@@ -392,7 +421,9 @@ describe("how far a route got (DLVP-MON-2)", () => {
 
   it("refuses to answer for a route with no stops left", () => {
     expect(routeProgress([]).completion).toBeNull();
-    expect(routeProgress([{ id: "s1", status: "CANCELLED" }]).completion).toBeNull();
+    expect(
+      routeProgress([{ id: "s1", status: "CANCELLED" }]).completion,
+    ).toBeNull();
   });
 });
 
@@ -409,7 +440,10 @@ describe("the events feed", () => {
       2,
     );
 
-    expect(merged.map((entry) => entry.id)).toEqual(["occurrence:b", "route:c:started"]);
+    expect(merged.map((entry) => entry.id)).toEqual([
+      "occurrence:b",
+      "route:c:started",
+    ]);
   });
 });
 
@@ -426,7 +460,13 @@ describe("a driver's share of the day (driverDayLoads)", () => {
     ]);
 
     expect(loads).toEqual([
-      { driverId: "d1", designated: 2, inRoute: 1, deliveredToday: 3, failedToday: 7 },
+      {
+        driverId: "d1",
+        designated: 2,
+        inRoute: 1,
+        deliveredToday: 3,
+        failedToday: 7,
+      },
     ]);
   });
 
@@ -436,6 +476,14 @@ describe("a driver's share of the day (driverDayLoads)", () => {
         { driverId: "d1", status: "DELIVERED", total: 1 },
         { driverId: "d1", status: "DELIVERED", total: 2 },
       ]),
-    ).toEqual([{ driverId: "d1", designated: 0, inRoute: 0, deliveredToday: 3, failedToday: 0 }]);
+    ).toEqual([
+      {
+        driverId: "d1",
+        designated: 0,
+        inRoute: 0,
+        deliveredToday: 3,
+        failedToday: 0,
+      },
+    ]);
   });
 });

@@ -34,7 +34,11 @@ const count = z
 const offsetMeta = z.object({
   total: count.optional(),
   page: z.number().int().optional().describe("A página pedida."),
-  pageSize: z.number().int().optional().describe("O tamanho de página aplicado."),
+  pageSize: z
+    .number()
+    .int()
+    .optional()
+    .describe("O tamanho de página aplicado."),
   searchMeta: z
     .record(z.unknown())
     .optional()
@@ -64,7 +68,9 @@ const cursorPage = z.object({
 const zeroTotal = z
   .literal(0)
   .optional()
-  .describe("Sempre 0 nas listas por cursor (não contamos o conjunto); não use.");
+  .describe(
+    "Sempre 0 nas listas por cursor (não contamos o conjunto); não use.",
+  );
 
 /**
  * The first line of a cursor listing, with whatever extras it carries.
@@ -79,7 +85,11 @@ function cursorMeta(
   return total ? z.object({ total, searchMeta }) : z.object({ searchMeta });
 }
 
-function register(item: ZodTypeAny, meta: ZodTypeAny, cursor: boolean): ZodTypeAny {
+function register(
+  item: ZodTypeAny,
+  meta: ZodTypeAny,
+  cursor: boolean,
+): ZodTypeAny {
   const runtime = z.any();
 
   NDJSON_DOCS.set(runtime, { item, meta, cursor });
@@ -88,12 +98,18 @@ function register(item: ZodTypeAny, meta: ZodTypeAny, cursor: boolean): ZodTypeA
 }
 
 /** An offset listing whose items are `item`. */
-function ndjsonList(item: ZodTypeAny, meta: ZodTypeAny = offsetMeta): ZodTypeAny {
+function ndjsonList(
+  item: ZodTypeAny,
+  meta: ZodTypeAny = offsetMeta,
+): ZodTypeAny {
   return register(item, meta, false);
 }
 
 /** A cursor listing: `meta.searchMeta.{nextCursor, hasMore}`. */
-function ndjsonCursor(item: ZodTypeAny, meta: ZodTypeAny = cursorMeta()): ZodTypeAny {
+function ndjsonCursor(
+  item: ZodTypeAny,
+  meta: ZodTypeAny = cursorMeta(),
+): ZodTypeAny {
   return register(item, meta, true);
 }
 

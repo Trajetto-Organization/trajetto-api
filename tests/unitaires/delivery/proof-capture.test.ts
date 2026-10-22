@@ -50,8 +50,20 @@ describe("resolvePhotoTakenAt", () => {
   });
 
   it("is null when absent, unreadable or older than the offline week", () => {
-    expect(resolvePhotoTakenAt({ photoTakenAt: undefined, occurredAt: null, now: NOW })).toBeNull();
-    expect(resolvePhotoTakenAt({ photoTakenAt: "ontem", occurredAt: null, now: NOW })).toBeNull();
+    expect(
+      resolvePhotoTakenAt({
+        photoTakenAt: undefined,
+        occurredAt: null,
+        now: NOW,
+      }),
+    ).toBeNull();
+    expect(
+      resolvePhotoTakenAt({
+        photoTakenAt: "ontem",
+        occurredAt: null,
+        now: NOW,
+      }),
+    ).toBeNull();
     expect(
       resolvePhotoTakenAt({
         photoTakenAt: new Date(NOW.getTime() - 8 * 24 * HOUR).toISOString(),
@@ -83,7 +95,8 @@ describe("deviceLabel", () => {
   it("names the app build from x-trajetto-client-version", () => {
     expect(
       deviceLabel({
-        "x-trajetto-client-version": "platform=android; version=1.4.0; build=42; contract=3",
+        "x-trajetto-client-version":
+          "platform=android; version=1.4.0; build=42; contract=3",
         "user-agent": "okhttp/4.12.0",
       }),
     ).toBe("android 1.4.0 (build 42)");

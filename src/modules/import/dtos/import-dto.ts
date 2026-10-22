@@ -39,7 +39,12 @@ interface ImportReport {
   rows: ImportRowResult[];
 
   /** Routes the file created, by name and number. */
-  routes: Array<{ id: string; code: number; name: string | null; stops: number }>;
+  routes: Array<{
+    id: string;
+    code: number;
+    name: string | null;
+    stops: number;
+  }>;
 }
 
 interface ImportRecord {

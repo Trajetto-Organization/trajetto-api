@@ -54,7 +54,12 @@ type Actor = "admin" | "driver" | "apiKey";
 interface Operation {
   method: string;
   path: string;
-  parameters?: Array<{ in: string; name: string; required?: boolean; schema?: JsonSchema }>;
+  parameters?: Array<{
+    in: string;
+    name: string;
+    required?: boolean;
+    schema?: JsonSchema;
+  }>;
   requestBody?: { content?: Record<string, { schema?: JsonSchema }> };
   security?: unknown[];
 }
@@ -149,14 +154,18 @@ const DRIVER_OWN: Record<string, string> = {
 };
 
 /** `{id}` and `[].id` mean a different row on each route family. */
-function entityForGenericId(path: string, location: string): string | undefined {
+function entityForGenericId(
+  path: string,
+  location: string,
+): string | undefined {
   if (location.includes("cards")) return "cardId";
   if (location.includes("columns")) return "columnId";
   if (path.startsWith("/integration/v1/deliveries")) return "deliveryId";
   if (path.startsWith("/integration/v1/routes")) return "routeId";
   if (path.startsWith("/integrations/api-key")) return "apiKeyId";
   if (path.startsWith("/integrations/webhook-endpoint")) return "endpointId";
-  if (path.startsWith("/integrations/webhook-delivery")) return "webhookDeliveryId";
+  if (path.startsWith("/integrations/webhook-delivery"))
+    return "webhookDeliveryId";
   return undefined;
 }
 
@@ -235,16 +244,20 @@ interface Variant {
 const VARIANTS: Record<string, Variant[]> = {
   "POST /user/create-user": [
     { omit: ["driverId"], set: { role: "BUSINESS_USER" } },
-    { omit: ["profileAccessId"], set: { role: "BUSINESS_USER", userType: "driver" } },
+    {
+      omit: ["profileAccessId"],
+      set: { role: "BUSINESS_USER", userType: "driver" },
+    },
   ],
   "PATCH /user/update-user/{userId}": [
     { omit: ["driverId"] },
     { omit: ["profileAccessId"], set: { userType: "driver" } },
   ],
-  "PATCH /user/update-master-user/{masterUserId}": [{ set: { name: "Novo nome" } }],
-  "PATCH /status-change-reason/update-status-change-reason/{reasonId}/business/{businessId}": [
+  "PATCH /user/update-master-user/{masterUserId}": [
     { set: { name: "Novo nome" } },
   ],
+  "PATCH /status-change-reason/update-status-change-reason/{reasonId}/business/{businessId}":
+    [{ set: { name: "Novo nome" } }],
   "PATCH /route/set-delivery-location/{deliveryId}/business/{businessId}": [
     { set: { latitude: -23.55, longitude: -46.63 } },
   ],
@@ -260,12 +273,22 @@ const VARIANTS: Record<string, Variant[]> = {
     { omit: ["aroundMessageId", "deliveryId", "routeId", "ticketId"] },
     { omit: ["threadId", "driverId", "deliveryId", "routeId", "ticketId"] },
   ],
-  "POST /fuel/create-fuel/{businessId}": [{ set: { latitude: -23.55, longitude: -46.63 } }],
-  "POST /chat/tickets/{ticketId}/messages": [{ set: { body: "Mensagem da varredura" } }],
-  "PATCH /permission/update-permission/{permissionId}": [{ set: { canRead: true } }],
+  "POST /fuel/create-fuel/{businessId}": [
+    { set: { latitude: -23.55, longitude: -46.63 } },
+  ],
+  "POST /chat/tickets/{ticketId}/messages": [
+    { set: { body: "Mensagem da varredura" } },
+  ],
+  "PATCH /permission/update-permission/{permissionId}": [
+    { set: { canRead: true } },
+  ],
   // A fresh submission per request: a reused one is an idempotent replay.
-  "POST /driver-pause/start/{businessId}": [{ set: { start_submission_id: () => randomUUID() } }],
-  "POST /chat/send-message": [{ omit: ["audience"], set: { body: "Mensagem da varredura" } }],
+  "POST /driver-pause/start/{businessId}": [
+    { set: { start_submission_id: () => randomUUID() } },
+  ],
+  "POST /chat/send-message": [
+    { omit: ["audience"], set: { body: "Mensagem da varredura" } },
+  ],
   "PUT /integrations/webhook-endpoint/{id}/business/{businessId}": [
     { set: { topics: ["delivery.created"] } },
   ],
@@ -287,7 +310,9 @@ function isSkipped(op: Operation): boolean {
   return false;
 }
 
-type Mode = { kind: "base" } | { kind: "probe"; slot: number; with: "victim" | "missing" };
+type Mode =
+  | { kind: "base" }
+  | { kind: "probe"; slot: number; with: "victim" | "missing" };
 
 interface Slot {
   index: number;
@@ -311,7 +336,12 @@ const MISSING_IDS = new Map<number, string>();
  * in traversal order (deterministic for a given operation), so the probe of
  * slot N changes slot N only.
  */
-function build(op: Operation, mode: Mode, actor: Actor, variant: Variant = {}): Built {
+function build(
+  op: Operation,
+  mode: Mode,
+  actor: Actor,
+  variant: Variant = {},
+): Built {
   const slots: Slot[] = [];
   const unknownSlots: string[] = [];
   let probeValue: string | undefined;
@@ -324,7 +354,8 @@ function build(op: Operation, mode: Mode, actor: Actor, variant: Variant = {}): 
         ? entityForGenericId(op.path, location)
         : name === "occurrence_type_id" && op.path.startsWith("/driver-pause")
           ? "pauseTypeId"
-          : name === "start_submission_id" && op.path.startsWith("/driver-pause/start")
+          : name === "start_submission_id" &&
+              op.path.startsWith("/driver-pause/start")
             ? undefined
             : ENTITY_BY_NAME[name];
 
@@ -352,12 +383,17 @@ function build(op: Operation, mode: Mode, actor: Actor, variant: Variant = {}): 
     }
 
     // The driver works its released route of the day, not the plan.
-    if (actor === "driver" && DRIVER_OWN[entity]) return own[DRIVER_OWN[entity]];
+    if (actor === "driver" && DRIVER_OWN[entity])
+      return own[DRIVER_OWN[entity]];
 
     return own[entity];
   };
 
-  const sample = (schema: JsonSchema | undefined, name: string, location: string): unknown => {
+  const sample = (
+    schema: JsonSchema | undefined,
+    name: string,
+    location: string,
+  ): unknown => {
     if (!schema) return undefined;
 
     if (schema.allOf?.length) {
@@ -378,16 +414,18 @@ function build(op: Operation, mode: Mode, actor: Actor, variant: Variant = {}): 
 
     const variants = schema.anyOf ?? schema.oneOf;
     if (variants?.length) {
-      const nonNull = variants.find((variant) => variant.type !== "null") ?? variants[0];
+      const nonNull =
+        variants.find((variant) => variant.type !== "null") ?? variants[0];
       return sample(nonNull, name, location);
     }
 
     if (schema.const !== undefined) return schema.const;
-    if (schema.enum?.length) return schema.enum.find((value) => value !== null) ?? schema.enum[0];
+    if (schema.enum?.length)
+      return schema.enum.find((value) => value !== null) ?? schema.enum[0];
 
     const type = Array.isArray(schema.type)
       ? schema.type.find((candidate) => candidate !== "null")
-      : schema.type ?? (schema.properties ? "object" : undefined);
+      : (schema.type ?? (schema.properties ? "object" : undefined));
 
     if (type === "object") {
       const out: Record<string, unknown> = {};
@@ -402,7 +440,8 @@ function build(op: Operation, mode: Mode, actor: Actor, variant: Variant = {}): 
 
         if (location === "body" && variant.set && key in variant.set) {
           const value = variant.set[key];
-          out[key] = typeof value === "function" ? (value as () => unknown)() : value;
+          out[key] =
+            typeof value === "function" ? (value as () => unknown)() : value;
           continue;
         }
 
@@ -419,7 +458,12 @@ function build(op: Operation, mode: Mode, actor: Actor, variant: Variant = {}): 
       const item = schema.items;
       const itemsHaveId = Boolean(item?.properties?.id);
 
-      if (!reference && !itemsHaveId && !(schema.minItems && schema.minItems > 0)) return [];
+      if (
+        !reference &&
+        !itemsHaveId &&
+        !(schema.minItems && schema.minItems > 0)
+      )
+        return [];
 
       return [sample(item, reference ? name : name, `${location}[]`)];
     }
@@ -432,8 +476,10 @@ function build(op: Operation, mode: Mode, actor: Actor, variant: Variant = {}): 
       if (schema.format === "uuid") return randomUUID();
       if (schema.format === "date-time") return new Date().toISOString();
       if (schema.format === "date") return "2026-10-07";
-      if (schema.format === "email") return `sweep-${randomUUID().slice(0, 8)}@exemplo.com.br`;
-      if (schema.format === "uri" || schema.format === "url") return "https://example.com/sweep";
+      if (schema.format === "email")
+        return `sweep-${randomUUID().slice(0, 8)}@exemplo.com.br`;
+      if (schema.format === "uri" || schema.format === "url")
+        return "https://example.com/sweep";
 
       const lower = name.toLowerCase();
       let value = "Teste de varredura";
@@ -466,9 +512,11 @@ function build(op: Operation, mode: Mode, actor: Actor, variant: Variant = {}): 
       if (hinted !== undefined) return hinted;
 
       let value = typeof schema.minimum === "number" ? schema.minimum : 1;
-      if (typeof schema.exclusiveMinimum === "number") value = schema.exclusiveMinimum + 1;
+      if (typeof schema.exclusiveMinimum === "number")
+        value = schema.exclusiveMinimum + 1;
       if (schema.exclusiveMinimum === true) value += 1;
-      if (typeof schema.maximum === "number" && value > schema.maximum) value = schema.maximum;
+      if (typeof schema.maximum === "number" && value > schema.maximum)
+        value = schema.maximum;
       return value;
     }
 
@@ -489,13 +537,22 @@ function build(op: Operation, mode: Mode, actor: Actor, variant: Variant = {}): 
     if (parameter.in !== "query") continue;
     if (variant.omit?.includes(parameter.name)) continue;
 
-    const reference = !NOT_A_REFERENCE.has(parameter.name) && looksLikeReference(parameter.name);
+    const reference =
+      !NOT_A_REFERENCE.has(parameter.name) &&
+      looksLikeReference(parameter.name);
     if (!parameter.required && !reference) continue;
 
-    const value = sample(parameter.schema, parameter.name, `query.${parameter.name}`);
+    const value = sample(
+      parameter.schema,
+      parameter.name,
+      `query.${parameter.name}`,
+    );
     if (value === undefined) continue;
 
-    query.set(parameter.name, Array.isArray(value) ? value.join(",") : String(value));
+    query.set(
+      parameter.name,
+      Array.isArray(value) ? value.join(",") : String(value),
+    );
   }
 
   const json = op.requestBody?.content?.["application/json"]?.schema;
@@ -519,7 +576,11 @@ interface Answer {
   body: string;
 }
 
-async function send(op: Operation, built: Built, actor: Actor): Promise<Answer> {
+async function send(
+  op: Operation,
+  built: Built,
+  actor: Actor,
+): Promise<Answer> {
   const headers: Record<string, string> = {
     authorization: `Bearer ${tokens[actor]}`,
     "idempotency-key": randomUUID(),
@@ -553,7 +614,13 @@ async function resetLimiter(): Promise<void> {
   for (const id of actorUserIds) {
     let cursor = "0";
     do {
-      const [next, keys] = await redis.scan(cursor, "MATCH", `*${id}*`, "COUNT", 500);
+      const [next, keys] = await redis.scan(
+        cursor,
+        "MATCH",
+        `*${id}*`,
+        "COUNT",
+        500,
+      );
       cursor = next;
       if (keys.length) await redis.del(...keys);
     } while (cursor !== "0");
@@ -630,7 +697,11 @@ beforeAll(async () => {
   redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:63790");
 
   A = await seedSweepCarrier(prisma, { label: "A", marker: "ZZSEGREDOA" });
-  B = await seedSweepCarrier(prisma, { label: "B", marker: SECRET_MARKER, openPause: true });
+  B = await seedSweepCarrier(prisma, {
+    label: "B",
+    marker: SECRET_MARKER,
+    openPause: true,
+  });
 
   tokens.admin = await sweepToken(prisma, A.businessId, "BUSINESS_ADMIN");
   tokens.driver = await sweepToken(prisma, A.businessId, "DRIVER", A.driverId);
@@ -656,7 +727,10 @@ beforeAll(async () => {
   );
 
   // Destructive verbs last, so every other probe still finds its rows.
-  operations.sort((left, right) => Number(left.method === "DELETE") - Number(right.method === "DELETE"));
+  operations.sort(
+    (left, right) =>
+      Number(left.method === "DELETE") - Number(right.method === "DELETE"),
+  );
 
   before = await victimSnapshot();
 }, APP_BOOT_TIMEOUT_MS);
@@ -668,43 +742,62 @@ afterAll(async () => {
 });
 
 describe("IDOR sweep over the whole OpenAPI document", () => {
-  it(
-    "answers another company's id exactly like an id that does not exist",
-    async () => {
-      expect(operations.length, "o documento veio vazio").toBeGreaterThan(200);
+  it("answers another company's id exactly like an id that does not exist", async () => {
+    expect(operations.length, "o documento veio vazio").toBeGreaterThan(200);
 
-      for (const op of operations) {
-        if (isSkipped(op)) continue;
+    for (const op of operations) {
+      if (isSkipped(op)) continue;
 
-        for (const actor of actorsFor(op)) {
-          for (const variant of VARIANTS[`${op.method} ${op.path}`] ?? [{}]) {
+      for (const actor of actorsFor(op)) {
+        for (const variant of VARIANTS[`${op.method} ${op.path}`] ?? [{}]) {
           const shape = build(op, { kind: "base" }, actor, variant);
-          shape.unknownSlots.forEach((slot) => unknown.add(`${op.method} ${op.path} ${slot}`));
+          shape.unknownSlots.forEach((slot) =>
+            unknown.add(`${op.method} ${op.path} ${slot}`),
+          );
 
           for (const slot of shape.slots) {
             await resetLimiter();
 
-            const victimBuilt = build(op, { kind: "probe", slot: slot.index, with: "victim" }, actor, variant);
-            const missingBuilt = build(op, { kind: "probe", slot: slot.index, with: "missing" }, actor, variant);
+            const victimBuilt = build(
+              op,
+              { kind: "probe", slot: slot.index, with: "victim" },
+              actor,
+              variant,
+            );
+            const missingBuilt = build(
+              op,
+              { kind: "probe", slot: slot.index, with: "missing" },
+              actor,
+              variant,
+            );
 
             const victim = await send(op, victimBuilt, actor);
             const missing = await send(op, missingBuilt, actor);
             probes += 1;
 
             const where = `${actor} ${op.method} ${op.path} [${slot.location}]`;
-            const ids = [victimBuilt.probeValue ?? "", missingBuilt.probeValue ?? ""];
+            const ids = [
+              victimBuilt.probeValue ?? "",
+              missingBuilt.probeValue ?? "",
+            ];
 
             if (victim.status === 429 || missing.status === 429) {
-              findings.push(`${where}: 429 no meio da varredura (inconclusivo)`);
+              findings.push(
+                `${where}: 429 no meio da varredura (inconclusivo)`,
+              );
               continue;
             }
 
             if (victim.status >= 500) {
-              findings.push(`${where}: ${victim.status} ${victim.code} com o id da outra empresa`);
+              findings.push(
+                `${where}: ${victim.status} ${victim.code} com o id da outra empresa`,
+              );
             }
 
             if (victim.body.includes(SECRET_MARKER)) {
-              findings.push(`${where}: a resposta (${victim.status}) traz dados da outra empresa`);
+              findings.push(
+                `${where}: a resposta (${victim.status}) traz dados da outra empresa`,
+              );
             }
 
             const left = normalise(victim, ids);
@@ -713,32 +806,39 @@ describe("IDOR sweep over the whole OpenAPI document", () => {
             trace.push(`${where}: ${left} | ${right}`);
 
             if (left !== right) {
-              findings.push(`${where}: outra empresa → "${left}" ≠ inexistente → "${right}"`);
+              findings.push(
+                `${where}: outra empresa → "${left}" ≠ inexistente → "${right}"`,
+              );
             }
 
-            if (victim.code === "VALIDATION_ERROR" && missing.code === "VALIDATION_ERROR") {
+            if (
+              victim.code === "VALIDATION_ERROR" &&
+              missing.code === "VALIDATION_ERROR"
+            ) {
               unreached.push(`${where}: ${victim.message}`);
             }
           }
-          }
         }
       }
+    }
 
-      // The report the next person reads when this fails.
-      console.info(
-        `[idor-sweep] ${probes} sondagens; ${unreached.length} pararam na validação antes do id`,
+    // The report the next person reads when this fails.
+    console.info(
+      `[idor-sweep] ${probes} sondagens; ${unreached.length} pararam na validação antes do id`,
+    );
+    if (process.env.IDOR_SWEEP_REPORT) {
+      writeFileSync(
+        process.env.IDOR_SWEEP_REPORT,
+        JSON.stringify(
+          { findings, unknown: [...unknown], unreached, trace },
+          null,
+          2,
+        ),
       );
-      if (process.env.IDOR_SWEEP_REPORT) {
-        writeFileSync(
-          process.env.IDOR_SWEEP_REPORT,
-          JSON.stringify({ findings, unknown: [...unknown], unreached, trace }, null, 2),
-        );
-      }
+    }
 
-      expect(findings).toEqual([]);
-    },
-    600_000,
-  );
+    expect(findings).toEqual([]);
+  }, 600_000);
 
   it("knows every id slot the document declares", () => {
     // A slot name nobody mapped is a route this sweep silently skips.
@@ -747,7 +847,9 @@ describe("IDOR sweep over the whole OpenAPI document", () => {
 
   it("did not change a single row of the other company", async () => {
     const after = await victimSnapshot();
-    const changed = Object.keys(before).filter((table) => before[table] !== after[table]);
+    const changed = Object.keys(before).filter(
+      (table) => before[table] !== after[table],
+    );
     expect(changed).toEqual([]);
   });
 });

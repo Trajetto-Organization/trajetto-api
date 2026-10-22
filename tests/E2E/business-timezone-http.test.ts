@@ -75,7 +75,10 @@ async function seedUser(
   );
 }
 
-async function createBusiness(body: Record<string, unknown>, token = tokens.master) {
+async function createBusiness(
+  body: Record<string, unknown>,
+  token = tokens.master,
+) {
   return app.inject({
     method: "POST",
     url: "/business/create-business",
@@ -84,7 +87,11 @@ async function createBusiness(body: Record<string, unknown>, token = tokens.mast
   });
 }
 
-async function updateBusiness(id: string, body: Record<string, unknown>, token = tokens.master) {
+async function updateBusiness(
+  id: string,
+  body: Record<string, unknown>,
+  token = tokens.master,
+) {
   return app.inject({
     method: "PATCH",
     url: `/business/update-business/${id}`,
@@ -116,16 +123,23 @@ describe("Business.timezone", () => {
     expect(saved.timezone).toBe("America/Cuiaba");
 
     // The head office mirrors the company, without the zone.
-    expect(await prisma.branch.count({ where: { cnpj: withZone.cnpj as string } })).toBe(1);
+    expect(
+      await prisma.branch.count({ where: { cnpj: withZone.cnpj as string } }),
+    ).toBe(1);
 
     const withoutZone = businessBody();
     expect((await createBusiness(withoutZone)).statusCode).toBe(201);
     expect(
-      (await prisma.business.findUniqueOrThrow({ where: { cnpj: withoutZone.cnpj as string } }))
-        .timezone,
+      (
+        await prisma.business.findUniqueOrThrow({
+          where: { cnpj: withoutZone.cnpj as string },
+        })
+      ).timezone,
     ).toBe("America/Sao_Paulo");
 
-    const lisbon = await createBusiness(businessBody({ timezone: "Europe/Lisbon" }));
+    const lisbon = await createBusiness(
+      businessBody({ timezone: "Europe/Lisbon" }),
+    );
     expect(lisbon.statusCode).toBe(400);
     expect(lisbon.body).toContain("Fuso horário inválido");
   });
@@ -145,12 +159,16 @@ describe("Business.timezone", () => {
     });
 
     expect(moved.statusCode).toBe(200);
-    expect(await prisma.business.findUniqueOrThrow({ where: { id: business.id } })).toMatchObject({
+    expect(
+      await prisma.business.findUniqueOrThrow({ where: { id: business.id } }),
+    ).toMatchObject({
       timezone: "America/Manaus",
       city: "Manaus",
     });
     expect(
-      await prisma.branch.findFirstOrThrow({ where: { businessId: business.id } }),
+      await prisma.branch.findFirstOrThrow({
+        where: { businessId: business.id },
+      }),
     ).toMatchObject({ city: "Manaus", uf: "AM" });
 
     expect(
@@ -160,11 +178,17 @@ describe("Business.timezone", () => {
     tokens.admin = await seedUser("BUSINESS_ADMIN", business.id);
 
     expect(
-      (await updateBusiness(business.id, { timezone: "America/Sao_Paulo" }, tokens.admin))
-        .statusCode,
+      (
+        await updateBusiness(
+          business.id,
+          { timezone: "America/Sao_Paulo" },
+          tokens.admin,
+        )
+      ).statusCode,
     ).toBe(403);
     expect(
-      (await prisma.business.findUniqueOrThrow({ where: { id: business.id } })).timezone,
+      (await prisma.business.findUniqueOrThrow({ where: { id: business.id } }))
+        .timezone,
     ).toBe("America/Manaus");
   });
 

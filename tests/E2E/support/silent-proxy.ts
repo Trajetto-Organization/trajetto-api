@@ -9,8 +9,11 @@ import net from "node:net";
  * flow idle for 900 s looks like from the client (GAP6-4).
  */
 class SilentProxy {
-  private readonly flows: Array<{ client: net.Socket; upstream: net.Socket; forgotten: boolean }> =
-    [];
+  private readonly flows: Array<{
+    client: net.Socket;
+    upstream: net.Socket;
+    forgotten: boolean;
+  }> = [];
 
   private readonly server: net.Server;
 
@@ -39,7 +42,10 @@ class SilentProxy {
   static for(databaseUrl: string): SilentProxy {
     const url = new URL(databaseUrl);
 
-    return new SilentProxy({ host: url.hostname, port: Number(url.port || 5432) });
+    return new SilentProxy({
+      host: url.hostname,
+      port: Number(url.port || 5432),
+    });
   }
 
   async listen(): Promise<number> {
@@ -68,17 +74,27 @@ type Outcome =
   | { kind: "still waiting"; ms: number };
 
 /** How a promise ends, or that it had not ended after `capMs`. */
-async function settle(promise: Promise<unknown>, capMs: number): Promise<Outcome> {
+async function settle(
+  promise: Promise<unknown>,
+  capMs: number,
+): Promise<Outcome> {
   const startedAt = Date.now();
   let timer: NodeJS.Timeout | undefined;
 
   const outcome = await Promise.race<Outcome>([
     promise.then(
       (value) => ({ kind: "answered", ms: Date.now() - startedAt, value }),
-      (error: unknown) => ({ kind: "failed", ms: Date.now() - startedAt, error }),
+      (error: unknown) => ({
+        kind: "failed",
+        ms: Date.now() - startedAt,
+        error,
+      }),
     ),
     new Promise<Outcome>((done) => {
-      timer = setTimeout(() => done({ kind: "still waiting", ms: capMs }), capMs);
+      timer = setTimeout(
+        () => done({ kind: "still waiting", ms: capMs }),
+        capMs,
+      );
     }),
   ]);
 

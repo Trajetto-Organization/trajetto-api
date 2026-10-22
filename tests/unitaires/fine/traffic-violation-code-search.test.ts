@@ -18,7 +18,11 @@ function context() {
   const users = new InMemoryUserRepository();
   const codes = new InMemoryTrafficViolationCodeRepository();
 
-  users.user.push({ id: USER, role: "BUSINESS_ADMIN", businessId: "b" } as User);
+  users.user.push({
+    id: USER,
+    role: "BUSINESS_ADMIN",
+    businessId: "b",
+  } as User);
 
   // Twenty filler codes before the one searched for, so it is off the first page.
   for (let index = 0; index < 20; index += 1) {
@@ -57,7 +61,11 @@ describe("searching traffic violation codes", () => {
   it("finds a code that is not on the first page", async () => {
     const { wanted, useCase } = context();
 
-    const result = await useCase.execute({ userId: USER, limit: 10, search: "velocidade" });
+    const result = await useCase.execute({
+      userId: USER,
+      limit: 10,
+      search: "velocidade",
+    });
 
     expect(result.data.map((code) => code.id)).toEqual([wanted.id]);
     expect(result.hasMore).toBe(false);
@@ -66,7 +74,11 @@ describe("searching traffic violation codes", () => {
   it("finds the code as printed on the notice", async () => {
     const { wanted, useCase } = context();
 
-    const result = await useCase.execute({ userId: USER, limit: 10, search: "745-50" });
+    const result = await useCase.execute({
+      userId: USER,
+      limit: 10,
+      search: "745-50",
+    });
 
     expect(result.data.map((code) => code.fullCode)).toEqual(["745-50"]);
     expect(result.data[0].id).toBe(wanted.id);

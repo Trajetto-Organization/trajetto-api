@@ -1,6 +1,5 @@
 import type { FastifyReply } from "fastify";
 
-
 import {
   replyFrom,
   type FuelHttpError,

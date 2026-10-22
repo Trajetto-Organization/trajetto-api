@@ -22,7 +22,10 @@ const STATUS_REASON_SORT_KEYS = ["name", "created_at", "updated_at"] as const;
 
 type StatusReasonSortKey = (typeof STATUS_REASON_SORT_KEYS)[number];
 
-const STATUS_REASON_SORT_FALLBACK = { sort: "created_at", order: "desc" } as const;
+const STATUS_REASON_SORT_FALLBACK = {
+  sort: "created_at",
+  order: "desc",
+} as const;
 
 const STATUS_REASON_SORT: SortSpec<
   StatusReasonSortKey,
@@ -70,7 +73,10 @@ function statusReasonListWhere(
     );
   }
 
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Reasons per status over the base. */

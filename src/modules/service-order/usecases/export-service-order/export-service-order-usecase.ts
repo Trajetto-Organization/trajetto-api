@@ -228,7 +228,6 @@ class ExportServiceOrderUseCase {
         formatter: ExportFormatters.fallback,
       },
 
-
       {
         header: "Criado em",
         key: "created_at",

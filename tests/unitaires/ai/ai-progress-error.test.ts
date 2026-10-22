@@ -17,12 +17,16 @@ describe("the progress route's error", () => {
       "AI_PROVIDER_PAUSED: This request would exceed your organization's spend limit.",
     );
 
-    expect(error).toEqual({ code: "AI_PROVIDER_PAUSED", message: PAUSED_MESSAGE });
+    expect(error).toEqual({
+      code: "AI_PROVIDER_PAUSED",
+      message: PAUSED_MESSAGE,
+    });
     expect(error?.message).not.toContain("spend limit");
   });
 
   it("never passes the provider's raw error on", () => {
-    const raw = "401 {\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}";
+    const raw =
+      '401 {"type":"authentication_error","message":"invalid x-api-key"}';
 
     expect(progressError("FAILED", raw)).toEqual({
       code: "AI_ANALYSIS_ERROR",
@@ -30,19 +34,26 @@ describe("the progress route's error", () => {
     });
     expect(progressError("PENDING", raw)).toEqual({
       code: "AI_ANALYSIS_ERROR",
-      message: "A última tentativa de leitura falhou; uma nova tentativa está agendada.",
+      message:
+        "A última tentativa de leitura falhou; uma nova tentativa está agendada.",
     });
   });
 
   it("tells the quota, a superseded input and a malformed answer apart", () => {
-    expect(progressError("SKIPPED", "Limite de análises do período atingido")?.code).toBe(
-      "AI_QUOTA_EXCEEDED",
-    );
     expect(
-      progressError("COMPLETED", "AI_INPUT_SUPERSEDED: a foto deste item foi trocada.")?.code,
+      progressError("SKIPPED", "Limite de análises do período atingido")?.code,
+    ).toBe("AI_QUOTA_EXCEEDED");
+    expect(
+      progressError(
+        "COMPLETED",
+        "AI_INPUT_SUPERSEDED: a foto deste item foi trocada.",
+      )?.code,
     ).toBe("AI_INPUT_SUPERSEDED");
     expect(
-      progressError("FAILED", "AI_INVALID_RESPONSE: resposta sem JSON — Desculpe")?.message,
+      progressError(
+        "FAILED",
+        "AI_INVALID_RESPONSE: resposta sem JSON — Desculpe",
+      )?.message,
     ).toBe("O modelo respondeu fora do formato esperado.");
     expect(progressError("COMPLETED", null)).toBeNull();
   });

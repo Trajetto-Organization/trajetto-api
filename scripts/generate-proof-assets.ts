@@ -66,4 +66,6 @@ export {
 
 fs.writeFileSync(target, content);
 
-console.log(`proof-assets.generated.ts written (${bytes.length} bytes, sha256 ${sha256})`);
+console.log(
+  `proof-assets.generated.ts written (${bytes.length} bytes, sha256 ${sha256})`,
+);

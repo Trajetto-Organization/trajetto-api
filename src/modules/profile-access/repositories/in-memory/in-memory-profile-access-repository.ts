@@ -45,7 +45,8 @@ function uniqueViolation(target: string): Prisma.PrismaClientKnownRequestError {
   );
 }
 
-const time = (value: Date | undefined) => (value ? new Date(value).getTime() : 0);
+const time = (value: Date | undefined) =>
+  value ? new Date(value).getTime() : 0;
 
 /**
  * The Prisma repository's twin: tenant filter, search, order with the same
@@ -58,8 +59,9 @@ class InMemoryProfileAccessRepository implements IProfileAccessRepository {
   constructor(private readonly links: ProfileLinks = {}) {}
 
   private usersOf(id: string): number {
-    return (this.links.users?.() ?? []).filter((user) => user.profileAccessId === id)
-      .length;
+    return (this.links.users?.() ?? []).filter(
+      (user) => user.profileAccessId === id,
+    ).length;
   }
 
   private permissionsOf(id: string): number {
@@ -94,7 +96,10 @@ class InMemoryProfileAccessRepository implements IProfileAccessRepository {
     return newProfileAccess;
   }
 
-  private sortValue(profile: StoredProfile, key: ProfileSortKey): string | number {
+  private sortValue(
+    profile: StoredProfile,
+    key: ProfileSortKey,
+  ): string | number {
     switch (key) {
       case "created_at":
         return time(profile.created_at);
@@ -130,13 +135,18 @@ class InMemoryProfileAccessRepository implements IProfileAccessRepository {
     );
 
     const key = sort ?? PROFILE_SORT_FALLBACK.sort;
-    const direction: SortOrder = order ?? (sort ? "asc" : PROFILE_SORT_FALLBACK.order);
+    const direction: SortOrder =
+      order ?? (sort ? "asc" : PROFILE_SORT_FALLBACK.order);
 
     // The comparator every twin shares (table-infra contract): code-point
     // strings and the same created_at desc, id desc tiebreaker as Postgres.
     const sorted = [...filtered].sort(
       (a, b) =>
-        compareForOrder(this.sortValue(a, key), this.sortValue(b, key), direction) ||
+        compareForOrder(
+          this.sortValue(a, key),
+          this.sortValue(b, key),
+          direction,
+        ) ||
         compareForOrder(time(a.created_at), time(b.created_at), "desc") ||
         compareForOrder(a.id, b.id, "desc"),
     );

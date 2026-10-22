@@ -165,7 +165,10 @@ interface VehicleChoice {
   /** The responsible driver's name, so the picker can say whose truck it is. */
   driver?: { name: string } | null;
   /** The type and the licence it requires (decision 8.5). */
-  vehicleType?: { description: string; required_cnh_category: string | null } | null;
+  vehicleType?: {
+    description: string;
+    required_cnh_category: string | null;
+  } | null;
 }
 
 interface CursorPaginatedVehicle {

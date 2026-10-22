@@ -37,7 +37,12 @@ function tinyPng(): Buffer {
   const chunk = (type: string, data: Buffer) => {
     const length = Buffer.alloc(4);
     length.writeUInt32BE(data.length);
-    return Buffer.concat([length, Buffer.from(type, "latin1"), data, Buffer.alloc(4)]);
+    return Buffer.concat([
+      length,
+      Buffer.from(type, "latin1"),
+      data,
+      Buffer.alloc(4),
+    ]);
   };
 
   const header = Buffer.alloc(13);
@@ -59,9 +64,14 @@ function response(status: number, body: Buffer, type: string) {
     status,
     headers: {
       get: (name: string) =>
-        name === "content-type" ? type : name === "content-length" ? String(body.length) : null,
+        name === "content-type"
+          ? type
+          : name === "content-length"
+            ? String(body.length)
+            : null,
     },
-    arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+    arrayBuffer: async () =>
+      body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
     json: async () => JSON.parse(body.toString("utf8")),
   };
 }
@@ -75,7 +85,9 @@ describe("the map's tiles (Web Mercator)", () => {
     const lng = -40.3038332;
     const n = 2 ** 16;
     const column = Math.floor(((lng + 180) / 360) * n);
-    const row = Math.floor(((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * n);
+    const row = Math.floor(
+      ((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * n,
+    );
 
     const { x, y } = projectToPixels(lat, lng, 16);
 
@@ -84,7 +96,11 @@ describe("the map's tiles (Web Mercator)", () => {
   });
 
   it("covers a 400×170 viewport centred on the point with at most a 3×2 grid", () => {
-    const viewport = tileViewport(-20.3502181, -40.3038332, { zoom: 16, width: 400, height: 170 });
+    const viewport = tileViewport(-20.3502181, -40.3038332, {
+      zoom: 16,
+      width: 400,
+      height: 170,
+    });
 
     expect(viewport.marker).toEqual({ x: 200, y: 85 });
     expect(viewport.tiles.length).toBeGreaterThanOrEqual(2);
@@ -103,16 +119,26 @@ describe("the map's tiles (Web Mercator)", () => {
   });
 
   it("wraps columns across the antimeridian", () => {
-    const viewport = tileViewport(0, 179.9999, { zoom: 2, width: 400, height: 170 });
+    const viewport = tileViewport(0, 179.9999, {
+      zoom: 2,
+      width: 400,
+      height: 170,
+    });
 
     expect(viewport.tiles.map((tile) => tile.x)).toContain(0);
-    expect(viewport.tiles.every((tile) => tile.x >= 0 && tile.x < 4)).toBe(true);
+    expect(viewport.tiles.every((tile) => tile.x >= 0 && tile.x < 4)).toBe(
+      true,
+    );
   });
 
   it("fills the XYZ template, subdomain included", () => {
-    expect(tileUrl("https://{s}.tiles.example/{z}/{x}/{y}.png?key=k", { z: 16, x: 1, y: 2 })).toBe(
-      "https://a.tiles.example/16/1/2.png?key=k",
-    );
+    expect(
+      tileUrl("https://{s}.tiles.example/{z}/{x}/{y}.png?key=k", {
+        z: 16,
+        x: 1,
+        y: 2,
+      }),
+    ).toBe("https://a.tiles.example/16/1/2.png?key=k");
   });
 });
 
@@ -127,14 +153,25 @@ describe("the map is all or nothing", () => {
 
   it("accepts real PNG and JPEG tiles only", () => {
     expect(isAcceptableTile(tinyPng(), "image/png")).toBe(true);
-    expect(isAcceptableTile(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]), "image/jpeg")).toBe(true);
+    expect(
+      isAcceptableTile(
+        Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]),
+        "image/jpeg",
+      ),
+    ).toBe(true);
     expect(isAcceptableTile(tinyPng(), "text/html")).toBe(false);
     expect(isAcceptableTile(Buffer.from("<html>"), "image/png")).toBe(false);
-    expect(isAcceptableTile(Buffer.alloc(MAX_TILE_BYTES + 1), "image/jpeg")).toBe(false);
+    expect(
+      isAcceptableTile(Buffer.alloc(MAX_TILE_BYTES + 1), "image/jpeg"),
+    ).toBe(false);
   });
 
   it("returns every tile with its offset when all of them are good", async () => {
-    const map = await fetchProofMap(-20.35, -40.3, options(async () => response(200, tinyPng(), "image/png")));
+    const map = await fetchProofMap(
+      -20.35,
+      -40.3,
+      options(async () => response(200, tinyPng(), "image/png")),
+    );
 
     expect(map).not.toBeNull();
     expect(map!.attribution).toBe("© OpenStreetMap");
@@ -143,8 +180,19 @@ describe("the map is all or nothing", () => {
 
   it.each([
     ["an HTTP error", () => response(500, Buffer.alloc(0), "text/plain")],
-    ["a corrupt PNG", () => response(200, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2]), "image/png")],
-    ["an HTML page", () => response(200, Buffer.from("<html></html>"), "text/html")],
+    [
+      "a corrupt PNG",
+      () =>
+        response(
+          200,
+          Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2]),
+          "image/png",
+        ),
+    ],
+    [
+      "an HTML page",
+      () => response(200, Buffer.from("<html></html>"), "text/html"),
+    ],
   ])("is dropped whole when one tile is %s", async (_, bad) => {
     let calls = 0;
 
@@ -161,9 +209,13 @@ describe("the map is all or nothing", () => {
   });
 
   it("is dropped when the provider throws (timeout, DNS)", async () => {
-    const map = await fetchProofMap(-20.35, -40.3, options(async () => {
-      throw new Error("aborted");
-    }));
+    const map = await fetchProofMap(
+      -20.35,
+      -40.3,
+      options(async () => {
+        throw new Error("aborted");
+      }),
+    );
 
     expect(map).toBeNull();
   });
@@ -175,8 +227,15 @@ describe("the map is all or nothing", () => {
       return response(200, tinyPng(), "image/png");
     };
 
-    expect(await fetchProofMap(1, 1, { ...options(fetcher), template: undefined })).toBeNull();
-    expect(await fetchProofMap(1, 1, { ...options(fetcher), attribution: undefined })).toBeNull();
+    expect(
+      await fetchProofMap(1, 1, { ...options(fetcher), template: undefined }),
+    ).toBeNull();
+    expect(
+      await fetchProofMap(1, 1, {
+        ...options(fetcher),
+        attribution: undefined,
+      }),
+    ).toBeNull();
     expect(called).toBe(false);
   });
 });
@@ -204,12 +263,18 @@ describe("the reverse geocoder", () => {
     });
 
     expect(parseNominatimAddress({ error: "Unable to geocode" })).toBeNull();
-    expect(parseNominatimAddress({ address: { country: "Brasil" } })).toBeNull();
+    expect(
+      parseNominatimAddress({ address: { country: "Brasil" } }),
+    ).toBeNull();
   });
 
   it("asks with the protocol's parameters and the key in its configured parameter", () => {
     const url = new URL(
-      reverseUrl({ url: "https://geo.example/", key: "segredo", keyParam: "api_key" }, -20.35, -40.3),
+      reverseUrl(
+        { url: "https://geo.example/", key: "segredo", keyParam: "api_key" },
+        -20.35,
+        -40.3,
+      ),
     );
 
     expect(url.pathname).toBe("/reverse");
@@ -221,7 +286,13 @@ describe("the reverse geocoder", () => {
   });
 
   it("answers null — never throws — on errors, timeouts and points not worth asking", async () => {
-    const config = { url: "https://geo.example", key: undefined, keyParam: "key", userAgent: "t", timeoutMs: 100 };
+    const config = {
+      url: "https://geo.example",
+      key: undefined,
+      keyParam: "key",
+      userAgent: "t",
+      timeoutMs: 100,
+    };
     let calls = 0;
     const failing: GeocodeFetch = async () => {
       calls += 1;
@@ -229,7 +300,12 @@ describe("the reverse geocoder", () => {
     };
 
     expect(await reverseGeocode(-20.35, -40.3, config, failing)).toBeNull();
-    expect(await reverseGeocode(-20.35, -40.3, config, async () => ({ status: 503, json: async () => ({}) }))).toBeNull();
+    expect(
+      await reverseGeocode(-20.35, -40.3, config, async () => ({
+        status: 503,
+        json: async () => ({}),
+      })),
+    ).toBeNull();
 
     // (0,0) and out-of-range points are never sent.
     expect(await reverseGeocode(0, 0, config, failing)).toBeNull();
@@ -239,7 +315,9 @@ describe("the reverse geocoder", () => {
 });
 
 describe("the address cache on the proof event", () => {
-  const proof = (overrides: Partial<NonNullable<ProofDocumentSource["proof"]>> = {}) => ({
+  const proof = (
+    overrides: Partial<NonNullable<ProofDocumentSource["proof"]>> = {},
+  ) => ({
     eventId: "event-1",
     created_at: new Date(),
     latitude: -20.35,
@@ -249,9 +327,18 @@ describe("the address cache on the proof event", () => {
     ...overrides,
   });
 
-  function service(fetcher: GeocodeFetch, url: string | null = "https://geo.example") {
+  function service(
+    fetcher: GeocodeFetch,
+    url: string | null = "https://geo.example",
+  ) {
     const config: ProofLocationConfig = {
-      geocoder: { url: url ?? undefined, key: undefined, keyParam: "key", userAgent: "t", timeoutMs: 100 },
+      geocoder: {
+        url: url ?? undefined,
+        key: undefined,
+        keyParam: "key",
+        userAgent: "t",
+        timeoutMs: 100,
+      },
       map: { template: undefined, attribution: undefined, timeoutMs: 100 },
       fetcher: fetcher as ProofLocationConfig["fetcher"],
     };
@@ -270,7 +357,9 @@ describe("the address cache on the proof event", () => {
   };
 
   it("asks the provider once and asks to persist its answer", async () => {
-    const { calls, fetcher } = answering({ address: { road: "Rua A", city: "Vila Velha" } });
+    const { calls, fetcher } = answering({
+      address: { road: "Rua A", city: "Vila Velha" },
+    });
 
     const resolved = await service(fetcher).resolveAddress(proof());
 
@@ -281,14 +370,28 @@ describe("the address cache on the proof event", () => {
 
   it("reuses a cached PROVIDER address without asking", async () => {
     const { calls, fetcher } = answering({});
-    const cached = { line: "Rua B", district: null, city: null, state: null, cep: null };
+    const cached = {
+      line: "Rua B",
+      district: null,
+      city: null,
+      state: null,
+      cep: null,
+    };
 
     const resolved = await service(fetcher).resolveAddress(
-      proof({ gps_address: cached, gps_address_source: "PROVIDER", gps_geocoded_at: new Date() }),
+      proof({
+        gps_address: cached,
+        gps_address_source: "PROVIDER",
+        gps_geocoded_at: new Date(),
+      }),
     );
 
     expect(calls).toHaveLength(0);
-    expect(resolved).toEqual({ address: cached, source: "PROVIDER", persist: false });
+    expect(resolved).toEqual({
+      address: cached,
+      source: "PROVIDER",
+      persist: false,
+    });
   });
 
   it("does not retry an UNAVAILABLE answer for 24 h, and retries after", async () => {
@@ -296,15 +399,25 @@ describe("the address cache on the proof event", () => {
     const now = new Date("2026-10-05T12:00:00Z");
 
     const recent = await service(fetcher).resolveAddress(
-      proof({ gps_address_source: "UNAVAILABLE", gps_geocoded_at: new Date("2026-10-05T00:00:00Z") }),
+      proof({
+        gps_address_source: "UNAVAILABLE",
+        gps_geocoded_at: new Date("2026-10-05T00:00:00Z"),
+      }),
       now,
     );
 
-    expect(recent).toEqual({ address: null, source: "UNAVAILABLE", persist: false });
+    expect(recent).toEqual({
+      address: null,
+      source: "UNAVAILABLE",
+      persist: false,
+    });
     expect(calls).toHaveLength(0);
 
     const stale = await service(fetcher).resolveAddress(
-      proof({ gps_address_source: "UNAVAILABLE", gps_geocoded_at: new Date("2026-10-04T11:00:00Z") }),
+      proof({
+        gps_address_source: "UNAVAILABLE",
+        gps_geocoded_at: new Date("2026-10-04T11:00:00Z"),
+      }),
       now,
     );
 
@@ -313,16 +426,27 @@ describe("the address cache on the proof event", () => {
   });
 
   it("records UNAVAILABLE when the provider fails, so it is not asked on every render", async () => {
-    const resolved = await service(async () => ({ status: 500, json: async () => ({}) })).resolveAddress(proof());
+    const resolved = await service(async () => ({
+      status: 500,
+      json: async () => ({}),
+    })).resolveAddress(proof());
 
-    expect(resolved).toEqual({ address: null, source: "UNAVAILABLE", persist: true });
+    expect(resolved).toEqual({
+      address: null,
+      source: "UNAVAILABLE",
+      persist: true,
+    });
   });
 
   it("does nothing — and records nothing — without a provider or without a fix", async () => {
     const { calls, fetcher } = answering({});
 
     expect(await service(fetcher, null).resolveAddress(proof())).toBeNull();
-    expect(await service(fetcher).resolveAddress(proof({ latitude: null, longitude: null }))).toBeNull();
+    expect(
+      await service(fetcher).resolveAddress(
+        proof({ latitude: null, longitude: null }),
+      ),
+    ).toBeNull();
     expect(await service(fetcher).resolveAddress(null)).toBeNull();
     expect(calls).toHaveLength(0);
   });
@@ -335,11 +459,16 @@ describe("the address cache on the proof event", () => {
 
     const slow: GeocodeFetch = async () => {
       await gate;
-      return { status: 200, json: async () => ({ address: { road: "Rua D" } }) };
+      return {
+        status: 200,
+        json: async () => ({ address: { road: "Rua D" } }),
+      };
     };
 
     const location = service(slow);
-    const inFlight = Array.from({ length: 4 }, () => location.resolveAddress(proof()));
+    const inFlight = Array.from({ length: 4 }, () =>
+      location.resolveAddress(proof()),
+    );
 
     expect(await location.resolveAddress(proof())).toEqual({
       address: null,
@@ -357,9 +486,14 @@ describe("the address cache on the proof event", () => {
 
 describe("the providers the configuration accepts", () => {
   const issues = (overrides: Record<string, string>) => {
-    const parsed = envSchema.safeParse({ ...definedEnv(process.env), ...overrides });
+    const parsed = envSchema.safeParse({
+      ...definedEnv(process.env),
+      ...overrides,
+    });
 
-    return parsed.success ? [] : parsed.error.issues.map((issue) => issue.path.join("."));
+    return parsed.success
+      ? []
+      : parsed.error.issues.map((issue) => issue.path.join("."));
   };
 
   it("refuses the public OpenStreetMap services in production, whose policy forbids this use", () => {
@@ -386,7 +520,10 @@ describe("the providers the configuration accepts", () => {
     expect(development).not.toContain("REVERSE_GEOCODER_URL");
 
     expect(
-      issues({ NODE_ENV: "production", REVERSE_GEOCODER_URL: "http://nominatim.interno:8080" }),
+      issues({
+        NODE_ENV: "production",
+        REVERSE_GEOCODER_URL: "http://nominatim.interno:8080",
+      }),
     ).toContain("REVERSE_GEOCODER_URL");
   });
 });

@@ -57,7 +57,12 @@ beforeEach(() => {
 
   users.user.push(
     { id: ADMIN_A, role: "BUSINESS_ADMIN", businessId: A } as User,
-    { id: CLERK_A, role: "BUSINESS_USER", businessId: A, profileAccessId: CLERK_PROFILE } as User,
+    {
+      id: CLERK_A,
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: CLERK_PROFILE,
+    } as User,
     { id: MASTER, role: "MASTER", businessId: null } as unknown as User,
   );
   businesses.business.push(
@@ -95,7 +100,8 @@ const overview = () =>
     new InMemoryOperationDayRepository(),
   );
 
-const trends = () => new GetDashboardTrendsUseCase(users, dashboard, businesses);
+const trends = () =>
+  new GetDashboardTrendsUseCase(users, dashboard, businesses);
 
 describe("GetDashboardOverviewUseCase", () => {
   it("counts the admin's company by its own months, never another company's rows", async () => {
@@ -117,8 +123,17 @@ describe("GetDashboardOverviewUseCase", () => {
       value: 4,
       previous: 0,
     });
-    expect(result.activityTrends.map((point) => point.month)).toEqual(["Mai", "Jun", "Jul", "Ago", "Set", "Out"]);
-    expect(result.maintenanceCosts[result.maintenanceCosts.length - 1]).toEqual({ month: "Out", internal: 300, external: 100 });
+    expect(result.activityTrends.map((point) => point.month)).toEqual([
+      "Mai",
+      "Jun",
+      "Jul",
+      "Ago",
+      "Set",
+      "Out",
+    ]);
+    expect(result.maintenanceCosts[result.maintenanceCosts.length - 1]).toEqual(
+      { month: "Out", internal: 300, external: 100 },
+    );
   });
 
   it("leaves the series of a module the company did not hire out of the chart, and the operation null", async () => {
@@ -181,19 +196,33 @@ describe("GetDashboardOverviewUseCase", () => {
   });
 
   it("drops the costs without Frotas", async () => {
-    entitlements.getBusinessEntitlements.mockResolvedValue([{ module: "DELIVERIES", enabled: true }]);
+    entitlements.getBusinessEntitlements.mockResolvedValue([
+      { module: "DELIVERIES", enabled: true },
+    ]);
 
     const result = await overview().execute({ userId: ADMIN_A });
 
     expect(result.maintenanceCosts).toEqual([]);
-    expect(result.maintenanceStats).toEqual({ pending: 0, recent: 0, overdue: 0 });
+    expect(result.maintenanceStats).toEqual({
+      pending: 0,
+      recent: 0,
+      overdue: 0,
+    });
   });
 
   it("shows a restricted profile only the series it may read", async () => {
     const result = await overview().execute({ userId: CLERK_A });
 
-    expect(Object.keys(result.activityTrends[5]).sort()).toEqual(["drivers", "month"]);
-    expect(result.vehicleStatus).toEqual({ ACTIVE: 0, INACTIVE: 0, BLOCKED: 0, IN_ROUTE: 0 });
+    expect(Object.keys(result.activityTrends[5]).sort()).toEqual([
+      "drivers",
+      "month",
+    ]);
+    expect(result.vehicleStatus).toEqual({
+      ACTIVE: 0,
+      INACTIVE: 0,
+      BLOCKED: 0,
+      IN_ROUTE: 0,
+    });
     expect(result.maintenanceCosts).toEqual([]);
     expect(result.deliveryOperation).toBeNull();
   });
@@ -208,7 +237,9 @@ describe("GetDashboardOverviewUseCase", () => {
   });
 
   it("answers 404 USER_NOT_FOUND for an unknown session user", async () => {
-    await expect(overview().execute({ userId: "nobody" })).rejects.toMatchObject({
+    await expect(
+      overview().execute({ userId: "nobody" }),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "USER_NOT_FOUND",
     });
@@ -220,10 +251,18 @@ describe("GetDashboardTrendsUseCase", () => {
     const result = await trends().execute({ userId: ADMIN_A, period: "7d" });
 
     expect(result.activityTrends).toHaveLength(7);
-    expect(result.activityTrends[result.activityTrends.length - 1]).toMatchObject({ date: "05 de out.", drivers: 4 });
-    expect(result.activityTrends.find((point) => point.date === "03 de out.")).toMatchObject({ vehicles: 2 });
-    expect(result.activityTrends[result.activityTrends.length - 1]).not.toHaveProperty("deliveries");
-    expect(result.maintenanceCosts.find((point) => point.date === "02 de out.")).toEqual({
+    expect(
+      result.activityTrends[result.activityTrends.length - 1],
+    ).toMatchObject({ date: "05 de out.", drivers: 4 });
+    expect(
+      result.activityTrends.find((point) => point.date === "03 de out."),
+    ).toMatchObject({ vehicles: 2 });
+    expect(
+      result.activityTrends[result.activityTrends.length - 1],
+    ).not.toHaveProperty("deliveries");
+    expect(
+      result.maintenanceCosts.find((point) => point.date === "02 de out."),
+    ).toEqual({
       date: "02 de out.",
       internal: 300,
       external: 100,
@@ -255,11 +294,16 @@ describe("GetDashboardTrendsUseCase", () => {
     const result = await trends().execute({ userId: CLERK_A, period: "7d" });
 
     expect(result.maintenanceCosts).toEqual([]);
-    expect(Object.keys(result.activityTrends[0]).sort()).toEqual(["date", "drivers"]);
+    expect(Object.keys(result.activityTrends[0]).sort()).toEqual([
+      "date",
+      "drivers",
+    ]);
   });
 
   it("answers 404 USER_NOT_FOUND for an unknown session user", async () => {
-    await expect(trends().execute({ userId: "nobody", period: "7d" })).rejects.toMatchObject({
+    await expect(
+      trends().execute({ userId: "nobody", period: "7d" }),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "USER_NOT_FOUND",
     });

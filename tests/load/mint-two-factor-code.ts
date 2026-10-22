@@ -24,7 +24,9 @@ async function main(): Promise<void> {
   assertDisposableDatabase();
 
   if (!email || !/^\d{6}$/.test(code ?? "")) {
-    throw new Error("Uso: mint-two-factor-code.ts <email> <código de 6 dígitos>");
+    throw new Error(
+      "Uso: mint-two-factor-code.ts <email> <código de 6 dígitos>",
+    );
   }
 
   const { count } = await prisma.twoFactorToken.updateMany({
@@ -33,7 +35,9 @@ async function main(): Promise<void> {
   });
 
   if (count !== 1) {
-    throw new Error(`Nenhum código pendente para ${email}: envie o formulário de login antes.`);
+    throw new Error(
+      `Nenhum código pendente para ${email}: envie o formulário de login antes.`,
+    );
   }
 
   console.log(`[Web E2E] Código de dois fatores trocado para ${email}`);

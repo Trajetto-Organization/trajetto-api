@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import type { ChatMessageView, ChatThreadListEntry } from "@/modules/chat/dtos/chat-dto";
+import type {
+  ChatMessageView,
+  ChatThreadListEntry,
+} from "@/modules/chat/dtos/chat-dto";
 import { presentChatMessage } from "@/modules/chat/usecases/shared/chat-presenter";
 
 import type { ListChatMessagesUseCase } from "@/modules/chat/usecases/list-chat-messages/list-chat-messages-usecase";
@@ -11,7 +14,10 @@ import type { ListChatRecipientsResponse } from "@/modules/chat/usecases/list-ch
 
 import type { UploadService } from "@/shared/services/upload-service";
 
-import { chatDocumented, chatResponses } from "@/routes/documentation/chat-documentation";
+import {
+  chatDocumented,
+  chatResponses,
+} from "@/routes/documentation/chat-documentation";
 import { documentedDocFor } from "@/routes/documentation/doc-only-responses";
 
 import { strictIssues } from "./support/deep-strict";
@@ -159,8 +165,13 @@ describe("the chat as documented", () => {
       counterpartLastReadAt: new Date("2026-09-24T10:01:00Z"),
       driverUser: { id: "u1", last_seen_at: null },
       counterpartDeliveredAt: null,
-      tickets: [presentTicket(ticketRow), driverTicketView(presentTicket(ticketRow))],
-      counterpartTicketReadAt: { [ticketRow.id]: new Date("2026-09-24T10:02:00Z") },
+      tickets: [
+        presentTicket(ticketRow),
+        driverTicketView(presentTicket(ticketRow)),
+      ],
+      counterpartTicketReadAt: {
+        [ticketRow.id]: new Date("2026-09-24T10:02:00Z"),
+      },
     };
 
     expect(
@@ -207,7 +218,13 @@ describe("the chat as documented", () => {
     const sent = {
       ...(await presentChatMessage(view, signer)),
       driver: { id: "dr1", name: "Motorista" },
-      ticket: { id: "tk1", number: 128, status: "OPEN" as const, assigneeId: null, version: 1 },
+      ticket: {
+        id: "tk1",
+        number: 128,
+        status: "OPEN" as const,
+        assigneeId: null,
+        version: 1,
+      },
       senderSide: "STAFF" as const,
     };
 
@@ -215,7 +232,12 @@ describe("the chat as documented", () => {
       message: "Mensagem enviada!",
       data: [sent],
       outcomes: [
-        { driverId: "dr1", driverName: "Motorista", status: "SENT", messageId: "m1" },
+        {
+          driverId: "dr1",
+          driverName: "Motorista",
+          status: "SENT",
+          messageId: "m1",
+        },
         {
           driverId: "dr2",
           driverName: "Sem App",
@@ -255,11 +277,25 @@ describe("the chat as documented", () => {
       },
     });
 
-    expect(strictIssues(supportTicketDocumented.summary, wire(summary))).toEqual([]);
+    expect(
+      strictIssues(supportTicketDocumented.summary, wire(summary)),
+    ).toEqual([]);
 
-    const list = { data: [summary], total: 1, counts: { open: 1, unassigned: 0, mine: 0, pendingAuthorization: 1, unreadOpen: 1 } };
+    const list = {
+      data: [summary],
+      total: 1,
+      counts: {
+        open: 1,
+        unassigned: 0,
+        mine: 0,
+        pendingAuthorization: 1,
+        unreadOpen: 1,
+      },
+    };
 
-    expect(strictIssues(documented(supportTicketResponses.list), wire(list))).toEqual([]);
+    expect(
+      strictIssues(documented(supportTicketResponses.list), wire(list)),
+    ).toEqual([]);
 
     // The driver's view never carries who handles the ticket.
     const forDriver = driverTicketView(summary);

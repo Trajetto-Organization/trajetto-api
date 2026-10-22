@@ -50,7 +50,8 @@ const THIRD_DELIVERY = "018fe100-0000-7000-8000-0000000000e3";
 /** Enough drivers named before "Zuleica" to push her past the first page. */
 const FILLERS = Array.from(
   { length: 12 },
-  (_, index) => `018fe100-0000-7000-8000-0000000001${String(index).padStart(2, "0")}`,
+  (_, index) =>
+    `018fe100-0000-7000-8000-0000000001${String(index).padStart(2, "0")}`,
 );
 
 let towerToken = "";
@@ -123,7 +124,11 @@ async function seedDriver(
 async function seedUser(
   businessId: string,
   role: "BUSINESS_ADMIN" | "BUSINESS_USER",
-  options: { driverId?: string; profileAccessId?: string; revoked?: boolean } = {},
+  options: {
+    driverId?: string;
+    profileAccessId?: string;
+    revoked?: boolean;
+  } = {},
 ): Promise<string> {
   const id = randomUUID();
   const familyId = randomUUID();
@@ -190,7 +195,12 @@ beforeAll(async () => {
       businessId: CARRIER,
     },
   });
-  await seedDriver(CARRIER, FABIO_BRANCH_OFF, "Fábio Filial Inativa", CLOSED_BRANCH);
+  await seedDriver(
+    CARRIER,
+    FABIO_BRANCH_OFF,
+    "Fábio Filial Inativa",
+    CLOSED_BRANCH,
+  );
 
   for (const [index, id] of FILLERS.entries()) {
     await seedDriver(CARRIER, id, `Aaron ${String(index).padStart(2, "0")}`);
@@ -295,11 +305,7 @@ const recipients = (token: string | null, query = "") =>
     headers: token ? { authorization: `Bearer ${token}` } : {},
   });
 
-const send = (
-  token: string,
-  payload: Record<string, unknown>,
-  key?: string,
-) =>
+const send = (token: string, payload: Record<string, unknown>, key?: string) =>
   app.inject({
     method: "POST",
     url: "/chat/send-message",
@@ -337,7 +343,10 @@ describe("GET /chat/recipients", () => {
   });
 
   it("matches by name and no longer by CNH", async () => {
-    const byCnh = await recipients(towerToken, `?search=${ZULEICA.slice(-6)}cnh`);
+    const byCnh = await recipients(
+      towerToken,
+      `?search=${ZULEICA.slice(-6)}cnh`,
+    );
 
     expect(byCnh.statusCode, byCnh.body).toBe(200);
     expect(byCnh.json().data).toEqual([]);
@@ -355,10 +364,12 @@ describe("GET /chat/recipients", () => {
     const response = await recipients(towerToken, "?app=WITHOUT_APP");
 
     expect(
-      response.json().data.map((row: { id: string; hasApp: boolean }) => [
-        row.id,
-        row.hasApp,
-      ]),
+      response
+        .json()
+        .data.map((row: { id: string; hasApp: boolean }) => [
+          row.id,
+          row.hasApp,
+        ]),
     ).toEqual([
       [BETO_NO_APP, false],
       [CARLA_REVOKED, false],
@@ -378,7 +389,9 @@ describe("GET /chat/recipients", () => {
       await recipients(towerToken, `?limit=10&cursor=${first.nextCursor}`)
     ).json();
 
-    const ids = [...first.data, ...second.data].map((row: { id: string }) => row.id);
+    const ids = [...first.data, ...second.data].map(
+      (row: { id: string }) => row.id,
+    );
 
     expect(new Set(ids).size).toBe(18);
     expect(second.hasMore).toBe(false);
@@ -393,7 +406,9 @@ describe("GET /chat/recipients", () => {
     expect(crossTenant.body).not.toContain(JOAO);
 
     const own = await recipients(otherToken);
-    expect(own.json().data.map((row: { id: string }) => row.id)).toEqual([FOREIGN]);
+    expect(own.json().data.map((row: { id: string }) => row.id)).toEqual([
+      FOREIGN,
+    ]);
 
     const asDriver = await recipients(driverToken);
     expect(asDriver.statusCode).toBe(403);
@@ -438,7 +453,9 @@ describe("POST /chat/send-message — mass notice", () => {
     expect(await messagesOf(CARLA_REVOKED)).toHaveLength(0);
     expect(await messagesOf(FABIO_BRANCH_OFF)).toHaveLength(0);
     expect(
-      (await messagesOf(MARIA)).filter((row) => row.body === "Balança na BR-101 hoje."),
+      (await messagesOf(MARIA)).filter(
+        (row) => row.body === "Balança na BR-101 hoje.",
+      ),
     ).toHaveLength(1);
   });
 
@@ -456,9 +473,10 @@ describe("POST /chat/send-message — mass notice", () => {
       send(towerToken, payload, key),
     ]);
 
-    expect([one.statusCode, two.statusCode], `${one.body}\n${two.body}`).toEqual([
-      201, 201,
-    ]);
+    expect(
+      [one.statusCode, two.statusCode],
+      `${one.body}\n${two.body}`,
+    ).toEqual([201, 201]);
 
     const sent = await prisma.chatMessage.findMany({
       where: { body: "Aviso duplo-clique" },
@@ -497,7 +515,11 @@ describe("POST /chat/send-message — mass notice", () => {
     );
 
     expect(response.statusCode, response.body).toBe(201);
-    expect(response.json().summary).toEqual({ sent: 15, alreadySent: 0, skippedNoApp: 0 });
+    expect(response.json().summary).toEqual({
+      sent: 15,
+      alreadySent: 0,
+      skippedNoApp: 0,
+    });
 
     const reached = await prisma.chatMessage.findMany({
       where: { body: "Reunião às 7h." },
@@ -505,9 +527,15 @@ describe("POST /chat/send-message — mass notice", () => {
     });
 
     expect(reached).toHaveLength(15);
-    expect(reached.every((row) => row.thread.businessId === CARRIER)).toBe(true);
-    expect(reached.map((row) => row.thread.driverId)).not.toContain(BETO_NO_APP);
-    expect(reached.map((row) => row.thread.driverId)).not.toContain(FABIO_BRANCH_OFF);
+    expect(reached.every((row) => row.thread.businessId === CARRIER)).toBe(
+      true,
+    );
+    expect(reached.map((row) => row.thread.driverId)).not.toContain(
+      BETO_NO_APP,
+    );
+    expect(reached.map((row) => row.thread.driverId)).not.toContain(
+      FABIO_BRANCH_OFF,
+    );
   });
 
   it("refuses everyone without a key, before writing", async () => {
@@ -519,7 +547,9 @@ describe("POST /chat/send-message — mass notice", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json().code).toBe("CHAT_BROADCAST_KEY_REQUIRED");
-    expect(await prisma.chatMessage.count({ where: { body: "Sem chave" } })).toBe(0);
+    expect(
+      await prisma.chatMessage.count({ where: { body: "Sem chave" } }),
+    ).toBe(0);
   });
 });
 
@@ -537,25 +567,34 @@ describe("POST /chat/send-message — one conversation", () => {
       send(towerToken, payload),
     ]);
 
-    expect([one.statusCode, two.statusCode], `${one.body}\n${two.body}`).toEqual([
-      201, 201,
-    ]);
+    expect(
+      [one.statusCode, two.statusCode],
+      `${one.body}\n${two.body}`,
+    ).toEqual([201, 201]);
     expect(one.json().data[0].id).toBe(two.json().data[0].id);
     expect(
-      await prisma.chatMessage.count({ where: { body: "Clique duplo numa conversa" } }),
+      await prisma.chatMessage.count({
+        where: { body: "Clique duplo numa conversa" },
+      }),
     ).toBe(1);
   });
 
   it("keys a single recipient by the Idempotency-Key header", async () => {
     const key = randomUUID();
-    const payload = { driverIds: [MARIA], kind: "TEXT", body: "Aviso a uma só" };
+    const payload = {
+      driverIds: [MARIA],
+      kind: "TEXT",
+      body: "Aviso a uma só",
+    };
 
     const first = await send(towerToken, payload, key);
     const again = await send(towerToken, payload, key);
 
     expect(again.json().data[0].id).toBe(first.json().data[0].id);
     expect(again.json().outcomes[0].status).toBe("ALREADY_SENT");
-    expect(await prisma.chatMessage.count({ where: { body: "Aviso a uma só" } })).toBe(1);
+    expect(
+      await prisma.chatMessage.count({ where: { body: "Aviso a uma só" } }),
+    ).toBe(1);
   });
 
   it("tags the message with the route the driver is running, and the chip's route", async () => {
@@ -607,7 +646,9 @@ describe("POST /chat/send-message — one conversation", () => {
         businessId: CARRIER,
         driverId: JOAO,
         stops: {
-          create: [{ deliveryId: THIRD_DELIVERY, sequence: 10, status: "FAILED" }],
+          create: [
+            { deliveryId: THIRD_DELIVERY, sequence: 10, status: "FAILED" },
+          ],
         },
       },
     });
@@ -651,7 +692,9 @@ describe("POST /chat/send-message — one conversation", () => {
     });
     expect(missing.statusCode).toBe(foreign.statusCode);
     expect(missing.json()).toEqual(foreign.json());
-    expect(await prisma.chatMessage.count({ where: { body: "Motorista alheio" } })).toBe(0);
+    expect(
+      await prisma.chatMessage.count({ where: { body: "Motorista alheio" } }),
+    ).toBe(0);
   });
 
   it("answers 409 to a key another company already used, and writes nothing", async () => {
@@ -679,7 +722,9 @@ describe("POST /chat/send-message — one conversation", () => {
     // Nothing of A's message crosses over.
     expect(theirs.body).not.toContain(mine.json().data[0].id);
     expect(theirs.body).not.toContain("Chave da empresa A");
-    expect(await prisma.chatMessage.count({ where: { body: "Chave da empresa B" } })).toBe(0);
+    expect(
+      await prisma.chatMessage.count({ where: { body: "Chave da empresa B" } }),
+    ).toBe(0);
   });
 
   it("refuses another company's route as missing, and writes nothing", async () => {
@@ -692,7 +737,9 @@ describe("POST /chat/send-message — one conversation", () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json().code).toBe("CHAT_ROUTE_NOT_FOUND");
-    expect(await prisma.chatMessage.count({ where: { body: "Rota alheia" } })).toBe(0);
+    expect(
+      await prisma.chatMessage.count({ where: { body: "Rota alheia" } }),
+    ).toBe(0);
   });
 });
 
@@ -720,7 +767,9 @@ describe("GET /chat/list-messages — filtered history", () => {
 
     expect(onRoute.statusCode, onRoute.body).toBe(200);
 
-    const routeBodies = onRoute.json().data.map((row: { body: string }) => row.body);
+    const routeBodies = onRoute
+      .json()
+      .data.map((row: { body: string }) => row.body);
 
     expect(routeBodies).toContain("Como está o trânsito?");
     expect(routeBodies).not.toContain("Depois da rota");
@@ -731,9 +780,9 @@ describe("GET /chat/list-messages — filtered history", () => {
       headers: { authorization: `Bearer ${towerToken}` },
     });
 
-    expect(onDelivery.json().data.map((row: { body: string }) => row.body)).toEqual([
-      "Sobre a entrega da rota",
-    ]);
+    expect(
+      onDelivery.json().data.map((row: { body: string }) => row.body),
+    ).toEqual(["Sobre a entrega da rota"]);
 
     // Another company's route id matches nothing in this thread.
     const foreign = await app.inject({
@@ -775,7 +824,9 @@ describe("another company's thread or message reads as missing (404)", () => {
   it("answers list-messages, mark-read and mark-delivered with CHAT_THREAD_NOT_FOUND", async () => {
     const { threadId } = await foreignMessage();
 
-    const cursorsBefore = await prisma.chatThreadRead.count({ where: { threadId } });
+    const cursorsBefore = await prisma.chatThreadRead.count({
+      where: { threadId },
+    });
 
     const listed = await app.inject({
       method: "GET",

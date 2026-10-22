@@ -206,7 +206,10 @@ function resolveReportRange(
 
   // Checked before any shift: the helpers throw a bare RangeError on a key
   // they cannot move, and `to` is shifted below.
-  if ((to !== undefined && !inWindow(to)) || (from !== undefined && !inWindow(from))) {
+  if (
+    (to !== undefined && !inWindow(to)) ||
+    (from !== undefined && !inWindow(from))
+  ) {
     throw invalidDay();
   }
 
@@ -216,7 +219,9 @@ function resolveReportRange(
   if (!inWindow(firstDay) || !inWindow(lastDay)) throw invalidDay();
 
   if (firstDay > lastDay) {
-    throw new ReportRangeInvalid("A data inicial deve ser anterior ou igual à final.");
+    throw new ReportRangeInvalid(
+      "A data inicial deve ser anterior ou igual à final.",
+    );
   }
 
   const days =
@@ -236,7 +241,10 @@ function resolveReportRange(
       to: lastDay,
       start: businessDayStart(firstDay, timeZone),
       end: businessDayStart(shiftDateKey(lastDay, 1), timeZone),
-      loadStart: businessDayStart(shiftDateKey(firstDay, -LOOKBACK_DAYS), timeZone),
+      loadStart: businessDayStart(
+        shiftDateKey(firstDay, -LOOKBACK_DAYS),
+        timeZone,
+      ),
       loadEnd: businessDayStart(shiftDateKey(lastDay, 2), timeZone),
     };
   } catch (error) {
@@ -282,11 +290,16 @@ function subtractSpans(base: readonly Span[], cut: readonly Span[]): Span[] {
     cut.reduce<Span[]>(
       (pieces, hole) =>
         pieces.flatMap((piece) => {
-          if (hole.end <= piece.start || hole.start >= piece.end) return [piece];
+          if (hole.end <= piece.start || hole.start >= piece.end)
+            return [piece];
 
           return [
-            ...(hole.start > piece.start ? [{ start: piece.start, end: hole.start }] : []),
-            ...(hole.end < piece.end ? [{ start: hole.end, end: piece.end }] : []),
+            ...(hole.start > piece.start
+              ? [{ start: piece.start, end: hole.start }]
+              : []),
+            ...(hole.end < piece.end
+              ? [{ start: hole.end, end: piece.end }]
+              : []),
           ];
         }),
       [{ ...span }],
@@ -436,7 +449,9 @@ function flagFor(
       return {
         code,
         message: `A pausa iniciada em ${
-          facts.notEndedStart ? wallLabel(facts.notEndedStart, facts.timeZone) : "—"
+          facts.notEndedStart
+            ? wallLabel(facts.notEndedStart, facts.timeZone)
+            : "—"
         } não foi encerrada no aplicativo; a duração dela fica fora dos cálculos.`,
       };
     case "PAUSE_TOO_LONG":
@@ -520,7 +535,9 @@ interface DriverRoutes {
  * of the company for each pause (pauses × routes on the event loop); per
  * driver and by binary search it is about P log R.
  */
-function indexRoutesByDriver(routes: readonly RouteItem[]): Map<string, DriverRoutes> {
+function indexRoutesByDriver(
+  routes: readonly RouteItem[],
+): Map<string, DriverRoutes> {
   const byDriver = new Map<string, RouteItem[]>();
 
   for (const route of routes) {
@@ -534,14 +551,18 @@ function indexRoutesByDriver(routes: readonly RouteItem[]): Map<string, DriverRo
   const index = new Map<string, DriverRoutes>();
 
   for (const [driverId, list] of byDriver) {
-    list.sort((a, b) => a.start - b.start || a.route.id.localeCompare(b.route.id));
+    list.sort(
+      (a, b) => a.start - b.start || a.route.id.localeCompare(b.route.id),
+    );
 
     const latestEnd: number[] = [];
 
     list.forEach((route, position) => {
       const previous = position > 0 ? latestEnd[position - 1] : -1;
 
-      latestEnd.push(previous >= 0 && list[previous].end >= route.end ? previous : position);
+      latestEnd.push(
+        previous >= 0 && list[previous].end >= route.end ? previous : position,
+      );
     });
 
     index.set(driverId, { routes: list, latestEnd });
@@ -671,7 +692,12 @@ function buildPauseReport({
       end = Math.max(start, nowMs);
     }
 
-    const route = routeForPause(routesByDriver.get(pause.driverId), start, end, interjornadaMs);
+    const route = routeForPause(
+      routesByDriver.get(pause.driverId),
+      start,
+      end,
+      interjornadaMs,
+    );
 
     return {
       start,
@@ -696,10 +722,14 @@ function buildPauseReport({
     return workday;
   };
 
-  for (const route of routes) workdayOf(route.route.driverId, route.day).routes.push(route);
-  for (const pause of pauses) workdayOf(pause.pause.driverId, pause.day).pauses.push(pause);
+  for (const route of routes)
+    workdayOf(route.route.driverId, route.day).routes.push(route);
+  for (const pause of pauses)
+    workdayOf(pause.pause.driverId, pause.day).pauses.push(pause);
 
-  const names = new Map(source.drivers.map((driver) => [driver.id, driver.name]));
+  const names = new Map(
+    source.drivers.map((driver) => [driver.id, driver.name]),
+  );
 
   // Oldest first per driver, so each workday meets the one before it.
   const ordered = [...workdays.values()].sort(
@@ -711,7 +741,8 @@ function buildPauseReport({
   const rows: DriverDayReport[] = [];
   let previous: { driverId: string; end: number } | null = null;
 
-  const isTimed = (pause: PauseItem) => pause.status === "ENDED" || pause.status === "ONGOING";
+  const isTimed = (pause: PauseItem) =>
+    pause.status === "ENDED" || pause.status === "ONGOING";
   const sum = (spans: readonly Span[]) => lengthOf(mergeSpans(spans));
 
   for (const workday of ordered) {
@@ -734,15 +765,20 @@ function buildPauseReport({
     const driving = subtractSpans(routeSpans, restSpans);
     const longestDriving = longestDrivingWithoutRest(driving, restSpans);
 
-    const spansOf = (kind: DriverPauseKind) => timed.filter((pause) => pause.pause.kind === kind);
+    const spansOf = (kind: DriverPauseKind) =>
+      timed.filter((pause) => pause.pause.kind === kind);
 
     // Two overlapping meal pauses are one meal interval, not two.
     const meals = mergeSpans(spansOf("MEAL"));
-    const longestMeal = meals.reduce((longest, span) => Math.max(longest, span.end - span.start), 0);
+    const longestMeal = meals.reduce(
+      (longest, span) => Math.max(longest, span.end - span.start),
+      0,
+    );
 
     const previousEnd =
       previous && previous.driverId === workday.driverId ? previous.end : null;
-    const restBefore = previousEnd === null ? null : Math.max(0, start - previousEnd);
+    const restBefore =
+      previousEnd === null ? null : Math.max(0, start - previousEnd);
 
     previous = { driverId: workday.driverId, end };
 
@@ -753,7 +789,10 @@ function buildPauseReport({
     const facts = { timeZone };
 
     // A day still going on has not missed its meal yet.
-    if (!inProgress && workdayMs > PAUSE_LAW.mealRequiredAboveWorkdayMinutes * 60_000) {
+    if (
+      !inProgress &&
+      workdayMs > PAUSE_LAW.mealRequiredAboveWorkdayMinutes * 60_000
+    ) {
       if (meals.length === 0) {
         flags.push(
           flagFor("MEAL_MISSING", {
@@ -766,7 +805,10 @@ function buildPauseReport({
         );
       } else if (longestMeal < PAUSE_LAW.mealMinMinutes * 60_000) {
         flags.push(
-          flagFor("MEAL_SHORT", { ...facts, longestMealMinutes: minutesOf(longestMeal) }),
+          flagFor("MEAL_SHORT", {
+            ...facts,
+            longestMealMinutes: minutesOf(longestMeal),
+          }),
         );
       }
     }
@@ -794,7 +836,9 @@ function buildPauseReport({
       );
     }
 
-    const forgotten = workday.pauses.find((pause) => pause.status === "NOT_ENDED");
+    const forgotten = workday.pauses.find(
+      (pause) => pause.status === "NOT_ENDED",
+    );
 
     if (forgotten) {
       flags.push(
@@ -805,7 +849,9 @@ function buildPauseReport({
       );
     }
 
-    const closedLate = workday.pauses.find((pause) => pause.status === "TOO_LONG");
+    const closedLate = workday.pauses.find(
+      (pause) => pause.status === "TOO_LONG",
+    );
 
     if (closedLate && closedLate.pause.ended_at) {
       flags.push(
@@ -815,7 +861,8 @@ function buildPauseReport({
             start: closedLate.pause.started_at,
             end: closedLate.pause.ended_at,
             minutes: minutesOf(
-              closedLate.pause.ended_at.getTime() - closedLate.pause.started_at.getTime(),
+              closedLate.pause.ended_at.getTime() -
+                closedLate.pause.started_at.getTime(),
             ),
           },
         }),
@@ -834,14 +881,18 @@ function buildPauseReport({
         minutes: minutesOf(workdayMs),
       },
       pauses: [...workday.pauses]
-        .sort((a, b) => a.start - b.start || a.pause.id.localeCompare(b.pause.id))
+        .sort(
+          (a, b) => a.start - b.start || a.pause.id.localeCompare(b.pause.id),
+        )
         .map((pause) => ({
           id: pause.pause.id,
           kind: pause.pause.kind,
           occurrence_type_name: pause.pause.occurrence_type_name ?? null,
           status: pause.status,
           started_at: pause.pause.started_at.toISOString(),
-          ended_at: pause.pause.ended_at ? pause.pause.ended_at.toISOString() : null,
+          ended_at: pause.pause.ended_at
+            ? pause.pause.ended_at.toISOString()
+            : null,
           duration_minutes:
             pause.status === "NOT_ENDED"
               ? null
@@ -860,7 +911,8 @@ function buildPauseReport({
         drivingMinutes: minutesOf(lengthOf(driving)),
         longestDrivingWithoutRestMinutes: minutesOf(longestDriving),
       },
-      previousWorkdayEnd: previousEnd === null ? null : new Date(previousEnd).toISOString(),
+      previousWorkdayEnd:
+        previousEnd === null ? null : new Date(previousEnd).toISOString(),
       restBeforeMinutes: restBefore === null ? null : minutesOf(restBefore),
       flags,
     });
@@ -920,7 +972,8 @@ function summarizePauseReport(
   const byDriver = (row: DriverDayReport) =>
     chosenDrivers.size === 0 || chosenDrivers.has(row.driverId);
   const byFlag = (row: DriverDayReport) =>
-    chosenFlags.size === 0 || row.flags.some((flag) => chosenFlags.has(flag.code));
+    chosenFlags.size === 0 ||
+    row.flags.some((flag) => chosenFlags.has(flag.code));
 
   const kept = rows.filter((row) => byDriver(row) && byFlag(row));
   const forDriverFacet = rows.filter(byFlag);
@@ -939,7 +992,11 @@ function summarizePauseReport(
   }
 
   const driverFacet = [...driverCounts.entries()]
-    .map(([value, count]) => ({ value, label: driverNames.get(value) ?? "", count }))
+    .map(([value, count]) => ({
+      value,
+      label: driverNames.get(value) ?? "",
+      count,
+    }))
     .sort(
       (a, b) =>
         NAME_ORDER.compare(a.label, b.label) || a.value.localeCompare(b.value),
@@ -947,8 +1004,9 @@ function summarizePauseReport(
 
   const flagFacet = PAUSE_FLAG_CODES.map((code) => ({
     value: code,
-    count: forFlagFacet.filter((row) => row.flags.some((flag) => flag.code === code))
-      .length,
+    count: forFlagFacet.filter((row) =>
+      row.flags.some((flag) => flag.code === code),
+    ).length,
   }));
 
   return {

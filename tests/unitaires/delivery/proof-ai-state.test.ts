@@ -28,7 +28,9 @@ const state = (overrides: Partial<ProofAiStateInput>) =>
 
 describe("the reading state of a card", () => {
   it("is 'read' whenever the suggestion is there", () => {
-    expect(state({ hasSuggestion: true, analysisStatus: "FAILED" })).toBe("read");
+    expect(state({ hasSuggestion: true, analysisStatus: "FAILED" })).toBe(
+      "read",
+    );
   });
 
   it("follows the latest request's status", () => {

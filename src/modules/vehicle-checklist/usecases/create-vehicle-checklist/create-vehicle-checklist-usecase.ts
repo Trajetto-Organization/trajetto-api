@@ -323,15 +323,18 @@ class CreateVehicleChecklistUseCase {
         : null;
 
       // Add photo paths to checklist data
-      const checklistDataWithPhotos = withChecklistDate({
-        ...checklistData,
-        ...(mileagePrecheck && { mileage_device_precheck: mileagePrecheck }),
-        photos: photoPaths,
-        photos_by_field:
-          Object.keys(photoPathsByField).length > 0
-            ? photoPathsByField
-            : undefined,
-      }, timeZoneOfBusiness(findBusiness));
+      const checklistDataWithPhotos = withChecklistDate(
+        {
+          ...checklistData,
+          ...(mileagePrecheck && { mileage_device_precheck: mileagePrecheck }),
+          photos: photoPaths,
+          photos_by_field:
+            Object.keys(photoPathsByField).length > 0
+              ? photoPathsByField
+              : undefined,
+        },
+        timeZoneOfBusiness(findBusiness),
+      );
 
       // Record creation, mileage advancement and the outbox event are
       // committed atomically; the pipeline turns the event into the activity
@@ -372,7 +375,6 @@ class CreateVehicleChecklistUseCase {
         );
 
         photosSettled = true;
-
 
         /**
          * The same ownership rule as the early return, for the narrower

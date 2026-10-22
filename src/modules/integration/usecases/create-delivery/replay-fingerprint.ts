@@ -66,7 +66,8 @@ interface StoredItem {
   unit_value: DecimalLike | null;
 }
 
-interface StoredDelivery extends Omit<DeliveryDraft, "shipperId" | "items" | "scheduled_date"> {
+interface StoredDelivery
+  extends Omit<DeliveryDraft, "shipperId" | "items" | "scheduled_date"> {
   shipperId: string;
   scheduled_date: Date | null;
   items: StoredItem[];
@@ -129,7 +130,10 @@ function atColumnScale(value: DecimalLike, scale: number): string {
   return decimal.toFixed(scale, Prisma.Decimal.ROUND_HALF_UP);
 }
 
-function scaled(value: DecimalLike | null | undefined, scale: number): string | null {
+function scaled(
+  value: DecimalLike | null | undefined,
+  scale: number,
+): string | null {
   if (value === undefined || value === null) return null;
 
   return atColumnScale(value, scale);
@@ -176,7 +180,9 @@ function fingerprint(
 ): string {
   return JSON.stringify({
     shipperId,
-    ...Object.fromEntries(TEXT_FIELDS.map((field) => [field, text(fields[field])])),
+    ...Object.fromEntries(
+      TEXT_FIELDS.map((field) => [field, text(fields[field])]),
+    ),
     scheduled_date: scheduledDate ? dateOnlyKey(scheduledDate) : null,
     items: [...items].sort(),
   });
@@ -208,7 +214,10 @@ function storedFingerprint(stored: StoredDelivery): string {
 }
 
 /** True when the retry carries the body that created `stored`. */
-function isSameSubmission(draft: DeliveryDraft, stored: StoredDelivery): boolean {
+function isSameSubmission(
+  draft: DeliveryDraft,
+  stored: StoredDelivery,
+): boolean {
   return draftFingerprint(draft) === storedFingerprint(stored);
 }
 

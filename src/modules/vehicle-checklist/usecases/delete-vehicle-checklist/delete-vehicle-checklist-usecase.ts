@@ -92,7 +92,10 @@ class DeleteVehicleChecklistUseCase {
       deletedChecklist =
         await this.vehicleChecklist.deleteVehicleChecklist(checklistId);
     } catch (error) {
-      log.error({ err: error, checklistId }, "vehicle checklist could not be deleted");
+      log.error(
+        { err: error, checklistId },
+        "vehicle checklist could not be deleted",
+      );
 
       throw new AppError(
         "Houve um erro ao tentar deletar o checklist veicular! Por favor, tente novamente.",

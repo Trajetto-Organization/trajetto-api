@@ -113,10 +113,8 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  const {
-    configureIntegrationRateGuard,
-    unlimitedIntegrationRateGuard,
-  } = await import("@/shared/integration/integration-rate-guard");
+  const { configureIntegrationRateGuard, unlimitedIntegrationRateGuard } =
+    await import("@/shared/integration/integration-rate-guard");
 
   configureIntegrationRateGuard(unlimitedIntegrationRateGuard);
 
@@ -126,7 +124,9 @@ afterAll(async () => {
     where: { userId: { in: [ADMIN, MASTER] } },
   });
   await prisma.user.deleteMany({ where: { id: { in: [ADMIN, MASTER] } } });
-  await prisma.businessEntitlement.deleteMany({ where: { businessId: CARRIER } });
+  await prisma.businessEntitlement.deleteMany({
+    where: { businessId: CARRIER },
+  });
   await prisma.business.deleteMany({ where: { id: CARRIER } });
 
   await app?.close();
@@ -191,7 +191,9 @@ describe("the number of active keys", () => {
     expect(JSON.parse(eleventh.body).code).toBe("API_KEY_LIMIT_REACHED");
 
     // Not even the platform: the cap is on what a company holds.
-    expect((await issue(masterToken, 120, "Pelo suporte")).statusCode).toBe(409);
+    expect((await issue(masterToken, 120, "Pelo suporte")).statusCode).toBe(
+      409,
+    );
 
     const one = await prisma.apiKey.findFirstOrThrow({
       where: { businessId: CARRIER, revoked_at: null },
@@ -202,9 +204,9 @@ describe("the number of active keys", () => {
       data: { revoked_at: new Date() },
     });
 
-    expect((await issue(adminToken, 120, "No lugar da revogada")).statusCode).toBe(
-      201,
-    );
+    expect(
+      (await issue(adminToken, 120, "No lugar da revogada")).statusCode,
+    ).toBe(201);
   });
 });
 
@@ -249,9 +251,7 @@ describe("the company's budget across its keys", () => {
       expect(JSON.parse(response.body).code).toBe("RATE_LIMITED");
       expect(Number(response.headers["retry-after"])).toBeGreaterThan(0);
 
-      expect(asked).toEqual([
-        { businessId: CARRIER, max: expect.any(Number) },
-      ]);
+      expect(asked).toEqual([{ businessId: CARRIER, max: expect.any(Number) }]);
     } finally {
       configureIntegrationRateGuard(unlimitedIntegrationRateGuard);
     }

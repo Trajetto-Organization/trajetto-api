@@ -28,12 +28,16 @@ class OpsAlertPreferenceUseCase {
     return { sound };
   }
 
-  async update(userId: string, input: OpsAlertPreference): Promise<OpsAlertPreference> {
+  async update(
+    userId: string,
+    input: OpsAlertPreference,
+  ): Promise<OpsAlertPreference> {
     const current = await this.preferences.getSound(userId);
 
     if (current === null) throw new ResourceNotFoundError();
 
-    if (current !== input.sound) await this.preferences.setSound(userId, input.sound);
+    if (current !== input.sound)
+      await this.preferences.setSound(userId, input.sound);
 
     return { sound: input.sound };
   }

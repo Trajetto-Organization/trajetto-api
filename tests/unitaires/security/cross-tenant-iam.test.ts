@@ -30,7 +30,9 @@ vi.mock("@/websocket", () => ({
 // no database, so the real $transaction failed and the admin's own delete
 // came back as the use case's 500 instead of the deletion.
 vi.mock("@/../infra/database", () => ({
-  default: { $transaction: (run: (client: unknown) => Promise<unknown>) => run({}) },
+  default: {
+    $transaction: (run: (client: unknown) => Promise<unknown>) => run({}),
+  },
 }));
 
 const BUSINESS_A = "018f0000-0000-7000-8000-00000000000a";
@@ -50,7 +52,8 @@ const notificationStub = {
  * Another company's record answers exactly like a missing one: a 403 next to
  * a 404 told the attacker which ids exist elsewhere (IDOR sweep, 10/2026).
  */
-const notFoundError = () => new AppError("Não encontrado.", 404, "RECORD_NOT_FOUND");
+const notFoundError = () =>
+  new AppError("Não encontrado.", 404, "RECORD_NOT_FOUND");
 
 const notFound = expect.objectContaining({ statusCode: 404 });
 
@@ -84,7 +87,9 @@ describe("assertTenantAccessToRecord", () => {
         BUSINESS_B,
         notFoundError,
       ),
-    ).toThrowError(expect.objectContaining({ statusCode: 404, code: "RECORD_NOT_FOUND" }));
+    ).toThrowError(
+      expect.objectContaining({ statusCode: 404, code: "RECORD_NOT_FOUND" }),
+    );
   });
 
   it("allows a record of the caller's own tenant", () => {
@@ -108,13 +113,21 @@ describe("assertTenantAccessToRecord", () => {
     ).toThrowError(notFound);
 
     expect(() =>
-      assertTenantAccessToRecord({ role: "MASTER", businessId: null }, null, notFoundError),
+      assertTenantAccessToRecord(
+        { role: "MASTER", businessId: null },
+        null,
+        notFoundError,
+      ),
     ).not.toThrow();
   });
 
   it("lets a master cross tenants, as every other guard does", () => {
     expect(() =>
-      assertTenantAccessToRecord({ role: "MASTER", businessId: null }, BUSINESS_B, notFoundError),
+      assertTenantAccessToRecord(
+        { role: "MASTER", businessId: null },
+        BUSINESS_B,
+        notFoundError,
+      ),
     ).not.toThrow();
   });
 });
@@ -132,7 +145,9 @@ describe("IAM routes without :businessId refuse another tenant's record", () => 
 
     await expect(
       useCase.execute({ userId: VICTIM, id: ATTACKER }),
-    ).rejects.toThrowError(expect.objectContaining({ statusCode: 404, code: "USER_NOT_FOUND" }));
+    ).rejects.toThrowError(
+      expect.objectContaining({ statusCode: 404, code: "USER_NOT_FOUND" }),
+    );
 
     // The refusal has to happen before the write, not after it.
     expect(userRepository.user.some((user) => user.id === VICTIM)).toBe(true);
@@ -154,10 +169,11 @@ describe("IAM routes without :businessId refuse another tenant's record", () => 
       notificationStub,
     );
 
-    await expect(
-      useCase.execute(PROFILE_OF_B, ATTACKER),
-    ).rejects.toThrowError(
-      expect.objectContaining({ statusCode: 404, code: "PROFILE_ACCESS_NOT_FOUND" }),
+    await expect(useCase.execute(PROFILE_OF_B, ATTACKER)).rejects.toThrowError(
+      expect.objectContaining({
+        statusCode: 404,
+        code: "PROFILE_ACCESS_NOT_FOUND",
+      }),
     );
 
     expect(profileRepository.profileAccess).toHaveLength(1);
@@ -182,7 +198,12 @@ describe("IAM routes without :businessId refuse another tenant's record", () => 
 
     await expect(
       useCase.execute(PERMISSION_OF_B, ATTACKER),
-    ).rejects.toThrowError(expect.objectContaining({ statusCode: 404, code: "PERMISSION_NOT_FOUND" }));
+    ).rejects.toThrowError(
+      expect.objectContaining({
+        statusCode: 404,
+        code: "PERMISSION_NOT_FOUND",
+      }),
+    );
 
     expect(permissionRepository.permissions).toHaveLength(1);
   });

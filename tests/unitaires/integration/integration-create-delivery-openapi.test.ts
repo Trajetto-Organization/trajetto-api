@@ -25,11 +25,19 @@ interface Operation {
   description?: string;
   security?: unknown[];
   "x-scopes"?: string[];
-  parameters?: Array<{ in: string; name: string; required?: boolean; description?: string }>;
+  parameters?: Array<{
+    in: string;
+    name: string;
+    required?: boolean;
+    description?: string;
+  }>;
   requestBody?: { content?: Record<string, { schema?: JsonSchema }> };
   responses: Record<
     string,
-    { description?: string; content?: Record<string, { schema?: JsonSchema; example?: unknown }> }
+    {
+      description?: string;
+      content?: Record<string, { schema?: JsonSchema; example?: unknown }>;
+    }
   >;
 }
 
@@ -43,11 +51,16 @@ beforeAll(async () => {
 
   await app.ready();
 
-  const portal = await app.inject({ method: "GET", url: "/integration/docs/openapi.json" });
+  const portal = await app.inject({
+    method: "GET",
+    url: "/integration/docs/openapi.json",
+  });
 
   operation = portal.json().paths["/integration/v1/deliveries"]?.post;
   introduction = String(portal.json().info?.description ?? "");
-  catalogue = (await app.inject({ method: "GET", url: "/integration/v1/catalogue" })).json();
+  catalogue = (
+    await app.inject({ method: "GET", url: "/integration/v1/catalogue" })
+  ).json();
 
   close = () => app.close();
 }, APP_BOOT_TIMEOUT_MS);
@@ -71,12 +84,17 @@ function fits(schema: JsonSchema, body: Record<string, unknown>): boolean {
 
 describe("the public create, as published", () => {
   it("is in the public portal, behind a key with the write scope", () => {
-    expect(operation, "POST /integration/v1/deliveries fora do portal").toBeDefined();
+    expect(
+      operation,
+      "POST /integration/v1/deliveries fora do portal",
+    ).toBeDefined();
 
     // The key scheme only; the portal may name the scope in the requirement.
     const security = operation.security as Array<Record<string, string[]>>;
 
-    expect(security.map((requirement) => Object.keys(requirement))).toEqual([["apiKey"]]);
+    expect(security.map((requirement) => Object.keys(requirement))).toEqual([
+      ["apiKey"],
+    ]);
     expect(["", "deliveries:write"]).toContain(security[0].apiKey.join(","));
 
     expect(operation["x-scopes"]).toEqual(["deliveries:write"]);
@@ -85,7 +103,8 @@ describe("the public create, as published", () => {
 
   it("requires the Idempotency-Key and says what repeating it does", () => {
     const header = operation.parameters?.find(
-      (parameter) => parameter.in === "header" && parameter.name === "idempotency-key",
+      (parameter) =>
+        parameter.in === "header" && parameter.name === "idempotency-key",
     );
 
     expect(header?.required).toBe(true);
@@ -93,9 +112,16 @@ describe("the public create, as published", () => {
   });
 
   it("publishes the body with both ways to name the shipper, closed to unknown fields", () => {
-    const body = operation.requestBody?.content?.["application/json"]?.schema ?? {};
+    const body =
+      operation.requestBody?.content?.["application/json"]?.schema ?? {};
 
-    for (const field of ["shipper_id", "shipper_cnpj", "recipient_name", "cep", "items"]) {
+    for (const field of [
+      "shipper_id",
+      "shipper_cnpj",
+      "recipient_name",
+      "cep",
+      "items",
+    ]) {
       expect(Object.keys(body.properties ?? {}), field).toContain(field);
     }
 
@@ -106,7 +132,9 @@ describe("the public create, as published", () => {
     // One of the two, so neither is required on its own; both explained.
     for (const field of ["shipper_id", "shipper_cnpj"]) {
       expect(body.required ?? [], field).not.toContain(field);
-      expect(body.properties?.[field]?.description ?? "", field).toMatch(/shipper_(id|cnpj)/);
+      expect(body.properties?.[field]?.description ?? "", field).toMatch(
+        /shipper_(id|cnpj)/,
+      );
     }
   });
 
@@ -125,25 +153,33 @@ describe("the public create, as published", () => {
     );
 
     // The introduction's "## Erros" says the same.
-    expect(introduction).toContain("`VALIDATION_ERROR` ela é a frase do primeiro campo");
+    expect(introduction).toContain(
+      "`VALIDATION_ERROR` ela é a frase do primeiro campo",
+    );
     expect(introduction).not.toContain("Validation Error");
   });
 
   it("says the Idempotency-Key namespace includes the panel's submissions", () => {
     const header = operation.parameters?.find(
-      (parameter) => parameter.in === "header" && parameter.name === "idempotency-key",
+      (parameter) =>
+        parameter.in === "header" && parameter.name === "idempotency-key",
     );
 
     expect(header?.description).toMatch(/painel/);
     expect(operation.responses["409"].description ?? "").toMatch(/painel/);
-    expect(operation.responses["409"].description ?? "").toContain("shipper_cnpj");
+    expect(operation.responses["409"].description ?? "").toContain(
+      "shipper_cnpj",
+    );
   });
 
   it("shows an example of what comes back, created and replayed", () => {
     for (const status of ["201", "200"]) {
       const media = operation.responses[status]?.content?.["application/json"];
 
-      expect(media?.example, status).toMatchObject({ status: "PENDING", route: null });
+      expect(media?.example, status).toMatchObject({
+        status: "PENDING",
+        route: null,
+      });
     }
   });
 
@@ -153,7 +189,16 @@ describe("the public create, as published", () => {
 
   it("documents the error bodies the API really sends", () => {
     expect(Object.keys(operation.responses)).toEqual(
-      expect.arrayContaining(["400", "401", "403", "404", "409", "429", "500", "503"]),
+      expect.arrayContaining([
+        "400",
+        "401",
+        "403",
+        "404",
+        "409",
+        "429",
+        "500",
+        "503",
+      ]),
     );
 
     // The handler's validation refusal.
@@ -166,9 +211,17 @@ describe("the public create, as published", () => {
     ).toBe(true);
 
     // The controller's two 409s, with the delivery in the way.
-    for (const code of ["IDEMPOTENCY_KEY_REUSED", "DELIVERY_INVOICE_KEY_EXISTS"]) {
-      expect(fits(schemaOf("409"), { code, message: "m", delivery_id: "x" }), code).toBe(true);
-      expect(operation.responses["409"].description ?? "", code).toContain(code);
+    for (const code of [
+      "IDEMPOTENCY_KEY_REUSED",
+      "DELIVERY_INVOICE_KEY_EXISTS",
+    ]) {
+      expect(
+        fits(schemaOf("409"), { code, message: "m", delivery_id: "x" }),
+        code,
+      ).toBe(true);
+      expect(operation.responses["409"].description ?? "", code).toContain(
+        code,
+      );
     }
 
     expect(
@@ -179,12 +232,15 @@ describe("the public create, as published", () => {
 
 describe("the open catalogue", () => {
   it("no longer calls deliveries:write reserved", () => {
-    const write = catalogue.scopes.find((entry) => entry.scope === "deliveries:write");
+    const write = catalogue.scopes.find(
+      (entry) => entry.scope === "deliveries:write",
+    );
 
     expect(write?.reserved).toBe(false);
 
     expect(
-      catalogue.scopes.find((entry) => entry.scope === "webhooks:manage")?.reserved,
+      catalogue.scopes.find((entry) => entry.scope === "webhooks:manage")
+        ?.reserved,
     ).toBe(true);
   });
 });

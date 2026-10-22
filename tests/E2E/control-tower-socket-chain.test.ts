@@ -90,10 +90,14 @@ async function tokenFor(userId: string): Promise<string> {
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: userId,
-    expiresIn: "1h",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: userId,
+      expiresIn: "1h",
+    },
+  );
 }
 
 async function seedBusiness(id: string, cnpj: string): Promise<void> {
@@ -127,7 +131,10 @@ function connectTo(port: number, token: string): Promise<TestSocket> {
       reconnection: false,
     });
 
-    const timer = setTimeout(() => fail(new Error(`sem conexão na porta ${port}`)), 20_000);
+    const timer = setTimeout(
+      () => fail(new Error(`sem conexão na porta ${port}`)),
+      20_000,
+    );
 
     socket.on("connect", () => {
       clearTimeout(timer);
@@ -308,7 +315,9 @@ describe("a position posted by the phone", () => {
     expect(event).toMatchObject({ driverId: DRIVER, latitude: -23.501 });
 
     // Stored before it was announced: the tower's next read has it.
-    const stored = await prisma.driverLastPosition.findUnique({ where: { driverId: DRIVER } });
+    const stored = await prisma.driverLastPosition.findUnique({
+      where: { driverId: DRIVER },
+    });
 
     expect(stored?.latitude).toBeCloseTo(-23.501, 6);
 

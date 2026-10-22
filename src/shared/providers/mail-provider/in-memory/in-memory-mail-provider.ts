@@ -1,7 +1,4 @@
-import {
-  MailProviderProps,
-  MailSendResult,
-} from "../dtos/mail-provider-dto";
+import { MailProviderProps, MailSendResult } from "../dtos/mail-provider-dto";
 import { IMailProvider } from "../IMail-provider";
 
 import { buildMessageId } from "../message-id";

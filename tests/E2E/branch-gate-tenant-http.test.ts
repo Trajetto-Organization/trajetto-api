@@ -171,7 +171,11 @@ async function moveBill(
 
   const body = response.json() as { code?: string; message?: string };
 
-  return { status: response.statusCode, code: body.code, message: body.message };
+  return {
+    status: response.statusCode,
+    code: body.code,
+    message: body.message,
+  };
 }
 
 describe("a company naming a branch that is not its own", () => {

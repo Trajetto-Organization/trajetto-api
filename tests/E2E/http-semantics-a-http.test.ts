@@ -182,39 +182,75 @@ describe("a company that does not exist, on the MASTER's routes", () => {
   // Red before: 400 `{ message }` with no code on each of these.
   it.each([
     ["PATCH", `/business/toggle-business-active/${MISSING}`, undefined],
-    ["PATCH", `/business/update-ai-limit/${MISSING}`, { ai_analysis_limit: 10 }],
-    ["PATCH", `/business/update-vehicle-limit/${MISSING}`, { vehicle_limit: 10 }],
+    [
+      "PATCH",
+      `/business/update-ai-limit/${MISSING}`,
+      { ai_analysis_limit: 10 },
+    ],
+    [
+      "PATCH",
+      `/business/update-vehicle-limit/${MISSING}`,
+      { vehicle_limit: 10 },
+    ],
     ["GET", `/business/entitlements/${MISSING}`, undefined],
-  ] as const)("%s %s → 404 BUSINESS_NOT_FOUND", async (method, url, payload) => {
-    expectRefusal(await call(method, url, tokens.master, payload), 404, "BUSINESS_NOT_FOUND");
-  });
+  ] as const)(
+    "%s %s → 404 BUSINESS_NOT_FOUND",
+    async (method, url, payload) => {
+      expectRefusal(
+        await call(method, url, tokens.master, payload),
+        404,
+        "BUSINESS_NOT_FOUND",
+      );
+    },
+  );
 
   it("answers the branch deletion steps with 404 BUSINESS_NOT_FOUND too", async () => {
     const branch = await seedBranch(CARRIER, "Filial Qualquer");
 
     expectRefusal(
-      await call("POST", `/branch/request-branch-deletion/${branch.id}/business/${MISSING}`, tokens.master),
+      await call(
+        "POST",
+        `/branch/request-branch-deletion/${branch.id}/business/${MISSING}`,
+        tokens.master,
+      ),
       404,
       "BUSINESS_NOT_FOUND",
     );
     expectRefusal(
-      await call("DELETE", `/branch/delete-branch/${branch.id}/business/${MISSING}`, tokens.master, { code: CODE }),
+      await call(
+        "DELETE",
+        `/branch/delete-branch/${branch.id}/business/${MISSING}`,
+        tokens.master,
+        { code: CODE },
+      ),
       404,
       "BUSINESS_NOT_FOUND",
     );
   });
 
   it("still refuses the routes to a company's administrator by role", async () => {
-    const response = await call("PATCH", `/business/toggle-business-active/${CARRIER}`, tokens.admin);
+    const response = await call(
+      "PATCH",
+      `/business/toggle-business-active/${CARRIER}`,
+      tokens.admin,
+    );
 
     expect(response.statusCode).toBe(403);
     expect(response.json().code).toBe("AUTH_ROLE_FORBIDDEN");
-    expect((await prisma.business.findUniqueOrThrow({ where: { id: CARRIER } })).is_active).toBe(true);
+    expect(
+      (await prisma.business.findUniqueOrThrow({ where: { id: CARRIER } }))
+        .is_active,
+    ).toBe(true);
   });
 
   it("keeps a validation error a 400, never a 404", async () => {
     expectRefusal(
-      await call("PATCH", `/business/update-ai-limit/${MISSING}`, tokens.master, { ai_analysis_limit: -1 }),
+      await call(
+        "PATCH",
+        `/business/update-ai-limit/${MISSING}`,
+        tokens.master,
+        { ai_analysis_limit: -1 },
+      ),
       400,
       "VALIDATION_ERROR",
     );
@@ -223,20 +259,31 @@ describe("a company that does not exist, on the MASTER's routes", () => {
 
 describe("confirming a company's deletion", () => {
   const confirm = (businessId: string) =>
-    call("DELETE", `/business/delete-business/${businessId}`, tokens.master, { code: CODE });
+    call("DELETE", `/business/delete-business/${businessId}`, tokens.master, {
+      code: CODE,
+    });
 
   it("answers 409 BUSINESS_DELETION_NOT_REQUESTED when nobody asked for it", async () => {
     // Red before: 400 with no code — the request was fine, the state was not.
-    expectRefusal(await confirm(LONELY), 409, "BUSINESS_DELETION_NOT_REQUESTED");
+    expectRefusal(
+      await confirm(LONELY),
+      409,
+      "BUSINESS_DELETION_NOT_REQUESTED",
+    );
     expect(await prisma.business.count({ where: { id: LONELY } })).toBe(1);
   });
 
   it("answers a wrong code and an expired one with 400 and their own codes", async () => {
     await seedPending("business", LONELY, tokens.master);
 
-    const wrong = await call("DELETE", `/business/delete-business/${LONELY}`, tokens.master, {
-      code: "654321",
-    });
+    const wrong = await call(
+      "DELETE",
+      `/business/delete-business/${LONELY}`,
+      tokens.master,
+      {
+        code: "654321",
+      },
+    );
 
     expectRefusal(wrong, 400, "BUSINESS_DELETION_CODE_INVALID");
 
@@ -253,7 +300,11 @@ describe("confirming a company's deletion", () => {
     // Red before: 409 `{ message }` with no code.
     expectRefusal(await confirm(CARRIER), 409, "BUSINESS_IN_USE");
     expectRefusal(
-      await call("POST", `/business/request-business-deletion/${CARRIER}`, tokens.master),
+      await call(
+        "POST",
+        `/business/request-business-deletion/${CARRIER}`,
+        tokens.master,
+      ),
       409,
       "BUSINESS_IN_USE",
     );
@@ -265,14 +316,28 @@ describe("confirming a company's deletion", () => {
 });
 
 describe("confirming a branch's deletion", () => {
-  const confirm = (branchId: string, businessId: string, token = tokens.admin, code = CODE) =>
-    call("DELETE", `/branch/delete-branch/${branchId}/business/${businessId}`, token, { code });
+  const confirm = (
+    branchId: string,
+    businessId: string,
+    token = tokens.admin,
+    code = CODE,
+  ) =>
+    call(
+      "DELETE",
+      `/branch/delete-branch/${branchId}/business/${businessId}`,
+      token,
+      { code },
+    );
 
   it("answers 409 BRANCH_DELETION_NOT_REQUESTED when nobody asked for it", async () => {
     const branch = await seedBranch(CARRIER, "Filial Sem Pedido");
 
     // Red before: 400 with no code.
-    expectRefusal(await confirm(branch.id, CARRIER), 409, "BRANCH_DELETION_NOT_REQUESTED");
+    expectRefusal(
+      await confirm(branch.id, CARRIER),
+      409,
+      "BRANCH_DELETION_NOT_REQUESTED",
+    );
     expect(await prisma.branch.count({ where: { id: branch.id } })).toBe(1);
   });
 
@@ -292,7 +357,11 @@ describe("confirming a branch's deletion", () => {
       data: { expires: new Date(Date.now() - 1_000) },
     });
 
-    expectRefusal(await confirm(branch.id, CARRIER), 400, "BRANCH_DELETION_CODE_EXPIRED");
+    expectRefusal(
+      await confirm(branch.id, CARRIER),
+      400,
+      "BRANCH_DELETION_CODE_EXPIRED",
+    );
     expect(await prisma.branch.count({ where: { id: branch.id } })).toBe(1);
   });
 

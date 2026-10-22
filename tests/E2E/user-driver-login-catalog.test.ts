@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -107,7 +115,8 @@ async function seedUser(data: {
       id,
       name: "Pessoa Cadastrada",
       email: `${id}@exemplo.com.br`,
-      password: "$2a$08$hash.que.nao.importa.neste.teste..........................",
+      password:
+        "$2a$08$hash.que.nao.importa.neste.teste..........................",
       role: data.role,
       businessId: data.businessId,
       profileAccessId: data.profileAccessId ?? null,
@@ -128,10 +137,14 @@ async function seedUser(data: {
 
   return {
     id,
-    token: sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-      subject: id,
-      expiresIn: "30m",
-    }),
+    token: sign(
+      { tokenType: "access", sessionVersion: 0, familyId },
+      auth.secret_token,
+      {
+        subject: id,
+        expiresIn: "30m",
+      },
+    ),
   };
 }
 
@@ -141,7 +154,12 @@ async function send(
   token: string,
   payload?: Record<string, unknown>,
 ) {
-  return app.inject({ method, url, headers: { authorization: `Bearer ${token}` }, payload });
+  return app.inject({
+    method,
+    url,
+    headers: { authorization: `Bearer ${token}` },
+    payload,
+  });
 }
 
 let admin: Seeded;
@@ -152,7 +170,9 @@ beforeAll(async () => {
   await seedBusiness(A);
   await seedBusiness(B);
 
-  const profile = await prisma.profileAccess.create({ data: { name: "Operação", businessId: A } });
+  const profile = await prisma.profileAccess.create({
+    data: { name: "Operação", businessId: A },
+  });
   await prisma.permission.create({
     data: {
       action: "kanban_manage",
@@ -224,64 +244,115 @@ describe("a driver's app login tells the driver catalogue", () => {
   it("when it moves to another driver or leaves the driver, and not on a rename", async () => {
     const first = await seedDriver(A, "Motorista Um");
     const second = await seedDriver(A, "Motorista Dois");
-    const login = await seedUser({ role: "BUSINESS_USER", businessId: A, driverId: first });
-
-    const renamed = await send("PATCH", `/user/update-user/${login.id}`, admin.token, {
-      name: "Nome Novo Completo",
+    const login = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId: first,
     });
+
+    const renamed = await send(
+      "PATCH",
+      `/user/update-user/${login.id}`,
+      admin.token,
+      {
+        name: "Nome Novo Completo",
+      },
+    );
     expect(renamed.statusCode, renamed.body).toBe(200);
     expect(events.catalog).toEqual([]);
 
-    const relinked = await send("PATCH", `/user/update-user/${login.id}`, admin.token, {
-      driverId: second,
-      userType: "driver",
-    });
+    const relinked = await send(
+      "PATCH",
+      `/user/update-user/${login.id}`,
+      admin.token,
+      {
+        driverId: second,
+        userType: "driver",
+      },
+    );
     expect(relinked.statusCode, relinked.body).toBe(200);
     expect(events.catalog).toEqual([DRIVER_CHANGED]);
 
     events.catalog.length = 0;
 
-    const toStaff = await send("PATCH", `/user/update-user/${login.id}`, admin.token, {
-      profileAccessId: profileA,
-    });
+    const toStaff = await send(
+      "PATCH",
+      `/user/update-user/${login.id}`,
+      admin.token,
+      {
+        profileAccessId: profileA,
+      },
+    );
     expect(toStaff.statusCode, toStaff.body).toBe(200);
     expect(events.catalog).toEqual([DRIVER_CHANGED]);
   });
 
   it("when its access is revoked and when it is restored", async () => {
     const driverId = await seedDriver(A, "Motorista Revogado");
-    const login = await seedUser({ role: "BUSINESS_USER", businessId: A, driverId });
+    const login = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId,
+    });
 
-    const revoked = await send("PATCH", `/user/revoke-access/${login.id}`, admin.token);
+    const revoked = await send(
+      "PATCH",
+      `/user/revoke-access/${login.id}`,
+      admin.token,
+    );
     expect(revoked.statusCode, revoked.body).toBe(200);
     expect(events.catalog).toEqual([DRIVER_CHANGED]);
 
     events.catalog.length = 0;
 
-    const restored = await send("PATCH", `/user/revoke-access/${login.id}`, admin.token);
+    const restored = await send(
+      "PATCH",
+      `/user/revoke-access/${login.id}`,
+      admin.token,
+    );
     expect(restored.statusCode, restored.body).toBe(200);
     expect(events.catalog).toEqual([DRIVER_CHANGED]);
   });
 
   it("when it is deleted; a staff login deleted says nothing", async () => {
     const driverId = await seedDriver(A, "Motorista Excluído");
-    const login = await seedUser({ role: "BUSINESS_USER", businessId: A, driverId });
+    const login = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId,
+    });
 
-    const deleted = await send("DELETE", `/user/delete-user/${login.id}`, admin.token);
+    const deleted = await send(
+      "DELETE",
+      `/user/delete-user/${login.id}`,
+      admin.token,
+    );
     expect(deleted.statusCode, deleted.body).toBe(200);
     expect(events.catalog).toEqual([DRIVER_CHANGED]);
 
     events.catalog.length = 0;
 
-    const staff = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA });
-    const staffDeleted = await send("DELETE", `/user/delete-user/${staff.id}`, admin.token);
+    const staff = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA,
+    });
+    const staffDeleted = await send(
+      "DELETE",
+      `/user/delete-user/${staff.id}`,
+      admin.token,
+    );
     expect(staffDeleted.statusCode, staffDeleted.body).toBe(200);
     expect(events.catalog).toEqual([]);
   });
 
   it("a login responsible for a bill is kept, as a conflict (409), and tells nobody", async () => {
     const driverId = await seedDriver(A, "Motorista Responsável");
-    const login = await seedUser({ role: "BUSINESS_USER", businessId: A, driverId });
+    const login = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId,
+    });
 
     const branch = await prisma.branch.create({
       data: {
@@ -291,7 +362,9 @@ describe("a driver's app login tells the driver catalogue", () => {
         uf: "SP",
         street: "Rua",
         address_number: "1",
-        cnpj: `78${Math.floor(Math.random() * 1e12)}`.padEnd(14, "0").slice(0, 14),
+        cnpj: `78${Math.floor(Math.random() * 1e12)}`
+          .padEnd(14, "0")
+          .slice(0, 14),
         cnae: "4930202",
         responsible_name: "Responsável",
         telephone: "11999999999",
@@ -310,7 +383,11 @@ describe("a driver's app login tells the driver catalogue", () => {
       },
     });
 
-    const refused = await send("DELETE", `/user/delete-user/${login.id}`, admin.token);
+    const refused = await send(
+      "DELETE",
+      `/user/delete-user/${login.id}`,
+      admin.token,
+    );
 
     expect(refused.statusCode, refused.body).toBe(409);
     expect(JSON.parse(refused.body).code).toBe("USER_HAS_ACCOUNT_PAYABLES");
@@ -319,7 +396,11 @@ describe("a driver's app login tells the driver catalogue", () => {
   });
 
   it("a user who left a record behind is kept, as a conflict (409) that points to revoking, not a 500", async () => {
-    const staff = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA });
+    const staff = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA,
+    });
 
     // An upload is a record of something a person did: its FK is RESTRICT,
     // like the delivery events (a tower decision among them).
@@ -333,7 +414,11 @@ describe("a driver's app login tells the driver catalogue", () => {
       },
     });
 
-    const refused = await send("DELETE", `/user/delete-user/${staff.id}`, admin.token);
+    const refused = await send(
+      "DELETE",
+      `/user/delete-user/${staff.id}`,
+      admin.token,
+    );
 
     expect(refused.statusCode, refused.body).toBe(409);
     expect(JSON.parse(refused.body).code).toBe("USER_HAS_RECORDS");
@@ -343,13 +428,22 @@ describe("a driver's app login tells the driver catalogue", () => {
 
   it("a refused edit tells nobody", async () => {
     const driverId = await seedDriver(B, "Motorista de Outra");
-    const login = await seedUser({ role: "BUSINESS_USER", businessId: A, profileAccessId: profileA });
+    const login = await seedUser({
+      role: "BUSINESS_USER",
+      businessId: A,
+      profileAccessId: profileA,
+    });
 
     // A driver of another company: refused before anything is written.
-    const refused = await send("PATCH", `/user/update-user/${login.id}`, admin.token, {
-      driverId,
-      userType: "driver",
-    });
+    const refused = await send(
+      "PATCH",
+      `/user/update-user/${login.id}`,
+      admin.token,
+      {
+        driverId,
+        userType: "driver",
+      },
+    );
 
     expect(refused.statusCode).toBeGreaterThanOrEqual(400);
     expect(events.catalog).toEqual([]);

@@ -28,7 +28,11 @@ async function exportRow(timezone: string) {
   const businesses = new InMemoryBusinessRepository();
   const orders = new InMemoryServiceOrderRepository();
 
-  users.user.push({ id: USER, role: "BUSINESS_ADMIN", businessId: BUSINESS } as User);
+  users.user.push({
+    id: USER,
+    role: "BUSINESS_ADMIN",
+    businessId: BUSINESS,
+  } as User);
   businesses.business.push({
     ...BUSINESS_COLUMN_DEFAULTS,
     id: BUSINESS,

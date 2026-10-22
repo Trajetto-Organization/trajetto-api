@@ -440,7 +440,8 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       handshakeLimiter
         .allow(addressHandshakeKey(address), HANDSHAKES_PER_ADDRESS)
         .then(
-          (allowed) => callback(allowed ? null : "SOCKET_RATE_LIMITED", allowed),
+          (allowed) =>
+            callback(allowed ? null : "SOCKET_RATE_LIMITED", allowed),
           () => callback(null, true),
         );
     },
@@ -473,7 +474,11 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   attachRedisConnectionLog(adapterSubClient, "socket.io/sub");
 
   io.adapter(
-    createAdapter(adapterPubClient, adapterSubClient, socketAdapterOptions(env)),
+    createAdapter(
+      adapterPubClient,
+      adapterSubClient,
+      socketAdapterOptions(env),
+    ),
   );
 
   if (await waitForAdapterRedis(adapterClients, ADAPTER_BOOT_WAIT_MS)) {
@@ -558,7 +563,10 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
           return next(new Error("Token de autenticação não fornecido"));
         }
 
-        const verified = verify(token, hmacVerifyKey(auth.secret_token)) as SessionJwtPayload;
+        const verified = verify(
+          token,
+          hmacVerifyKey(auth.secret_token),
+        ) as SessionJwtPayload;
 
         if (
           !verified.sub ||
@@ -1117,7 +1125,10 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     if (typeof businessId !== "string") return;
 
     void refreshLocalDeliveryRooms(businessId).catch((error) =>
-      log.error({ err: error, businessId }, "delivery rooms could not be re-evaluated"),
+      log.error(
+        { err: error, businessId },
+        "delivery rooms could not be re-evaluated",
+      ),
     );
   });
 
@@ -1185,7 +1196,9 @@ const sendAIVerificationEvent = (userId: string, event: any) => {
           ? operationsRoom(hint.payload.businessId)
           : `business:${hint.payload.businessId}`;
 
-      io.to(room).to(MASTERS_ROOM).emit(AI_ANALYSIS_CHANGED_EVENT, hint.payload);
+      io.to(room)
+        .to(MASTERS_ROOM)
+        .emit(AI_ANALYSIS_CHANGED_EVENT, hint.payload);
     }
   } else {
     log.error("Socket.IO is not initialized yet");
@@ -1266,7 +1279,10 @@ const refreshDeliveryRooms = async (businessId: string): Promise<void> => {
     io.serverSideEmit(REFRESH_DELIVERY_ROOMS_EVENT, businessId);
   } catch (error) {
     // No cluster to tell: this replica is the only one, and it runs below.
-    log.error({ err: error, businessId }, "other replicas could not be told to re-evaluate rooms");
+    log.error(
+      { err: error, businessId },
+      "other replicas could not be told to re-evaluate rooms",
+    );
   }
 
   await refreshLocalDeliveryRooms(businessId);
@@ -1282,13 +1298,18 @@ const WHATSAPP_TEMPLATE_LANE_EVENT = "trajetto:whatsapp-template-lane";
  * like every adapter frame (ADR 0002): a replica that misses it learns the
  * pause from its own first refused send, as it always did.
  */
-const broadcastWhatsAppTemplateLaneChange = (change: TemplateLaneChange): void => {
+const broadcastWhatsAppTemplateLaneChange = (
+  change: TemplateLaneChange,
+): void => {
   if (!io) return;
 
   try {
     io.serverSideEmit(WHATSAPP_TEMPLATE_LANE_EVENT, change);
   } catch (error) {
-    log.warn({ err: error, ...change }, "other replicas could not be told about a whatsapp template");
+    log.warn(
+      { err: error, ...change },
+      "other replicas could not be told about a whatsapp template",
+    );
   }
 };
 
@@ -1346,7 +1367,10 @@ async function refreshLocalDeliveryRooms(businessId: string): Promise<void> {
         // costs one subscribe.
         leaveDeliveryRooms(socket);
 
-        log.error({ err: error, socketId: socket.id }, "dispatch access could not be re-evaluated");
+        log.error(
+          { err: error, socketId: socket.id },
+          "dispatch access could not be re-evaluated",
+        );
       }
     }),
   );
@@ -1370,7 +1394,10 @@ const sendSecurityEventToBusiness = (
     // `permissions_changed` removed a permission without touching the channel
     // the data leaves through.
     void refreshDeliveryRooms(businessId).catch((error) =>
-      log.error({ err: error, businessId }, "delivery rooms could not be re-evaluated"),
+      log.error(
+        { err: error, businessId },
+        "delivery rooms could not be re-evaluated",
+      ),
     );
   }
 };
@@ -1480,7 +1507,6 @@ interface RouteRealtimeEvent {
     // board has to say so — and the type has to name it, or the emit would
     // have to lie and call it a release.
     | "route.unreleased"
-
     | "route.started"
     | "route.cancelled"
     | "route.completed"
@@ -1759,7 +1785,12 @@ const sendChatReadEvent = (
   businessId: string,
   driverUserId: string | null,
   // ticketId: the cursor moved was a ticket's (decision 14.5).
-  event: { threadId: string; userId: string; last_read_at: string; ticketId?: string },
+  event: {
+    threadId: string;
+    userId: string;
+    last_read_at: string;
+    ticketId?: string;
+  },
 ) => {
   if (!io) return;
 
@@ -1812,9 +1843,7 @@ const sendChatDeliveredEvent = (
  * the unread badge refetches on every chat message. A page names at most a
  * page of drivers, and that is all the dots need.
  */
-async function getOnlineUserIds(
-  userIds: readonly string[],
-): Promise<string[]> {
+async function getOnlineUserIds(userIds: readonly string[]): Promise<string[]> {
   if (!io || userIds.length === 0) return [];
 
   const wanted = new Set(userIds);

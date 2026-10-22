@@ -114,7 +114,9 @@ function routeEventPayload(
 
     // The route's day is a civil date (decision 1.3): "2026-09-17", never an
     // instant an ERP would shift into its own zone and read as the 16th.
-    scheduled_date: route.scheduled_date ? dateOnlyKey(route.scheduled_date) : null,
+    scheduled_date: route.scheduled_date
+      ? dateOnlyKey(route.scheduled_date)
+      : null,
     destination: route.destination ?? null,
 
     // The planned window is a real instant (decision 1.4), sent in UTC.

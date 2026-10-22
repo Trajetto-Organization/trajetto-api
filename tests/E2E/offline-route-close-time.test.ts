@@ -251,7 +251,9 @@ describe("a route closed by a build that sends no time", () => {
 
     const route = await routeOf(routeId);
     expect(route.status).toBe("COMPLETED");
-    expect(route.completed_at!.getTime()).toBeGreaterThanOrEqual(before - 1_000);
+    expect(route.completed_at!.getTime()).toBeGreaterThanOrEqual(
+      before - 1_000,
+    );
     expect(route.completed_at!.getTime()).toBeLessThanOrEqual(after + 1_000);
   });
 });

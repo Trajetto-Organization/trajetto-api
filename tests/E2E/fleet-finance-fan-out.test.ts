@@ -50,7 +50,9 @@ const MANAGER = "018fe400-0000-7000-8000-0000000000a1";
 
 const BUDGET = 2;
 
-async function peakOf<T>(run: () => Promise<T>): Promise<{ peak: number; result: T }> {
+async function peakOf<T>(
+  run: () => Promise<T>,
+): Promise<{ peak: number; result: T }> {
   pool.inFlight = 0;
   pool.peak = 0;
 
@@ -107,8 +109,18 @@ beforeAll(async () => {
 
   await prisma.supplier.createMany({
     data: [
-      { name: "Oficina SP", cnpj: "11111111000111", uf: "SP", businessId: CARRIER },
-      { name: "Oficina MG", cnpj: "22222222000122", uf: "MG", businessId: CARRIER },
+      {
+        name: "Oficina SP",
+        cnpj: "11111111000111",
+        uf: "SP",
+        businessId: CARRIER,
+      },
+      {
+        name: "Oficina MG",
+        cnpj: "22222222000122",
+        uf: "MG",
+        businessId: CARRIER,
+      },
     ],
   });
 
@@ -150,8 +162,16 @@ describe("one screen, at most two connections", () => {
       useCase.execute({ userId: MANAGER, page: 1, pageSize: 10 }),
     );
 
-    expect(peak, `as contas a pagar ocuparam ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
-    expect(result.searchMeta).toMatchObject({ total: 3, open: 1, overdue: 1, paid: 1 });
+    expect(
+      peak,
+      `as contas a pagar ocuparam ${peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
+    expect(result.searchMeta).toMatchObject({
+      total: 3,
+      open: 1,
+      overdue: 1,
+      paid: 1,
+    });
   });
 
   it("the supplier list, with its cards", async () => {
@@ -164,7 +184,10 @@ describe("one screen, at most two connections", () => {
       useCase.execute({ userId: MANAGER, page: 1, pageSize: 10 }),
     );
 
-    expect(peak, `os fornecedores ocuparam ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(
+      peak,
+      `os fornecedores ocuparam ${peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
     expect(result.total).toBe(2);
     expect(result.searchMeta.topStates).toBe("MG (1), SP (1)");
   });

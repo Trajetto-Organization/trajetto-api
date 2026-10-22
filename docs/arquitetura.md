@@ -44,11 +44,11 @@ dois módulos contratados separadamente por empresa:
   PDF assinado, atendimento por ticket (chat), mensagens ao cliente final e a
   API pública com webhooks.
 
-| Repositório (GitHub)                                | O que é                                                           | Tecnologia                                                             |
-| --------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `trajetto-api` (este)                               | API HTTP, tempo real, filas, crons, IA local, backup              | Node.js 22, Fastify 5, Prisma 6, PostgreSQL 16, Redis 7, tsyringe, zod |
-| `trajetto-fleet-manager-ui` (`trajetto-ui`)         | painel web (`/dashboard`, `/admin`), site público, portal `/docs` | Next.js 14 (App Router)                                                |
-| `trajetto-fleet-manager-mobile` (`trajetto-mobile`) | app de campo do motorista, só Android                             | Expo / React Native                                                    |
+| Repositório (GitHub)                  | O que é                                                           | Tecnologia                                                             |
+| ------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `trajetto-api` (este)                 | API HTTP, tempo real, filas, crons, IA local, backup              | Node.js 22, Fastify 5, Prisma 6, PostgreSQL 16, Redis 7, tsyringe, zod |
+| `trajetto-ui` (`trajetto-ui`)         | painel web (`/dashboard`, `/admin`), site público, portal `/docs` | Next.js 14 (App Router)                                                |
+| `trajetto-mobile` (`trajetto-mobile`) | app de campo do motorista, só Android                             | Expo / React Native                                                    |
 
 A escala alvo usada nas decisões de capacidade: milhares de transportadoras
 (cada uma um tenant), dezenas de milhares de motoristas e milhões de entregas
@@ -67,14 +67,17 @@ por mês.
                      ▼               ▼                  ▼              ▼
                PostgreSQL 16     Redis 7         trajetto-ai      Cloudflare R2
            dados + filas + crons  rate limit +   (OCR local,       (fotos, PDFs;
-                                  pub/sub do     rede interna)     URLs assinadas)
+                                  pub/sub do     sem domínio)      URLs assinadas)
                                   Socket.IO
 ```
 
 Saídas para fora: Meta (WhatsApp Cloud API), Resend (e-mail), Expo (push), os
 endpoints de webhook dos clientes, o provedor de tiles e de geocodificação do
-comprovante, e o heartbeat de monitoramento. A topologia de produção (Swarm,
-redes, réplicas, limites) está em [`deploy.md`](./deploy.md#4-a-topologia-no-servidor).
+comprovante, e o heartbeat de monitoramento. Em staging e produção cada caixa
+do desenho é um serviço próprio do Dokploy (Docker Swarm): a API, a IA e o
+backup como Applications que puxam a imagem do GHCR, o PostgreSQL e o Redis
+como Databases do Dokploy, todos na rede `dokploy-network`. A topologia
+(nomes, réplicas, limites) está em [`deploy.md`](./deploy.md#4-a-topologia-no-servidor).
 
 ## Estrutura do código
 
@@ -193,12 +196,12 @@ migra e semeia se `RUN_MIGRATIONS_ON_BOOT=true`, e faz `exec` do servidor —
 o Node é filho direto do `dumb-init`, então o SIGTERM do deploy chega a ele.
 
 O desligamento é ordenado (`src/shared/lifecycle/shutdown.ts`): a readiness
-passa a 503, a réplica espera 12 s para o Traefik tirá-la do balanceamento,
+passa a 503, a réplica espera 12 s para sair do balanceamento do serviço,
 fecha o tempo real, o HTTP, os workers e o Redis, com teto de 35 s (abaixo dos
-40 s do `stop_grace_period`).
+40 s do _Stop Grace Period_ da Application no Dokploy).
 
 Separar workers do HTTP é possível com a mesma imagem (`WORKERS_ENABLED=false`
-nas réplicas HTTP e um serviço `worker`), só por gatilho medido:
+nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
 [`deploy.md`](./deploy.md#19-réplicas-workers-e-tempo-real).
 
 ## Regras transversais
@@ -318,7 +321,7 @@ autorização é relida do banco a cada inscrição e revalidada periodicamente
 verdade está no banco e as telas refazem a consulta ao reconectar. Mudanças de
 catálogo emitem `catalogChanged` `{ businessId, entity }` depois do commit, e
 a web invalida a lista daquela entidade. `SOCKET_ADAPTER_KEY` separa os canais
-de duas stacks que dividam um Redis (Pub/Sub ignora o número do banco).
+de dois ambientes que dividam um Redis (Pub/Sub ignora o número do banco).
 
 **Escala horizontal** (ADR 0008): N réplicas idênticas atrás do Traefik, sem
 cookie sticky; o estado está no Postgres; os crons e as filas não duplicam
@@ -408,8 +411,9 @@ OpenStreetMap são recusados.
 
 ## Conexão com o Postgres
 
-A `DATABASE_URL` do serviço `api` em produção (só o servidor; migrations e
-seeds usam `MIGRATION_DATABASE_URL`):
+A `DATABASE_URL` da Application `trajetto-api` em staging e produção (só o
+servidor; migrations e seeds usam `MIGRATION_DATABASE_URL`; a URL inteira, para
+copiar, está em [`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md#2-banco-de-dados)):
 
 | Parâmetro                      | Valor                                                                                 | Por quê                                                                                                                                                                                                                         |
 | ------------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -426,8 +430,8 @@ os fluxos sem FIN nem RST), `tests/E2E/runtime-database-timeouts.test.ts` e
 
 **A readiness tem conexão própria**: `/health/readiness` faz `SELECT 1` num
 `PrismaClient` separado (`connection_limit=1`, timeouts de 2–3 s) e responde
-em até 3 s, abaixo dos 5 s do Traefik. Um pool principal cheio não tira as
-duas réplicas do balanceador; depois de um "não", a probe fecha a conexão
+em até 3 s, abaixo do timeout de 5 s dos monitores. Um pool principal cheio
+não faz a réplica parecer fora do ar; depois de um "não", a probe fecha a conexão
 (`$disconnect()`) e a próxima abre outra no mesmo client (um client novo por
 "não" retinha ~2,3 MB de memória nativa cada).
 
@@ -435,9 +439,10 @@ duas réplicas do balanceador; depois de um "não", a probe fecha a conexão
 statement já preparado; preparar um statement novo numa conexão cujo par
 morreu espera o kernel (`net.ipv4.tcp_retries2=15` ≈ 15 min). O caso comum (o
 IPVS esquecendo um fluxo ocioso) já é coberto por
-`max_idle_connection_lifetime`. Opcional: `sysctls: net.ipv4.tcp_retries2: "8"`
-no serviço `api` (~100 s), depois de conferir no nó que o Docker aceita
-(`docker run --rm --sysctl net.ipv4.tcp_retries2=8 alpine cat /proc/sys/net/ipv4/tcp_retries2`).
+`max_idle_connection_lifetime`. Baixar `net.ipv4.tcp_retries2` para `8`
+(~100 s) só na API exigiria um sysctl por contêiner, que a Application do
+Dokploy não expõe; no host inteiro (`sysctl -w net.ipv4.tcp_retries2=8` e
+`/etc/sysctl.d/`) vale para tudo, inclusive o Postgres — decisão a medir antes.
 
 ## Migrations: expandir e contrair
 
@@ -557,7 +562,7 @@ Regras de implementação que vieram dessa análise:
 | Rota                                                                                       | Para quê                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /health/liveness`                                                                     | o processo está vivo (não toca dependências; é a sonda do Swarm)                                                                                                                                                                              |
-| `GET /health/readiness`                                                                    | pode receber tráfego (a sonda do Traefik; 503 no desligamento)                                                                                                                                                                                |
+| `GET /health/readiness`                                                                    | pode receber tráfego (a sonda dos monitores externos; 503 no desligamento)                                                                                                                                                                    |
 | `GET /health/metrics` (MASTER)                                                             | conexões do Postgres, filas e atraso do outbox, backlog de IA e de notificações, workers e crons de cada réplica, partições, provedores (latência e erro), sockets, Redis, pool, contratos antigos do app ainda em uso, estado do certificado |
 | `GET /health/providers` (MASTER)                                                           | prontidão de Resend, Meta, Expo, R2, trajetto-ai, certificado e heartbeat, sem enviar nada                                                                                                                                                    |
 | `GET /health/dead-letter`, `/health/dead-letter/events`, `POST /health/dead-letter/replay` | o que esgotou as tentativas, e o reenvio                                                                                                                                                                                                      |

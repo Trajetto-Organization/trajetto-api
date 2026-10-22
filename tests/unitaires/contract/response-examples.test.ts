@@ -6,7 +6,10 @@ import type { ZodTypeAny } from "zod";
 import { documentedDocFor } from "@/routes/documentation/doc-only-responses";
 
 import { strictIssues } from "./support/deep-strict";
-import { introspectRoutes, type IntrospectedRoute } from "./support/introspect-routes";
+import {
+  introspectRoutes,
+  type IntrospectedRoute,
+} from "./support/introspect-routes";
 
 /**
  * The success bodies an integrator and the driver's app live on, shown by
@@ -45,8 +48,14 @@ afterAll(async () => {
   await close?.();
 });
 
-function successOf(route: IntrospectedRoute): { status: string; runtime: ZodTypeAny } {
-  const responses = (route.schema?.response ?? {}) as Record<string, ZodTypeAny>;
+function successOf(route: IntrospectedRoute): {
+  status: string;
+  runtime: ZodTypeAny;
+} {
+  const responses = (route.schema?.response ?? {}) as Record<
+    string,
+    ZodTypeAny
+  >;
   const status = Object.keys(responses).find((code) => /^2\d\d$/.test(code));
 
   if (!status) throw new Error(`${route.id}: sem resposta 2xx declarada`);
@@ -61,7 +70,9 @@ function publishedExample(route: IntrospectedRoute, status: string): unknown {
 }
 
 function covered(): IntrospectedRoute[] {
-  const publicApi = routes.filter((route) => route.url.startsWith("/integration/v1/"));
+  const publicApi = routes.filter((route) =>
+    route.url.startsWith("/integration/v1/"),
+  );
 
   const driver = DRIVER_LOOP.map((id) => {
     const route = routes.find((candidate) => candidate.id === id);
@@ -80,13 +91,16 @@ describe("the 2xx of the public API and of the driver's loop", () => {
 
     // Six public reads today; a vacuous pass would guard nothing.
     expect(
-      routesCovered.filter((route) => route.url.startsWith("/integration/v1/")).length,
+      routesCovered.filter((route) => route.url.startsWith("/integration/v1/"))
+        .length,
     ).toBeGreaterThanOrEqual(6);
 
     const missing = routesCovered
       .filter((route) => {
         const { status } = successOf(route);
-        const media = publishedExample(route, status) as { example?: unknown } | undefined;
+        const media = publishedExample(route, status) as
+          | { example?: unknown }
+          | undefined;
 
         return media?.example === undefined;
       })
@@ -98,7 +112,9 @@ describe("the 2xx of the public API and of the driver's loop", () => {
   it("shows a body the schema describes, field for field", () => {
     const wrong = covered().flatMap((route) => {
       const { status, runtime } = successOf(route);
-      const media = publishedExample(route, status) as { example?: unknown } | undefined;
+      const media = publishedExample(route, status) as
+        | { example?: unknown }
+        | undefined;
 
       if (media?.example === undefined) return [];
 
@@ -116,13 +132,17 @@ describe("the 2xx of the public API and of the driver's loop", () => {
   it("is what the serializer would send for it: nothing stripped, nothing added", () => {
     const changed = covered().flatMap((route) => {
       const { status, runtime } = successOf(route);
-      const media = publishedExample(route, status) as { example?: unknown } | undefined;
+      const media = publishedExample(route, status) as
+        | { example?: unknown }
+        | undefined;
 
       if (media?.example === undefined) return [];
 
       const sent = JSON.parse(JSON.stringify(runtime.parse(media.example)));
 
-      return JSON.stringify(sent) === JSON.stringify(media.example) ? [] : [route.id];
+      return JSON.stringify(sent) === JSON.stringify(media.example)
+        ? []
+        : [route.id];
     });
 
     expect(changed).toEqual([]);

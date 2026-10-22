@@ -135,7 +135,10 @@ class CreateAccountPayableUseCase {
       // Bill and outbox event commit together; the pipeline notifies the
       // responsible user and records the activity after the commit.
       accountPayableCreated = await database.$transaction(async (tx) => {
-        const created = await this.accountPayable.createAccountPayable(data, tx);
+        const created = await this.accountPayable.createAccountPayable(
+          data,
+          tx,
+        );
 
         await this.outbox.publish(tx, {
           topic: "account-payable.created",

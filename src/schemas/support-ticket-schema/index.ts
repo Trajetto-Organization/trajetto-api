@@ -11,7 +11,13 @@ import {
  * (actions/chat/tickets) and the app (features/chat).
  */
 
-const SUPPORT_TICKET_KINDS = ["OCCURRENCE", "DELIVERY", "ROUTE", "DRIVER", "LEGACY"] as const;
+const SUPPORT_TICKET_KINDS = [
+  "OCCURRENCE",
+  "DELIVERY",
+  "ROUTE",
+  "DRIVER",
+  "LEGACY",
+] as const;
 
 const SUPPORT_TICKET_CLOSE_NOTE_MAX = 500;
 const SUPPORT_TICKET_SUBJECT_MIN = 3;
@@ -20,7 +26,9 @@ const SUPPORT_TICKET_SUBJECT_MAX = 160;
 const uuid = (message: string) => z.string().uuid(message);
 
 const ticketParamsSchema = z.object({
-  ticketId: uuid("ID do atendimento é inválido.").describe("O atendimento (ticket)."),
+  ticketId: uuid("ID do atendimento é inválido.").describe(
+    "O atendimento (ticket).",
+  ),
 });
 
 const businessIdField = uuid("ID da empresa é inválido.")
@@ -44,12 +52,22 @@ const listSupportTicketsSchema = z.object({
       "MINE: atribuídos a mim. UNASSIGNED: abertos sem atendente. PENDING_AUTHORIZATION: ocorrência aguardando autorização. Ignorado para o motorista.",
     ),
   kind: z
-    .enum(SUPPORT_TICKET_KINDS, { errorMap: () => ({ message: "Tipo de atendimento inválido." }) })
+    .enum(SUPPORT_TICKET_KINDS, {
+      errorMap: () => ({ message: "Tipo de atendimento inválido." }),
+    })
     .optional()
-    .describe("OCCURRENCE, DELIVERY, ROUTE, DRIVER (geral) ou LEGACY (conversa anterior)."),
-  driverId: uuid("ID do motorista é inválido.").optional().describe("Só os atendimentos deste motorista."),
-  deliveryId: uuid("ID da entrega é inválido.").optional().describe("Só os atendimentos desta entrega."),
-  routeId: uuid("ID da rota é inválido.").optional().describe("Só os atendimentos desta rota."),
+    .describe(
+      "OCCURRENCE, DELIVERY, ROUTE, DRIVER (geral) ou LEGACY (conversa anterior).",
+    ),
+  driverId: uuid("ID do motorista é inválido.")
+    .optional()
+    .describe("Só os atendimentos deste motorista."),
+  deliveryId: uuid("ID da entrega é inválido.")
+    .optional()
+    .describe("Só os atendimentos desta entrega."),
+  routeId: uuid("ID da rota é inválido.")
+    .optional()
+    .describe("Só os atendimentos desta rota."),
   occurrenceId: uuid("ID da ocorrência é inválido.")
     .optional()
     .describe("O atendimento desta ocorrência."),
@@ -59,7 +77,12 @@ const listSupportTicketsSchema = z.object({
     .max(100, "A busca pode ter no máximo 100 caracteres.")
     .optional()
     .describe("Assunto, nome do motorista, destinatário ou #número."),
-  page: z.coerce.number().int().min(1).default(1).describe("Página, a partir de 1."),
+  page: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(1)
+    .describe("Página, a partir de 1."),
   pageSize: z.coerce
     .number()
     .int()
@@ -79,7 +102,10 @@ const ticketMessageBodySchema = z
     body: z
       .string()
       .trim()
-      .max(CHAT_MESSAGE_MAX_LENGTH, `A mensagem deve ter no máximo ${CHAT_MESSAGE_MAX_LENGTH} caracteres.`)
+      .max(
+        CHAT_MESSAGE_MAX_LENGTH,
+        `A mensagem deve ter no máximo ${CHAT_MESSAGE_MAX_LENGTH} caracteres.`,
+      )
       .optional(),
     attachmentKey: z.string().max(512).optional(),
     durationMs: z
@@ -128,17 +154,25 @@ const openSupportTicketSchema = z.object({
   deliveryId: uuid("ID da entrega é inválido.")
     .optional()
     .describe("Atendimento sobre esta entrega (exclusivo com routeId)."),
-  routeId: uuid("ID da rota é inválido.").optional().describe("Atendimento sobre esta rota."),
+  routeId: uuid("ID da rota é inválido.")
+    .optional()
+    .describe("Atendimento sobre esta rota."),
   occurrenceId: uuid("ID da ocorrência é inválido.")
     .optional()
     .describe(
-      "Só a central: \"Abrir atendimento\" de uma ocorrência sem atendimento. Exige a entrega da própria ocorrência.",
+      'Só a central: "Abrir atendimento" de uma ocorrência sem atendimento. Exige a entrega da própria ocorrência.',
     ),
   subject: z
     .string()
     .trim()
-    .min(SUPPORT_TICKET_SUBJECT_MIN, `O assunto deve ter ao menos ${SUPPORT_TICKET_SUBJECT_MIN} caracteres.`)
-    .max(SUPPORT_TICKET_SUBJECT_MAX, `O assunto deve ter no máximo ${SUPPORT_TICKET_SUBJECT_MAX} caracteres.`)
+    .min(
+      SUPPORT_TICKET_SUBJECT_MIN,
+      `O assunto deve ter ao menos ${SUPPORT_TICKET_SUBJECT_MIN} caracteres.`,
+    )
+    .max(
+      SUPPORT_TICKET_SUBJECT_MAX,
+      `O assunto deve ter no máximo ${SUPPORT_TICKET_SUBJECT_MAX} caracteres.`,
+    )
     .optional()
     .describe("Obrigatório para um atendimento geral aberto pela central."),
   message: ticketMessageBodySchema
@@ -170,7 +204,9 @@ const assignSupportTicketSchema = z.object({
   expectedAssigneeId: uuid("ID do atendente é inválido.")
     .nullable()
     .optional()
-    .describe("O atendente que a tela mostrava; se mudou, 409 SUPPORT_TICKET_ASSIGNEE_CHANGED."),
+    .describe(
+      "O atendente que a tela mostrava; se mudou, 409 SUPPORT_TICKET_ASSIGNEE_CHANGED.",
+    ),
 });
 
 const reopenSupportTicketSchema = z.object({
@@ -178,7 +214,10 @@ const reopenSupportTicketSchema = z.object({
   note: z
     .string()
     .trim()
-    .max(SUPPORT_TICKET_CLOSE_NOTE_MAX, `A observação pode ter no máximo ${SUPPORT_TICKET_CLOSE_NOTE_MAX} caracteres.`)
+    .max(
+      SUPPORT_TICKET_CLOSE_NOTE_MAX,
+      `A observação pode ter no máximo ${SUPPORT_TICKET_CLOSE_NOTE_MAX} caracteres.`,
+    )
     .optional(),
 });
 

@@ -78,7 +78,9 @@ class CreateDriverUseCase {
 
     // CPF and CNH are unique per company (decision 8.1): only this company's
     // drivers are asked, so the answer can never say anything about another.
-    if (await this.driver.findDriverByCpf(driverData.cpf, driverData.businessId)) {
+    if (
+      await this.driver.findDriverByCpf(driverData.cpf, driverData.businessId)
+    ) {
       throw new DriverCpfAlreadyExistsError();
     }
 
@@ -86,7 +88,9 @@ class CreateDriverUseCase {
     // was never an identity (the CPF is). Its unique was dropped in
     // 20260924090400_tenant_scoped_uniques.
 
-    if (await this.driver.findDriverByCnh(driverData.cnh, driverData.businessId)) {
+    if (
+      await this.driver.findDriverByCnh(driverData.cnh, driverData.businessId)
+    ) {
       throw new DriverLicenseAlreadyExistsError();
     }
 

@@ -63,7 +63,11 @@ describe("a signature during a rotation", () => {
 
     expect(signed.header.match(/v1=/g)).toHaveLength(1);
     expect(
-      verifyWebhookSignature({ secret: "whsec_new", body, header: signed.header }),
+      verifyWebhookSignature({
+        secret: "whsec_new",
+        body,
+        header: signed.header,
+      }),
     ).toBe(true);
   });
 });

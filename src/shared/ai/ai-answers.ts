@@ -119,7 +119,10 @@ const answerSchemas = {
     observacao: freeText,
   }),
   condition: z.object({
-    condicao_observada: z.preprocess(normalizeChoice, z.enum(CONDITION_CHOICES)),
+    condicao_observada: z.preprocess(
+      normalizeChoice,
+      z.enum(CONDITION_CHOICES),
+    ),
     confianca: unitScore,
     observacao: freeText,
   }),
@@ -135,9 +138,13 @@ const answerSchemas = {
     tem_assinatura: verdict,
     // False when the reader cannot see a signature at all (OCR): the
     // signature then stays for a person, whatever the screen signature says.
-    assinatura_avaliada: flag.optional().transform((assessed) => assessed ?? true),
+    assinatura_avaliada: flag
+      .optional()
+      .transform((assessed) => assessed ?? true),
     // Shown to the reviewer, never decided on: may be missing.
-    nome_recebedor_lido: transcription.optional().transform((name) => name ?? null),
+    nome_recebedor_lido: transcription
+      .optional()
+      .transform((name) => name ?? null),
     legivel: verdict,
     qualidade_foto: unitScore,
     confianca: unitScore,
@@ -150,7 +157,10 @@ const answerSchemas = {
  * judged fraud and the signature at all. A model's prompt does not list
  * them; an answer without them counts as judged.
  */
-const READER_DECLARED_KEYS = ["fraude_avaliada", "assinatura_avaliada"] as const;
+const READER_DECLARED_KEYS = [
+  "fraude_avaliada",
+  "assinatura_avaliada",
+] as const;
 
 type OdometerAnswer = z.infer<typeof answerSchemas.odometer>;
 type FuelLevelAnswer = z.infer<typeof answerSchemas.fuel_level>;

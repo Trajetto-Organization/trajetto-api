@@ -31,8 +31,12 @@ describe.each([
   });
 
   it("refuses anything above R$ 50,00", () => {
-    expect(priceIssues(schema, 50.001)).toEqual(["O preço por litro não pode exceder R$ 50,00."]);
-    expect(priceIssues(schema, "599")).toEqual(["O preço por litro não pode exceder R$ 50,00."]);
+    expect(priceIssues(schema, 50.001)).toEqual([
+      "O preço por litro não pode exceder R$ 50,00.",
+    ]);
+    expect(priceIssues(schema, "599")).toEqual([
+      "O preço por litro não pode exceder R$ 50,00.",
+    ]);
   });
 
   it("refuses zero and negatives", () => {

@@ -34,7 +34,8 @@ function prioritiesFromSearch(term: string): string[] {
   if (PRIORITY_MAPPING[normalized]) return [PRIORITY_MAPPING[normalized]];
 
   for (const [word, priority] of Object.entries(PRIORITY_MAPPING)) {
-    if (word.includes(normalized) || normalized.includes(word)) return [priority];
+    if (word.includes(normalized) || normalized.includes(word))
+      return [priority];
   }
 
   return [];
@@ -90,7 +91,9 @@ class InMemoryKanbanRepository implements IKanbanRepository {
   public users = new Map<string, AssignableUser>();
 
   private toCard(card: StoredCard): KanbanCard {
-    const user = card.assignedUserId ? this.users.get(card.assignedUserId) : undefined;
+    const user = card.assignedUserId
+      ? this.users.get(card.assignedUserId)
+      : undefined;
 
     return {
       ...card,
@@ -107,7 +110,9 @@ class InMemoryKanbanRepository implements IKanbanRepository {
       .sort((a, b) => a.position - b.position);
   }
 
-  private compact<T extends { position: number; created_at: Date; id: string }>(rows: T[]): void {
+  private compact<T extends { position: number; created_at: Date; id: string }>(
+    rows: T[],
+  ): void {
     rows
       .sort(
         (a, b) =>
@@ -120,14 +125,17 @@ class InMemoryKanbanRepository implements IKanbanRepository {
       });
   }
 
-  async createColumn(columnData: CreateKanbanColumnProps): Promise<KanbanColumn> {
+  async createColumn(
+    columnData: CreateKanbanColumnProps,
+  ): Promise<KanbanColumn> {
     const column: StoredColumn = {
       id: uuidV7(),
       title: columnData.title,
       color: columnData.color,
       businessId: columnData.businessId,
       position:
-        columnData.position ?? (await this.getNextColumnPosition(columnData.businessId)),
+        columnData.position ??
+        (await this.getNextColumnPosition(columnData.businessId)),
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -137,13 +145,17 @@ class InMemoryKanbanRepository implements IKanbanRepository {
     return { ...column };
   }
 
-  async updateColumn({ columnData, columnId }: UpdateKanbanColumn): Promise<KanbanColumn> {
+  async updateColumn({
+    columnData,
+    columnId,
+  }: UpdateKanbanColumn): Promise<KanbanColumn> {
     const column = this.columns.find((item) => item.id === columnId);
 
     if (!column) throw new KanbanColumnNotFoundError();
 
     for (const [key, value] of Object.entries(columnData)) {
-      if (value !== undefined) (column as unknown as Record<string, unknown>)[key] = value;
+      if (value !== undefined)
+        (column as unknown as Record<string, unknown>)[key] = value;
     }
 
     column.updated_at = new Date();
@@ -161,7 +173,9 @@ class InMemoryKanbanRepository implements IKanbanRepository {
     // ON DELETE CASCADE.
     this.cards = this.cards.filter((card) => card.columnId !== columnId);
 
-    this.compact(this.columns.filter((item) => item.businessId === column.businessId));
+    this.compact(
+      this.columns.filter((item) => item.businessId === column.businessId),
+    );
 
     return { ...column };
   }
@@ -186,7 +200,9 @@ class InMemoryKanbanRepository implements IKanbanRepository {
     const priorities = term ? prioritiesFromSearch(term) : [];
 
     const cardMatches = (card: StoredCard): boolean => {
-      const user = card.assignedUserId ? this.users.get(card.assignedUserId) : undefined;
+      const user = card.assignedUserId
+        ? this.users.get(card.assignedUserId)
+        : undefined;
 
       return (
         contains(card.id, term) ||
@@ -217,7 +233,9 @@ class InMemoryKanbanRepository implements IKanbanRepository {
 
     if (filterByUserId) {
       columns = columns.filter((column) =>
-        this.cardsOf(column.id).some((card) => card.assignedUserId === filterByUserId),
+        this.cardsOf(column.id).some(
+          (card) => card.assignedUserId === filterByUserId,
+        ),
       );
     }
 
@@ -238,7 +256,8 @@ class InMemoryKanbanRepository implements IKanbanRepository {
       const columnMatches = term !== "" && contains(column.title, term);
 
       const shown = all.filter((card) => {
-        if (filterByUserId && card.assignedUserId !== filterByUserId) return false;
+        if (filterByUserId && card.assignedUserId !== filterByUserId)
+          return false;
         if (!term || columnMatches) return true;
 
         return cardMatches(card);
@@ -259,7 +278,9 @@ class InMemoryKanbanRepository implements IKanbanRepository {
   }
 
   async reorderColumns(data: ReorderKanbanColumnsProps): Promise<void> {
-    const found = data.columns.map(({ id }) => this.columns.find((item) => item.id === id));
+    const found = data.columns.map(({ id }) =>
+      this.columns.find((item) => item.id === id),
+    );
 
     // One transaction there: a missing column changes nothing.
     if (found.some((column) => !column)) {
@@ -271,7 +292,9 @@ class InMemoryKanbanRepository implements IKanbanRepository {
     });
   }
 
-  async getFirstColumnByBusinessId(businessId: string): Promise<KanbanColumn | null> {
+  async getFirstColumnByBusinessId(
+    businessId: string,
+  ): Promise<KanbanColumn | null> {
     const [first] = this.columns
       .filter((column) => column.businessId === businessId)
       .sort((a, b) => a.position - b.position);
@@ -279,7 +302,10 @@ class InMemoryKanbanRepository implements IKanbanRepository {
     return first ? { ...first } : null;
   }
 
-  async createCard(cardData: CreateKanbanCardProps, _tx?: unknown): Promise<KanbanCard> {
+  async createCard(
+    cardData: CreateKanbanCardProps,
+    _tx?: unknown,
+  ): Promise<KanbanCard> {
     if (!this.columns.some((column) => column.id === cardData.columnId)) {
       throw new KanbanColumnNotFoundError();
     }
@@ -293,7 +319,9 @@ class InMemoryKanbanRepository implements IKanbanRepository {
       columnId: cardData.columnId,
       assignedUserId: cardData.assignedUserId ?? null,
       completed: cardData.completed || false,
-      position: cardData.position ?? (await this.getNextCardPosition(cardData.columnId)),
+      position:
+        cardData.position ??
+        (await this.getNextCardPosition(cardData.columnId)),
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -303,7 +331,10 @@ class InMemoryKanbanRepository implements IKanbanRepository {
     return this.toCard(card);
   }
 
-  async updateCard({ cardData, cardId }: UpdateKanbanCard, _tx?: unknown): Promise<KanbanCard> {
+  async updateCard(
+    { cardData, cardId }: UpdateKanbanCard,
+    _tx?: unknown,
+  ): Promise<KanbanCard> {
     const card = this.cards.find((item) => item.id === cardId);
 
     if (!card) throw new KanbanCardNotFoundError();
@@ -352,8 +383,12 @@ class InMemoryKanbanRepository implements IKanbanRepository {
   }
 
   /** Every card and target column of a move, or the repository's refusal. */
-  private resolveMove(moves: Array<{ id: string; columnId: string }>): StoredCard[] {
-    const cards = moves.map(({ id }) => this.cards.find((item) => item.id === id));
+  private resolveMove(
+    moves: Array<{ id: string; columnId: string }>,
+  ): StoredCard[] {
+    const cards = moves.map(({ id }) =>
+      this.cards.find((item) => item.id === id),
+    );
 
     if (cards.some((card) => !card)) throw new KanbanCardNotFoundError();
 
@@ -377,7 +412,9 @@ class InMemoryKanbanRepository implements IKanbanRepository {
   }
 
   async moveCardToColumn(data: MoveCardToColumnProps): Promise<KanbanCard> {
-    const [card] = this.resolveMove([{ id: data.cardId, columnId: data.targetColumnId }]);
+    const [card] = this.resolveMove([
+      { id: data.cardId, columnId: data.targetColumnId },
+    ]);
 
     card.columnId = data.targetColumnId;
     card.position = data.position;

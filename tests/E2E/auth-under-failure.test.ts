@@ -228,7 +228,9 @@ describe("a bug in the session check", () => {
     const original = UserRepository.prototype.findUserById;
 
     UserRepository.prototype.findUserById = async () => {
-      throw new TypeError("Cannot read properties of undefined (reading 'role')");
+      throw new TypeError(
+        "Cannot read properties of undefined (reading 'role')",
+      );
     };
 
     try {

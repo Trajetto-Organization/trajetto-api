@@ -21,7 +21,8 @@ import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
  */
 const prisma = new PrismaClient();
 
-const id = (suffix: string) => `018fe000-0000-7000-8000-${suffix.padStart(12, "0")}`;
+const id = (suffix: string) =>
+  `018fe000-0000-7000-8000-${suffix.padStart(12, "0")}`;
 
 const A = id("a");
 const B = id("b");
@@ -81,11 +82,26 @@ const DELIVERIES = [
   deliveryRow(DELIVERY_RELEASED, null),
 ];
 
-const ROUTES = [routeRow(RUNNING, 1, "IN_PROGRESS"), routeRow(RELEASED, 2, "RELEASED")];
+const ROUTES = [
+  routeRow(RUNNING, 1, "IN_PROGRESS"),
+  routeRow(RELEASED, 2, "RELEASED"),
+];
 
 const STOPS = [
-  { id: STOP, routeId: RUNNING, deliveryId: DELIVERY, sequence: 10, status: "PENDING" },
-  { id: STOP_2, routeId: RUNNING, deliveryId: DELIVERY_2, sequence: 20, status: "PENDING" },
+  {
+    id: STOP,
+    routeId: RUNNING,
+    deliveryId: DELIVERY,
+    sequence: 10,
+    status: "PENDING",
+  },
+  {
+    id: STOP_2,
+    routeId: RUNNING,
+    deliveryId: DELIVERY_2,
+    sequence: 20,
+    status: "PENDING",
+  },
   {
     id: STOP_RELEASED,
     routeId: RELEASED,
@@ -138,7 +154,9 @@ beforeAll(async () => {
     });
   }
 
-  await prisma.shipper.create({ data: { id: SHIPPER, name: "Embarcador", businessId: A } });
+  await prisma.shipper.create({
+    data: { id: SHIPPER, name: "Embarcador", businessId: A },
+  });
 
   await prisma.driver.create({
     data: {
@@ -210,8 +228,21 @@ const both = () =>
 describe("reads", () => {
   it("finds the stop with its route and delivery, in both", async () => {
     const expected = {
-      stop: { id: STOP, routeId: RUNNING, deliveryId: DELIVERY, status: "PENDING", on_the_way_at: null },
-      route: { id: RUNNING, code: 1, businessId: A, driverId: DRIVER, status: "IN_PROGRESS", started_at: STARTED },
+      stop: {
+        id: STOP,
+        routeId: RUNNING,
+        deliveryId: DELIVERY,
+        status: "PENDING",
+        on_the_way_at: null,
+      },
+      route: {
+        id: RUNNING,
+        code: 1,
+        businessId: A,
+        driverId: DRIVER,
+        status: "IN_PROGRESS",
+        started_at: STARTED,
+      },
       delivery: expect.objectContaining({
         id: DELIVERY,
         businessId: A,
@@ -223,7 +254,9 @@ describe("reads", () => {
     };
 
     for (const [name, repository] of both()) {
-      expect(await repository.findTarget(STOP, RUNNING, A), name).toEqual(expected);
+      expect(await repository.findTarget(STOP, RUNNING, A), name).toEqual(
+        expected,
+      );
     }
   });
 
@@ -262,7 +295,9 @@ describe("reads", () => {
       });
 
       expect(
-        await inTransaction(repository, (tx) => repository.lockForMark(STOP, RUNNING, B, tx)),
+        await inTransaction(repository, (tx) =>
+          repository.lockForMark(STOP, RUNNING, B, tx),
+        ),
         name,
       ).toBeNull();
     }
@@ -286,11 +321,14 @@ describe("the write", () => {
 
   it("stamps the stop and records the event with the route, in both", async () => {
     for (const [name, repository] of both()) {
-      await inTransaction(repository, (tx) => repository.applyMark(input(), tx));
-
-      expect((await repository.findTarget(STOP, RUNNING, A))?.stop.on_the_way_at, name).toEqual(
-        MARKED,
+      await inTransaction(repository, (tx) =>
+        repository.applyMark(input(), tx),
       );
+
+      expect(
+        (await repository.findTarget(STOP, RUNNING, A))?.stop.on_the_way_at,
+        name,
+      ).toEqual(MARKED);
 
       expect(await repository.findBySubmission(id("71"), A), name).toEqual({
         type: "ON_THE_WAY",
@@ -304,7 +342,11 @@ describe("the write", () => {
       where: { client_submission_id: id("71") },
     });
 
-    expect(event).toMatchObject({ actor: "DRIVER_APP", businessId: A, latitude: -15.6 });
+    expect(event).toMatchObject({
+      actor: "DRIVER_APP",
+      businessId: A,
+      latitude: -15.6,
+    });
   });
 
   it("refuses a used submission id with the unique violation, and changes nothing", async () => {
@@ -314,14 +356,22 @@ describe("the write", () => {
       const error = await failure(
         inTransaction(repository, (tx) =>
           repository.applyMark(
-            input({ stopId: STOP_2, deliveryId: DELIVERY_2, stopOnTheWayAt: later, client_submission_id: USED_KEY }),
+            input({
+              stopId: STOP_2,
+              deliveryId: DELIVERY_2,
+              stopOnTheWayAt: later,
+              client_submission_id: USED_KEY,
+            }),
             tx,
           ),
         ),
       );
 
       expect(violatesUniqueOn(error, "client_submission_id"), name).toBe(true);
-      expect((await repository.findTarget(STOP_2, RUNNING, A))?.stop.on_the_way_at, name).toBeNull();
+      expect(
+        (await repository.findTarget(STOP_2, RUNNING, A))?.stop.on_the_way_at,
+        name,
+      ).toBeNull();
     }
   });
 
@@ -346,7 +396,12 @@ describe("the write", () => {
       const foreign = await failure(
         inTransaction(repository, (tx) =>
           repository.applyMark(
-            input({ stopId: STOP_2, deliveryId: DELIVERY_2, businessId: B, client_submission_id: id("73") }),
+            input({
+              stopId: STOP_2,
+              deliveryId: DELIVERY_2,
+              businessId: B,
+              client_submission_id: id("73"),
+            }),
             tx,
           ),
         ),

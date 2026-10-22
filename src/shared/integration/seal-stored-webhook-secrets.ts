@@ -52,7 +52,8 @@ async function sealStoredWebhookSecrets(
     for (const endpoint of endpoints) {
       const secretPlain = !isSealed(endpoint.secret);
       const previousPlain =
-        endpoint.previous_secret !== null && !isSealed(endpoint.previous_secret);
+        endpoint.previous_secret !== null &&
+        !isSealed(endpoint.previous_secret);
       const headersPlain = !areHeadersSealed(endpoint.headers);
 
       if (!secretPlain && !previousPlain && !headersPlain) continue;

@@ -148,7 +148,11 @@ async function main(): Promise<void> {
    * one.
    */
   const admins = await prisma.user.findMany({
-    where: { role: "BUSINESS_ADMIN", businessId: { not: null }, ...SEEDED("manager-") },
+    where: {
+      role: "BUSINESS_ADMIN",
+      businessId: { not: null },
+      ...SEEDED("manager-"),
+    },
     select: { id: true, businessId: true },
     orderBy: { id: "asc" },
   });
@@ -176,7 +180,11 @@ async function main(): Promise<void> {
    * "caiu no login", which reads like the product refusing a valid session.
    */
   const drivers = await prisma.user.findMany({
-    where: { role: "BUSINESS_USER", driverId: { not: null }, ...SEEDED("driver-") },
+    where: {
+      role: "BUSINESS_USER",
+      driverId: { not: null },
+      ...SEEDED("driver-"),
+    },
     select: { id: true, businessId: true, driverId: true },
     orderBy: { id: "asc" },
     take: 20,
@@ -205,8 +213,7 @@ async function main(): Promise<void> {
   };
 
   const out =
-    process.argv[2] ??
-    resolve(__dirname, "fixtures", "browser-sessions.json");
+    process.argv[2] ?? resolve(__dirname, "fixtures", "browser-sessions.json");
 
   writeFileSync(out, JSON.stringify(payload, null, 2));
 

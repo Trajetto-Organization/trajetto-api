@@ -160,7 +160,11 @@ class ImportDeliverySpreadsheetUseCase {
 
     // Same 404 for "does not exist" and "is not yours".
     if (!findShipper || findShipper.businessId !== businessId) {
-      throw new AppError("Embarcador não encontrado.", 404, "SHIPPER_NOT_FOUND");
+      throw new AppError(
+        "Embarcador não encontrado.",
+        404,
+        "SHIPPER_NOT_FOUND",
+      );
     }
 
     // A deactivated shipper takes no new deliveries through any door
@@ -368,7 +372,8 @@ class ImportDeliverySpreadsheetUseCase {
             outcome: "duplicated",
             recipient_name: row.recipient_name,
             reference: row.code,
-            message: "Este pedido já havia sido importado para este embarcador.",
+            message:
+              "Este pedido já havia sido importado para este embarcador.",
           });
 
           continue;
@@ -704,10 +709,7 @@ class ImportDeliverySpreadsheetUseCase {
         });
       } catch (error) {
         for (const row of group) {
-          note(
-            row.line,
-            "Entrega importada, mas a rota não pôde ser criada.",
-          );
+          note(row.line, "Entrega importada, mas a rota não pôde ser criada.");
         }
       }
     }

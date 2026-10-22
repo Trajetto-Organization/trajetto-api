@@ -97,7 +97,7 @@ jobs:
           BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          for pair in web:trajetto-fleet-manager-ui app:trajetto-fleet-manager-mobile; do
+          for pair in web:trajetto-ui app:trajetto-mobile; do
             key=${pair%%:*}
             repo=${pair#*:}
             if git -c "http.https://github.com/.extraheader=$auth" ls-remote --exit-code --heads \
@@ -113,7 +113,7 @@ jobs:
         if: steps.clients.outputs.enabled == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: Trajetto-Organization/trajetto-fleet-manager-ui
+          repository: Trajetto-Organization/trajetto-ui
           ref: ${{ steps.refs.outputs.web }}
           token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
           path: .siblings/trajetto-ui
@@ -123,7 +123,7 @@ jobs:
         if: steps.clients.outputs.enabled == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: Trajetto-Organization/trajetto-fleet-manager-mobile
+          repository: Trajetto-Organization/trajetto-mobile
           ref: ${{ steps.refs.outputs.app }}
           token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
           path: .siblings/trajetto-mobile

@@ -71,17 +71,27 @@ describe("supplierListWhere", () => {
       { withUfFacet: true },
     );
 
-    expect(JSON.stringify(where)).toContain('"cnpj":{"contains":"12345678000190"}');
+    expect(JSON.stringify(where)).toContain(
+      '"cnpj":{"contains":"12345678000190"}',
+    );
   });
 });
 
 describe("the refusal of a supplier with history", () => {
   it("names what depends on it, in Portuguese", () => {
     expect(
-      describeSupplierReferences({ serviceOrders: 2, parts: 1, accountsPayable: 0 }),
+      describeSupplierReferences({
+        serviceOrders: 2,
+        parts: 1,
+        accountsPayable: 0,
+      }),
     ).toBe("2 ordens de serviço e 1 peça");
     expect(
-      describeSupplierReferences({ serviceOrders: 1, parts: 3, accountsPayable: 4 }),
+      describeSupplierReferences({
+        serviceOrders: 1,
+        parts: 3,
+        accountsPayable: 4,
+      }),
     ).toBe("1 ordem de serviço, 3 peças e 4 contas a pagar");
   });
 });

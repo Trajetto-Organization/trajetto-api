@@ -142,7 +142,9 @@ class DeleteDriverUseCase {
     const fuels = await this.fuel.countFuelsByDriverId(driverId);
     const checklists =
       await this.vehicleChecklist.countVehicleChecklistsByDriverId(driverId);
-    const deliveries = await this.delivery.countDeliveriesReferencing({ driverId });
+    const deliveries = await this.delivery.countDeliveriesReferencing({
+      driverId,
+    });
     const routes = await this.route.countRoutesReferencing({ driverId });
     // `driver_pause.driverId` is RESTRICT: without this the database refused
     // and the refusal surfaced as a 500.

@@ -73,10 +73,15 @@ const backupEnv = {
 function backup(env: Record<string, string> = {}) {
   const out = `${box.root}/backups`;
 
-  const result = run("bash", repoFile("infra/scripts/backup-postgres.sh"), [out], {
-    bin: box.bin,
-    env: { ...backupEnv, ...env },
-  });
+  const result = run(
+    "bash",
+    repoFile("infra/scripts/backup-postgres.sh"),
+    [out],
+    {
+      bin: box.bin,
+      env: { ...backupEnv, ...env },
+    },
+  );
 
   let files: string[] = [];
 
@@ -90,8 +95,26 @@ function backup(env: Record<string, string> = {}) {
 }
 
 describe.skipIf(!bash)("the manual backup", () => {
+  it("finds the Dokploy database's task by its service name, not the dev container's", () => {
+    // A Dokploy PostgreSQL database is a Swarm service named after its
+    // appName (random suffix), so `name=trajetto-database` finds nothing.
+    const { status } = backup({ POSTGRES_SERVICE: "trajetto-api-db-x1y2" });
+
+    expect(status).toBe(0);
+
+    const ps = box.calls("docker").find((call) => call.startsWith("docker ps"));
+
+    expect(ps).toContain(
+      "label=com.docker.swarm.service.name=trajetto-api-db-x1y2",
+    );
+    expect(ps).not.toContain("name=trajetto-database");
+  });
+
   it("leaves nothing behind when pg_dump dies halfway", () => {
-    const { status, files } = backup({ STUB_DUMP_BYTES: "100", STUB_DUMP_EXIT: "1" });
+    const { status, files } = backup({
+      STUB_DUMP_BYTES: "100",
+      STUB_DUMP_EXIT: "1",
+    });
 
     expect(status).not.toBe(0);
     expect(files.filter((name) => name.includes(".dump"))).toEqual([]);
@@ -131,47 +154,61 @@ describe.skipIf(!bash)("the manual backup", () => {
   });
 });
 
-describe.skipIf(!bash)("the position trail in the manual backup (PG-11)", () => {
-  /**
-   * driver_position is the bulk of the database at scale (about 2,400 points
-   * per driver per 10-hour day, ~450 B each with indexes, 90 days kept). A
-   * logical dump that always carries it grows to hours, holding one snapshot
-   * — and the xmin horizon of every hot table — the whole time. Leaving it
-   * out, or dumping it on its own, is an operator's choice; the default stays
-   * a full dump until the owner decides.
-   */
-  const dumpCall = () => box.calls("docker").find((call) => call.includes("pg_dump")) ?? "";
+describe.skipIf(!bash)(
+  "the position trail in the manual backup (PG-11)",
+  () => {
+    /**
+     * driver_position is the bulk of the database at scale (about 2,400 points
+     * per driver per 10-hour day, ~450 B each with indexes, 90 days kept). A
+     * logical dump that always carries it grows to hours, holding one snapshot
+     * — and the xmin horizon of every hot table — the whole time. Leaving it
+     * out, or dumping it on its own, is an operator's choice; the default stays
+     * a full dump until the owner decides.
+     */
+    const dumpCall = () =>
+      box.calls("docker").find((call) => call.includes("pg_dump")) ?? "";
 
-  it("dumps everything by default", () => {
-    expect(backup().status).toBe(0);
-    expect(dumpCall()).not.toContain("driver_position");
-  });
+    it("dumps everything by default", () => {
+      expect(backup().status).toBe(0);
+      expect(dumpCall()).not.toContain("driver_position");
+    });
 
-  it("can leave the trail's rows out, keeping its schema", () => {
-    expect(backup({ BACKUP_EXCLUDE_TRAIL: "true" }).status).toBe(0);
-    expect(dumpCall()).toContain("--exclude-table-data-and-children=public.driver_position");
-  });
+    it("can leave the trail's rows out, keeping its schema", () => {
+      expect(backup({ BACKUP_EXCLUDE_TRAIL: "true" }).status).toBe(0);
+      expect(dumpCall()).toContain(
+        "--exclude-table-data-and-children=public.driver_position",
+      );
+    });
 
-  it("can dump only the trail, into a file named for it", () => {
-    const { status, files } = backup({ BACKUP_TRAIL_ONLY: "true" });
+    it("can dump only the trail, into a file named for it", () => {
+      const { status, files } = backup({ BACKUP_TRAIL_ONLY: "true" });
 
-    expect(status).toBe(0);
-    expect(dumpCall()).toContain("--table-and-children=public.driver_position");
-    expect(files.find((name) => name.endsWith(".dump"))).toMatch(
-      /^trajetto-trail-\d{8}T\d{6}Z\.dump$/,
-    );
-  });
+      expect(status).toBe(0);
+      expect(dumpCall()).toContain(
+        "--table-and-children=public.driver_position",
+      );
+      expect(files.find((name) => name.endsWith(".dump"))).toMatch(
+        /^trajetto-trail-\d{8}T\d{6}Z\.dump$/,
+      );
+    });
 
-  it("refuses both at once rather than guess", () => {
-    const { status } = backup({ BACKUP_EXCLUDE_TRAIL: "true", BACKUP_TRAIL_ONLY: "true" });
+    it("refuses both at once rather than guess", () => {
+      const { status } = backup({
+        BACKUP_EXCLUDE_TRAIL: "true",
+        BACKUP_TRAIL_ONLY: "true",
+      });
 
-    expect(status).not.toBe(0);
-    expect(dumpCall()).toBe("");
-  });
-});
+      expect(status).not.toBe(0);
+      expect(dumpCall()).toBe("");
+    });
+  },
+);
 
 describe.skipIf(!bash)("the restore drill", () => {
-  function restore(env: Record<string, string> = {}, dumpName = "trajetto-x.dump") {
+  function restore(
+    env: Record<string, string> = {},
+    dumpName = "trajetto-x.dump",
+  ) {
     const dump = box.file(`in/${dumpName}`, "x".repeat(4096));
 
     const result = run(
@@ -185,14 +222,16 @@ describe.skipIf(!bash)("the restore drill", () => {
   }
 
   it("rehearses on the image production runs", () => {
-    // POSTGRES_IMAGE pins production's Postgres (compose.production.yaml); a
-    // drill on another minor proves less about the dump being restored.
+    // POSTGRES_IMAGE is the Dokploy database's exact image; a drill on
+    // another minor proves less about the dump being restored.
     const pinned = "postgres:16.4-alpine@sha256:" + "a".repeat(64);
     const { status } = restore({ POSTGRES_IMAGE: pinned });
 
     expect(status).toBe(0);
 
-    const started = box.calls("docker").find((call) => call.startsWith("docker run"));
+    const started = box
+      .calls("docker")
+      .find((call) => call.startsWith("docker run"));
 
     expect(started).toContain(pinned);
   });
@@ -204,7 +243,9 @@ describe.skipIf(!bash)("the restore drill", () => {
 
     const npx = box.calls("npx");
 
-    expect(npx.some((call) => call.includes("prisma migrate status"))).toBe(true);
+    expect(npx.some((call) => call.includes("prisma migrate status"))).toBe(
+      true,
+    );
     expect(npx.filter((call) => call.includes("migrate deploy"))).toEqual([]);
   });
 
@@ -217,18 +258,15 @@ describe.skipIf(!bash)("the restore drill", () => {
 
     expect(status).not.toBe(0);
     expect(stderr).toMatch(/migrations pendentes/);
-    expect(box.calls("npx").filter((call) => call.includes("migrate deploy"))).toEqual(
-      [],
-    );
+    expect(
+      box.calls("npx").filter((call) => call.includes("migrate deploy")),
+    ).toEqual([]);
   });
 
   it("refuses a dump whose checksum does not match, before starting anything", () => {
     const dump = box.file("in/trajetto-bad.dump", "x".repeat(4096));
 
-    writeFileSync(
-      `${dump}.sha256`,
-      `${"0".repeat(64)}  trajetto-bad.dump\n`,
-    );
+    writeFileSync(`${dump}.sha256`, `${"0".repeat(64)}  trajetto-bad.dump\n`);
 
     const result = run(
       "bash",
@@ -238,17 +276,22 @@ describe.skipIf(!bash)("the restore drill", () => {
     );
 
     expect(result.status).not.toBe(0);
-    expect(box.calls("docker").filter((call) => call.startsWith("docker run"))).toEqual(
-      [],
-    );
+    expect(
+      box.calls("docker").filter((call) => call.startsWith("docker run")),
+    ).toEqual([]);
   });
 
   it("accepts a dump whose checksum matches", () => {
     const dump = box.file("in/trajetto-good.dump", "x".repeat(4096));
 
-    writeFileSync(`${box.root}/sum.sh`, `cd "$(dirname "$1")" && sha256sum "$(basename "$1")" > "$1.sha256"\n`);
+    writeFileSync(
+      `${box.root}/sum.sh`,
+      `cd "$(dirname "$1")" && sha256sum "$(basename "$1")" > "$1.sha256"\n`,
+    );
     expect(run("bash", `${box.root}/sum.sh`, [dump]).status).toBe(0);
-    expect(readFileSync(`${dump}.sha256`, "utf8")).toContain("trajetto-good.dump");
+    expect(readFileSync(`${dump}.sha256`, "utf8")).toContain(
+      "trajetto-good.dump",
+    );
 
     const result = run(
       "bash",

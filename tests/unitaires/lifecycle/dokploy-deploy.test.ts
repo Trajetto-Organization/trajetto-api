@@ -6,17 +6,22 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 /**
- * The deploy step of the API pipeline (staging and production). The web
- * deploys as a Dokploy Application through its own webhook script
- * (trajetto-ui/.github/scripts/dokploy-webhook.mjs), so this one is no longer
- * shared and has no copy to keep in sync.
+ * The deploy step of the API pipeline (staging and production): one call per
+ * Dokploy Application (the API, the AI OCR service and the backup, each a
+ * Docker-provider Application on a GHCR tag). The web deploys its own
+ * Application through a webhook script (trajetto-ui/.github/scripts/).
  *
  * It was a `curl` to a Portainer webhook, which answers the moment it queues
  * the redeploy: a stack that never converged still finished the run green.
  * The script is run for real here, against a fake Dokploy on the loopback
  * that records every call.
  */
-const SCRIPT = resolve(process.cwd(), ".github", "scripts", "dokploy-deploy.mjs");
+const SCRIPT = resolve(
+  process.cwd(),
+  ".github",
+  "scripts",
+  "dokploy-deploy.mjs",
+);
 const KEY = "dokploy-key-that-must-never-be-printed";
 
 interface Deployment {
@@ -26,13 +31,20 @@ interface Deployment {
 
 interface Fake {
   url: string;
-  calls: Array<{ method: string; path: string; key: string | undefined; body: string }>;
+  calls: Array<{
+    method: string;
+    path: string;
+    key: string | undefined;
+    body: string;
+  }>;
 }
 
 let server: Server | undefined;
 
 afterEach(async () => {
-  await new Promise<void>((done) => (server ? server.close(() => done()) : done()));
+  await new Promise<void>((done) =>
+    server ? server.close(() => done()) : done(),
+  );
   server = undefined;
 });
 
@@ -71,14 +83,18 @@ async function fakeDokploy(options: {
         return;
       }
 
-      if (path.startsWith("/api/compose.deploy")) {
+      if (path.startsWith("/api/application.deploy")) {
         response.statusCode = options.deployStatus ?? 200;
         deployed = response.statusCode === 200;
-        response.end(response.statusCode === 200 ? "true" : JSON.stringify({ message: "nope" }));
+        response.end(
+          response.statusCode === 200
+            ? "true"
+            : JSON.stringify({ message: "nope" }),
+        );
         return;
       }
 
-      if (path.startsWith("/api/deployment.allByCompose")) {
+      if (path.startsWith("/api/deployment.all?")) {
         const history = options.history ?? [];
         const after = options.after ?? [];
 
@@ -99,9 +115,14 @@ async function fakeDokploy(options: {
     });
   });
 
-  await new Promise<void>((done) => server!.listen(0, "127.0.0.1", () => done()));
+  await new Promise<void>((done) =>
+    server!.listen(0, "127.0.0.1", () => done()),
+  );
 
-  return { url: `http://127.0.0.1:${(server!.address() as AddressInfo).port}`, calls };
+  return {
+    url: `http://127.0.0.1:${(server!.address() as AddressInfo).port}`,
+    calls,
+  };
 }
 
 function deploy(env: Record<string, string>) {
@@ -110,7 +131,9 @@ function deploy(env: Record<string, string>) {
       // Not the test's own env: nothing of the developer's reaches the script.
       env: {
         PATH: process.env.PATH ?? "",
-        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+        ...(process.env.SystemRoot
+          ? { SystemRoot: process.env.SystemRoot }
+          : {}),
         DOKPLOY_POLL_SECONDS: "0.01",
         DOKPLOY_TIMEOUT_SECONDS: "2",
         ...env,
@@ -128,7 +151,7 @@ function deploy(env: Record<string, string>) {
 const valid = (fake: Fake) => ({
   DOKPLOY_URL: fake.url,
   DOKPLOY_API_KEY: KEY,
-  DOKPLOY_COMPOSE_ID: "abc123_XYZ-9",
+  DOKPLOY_APPLICATION_ID: "abc123_XYZ-9",
 });
 
 describe("the Dokploy deploy step", () => {
@@ -147,10 +170,14 @@ describe("the Dokploy deploy step", () => {
     expect(result.status, result.output).toBe(0);
     expect(result.output).toContain("new");
 
-    const trigger = fake.calls.find((call) => call.path === "/api/compose.deploy");
+    const trigger = fake.calls.find(
+      (call) => call.path === "/api/application.deploy",
+    );
 
     expect(trigger?.method).toBe("POST");
-    expect(JSON.parse(trigger!.body)).toEqual({ composeId: "abc123_XYZ-9" });
+    expect(JSON.parse(trigger!.body)).toEqual({
+      applicationId: "abc123_XYZ-9",
+    });
     expect(fake.calls.every((call) => call.key === KEY)).toBe(true);
   });
 
@@ -168,14 +195,19 @@ describe("the Dokploy deploy step", () => {
     expect(result.output).toMatch(/ainda estava 'running'/);
   });
 
-  it.each(["error", "cancelled"])("fails the run when the deployment ends in %s", async (status) => {
-    const fake = await fakeDokploy({ after: [[{ deploymentId: "new", status }]] });
+  it.each(["error", "cancelled"])(
+    "fails the run when the deployment ends in %s",
+    async (status) => {
+      const fake = await fakeDokploy({
+        after: [[{ deploymentId: "new", status }]],
+      });
 
-    const result = await deploy(valid(fake));
+      const result = await deploy(valid(fake));
 
-    expect(result.status).toBe(1);
-    expect(result.output).toContain(`'${status}'`);
-  });
+      expect(result.status).toBe(1);
+      expect(result.output).toContain(`'${status}'`);
+    },
+  );
 
   it("fails when Dokploy refuses the deploy, and does not wait for it", async () => {
     const fake = await fakeDokploy({ deployStatus: 404 });
@@ -183,12 +215,18 @@ describe("the Dokploy deploy step", () => {
     const result = await deploy(valid(fake));
 
     expect(result.status).toBe(1);
-    expect(result.output).toMatch(/recusou o deploy: HTTP 404/);
-    expect(fake.calls.filter((call) => call.path.startsWith("/api/compose.deploy"))).toHaveLength(1);
+    expect(result.output).toMatch(/recusou o deploy de .*: HTTP 404/);
+    expect(
+      fake.calls.filter((call) =>
+        call.path.startsWith("/api/application.deploy"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("fails when no deployment shows up before the timeout", async () => {
-    const fake = await fakeDokploy({ history: [{ deploymentId: "old", status: "done" }] });
+    const fake = await fakeDokploy({
+      history: [{ deploymentId: "old", status: "done" }],
+    });
 
     const result = await deploy(valid(fake));
 
@@ -203,7 +241,9 @@ describe("the Dokploy deploy step", () => {
 
     expect(result.status).toBe(0);
     expect(result.output).toMatch(/sem acompanhar/);
-    expect(fake.calls.map((call) => call.path)).toEqual(["/api/compose.deploy"]);
+    expect(fake.calls.map((call) => call.path)).toEqual([
+      "/api/application.deploy",
+    ]);
   });
 
   it("never prints the API key", async () => {
@@ -218,7 +258,7 @@ describe("the Dokploy deploy step", () => {
     const result = await deploy({
       DOKPLOY_URL: "http://dokploy.example.com",
       DOKPLOY_API_KEY: KEY,
-      DOKPLOY_COMPOSE_ID: "abc",
+      DOKPLOY_APPLICATION_ID: "abc",
     });
 
     expect(result.status).toBe(1);
@@ -231,7 +271,35 @@ describe("the Dokploy deploy step", () => {
     const result = await deploy({ DOKPLOY_URL: fake.url });
 
     expect(result.status).toBe(1);
-    expect(result.output).toContain("DOKPLOY_API_KEY, DOKPLOY_COMPOSE_ID");
+    expect(result.output).toContain("DOKPLOY_API_KEY, DOKPLOY_APPLICATION_ID");
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("skips an optional Application that has no id yet, without calling Dokploy", async () => {
+    const fake = await fakeDokploy({});
+
+    const result = await deploy({
+      DOKPLOY_URL: fake.url,
+      DOKPLOY_API_KEY: KEY,
+      DOKPLOY_APP_LABEL: "trajetto-ai",
+      DOKPLOY_OPTIONAL: "true",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output).toContain("::notice::Deploy de trajetto-ai pulado");
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("still requires the id of a required Application", async () => {
+    const fake = await fakeDokploy({});
+
+    const result = await deploy({
+      DOKPLOY_URL: fake.url,
+      DOKPLOY_API_KEY: KEY,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("DOKPLOY_APPLICATION_ID");
     expect(fake.calls).toEqual([]);
   });
 });

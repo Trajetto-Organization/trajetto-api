@@ -42,7 +42,9 @@ interface ProviderErrorDetail {
  * must never be able to close the bracket and forge another field.
  */
 function token(value: string | number): string {
-  return String(value).replace(/[^A-Za-z0-9._-]/g, "").slice(0, 32);
+  return String(value)
+    .replace(/[^A-Za-z0-9._-]/g, "")
+    .slice(0, 32);
 }
 
 /**
@@ -121,9 +123,8 @@ function providerDetailOf(
 function isCredentialFailure(lastError: string | null | undefined): boolean {
   if (!lastError) return false;
 
-  const prefix = /^\[(whatsapp|email|push)((?: [a-z]+=[A-Za-z0-9._-]+)*)\]/.exec(
-    lastError,
-  );
+  const prefix =
+    /^\[(whatsapp|email|push)((?: [a-z]+=[A-Za-z0-9._-]+)*)\]/.exec(lastError);
 
   if (!prefix) return false;
 
@@ -183,7 +184,10 @@ function suppressedChannels(
   }> = [];
 
   if (options.hasInAppContent && !chosen.has(NotificationChannel.IN_APP)) {
-    suppressed.push({ channel: NotificationChannel.IN_APP, reason: "preference_off" });
+    suppressed.push({
+      channel: NotificationChannel.IN_APP,
+      reason: "preference_off",
+    });
   }
 
   const hasPushContent =
@@ -197,13 +201,18 @@ function suppressedChannels(
   }
 
   if (options.hasEmailContent && !chosen.has(NotificationChannel.EMAIL)) {
-    suppressed.push({ channel: NotificationChannel.EMAIL, reason: "preference_off" });
+    suppressed.push({
+      channel: NotificationChannel.EMAIL,
+      reason: "preference_off",
+    });
   }
 
   if (options.hasWhatsAppContent && !chosen.has(NotificationChannel.WHATSAPP)) {
     suppressed.push({
       channel: NotificationChannel.WHATSAPP,
-      reason: flags.whatsappNotificationsEnabled ? "no_contact" : "preference_off",
+      reason: flags.whatsappNotificationsEnabled
+        ? "no_contact"
+        : "preference_off",
     });
   }
 

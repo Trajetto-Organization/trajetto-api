@@ -173,9 +173,10 @@ describe("the referential actions behind a driver", () => {
 
     // The other driver's history is untouched, which is the only reassuring
     // part: the damage is scoped to the driver removed.
-    expect((await prisma.delivery.findUniqueOrThrow({ where: { id: proven } })).driverId).toBe(
-      DRIVER,
-    );
+    expect(
+      (await prisma.delivery.findUniqueOrThrow({ where: { id: proven } }))
+        .driverId,
+    ).toBe(DRIVER);
   });
 
   it("refuses outright when the driver has a route", async () => {

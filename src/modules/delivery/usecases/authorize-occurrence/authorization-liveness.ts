@@ -21,7 +21,10 @@ import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
  */
 
 /** The statuses an attempt is still running in. FAILED ended it. */
-const ACTIVE_ATTEMPT_STATUSES: readonly DeliveryStatus[] = ["PENDING", "IN_TRANSIT"];
+const ACTIVE_ATTEMPT_STATUSES: readonly DeliveryStatus[] = [
+  "PENDING",
+  "IN_TRANSIT",
+];
 
 /** What the request recorded about its attempt when it was filed. */
 interface AuthorizationAnchor {
@@ -58,7 +61,10 @@ function authorizationRequestIsLive(
 
   if (state.statusChangedSince) return false;
 
-  if (anchor.reporterDriverId !== null && state.driverId !== anchor.reporterDriverId) {
+  if (
+    anchor.reporterDriverId !== null &&
+    state.driverId !== anchor.reporterDriverId
+  ) {
     return false;
   }
 

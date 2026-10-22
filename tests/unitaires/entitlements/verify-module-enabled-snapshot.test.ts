@@ -31,7 +31,9 @@ async function codeOf(promise: Promise<unknown>): Promise<string | null> {
 
     return null;
   } catch (error) {
-    return error instanceof AppError ? (error.code ?? null) : "not-an-app-error";
+    return error instanceof AppError
+      ? (error.code ?? null)
+      : "not-an-app-error";
   }
 }
 
@@ -101,9 +103,7 @@ describe("the module gate", () => {
 
     expect(service.hasModule).toHaveBeenCalledWith("business-1", "DELIVERIES");
   });
-
 });
-
 
 /**
  * MASTER is gated too (decision 4.3), on every company the request names.
@@ -142,7 +142,9 @@ describe("the module gate for a MASTER", () => {
     companies([{ id: COMPANY, moduleEnabled: false }]);
 
     expect(
-      await codeOf(gate(masterRequest({ params: { businessId: COMPANY } }), {} as never)),
+      await codeOf(
+        gate(masterRequest({ params: { businessId: COMPANY } }), {} as never),
+      ),
     ).toBe("MODULE_NOT_ENABLED");
 
     expect(service.getCompaniesModuleState).toHaveBeenCalledWith(
@@ -155,7 +157,9 @@ describe("the module gate for a MASTER", () => {
     companies([{ id: COMPANY, moduleEnabled: true }]);
 
     expect(
-      await codeOf(gate(masterRequest({ query: { businessId: COMPANY } }), {} as never)),
+      await codeOf(
+        gate(masterRequest({ query: { businessId: COMPANY } }), {} as never),
+      ),
     ).toBeNull();
   });
 
@@ -216,7 +220,10 @@ describe("the module gate for a MASTER", () => {
     companies([{ id: COMPANY, moduleEnabled: false }]);
 
     try {
-      await gate(masterRequest({ params: { businessId: COMPANY } }), {} as never);
+      await gate(
+        masterRequest({ params: { businessId: COMPANY } }),
+        {} as never,
+      );
       expect.unreachable();
     } catch (error) {
       expect((error as AppError).message).toMatch(/Módulos Contratados/);
@@ -228,7 +235,10 @@ describe("the module gate for a MASTER", () => {
     companies([]);
 
     try {
-      await gate(masterRequest({ params: { businessId: COMPANY } }), {} as never);
+      await gate(
+        masterRequest({ params: { businessId: COMPANY } }),
+        {} as never,
+      );
       expect.unreachable();
     } catch (error) {
       expect((error as AppError).statusCode).toBe(404);
@@ -240,7 +250,9 @@ describe("the module gate for a MASTER", () => {
     companies([{ id: COMPANY, isActive: false, moduleEnabled: false }]);
 
     expect(
-      await codeOf(gate(masterRequest({ query: { businessId: COMPANY } }), {} as never)),
+      await codeOf(
+        gate(masterRequest({ query: { businessId: COMPANY } }), {} as never),
+      ),
     ).toBe("TENANT_INACTIVE");
   });
 
@@ -250,7 +262,9 @@ describe("the module gate for a MASTER", () => {
     companies([{ id: COMPANY, isActive: false, moduleEnabled: true }]);
 
     expect(
-      await codeOf(gate(masterRequest({ query: { businessId: COMPANY } }), {} as never)),
+      await codeOf(
+        gate(masterRequest({ query: { businessId: COMPANY } }), {} as never),
+      ),
     ).toBeNull();
   });
 });

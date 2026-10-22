@@ -252,7 +252,8 @@ function channelsForRecipient(
   }
 
   const wantsPush =
-    (wantsInApp || (Boolean(options.hasStandalonePushContent) && inAppAllowed)) &&
+    (wantsInApp ||
+      (Boolean(options.hasStandalonePushContent) && inAppAllowed)) &&
     Boolean(options.hasPushDevice);
 
   if (wantsPush) {

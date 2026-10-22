@@ -12,13 +12,17 @@ const fuelListSearchMetaDoc = searchMetaDoc(
     total: z
       .number()
       .int()
-      .describe("Abastecimentos da busca e de todos os filtros (o cartão Total)."),
+      .describe(
+        "Abastecimentos da busca e de todos os filtros (o cartão Total).",
+      ),
     totalLiters: z
       .number()
       .describe("Soma dos litros desses abastecimentos, com 3 casas."),
     totalAmount: z
       .number()
-      .describe("Soma do valor total desses abastecimentos, em reais, com 2 casas."),
+      .describe(
+        "Soma do valor total desses abastecimentos, em reais, com 2 casas.",
+      ),
     verifiedOdometer: z
       .number()
       .int()

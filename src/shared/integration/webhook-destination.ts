@@ -144,7 +144,8 @@ function isPrivateIPv6(address: string): boolean {
 
   // Mapped (`::ffff:10.0.0.5`) and translated (`::ffff:0:10.0.0.5`): an IPv4
   // wearing another coat, judged as the IPv4 it is.
-  if (zeros(0, 5) && h[5] === 0xffff) return isPrivateIPv4(embeddedIPv4(h[6], h[7]));
+  if (zeros(0, 5) && h[5] === 0xffff)
+    return isPrivateIPv4(embeddedIPv4(h[6], h[7]));
   if (zeros(0, 4) && h[4] === 0xffff && h[5] === 0) {
     return isPrivateIPv4(embeddedIPv4(h[6], h[7]));
   }
@@ -289,7 +290,9 @@ async function resolveHost(hostname: string): Promise<string[]> {
  * that decides where the bytes go. An IP literal never reaches it (the socket
  * skips the lookup), and a literal is judged by the check.
  */
-function createGuardedLookup(resolve: ResolveHost = resolveHost): LookupFunction {
+function createGuardedLookup(
+  resolve: ResolveHost = resolveHost,
+): LookupFunction {
   return (hostname, options, callback) => {
     resolve(hostname).then(
       (addresses) => {
@@ -317,7 +320,10 @@ function createGuardedLookup(resolve: ResolveHost = resolveHost): LookupFunction
           .filter((entry) => wanted === 0 || entry.family === wanted);
 
         if (entries.length === 0) {
-          callback(webhookDnsError("EWEBHOOK_UNRESOLVED", UNRESOLVED_REASON), "");
+          callback(
+            webhookDnsError("EWEBHOOK_UNRESOLVED", UNRESOLVED_REASON),
+            "",
+          );
           return;
         }
 
@@ -328,7 +334,8 @@ function createGuardedLookup(resolve: ResolveHost = resolveHost): LookupFunction
 
         callback(null, entries[0].address, entries[0].family);
       },
-      () => callback(webhookDnsError("EWEBHOOK_UNRESOLVED", UNRESOLVED_REASON), ""),
+      () =>
+        callback(webhookDnsError("EWEBHOOK_UNRESOLVED", UNRESOLVED_REASON), ""),
     );
   };
 }
@@ -402,7 +409,8 @@ async function verifyWebhookDestination(
     return isPrivateAddress(host)
       ? {
           allowed: false,
-          reason: "O endpoint precisa ser um endereço alcançável pela internet.",
+          reason:
+            "O endpoint precisa ser um endereço alcançável pela internet.",
         }
       : { allowed: true };
   }
@@ -543,7 +551,8 @@ function safeWebhookHeaders(
 
   return Object.fromEntries(
     Object.entries(headers).filter(
-      ([name, value]) => !isReservedHeader(name) && isSendableHeader(name, value),
+      ([name, value]) =>
+        !isReservedHeader(name) && isSendableHeader(name, value),
     ),
   );
 }

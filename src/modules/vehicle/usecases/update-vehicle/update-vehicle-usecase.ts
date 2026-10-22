@@ -165,7 +165,10 @@ class UpdateVehicleUseCase {
           businessId,
         );
 
-      if (findVehicleByLicensePlate && findVehicleByLicensePlate.id !== vehicleId) {
+      if (
+        findVehicleByLicensePlate &&
+        findVehicleByLicensePlate.id !== vehicleId
+      ) {
         throw new VehicleAlreadyExistsError();
       }
     }

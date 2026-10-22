@@ -244,7 +244,9 @@ const routeFor = (id: string) =>
   context.routeRepository.routes.find((route) => route.id === id)!;
 
 const stopsFor = (deliveryId: string) =>
-  context.routeRepository.stops.filter((stop) => stop.deliveryId === deliveryId);
+  context.routeRepository.stops.filter(
+    (stop) => stop.deliveryId === deliveryId,
+  );
 
 const dispatchedTo = () =>
   context.published
@@ -272,7 +274,10 @@ describe("a route with nothing left on it (IDEMP-05)", () => {
 });
 
 describe("a delivery that goes back to the pool (IDEMP-11)", () => {
-  const setStatus = (deliveryId: string, status: "PENDING" | "DELIVERED" | "CANCELLED") =>
+  const setStatus = (
+    deliveryId: string,
+    status: "PENDING" | "DELIVERED" | "CANCELLED",
+  ) =>
     context.setStatus.execute({
       userId: DISPATCHER_A,
       businessId: A,
@@ -293,7 +298,9 @@ describe("a delivery that goes back to the pool (IDEMP-11)", () => {
     // Before: the stop stayed PENDING on the running route — the driver saw
     // an address refused at arrival and proof, the route never closed, and
     // the delivery could not join tomorrow's route (409).
-    expect(stopsFor(postponed).map((stop) => stop.status)).toEqual(["CANCELLED"]);
+    expect(stopsFor(postponed).map((stop) => stop.status)).toEqual([
+      "CANCELLED",
+    ]);
     expect(deliveryFor(postponed).status).toBe("PENDING");
     expect(deliveryFor(postponed).driverId).toBeNull();
     expect(deliveryFor(postponed).vehicleId).toBeNull();
@@ -310,8 +317,9 @@ describe("a delivery that goes back to the pool (IDEMP-11)", () => {
 
     expect(routeFor(routeId).status).toBe("COMPLETED");
     expect(
-      context.vehicleRepository.vehicles.find((entry) => entry.id === VEHICLE_A)!
-        .status,
+      context.vehicleRepository.vehicles.find(
+        (entry) => entry.id === VEHICLE_A,
+      )!.status,
     ).toBe("ACTIVE");
 
     // And the postponed delivery can go on tomorrow's route.
@@ -468,13 +476,14 @@ describe("the departure announces what actually left (IDEMP-06)", () => {
       context.vehicleRepository,
     );
 
-    vi.spyOn(context.vehicleRepository, "findVehicleById").mockImplementationOnce(
-      async (id: string) => {
-        await context.routeRepository.removeStops(routeId, A, [stopOfRemoved.id]);
+    vi.spyOn(
+      context.vehicleRepository,
+      "findVehicleById",
+    ).mockImplementationOnce(async (id: string) => {
+      await context.routeRepository.removeStops(routeId, A, [stopOfRemoved.id]);
 
-        return findVehicle(id);
-      },
-    );
+      return findVehicle(id);
+    });
 
     await context.start.execute({
       userId: DRIVER_USER_A,

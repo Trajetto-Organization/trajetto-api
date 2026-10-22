@@ -1,7 +1,4 @@
-import {
-  MailProviderProps,
-  MailSendResult,
-} from "../dtos/mail-provider-dto";
+import { MailProviderProps, MailSendResult } from "../dtos/mail-provider-dto";
 import { IMailProvider } from "../IMail-provider";
 
 import nodemailer, { Transporter } from "nodemailer";
@@ -62,45 +59,50 @@ class ResendMailProvider implements IMailProvider {
 
     try {
       // Timed per call for /health/metrics (latency and error rate per channel).
-      const info = await observeProviderCall("EMAIL", () => this.client.sendMail({
-        to,
-        from: env.RESEND_FROM_EMAIL,
-        subject,
-        html: templateHTML,
+      const info = await observeProviderCall("EMAIL", () =>
+        this.client.sendMail({
+          to,
+          from: env.RESEND_FROM_EMAIL,
+          subject,
+          html: templateHTML,
 
-        // Deterministic, so a redelivery of the same notification carries the
-        // same message identity and most receivers suppress the copy. See
-        // message-id.ts for what this does and does not guarantee.
-        ...(referenceId
-          ? {
-              messageId: buildMessageId(
-                referenceId,
-                senderDomain(env.RESEND_FROM_EMAIL),
-              ),
-            }
-          : {}),
+          // Deterministic, so a redelivery of the same notification carries the
+          // same message identity and most receivers suppress the copy. See
+          // message-id.ts for what this does and does not guarantee.
+          ...(referenceId
+            ? {
+                messageId: buildMessageId(
+                  referenceId,
+                  senderDomain(env.RESEND_FROM_EMAIL),
+                ),
+              }
+            : {}),
 
-        headers: {
-          // Only sent when the caller supplied one: a constant here made
-          // Resend treat unrelated messages as the same entity.
-          ...(referenceId ? { "X-Entity-Ref-ID": referenceId } : {}),
+          headers: {
+            // Only sent when the caller supplied one: a constant here made
+            // Resend treat unrelated messages as the same entity.
+            ...(referenceId ? { "X-Entity-Ref-ID": referenceId } : {}),
 
-          // The one idempotency a provider honours for us: Resend drops a
-          // second message carrying the same key within 24 hours and answers
-          // as if it had sent it. The pipeline passes the delivery id, so a
-          // retry after a crash, a lost answer or an abandoned wait no longer
-          // reaches the inbox twice. Neither X-Entity-Ref-ID nor the
-          // Message-ID above does that — they only help a receiver thread.
-          ...(referenceId ? { "Resend-Idempotency-Key": referenceId } : {}),
-          "X-Mailer": "Trajetto Fleet Management System",
-        },
-      }));
+            // The one idempotency a provider honours for us: Resend drops a
+            // second message carrying the same key within 24 hours and answers
+            // as if it had sent it. The pipeline passes the delivery id, so a
+            // retry after a crash, a lost answer or an abandoned wait no longer
+            // reaches the inbox twice. Neither X-Entity-Ref-ID nor the
+            // Message-ID above does that — they only help a receiver thread.
+            ...(referenceId ? { "Resend-Idempotency-Key": referenceId } : {}),
+            "X-Mailer": "Trajetto Fleet Management System",
+          },
+        }),
+      );
 
       return { messageId: info.messageId };
     } catch (error) {
       // No recipient in the text (OBS-15): the delivery id in the pipeline's
       // log line already says which message this was.
-      const deliveryError = toMailDeliveryError(error, "Falha ao enviar e-mail");
+      const deliveryError = toMailDeliveryError(
+        error,
+        "Falha ao enviar e-mail",
+      );
 
       // The redacted error only: the raw transport error repeats the address
       // in its message and in fields the `err` serializer would copy.

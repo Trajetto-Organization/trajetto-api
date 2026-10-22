@@ -8,7 +8,12 @@ import type {
 class PushDeviceTokenRepository implements IPushDeviceTokenRepository {
   constructor(private prisma = database) {}
 
-  async register({ token, platform, userId, sessionId }: RegisterPushDeviceData): Promise<void> {
+  async register({
+    token,
+    platform,
+    userId,
+    sessionId,
+  }: RegisterPushDeviceData): Promise<void> {
     // An upsert on the unique token, not find-then-create: the app registers
     // on every launch, and two launches racing must not raise P2002.
     await this.prisma.pushDeviceToken.upsert({

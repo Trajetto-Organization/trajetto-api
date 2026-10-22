@@ -130,12 +130,13 @@ USER nodejs
 
 EXPOSE 3333
 
-# Liveness, matching compose.production.yaml. A probe that decides whether to
-# DESTROY the container must not depend on Postgres: /health answers 503 when
-# the database is down, which turned a blip into a restart loop. The image
-# default matters on its own because anything running it outside the stack —
-# a debug run, a one-off task, another orchestrator — inherits this and used
-# to get the more aggressive `/health` with retries=3.
+# Liveness, matching the API Application's healthcheck in Dokploy (Swarm
+# settings, docs/deploy.md). A probe that decides whether to DESTROY the
+# container must not depend on Postgres: /health answers 503 when the
+# database is down, which turned a blip into a restart loop. The image
+# default matters on its own because anything running it without that
+# setting — a debug run, a one-off task, another orchestrator — inherits this
+# and used to get the more aggressive `/health` with retries=3.
 # busybox wget rather than `node -e`: measured in this base image, ~1 MB and
 # ~1 ms per probe against ~52 MB and ~54 ms for a Node process, inside the
 # container's memory limit. 127.0.0.1: busybox tries only the first address.

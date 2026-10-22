@@ -12,4 +12,6 @@ interface SocketClientEntryOptions {
 export function socketClientEntry(options?: SocketClientEntryOptions): string;
 
 /** The client's `io`, from wherever socketClientEntry found it. */
-export function loadSocketClient(options?: SocketClientEntryOptions): Promise<unknown>;
+export function loadSocketClient(
+  options?: SocketClientEntryOptions,
+): Promise<unknown>;

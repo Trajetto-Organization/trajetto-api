@@ -58,7 +58,10 @@ describe("a code issued now", () => {
 
     expect(await verifyOneTimeCode("482910", `${prefix}:${mac}`)).toBe(false);
     expect(
-      await verifyOneTimeCode("482910", `${prefix}:${"0".repeat(salt.length)}:${mac}`),
+      await verifyOneTimeCode(
+        "482910",
+        `${prefix}:${"0".repeat(salt.length)}:${mac}`,
+      ),
     ).toBe(false);
   });
 });

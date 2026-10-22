@@ -99,14 +99,19 @@ beforeEach(() => {
     businessId: BUSINESS,
   } as User);
 
-  businesses.business.push({ ...BUSINESS_COLUMN_DEFAULTS, id: BUSINESS } as Business);
+  businesses.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
+    id: BUSINESS,
+  } as Business);
 
   importXml = new ImportDeliveryXmlUseCase(
     users,
     businesses,
     shippers,
     deliveries,
-    { createActivityIfEnabled: async () => undefined } as unknown as NotificationService,
+    {
+      createActivityIfEnabled: async () => undefined,
+    } as unknown as NotificationService,
     new InMemoryWebhookFanOutService().asService(),
     imports,
   );
@@ -176,7 +181,9 @@ describe("a deactivated shipper takes no new notes", () => {
     } as Shipper);
 
     await expect(
-      importing([KEY_ONE], { shipperId: "018f0000-0000-7000-8000-0000000009f1" }),
+      importing([KEY_ONE], {
+        shipperId: "018f0000-0000-7000-8000-0000000009f1",
+      }),
     ).rejects.toMatchObject({ code: "SHIPPER_INACTIVE" });
 
     expect(deliveries.deliveries).toEqual([]);

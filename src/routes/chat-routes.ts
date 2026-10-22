@@ -66,7 +66,10 @@ async function chatRoutes(app: FastifyInstance) {
     "/list-threads",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],
@@ -87,7 +90,10 @@ async function chatRoutes(app: FastifyInstance) {
     "/list-messages",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],
@@ -109,7 +115,10 @@ async function chatRoutes(app: FastifyInstance) {
     "/search-messages",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],
@@ -130,13 +139,16 @@ async function chatRoutes(app: FastifyInstance) {
     "/recipients",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],
         summary: "Destinatários do chat (motoristas ativos)",
         description:
-          "Os motoristas ativos da empresa para \"Nova conversa\" e para o aviso em massa, em ordem alfabética, com busca por nome no servidor e paginação por cursor (o `nextCursor` volta como `cursor`). Só os campos da escolha (id, nome, `hasApp`), nada do cadastro. `hasApp` diz se a conta do motorista consegue entrar no aplicativo (existe, não foi revogada e a filial está ativa); `app=WITH_APP` ou `app=WITHOUT_APP` lista só um dos lados. Exige `delivery_manage:read` (não a leitura do cadastro de motoristas): a torre que pode enviar também escolhe para quem. A primeira página traz `audience`, a contagem da empresa inteira. Token de motorista recebe 403 PERMISSION_DENIED.",
+          'Os motoristas ativos da empresa para "Nova conversa" e para o aviso em massa, em ordem alfabética, com busca por nome no servidor e paginação por cursor (o `nextCursor` volta como `cursor`). Só os campos da escolha (id, nome, `hasApp`), nada do cadastro. `hasApp` diz se a conta do motorista consegue entrar no aplicativo (existe, não foi revogada e a filial está ativa); `app=WITH_APP` ou `app=WITHOUT_APP` lista só um dos lados. Exige `delivery_manage:read` (não a leitura do cadastro de motoristas): a torre que pode enviar também escolhe para quem. A primeira página traz `audience`, a contagem da empresa inteira. Token de motorista recebe 403 PERMISSION_DENIED.',
         querystring: chatSchemas.listRecipients,
         response: {
           200: chatResponses.recipients,
@@ -184,13 +196,16 @@ async function chatRoutes(app: FastifyInstance) {
     "/attachment-url",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],
         summary: "Assinar de novo um anexo",
         description:
-          "Uma URL assinada nova para o anexo de uma mensagem. As URLs expiram, e um visualizador aberto por muito tempo mostraria a foto quebrada; recarregar a conversa inteira fecharia o visualizador. Responde null para mensagem sem arquivo. Mensagem inexistente, de outra empresa ou de outra conversa do motorista recebe a mesma resposta: 404 CHAT_MESSAGE_NOT_FOUND (nunca \"não é seu\").",
+          'Uma URL assinada nova para o anexo de uma mensagem. As URLs expiram, e um visualizador aberto por muito tempo mostraria a foto quebrada; recarregar a conversa inteira fecharia o visualizador. Responde null para mensagem sem arquivo. Mensagem inexistente, de outra empresa ou de outra conversa do motorista recebe a mesma resposta: 404 CHAT_MESSAGE_NOT_FOUND (nunca "não é seu").',
         querystring: chatSchemas.attachmentUrl,
         response: {
           200: chatResponses.attachmentUrl,
@@ -206,7 +221,10 @@ async function chatRoutes(app: FastifyInstance) {
     "/mark-read",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],
@@ -228,7 +246,10 @@ async function chatRoutes(app: FastifyInstance) {
     "/mark-delivered",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],
@@ -263,7 +284,10 @@ async function chatRoutes(app: FastifyInstance) {
     "/tickets",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],
@@ -323,7 +347,10 @@ async function chatRoutes(app: FastifyInstance) {
     "/tickets/:ticketId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],
@@ -357,7 +384,7 @@ async function chatRoutes(app: FastifyInstance) {
         tags: ["chat"],
         summary: "Abrir atendimento",
         description:
-          "O \"+ Novo atendimento\" da central (motorista e assunto), o \"Abrir atendimento\" de uma entrega, rota ou ocorrência, e o \"Novo assunto\" do motorista. Com `deliveryId` ou `routeId` é um get-or-create: um atendimento aberto por entrega e por rota (201 `created: true` ao criar; 200 `created: false` quando já havia). Header Idempotency-Key (UUID) obrigatório: a mesma chave devolve o mesmo atendimento. `message` grava a primeira mensagem. Erros: 400 IDEMPOTENCY_KEY_REQUIRED, SUPPORT_TICKET_CONTEXT_CONFLICT (entrega e rota juntas), SUPPORT_TICKET_SUBJECT_REQUIRED; 403 MASTER_CHAT_READ_ONLY, DRIVER_CHAT_OWN_THREAD; 404 CHAT_DRIVER_NOT_FOUND, CHAT_DELIVERY_NOT_FOUND, CHAT_ROUTE_NOT_FOUND; 409 CHAT_SUBMISSION_CONFLICT.",
+          'O "+ Novo atendimento" da central (motorista e assunto), o "Abrir atendimento" de uma entrega, rota ou ocorrência, e o "Novo assunto" do motorista. Com `deliveryId` ou `routeId` é um get-or-create: um atendimento aberto por entrega e por rota (201 `created: true` ao criar; 200 `created: false` quando já havia). Header Idempotency-Key (UUID) obrigatório: a mesma chave devolve o mesmo atendimento. `message` grava a primeira mensagem. Erros: 400 IDEMPOTENCY_KEY_REQUIRED, SUPPORT_TICKET_CONTEXT_CONFLICT (entrega e rota juntas), SUPPORT_TICKET_SUBJECT_REQUIRED; 403 MASTER_CHAT_READ_ONLY, DRIVER_CHAT_OWN_THREAD; 404 CHAT_DRIVER_NOT_FOUND, CHAT_DELIVERY_NOT_FOUND, CHAT_ROUTE_NOT_FOUND; 409 CHAT_SUBMISSION_CONFLICT.',
         body: supportTicketSchemas.open,
         response: {
           201: supportTicketResponses.opened,
@@ -484,7 +511,10 @@ async function chatRoutes(app: FastifyInstance) {
     "/tickets/:ticketId/messages",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],
@@ -537,7 +567,10 @@ async function chatRoutes(app: FastifyInstance) {
     "/tickets/:ticketId/read",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["chat"],

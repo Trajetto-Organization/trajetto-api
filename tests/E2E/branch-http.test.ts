@@ -28,8 +28,10 @@ let app: Awaited<typeof import("@/http")>["app"];
 const CARRIER = "018fec00-0000-7000-8000-00000000000a";
 const OTHER = "018fec00-0000-7000-8000-00000000000b";
 
-const tokens: Record<"admin" | "readOnly" | "noKey" | "otherAdmin" | "master", string> =
-  {} as never;
+const tokens: Record<
+  "admin" | "readOnly" | "noKey" | "otherAdmin" | "master",
+  string
+> = {} as never;
 
 let cnpjSeq = 0;
 let branchSeq = 0;
@@ -62,7 +64,13 @@ async function seedProfile(businessId: string, key: string, canWrite: boolean) {
       businessId,
       permissions: {
         create: [
-          { permissionKey: key, action: key, canRead: true, canWrite, businessId },
+          {
+            permissionKey: key,
+            action: key,
+            canRead: true,
+            canWrite,
+            businessId,
+          },
         ],
       },
     },
@@ -130,7 +138,11 @@ function branchBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function create(businessId: string, body: Record<string, unknown>, token = tokens.admin) {
+async function create(
+  businessId: string,
+  body: Record<string, unknown>,
+  token = tokens.admin,
+) {
   return app.inject({
     method: "POST",
     url: `/branch/create-branch/${businessId}`,
@@ -147,7 +159,12 @@ async function list(query: string, token = tokens.admin) {
   });
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, rows: [] as any[], meta: {} as any, body: response.body };
+    return {
+      status: response.statusCode,
+      rows: [] as any[],
+      meta: {} as any,
+      body: response.body,
+    };
   }
 
   const [first, ...rows] = response.body
@@ -262,7 +279,9 @@ describe("GET /branch/list-branch", () => {
 
     const inactive = await list("status=inactive");
 
-    expect(inactive.rows.map((row) => row.corporate_reason)).toEqual(["Base 11"]);
+    expect(inactive.rows.map((row) => row.corporate_reason)).toEqual([
+      "Base 11",
+    ]);
     expect(inactive.meta.searchMeta.facets.status).toEqual([
       { value: "active", count: 11 },
       { value: "inactive", count: 1 },
@@ -277,9 +296,16 @@ describe("GET /branch/list-branch", () => {
       url: "/branch/list-branch?page=2&pageSize=10&sort=corporate_reason&order=asc",
       headers: { authorization: `Bearer ${tokens.admin}` },
     });
-    const rows = second.body.trim().split("\n").slice(1).map((line) => JSON.parse(line));
+    const rows = second.body
+      .trim()
+      .split("\n")
+      .slice(1)
+      .map((line) => JSON.parse(line));
 
-    expect(rows.map((row) => row.corporate_reason)).toEqual(["Base 10", "Base 11"]);
+    expect(rows.map((row) => row.corporate_reason)).toEqual([
+      "Base 10",
+      "Base 11",
+    ]);
   });
 
   it("refuses an order or a facet value the server does not offer", async () => {
@@ -295,9 +321,13 @@ describe("GET /branch/list-branch", () => {
     expect(without.body).toContain("BUSINESS_NOT_IDENTIFIED");
 
     const other = await list(`businessId=${OTHER}`, tokens.master);
-    expect(other.rows.map((row) => row.corporate_reason)).toEqual(["Filial Compartilhada"]);
+    expect(other.rows.map((row) => row.corporate_reason)).toEqual([
+      "Filial Compartilhada",
+    ]);
 
-    expect((await list(`businessId=${CARRIER}`, tokens.otherAdmin)).status).toBe(403);
+    expect(
+      (await list(`businessId=${CARRIER}`, tokens.otherAdmin)).status,
+    ).toBe(403);
   });
 
   it("lets a read-only profile read and refuses a profile without the key", async () => {
@@ -310,7 +340,10 @@ describe("POST /branch/create-branch — uniqueness inside one company", () => {
   it("accepts another carrier's name and e-mail, and refuses them inside the company", async () => {
     const shared = await create(
       CARRIER,
-      branchBody({ corporate_reason: "Filial Compartilhada", email: "compartilhada@exemplo.com.br" }),
+      branchBody({
+        corporate_reason: "Filial Compartilhada",
+        email: "compartilhada@exemplo.com.br",
+      }),
     );
 
     expect(shared.statusCode).toBe(201);
@@ -325,7 +358,10 @@ describe("POST /branch/create-branch — uniqueness inside one company", () => {
   });
 
   it("answers a CNPJ held by another carrier with a neutral 409", async () => {
-    const response = await create(CARRIER, branchBody({ cnpj: "73000000000001" }));
+    const response = await create(
+      CARRIER,
+      branchBody({ cnpj: "73000000000001" }),
+    );
 
     expect(response.statusCode).toBe(409);
     expect(response.json().code).toBe("BRANCH_CNPJ_UNAVAILABLE");
@@ -348,12 +384,20 @@ describe("POST /branch/create-branch — uniqueness inside one company", () => {
     const statuses = responses.map((response) => response.statusCode).sort();
 
     expect(statuses).toEqual([201, 409, 409]);
-    expect(await prisma.branch.count({ where: { corporate_reason: "Filial Corrida" } })).toBe(1);
+    expect(
+      await prisma.branch.count({
+        where: { corporate_reason: "Filial Corrida" },
+      }),
+    ).toBe(1);
   });
 
   it("refuses a profile without write and another company's manager", async () => {
-    expect((await create(CARRIER, branchBody(), tokens.readOnly)).statusCode).toBe(403);
-    expect((await create(CARRIER, branchBody(), tokens.otherAdmin)).statusCode).toBe(403);
+    expect(
+      (await create(CARRIER, branchBody(), tokens.readOnly)).statusCode,
+    ).toBe(403);
+    expect(
+      (await create(CARRIER, branchBody(), tokens.otherAdmin)).statusCode,
+    ).toBe(403);
   });
 });
 
@@ -361,7 +405,11 @@ describe("PATCH /branch/update-branch", () => {
   it("changes only what it sends", async () => {
     const { id: branchId } = await prisma.branch.create({
       data: {
-        ...branchBody({ corporate_reason: "Filial ERP", erp_code: "MANTER", complement: "Sala 2" }),
+        ...branchBody({
+          corporate_reason: "Filial ERP",
+          erp_code: "MANTER",
+          complement: "Sala 2",
+        }),
         fantasy_name: null,
         businessId: CARRIER,
       },
@@ -375,7 +423,9 @@ describe("PATCH /branch/update-branch", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(await prisma.branch.findUniqueOrThrow({ where: { id: branchId } })).toMatchObject({
+    expect(
+      await prisma.branch.findUniqueOrThrow({ where: { id: branchId } }),
+    ).toMatchObject({
       city: "Jundiaí",
       erp_code: "MANTER",
       complement: "Sala 2",
@@ -383,7 +433,9 @@ describe("PATCH /branch/update-branch", () => {
   });
 
   it("answers another company's branch like a missing one", async () => {
-    const foreign = await prisma.branch.findFirstOrThrow({ where: { businessId: OTHER } });
+    const foreign = await prisma.branch.findFirstOrThrow({
+      where: { businessId: OTHER },
+    });
 
     const byPath = await app.inject({
       method: "PATCH",
@@ -402,7 +454,9 @@ describe("PATCH /branch/update-branch", () => {
     });
 
     expect(toggle.statusCode).toBe(404);
-    expect(await prisma.branch.findUniqueOrThrow({ where: { id: foreign.id } })).toMatchObject({
+    expect(
+      await prisma.branch.findUniqueOrThrow({ where: { id: foreign.id } }),
+    ).toMatchObject({
       city: "São Paulo",
       is_active: true,
     });
@@ -417,7 +471,11 @@ describe("GET /branch/search-branch-business — the picker", () => {
       headers: { authorization: `Bearer ${tokens.admin}` },
     });
 
-    const rows = response.body.trim().split("\n").slice(1).map((line) => JSON.parse(line));
+    const rows = response.body
+      .trim()
+      .split("\n")
+      .slice(1)
+      .map((line) => JSON.parse(line));
 
     expect(response.statusCode).toBe(200);
     expect(rows.map((row) => row.corporate_reason).sort()).toEqual(["Base 10"]);
@@ -452,7 +510,9 @@ describe("branch deletion — request and confirm", () => {
   const subjectOf = (token: string) => (decode(token) as { sub: string }).sub;
 
   it("answers another company's branch like a missing one, through the caller's own path", async () => {
-    const theirs = await prisma.branch.findFirstOrThrow({ where: { businessId: CARRIER } });
+    const theirs = await prisma.branch.findFirstOrThrow({
+      where: { businessId: CARRIER },
+    });
 
     for (const step of [request, confirm]) {
       const real = await step(theirs.id, OTHER, tokens.otherAdmin);
@@ -470,10 +530,14 @@ describe("branch deletion — request and confirm", () => {
   });
 
   it("refuses another company's path and a read-only profile", async () => {
-    const theirs = await prisma.branch.findFirstOrThrow({ where: { businessId: CARRIER } });
+    const theirs = await prisma.branch.findFirstOrThrow({
+      where: { businessId: CARRIER },
+    });
 
     for (const step of [request, confirm]) {
-      expect((await step(theirs.id, CARRIER, tokens.otherAdmin)).statusCode).toBe(403);
+      expect(
+        (await step(theirs.id, CARRIER, tokens.otherAdmin)).statusCode,
+      ).toBe(403);
 
       const readOnly = await step(theirs.id, CARRIER, tokens.readOnly);
 
@@ -489,7 +553,10 @@ describe("branch deletion — request and confirm", () => {
 
   it("deletes the company's own branch with the right code", async () => {
     const { id: branchId } = await prisma.branch.create({
-      data: { ...branchBody({ corporate_reason: "Filial Descartável" }), businessId: CARRIER },
+      data: {
+        ...branchBody({ corporate_reason: "Filial Descartável" }),
+        businessId: CARRIER,
+      },
     });
 
     await prisma.pendingDeletion.create({

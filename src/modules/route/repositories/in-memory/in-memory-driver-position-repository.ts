@@ -1,4 +1,7 @@
-import { routeOfPing, type AcceptedPing } from "@/shared/route/driver-position-rules";
+import {
+  routeOfPing,
+  type AcceptedPing,
+} from "@/shared/route/driver-position-rules";
 
 import type {
   IDriverPositionRepository,
@@ -28,7 +31,11 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
   /** What the map's join reads: names, and the plate through the route. */
   public drivers: Array<{ id: string; businessId: string; name: string }> = [];
 
-  public routes: Array<{ id: string; code: number; vehiclePlate: string | null }> = [];
+  public routes: Array<{
+    id: string;
+    code: number;
+    vehiclePlate: string | null;
+  }> = [];
 
   async recordBatch({
     driverId,
@@ -81,7 +88,10 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
     const current = this.last.get(driverId);
 
     // ON CONFLICT ... WHERE stored < incoming: never backwards.
-    if (!current || current.recorded_at.getTime() < latest.recorded_at.getTime()) {
+    if (
+      !current ||
+      current.recorded_at.getTime() < latest.recorded_at.getTime()
+    ) {
       this.last.set(driverId, {
         driverId,
         businessId,
@@ -111,12 +121,15 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
       )
       .sort((a, b) => b.recorded_at.getTime() - a.recorded_at.getTime())
       .map(({ businessId: _businessId, ...row }) => {
-        const route = this.routes.find((candidate) => candidate.id === row.routeId);
+        const route = this.routes.find(
+          (candidate) => candidate.id === row.routeId,
+        );
 
         return {
           ...row,
           driverName:
-            this.drivers.find((driver) => driver.id === row.driverId)?.name ?? null,
+            this.drivers.find((driver) => driver.id === row.driverId)?.name ??
+            null,
           vehiclePlate: route?.vehiclePlate ?? null,
           routeCode: route?.code ?? null,
         };
@@ -128,7 +141,10 @@ class InMemoryDriverPositionRepository implements IDriverPositionRepository {
     driverIds: string[],
   ): Promise<Array<{ driverId: string; recorded_at: Date }>> {
     return [...this.last.values()]
-      .filter((row) => row.businessId === businessId && driverIds.includes(row.driverId))
+      .filter(
+        (row) =>
+          row.businessId === businessId && driverIds.includes(row.driverId),
+      )
       .map((row) => ({ driverId: row.driverId, recorded_at: row.recorded_at }));
   }
 

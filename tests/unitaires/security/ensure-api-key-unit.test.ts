@@ -18,7 +18,10 @@ vi.mock("@/config/rate-limit", async (importOriginal) => ({
   clientAddress: () => "203.0.113.9",
 }));
 
-import { ensureApiKey, verifyApiScope } from "@/modules/middlewares/ensure-api-key";
+import {
+  ensureApiKey,
+  verifyApiScope,
+} from "@/modules/middlewares/ensure-api-key";
 import { AppError } from "@/shared/errors/AppError";
 import { hashApiKeySecret } from "@/shared/integration/api-key-rules";
 import { configureIntegrationRateGuard } from "@/shared/integration/integration-rate-guard";
@@ -26,7 +29,11 @@ import { configureIntegrationRateGuard } from "@/shared/integration/integration-
 const SECRET = "s".repeat(40);
 const PREFIX = "tjk_live_ab12cd";
 
-const guard = { authFailuresBlocked: vi.fn(), recordAuthFailure: vi.fn(), allowBusiness: vi.fn() };
+const guard = {
+  authFailuresBlocked: vi.fn(),
+  recordAuthFailure: vi.fn(),
+  allowBusiness: vi.fn(),
+};
 const repository = { findCredentialByPrefix: vi.fn(), touchLastUsed: vi.fn() };
 
 let keySeq = 0;
@@ -50,9 +57,16 @@ const logger = () => {
 };
 
 const call = (authorization?: string) => {
-  const request = { headers: authorization ? { authorization } : {}, log: logger() } as Record<string, unknown>;
+  const request = {
+    headers: authorization ? { authorization } : {},
+    log: logger(),
+  } as Record<string, unknown>;
   const reply = { header: vi.fn(), log: logger() };
-  return { request, reply, run: () => ensureApiKey(request as never, reply as never) };
+  return {
+    request,
+    reply,
+    run: () => ensureApiKey(request as never, reply as never),
+  };
 };
 
 async function refusalOf(run: () => Promise<unknown>) {
@@ -61,11 +75,19 @@ async function refusalOf(run: () => Promise<unknown>) {
     return null;
   } catch (error) {
     if (!(error instanceof AppError)) throw error;
-    return { status: error.statusCode, code: error.code, message: error.message };
+    return {
+      status: error.statusCode,
+      code: error.code,
+      message: error.message,
+    };
   }
 }
 
-const INVALID = { status: 401, code: "INVALID_API_KEY", message: "Chave de API inválida." };
+const INVALID = {
+  status: 401,
+  code: "INVALID_API_KEY",
+  message: "Chave de API inválida.",
+};
 
 beforeEach(() => {
   guard.authFailuresBlocked.mockReset().mockResolvedValue(false);
@@ -85,7 +107,8 @@ describe("ensureApiKey", () => {
     expect(await refusalOf(run)).toEqual({
       status: 429,
       code: "RATE_LIMITED",
-      message: "Muitas tentativas com chave de API inválida. Confira a chave e tente novamente em um minuto.",
+      message:
+        "Muitas tentativas com chave de API inválida. Confira a chave e tente novamente em um minuto.",
     });
     expect(guard.authFailuresBlocked).toHaveBeenCalledWith("ip:203.0.113.9");
     expect(reply.header).toHaveBeenCalledWith("retry-after", "60");
@@ -97,8 +120,17 @@ describe("ensureApiKey", () => {
       [undefined, () => undefined],
       [`Basic ${PREFIX}.${SECRET}`, () => undefined],
       ["Bearer not-a-key", () => undefined],
-      [`Bearer ${PREFIX}.${SECRET}`, () => repository.findCredentialByPrefix.mockResolvedValueOnce(null)],
-      [`Bearer ${PREFIX}.${SECRET}`, () => repository.findCredentialByPrefix.mockResolvedValueOnce(storedKey({ revoked_at: new Date() }))],
+      [
+        `Bearer ${PREFIX}.${SECRET}`,
+        () => repository.findCredentialByPrefix.mockResolvedValueOnce(null),
+      ],
+      [
+        `Bearer ${PREFIX}.${SECRET}`,
+        () =>
+          repository.findCredentialByPrefix.mockResolvedValueOnce(
+            storedKey({ revoked_at: new Date() }),
+          ),
+      ],
       [`Bearer ${PREFIX}.${"x".repeat(40)}`, () => undefined],
     ];
 
@@ -117,7 +149,9 @@ describe("ensureApiKey", () => {
   });
 
   it("refuses a key of a deactivated company or one without Entregas, with company codes", async () => {
-    repository.findCredentialByPrefix.mockResolvedValueOnce(storedKey({ business: { is_active: false, timezone: "UTC" } }));
+    repository.findCredentialByPrefix.mockResolvedValueOnce(
+      storedKey({ business: { is_active: false, timezone: "UTC" } }),
+    );
     expect(await refusalOf(call(`Bearer ${PREFIX}.${SECRET}`).run)).toEqual({
       status: 403,
       code: "TENANT_INACTIVE",
@@ -128,9 +162,13 @@ describe("ensureApiKey", () => {
     expect(await refusalOf(call(`Bearer ${PREFIX}.${SECRET}`).run)).toEqual({
       status: 403,
       code: "MODULE_NOT_ENABLED",
-      message: "O módulo de Entregas não está habilitado para a empresa desta chave.",
+      message:
+        "O módulo de Entregas não está habilitado para a empresa desta chave.",
     });
-    expect(entitlements.hasModule).toHaveBeenLastCalledWith("business-1", "DELIVERIES");
+    expect(entitlements.hasModule).toHaveBeenLastCalledWith(
+      "business-1",
+      "DELIVERIES",
+    );
     expect(guard.recordAuthFailure).not.toHaveBeenCalled();
   });
 
@@ -151,13 +189,21 @@ describe("ensureApiKey", () => {
       rateLimitPerMinute: 120,
       timeZone: "America/Manaus",
     });
-    expect((first.request.log as { child: ReturnType<typeof vi.fn> }).child).toHaveBeenCalledWith({
+    expect(
+      (first.request.log as { child: ReturnType<typeof vi.fn> }).child,
+    ).toHaveBeenCalledWith({
       apiKeyId: key.id,
       businessId: "business-1",
     });
-    expect(first.reply.log.child).toHaveBeenCalledWith({ apiKeyId: key.id, businessId: "business-1" });
+    expect(first.reply.log.child).toHaveBeenCalledWith({
+      apiKeyId: key.id,
+      businessId: "business-1",
+    });
     expect(repository.touchLastUsed).toHaveBeenCalledTimes(1);
-    expect(repository.touchLastUsed).toHaveBeenCalledWith(key.id, expect.any(Date));
+    expect(repository.touchLastUsed).toHaveBeenCalledWith(
+      key.id,
+      expect.any(Date),
+    );
   });
 
   it("forgets the throttle when recording the use fails, so the next call tries again", async () => {
@@ -178,12 +224,20 @@ describe("verifyApiScope", () => {
 
   it("needs a key, then the scope, with distinct statuses", async () => {
     expect(await refusalOf(() => hook({} as never))).toEqual(INVALID);
-    expect(await refusalOf(() => hook({ apiKey: { scopes: ["deliveries:read"] } } as never))).toEqual({
+    expect(
+      await refusalOf(() =>
+        hook({ apiKey: { scopes: ["deliveries:read"] } } as never),
+      ),
+    ).toEqual({
       status: 403,
       code: "MISSING_API_SCOPE",
       message: 'Esta chave não tem o escopo "deliveries:write".',
     });
-    expect(await refusalOf(() => hook({ apiKey: { scopes: ["deliveries:write"] } } as never))).toBeNull();
+    expect(
+      await refusalOf(() =>
+        hook({ apiKey: { scopes: ["deliveries:write"] } } as never),
+      ),
+    ).toBeNull();
   });
 
   it("publishes its scope for /docs", () => {

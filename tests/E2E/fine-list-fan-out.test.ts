@@ -193,10 +193,15 @@ describe("the fines list", () => {
       pageSize: 10,
     });
 
-    expect(pool.peak, `a listagem ocupou ${pool.peak} conexões`).toBeLessThanOrEqual(
-      BUDGET,
-    );
+    expect(
+      pool.peak,
+      `a listagem ocupou ${pool.peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
     expect(result.total).toBe(3);
-    expect(result.searchMeta).toMatchObject({ paid: 1, overdue: 1, pending: 1 });
+    expect(result.searchMeta).toMatchObject({
+      paid: 1,
+      overdue: 1,
+      pending: 1,
+    });
   });
 });

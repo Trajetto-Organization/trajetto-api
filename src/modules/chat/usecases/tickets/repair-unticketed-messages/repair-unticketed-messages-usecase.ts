@@ -76,12 +76,20 @@ class RepairUnticketedMessagesUseCase {
 
     for (const message of messages) {
       const driverUser = await this.user.findUserByDriverId(message.driverId);
-      const ticket = await this.ticketFor(message, driverUser?.id ?? null, deps);
+      const ticket = await this.ticketFor(
+        message,
+        driverUser?.id ?? null,
+        deps,
+      );
 
       if (!ticket) continue;
 
       const attached = await database.$transaction(async (tx) => {
-        const done = await this.tickets.attachMessage(message.id, ticket.id, tx);
+        const done = await this.tickets.attachMessage(
+          message.id,
+          ticket.id,
+          tx,
+        );
 
         if (done) {
           await this.tickets.touchOnMessage(
@@ -183,7 +191,8 @@ class RepairUnticketedMessagesUseCase {
       businessId: message.businessId,
       driverId: message.driverId,
       subject: driverSubject(
-        (await this.driver.findDriverById(message.driverId))?.name ?? "o motorista",
+        (await this.driver.findDriverById(message.driverId))?.name ??
+          "o motorista",
       ),
       opened: SYSTEM,
     });

@@ -79,7 +79,9 @@ describe("readBoundedBody", () => {
 
     const after = process.memoryUsage();
     const grew =
-      after.heapUsed + after.arrayBuffers - (before.heapUsed + before.arrayBuffers);
+      after.heapUsed +
+      after.arrayBuffers -
+      (before.heapUsed + before.arrayBuffers);
 
     expect(text.length).toBeLessThanOrEqual(8 * 1024);
 

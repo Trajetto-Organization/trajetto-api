@@ -82,7 +82,9 @@ interface IExternalRecipientRepository {
    * message goes out — after a backoff, or a re-run of an old event — the
    * delivery may have moved on, or its phone been corrected.
    */
-  findDeliveryState: (deliveryId: string) => Promise<DeliveryContactState | null>;
+  findDeliveryState: (
+    deliveryId: string,
+  ) => Promise<DeliveryContactState | null>;
 }
 
 export type {

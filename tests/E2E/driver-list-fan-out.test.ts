@@ -124,10 +124,14 @@ describe("the driver list's connection budget", () => {
       branchIds: [BRANCH],
     });
 
-    expect(pool.peak, `a lista de motoristas ocupou ${pool.peak} conexões`).toBeLessThanOrEqual(
-      BUDGET,
-    );
-    expect(result.data.map((row) => row.name)).toEqual(["Motorista 1", "Motorista 2"]);
+    expect(
+      pool.peak,
+      `a lista de motoristas ocupou ${pool.peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
+    expect(result.data.map((row) => row.name)).toEqual([
+      "Motorista 1",
+      "Motorista 2",
+    ]);
     expect(result.branchNames.get(BRANCH)).toBe("Filial do Pool");
   });
 });

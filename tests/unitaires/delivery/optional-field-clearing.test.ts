@@ -93,7 +93,9 @@ describe("clearing optional fields in the deliveries module", () => {
 
     // Asserting on the error map instead of the boolean: a failure names the
     // offending field instead of just saying "false".
-    expect(parsed.success ? {} : parsed.error.flatten().fieldErrors).toEqual({});
+    expect(parsed.success ? {} : parsed.error.flatten().fieldErrors).toEqual(
+      {},
+    );
 
     if (parsed.success) {
       for (const field of [
@@ -133,6 +135,9 @@ describe("clearing optional fields in the deliveries module", () => {
     const parsed = updateShipperSchema.safeParse({ name: "Só o nome" });
 
     expect(parsed.success).toBe(true);
-    if (parsed.success) expect("cnpj" in parsed.data && parsed.data.cnpj !== undefined).toBe(false);
+    if (parsed.success)
+      expect("cnpj" in parsed.data && parsed.data.cnpj !== undefined).toBe(
+        false,
+      );
   });
 });

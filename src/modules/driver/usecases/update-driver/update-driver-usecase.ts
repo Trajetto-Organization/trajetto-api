@@ -86,7 +86,10 @@ class UpdateDriverUseCase {
 
     // Per company (decision 8.1), and never the driver being edited.
     if (driverData.cpf) {
-      const sameCpf = await this.driver.findDriverByCpf(driverData.cpf, businessId);
+      const sameCpf = await this.driver.findDriverByCpf(
+        driverData.cpf,
+        businessId,
+      );
 
       if (sameCpf && sameCpf.id !== driverId) {
         throw new DriverCpfAlreadyExistsError();
@@ -97,7 +100,10 @@ class UpdateDriverUseCase {
     // (the CPF is); see create-driver.
 
     if (driverData.cnh) {
-      const sameCnh = await this.driver.findDriverByCnh(driverData.cnh, businessId);
+      const sameCnh = await this.driver.findDriverByCnh(
+        driverData.cnh,
+        businessId,
+      );
 
       if (sameCnh && sameCnh.id !== driverId) {
         throw new DriverLicenseAlreadyExistsError();
@@ -133,10 +139,7 @@ class UpdateDriverUseCase {
     sendCatalogChangedEvent(businessId, "driver");
 
     // If the driver was just deactivated, notify the linked user in real-time
-    if (
-      changes.status === "INACTIVE" &&
-      findDriverById.status !== "INACTIVE"
-    ) {
+    if (changes.status === "INACTIVE" && findDriverById.status !== "INACTIVE") {
       const driverUser = await this.user.findUserByDriverId(driverId);
 
       if (driverUser) {

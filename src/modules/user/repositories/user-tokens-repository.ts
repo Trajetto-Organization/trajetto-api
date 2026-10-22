@@ -263,7 +263,7 @@ class UserTokensRepository implements IUsersTokensRepository {
       // A NEW code starts from zero; otherwise it inherits the previous
       // code's count and locks out the legitimate user. Requesting codes is
       // rate limited on its own.
-        update: { token, expires, attempts: 0 },
+      update: { token, expires, attempts: 0 },
       create: { email, token, expires },
     });
 

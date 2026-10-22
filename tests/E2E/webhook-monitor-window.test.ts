@@ -139,7 +139,9 @@ afterAll(async () => {
   await prisma.webhookEndpoint.deleteMany({ where: { businessId: BUSINESS } });
   await prisma.refreshToken.deleteMany({ where: { userId: ADMIN } });
   await prisma.user.deleteMany({ where: { id: ADMIN } });
-  await prisma.businessEntitlement.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.businessEntitlement.deleteMany({
+    where: { businessId: BUSINESS },
+  });
   await prisma.business.deleteMany({ where: { id: BUSINESS } });
 
   await app?.close();
@@ -325,7 +327,9 @@ describe("a list longer than the monitor counts (DLVB-30)", () => {
   }, 120_000);
 
   it("says the total is a floor and keeps the cards exact", async () => {
-    const { total, meta, rows } = await monitor(`&endpointId=${busyEndpointId}`);
+    const { total, meta, rows } = await monitor(
+      `&endpointId=${busyEndpointId}`,
+    );
 
     expect(total).toBe(MONITOR_LIST_CAP);
     expect(meta.totalCapped).toBe(true);

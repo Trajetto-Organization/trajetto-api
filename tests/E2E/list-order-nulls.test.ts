@@ -34,10 +34,25 @@ interface Row {
  * The recipient is the tiebreaker, so every order below is total.
  */
 const ROWS: Row[] = [
-  { recipient: "D1", driverName: "Bruno", delivered_at: new Date("2026-09-02T12:00:00Z"), code: "B" },
+  {
+    recipient: "D1",
+    driverName: "Bruno",
+    delivered_at: new Date("2026-09-02T12:00:00Z"),
+    code: "B",
+  },
   { recipient: "D2", driverName: null, delivered_at: null, code: null },
-  { recipient: "D3", driverName: "Ana", delivered_at: new Date("2026-09-01T12:00:00Z"), code: "A" },
-  { recipient: "D4", driverName: null, delivered_at: new Date("2026-09-03T12:00:00Z"), code: null },
+  {
+    recipient: "D3",
+    driverName: "Ana",
+    delivered_at: new Date("2026-09-01T12:00:00Z"),
+    code: "A",
+  },
+  {
+    recipient: "D4",
+    driverName: null,
+    delivered_at: new Date("2026-09-03T12:00:00Z"),
+    code: null,
+  },
 ];
 
 beforeAll(async () => {

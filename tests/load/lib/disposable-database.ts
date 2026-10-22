@@ -37,7 +37,8 @@ function disposableDatabaseRefusal(
   const ports = allowedPorts(env);
   const expected = `porta ${ports.join(" ou ")} em localhost`;
 
-  if (!url) return `DATABASE_URL não definida. Aponte para o banco descartável (${expected}).`;
+  if (!url)
+    return `DATABASE_URL não definida. Aponte para o banco descartável (${expected}).`;
 
   let parsed: URL;
 

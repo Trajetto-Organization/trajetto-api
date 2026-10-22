@@ -10,9 +10,9 @@ import { envShape } from "@/schemas/env-schema/defined-env";
  *
  * It drifted both ways: OSRM_URL stayed in it (and in the schema) long after
  * the last reader was deleted, while ACTIVITY_RETENTION_DAYS — read by the
- * nightly purge and passed by the production compose — was never in it. An
- * operator filling a new stack (staging, Dokploy) from the example got a dead
- * knob and missed a live one.
+ * nightly purge — was never in it. An operator filling a new deployment's
+ * environment (the API Application in Dokploy, staging or production) from
+ * the example got a dead knob and missed a live one.
  *
  * Commented lines count as documented: optional variables are listed as
  * `# NAME=value` on purpose.
@@ -32,13 +32,16 @@ function documented(): Set<string> {
 }
 
 function files(dir: string, pattern: RegExp): string[] {
-  return readdirSync(resolve(ROOT, dir), { withFileTypes: true }).flatMap((entry) => {
-    const path = join(dir, entry.name);
+  return readdirSync(resolve(ROOT, dir), { withFileTypes: true }).flatMap(
+    (entry) => {
+      const path = join(dir, entry.name);
 
-    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : files(path, pattern);
+      if (entry.isDirectory())
+        return entry.name === "node_modules" ? [] : files(path, pattern);
 
-    return pattern.test(entry.name) ? [path] : [];
-  });
+      return pattern.test(entry.name) ? [path] : [];
+    },
+  );
 }
 
 /** `process.env.NAME` in the code that runs in the API's container. */
@@ -46,13 +49,37 @@ function readByCode(): Set<string> {
   const names = new Set<string>();
 
   for (const file of [...files("src", /\.ts$/), ...files("infra", /\.ts$/)]) {
-    for (const match of read(file).matchAll(new RegExp(`process\\.env\\.(${NAME})`, "g"))) {
+    for (const match of read(file).matchAll(
+      new RegExp(`process\\.env\\.(${NAME})`, "g"),
+    )) {
       names.add(match[1]);
     }
   }
 
-  for (const match of read("prisma/schema.prisma").matchAll(new RegExp(`env\\("(${NAME})"\\)`, "g"))) {
+  for (const match of read("prisma/schema.prisma").matchAll(
+    new RegExp(`env\\("(${NAME})"\\)`, "g"),
+  )) {
     names.add(match[1]);
+  }
+
+  return names;
+}
+
+/**
+ * Names the code reads without spelling `process.env.NAME`: through an `env`
+ * object handed in (`env.NAME`, the bootstrap guard) or a name held in a
+ * constant (`const X_ENV = "NAME"`, the activity purge). The compose used to
+ * vouch for these by interpolating them.
+ */
+function readIndirectly(): Set<string> {
+  const names = new Set<string>();
+
+  for (const file of [...files("src", /\.ts$/), ...files("infra", /\.ts$/)]) {
+    for (const match of read(file).matchAll(
+      new RegExp(`\\benv\\.(${NAME})\\b|const \\w+_ENV = "(${NAME})"`, "g"),
+    )) {
+      names.add(match[1] ?? match[2]);
+    }
   }
 
   return names;
@@ -66,7 +93,24 @@ function interpolatedBy(compose: string): Set<string> {
     .join("\n");
 
   return new Set(
-    [...code.matchAll(new RegExp(`\\$\\{(${NAME})(?::?[-?][^}]*)?\\}`, "g"))].map(
+    [
+      ...code.matchAll(new RegExp(`\\$\\{(${NAME})(?::?[-?][^}]*)?\\}`, "g")),
+    ].map((match) => match[1]),
+  );
+}
+
+/**
+ * Names the example's own values expand (dotenv-expand, src/env): the
+ * POSTGRES_* and REDIS_* pieces DATABASE_URL and REDIS_URL are built from.
+ */
+function expandedByExample(): Set<string> {
+  const values = read(".env.example")
+    .split(/\r?\n/)
+    .filter((line) => /^[A-Z][A-Z0-9_]*=/.test(line))
+    .join("\n");
+
+  return new Set(
+    [...values.matchAll(new RegExp(`\\$\\{(${NAME})\\}`, "g"))].map(
       (match) => match[1],
     ),
   );
@@ -76,8 +120,13 @@ function interpolatedBy(compose: string): Set<string> {
 function readByScripts(): Set<string> {
   const names = new Set<string>();
 
-  for (const file of [...files("infra/scripts", /\.sh$/), ...files("infra/backup", /\.sh$/)]) {
-    for (const match of read(file).matchAll(new RegExp(`\\$\\{?(${NAME})`, "g"))) {
+  for (const file of [
+    ...files("infra/scripts", /\.sh$/),
+    ...files("infra/backup", /\.sh$/),
+  ]) {
+    for (const match of read(file).matchAll(
+      new RegExp(`\\$\\{?(${NAME})`, "g"),
+    )) {
       names.add(match[1]);
     }
   }
@@ -89,7 +138,9 @@ describe(".env.example", () => {
   const example = documented();
 
   it("lists every variable the schema accepts", () => {
-    const missing = Object.keys(envShape()).filter((name) => !example.has(name));
+    const missing = Object.keys(envShape()).filter(
+      (name) => !example.has(name),
+    );
 
     expect(missing).toEqual([]);
   });
@@ -100,22 +151,30 @@ describe(".env.example", () => {
     expect(missing).toEqual([]);
   });
 
-  it.each(["compose.production.yaml", "compose.development.yaml"])(
-    "lists every variable %s interpolates",
-    (compose) => {
-      const missing = [...interpolatedBy(compose)].filter((name) => !example.has(name));
+  it("lists every variable compose.development.yaml interpolates", () => {
+    const missing = [...interpolatedBy("compose.development.yaml")].filter(
+      (name) => !example.has(name),
+    );
 
-      expect(missing).toEqual([]);
-    },
-  );
+    expect(missing).toEqual([]);
+  });
+
+  it("defines every variable its own values expand", () => {
+    const missing = [...expandedByExample()].filter(
+      (name) => !example.has(name),
+    );
+
+    expect(missing).toEqual([]);
+  });
 
   it("lists nothing that nobody reads", () => {
     const readers = new Set([
       ...Object.keys(envShape()),
       ...readByCode(),
-      ...interpolatedBy("compose.production.yaml"),
+      ...readIndirectly(),
       ...interpolatedBy("compose.development.yaml"),
       ...readByScripts(),
+      ...expandedByExample(),
     ]);
 
     const dead = [...example].filter((name) => !readers.has(name));

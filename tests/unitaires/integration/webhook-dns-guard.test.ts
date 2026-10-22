@@ -90,7 +90,11 @@ function callLookup(
   lookup: (hostname: string, options: object, callback: LookupCallback) => void,
   hostname: string,
   options: object,
-): Promise<{ error: NodeJS.ErrnoException | null; address: unknown; family: unknown }> {
+): Promise<{
+  error: NodeJS.ErrnoException | null;
+  address: unknown;
+  family: unknown;
+}> {
   return new Promise((resolve) => {
     lookup(hostname, options, (error, address, family) =>
       resolve({ error, address, family }),
@@ -107,12 +111,16 @@ describe("the address the connection uses", () => {
 
     const lookup = destination.createGuardedLookup(resolve);
 
-    const first = await callLookup(lookup, "rebind.exemplo.com.br", { all: true });
+    const first = await callLookup(lookup, "rebind.exemplo.com.br", {
+      all: true,
+    });
 
     expect(first.error).toBeNull();
     expect(first.address).toEqual([{ address: "93.184.216.34", family: 4 }]);
 
-    const second = await callLookup(lookup, "rebind.exemplo.com.br", { all: true });
+    const second = await callLookup(lookup, "rebind.exemplo.com.br", {
+      all: true,
+    });
 
     expect(second.error?.code).toBe("EWEBHOOK_FORBIDDEN");
     expect(resolve).toHaveBeenCalledTimes(2);
@@ -141,7 +149,9 @@ describe("the address the connection uses", () => {
     expect(typeof single.address).toBe("string");
     expect([4, 6]).toContain(single.family);
 
-    const onlyV4 = await callLookup(lookup, "dual.exemplo.com.br", { family: 4 });
+    const onlyV4 = await callLookup(lookup, "dual.exemplo.com.br", {
+      family: 4,
+    });
 
     expect(onlyV4.address).toBe("93.184.216.34");
     expect(onlyV4.family).toBe(4);
@@ -152,7 +162,9 @@ describe("the address the connection uses", () => {
       throw Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" });
     });
 
-    const result = await callLookup(lookup, "gone.exemplo.com.br", { all: true });
+    const result = await callLookup(lookup, "gone.exemplo.com.br", {
+      all: true,
+    });
 
     expect(result.error?.code).toBe("EWEBHOOK_UNRESOLVED");
   });

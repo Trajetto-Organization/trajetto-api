@@ -45,14 +45,24 @@ describe("the body field", () => {
 
   it("drops a malformed one instead of refusing the submission", () => {
     // A 400 parks the driver's queue for good; the hint is not worth that.
-    expect(body.parse({ device_precheck: { ...sent, text: "MARIA" } }).device_precheck).toBeUndefined();
-    expect(body.parse({ device_precheck: "{}" }).device_precheck).toBeUndefined();
-    expect(body.parse({ device_precheck: { ...sent, engine: "tesseract" } }).device_precheck).toBeUndefined();
+    expect(
+      body.parse({ device_precheck: { ...sent, text: "MARIA" } })
+        .device_precheck,
+    ).toBeUndefined();
+    expect(
+      body.parse({ device_precheck: "{}" }).device_precheck,
+    ).toBeUndefined();
+    expect(
+      body.parse({ device_precheck: { ...sent, engine: "tesseract" } })
+        .device_precheck,
+    ).toBeUndefined();
     expect(body.parse({}).device_precheck).toBeUndefined();
   });
 
   it("never carries the text read: the schema is strict", () => {
-    expect(devicePrecheckSchema.safeParse({ ...sent, lines: ["NF 123"] }).success).toBe(false);
+    expect(
+      devicePrecheckSchema.safeParse({ ...sent, lines: ["NF 123"] }).success,
+    ).toBe(false);
   });
 });
 
@@ -62,28 +72,58 @@ describe("acceptDevicePrecheck", () => {
   });
 
   it("drops it without the contract, with the reading off, or for another kind of photo", () => {
-    expect(acceptDevicePrecheck(sent, { ...on, aiAnalysisLimit: 0, kind: "proof" })).toBeNull();
-    expect(acceptDevicePrecheck(sent, { ...on, aiAnalysisLimit: null, kind: "proof" })).toBeNull();
-    expect(acceptDevicePrecheck(sent, { ...on, providerConfigured: false, kind: "proof" })).toBeNull();
+    expect(
+      acceptDevicePrecheck(sent, { ...on, aiAnalysisLimit: 0, kind: "proof" }),
+    ).toBeNull();
+    expect(
+      acceptDevicePrecheck(sent, {
+        ...on,
+        aiAnalysisLimit: null,
+        kind: "proof",
+      }),
+    ).toBeNull();
+    expect(
+      acceptDevicePrecheck(sent, {
+        ...on,
+        providerConfigured: false,
+        kind: "proof",
+      }),
+    ).toBeNull();
     expect(acceptDevicePrecheck(sent, { ...on, kind: "odometer" })).toBeNull();
-    expect(acceptDevicePrecheck(undefined, { ...on, kind: "proof" })).toBeNull();
+    expect(
+      acceptDevicePrecheck(undefined, { ...on, kind: "proof" }),
+    ).toBeNull();
   });
 });
 
 describe("sessionPrecheckFlag", () => {
   it("is on only with the contract, the server reading and quota left", () => {
-    expect(sessionPrecheckFlag({ ...on, remaining: 5 })).toEqual({ precheck: true, reason: null });
+    expect(sessionPrecheckFlag({ ...on, remaining: 5 })).toEqual({
+      precheck: true,
+      reason: null,
+    });
     // The ledger could not be read: the server's reservation still gates.
-    expect(sessionPrecheckFlag({ ...on, remaining: null })).toEqual({ precheck: true, reason: null });
+    expect(sessionPrecheckFlag({ ...on, remaining: null })).toEqual({
+      precheck: true,
+      reason: null,
+    });
     expect(sessionPrecheckFlag({ ...on, remaining: 0 })).toEqual({
       precheck: false,
       reason: "quota_exhausted",
     });
-    expect(sessionPrecheckFlag({ ...on, aiAnalysisLimit: 0, remaining: null })).toEqual({
+    expect(
+      sessionPrecheckFlag({ ...on, aiAnalysisLimit: 0, remaining: null }),
+    ).toEqual({
       precheck: false,
       reason: "not_contracted",
     });
-    expect(sessionPrecheckFlag({ ...on, providerConfigured: false, remaining: null })).toEqual({
+    expect(
+      sessionPrecheckFlag({
+        ...on,
+        providerConfigured: false,
+        remaining: null,
+      }),
+    ).toEqual({
       precheck: false,
       reason: "unavailable",
     });
@@ -92,48 +132,93 @@ describe("sessionPrecheckFlag", () => {
 
 describe("proofDeviceAgreement", () => {
   it("compares 'number found' with 'number matches'", () => {
-    expect(proofDeviceAgreement(sent, { documentMatches: "yes" })).toBe("AGREE");
-    expect(proofDeviceAgreement(sent, { documentMatches: "no" })).toBe("DISAGREE");
+    expect(proofDeviceAgreement(sent, { documentMatches: "yes" })).toBe(
+      "AGREE",
+    );
+    expect(proofDeviceAgreement(sent, { documentMatches: "no" })).toBe(
+      "DISAGREE",
+    );
     expect(
-      proofDeviceAgreement({ ...sent, invoice_number_found: false }, { documentMatches: "no" }),
+      proofDeviceAgreement(
+        { ...sent, invoice_number_found: false },
+        { documentMatches: "no" },
+      ),
     ).toBe("AGREE");
     expect(
-      proofDeviceAgreement({ ...sent, invoice_number_found: false }, { documentMatches: "yes" }),
+      proofDeviceAgreement(
+        { ...sent, invoice_number_found: false },
+        { documentMatches: "yes" },
+      ),
     ).toBe("DISAGREE");
   });
 
   it("is n/a when either side could not say", () => {
-    expect(proofDeviceAgreement(sent, { documentMatches: "unknown" })).toBe("NOT_APPLICABLE");
-    expect(proofDeviceAgreement(sent, { documentMatches: "not_applicable" })).toBe("NOT_APPLICABLE");
-    expect(
-      proofDeviceAgreement({ ...sent, invoice_number_found: null }, { documentMatches: "yes" }),
-    ).toBe("NOT_APPLICABLE");
-    expect(proofDeviceAgreement({ ...sent, outcome: "error" }, { documentMatches: "yes" })).toBe(
+    expect(proofDeviceAgreement(sent, { documentMatches: "unknown" })).toBe(
       "NOT_APPLICABLE",
     );
+    expect(
+      proofDeviceAgreement(sent, { documentMatches: "not_applicable" }),
+    ).toBe("NOT_APPLICABLE");
+    expect(
+      proofDeviceAgreement(
+        { ...sent, invoice_number_found: null },
+        { documentMatches: "yes" },
+      ),
+    ).toBe("NOT_APPLICABLE");
+    expect(
+      proofDeviceAgreement(
+        { ...sent, outcome: "error" },
+        { documentMatches: "yes" },
+      ),
+    ).toBe("NOT_APPLICABLE");
   });
 
   it("is null with nothing to compare", () => {
     expect(proofDeviceAgreement(null, { documentMatches: "yes" })).toBeNull();
     expect(proofDeviceAgreement(sent, null)).toBeNull();
-    expect(proofDeviceAgreement({ ...sent, kind: "odometer" }, { documentMatches: "yes" })).toBeNull();
+    expect(
+      proofDeviceAgreement(
+        { ...sent, kind: "odometer" },
+        { documentMatches: "yes" },
+      ),
+    ).toBeNull();
   });
 });
 
 describe("odometerDeviceAgreement", () => {
-  const odometer = { ...sent, kind: "odometer", invoice_number_found: null, date_out_of_window: null, typed_mileage_found: true } as const;
+  const odometer = {
+    ...sent,
+    kind: "odometer",
+    invoice_number_found: null,
+    date_out_of_window: null,
+    typed_mileage_found: true,
+  } as const;
 
   it("compares the phone's 'typed km found' with the server's 'km read matches'", () => {
     expect(odometerDeviceAgreement(odometer, true)).toBe("AGREE");
     expect(odometerDeviceAgreement(odometer, false)).toBe("DISAGREE");
-    expect(odometerDeviceAgreement({ ...odometer, typed_mileage_found: false }, false)).toBe("AGREE");
-    expect(odometerDeviceAgreement({ ...odometer, typed_mileage_found: false }, true)).toBe("DISAGREE");
+    expect(
+      odometerDeviceAgreement(
+        { ...odometer, typed_mileage_found: false },
+        false,
+      ),
+    ).toBe("AGREE");
+    expect(
+      odometerDeviceAgreement(
+        { ...odometer, typed_mileage_found: false },
+        true,
+      ),
+    ).toBe("DISAGREE");
   });
 
   it("is NOT_APPLICABLE when either side could not say", () => {
     expect(odometerDeviceAgreement(odometer, null)).toBe("NOT_APPLICABLE");
-    expect(odometerDeviceAgreement({ ...odometer, typed_mileage_found: null }, true)).toBe("NOT_APPLICABLE");
-    expect(odometerDeviceAgreement({ ...odometer, outcome: "error" }, true)).toBe("NOT_APPLICABLE");
+    expect(
+      odometerDeviceAgreement({ ...odometer, typed_mileage_found: null }, true),
+    ).toBe("NOT_APPLICABLE");
+    expect(
+      odometerDeviceAgreement({ ...odometer, outcome: "error" }, true),
+    ).toBe("NOT_APPLICABLE");
   });
 
   it("is null without an odometer pre-check", () => {
@@ -154,7 +239,9 @@ describe("ai_device_agreement_total", () => {
     const after = deviceAgreementTotals();
 
     expect(after.proof.AGREE - before.proof.AGREE).toBe(2);
-    expect(after.fuel_odometer.DISAGREE - before.fuel_odometer.DISAGREE).toBe(1);
+    expect(after.fuel_odometer.DISAGREE - before.fuel_odometer.DISAGREE).toBe(
+      1,
+    );
     expect(after.checklist_mileage).toEqual(before.checklist_mileage);
     expect(after.checklist_mileage.NOT_APPLICABLE).toBeGreaterThanOrEqual(0);
   });
@@ -169,23 +256,48 @@ describe("proofAiState with the phone's pre-check", () => {
   };
 
   it("is provisional while the server reads, and 'read' once it did", () => {
-    expect(proofAiState({ ...base, analysisStatus: "PENDING", hasDevicePrecheck: true })).toBe(
-      "device_provisional",
-    );
-    expect(proofAiState({ ...base, analysisStatus: "PROCESSING", hasDevicePrecheck: true })).toBe(
-      "device_provisional",
-    );
     expect(
-      proofAiState({ ...base, hasSuggestion: true, analysisStatus: "COMPLETED", hasDevicePrecheck: true }),
+      proofAiState({
+        ...base,
+        analysisStatus: "PENDING",
+        hasDevicePrecheck: true,
+      }),
+    ).toBe("device_provisional");
+    expect(
+      proofAiState({
+        ...base,
+        analysisStatus: "PROCESSING",
+        hasDevicePrecheck: true,
+      }),
+    ).toBe("device_provisional");
+    expect(
+      proofAiState({
+        ...base,
+        hasSuggestion: true,
+        analysisStatus: "COMPLETED",
+        hasDevicePrecheck: true,
+      }),
     ).toBe("read");
   });
 
   it("keeps the old states without a pre-check or after a failure", () => {
-    expect(proofAiState({ ...base, analysisStatus: "PENDING" })).toBe("analyzing");
-    expect(proofAiState({ ...base, analysisStatus: "FAILED", hasDevicePrecheck: true })).toBe("failed");
-    expect(proofAiState({ ...base, analysisStatus: "SKIPPED", hasDevicePrecheck: true })).toBe(
-      "quota_exceeded",
+    expect(proofAiState({ ...base, analysisStatus: "PENDING" })).toBe(
+      "analyzing",
     );
+    expect(
+      proofAiState({
+        ...base,
+        analysisStatus: "FAILED",
+        hasDevicePrecheck: true,
+      }),
+    ).toBe("failed");
+    expect(
+      proofAiState({
+        ...base,
+        analysisStatus: "SKIPPED",
+        hasDevicePrecheck: true,
+      }),
+    ).toBe("quota_exceeded");
   });
 });
 
@@ -193,9 +305,14 @@ describe("the in-memory audit card, as Postgres keeps it", () => {
   it("writes the pre-check with the card and replaces it (null included) on a re-proof", async () => {
     const repository = new InMemoryProofAuditRepository();
 
-    const card = await repository.enqueue("delivery-1", "business-1", undefined, {
-      devicePrecheck: sent,
-    });
+    const card = await repository.enqueue(
+      "delivery-1",
+      "business-1",
+      undefined,
+      {
+        devicePrecheck: sent,
+      },
+    );
 
     expect(card.device_precheck).toEqual(sent);
     // A copy, not the caller's object.

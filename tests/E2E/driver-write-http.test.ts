@@ -86,10 +86,14 @@ async function seedUser(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "15m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "15m",
+    },
+  );
 }
 
 /** What the web form posts (after its own masks are stripped by the schema). */
@@ -113,7 +117,11 @@ function body(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function create(businessId: string, payload: object, token = tokens.admin) {
+async function create(
+  businessId: string,
+  payload: object,
+  token = tokens.admin,
+) {
   return app.inject({
     method: "POST",
     url: `/driver/create-driver/${businessId}`,
@@ -136,7 +144,11 @@ async function update(
   });
 }
 
-async function remove(driverId: string, businessId: string, token = tokens.admin) {
+async function remove(
+  driverId: string,
+  businessId: string,
+  token = tokens.admin,
+) {
   return app.inject({
     method: "DELETE",
     url: `/driver/delete-driver/${driverId}/business/${businessId}`,
@@ -154,7 +166,10 @@ async function createdId(businessId: string, payload: { cpf: string }) {
 
 let routeCode = 0;
 
-async function seedRoute(driverId: string, status: "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED") {
+async function seedRoute(
+  driverId: string,
+  status: "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED",
+) {
   routeCode += 1;
 
   await prisma.route.create({
@@ -193,7 +208,11 @@ beforeAll(async () => {
   });
 
   tokens.admin = await seedUser("BUSINESS_ADMIN", CARRIER);
-  tokens.readOnly = await seedUser("BUSINESS_USER", CARRIER, readOnlyProfile.id);
+  tokens.readOnly = await seedUser(
+    "BUSINESS_USER",
+    CARRIER,
+    readOnlyProfile.id,
+  );
   tokens.otherAdmin = await seedUser("BUSINESS_ADMIN", OTHER);
   tokens.master = await seedUser("MASTER", null);
 
@@ -209,7 +228,12 @@ beforeAll(async () => {
       businessId: CARRIER,
     },
   });
-  tokens.driver = await seedUser("BUSINESS_USER", CARRIER, undefined, appDriver.id);
+  tokens.driver = await seedUser(
+    "BUSINESS_USER",
+    CARRIER,
+    undefined,
+    appDriver.id,
+  );
 
   ({ app } = await import("@/http"));
   await app.ready();
@@ -271,10 +295,15 @@ describe("the licence fields (decision 8.5)", () => {
     await create(CARRIER, payload);
     const id = await createdId(CARRIER, payload);
 
-    const response = await update(id, CARRIER, { birth_date: payload.birth_date, cnh_expires_at: "" });
+    const response = await update(id, CARRIER, {
+      birth_date: payload.birth_date,
+      cnh_expires_at: "",
+    });
 
     expect(response.statusCode).toBe(200);
-    expect((await prisma.driver.findUniqueOrThrow({ where: { id } })).cnh_expires_at).toBeNull();
+    expect(
+      (await prisma.driver.findUniqueOrThrow({ where: { id } })).cnh_expires_at,
+    ).toBeNull();
   });
 });
 
@@ -312,7 +341,9 @@ describe("CPF and CNH unique per company (decision 8.1)", () => {
     const payload = body();
 
     expect((await create(CARRIER, payload)).statusCode).toBe(201);
-    expect((await create(OTHER, payload, tokens.otherAdmin)).statusCode).toBe(201);
+    expect((await create(OTHER, payload, tokens.otherAdmin)).statusCode).toBe(
+      201,
+    );
   });
 
   it("refuses a CPF already in THIS company with a 409 that names only it", async () => {
@@ -362,7 +393,9 @@ describe("CPF and CNH unique per company (decision 8.1)", () => {
       create(CARRIER, { ...payload, cnh: body().cnh }),
     ]);
 
-    expect(responses.map((response) => response.statusCode).sort()).toEqual([201, 409]);
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([
+      201, 409,
+    ]);
   });
 });
 
@@ -384,8 +417,12 @@ describe("deactivating a driver with routes (decision 8.3)", () => {
 
     expect(response.statusCode).toBe(409);
     expect(json.code).toBe("DRIVER_HAS_OPEN_ROUTES");
-    expect(json.message).toContain("1 rota em andamento e 2 rotas planejadas ou liberadas");
-    expect((await prisma.driver.findUniqueOrThrow({ where: { id } })).status).toBe("ACTIVE");
+    expect(json.message).toContain(
+      "1 rota em andamento e 2 rotas planejadas ou liberadas",
+    );
+    expect(
+      (await prisma.driver.findUniqueOrThrow({ where: { id } })).status,
+    ).toBe("ACTIVE");
   });
 
   it("goes through once the routes are finished or cancelled", async () => {
@@ -402,7 +439,9 @@ describe("deactivating a driver with routes (decision 8.3)", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect((await prisma.driver.findUniqueOrThrow({ where: { id } })).status).toBe("INACTIVE");
+    expect(
+      (await prisma.driver.findUniqueOrThrow({ where: { id } })).status,
+    ).toBe("INACTIVE");
   });
 });
 
@@ -448,7 +487,9 @@ describe("deleting a driver", () => {
  * `release()` — the window a concurrent request lands in.
  */
 function holdOpen(
-  work: (tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => Promise<unknown>,
+  work: (
+    tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  ) => Promise<unknown>,
 ) {
   let release!: () => void;
   let markReady!: () => void;
@@ -497,7 +538,10 @@ describe("writes racing another request (the driver row's lock)", () => {
     // The count of a plain read would not see the uncommitted route, and the
     // status UPDATE does not conflict with the route's KEY SHARE lock: the
     // driver went inactive with a route waiting for them.
-    const deactivation = update(id, CARRIER, { birth_date: payload.birth_date, status: "INACTIVE" });
+    const deactivation = update(id, CARRIER, {
+      birth_date: payload.birth_date,
+      status: "INACTIVE",
+    });
 
     await pause(400);
     writer.release();
@@ -507,7 +551,9 @@ describe("writes racing another request (the driver row's lock)", () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json().code).toBe("DRIVER_HAS_OPEN_ROUTES");
-    expect((await prisma.driver.findUniqueOrThrow({ where: { id } })).status).toBe("ACTIVE");
+    expect(
+      (await prisma.driver.findUniqueOrThrow({ where: { id } })).status,
+    ).toBe("ACTIVE");
   });
 
   it("refuses the delete, with a 409 and not a 500, when a pause arrives while it runs", async () => {
@@ -582,7 +628,9 @@ describe("writes racing another request (the driver row's lock)", () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json().code).toBe("DRIVER_HAS_USER");
-    expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).driverId).toBe(id);
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: userId } })).driverId,
+    ).toBe(id);
   });
 });
 
@@ -592,16 +640,19 @@ describe("tenants and roles on the writes", () => {
     await create(OTHER, theirs, tokens.otherAdmin);
     const theirId = await createdId(OTHER, theirs);
 
-    const edit = await update(theirId, CARRIER, { birth_date: theirs.birth_date, name: "Invasor Teste" });
+    const edit = await update(theirId, CARRIER, {
+      birth_date: theirs.birth_date,
+      name: "Invasor Teste",
+    });
     const drop = await remove(theirId, CARRIER);
 
     expect(edit.statusCode).toBe(404);
     expect(edit.json().code).toBe("DRIVER_NOT_FOUND");
     expect(drop.statusCode).toBe(404);
     expect(drop.json().code).toBe("DRIVER_NOT_FOUND");
-    expect((await prisma.driver.findUniqueOrThrow({ where: { id: theirId } })).name).toBe(
-      "Joana Motorista",
-    );
+    expect(
+      (await prisma.driver.findUniqueOrThrow({ where: { id: theirId } })).name,
+    ).toBe("Joana Motorista");
   });
 
   it("refuses another company's id in the path", async () => {
@@ -628,7 +679,12 @@ describe("tenants and roles on the writes", () => {
     const id = await createdId(CARRIER, payload);
 
     for (const token of [tokens.readOnly, tokens.driver]) {
-      const edit = await update(id, CARRIER, { birth_date: payload.birth_date, name: "Outro Nome" }, token);
+      const edit = await update(
+        id,
+        CARRIER,
+        { birth_date: payload.birth_date, name: "Outro Nome" },
+        token,
+      );
       const drop = await remove(id, CARRIER, token);
 
       expect(edit.statusCode).toBe(403);
@@ -654,7 +710,12 @@ describe("tenants and roles on the writes", () => {
       },
     });
 
-    const edit = await update(driver.id, INACTIVE, { birth_date: "1990-05-10", name: "Outro Nome" }, tokens.master);
+    const edit = await update(
+      driver.id,
+      INACTIVE,
+      { birth_date: "1990-05-10", name: "Outro Nome" },
+      tokens.master,
+    );
     const drop = await remove(driver.id, INACTIVE, tokens.master);
 
     expect(edit.statusCode).toBe(403);
@@ -662,6 +723,8 @@ describe("tenants and roles on the writes", () => {
     // Before, the delete route had no tenant guard and removed the row.
     expect(drop.statusCode).toBe(403);
     expect(drop.json().code).toBe("TENANT_INACTIVE");
-    expect(await prisma.driver.findUnique({ where: { id: driver.id } })).not.toBeNull();
+    expect(
+      await prisma.driver.findUnique({ where: { id: driver.id } }),
+    ).not.toBeNull();
   });
 });

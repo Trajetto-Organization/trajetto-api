@@ -131,7 +131,9 @@ function selectedIds(
 }
 
 /** Selected statuses, or undefined when the selection keeps every row. */
-function selectedStatuses(filters: FineFacetSelection): FineStatus[] | undefined {
+function selectedStatuses(
+  filters: FineFacetSelection,
+): FineStatus[] | undefined {
   const selected = Array.from(new Set(filters.statuses ?? []));
 
   return selected.length > 0 && selected.length < FINE_STATUSES.length
@@ -187,7 +189,9 @@ function fineSearchWhere(term: string): Prisma.FineWhereInput {
   }
 
   if (MONEY.test(term)) {
-    conditions.push({ amount: { equals: new Decimal(term.replace(",", ".")) } });
+    conditions.push({
+      amount: { equals: new Decimal(term.replace(",", ".")) },
+    });
   }
 
   return buildSearchOr(conditions);
@@ -228,7 +232,10 @@ function fineListWhere(
 
   // The tenant stays a top-level key: the (businessId, created_at) index
   // serves every read, and no OR can widen past it.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Fines of one (status, branch, code) combination over the base. */

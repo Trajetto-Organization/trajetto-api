@@ -7,7 +7,11 @@ import { createServer, type Server } from "node:http";
 import { sign } from "jsonwebtoken";
 
 import { socketClientEntry } from "./support/socket-client";
-import { freePort, startReplica, type Replica } from "./support/replica-process";
+import {
+  freePort,
+  startReplica,
+  type Replica,
+} from "./support/replica-process";
 
 /**
  * Chat typing and presence across replicas (CRIT-21, plan §13).
@@ -68,7 +72,10 @@ const sockets: TestSocket[] = [];
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
-async function tokenFor(userId: string, driverId: string | null): Promise<string> {
+async function tokenFor(
+  userId: string,
+  driverId: string | null,
+): Promise<string> {
   const familyId = randomUUID();
 
   await prisma.refreshToken.create({
@@ -290,125 +297,157 @@ describe("across replicas", () => {
   let staff: TestSocket;
   let driverOnOne: TestSocket;
 
-  it("announces a driver coming online on replica 1 to the SAC on replica 2", { timeout: 60_000 }, async () => {
-    staff = await connectTo(two.port, await tokenFor(STAFF, null));
+  it(
+    "announces a driver coming online on replica 1 to the SAC on replica 2",
+    { timeout: 60_000 },
+    async () => {
+      staff = await connectTo(two.port, await tokenFor(STAFF, null));
 
-    // Rooms are joined after the handshake's queries.
-    await sleep(1_500);
+      // Rooms are joined after the handshake's queries.
+      await sleep(1_500);
 
-    const online = next(staff, "chatPresence", aboutDriver);
+      const online = next(staff, "chatPresence", aboutDriver);
 
-    driverOnOne = await connectTo(one.port, await tokenFor(DRIVER_USER, DRIVER));
+      driverOnOne = await connectTo(
+        one.port,
+        await tokenFor(DRIVER_USER, DRIVER),
+      );
 
-    expect(await online).toMatchObject({
-      driverId: DRIVER,
-      userId: DRIVER_USER,
-      online: true,
-    });
-  });
+      expect(await online).toMatchObject({
+        driverId: DRIVER,
+        userId: DRIVER_USER,
+        online: true,
+      });
+    },
+  );
 
-  it("is seen online by a third node, for the thread list's dot", { timeout: 30_000 }, async () => {
-    expect(await thirdNode.getOnlineUserIds([DRIVER_USER, STAFF])).toEqual(
-      expect.arrayContaining([DRIVER_USER, STAFF]),
-    );
-    expect(await thirdNode.getOnlineUserIds([randomUUID()])).toEqual([]);
-  });
+  it(
+    "is seen online by a third node, for the thread list's dot",
+    { timeout: 30_000 },
+    async () => {
+      expect(await thirdNode.getOnlineUserIds([DRIVER_USER, STAFF])).toEqual(
+        expect.arrayContaining([DRIVER_USER, STAFF]),
+      );
+      expect(await thirdNode.getOnlineUserIds([randomUUID()])).toEqual([]);
+    },
+  );
 
-  it("relays typing and recording in both directions", { timeout: 30_000 }, async () => {
-    const driverTyping = next(staff, "chatTyping");
-    driverOnOne.emit("chatTyping");
+  it(
+    "relays typing and recording in both directions",
+    { timeout: 30_000 },
+    async () => {
+      const driverTyping = next(staff, "chatTyping");
+      driverOnOne.emit("chatTyping");
 
-    expect(await driverTyping).toEqual({
-      driverId: DRIVER,
-      userName: "Motorista das Réplicas",
-    });
+      expect(await driverTyping).toEqual({
+        driverId: DRIVER,
+        userName: "Motorista das Réplicas",
+      });
 
-    const staffTyping = next(driverOnOne, "chatTyping");
-    staff.emit("chatTyping", { driverUserId: DRIVER_USER });
+      const staffTyping = next(driverOnOne, "chatTyping");
+      staff.emit("chatTyping", { driverUserId: DRIVER_USER });
 
-    expect(await staffTyping).toEqual({ userName: "Atendente da Réplica 2" });
+      expect(await staffTyping).toEqual({ userName: "Atendente da Réplica 2" });
 
-    const staffRecording = next(driverOnOne, "chatRecording");
-    staff.emit("chatRecording", { driverUserId: DRIVER_USER, recording: true });
+      const staffRecording = next(driverOnOne, "chatRecording");
+      staff.emit("chatRecording", {
+        driverUserId: DRIVER_USER,
+        recording: true,
+      });
 
-    expect(await staffRecording).toEqual({
-      userName: "Atendente da Réplica 2",
-      recording: true,
-    });
-  });
+      expect(await staffRecording).toEqual({
+        userName: "Atendente da Réplica 2",
+        recording: true,
+      });
+    },
+  );
 
-  it("keeps him online while another replica still holds one of his sockets", { timeout: 60_000 }, async () => {
-    const driverOnTwo = await connectTo(two.port, await tokenFor(DRIVER_USER, DRIVER));
+  it(
+    "keeps him online while another replica still holds one of his sockets",
+    { timeout: 60_000 },
+    async () => {
+      const driverOnTwo = await connectTo(
+        two.port,
+        await tokenFor(DRIVER_USER, DRIVER),
+      );
 
-    await sleep(1_500);
+      await sleep(1_500);
 
-    const earlyOffline = next(
-      staff,
-      "chatPresence",
-      (payload) => aboutDriver(payload) && payload.online === false,
-      3_000,
-    );
+      const earlyOffline = next(
+        staff,
+        "chatPresence",
+        (payload) => aboutDriver(payload) && payload.online === false,
+        3_000,
+      );
 
-    driverOnOne.disconnect();
+      driverOnOne.disconnect();
 
-    // The cluster-wide count still finds the socket on replica 2.
-    expect(await earlyOffline).toBeNull();
+      // The cluster-wide count still finds the socket on replica 2.
+      expect(await earlyOffline).toBeNull();
 
-    expect(
-      (await prisma.user.findUniqueOrThrow({ where: { id: DRIVER_USER } }))
-        .last_seen_at,
-    ).toBeNull();
+      expect(
+        (await prisma.user.findUniqueOrThrow({ where: { id: DRIVER_USER } }))
+          .last_seen_at,
+      ).toBeNull();
 
-    const offline = next(
-      staff,
-      "chatPresence",
-      (payload) => aboutDriver(payload) && payload.online === false,
-    );
+      const offline = next(
+        staff,
+        "chatPresence",
+        (payload) => aboutDriver(payload) && payload.online === false,
+      );
 
-    driverOnTwo.disconnect();
+      driverOnTwo.disconnect();
 
-    const announced = await offline;
+      const announced = await offline;
 
-    expect(announced).toMatchObject({ driverId: DRIVER, online: false });
-    expect(typeof announced?.last_seen_at).toBe("string");
+      expect(announced).toMatchObject({ driverId: DRIVER, online: false });
+      expect(typeof announced?.last_seen_at).toBe("string");
 
-    const stamped = await prisma.user.findUniqueOrThrow({
-      where: { id: DRIVER_USER },
-    });
+      const stamped = await prisma.user.findUniqueOrThrow({
+        where: { id: DRIVER_USER },
+      });
 
-    expect(stamped.last_seen_at).not.toBeNull();
-  });
+      expect(stamped.last_seen_at).not.toBeNull();
+    },
+  );
 });
 
 describe("a replica whose Redis is unreachable", () => {
-  it("still relays hints and presence among its own sockets", { timeout: 60_000 }, async () => {
-    const staff = await connectTo(isolated.port, await tokenFor(STAFF, null));
+  it(
+    "still relays hints and presence among its own sockets",
+    { timeout: 60_000 },
+    async () => {
+      const staff = await connectTo(isolated.port, await tokenFor(STAFF, null));
 
-    await sleep(1_500);
+      await sleep(1_500);
 
-    const online = next(staff, "chatPresence", aboutDriver);
+      const online = next(staff, "chatPresence", aboutDriver);
 
-    const driver = await connectTo(
-      isolated.port,
-      await tokenFor(DRIVER_USER, DRIVER),
-    );
+      const driver = await connectTo(
+        isolated.port,
+        await tokenFor(DRIVER_USER, DRIVER),
+      );
 
-    // The cluster-wide question fails; this replica's own view answers.
-    expect(await online).toMatchObject({ userId: DRIVER_USER, online: true });
+      // The cluster-wide question fails; this replica's own view answers.
+      expect(await online).toMatchObject({ userId: DRIVER_USER, online: true });
 
-    const typing = next(staff, "chatTyping");
-    driver.emit("chatTyping");
+      const typing = next(staff, "chatTyping");
+      driver.emit("chatTyping");
 
-    expect(await typing).toMatchObject({ driverId: DRIVER });
+      expect(await typing).toMatchObject({ driverId: DRIVER });
 
-    const offline = next(
-      staff,
-      "chatPresence",
-      (payload) => aboutDriver(payload) && payload.online === false,
-    );
+      const offline = next(
+        staff,
+        "chatPresence",
+        (payload) => aboutDriver(payload) && payload.online === false,
+      );
 
-    driver.disconnect();
+      driver.disconnect();
 
-    expect(await offline).toMatchObject({ userId: DRIVER_USER, online: false });
-  });
+      expect(await offline).toMatchObject({
+        userId: DRIVER_USER,
+        online: false,
+      });
+    },
+  );
 });

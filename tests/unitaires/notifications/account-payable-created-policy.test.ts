@@ -26,7 +26,9 @@ describe("account-payable.created in-app render", () => {
       driverId: "drv-1",
     });
 
-    expect(rendered.link).toBe("https://app.trajetto.com/driver/account-payable");
+    expect(rendered.link).toBe(
+      "https://app.trajetto.com/driver/account-payable",
+    );
   });
 
   it("links an admin to the dashboard filtered by the bill", () => {

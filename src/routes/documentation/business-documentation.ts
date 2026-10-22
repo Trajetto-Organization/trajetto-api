@@ -65,7 +65,9 @@ const businessResponses = {
   businessConflict: codedError(
     "BUSINESS_CNPJ_TAKEN, BUSINESS_NAME_TAKEN, BUSINESS_EMAIL_TAKEN ou BUSINESS_ERP_CODE_TAKEN: outra empresa já usa o dado. BRANCH_CNPJ_UNAVAILABLE: o CNPJ já é de uma filial. BRANCH_NAME_TAKEN, BRANCH_EMAIL_TAKEN ou BRANCH_ERP_CODE_TAKEN: outra filial DESTA empresa já usa o dado que a matriz receberia.",
   ),
-  businessNotFoundCoded: codedError("BUSINESS_NOT_FOUND: a empresa não existe."),
+  businessNotFoundCoded: codedError(
+    "BUSINESS_NOT_FOUND: a empresa não existe.",
+  ),
 
   businessCreated: z.object({
     message: z.string().default("Empresa e filial matriz criadas com sucesso!"),
@@ -121,7 +123,7 @@ const businessResponses = {
       topCities: z
         .array(z.object({ value: z.string(), count: z.number().int() }))
         .describe(
-          "As até três cidades (\"Cidade/UF\") com mais empresas, do maior para o menor.",
+          'As até três cidades ("Cidade/UF") com mais empresas, do maior para o menor.',
         ),
     },
     ["status", "uf"],
@@ -140,7 +142,6 @@ const businessResponses = {
     is_active: z.boolean(),
   }),
 
-
   // Common error responses
   internalServerError: internalErrorResponse,
   resourceNotFound: errorResponse,
@@ -148,8 +149,9 @@ const businessResponses = {
     message: z.string().default("Os dados enviados são inválidos."),
     issues: z.array(z.string()),
   }),
-  businessNotFound: codedError("BUSINESS_NOT_FOUND: a empresa do caminho não existe."),
-
+  businessNotFound: codedError(
+    "BUSINESS_NOT_FOUND: a empresa do caminho não existe.",
+  ),
 
   // Grouping errors by route
   createBusinessErrors: z.union([
@@ -198,9 +200,7 @@ const businessResponses = {
     z.object({
       message: z
         .string()
-        .default(
-          "Já existe uma filial da sua empresa com este código ERP.",
-        ),
+        .default("Já existe uma filial da sua empresa com este código ERP."),
     }),
     z.object({
       message: z
@@ -266,9 +266,7 @@ const businessResponses = {
     z.object({
       message: z
         .string()
-        .default(
-          "Já existe uma filial da sua empresa com este código ERP.",
-        ),
+        .default("Já existe uma filial da sua empresa com este código ERP."),
     }),
     z.object({
       message: z
@@ -279,7 +277,9 @@ const businessResponses = {
     }),
   ]),
   /** A parameter the route refuses before looking anything up. */
-  businessParamErrors: codedError("VALIDATION_ERROR: parâmetro ou corpo inválido (com `issues`)."),
+  businessParamErrors: codedError(
+    "VALIDATION_ERROR: parâmetro ou corpo inválido (com `issues`).",
+  ),
   /** The company of the path does not exist (decision 11.3: 404 with a code). */
   businessNotFoundCodedPath: codedError(
     "BUSINESS_NOT_FOUND: a empresa do caminho não existe.",

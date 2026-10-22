@@ -46,7 +46,9 @@ export const uploadConfig = {
     secretAccessKey: env.R2_SECRET_ACCESS_KEY || "",
     // Unset: the account's R2 endpoint. Set: any S3-compatible storage
     // (the upload E2E runs against a local MinIO), addressed path-style.
-    endpoint: env.R2_ENDPOINT || `https://${env.R2_ACCOUNT_ID || ""}.r2.cloudflarestorage.com`,
+    endpoint:
+      env.R2_ENDPOINT ||
+      `https://${env.R2_ACCOUNT_ID || ""}.r2.cloudflarestorage.com`,
     forcePathStyle: Boolean(env.R2_ENDPOINT),
   },
   signedUrlTtlSeconds: env.UPLOAD_SIGNED_URL_TTL_SECONDS,

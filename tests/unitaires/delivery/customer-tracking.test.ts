@@ -97,9 +97,7 @@ describe("what the customer gets to know", () => {
   });
 
   it("orders the events newest first", () => {
-    const stamps = build().events.map((event) =>
-      new Date(event.at).getTime(),
-    );
+    const stamps = build().events.map((event) => new Date(event.at).getTime());
 
     expect([...stamps].sort((a, b) => b - a)).toEqual(stamps);
   });

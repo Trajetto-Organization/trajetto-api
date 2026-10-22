@@ -34,9 +34,21 @@
   "created_from": "MOBILE_APP",
   "client_submission_id": "018fd960-0000-7000-8000-0000000000f3",
   "photos": [
-    { "key": "checklistPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-current-mileage-00000001.jpg", "fieldName": "current_mileage" },
-    { "key": "checklistPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-fuel-level-00000002.jpg", "fieldName": "fuel_level_adequate" },
-    { "key": "checklistPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-tires-00000003.jpg", "fieldName": "tires_condition" },
-    { "key": "checklistPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-brakes-00000004.jpg", "fieldName": "brakes_working" }
+    {
+      "key": "checklistPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-current-mileage-00000001.jpg",
+      "fieldName": "current_mileage"
+    },
+    {
+      "key": "checklistPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-fuel-level-00000002.jpg",
+      "fieldName": "fuel_level_adequate"
+    },
+    {
+      "key": "checklistPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-tires-00000003.jpg",
+      "fieldName": "tires_condition"
+    },
+    {
+      "key": "checklistPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-brakes-00000004.jpg",
+      "fieldName": "brakes_working"
+    }
   ]
 }

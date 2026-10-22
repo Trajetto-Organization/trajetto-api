@@ -179,10 +179,11 @@ describe("what the message says", () => {
       "Oi {{destinatario}}! Sua NF {{nota}} foi entregue por {{transportadora}}. Acompanhe: {{link}}",
     );
 
-    const [recipient] = await deliveryDeliveredPolicy.resolveExternalRecipients!(
-      payload(),
-      deps(),
-    );
+    const [recipient] =
+      await deliveryDeliveredPolicy.resolveExternalRecipients!(
+        payload(),
+        deps(),
+      );
 
     const rendered = await deliveryDeliveredPolicy.renderExternal!(
       payload(),
@@ -238,7 +239,10 @@ describe("what the message says", () => {
     templates.templates[0].is_active = false;
 
     expect(
-      await deliveryDeliveredPolicy.resolveExternalRecipients!(payload(), deps()),
+      await deliveryDeliveredPolicy.resolveExternalRecipients!(
+        payload(),
+        deps(),
+      ),
     ).toEqual([]);
     expect(recipients.recipients).toEqual([]);
   });
@@ -248,10 +252,11 @@ describe("what the message says", () => {
     // wrote one must not have the other sent on their behalf.
     await seedTemplate("DELIVERED", "EMAIL", "corpo de e-mail");
 
-    const [recipient] = await deliveryDeliveredPolicy.resolveExternalRecipients!(
-      payload(),
-      deps(),
-    );
+    const [recipient] =
+      await deliveryDeliveredPolicy.resolveExternalRecipients!(
+        payload(),
+        deps(),
+      );
 
     // Only the channel with a template is offered, so no WhatsApp row is ever
     // created for this moment...
@@ -278,10 +283,11 @@ describe("what the message says", () => {
       "Entregue. Para não receber mais: {{link_descadastro}}",
     );
 
-    const [recipient] = await deliveryDeliveredPolicy.resolveExternalRecipients!(
-      payload(),
-      deps(),
-    );
+    const [recipient] =
+      await deliveryDeliveredPolicy.resolveExternalRecipients!(
+        payload(),
+        deps(),
+      );
 
     const rendered = await deliveryDeliveredPolicy.renderExternal!(
       payload(),
@@ -300,10 +306,11 @@ describe("what the message says", () => {
 
     businesses.business[0].fantasy_name = "Café & Cia";
 
-    const [recipient] = await deliveryDeliveredPolicy.resolveExternalRecipients!(
-      payload(),
-      deps(),
-    );
+    const [recipient] =
+      await deliveryDeliveredPolicy.resolveExternalRecipients!(
+        payload(),
+        deps(),
+      );
 
     const rendered = await deliveryDeliveredPolicy.renderExternal!(
       payload(),
@@ -322,10 +329,11 @@ describe("what the message says", () => {
 
     businesses.business[0].fantasy_name = null;
 
-    const [recipient] = await deliveryDeliveredPolicy.resolveExternalRecipients!(
-      payload(),
-      deps(),
-    );
+    const [recipient] =
+      await deliveryDeliveredPolicy.resolveExternalRecipients!(
+        payload(),
+        deps(),
+      );
 
     const rendered = await deliveryDeliveredPolicy.renderExternal!(
       payload(),
@@ -348,10 +356,11 @@ describe("dates in the message", () => {
       "Previsão: {{previsao}}. Acompanhe: {{link}}",
     );
 
-    const [recipient] = await deliveryDispatchedPolicy.resolveExternalRecipients!(
-      payload({ scheduledDate: new Date("2026-09-17T00:00:00.000Z") }),
-      deps(),
-    );
+    const [recipient] =
+      await deliveryDispatchedPolicy.resolveExternalRecipients!(
+        payload({ scheduledDate: new Date("2026-09-17T00:00:00.000Z") }),
+        deps(),
+      );
 
     const rendered = await deliveryDispatchedPolicy.renderExternal!(
       payload({ scheduledDate: new Date("2026-09-17T00:00:00.000Z") }),
@@ -375,10 +384,11 @@ describe("dates in the message", () => {
       "Entregue em {{data_entrega}}. {{link}}",
     );
 
-    const [recipient] = await deliveryDeliveredPolicy.resolveExternalRecipients!(
-      payload(),
-      deps(),
-    );
+    const [recipient] =
+      await deliveryDeliveredPolicy.resolveExternalRecipients!(
+        payload(),
+        deps(),
+      );
 
     const rendered = await deliveryDeliveredPolicy.renderExternal!(
       payload({ deliveredAt: new Date("2026-09-17T15:30:00.000Z") }),

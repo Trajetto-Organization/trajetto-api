@@ -13,7 +13,10 @@ import { AppError } from "@/shared/errors/AppError";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import type { SortOrder } from "@/shared/pagination/list-query";
 
-import { summarizeProfileList, type ProfileSortKey } from "./profile-access-list";
+import {
+  summarizeProfileList,
+  type ProfileSortKey,
+} from "./profile-access-list";
 
 interface ListProfileAccessRequest {
   userId: string;
@@ -70,23 +73,26 @@ class ListProfileAccessUseCase {
 
     if (businessId) assertTenantAccess(findUser, businessId);
 
-    const findBusiness = await this.business.findBusinessById(resolvedBusinessId);
+    const findBusiness =
+      await this.business.findBusinessById(resolvedBusinessId);
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
     }
 
     try {
-      const { data, total, usage } = await this.profileAccess.listProfileAccess({
-        page,
-        pageSize,
-        sort,
-        order,
-        search,
-        businessId: resolvedBusinessId,
-        hideProfileId:
-          findUser.role === "BUSINESS_USER" ? findUser.profileAccessId : null,
-      });
+      const { data, total, usage } = await this.profileAccess.listProfileAccess(
+        {
+          page,
+          pageSize,
+          sort,
+          order,
+          search,
+          businessId: resolvedBusinessId,
+          hideProfileId:
+            findUser.role === "BUSINESS_USER" ? findUser.profileAccessId : null,
+        },
+      );
 
       // The cards count the whole search of the company (decision 8.8),
       // never the page on screen.

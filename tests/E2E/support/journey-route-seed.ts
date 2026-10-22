@@ -24,7 +24,10 @@ async function seedJourneyRoute(
   const longAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
   const status = options.status ?? "IN_PROGRESS";
 
-  const last = await prisma.route.aggregate({ where: { businessId }, _max: { code: true } });
+  const last = await prisma.route.aggregate({
+    where: { businessId },
+    _max: { code: true },
+  });
 
   const route = await prisma.route.create({
     data: {
@@ -35,7 +38,8 @@ async function seedJourneyRoute(
       driverId,
       status,
       scheduled_date: dateOnlyFromKey(
-        options.scheduledDate ?? businessDateKey(new Date(), "America/Sao_Paulo"),
+        options.scheduledDate ??
+          businessDateKey(new Date(), "America/Sao_Paulo"),
       ),
       released_at: options.releasedAt ?? longAgo,
       started_at:

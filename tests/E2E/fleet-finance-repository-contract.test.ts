@@ -75,10 +75,38 @@ async function seedBusiness(id: string, seq: number) {
 }
 
 const SUPPLIERS = [
-  { name: "Borracharia Central", cnpj: "11111111000111", uf: "SP", city: "Campinas", email: "b@x.com.br", telephone: "11988887777" },
-  { name: "auto peças norte", cnpj: "22222222000122", uf: "MG", city: null, email: null, telephone: null },
-  { name: "Oficina 50% Diesel", cnpj: "33333333000133", uf: null, city: "Santos", email: "OFICINA@X.com.br", telephone: "11977776666" },
-  { name: "Mecânica Zé", cnpj: "44444444000144", uf: "SP", city: "Americana", email: null, telephone: null },
+  {
+    name: "Borracharia Central",
+    cnpj: "11111111000111",
+    uf: "SP",
+    city: "Campinas",
+    email: "b@x.com.br",
+    telephone: "11988887777",
+  },
+  {
+    name: "auto peças norte",
+    cnpj: "22222222000122",
+    uf: "MG",
+    city: null,
+    email: null,
+    telephone: null,
+  },
+  {
+    name: "Oficina 50% Diesel",
+    cnpj: "33333333000133",
+    uf: null,
+    city: "Santos",
+    email: "OFICINA@X.com.br",
+    telephone: "11977776666",
+  },
+  {
+    name: "Mecânica Zé",
+    cnpj: "44444444000144",
+    uf: "SP",
+    city: "Americana",
+    email: null,
+    telephone: null,
+  },
 ];
 
 // Due relative to the start of today in São Paulo: the edges decide.
@@ -86,9 +114,28 @@ const BILLS = [
   { doc: "EDGE-OPEN", due: 0, amount: 100 },
   { doc: "EDGE-OVERDUE", due: -1, amount: 200 },
   { doc: "LATER", due: 5 * DAY, amount: 300, category: "FUEL" as const },
-  { doc: "PARTIAL", due: -3 * DAY, amount: 400, amount_paid: 150, payment_day: -4 * DAY },
-  { doc: "PAID", due: -10 * DAY, amount: 500, amount_paid: 500, payment_day: -10 * DAY, category: "FUEL" as const },
-  { doc: "MINE", due: 2 * DAY, amount: 600, payee: "Pedágio Anhanguera", other: true },
+  {
+    doc: "PARTIAL",
+    due: -3 * DAY,
+    amount: 400,
+    amount_paid: 150,
+    payment_day: -4 * DAY,
+  },
+  {
+    doc: "PAID",
+    due: -10 * DAY,
+    amount: 500,
+    amount_paid: 500,
+    payment_day: -10 * DAY,
+    category: "FUEL" as const,
+  },
+  {
+    doc: "MINE",
+    due: 2 * DAY,
+    amount: 600,
+    payee: "Pedágio Anhanguera",
+    other: true,
+  },
 ];
 
 beforeAll(async () => {
@@ -143,7 +190,12 @@ beforeAll(async () => {
       await repo.createSupplier({ ...supplier, businessId: A });
     }
 
-    await repo.createSupplier({ name: "Oficina Alheia", cnpj: "99999999000199", uf: "SP", businessId: B });
+    await repo.createSupplier({
+      name: "Oficina Alheia",
+      cnpj: "99999999000199",
+      uf: "SP",
+      businessId: B,
+    });
   }
 
   for (const [, repo] of bills) {
@@ -213,7 +265,12 @@ beforeAll(async () => {
 
   const CATEGORY_BILLS = [
     { doc: "CAT-FINES", category: "FINES", amount: 100, serviceOrder: true },
-    { doc: "CAT-MAINTENANCE", category: "MAINTENANCE", amount: 250.5, serviceOrder: true },
+    {
+      doc: "CAT-MAINTENANCE",
+      category: "MAINTENANCE",
+      amount: 250.5,
+      serviceOrder: true,
+    },
     { doc: "CAT-TOLLS", category: "TOLLS", amount: 10, serviceOrder: false },
     { doc: "CAT-NONE", category: null, amount: 20, serviceOrder: false },
   ] as const;
@@ -245,8 +302,20 @@ const docs = (rows: AccountPayable[]) => rows.map((row) => row.document_number);
 
 describe.each(suppliers)("the %s supplier repository", (_label, repo) => {
   it("orders by city with the suppliers without one last, both ways", async () => {
-    const asc = await repo.listSuppliers({ page: 1, pageSize: 10, businessId: A, sort: "city", order: "asc" });
-    const desc = await repo.listSuppliers({ page: 1, pageSize: 10, businessId: A, sort: "city", order: "desc" });
+    const asc = await repo.listSuppliers({
+      page: 1,
+      pageSize: 10,
+      businessId: A,
+      sort: "city",
+      order: "asc",
+    });
+    const desc = await repo.listSuppliers({
+      page: 1,
+      pageSize: 10,
+      businessId: A,
+      sort: "city",
+      order: "desc",
+    });
 
     expect(names(asc.data)).toEqual([
       "Mecânica Zé",
@@ -263,7 +332,13 @@ describe.each(suppliers)("the %s supplier repository", (_label, repo) => {
   });
 
   it("orders names by code point, as Postgres does on the deployed image (lower case after upper)", async () => {
-    const asc = await repo.listSuppliers({ page: 1, pageSize: 10, businessId: A, sort: "name", order: "asc" });
+    const asc = await repo.listSuppliers({
+      page: 1,
+      pageSize: 10,
+      businessId: A,
+      sort: "name",
+      order: "asc",
+    });
 
     // The pt-BR linguistic order the twin used put "auto peças norte" first.
     expect(names(asc.data)).toEqual([
@@ -298,9 +373,24 @@ describe.each(suppliers)("the %s supplier repository", (_label, repo) => {
   });
 
   it("searches literally, ignoring case, and by the CNPJ digits", async () => {
-    const percent = await repo.listSuppliers({ page: 1, pageSize: 10, businessId: A, search: "50%" });
-    const accents = await repo.listSuppliers({ page: 1, pageSize: 10, businessId: A, search: "AUTO PEÇAS" });
-    const cnpj = await repo.listSuppliers({ page: 1, pageSize: 10, businessId: A, search: "44.444.444/0001-44" });
+    const percent = await repo.listSuppliers({
+      page: 1,
+      pageSize: 10,
+      businessId: A,
+      search: "50%",
+    });
+    const accents = await repo.listSuppliers({
+      page: 1,
+      pageSize: 10,
+      businessId: A,
+      search: "AUTO PEÇAS",
+    });
+    const cnpj = await repo.listSuppliers({
+      page: 1,
+      pageSize: 10,
+      businessId: A,
+      search: "44.444.444/0001-44",
+    });
 
     expect(names(percent.data)).toEqual(["Oficina 50% Diesel"]);
     expect(names(accents.data)).toEqual(["auto peças norte"]);
@@ -308,15 +398,25 @@ describe.each(suppliers)("the %s supplier repository", (_label, repo) => {
   });
 
   it("finds an e-mail ignoring case, only inside the company", async () => {
-    expect(await repo.findSupplierByEmailAndBusinessId("oficina@x.com.br", A)).toMatchObject({
+    expect(
+      await repo.findSupplierByEmailAndBusinessId("oficina@x.com.br", A),
+    ).toMatchObject({
       name: "Oficina 50% Diesel",
     });
-    expect(await repo.findSupplierByEmailAndBusinessId("oficina@x.com.br", B)).toBeNull();
-    expect(await repo.findSupplierByNameAndBusinessId("MECÂNICA ZÉ", A)).not.toBeNull();
+    expect(
+      await repo.findSupplierByEmailAndBusinessId("oficina@x.com.br", B),
+    ).toBeNull();
+    expect(
+      await repo.findSupplierByNameAndBusinessId("MECÂNICA ZÉ", A),
+    ).not.toBeNull();
   });
 
   it("searches the picker by the typed term, newest first", async () => {
-    const page = await repo.searchSupplierWithCursor({ limit: 10, businessId: A, search: "oficina" });
+    const page = await repo.searchSupplierWithCursor({
+      limit: 10,
+      businessId: A,
+      search: "oficina",
+    });
 
     expect(names(page.data)).toEqual(["Oficina 50% Diesel"]);
   });
@@ -344,11 +444,16 @@ describe.each(bills)("the %s accounts payable repository", (_label, repo) => {
       "MINE",
       "LATER",
     ]);
-    expect(docs((await list({ statusGroups: ["PAID"] })).data)).toEqual(["PAID"]);
+    expect(docs((await list({ statusGroups: ["PAID"] })).data)).toEqual([
+      "PAID",
+    ]);
   });
 
   it("totals each situation over every filter but the situation", async () => {
-    const { groups } = await list({ statusGroups: ["PAID"], categories: ["FUEL"] });
+    const { groups } = await list({
+      statusGroups: ["PAID"],
+      categories: ["FUEL"],
+    });
 
     expect(groups).toEqual({
       OPEN: { count: 1, amount: 300, amountPaid: 0 },
@@ -358,19 +463,25 @@ describe.each(bills)("the %s accounts payable repository", (_label, repo) => {
   });
 
   it("orders by payment date with the unpaid ones last, both ways", async () => {
-    expect(docs((await list({ sort: "payment_date", order: "asc" })).data).slice(0, 2)).toEqual([
-      "PAID",
-      "PARTIAL",
-    ]);
-    expect(docs((await list({ sort: "payment_date", order: "desc" })).data).slice(0, 2)).toEqual([
-      "PARTIAL",
-      "PAID",
-    ]);
+    expect(
+      docs((await list({ sort: "payment_date", order: "asc" })).data).slice(
+        0,
+        2,
+      ),
+    ).toEqual(["PAID", "PARTIAL"]);
+    expect(
+      docs((await list({ sort: "payment_date", order: "desc" })).data).slice(
+        0,
+        2,
+      ),
+    ).toEqual(["PARTIAL", "PAID"]);
   });
 
   it("searches payee, description and an exact amount", async () => {
     expect(docs((await list({ search: "anhanguera" })).data)).toEqual(["MINE"]);
-    expect(docs((await list({ search: "conta later" })).data)).toEqual(["LATER"]);
+    expect(docs((await list({ search: "conta later" })).data)).toEqual([
+      "LATER",
+    ]);
     expect(docs((await list({ search: "400" })).data)).toEqual(["PARTIAL"]);
   });
 

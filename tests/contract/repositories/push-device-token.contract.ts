@@ -32,7 +32,9 @@ interface PushDeviceHarness {
   rows(): Promise<PushDeviceRow[]>;
 }
 
-function pushDeviceTokenRepositoryContract(harness: () => PushDeviceHarness): void {
+function pushDeviceTokenRepositoryContract(
+  harness: () => PushDeviceHarness,
+): void {
   const byToken = async (h: PushDeviceHarness, token: string) =>
     (await h.rows()).filter((row) => row.token === token);
 
@@ -40,29 +42,64 @@ function pushDeviceTokenRepositoryContract(harness: () => PushDeviceHarness): vo
     it("creates the device bound to the session that registered it", async () => {
       const h = harness();
 
-      await h.repo.register({ token: "tk-new", platform: "android", userId: F.ana, sessionId: "s-1" });
+      await h.repo.register({
+        token: "tk-new",
+        platform: "android",
+        userId: F.ana,
+        sessionId: "s-1",
+      });
 
       expect(await byToken(h, "tk-new")).toEqual([
-        { token: "tk-new", platform: "android", userId: F.ana, session_family_id: "s-1" },
+        {
+          token: "tk-new",
+          platform: "android",
+          userId: F.ana,
+          session_family_id: "s-1",
+        },
       ]);
     });
 
     it("moves a token another account holds to the new login, keeping one row", async () => {
       const h = harness();
 
-      await h.repo.register({ token: "tk-shared", platform: "android", userId: F.ana, sessionId: "s-a" });
-      await h.repo.register({ token: "tk-shared", platform: "ios", userId: F.bia, sessionId: "s-b" });
+      await h.repo.register({
+        token: "tk-shared",
+        platform: "android",
+        userId: F.ana,
+        sessionId: "s-a",
+      });
+      await h.repo.register({
+        token: "tk-shared",
+        platform: "ios",
+        userId: F.bia,
+        sessionId: "s-b",
+      });
 
       expect(await byToken(h, "tk-shared")).toEqual([
-        { token: "tk-shared", platform: "ios", userId: F.bia, session_family_id: "s-b" },
+        {
+          token: "tk-shared",
+          platform: "ios",
+          userId: F.bia,
+          session_family_id: "s-b",
+        },
       ]);
     });
 
     it("is a no-op the second time the same login registers (app launch replay)", async () => {
       const h = harness();
 
-      await h.repo.register({ token: "tk-replay", platform: "android", userId: F.ana, sessionId: "s-r" });
-      await h.repo.register({ token: "tk-replay", platform: "android", userId: F.ana, sessionId: "s-r" });
+      await h.repo.register({
+        token: "tk-replay",
+        platform: "android",
+        userId: F.ana,
+        sessionId: "s-r",
+      });
+      await h.repo.register({
+        token: "tk-replay",
+        platform: "android",
+        userId: F.ana,
+        sessionId: "s-r",
+      });
 
       expect(await byToken(h, "tk-replay")).toHaveLength(1);
     });
@@ -71,7 +108,12 @@ function pushDeviceTokenRepositoryContract(harness: () => PushDeviceHarness): vo
       const h = harness();
 
       await expectPrismaCode(
-        h.repo.register({ token: "tk-ghost", platform: "android", userId: F.ghost, sessionId: "s-g" }),
+        h.repo.register({
+          token: "tk-ghost",
+          platform: "android",
+          userId: F.ghost,
+          sessionId: "s-g",
+        }),
         "P2003",
       );
       expect(await byToken(h, "tk-ghost")).toEqual([]);
@@ -82,7 +124,12 @@ function pushDeviceTokenRepositoryContract(harness: () => PushDeviceHarness): vo
     it("removes the owner's device and says so", async () => {
       const h = harness();
 
-      await h.repo.register({ token: "tk-own", platform: "android", userId: F.ana, sessionId: "s-o" });
+      await h.repo.register({
+        token: "tk-own",
+        platform: "android",
+        userId: F.ana,
+        sessionId: "s-o",
+      });
 
       expect(await h.repo.removeForUser("tk-own", F.ana)).toBe(1);
       expect(await byToken(h, "tk-own")).toEqual([]);
@@ -91,7 +138,12 @@ function pushDeviceTokenRepositoryContract(harness: () => PushDeviceHarness): vo
     it("leaves another user's device alone", async () => {
       const h = harness();
 
-      await h.repo.register({ token: "tk-foreign", platform: "android", userId: F.bia, sessionId: "s-f" });
+      await h.repo.register({
+        token: "tk-foreign",
+        platform: "android",
+        userId: F.bia,
+        sessionId: "s-f",
+      });
 
       expect(await h.repo.removeForUser("tk-foreign", F.ana)).toBe(0);
       expect(await byToken(h, "tk-foreign")).toHaveLength(1);
@@ -105,4 +157,8 @@ function pushDeviceTokenRepositoryContract(harness: () => PushDeviceHarness): vo
   });
 }
 
-export { PUSH_FIXTURE, pushDeviceTokenRepositoryContract, type PushDeviceHarness };
+export {
+  PUSH_FIXTURE,
+  pushDeviceTokenRepositoryContract,
+  type PushDeviceHarness,
+};

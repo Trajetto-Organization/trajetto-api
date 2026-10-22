@@ -15,8 +15,7 @@
 class VehicleHasAssociatedOperationError extends Error {
   constructor(deliveryCount: number, routeCount: number) {
     const parts = [
-      deliveryCount > 0 &&
-        `${deliveryCount} entrega(s)`,
+      deliveryCount > 0 && `${deliveryCount} entrega(s)`,
       routeCount > 0 && `${routeCount} rota(s)`,
     ].filter(Boolean);
 

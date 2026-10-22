@@ -28,7 +28,10 @@ let server: Server;
 let port = 0;
 let io: typeof import("@/websocket");
 
-let connect: (url: string, options: unknown) => {
+let connect: (
+  url: string,
+  options: unknown,
+) => {
   on: Function;
   disconnect: () => void;
 };
@@ -53,10 +56,13 @@ function handshake(
       done({ connected: true });
     });
 
-    socket.on("connect_error", (error: Error & { data?: { code?: string } }) => {
-      clearTimeout(timer);
-      done({ connected: false, code: error.data?.code });
-    });
+    socket.on(
+      "connect_error",
+      (error: Error & { data?: { code?: string } }) => {
+        clearTimeout(timer);
+        done({ connected: false, code: error.data?.code });
+      },
+    );
   });
 }
 

@@ -103,7 +103,9 @@ describe("fine.created WhatsApp render", () => {
     const data = payload();
     data.points = 0;
 
-    expect(renderFineCreatedWhatsApp(data)).toContain("Pontos na carteira: *0*");
+    expect(renderFineCreatedWhatsApp(data)).toContain(
+      "Pontos na carteira: *0*",
+    );
   });
 
   it("drops optional lines instead of printing blanks", () => {

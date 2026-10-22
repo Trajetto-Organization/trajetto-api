@@ -4,7 +4,10 @@ import { container } from "tsyringe";
 import { CreateSocketTicketUseCase } from "./create-socket-ticket-usecase";
 
 class CreateSocketTicketController {
-  async handle(request: FastifyRequest, reply: FastifyReply): Promise<Response> {
+  async handle(
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<Response> {
     const createSocketTicket = container.resolve(CreateSocketTicketUseCase);
 
     const { ticket, expiresInSeconds } = await createSocketTicket.execute({

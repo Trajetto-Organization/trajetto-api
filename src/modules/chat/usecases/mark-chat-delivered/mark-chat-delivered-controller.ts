@@ -8,8 +8,9 @@ import { markChatDeliveredSchema } from "@/schemas/mark-chat-delivered-schema";
 class MarkChatDeliveredController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
-    const { businessId, threadId, deliveredAt } =
-      markChatDeliveredSchema.parse(request.body);
+    const { businessId, threadId, deliveredAt } = markChatDeliveredSchema.parse(
+      request.body,
+    );
 
     const markChatDeliveredUseCase = container.resolve(
       MarkChatDeliveredUseCase,

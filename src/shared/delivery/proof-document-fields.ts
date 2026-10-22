@@ -82,7 +82,9 @@ function recipientDocumentLabel(
  * model prints them), the raw value otherwise. Unmasked on purpose: it is
  * the evidence of who received (ADR 0009 §1).
  */
-function recipientDocumentValue(document: string | null | undefined): string | null {
+function recipientDocumentValue(
+  document: string | null | undefined,
+): string | null {
   const raw = document?.trim();
 
   if (!raw) return null;
@@ -112,7 +114,9 @@ function formatCep(value: string | null | undefined): string | null {
 
   if (!digits) return null;
 
-  return digits.length === 8 ? `${digits.slice(0, 5)}-${digits.slice(5)}` : digits;
+  return digits.length === 8
+    ? `${digits.slice(0, 5)}-${digits.slice(5)}`
+    : digits;
 }
 
 interface StampInput {

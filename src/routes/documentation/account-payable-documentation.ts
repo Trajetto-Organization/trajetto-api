@@ -42,7 +42,8 @@ const accountPayableSchemas = {
   searchAccountPayableCursor: cursorPaginationSchema,
 };
 
-const namedRef = (fields: z.ZodRawShape) => z.object(fields).nullable().optional();
+const namedRef = (fields: z.ZodRawShape) =>
+  z.object(fields).nullable().optional();
 
 /** A bill as every read returns it: its columns, the names, the situation. */
 const accountPayableRow = z.object({
@@ -50,7 +51,9 @@ const accountPayableRow = z.object({
   issue_date: z.union([z.string(), z.date()]),
   due_date: z
     .union([z.string(), z.date()])
-    .describe("Instante em que começa o dia do vencimento, no fuso da empresa."),
+    .describe(
+      "Instante em que começa o dia do vencimento, no fuso da empresa.",
+    ),
   payment_date: z.union([z.string(), z.date()]).nullable(),
   amount: z.number(),
   amount_paid: z.number().nullable(),
@@ -111,7 +114,9 @@ const accountPayableRow = z.object({
     .describe("A situação dos cartões e do filtro `status`."),
   due_day: z
     .string()
-    .describe("AAAA-MM-DD do vencimento no fuso da empresa: mostre como dia, sem hora."),
+    .describe(
+      "AAAA-MM-DD do vencimento no fuso da empresa: mostre como dia, sem hora.",
+    ),
   payment_day: z.string().nullable().describe("AAAA-MM-DD do pagamento."),
   remaining_amount: z.number().describe("Valor − valor pago, nunca negativo."),
 });
@@ -122,12 +127,22 @@ const accountPayableSearchMetaDoc = searchMetaDoc(
     total: z
       .number()
       .int()
-      .describe("Contas da busca e dos demais filtros, sem o de situação (a soma dos três cartões)."),
-    open: z.number().int().describe("Em aberto: não quitadas, vencimento hoje ou depois."),
-    overdue: z.number().int().describe("Vencidas: não quitadas, dia do vencimento já passou."),
+      .describe(
+        "Contas da busca e dos demais filtros, sem o de situação (a soma dos três cartões).",
+      ),
+    open: z
+      .number()
+      .int()
+      .describe("Em aberto: não quitadas, vencimento hoje ou depois."),
+    overdue: z
+      .number()
+      .int()
+      .describe("Vencidas: não quitadas, dia do vencimento já passou."),
     paid: z.number().int().describe("Quitadas (inclui as pagas com atraso)."),
     openAmount: z.number().describe("Quanto falta pagar nas contas em aberto."),
-    overdueAmount: z.number().describe("Quanto falta pagar nas contas vencidas."),
+    overdueAmount: z
+      .number()
+      .describe("Quanto falta pagar nas contas vencidas."),
     paidAmount: z.number().describe("Quanto foi pago nas contas quitadas."),
   },
   ["status"],
@@ -148,7 +163,9 @@ const accountPayableResponses = {
   }),
   accountPayableUpdated: z.object({
     message: z.string().default("Conta a pagar atualizada com sucesso!"),
-    warnings: z.array(z.string()).describe("Avisos que não impedem a gravação."),
+    warnings: z
+      .array(z.string())
+      .describe("Avisos que não impedem a gravação."),
   }),
   accountPayableDeleted: z.object({
     message: z.string().default("Conta a pagar deletada com sucesso!"),
@@ -165,7 +182,9 @@ const accountPayableResponses = {
   exportErrors: codedError(
     "VALIDATION_ERROR, BUSINESS_NOT_IDENTIFIED, ou ACCOUNT_PAYABLE_NOTHING_TO_EXPORT: nenhuma conta com a busca e os filtros.",
   ),
-  searchErrors: codedError("VALIDATION_ERROR: limite, cursor ou busca inválidos."),
+  searchErrors: codedError(
+    "VALIDATION_ERROR: limite, cursor ou busca inválidos.",
+  ),
   deleteErrors: codedError("Empresa ou usuário não encontrado."),
   forbidden: codedError(
     "ACCOUNT_PAYABLE_TENANT_MISMATCH: só para o MASTER, quando a conta não é da empresa do caminho (conta não muda de empresa). Para o usuário da empresa, a conta de outra empresa responde 404 ACCOUNT_PAYABLE_NOT_FOUND, como um id que não existe.",

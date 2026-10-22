@@ -66,7 +66,13 @@ async function seedProfile(businessId: string, key: string, canWrite: boolean) {
       businessId,
       permissions: {
         create: [
-          { permissionKey: key, action: key, canRead: true, canWrite, businessId },
+          {
+            permissionKey: key,
+            action: key,
+            canRead: true,
+            canWrite,
+            businessId,
+          },
         ],
       },
     },
@@ -121,7 +127,12 @@ async function list(query: string, token = tokens.admin) {
   });
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, rows: [] as any[], total: 0, body: response.body };
+    return {
+      status: response.statusCode,
+      rows: [] as any[],
+      total: 0,
+      body: response.body,
+    };
   }
 
   const [first, ...rows] = response.body
@@ -129,7 +140,12 @@ async function list(query: string, token = tokens.admin) {
     .split("\n")
     .map((line) => JSON.parse(line));
 
-  return { status: 200, rows, total: first.meta.total as number, body: response.body };
+  return {
+    status: 200,
+    rows,
+    total: first.meta.total as number,
+    body: response.body,
+  };
 }
 
 beforeAll(async () => {
@@ -140,9 +156,24 @@ beforeAll(async () => {
 
   await prisma.fuelType.createMany({
     data: [
-      { id: DIESEL, description: "Diesel", businessId: CARRIER, created_at: new Date(now - 3_000) },
-      { id: GASOLINA, description: "Gasolina", businessId: CARRIER, created_at: new Date(now - 2_000) },
-      { id: ETANOL, description: "Etanol", businessId: CARRIER, created_at: new Date(now - 1_000) },
+      {
+        id: DIESEL,
+        description: "Diesel",
+        businessId: CARRIER,
+        created_at: new Date(now - 3_000),
+      },
+      {
+        id: GASOLINA,
+        description: "Gasolina",
+        businessId: CARRIER,
+        created_at: new Date(now - 2_000),
+      },
+      {
+        id: ETANOL,
+        description: "Etanol",
+        businessId: CARRIER,
+        created_at: new Date(now - 1_000),
+      },
       { id: OTHER_GNV, description: "GNV", businessId: OTHER },
     ],
   });
@@ -195,7 +226,9 @@ beforeAll(async () => {
   tokens.noKey = await seedUser("BUSINESS_USER", CARRIER, {
     profileAccessId: await seedProfile(CARRIER, "fuel_manage", true),
   });
-  tokens.driver = await seedUser("BUSINESS_USER", CARRIER, { driverId: driver.id });
+  tokens.driver = await seedUser("BUSINESS_USER", CARRIER, {
+    driverId: driver.id,
+  });
   tokens.otherAdmin = await seedUser("BUSINESS_ADMIN", OTHER);
   tokens.master = await seedUser("MASTER", null);
 
@@ -214,7 +247,11 @@ describe("GET /fuel-type/list-fuel-type", () => {
 
     expect(newest.status).toBe(200);
     expect(newest.total).toBe(3);
-    expect(newest.rows.map((row) => row.id)).toEqual([ETANOL, GASOLINA, DIESEL]);
+    expect(newest.rows.map((row) => row.id)).toEqual([
+      ETANOL,
+      GASOLINA,
+      DIESEL,
+    ]);
 
     const byName = await list("sort=description&order=asc");
 
@@ -236,7 +273,9 @@ describe("GET /fuel-type/list-fuel-type", () => {
 
     expect(other.rows.map((row) => row.id)).toEqual([OTHER_GNV]);
 
-    expect((await list(`businessId=${CARRIER}`, tokens.otherAdmin)).status).toBe(403);
+    expect(
+      (await list(`businessId=${CARRIER}`, tokens.otherAdmin)).status,
+    ).toBe(403);
   });
 
   it("lets a read-only profile read and refuses a profile or a driver without the key", async () => {
@@ -258,7 +297,10 @@ describe("GET /fuel-type/search-fuel-type-business — the picker", () => {
       headers: { authorization: `Bearer ${tokens.admin}` },
     });
 
-    const [, ...rows] = response.body.trim().split("\n").map((line) => JSON.parse(line));
+    const [, ...rows] = response.body
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
 
     expect(rows.map((row) => row.id)).toEqual([GASOLINA]);
   });
@@ -290,7 +332,9 @@ describe("POST /fuel-type/create-fuel-type", () => {
   it("refuses another company's manager and a read-only profile", async () => {
     expect((await create(CARRIER, tokens.otherAdmin)).statusCode).toBe(403);
     expect((await create(CARRIER, tokens.readOnly)).statusCode).toBe(403);
-    expect(await prisma.fuelType.count({ where: { description: "GLP" } })).toBe(0);
+    expect(await prisma.fuelType.count({ where: { description: "GLP" } })).toBe(
+      0,
+    );
   });
 
   it("answers a duplicate in the company with 409 and creates a new one", async () => {
@@ -300,7 +344,9 @@ describe("POST /fuel-type/create-fuel-type", () => {
     expect(duplicate.json().code).toBe("FUEL_TYPE_ALREADY_EXISTS");
     expect(duplicate.headers["x-error-code"]).toBe("FUEL_TYPE_ALREADY_EXISTS");
 
-    expect((await create(CARRIER, tokens.admin, "Hidrogênio")).statusCode).toBe(201);
+    expect((await create(CARRIER, tokens.admin, "Hidrogênio")).statusCode).toBe(
+      201,
+    );
   });
 });
 
@@ -315,7 +361,9 @@ describe("PATCH /fuel-type/update-fuel-type", () => {
 
     expect(response.statusCode).toBe(404);
 
-    const stored = await prisma.fuelType.findUniqueOrThrow({ where: { id: ETANOL } });
+    const stored = await prisma.fuelType.findUniqueOrThrow({
+      where: { id: ETANOL },
+    });
 
     expect(stored.businessId).toBe(CARRIER);
     expect(stored.description).toBe("Etanol");
@@ -355,7 +403,9 @@ describe("PATCH /fuel-type/update-fuel-type", () => {
 
     expect(response.statusCode).toBe(200);
 
-    const stored = await prisma.fuelType.findUniqueOrThrow({ where: { id: ETANOL } });
+    const stored = await prisma.fuelType.findUniqueOrThrow({
+      where: { id: ETANOL },
+    });
 
     expect(stored.description).toBe("Biodiesel");
     expect(stored.businessId).toBe(CARRIER);
@@ -374,7 +424,11 @@ describe("PATCH /fuel-type/update-fuel-type", () => {
 });
 
 describe("DELETE /fuel-type/delete-fuel-type", () => {
-  const remove = (fuelTypeId: string, businessId = CARRIER, token = tokens.admin) =>
+  const remove = (
+    fuelTypeId: string,
+    businessId = CARRIER,
+    token = tokens.admin,
+  ) =>
     app.inject({
       method: "DELETE",
       url: `/fuel-type/delete-fuel-type/${fuelTypeId}/business/${businessId}`,

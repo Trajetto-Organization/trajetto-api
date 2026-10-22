@@ -123,7 +123,10 @@ class InMemoryOccurrenceAuthorizationRepository
     if (!delivery || !reporter) return null;
 
     const anchorEvent = this.deliveries.events
-      .filter((event) => event.occurrenceId === occurrence.id && event.type === "OCCURRENCE")
+      .filter(
+        (event) =>
+          event.occurrenceId === occurrence.id && event.type === "OCCURRENCE",
+      )
       .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())[0];
 
     const openStop = this.deliveries.routeStops
@@ -134,7 +137,8 @@ class InMemoryOccurrenceAuthorizationRepository
           (stop.status === "PENDING" || stop.status === "ARRIVED"),
       )
       .sort(
-        (a, b) => (b.created_at?.getTime() ?? 0) - (a.created_at?.getTime() ?? 0),
+        (a, b) =>
+          (b.created_at?.getTime() ?? 0) - (a.created_at?.getTime() ?? 0),
       )[0];
 
     const statusChangedSince = this.deliveries.events.some(
@@ -154,17 +158,24 @@ class InMemoryOccurrenceAuthorizationRepository
         status: delivery.status as DeliveryStatus,
         driverId: delivery.driverId ?? null,
         openStop: openStop
-          ? { routeId: openStop.routeId!, created_at: openStop.created_at ?? new Date(0) }
+          ? {
+              routeId: openStop.routeId!,
+              created_at: openStop.created_at ?? new Date(0),
+            }
           : null,
         statusChangedSince,
       },
     );
   }
 
-  private findOwn(occurrenceId: string, businessId: string): StoredOccurrence | undefined {
+  private findOwn(
+    occurrenceId: string,
+    businessId: string,
+  ): StoredOccurrence | undefined {
     return this.deliveries.occurrences.find(
       (occurrence) =>
-        occurrence.id === occurrenceId && this.businessOf(occurrence) === businessId,
+        occurrence.id === occurrenceId &&
+        this.businessOf(occurrence) === businessId,
     );
   }
 
@@ -183,7 +194,10 @@ class InMemoryOccurrenceAuthorizationRepository
 
     if (!delivery) return null;
 
-    return { live: this.isLive(found), deliveryStatus: delivery.status as DeliveryStatus };
+    return {
+      live: this.isLive(found),
+      deliveryStatus: delivery.status as DeliveryStatus,
+    };
   }
 
   async lockDeliveryForRequest(
@@ -196,14 +210,19 @@ class InMemoryOccurrenceAuthorizationRepository
     );
 
     return delivery
-      ? { status: delivery.status as DeliveryStatus, driverId: delivery.driverId ?? null }
+      ? {
+          status: delivery.status as DeliveryStatus,
+          driverId: delivery.driverId ?? null,
+        }
       : null;
   }
 
   async isWaiting(occurrenceId: string, businessId: string): Promise<boolean> {
     const found = this.findOwn(occurrenceId, businessId);
 
-    return Boolean(found && found.authorization_status === "PENDING" && this.isLive(found));
+    return Boolean(
+      found && found.authorization_status === "PENDING" && this.isLive(found),
+    );
   }
 
   async supersedeStale(
@@ -238,7 +257,8 @@ class InMemoryOccurrenceAuthorizationRepository
   ): Promise<OccurrenceForDecision | null> {
     const found = this.deliveries.occurrences.find(
       (occurrence) =>
-        occurrence.id === occurrenceId && this.businessOf(occurrence) === businessId,
+        occurrence.id === occurrenceId &&
+        this.businessOf(occurrence) === businessId,
     );
 
     return found ? this.toDecision(found) : null;

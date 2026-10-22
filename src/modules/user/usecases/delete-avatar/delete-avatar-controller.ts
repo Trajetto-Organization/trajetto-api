@@ -9,9 +9,7 @@ class DeleteAvatarController {
     const deleteAvatarUseCase = container.resolve(DeleteAvatarUseCase);
 
     await deleteAvatarUseCase.execute(id);
-    return reply
-      .status(200)
-      .send({ message: "Avatar deletado com sucesso!" });
+    return reply.status(200).send({ message: "Avatar deletado com sucesso!" });
   }
 }
 

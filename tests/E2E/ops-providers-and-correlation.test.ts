@@ -49,7 +49,11 @@ const lines = () =>
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 
-async function tokenFor(userId: string, role: string, businessId: string | null = null) {
+async function tokenFor(
+  userId: string,
+  role: string,
+  businessId: string | null = null,
+) {
   const familyId = randomUUID();
 
   await prisma.refreshToken.create({
@@ -63,7 +67,14 @@ async function tokenFor(userId: string, role: string, businessId: string | null 
   });
 
   return sign(
-    { tokenType: "access", role, businessId, driverId: null, sessionVersion: 0, familyId },
+    {
+      tokenType: "access",
+      role,
+      businessId,
+      driverId: null,
+      sessionVersion: 0,
+      familyId,
+    },
     auth.secret_token,
     { subject: userId, expiresIn: "1h" },
   );
@@ -88,12 +99,21 @@ function business(id: string, name: string) {
 
 beforeAll(async () => {
   await prisma.business.createMany({
-    data: [business(CARRIER, "Transportadora Operação"), business(OTHER_CARRIER, "Outra Transportadora")],
+    data: [
+      business(CARRIER, "Transportadora Operação"),
+      business(OTHER_CARRIER, "Outra Transportadora"),
+    ],
   });
 
   await prisma.user.createMany({
     data: [
-      { id: MASTER, name: "Master Ops", email: `m-${randomUUID()}@exemplo.com.br`, password: "x", role: "MASTER" },
+      {
+        id: MASTER,
+        name: "Master Ops",
+        email: `m-${randomUUID()}@exemplo.com.br`,
+        password: "x",
+        role: "MASTER",
+      },
       {
         id: STAFF,
         name: "Gestora",
@@ -152,17 +172,26 @@ beforeAll(async () => {
 
   // Every line the shared logger (and its children) writes lands here.
   const { logger } = await import("@/shared/logging/logger");
-  (logger as unknown as Record<symbol, unknown>)[pino.symbols.streamSym] = capture;
+  (logger as unknown as Record<symbol, unknown>)[pino.symbols.streamSym] =
+    capture;
 }, 120_000);
 
 afterAll(async () => {
   await prisma.webhookDelivery.deleteMany({ where: { businessId: CARRIER } });
   await prisma.webhookEndpoint.deleteMany({ where: { businessId: CARRIER } });
-  await prisma.notificationDelivery.deleteMany({ where: { outboxEventId: EVENT } });
+  await prisma.notificationDelivery.deleteMany({
+    where: { outboxEventId: EVENT },
+  });
   await prisma.domainOutboxEvent.deleteMany({ where: { id: EVENT } });
-  await prisma.refreshToken.deleteMany({ where: { userId: { in: [MASTER, STAFF, OTHER_STAFF] } } });
-  await prisma.user.deleteMany({ where: { id: { in: [MASTER, STAFF, OTHER_STAFF] } } });
-  await prisma.business.deleteMany({ where: { id: { in: [CARRIER, OTHER_CARRIER] } } });
+  await prisma.refreshToken.deleteMany({
+    where: { userId: { in: [MASTER, STAFF, OTHER_STAFF] } },
+  });
+  await prisma.user.deleteMany({
+    where: { id: { in: [MASTER, STAFF, OTHER_STAFF] } },
+  });
+  await prisma.business.deleteMany({
+    where: { id: { in: [CARRIER, OTHER_CARRIER] } },
+  });
 
   await app?.close();
   await prisma.$disconnect();
@@ -216,11 +245,19 @@ describe("the providers' readiness, for the MASTER", () => {
     ]);
 
     for (const provider of body.providers) {
-      expect(["ok", "warning", "error", "not_configured", "disabled"]).toContain(provider.status);
+      expect([
+        "ok",
+        "warning",
+        "error",
+        "not_configured",
+        "disabled",
+      ]).toContain(provider.status);
     }
 
     // The test stack runs without Meta credentials: named, not valued.
-    const whatsapp = body.providers.find((p: { key: string }) => p.key === "whatsapp");
+    const whatsapp = body.providers.find(
+      (p: { key: string }) => p.key === "whatsapp",
+    );
     if (!process.env.META_WHATSAPP_ACCESS_TOKEN) {
       expect(whatsapp.status).toBe("not_configured");
       expect(whatsapp.missing_env).toContain("META_WHATSAPP_ACCESS_TOKEN");
@@ -265,13 +302,9 @@ describe("the operational metrics", () => {
 
     const body = response.json();
 
-    expect(body.providers.channels.map((c: { channel: string }) => c.channel)).toEqual([
-      "EMAIL",
-      "WHATSAPP",
-      "PUSH",
-      "AI_OCR",
-      "WEBHOOK",
-    ]);
+    expect(
+      body.providers.channels.map((c: { channel: string }) => c.channel),
+    ).toEqual(["EMAIL", "WHATSAPP", "PUSH", "AI_OCR", "WEBHOOK"]);
     expect(typeof body.realtime.local_connections).toBe("number");
     expect(body.redis.status).toBe("up");
     expect(body.redis.latency_ms).not.toBeNull();
@@ -280,7 +313,10 @@ describe("the operational metrics", () => {
 
 describe("a dead-letter row", () => {
   it("names the event and the request that caused it", async () => {
-    const response = await get("/health/dead-letter?channel=EMAIL&pageSize=5", masterToken);
+    const response = await get(
+      "/health/dead-letter?channel=EMAIL&pageSize=5",
+      masterToken,
+    );
 
     expect(response.statusCode).toBe(200);
 
@@ -313,8 +349,12 @@ describe("a webhook event published inside a request", () => {
       },
     });
 
-    const { enterRequestContext } = await import("@/shared/http/request-context");
-    const { fanOutWebhookEvent } = await import("@/shared/integration/webhook-dispatch-service");
+    const { enterRequestContext } = await import(
+      "@/shared/http/request-context"
+    );
+    const { fanOutWebhookEvent } = await import(
+      "@/shared/integration/webhook-dispatch-service"
+    );
     const database = (await import("@/../infra/database")).default;
 
     enterRequestContext({ requestId: "req-ops-webhook-0001" });
@@ -326,7 +366,9 @@ describe("a webhook event published inside a request", () => {
 
     expect(fanned).toBe(1);
 
-    const line = lines().find((entry) => entry.msg === "webhook event fanned out");
+    const line = lines().find(
+      (entry) => entry.msg === "webhook event fanned out",
+    );
 
     expect(line).toMatchObject({
       correlationId: "req-ops-webhook-0001",
@@ -335,7 +377,9 @@ describe("a webhook event published inside a request", () => {
       endpoints: 1,
     });
 
-    const row = await prisma.webhookDelivery.findFirstOrThrow({ where: { businessId: CARRIER } });
+    const row = await prisma.webhookDelivery.findFirstOrThrow({
+      where: { businessId: CARRIER },
+    });
 
     expect(line?.sourceEventId).toBe(row.sourceEventId);
   });

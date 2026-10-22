@@ -41,9 +41,26 @@ const LABELS: FuelListLabels = {
 
 describe("summarizeFuelList", () => {
   const groups = [
-    group({ count: 3, liters: "30.5", amount: "167.75", odometer_verified: true }),
-    group({ branchId: NORTE, vehicleId: "v2", count: 2, liters: "20.25", amount: "111.38" }),
-    group({ branchId: NORTE, fuelTypeId: "gasolina", count: 1, liters: "0.1", amount: "0.2" }),
+    group({
+      count: 3,
+      liters: "30.5",
+      amount: "167.75",
+      odometer_verified: true,
+    }),
+    group({
+      branchId: NORTE,
+      vehicleId: "v2",
+      count: 2,
+      liters: "20.25",
+      amount: "111.38",
+    }),
+    group({
+      branchId: NORTE,
+      fuelTypeId: "gasolina",
+      count: 1,
+      liters: "0.1",
+      amount: "0.2",
+    }),
   ];
 
   it("adds up every group for the cards, in decimal (no float drift)", () => {
@@ -90,9 +107,9 @@ describe("summarizeFuelList", () => {
     });
 
     expect(total).toBe(0);
-    expect(searchMeta.facets.branchId.map((option) => option.value)).not.toContain(
-      "foreign-branch",
-    );
+    expect(
+      searchMeta.facets.branchId.map((option) => option.value),
+    ).not.toContain("foreign-branch");
   });
 
   it("asks labels for the selected ids, then the ones with rows, busiest first", () => {
@@ -111,7 +128,9 @@ describe("a large fleet's filter options", () => {
   );
   const plates: FuelListLabels = {
     ...LABELS,
-    vehicleId: Object.fromEntries(fleet.map((row) => [row.vehicleId, `P${row.vehicleId}`])),
+    vehicleId: Object.fromEntries(
+      fleet.map((row) => [row.vehicleId, `P${row.vehicleId}`]),
+    ),
   };
 
   it(`offers the ${FUEL_FACET_OPTION_LIMIT} busiest vehicles, not every plate that ever refueled`, () => {
@@ -128,7 +147,9 @@ describe("a large fleet's filter options", () => {
   });
 
   it("always keeps a selected vehicle, even a quiet one, with its count", () => {
-    const { searchMeta } = summarizeFuelList(fleet, plates, { vehicleIds: ["v0"] });
+    const { searchMeta } = summarizeFuelList(fleet, plates, {
+      vehicleIds: ["v0"],
+    });
     const offered = searchMeta.facets.vehicleId;
 
     expect(offered).toHaveLength(FUEL_FACET_OPTION_LIMIT);
@@ -174,7 +195,10 @@ describe("fuelListWhere", () => {
   });
 
   it("escapes LIKE wildcards in the search term", () => {
-    const where = fuelListWhere({ businessId: A, search: "50%" }, { withFacets: true });
+    const where = fuelListWhere(
+      { businessId: A, search: "50%" },
+      { withFacets: true },
+    );
 
     expect(JSON.stringify(where)).toContain("50\\\\%");
   });
@@ -185,8 +209,14 @@ describe("InMemoryFuelRepository.listFuels matches the repository", () => {
     const repo = new InMemoryFuelRepository();
     const base = Date.parse("2026-09-01T12:00:00Z");
 
-    repo.branches.set(CENTRO, { businessId: A, corporate_reason: "Filial Centro" });
-    repo.branches.set(NORTE, { businessId: A, corporate_reason: "Filial Norte" });
+    repo.branches.set(CENTRO, {
+      businessId: A,
+      corporate_reason: "Filial Centro",
+    });
+    repo.branches.set(NORTE, {
+      businessId: A,
+      corporate_reason: "Filial Norte",
+    });
     repo.vehicles.set("v1", {
       businessId: A,
       license_plate: "AAA1A11",
@@ -237,9 +267,18 @@ describe("InMemoryFuelRepository.listFuels matches the repository", () => {
 
   it("orders by created_at desc with the id as tiebreaker, paging after sorting", async () => {
     const repo = seeded();
-    const { data } = await repo.listFuels({ page: 1, pageSize: 4, businessId: A });
+    const { data } = await repo.listFuels({
+      page: 1,
+      pageSize: 4,
+      businessId: A,
+    });
 
-    expect(data.map((row) => row.id.slice(-2))).toEqual(["11", "10", "09", "08"]);
+    expect(data.map((row) => row.id.slice(-2))).toEqual([
+      "11",
+      "10",
+      "09",
+      "08",
+    ]);
   });
 
   it("sorts by a relation column and filters by facet and search like Postgres", async () => {
@@ -284,7 +323,9 @@ describe("InMemoryFuelRepository.listFuels matches the repository", () => {
 
     expect(total).toBe(0);
     expect(labels.branchId.foreign).toBeUndefined();
-    expect(searchMeta.facets.branchId.map((option) => option.count)).toEqual([6, 6]);
+    expect(searchMeta.facets.branchId.map((option) => option.count)).toEqual([
+      6, 6,
+    ]);
   });
 
   it("exports with the same filters", async () => {
@@ -299,7 +340,9 @@ describe("InMemoryFuelRepository.listFuels matches the repository", () => {
     }
 
     expect(rows).toHaveLength(6);
-    expect(await repo.countFuelForExport({ businessId: A, vehicleIds: ["v1"] })).toBe(6);
+    expect(
+      await repo.countFuelForExport({ businessId: A, vehicleIds: ["v1"] }),
+    ).toBe(6);
   });
 });
 
@@ -334,7 +377,9 @@ describe("InMemoryFuelRepository keeps what Postgres keeps", () => {
     // 45.237 × 5.905 = 267.124485 → 267.12
     expect(updated.total_amount.toString()).toBe("267.12");
 
-    const halfUp = await repo.createFuel(refueling({ liters_amount: 1, price_per_liter: 0.125 }));
+    const halfUp = await repo.createFuel(
+      refueling({ liters_amount: 1, price_per_liter: 0.125 }),
+    );
 
     expect(halfUp.total_amount.toString()).toBe("0.13");
   });
@@ -411,7 +456,8 @@ describe("InMemoryFuelRepository.updateFuel matches the repository", () => {
 
 describe("InMemoryFuelRepository.updateFuelAndMileage matches the repository", () => {
   const TRUCK = "v-timeline";
-  const day = (n: number) => new Date(Date.parse("2026-09-01T12:00:00Z") + n * 86_400_000);
+  const day = (n: number) =>
+    new Date(Date.parse("2026-09-01T12:00:00Z") + n * 86_400_000);
 
   async function timeline() {
     const repo = new InMemoryFuelRepository();
@@ -454,7 +500,9 @@ describe("InMemoryFuelRepository.updateFuelAndMileage matches the repository", (
       move(typo.id, 44_500, day(5)),
     );
 
-    expect(repo.fuels.find((fuel) => fuel.id === typo.id)?.current_mileage).toBe(44_500);
+    expect(
+      repo.fuels.find((fuel) => fuel.id === typo.id)?.current_mileage,
+    ).toBe(44_500);
     expect(repo.vehicleMileage[TRUCK]).toBe(50_000);
   });
 
@@ -468,7 +516,9 @@ describe("InMemoryFuelRepository.updateFuelAndMileage matches the repository", (
       ),
     ).rejects.toThrow("quilometragem");
 
-    expect(repo.fuels.find((fuel) => fuel.id === typo.id)?.current_mileage).toBe(45_500);
+    expect(
+      repo.fuels.find((fuel) => fuel.id === typo.id)?.current_mileage,
+    ).toBe(45_500);
   });
 
   it("refuses a past reading above the later one, even ahead of the odometer", async () => {
@@ -530,7 +580,9 @@ describe("InMemoryFuelRepository.updateFuelAndMileage matches the repository", (
       move(last.id, 47_000, day(8)),
     );
 
-    expect(repo.fuels.find((fuel) => fuel.id === last.id)?.current_mileage).toBe(47_000);
+    expect(
+      repo.fuels.find((fuel) => fuel.id === last.id)?.current_mileage,
+    ).toBe(47_000);
     expect(repo.vehicleMileage[TRUCK]).toBe(50_000);
   });
 });
@@ -543,7 +595,8 @@ describe("InMemoryFuelRepository.updateFuelAndMileage matches the repository", (
 describe("InMemoryFuelRepository places every write by its date", () => {
   const TRUCK = "v-timeline";
   const OTHER_TRUCK = "v-other";
-  const day = (n: number) => new Date(Date.parse("2026-09-01T15:00:00Z") + n * 86_400_000);
+  const day = (n: number) =>
+    new Date(Date.parse("2026-09-01T15:00:00Z") + n * 86_400_000);
 
   const refuel = (mileage: number, when: Date, vehicleId = TRUCK) => ({
     current_mileage: mileage,
@@ -575,9 +628,9 @@ describe("InMemoryFuelRepository places every write by its date", () => {
     // passed and the odometer jumped to 510.000.
     const { repo } = await timeline();
 
-    await expect(repo.createFuelWithMileage(refuel(510_000, day(6)))).rejects.toThrow(
-      "quilometragem",
-    );
+    await expect(
+      repo.createFuelWithMileage(refuel(510_000, day(6))),
+    ).rejects.toThrow("quilometragem");
     expect(repo.vehicleMileage[TRUCK]).toBe(50_000);
 
     const between = await repo.createFuelWithMileage(refuel(46_000, day(6)));
@@ -610,18 +663,34 @@ describe("InMemoryFuelRepository places every write by its date", () => {
     await expect(
       repo.updateFuelAndMileage(
         { fuelId: middle.id, fuelData: { refueling_date: day(-2) } },
-        { businessId: A, vehicleId: TRUCK, currentMileage: 45_500, at: day(-2), fuelId: middle.id },
+        {
+          businessId: A,
+          vehicleId: TRUCK,
+          currentMileage: 45_500,
+          at: day(-2),
+          fuelId: middle.id,
+        },
       ),
     ).rejects.toThrow("quilometragem");
 
-    expect(repo.fuels.find((fuel) => fuel.id === middle.id)?.refueling_date).toEqual(day(5));
+    expect(
+      repo.fuels.find((fuel) => fuel.id === middle.id)?.refueling_date,
+    ).toEqual(day(5));
 
     await repo.updateFuelAndMileage(
       { fuelId: middle.id, fuelData: { refueling_date: day(4) } },
-      { businessId: A, vehicleId: TRUCK, currentMileage: 45_500, at: day(4), fuelId: middle.id },
+      {
+        businessId: A,
+        vehicleId: TRUCK,
+        currentMileage: 45_500,
+        at: day(4),
+        fuelId: middle.id,
+      },
     );
 
-    expect(repo.fuels.find((fuel) => fuel.id === middle.id)?.refueling_date).toEqual(day(4));
+    expect(
+      repo.fuels.find((fuel) => fuel.id === middle.id)?.refueling_date,
+    ).toEqual(day(4));
   });
 
   it("releases the odometer a past refueling set, corrected between later readings", async () => {
@@ -632,7 +701,13 @@ describe("InMemoryFuelRepository places every write by its date", () => {
 
     await repo.updateFuelAndMileage(
       { fuelId: typo.id, fuelData: { current_mileage: 46_000 } },
-      { businessId: A, vehicleId: TRUCK, currentMileage: 46_000, at: day(6), fuelId: typo.id },
+      {
+        businessId: A,
+        vehicleId: TRUCK,
+        currentMileage: 46_000,
+        at: day(6),
+        fuelId: typo.id,
+      },
     );
 
     expect(repo.vehicleMileage[TRUCK]).toBe(48_000);
@@ -643,12 +718,20 @@ describe("InMemoryFuelRepository places every write by its date", () => {
     repo.vehicleMileage[OTHER_TRUCK] = 120_000;
 
     // Typed on TRUCK with the other truck's km, which moved TRUCK's odometer.
-    const wrongTruck = await repo.createFuelWithMileage(refuel(121_000, day(9)));
+    const wrongTruck = await repo.createFuelWithMileage(
+      refuel(121_000, day(9)),
+    );
     expect(repo.vehicleMileage[TRUCK]).toBe(121_000);
 
     await repo.updateFuelAndMileage(
       { fuelId: wrongTruck.fuel.id, fuelData: { vehicleId: OTHER_TRUCK } },
-      { businessId: A, vehicleId: OTHER_TRUCK, currentMileage: 121_000, at: day(9), fuelId: wrongTruck.fuel.id },
+      {
+        businessId: A,
+        vehicleId: OTHER_TRUCK,
+        currentMileage: 121_000,
+        at: day(9),
+        fuelId: wrongTruck.fuel.id,
+      },
     );
 
     expect(repo.vehicleMileage[OTHER_TRUCK]).toBe(121_000);

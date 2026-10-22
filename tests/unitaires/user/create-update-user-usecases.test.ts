@@ -112,10 +112,30 @@ beforeEach(() => {
   drivers = new InMemoryDriverRepository();
 
   users.user.push(
-    person({ id: ADMIN, email: "admin@a.com.br", role: "BUSINESS_ADMIN", businessId: CARRIER }),
-    person({ id: OTHER_ADMIN, email: "admin@b.com.br", role: "BUSINESS_ADMIN", businessId: OTHER }),
-    person({ id: MASTER, email: "master@t.com.br", role: "MASTER", businessId: null }),
-    person({ id: MASTER_TWO, email: "master2@t.com.br", role: "MASTER", businessId: null }),
+    person({
+      id: ADMIN,
+      email: "admin@a.com.br",
+      role: "BUSINESS_ADMIN",
+      businessId: CARRIER,
+    }),
+    person({
+      id: OTHER_ADMIN,
+      email: "admin@b.com.br",
+      role: "BUSINESS_ADMIN",
+      businessId: OTHER,
+    }),
+    person({
+      id: MASTER,
+      email: "master@t.com.br",
+      role: "MASTER",
+      businessId: null,
+    }),
+    person({
+      id: MASTER_TWO,
+      email: "master2@t.com.br",
+      role: "MASTER",
+      businessId: null,
+    }),
     person({
       id: CLERK,
       name: "Carlos Lima",
@@ -131,7 +151,10 @@ beforeEach(() => {
       businessId: CARRIER,
     }),
   );
-  businesses.business.push({ id: CARRIER } as Business, { id: OTHER } as Business);
+  businesses.business.push(
+    { id: CARRIER } as Business,
+    { id: OTHER } as Business,
+  );
 
   profiles.profileAccess.push(
     { id: PROFILE, name: "Operação", businessId: CARRIER } as never,
@@ -139,13 +162,30 @@ beforeEach(() => {
   );
 
   drivers.drivers.push(
-    { id: DRIVER, name: "João", businessId: CARRIER, status: "ACTIVE" } as Driver,
-    { id: FOREIGN_DRIVER, name: "Pedro", businessId: OTHER, status: "ACTIVE" } as Driver,
+    {
+      id: DRIVER,
+      name: "João",
+      businessId: CARRIER,
+      status: "ACTIVE",
+    } as Driver,
+    {
+      id: FOREIGN_DRIVER,
+      name: "Pedro",
+      businessId: OTHER,
+      status: "ACTIVE",
+    } as Driver,
   );
 });
 
 const create = () =>
-  new CreateUserUseCase(users, businesses, profiles, tokens, notifications, drivers);
+  new CreateUserUseCase(
+    users,
+    businesses,
+    profiles,
+    tokens,
+    notifications,
+    drivers,
+  );
 const update = () =>
   new UpdateUserUseCase(users, profiles, notifications, drivers, tokens);
 
@@ -175,7 +215,9 @@ describe("creating a company user", () => {
     });
     expect(created.password).toMatch(/^\$2[aby]\$10\$/);
 
-    const welcome = mail.sent.find((entry) => entry.templateName === "user-created-successfully.hbs");
+    const welcome = mail.sent.find(
+      (entry) => entry.templateName === "user-created-successfully.hbs",
+    );
     expect(welcome?.url).toMatch(/\/forgot\/password\?token=/);
     expect(tokens.forgotPasswordVerificationTokens).toHaveLength(1);
   });
@@ -196,14 +238,18 @@ describe("creating a company user", () => {
     );
 
     expect(created.driverId).toBe(DRIVER);
-    expect(realtime.catalogChanged).toEqual([{ businessId: CARRIER, entity: "driver" }]);
+    expect(realtime.catalogChanged).toEqual([
+      { businessId: CARRIER, entity: "driver" },
+    ]);
   });
 
   it("refuses a BUSINESS_USER creating an administrator (403 PERMISSION_DENIED)", async () => {
     await expect(
       create().execute(newUser({ role: "BUSINESS_ADMIN" }) as never, CLERK),
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
-    expect(users.user.find((u) => u.email === "maria@a.com.br")).toBeUndefined();
+    expect(
+      users.user.find((u) => u.email === "maria@a.com.br"),
+    ).toBeUndefined();
   });
 
   it("refuses an administrator creating a MASTER (403)", async () => {
@@ -214,38 +260,64 @@ describe("creating a company user", () => {
 
   it("refuses creating an account in another company (403 TENANT_ACCESS_DENIED)", async () => {
     await expect(
-      create().execute(newUser({ businessId: OTHER, profileAccessId: undefined }) as never, ADMIN),
+      create().execute(
+        newUser({ businessId: OTHER, profileAccessId: undefined }) as never,
+        ADMIN,
+      ),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
-    expect(users.user.find((u) => u.email === "maria@a.com.br")).toBeUndefined();
+    expect(
+      users.user.find((u) => u.email === "maria@a.com.br"),
+    ).toBeUndefined();
   });
 
   it("refuses a profile or a driver of another company", async () => {
     await expect(
-      create().execute(newUser({ profileAccessId: FOREIGN_PROFILE }) as never, ADMIN),
-    ).rejects.toMatchObject({ statusCode: 404, code: "PROFILE_ACCESS_NOT_FOUND" });
+      create().execute(
+        newUser({ profileAccessId: FOREIGN_PROFILE }) as never,
+        ADMIN,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "PROFILE_ACCESS_NOT_FOUND",
+    });
 
     await expect(
       create().execute(
-        newUser({ profileAccessId: undefined, driverId: FOREIGN_DRIVER }) as never,
+        newUser({
+          profileAccessId: undefined,
+          driverId: FOREIGN_DRIVER,
+        }) as never,
         ADMIN,
       ),
     ).rejects.toMatchObject({ statusCode: 404, code: "DRIVER_NOT_FOUND" });
 
-    expect(users.user.find((u) => u.email === "maria@a.com.br")).toBeUndefined();
+    expect(
+      users.user.find((u) => u.email === "maria@a.com.br"),
+    ).toBeUndefined();
   });
 
   it("refuses both a profile and a driver, and a driver already linked", async () => {
     await expect(
       create().execute(newUser({ driverId: DRIVER }) as never, ADMIN),
-    ).rejects.toMatchObject({ statusCode: 400, code: "USER_PROFILE_AND_DRIVER" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "USER_PROFILE_AND_DRIVER",
+    });
 
     await create().execute(
-      newUser({ email: "joao@a.com.br", profileAccessId: undefined, driverId: DRIVER }) as never,
+      newUser({
+        email: "joao@a.com.br",
+        profileAccessId: undefined,
+        driverId: DRIVER,
+      }) as never,
       ADMIN,
     );
 
     await expect(
-      create().execute(newUser({ profileAccessId: undefined, driverId: DRIVER }) as never, ADMIN),
+      create().execute(
+        newUser({ profileAccessId: undefined, driverId: DRIVER }) as never,
+        ADMIN,
+      ),
     ).rejects.toMatchObject({ statusCode: 409, code: "DRIVER_ALREADY_LINKED" });
   });
 
@@ -257,12 +329,17 @@ describe("creating a company user", () => {
 
   it("refuses an unknown caller (404) and an unknown company for the MASTER (404)", async () => {
     await expect(
-      create().execute(newUser() as never, "018f3300-0000-7000-8000-0000000000ff"),
+      create().execute(
+        newUser() as never,
+        "018f3300-0000-7000-8000-0000000000ff",
+      ),
     ).rejects.toMatchObject({ statusCode: 404 });
 
     await expect(
       create().execute(
-        newUser({ businessId: "018f3300-0000-7000-8000-0000000000fe" }) as never,
+        newUser({
+          businessId: "018f3300-0000-7000-8000-0000000000fe",
+        }) as never,
         MASTER,
       ),
     ).rejects.toMatchObject({ statusCode: 404, code: "BUSINESS_NOT_FOUND" });
@@ -272,7 +349,10 @@ describe("creating a company user", () => {
 describe("editing a company user", () => {
   it("renames without logging the person out", async () => {
     const updated = await update().execute(
-      { userId: CLERK, userData: { name: "Carlos Lima Filho", email: "carlos@a.com.br" } } as never,
+      {
+        userId: CLERK,
+        userData: { name: "Carlos Lima Filho", email: "carlos@a.com.br" },
+      } as never,
       ADMIN,
     );
 
@@ -307,31 +387,47 @@ describe("editing a company user", () => {
     );
 
     const clerk = users.user.find((u) => u.id === CLERK);
-    expect(clerk).toMatchObject({ role: "BUSINESS_ADMIN", profileAccessId: null });
+    expect(clerk).toMatchObject({
+      role: "BUSINESS_ADMIN",
+      profileAccessId: null,
+    });
     expect(clerk?.session_version).toBe(1);
-    expect(realtime.securityEvents).toEqual([{ userId: CLERK, reason: "role_changed" }]);
+    expect(realtime.securityEvents).toEqual([
+      { userId: CLERK, reason: "role_changed" },
+    ]);
   });
 
   it("refuses editing yourself", async () => {
     await expect(
-      update().execute({ userId: ADMIN, userData: { name: "Eu" } } as never, ADMIN),
+      update().execute(
+        { userId: ADMIN, userData: { name: "Eu" } } as never,
+        ADMIN,
+      ),
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
   });
 
   it("refuses a BUSINESS_USER demoting an administrator (403)", async () => {
     await expect(
       update().execute(
-        { userId: SECOND_ADMIN, userData: { role: "BUSINESS_USER", profileAccessId: PROFILE } } as never,
+        {
+          userId: SECOND_ADMIN,
+          userData: { role: "BUSINESS_USER", profileAccessId: PROFILE },
+        } as never,
         CLERK,
       ),
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
 
-    expect(users.user.find((u) => u.id === SECOND_ADMIN)?.role).toBe("BUSINESS_ADMIN");
+    expect(users.user.find((u) => u.id === SECOND_ADMIN)?.role).toBe(
+      "BUSINESS_ADMIN",
+    );
   });
 
   it("answers another company's user like a missing one (404) and changes nothing", async () => {
     await expect(
-      update().execute({ userId: CLERK, userData: { name: "Invasor" } } as never, OTHER_ADMIN),
+      update().execute(
+        { userId: CLERK, userData: { name: "Invasor" } } as never,
+        OTHER_ADMIN,
+      ),
     ).rejects.toMatchObject({ statusCode: 404, code: "USER_NOT_FOUND" });
 
     expect(users.user.find((u) => u.id === CLERK)?.name).toBe("Carlos Lima");
@@ -342,27 +438,39 @@ describe("editing a company user", () => {
   it.each([
     ["BUSINESS_ADMIN", ADMIN],
     ["MASTER", MASTER],
-  ])("never moves a user to another company, even for a %s", async (_role, actor) => {
-    await update().execute(
-      { userId: CLERK, userData: { businessId: OTHER, name: "Carlos Lima Souza" } } as never,
-      actor,
-    );
+  ])(
+    "never moves a user to another company, even for a %s",
+    async (_role, actor) => {
+      await update().execute(
+        {
+          userId: CLERK,
+          userData: { businessId: OTHER, name: "Carlos Lima Souza" },
+        } as never,
+        actor,
+      );
 
-    const after = users.user.find((u) => u.id === CLERK);
+      const after = users.user.find((u) => u.id === CLERK);
 
-    expect(after?.name).toBe("Carlos Lima Souza");
-    expect(after?.businessId).toBe(CARRIER);
-  });
+      expect(after?.name).toBe("Carlos Lima Souza");
+      expect(after?.businessId).toBe(CARRIER);
+    },
+  );
 
   it("refuses the company route for a MASTER account (403)", async () => {
     await expect(
-      update().execute({ userId: MASTER_TWO, userData: { name: "X" } } as never, MASTER),
+      update().execute(
+        { userId: MASTER_TWO, userData: { name: "X" } } as never,
+        MASTER,
+      ),
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
   });
 
   it("refuses an e-mail taken by someone else (409)", async () => {
     await expect(
-      update().execute({ userId: CLERK, userData: { email: "admin2@a.com.br" } } as never, ADMIN),
+      update().execute(
+        { userId: CLERK, userData: { email: "admin2@a.com.br" } } as never,
+        ADMIN,
+      ),
     ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
   });
 
@@ -392,7 +500,10 @@ describe("editing a company user", () => {
   it("refuses an unknown person (404)", async () => {
     await expect(
       update().execute(
-        { userId: "018f3300-0000-7000-8000-0000000000ff", userData: { name: "X" } } as never,
+        {
+          userId: "018f3300-0000-7000-8000-0000000000ff",
+          userData: { name: "X" },
+        } as never,
         ADMIN,
       ),
     ).rejects.toMatchObject({ statusCode: 404 });

@@ -5,7 +5,7 @@ name: Pipeline (staging → produção)
 #   push to staging ─▶ validation (audit, lint, typecheck, unit + coverage
 #                      floor, E2E against Postgres/Redis, AI pytest, gitleaks)
 #                  ─▶ build the three images ONCE ─▶ GHCR `sha-<sha>` (immutable)
-#                  ─▶ move `staging` to those digests ─▶ Dokploy (staging stack)
+#                  ─▶ move `staging` to those digests ─▶ Dokploy (staging Applications)
 #                  ─▶ wait until Swarm runs them
 #
 #   pull request into main ─▶ the same validation, plus: the PR head was
@@ -13,7 +13,7 @@ name: Pipeline (staging → produção)
 #
 #   merge into main ─▶ PROMOTE: the exact digests staging validated, never a
 #                      rebuild ─▶ migrations (job) ─▶ `stable` ─▶ Dokploy
-#                      (production stack) ─▶ wait until Swarm runs them
+#                      (production Applications) ─▶ wait until Swarm runs them
 #                      ─▶ release (tag, CHANGELOG, GitHub Release)
 #
 #   Run workflow (manual) ─▶ the same promote with an older immutable tag:
@@ -363,12 +363,12 @@ jobs:
   # cheap to break.
   #
   # This job moves the `staging` tag of the three images to the digests this
-  # run just built, asks Dokploy to redeploy the staging stack (which reads
-  # API_IMAGE_TAG=staging) and waits until Swarm actually runs those bytes.
+  # run just built, asks Dokploy to redeploy the staging Applications (each on
+  # its `:staging` tag) and waits until Swarm actually runs those bytes.
   #
   # Before Dokploy exists the tags still move (so the image staging would run
   # is always visible in GHCR) and the deploy is skipped with a notice. To
-  # turn it on: secrets DOKPLOY_URL, DOKPLOY_API_KEY and DOKPLOY_COMPOSE_ID in
+  # turn it on: secrets DOKPLOY_URL, DOKPLOY_API_KEY and DOKPLOY_API_APPLICATION_ID in
   # the `staging` environment (docs/deploy.md, "GitHub").
   deploy-staging:
     name: Deploy staging
@@ -446,31 +446,54 @@ jobs:
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+          DOKPLOY_API_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
         run: |
           missing=""
           [ -n "$DOKPLOY_URL" ] || missing="$missing DOKPLOY_URL"
           [ -n "$DOKPLOY_API_KEY" ] || missing="$missing DOKPLOY_API_KEY"
-          [ -n "$DOKPLOY_COMPOSE_ID" ] || missing="$missing DOKPLOY_COMPOSE_ID"
+          [ -n "$DOKPLOY_API_APPLICATION_ID" ] || missing="$missing DOKPLOY_API_APPLICATION_ID"
           if [ -z "$missing" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
-          elif [ "$missing" = " DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_COMPOSE_ID" ]; then
+          elif [ "$missing" = " DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Deploy de staging pulado: o environment staging ainda não tem DOKPLOY_URL, DOKPLOY_API_KEY e DOKPLOY_COMPOSE_ID (docs/deploy.md). A tag staging já aponta para este build."
+            echo "::notice::Deploy de staging pulado: o environment staging ainda não tem DOKPLOY_URL, DOKPLOY_API_KEY e DOKPLOY_API_APPLICATION_ID (docs/deploy.md). A tag staging já aponta para este build."
             echo "Deploy de staging **pulado**: Dokploy ainda não configurado. A tag \`staging\` já aponta para este build." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::error::Configuração parcial do Dokploy no environment staging: faltam${missing} (docs/deploy.md)."
             exit 1
           fi
 
-      # `done` in Dokploy = `docker stack deploy` ACCEPTED the specs; the
-      # rollout is the next step's business.
+      # One Dokploy Application per service, each on its `:staging` tag. The
+      # AI goes first (the API calls it), the backup last. `done` in Dokploy =
+      # the Swarm manager ACCEPTED the new spec; the API's rollout is checked
+      # after. The AI and backup ids are optional: not created yet = a notice.
+      - name: Deploy the AI service to staging (Dokploy)
+        if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_AI_APPLICATION_ID }}
+          DOKPLOY_APP_LABEL: trajetto-ai
+          DOKPLOY_OPTIONAL: "true"
+        run: node .github/scripts/dokploy-deploy.mjs
+
       - name: Deploy to staging (Dokploy)
         if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
+          DOKPLOY_APP_LABEL: trajetto-api
+        run: node .github/scripts/dokploy-deploy.mjs
+
+      - name: Deploy the backup service to staging (Dokploy)
+        if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_BACKUP_APPLICATION_ID }}
+          DOKPLOY_APP_LABEL: trajetto-backup
+          DOKPLOY_OPTIONAL: "true"
         run: node .github/scripts/dokploy-deploy.mjs
 
       # The same check as the promote (see there): staging is where a build
@@ -601,9 +624,10 @@ jobs:
   # since its staging build.
   #
   # Promoting means moving the `stable` tag to the image being shipped and only
-  # then asking Dokploy to redeploy production. The production stack is pinned
-  # to `stable`: a stack deploy resolves the tag to its digest again, so the
-  # moved tag is what runs (Stack mode; see docs/deploy.md).
+  # then asking Dokploy to redeploy production. The production Applications
+  # are pinned to `stable`: a redeploy pulls the tag again and the Swarm
+  # service resolves it to its digest, so the moved tag is what runs (see
+  # docs/deploy.md).
   promote-production:
     name: Promote to production
     runs-on: ubuntu-latest
@@ -721,7 +745,7 @@ jobs:
       # validates the image and reuses the running API service's env — no
       # database credential lives in CI. docs/deploy.md ("Migrations") has the
       # setup; switch on with the repository variable MIGRATIONS_VIA_JOB=true,
-      # then set RUN_MIGRATIONS_ON_BOOT=false in the production stack.
+      # then set RUN_MIGRATIONS_ON_BOOT=false in the production API Application.
       - name: Run database migrations (once, before the rollout)
         if: vars.MIGRATIONS_VIA_JOB == 'true'
         env:
@@ -750,7 +774,7 @@ jobs:
       # `imagetools create` retags server-side, without pulling or rebuilding,
       # so production runs the exact bytes that were validated.
       #
-      # Unconditional: the stack reads ${API_IMAGE_TAG:-stable}, so THIS is
+      # Unconditional: the API Application runs `:stable`, so THIS is
       # what ships. The digest is read first, from the immutable tag: it is
       # what `stable` moves to, what the rollout check waits for and what a
       # later rollback or incident review needs to know was live.
@@ -811,34 +835,56 @@ jobs:
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+          DOKPLOY_API_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
         run: |
           missing=""
           [ -n "$DOKPLOY_URL" ] || missing="$missing DOKPLOY_URL"
           [ -n "$DOKPLOY_API_KEY" ] || missing="$missing DOKPLOY_API_KEY"
-          [ -n "$DOKPLOY_COMPOSE_ID" ] || missing="$missing DOKPLOY_COMPOSE_ID"
+          [ -n "$DOKPLOY_API_APPLICATION_ID" ] || missing="$missing DOKPLOY_API_APPLICATION_ID"
           if [ -z "$missing" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
-          elif [ "$missing" = " DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_COMPOSE_ID" ]; then
+          elif [ "$missing" = " DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_API_APPLICATION_ID" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Deploy de produção pulado: o environment production ainda não tem DOKPLOY_URL, DOKPLOY_API_KEY e DOKPLOY_COMPOSE_ID (docs/deploy.md). A tag stable já aponta para este build."
+            echo "::notice::Deploy de produção pulado: o environment production ainda não tem DOKPLOY_URL, DOKPLOY_API_KEY e DOKPLOY_API_APPLICATION_ID (docs/deploy.md). A tag stable já aponta para este build."
             echo "Deploy de produção **pulado**: Dokploy ainda não configurado. A tag \`stable\` já aponta para este build." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::error::Configuração parcial do Dokploy no environment production: faltam${missing} (docs/deploy.md)."
             exit 1
           fi
 
-      # Follows the deployment Dokploy creates for this call and fails the run
-      # if Dokploy could not deploy at all (a compose that does not render, a
-      # missing variable, the registry). Its `done` only means
-      # `docker stack deploy` ACCEPTED the specs: it runs detached, so the
-      # rollout is still ahead. Secrets of the production environment.
+      # As on staging: one Dokploy Application per service, now on `:stable`
+      # (moved above). Each step follows the deployment Dokploy creates for
+      # this call and fails the run if Dokploy could not deploy at all (an
+      # image it cannot pull, a wrong id). Its `done` only means the Swarm
+      # manager ACCEPTED the spec: the API's rollout is checked below.
+      # Secrets of the production environment.
+      - name: Deploy the AI service to production (Dokploy)
+        if: steps.dokploy.outputs.enabled == 'true'
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_AI_APPLICATION_ID }}
+          DOKPLOY_APP_LABEL: trajetto-ai
+          DOKPLOY_OPTIONAL: "true"
+        run: node .github/scripts/dokploy-deploy.mjs
+
       - name: Deploy to production (Dokploy)
         if: steps.dokploy.outputs.enabled == 'true'
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
+          DOKPLOY_APP_LABEL: trajetto-api
+        run: node .github/scripts/dokploy-deploy.mjs
+
+      - name: Deploy the backup service to production (Dokploy)
+        if: steps.dokploy.outputs.enabled == 'true'
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_BACKUP_APPLICATION_ID }}
+          DOKPLOY_APP_LABEL: trajetto-backup
+          DOKPLOY_OPTIONAL: "true"
         run: node .github/scripts/dokploy-deploy.mjs
 
       # The proof the promote shipped. Swarm rolls a failing image back on its
@@ -881,5 +927,5 @@ jobs:
       - name: Say the rollout was not verified
         if: steps.dokploy.outputs.enabled == 'true' && vars.ROLLOUT_VERIFY == 'off'
         run: |
-          echo "::warning::ROLLOUT_VERIFY=off: o run não confere se o Swarm terminou o rollout ou o reverteu. Confira 'docker service ps --no-trunc <app>_api' no host."
+          echo "::warning::ROLLOUT_VERIFY=off: o run não confere se o Swarm terminou o rollout ou o reverteu. Confira 'docker service ps --no-trunc <appName da Application da API>' no host."
           echo "Rollout de produção NÃO verificado (ROLLOUT_VERIFY=off)." >> "$GITHUB_STEP_SUMMARY"

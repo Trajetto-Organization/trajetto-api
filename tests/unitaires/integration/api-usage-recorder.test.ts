@@ -54,10 +54,38 @@ function recorder(): ApiUsageRecorder {
 
 /** The values bound to the batched INSERT, by column. */
 function batchOf(call: unknown[]) {
-  const [, ids, apiKeyIds, businessIds, days, methods, routes, classes, counts] =
-    call as [unknown, string[], string[], string[], string[], string[], string[], number[], bigint[]];
+  const [
+    ,
+    ids,
+    apiKeyIds,
+    businessIds,
+    days,
+    methods,
+    routes,
+    classes,
+    counts,
+  ] = call as [
+    unknown,
+    string[],
+    string[],
+    string[],
+    string[],
+    string[],
+    string[],
+    number[],
+    bigint[],
+  ];
 
-  return { ids, apiKeyIds, businessIds, days, methods, routes, classes, counts };
+  return {
+    ids,
+    apiKeyIds,
+    businessIds,
+    days,
+    methods,
+    routes,
+    classes,
+    counts,
+  };
 }
 
 const CALL = {
@@ -109,29 +137,31 @@ describe("which day a call belongs to (DLVB-33)", () => {
   it("is the company's day, not the UTC one, around the evening turn", () => {
     // 21:30 in São Paulo is already the next day in UTC: "Hoje" used to reset
     // to zero at 21:00 and show the previous evening until 03:00.
-    expect(usageDay(new Date("2026-09-16T00:30:00.000Z"), "America/Sao_Paulo")).toBe(
-      "2026-09-15",
-    );
-    expect(usageDay(new Date("2026-09-16T02:59:59.000Z"), "America/Sao_Paulo")).toBe(
-      "2026-09-15",
-    );
-    expect(usageDay(new Date("2026-09-16T03:00:00.000Z"), "America/Sao_Paulo")).toBe(
-      "2026-09-16",
-    );
+    expect(
+      usageDay(new Date("2026-09-16T00:30:00.000Z"), "America/Sao_Paulo"),
+    ).toBe("2026-09-15");
+    expect(
+      usageDay(new Date("2026-09-16T02:59:59.000Z"), "America/Sao_Paulo"),
+    ).toBe("2026-09-15");
+    expect(
+      usageDay(new Date("2026-09-16T03:00:00.000Z"), "America/Sao_Paulo"),
+    ).toBe("2026-09-16");
   });
 
   it("follows each company's own zone", () => {
     // Manaus is an hour behind São Paulo: 03:30Z is still the 15th there.
-    expect(usageDay(new Date("2026-09-16T03:30:00.000Z"), "America/Manaus")).toBe(
-      "2026-09-15",
-    );
-    expect(usageDay(new Date("2026-09-16T03:30:00.000Z"), "America/Sao_Paulo")).toBe(
-      "2026-09-16",
-    );
+    expect(
+      usageDay(new Date("2026-09-16T03:30:00.000Z"), "America/Manaus"),
+    ).toBe("2026-09-15");
+    expect(
+      usageDay(new Date("2026-09-16T03:30:00.000Z"), "America/Sao_Paulo"),
+    ).toBe("2026-09-16");
   });
 
   it("falls back to the default zone when the company carries none", () => {
-    expect(usageDay(new Date("2026-09-16T01:00:00.000Z"), null)).toBe("2026-09-15");
+    expect(usageDay(new Date("2026-09-16T01:00:00.000Z"), null)).toBe(
+      "2026-09-15",
+    );
     expect(usageDay(new Date("2026-09-16T01:00:00.000Z"), "Not/AZone")).toBe(
       "2026-09-15",
     );
@@ -287,7 +317,10 @@ describe("when something goes wrong (DLVB-34)", () => {
     // Circling forever would hold the buffer's ceiling hostage.
     expect(counter.pending()).toBe(0);
     expect(logged("error")).toHaveLength(1);
-    expect(logged("error")[0]).toMatchObject({ component: "api-usage", count: 1 });
+    expect(logged("error")[0]).toMatchObject({
+      component: "api-usage",
+      count: 1,
+    });
   });
 
   it("isolates a bucket whose key no longer exists, and keeps the rest", async () => {

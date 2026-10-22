@@ -40,7 +40,9 @@ function periodBuckets(
 
   while (start < to) {
     if (buckets.length >= MAX_BUCKETS) {
-      throw new RangeError(`Too many ${granularity} buckets between ${from.toISOString()} and ${to.toISOString()}`);
+      throw new RangeError(
+        `Too many ${granularity} buckets between ${from.toISOString()} and ${to.toISOString()}`,
+      );
     }
 
     const next =
@@ -52,7 +54,9 @@ function periodBuckets(
 
     buckets.push({
       period:
-        granularity === "day" ? businessDateKey(start, timeZone) : businessMonthKey(start, timeZone),
+        granularity === "day"
+          ? businessDateKey(start, timeZone)
+          : businessMonthKey(start, timeZone),
       start,
       end,
     });

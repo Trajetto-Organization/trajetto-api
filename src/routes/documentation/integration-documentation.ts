@@ -90,17 +90,19 @@ const publicRoute = z.object({
     .describe("Destino da rota, texto livre, quando foi informado."),
   planned_departure_at: isoDateTime
     .nullable()
-    .describe("Saída prevista (instante em UTC). Nulo quando não foi planejada."),
+    .describe(
+      "Saída prevista (instante em UTC). Nulo quando não foi planejada.",
+    ),
   planned_arrival_at: isoDateTime
     .nullable()
-    .describe("Retorno previsto (instante em UTC). Nulo quando não foi planejado."),
+    .describe(
+      "Retorno previsto (instante em UTC). Nulo quando não foi planejado.",
+    ),
   started_at: isoDateTime.nullable(),
   completed_at: isoDateTime.nullable(),
 
   driver: z.object({ id: z.string(), name: z.string() }).nullable(),
-  vehicle: z
-    .object({ id: z.string(), license_plate: z.string() })
-    .nullable(),
+  vehicle: z.object({ id: z.string(), license_plate: z.string() }).nullable(),
 
   stops: z.array(
     z.object({
@@ -196,7 +198,7 @@ const integrationResponses = {
         }),
       )
       .describe(
-        "O que \"todos os eventos\" de cada família assina: os curingas de um nível que cobrem os tópicos dela. Documentos são `delivery.*`, `occurrence.*` e `proof.*` — `document.*` não é um curinga válido.",
+        'O que "todos os eventos" de cada família assina: os curingas de um nível que cobrem os tópicos dela. Documentos são `delivery.*`, `occurrence.*` e `proof.*` — `document.*` não é um curinga válido.',
       ),
 
     scopes: z.array(
@@ -297,9 +299,7 @@ const integrationResponses = {
           .describe(
             "true quando a lista passou do limite de contagem: `total` é então o limite, não a contagem exata. Os contadores abaixo continuam exatos.",
           ),
-        delivered: z
-          .number()
-          .describe("Eventos do período entregues."),
+        delivered: z.number().describe("Eventos do período entregues."),
         failed: z.number().describe("Eventos do período que falharam."),
         pending: z
           .number()
@@ -366,7 +366,7 @@ const integrationResponses = {
       timeZone: z
         .string()
         .describe(
-          "O fuso da empresa (IANA): os dias de `byDay` e o \"hoje\" são os do calendário dela.",
+          'O fuso da empresa (IANA): os dias de `byDay` e o "hoje" são os do calendário dela.',
         ),
     }),
   }),

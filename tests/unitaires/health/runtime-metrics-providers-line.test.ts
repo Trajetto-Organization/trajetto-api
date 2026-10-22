@@ -29,9 +29,15 @@ function run(providers: ReturnType<typeof createProviderMetrics>) {
     },
   };
 
-  const metrics = createRuntimeMetrics({ windowMs: 1_000, canaryIntervalMs: 60_000 });
-  const stop = startRuntimeMetrics(log, metrics, async () => ({ limit: 5 }), () =>
-    providers.snapshot(),
+  const metrics = createRuntimeMetrics({
+    windowMs: 1_000,
+    canaryIntervalMs: 60_000,
+  });
+  const stop = startRuntimeMetrics(
+    log,
+    metrics,
+    async () => ({ limit: 5 }),
+    () => providers.snapshot(),
   );
 
   return { lines, stop };

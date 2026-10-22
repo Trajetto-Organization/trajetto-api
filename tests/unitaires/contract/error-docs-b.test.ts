@@ -115,7 +115,8 @@ function useCaseFolderOf(importPath: string): string {
 }
 
 /** Both throws answer 404 USER_NOT_FOUND (the Entregas modules use the second). */
-const SESSION_USER_GONE = /new ResourceNotFoundError\(|throw callerNotFound\(\)/;
+const SESSION_USER_GONE =
+  /new ResourceNotFoundError\(|throw callerNotFound\(\)/;
 
 /** True when the use case (or a helper it imports) says the session user is gone. */
 function throwsSessionUserGone(folder: string): boolean {
@@ -139,18 +140,22 @@ function throwsSessionUserGone(folder: string): boolean {
   // One level of imports too: the tower's use cases share operations-viewer,
   // which is where the session user is looked up.
   const imported = sources.flatMap(([path, text]) =>
-    [...text.matchAll(/from "((?:\.{1,2}\/|@\/modules\/)[^"]+)"/g)].map((match) => {
-      const target = match[1].startsWith("@/")
-        ? join(SRC, match[1].slice(2))
-        : join(dirname(path), match[1]);
+    [...text.matchAll(/from "((?:\.{1,2}\/|@\/modules\/)[^"]+)"/g)].map(
+      (match) => {
+        const target = match[1].startsWith("@/")
+          ? join(SRC, match[1].slice(2))
+          : join(dirname(path), match[1]);
 
-      return `${target}.ts`;
-    }),
+        return `${target}.ts`;
+      },
+    ),
   );
 
   const texts = [
     ...sources.map(([, text]) => text),
-    ...imported.filter((path) => existsSync(path)).map((path) => readFileSync(path, "utf-8")),
+    ...imported
+      .filter((path) => existsSync(path))
+      .map((path) => readFileSync(path, "utf-8")),
   ];
 
   return texts.some((text) => SESSION_USER_GONE.test(text));
@@ -167,7 +172,9 @@ function sessionUserRoutesFromSource(): string[] {
   const registry = readFileSync(join(ROUTES_DIR, "routes.ts"), "utf-8");
   const fileOfPlugin = new Map<string, string>();
 
-  for (const match of registry.matchAll(/import \{ (\w+) \} from "\.\/([\w.-]+)"/g)) {
+  for (const match of registry.matchAll(
+    /import \{ (\w+) \} from "\.\/([\w.-]+)"/g,
+  )) {
     fileOfPlugin.set(match[1], match[2]);
   }
 
@@ -192,11 +199,15 @@ function sessionUserRoutesFromSource(): string[] {
 
     const instanceClass = new Map<string, string>();
 
-    for (const created of source.matchAll(/const (\w+) = new (\w+Controller)\(/g)) {
+    for (const created of source.matchAll(
+      /const (\w+) = new (\w+Controller)\(/g,
+    )) {
       instanceClass.set(created[1], created[2]);
     }
 
-    const registrations = source.split(/app\.(?=(?:get|post|put|patch|delete)\()/);
+    const registrations = source.split(
+      /app\.(?=(?:get|post|put|patch|delete)\()/,
+    );
 
     for (const chunk of registrations.slice(1)) {
       const head = chunk.match(/^(get|post|put|patch|delete)\(\s*"([^"]*)"/);
@@ -206,7 +217,8 @@ function sessionUserRoutesFromSource(): string[] {
 
       const importPath = classImport.get(instanceClass.get(handler[1]) ?? "");
 
-      if (!importPath || !throwsSessionUserGone(useCaseFolderOf(importPath))) continue;
+      if (!importPath || !throwsSessionUserGone(useCaseFolderOf(importPath)))
+        continue;
 
       const path = `${prefix}${head[2]}`
         .replace(/:([A-Za-z0-9_]+)/g, "{$1}")
@@ -225,13 +237,17 @@ let close: () => Promise<void>;
 function isOwned(route: IntrospectedRoute): boolean {
   return OWNED_PREFIXES.some(
     (prefix) =>
-      route.openapiPath === prefix || route.openapiPath.startsWith(`${prefix}/`),
+      route.openapiPath === prefix ||
+      route.openapiPath.startsWith(`${prefix}/`),
   );
 }
 
 type JsonSchema = Record<string, unknown>;
 
-function responseSchema(route: IntrospectedRoute, status: string): JsonSchema | undefined {
+function responseSchema(
+  route: IntrospectedRoute,
+  status: string,
+): JsonSchema | undefined {
   return route.operation?.responses?.[status]?.content?.["application/json"]
     ?.schema as JsonSchema | undefined;
 }
@@ -245,7 +261,8 @@ function messageDefaults(schema: JsonSchema | undefined): string[] {
     ...((schema.oneOf as JsonSchema[] | undefined) ?? []),
     ...((schema.allOf as JsonSchema[] | undefined) ?? []),
   ];
-  const own = (schema.properties as Record<string, JsonSchema> | undefined)?.message;
+  const own = (schema.properties as Record<string, JsonSchema> | undefined)
+    ?.message;
   const values = [own?.default, own?.example].filter(
     (value): value is string => typeof value === "string",
   );
@@ -257,7 +274,8 @@ function messageDefaults(schema: JsonSchema | undefined): string[] {
 function describedCodes(route: IntrospectedRoute, status: string): string {
   const response = route.operation?.responses?.[status];
   const schema = responseSchema(route, status);
-  const code = (schema?.properties as Record<string, JsonSchema> | undefined)?.code;
+  const code = (schema?.properties as Record<string, JsonSchema> | undefined)
+    ?.code;
 
   return [response?.description, code?.description]
     .filter((text): text is string => typeof text === "string")
@@ -276,7 +294,9 @@ function objectsOf(schema: ZodTypeAny): ZodTypeAny[] {
 beforeAll(async () => {
   const introspected = await introspectRoutes();
 
-  owned = introspected.routes.filter((route) => !route.hidden && isOwned(route));
+  owned = introspected.routes.filter(
+    (route) => !route.hidden && isOwned(route),
+  );
   close = introspected.close;
 }, APP_BOOT_TIMEOUT_MS);
 
@@ -306,7 +326,10 @@ describe("refusals published by the I–Z modules", () => {
 
     const misfiled = owned.flatMap((route) =>
       Object.keys(route.operation?.responses ?? {})
-        .filter((status) => status !== "404" && bare.test(describedCodes(route, status)))
+        .filter(
+          (status) =>
+            status !== "404" && bare.test(describedCodes(route, status)),
+        )
         .map((status) => `${route.id} ${status}`),
     );
 
@@ -334,13 +357,17 @@ describe("refusals published by the I–Z modules", () => {
 
   it("declares every 4xx body with a code, as the handler sends it", () => {
     const codeless = owned.flatMap((route) => {
-      const responses = (route.schema?.response ?? {}) as Record<string, unknown>;
+      const responses = (route.schema?.response ?? {}) as Record<
+        string,
+        unknown
+      >;
 
       return Object.entries(responses)
         .filter(([status]) => Number(status) >= 400 && Number(status) < 500)
         .filter(([, schema]) =>
           objectsOf(schema as ZodTypeAny).some(
-            (option) => option instanceof ZodObject && !("code" in option.shape),
+            (option) =>
+              option instanceof ZodObject && !("code" in option.shape),
           ),
         )
         .map(([status]) => `${route.id} ${status}`);

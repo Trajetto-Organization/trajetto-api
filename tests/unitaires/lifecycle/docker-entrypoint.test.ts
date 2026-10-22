@@ -40,7 +40,10 @@ process.exit(Number(process.env.${exitVar} ?? 0));
 beforeEach(() => {
   box = sandbox();
 
-  box.file("build/wait-for-postgres.js", nodeStub("wait-for-postgres", "STUB_WAIT_EXIT"));
+  box.file(
+    "build/wait-for-postgres.js",
+    nodeStub("wait-for-postgres", "STUB_WAIT_EXIT"),
+  );
   box.file("build/seed.js", nodeStub("seed", "STUB_SEED_EXIT"));
   box.file(
     "build/import-violation-codes.js",
@@ -57,14 +60,19 @@ beforeEach(() => {
 afterEach(() => box.dispose());
 
 function entrypoint(args: string[], env: Record<string, string> = {}) {
-  const result = run("sh", repoFile("infra/scripts/docker-entrypoint.sh"), args, {
-    cwd: box.root,
-    env: {
-      STUB_LOG: box.log,
-      DATABASE_URL: "postgresql://runtime",
-      ...env,
+  const result = run(
+    "sh",
+    repoFile("infra/scripts/docker-entrypoint.sh"),
+    args,
+    {
+      cwd: box.root,
+      env: {
+        STUB_LOG: box.log,
+        DATABASE_URL: "postgresql://runtime",
+        ...env,
+      },
     },
-  });
+  );
 
   const calls = readFileSync(box.log, "utf8").split("\n").filter(Boolean);
   const called = (what: string) => calls.some((line) => line.startsWith(what));
@@ -77,7 +85,9 @@ describe.skipIf(!sh)("the release step (`migrate` mode)", () => {
     const { status, calls, called } = entrypoint(["migrate"]);
 
     expect(status, calls.join("\n")).toBe(0);
-    expect(calls.some((line) => line.startsWith("prisma migrate deploy"))).toBe(true);
+    expect(calls.some((line) => line.startsWith("prisma migrate deploy"))).toBe(
+      true,
+    );
     expect(called("seed ")).toBe(true);
     expect(called("import-violation-codes ")).toBe(true);
     expect(called("server ")).toBe(false);
@@ -92,14 +102,18 @@ describe.skipIf(!sh)("the release step (`migrate` mode)", () => {
   });
 
   it("fails when the violation-code import fails", () => {
-    const { status, called } = entrypoint(["migrate"], { STUB_IMPORT_EXIT: "1" });
+    const { status, called } = entrypoint(["migrate"], {
+      STUB_IMPORT_EXIT: "1",
+    });
 
     expect(status).not.toBe(0);
     expect(called("server ")).toBe(false);
   });
 
   it("stops at a failed migration, before any seed", () => {
-    const { status, called } = entrypoint(["migrate"], { STUB_PRISMA_EXIT: "1" });
+    const { status, called } = entrypoint(["migrate"], {
+      STUB_PRISMA_EXIT: "1",
+    });
 
     expect(status).not.toBe(0);
     expect(called("seed ")).toBe(false);
@@ -115,7 +129,9 @@ describe.skipIf(!sh)("the release step (`migrate` mode)", () => {
 
 describe.skipIf(!sh)("the boot (`serve`, the default)", () => {
   it("serves without touching the schema once boot migrations are off", () => {
-    const { status, called } = entrypoint([], { RUN_MIGRATIONS_ON_BOOT: "false" });
+    const { status, called } = entrypoint([], {
+      RUN_MIGRATIONS_ON_BOOT: "false",
+    });
 
     expect(status).toBe(0);
     expect(called("prisma ")).toBe(false);
@@ -158,29 +174,32 @@ describe.skipIf(!sh)("the boot (`serve`, the default)", () => {
 describe.skipIf(!sh)("which connection each step uses", () => {
   /**
    * The runtime DATABASE_URL carries statement_timeout and lock_timeout
-   * (compose.production.yaml). A CREATE INDEX or a backfill must not be
-   * cancelled halfway by the runtime ceiling, and lock_timeout must not cut
-   * short the migrate advisory-lock wait during a start-first rollout — so the
-   * schema steps run on MIGRATION_DATABASE_URL, and only the server keeps the
-   * timed one.
+   * (set in the API Application, modelled in .env.example). A CREATE INDEX
+   * or a backfill must not be cancelled halfway by the runtime ceiling, and
+   * lock_timeout must not cut short the migrate advisory-lock wait during a
+   * start-first rollout — so the schema steps run on MIGRATION_DATABASE_URL,
+   * and only the server keeps the timed one.
    */
   const env = {
     DATABASE_URL: "postgresql://runtime",
     MIGRATION_DATABASE_URL: "postgresql://migration",
   };
 
-  it.each([[["migrate"]], [[]]])("migrates and seeds on the migration URL (%j)", (args) => {
-    const { calls } = entrypoint(args, env);
+  it.each([[["migrate"]], [[]]])(
+    "migrates and seeds on the migration URL (%j)",
+    (args) => {
+      const { calls } = entrypoint(args, env);
 
-    const schemaSteps = calls.filter((line) =>
-      /^(prisma migrate deploy|seed |import-violation-codes )/.test(line),
-    );
+      const schemaSteps = calls.filter((line) =>
+        /^(prisma migrate deploy|seed |import-violation-codes )/.test(line),
+      );
 
-    expect(schemaSteps).toHaveLength(3);
-    for (const line of schemaSteps) {
-      expect(line).toContain("DATABASE_URL=postgresql://migration");
-    }
-  });
+      expect(schemaSteps).toHaveLength(3);
+      for (const line of schemaSteps) {
+        expect(line).toContain("DATABASE_URL=postgresql://migration");
+      }
+    },
+  );
 
   it("serves on the runtime URL", () => {
     const { calls } = entrypoint([], env);
@@ -191,7 +210,9 @@ describe.skipIf(!sh)("which connection each step uses", () => {
   });
 
   it("falls back to DATABASE_URL when no migration URL is set", () => {
-    const { calls } = entrypoint(["migrate"], { DATABASE_URL: "postgresql://only" });
+    const { calls } = entrypoint(["migrate"], {
+      DATABASE_URL: "postgresql://only",
+    });
 
     expect(calls.find((line) => line.startsWith("prisma "))).toContain(
       "DATABASE_URL=postgresql://only",
@@ -213,13 +234,17 @@ describe("yarn start", () => {
   });
 
   it("has the release step as a script of its own", () => {
-    expect(scripts["migrate:release"]).toMatch(/docker-entrypoint\.sh migrate\b/);
+    expect(scripts["migrate:release"]).toMatch(
+      /docker-entrypoint\.sh migrate\b/,
+    );
   });
 
   // One way to find the script, not two: the release step is `start` plus
   // its mode, so a fix to where the script is looked up reaches both.
   it("finds the script the same way for the release step", () => {
-    expect(scripts["migrate:release"].replace(/ migrate\b/g, "")).toBe(scripts.start);
+    expect(scripts["migrate:release"].replace(/ migrate\b/g, "")).toBe(
+      scripts.start,
+    );
   });
 });
 
@@ -234,47 +259,64 @@ describe("yarn start", () => {
  * with "can't open". The scripts now run whichever copy is there; the steps
  * themselves still live in that one file.
  */
-describe.skipIf(!sh)("the package scripts, in the repository and in the image", () => {
-  const scripts = JSON.parse(readFileSync(repoFile("package.json"), "utf8"))
-    .scripts as Record<string, string>;
+describe.skipIf(!sh)(
+  "the package scripts, in the repository and in the image",
+  () => {
+    const scripts = JSON.parse(readFileSync(repoFile("package.json"), "utf8"))
+      .scripts as Record<string, string>;
 
-  const layouts = {
-    repository: "infra/scripts/docker-entrypoint.sh",
-    image: "docker-entrypoint.sh",
-  } as const;
+    const layouts = {
+      repository: "infra/scripts/docker-entrypoint.sh",
+      image: "docker-entrypoint.sh",
+    } as const;
 
-  function runScript(name: "start" | "migrate:release", layout: keyof typeof layouts) {
-    box.file(layouts[layout], readFileSync(repoFile("infra/scripts/docker-entrypoint.sh"), "utf8"));
+    function runScript(
+      name: "start" | "migrate:release",
+      layout: keyof typeof layouts,
+    ) {
+      box.file(
+        layouts[layout],
+        readFileSync(repoFile("infra/scripts/docker-entrypoint.sh"), "utf8"),
+      );
 
-    // What yarn and npm do with a script on Linux: `sh -c`, in the package root.
-    const result = spawnSync("sh", ["-c", scripts[name]], {
-      cwd: box.root,
-      env: { ...process.env, STUB_LOG: box.log, DATABASE_URL: "postgresql://runtime" },
-      encoding: "utf8",
-      timeout: 30_000,
-    });
+      // What yarn and npm do with a script on Linux: `sh -c`, in the package root.
+      const result = spawnSync("sh", ["-c", scripts[name]], {
+        cwd: box.root,
+        env: {
+          ...process.env,
+          STUB_LOG: box.log,
+          DATABASE_URL: "postgresql://runtime",
+        },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
 
-    const calls = readFileSync(box.log, "utf8").split("\n").filter(Boolean);
-    const called = (what: string) => calls.some((line) => line.startsWith(what));
+      const calls = readFileSync(box.log, "utf8").split("\n").filter(Boolean);
+      const called = (what: string) =>
+        calls.some((line) => line.startsWith(what));
 
-    return { status: result.status, stderr: result.stderr ?? "", called };
-  }
+      return { status: result.status, stderr: result.stderr ?? "", called };
+    }
 
-  it.each(Object.keys(layouts) as (keyof typeof layouts)[])("`start` boots the server (%s)", (layout) => {
-    const { status, stderr, called } = runScript("start", layout);
+    it.each(Object.keys(layouts) as (keyof typeof layouts)[])(
+      "`start` boots the server (%s)",
+      (layout) => {
+        const { status, stderr, called } = runScript("start", layout);
 
-    expect(status, stderr).toBe(0);
-    expect(called("server ")).toBe(true);
-  });
+        expect(status, stderr).toBe(0);
+        expect(called("server ")).toBe(true);
+      },
+    );
 
-  it.each(Object.keys(layouts) as (keyof typeof layouts)[])(
-    "`migrate:release` migrates and never serves (%s)",
-    (layout) => {
-      const { status, stderr, called } = runScript("migrate:release", layout);
+    it.each(Object.keys(layouts) as (keyof typeof layouts)[])(
+      "`migrate:release` migrates and never serves (%s)",
+      (layout) => {
+        const { status, stderr, called } = runScript("migrate:release", layout);
 
-      expect(status, stderr).toBe(0);
-      expect(called("prisma migrate deploy")).toBe(true);
-      expect(called("server ")).toBe(false);
-    },
-  );
-});
+        expect(status, stderr).toBe(0);
+        expect(called("prisma migrate deploy")).toBe(true);
+        expect(called("server ")).toBe(false);
+      },
+    );
+  },
+);

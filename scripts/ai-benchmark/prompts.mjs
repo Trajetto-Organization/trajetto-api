@@ -54,7 +54,11 @@ function schemas() {
  */
 async function buildRequest(item) {
   if (item.task === "odometer") {
-    return { prompt: product().odometerPrompt(), schema: schemas().odometer, kind: "odometer" };
+    return {
+      prompt: product().odometerPrompt(),
+      schema: schemas().odometer,
+      kind: "odometer",
+    };
   }
 
   if (item.task === "checklist") {
@@ -68,7 +72,11 @@ async function buildRequest(item) {
     };
   }
 
-  return { prompt: product().proofPrompt(), schema: schemas().proof, kind: "proof" };
+  return {
+    prompt: product().proofPrompt(),
+    schema: schemas().proof,
+    kind: "proof",
+  };
 }
 
 /**
@@ -84,7 +92,9 @@ function promptAnswerShape(prompt) {
   const template = prompt.slice(start, end === -1 ? undefined : end + 1);
 
   const shape = new Map();
-  for (const [, key, value] of template.matchAll(/"([A-Za-z_]+)"\s*:\s*([^,\n}]*)/g)) {
+  for (const [, key, value] of template.matchAll(
+    /"([A-Za-z_]+)"\s*:\s*([^,\n}]*)/g,
+  )) {
     const choices = /^"[^"]*"(\s*\|\s*"[^"]*")+\s*$/.test(value.trim())
       ? [...value.matchAll(/"([^"]*)"/g)].map((match) => match[1])
       : null;
@@ -108,10 +118,13 @@ function schemaDrift(prompt, schema, label = "prompt") {
 
   for (const [key, choices] of shape) {
     if (!properties[key]) {
-      drift.push(`${label}: the prompt asks for "${key}", the Ollama schema does not have it`);
+      drift.push(
+        `${label}: the prompt asks for "${key}", the Ollama schema does not have it`,
+      );
       continue;
     }
-    if (!required.has(key)) drift.push(`${label}: "${key}" is not required in the Ollama schema`);
+    if (!required.has(key))
+      drift.push(`${label}: "${key}" is not required in the Ollama schema`);
 
     const allowed = properties[key].enum ?? null;
     const same =
@@ -129,7 +142,9 @@ function schemaDrift(prompt, schema, label = "prompt") {
 
   for (const key of Object.keys(properties)) {
     if (!shape.has(key)) {
-      drift.push(`${label}: the Ollama schema has "${key}", the prompt no longer asks for it`);
+      drift.push(
+        `${label}: the Ollama schema has "${key}", the prompt no longer asks for it`,
+      );
     }
   }
 

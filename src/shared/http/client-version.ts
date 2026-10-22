@@ -52,7 +52,10 @@ function parseClientVersion(header: unknown): ClientVersion | null {
     if (separator === -1) continue;
 
     const key = pair.slice(0, separator).trim();
-    const value = pair.slice(separator + 1).trim().slice(0, 128);
+    const value = pair
+      .slice(separator + 1)
+      .trim()
+      .slice(0, 128);
 
     if (!value) continue;
 
@@ -97,7 +100,10 @@ const UPGRADE_EXEMPT_ROUTES = new Set([
 ]);
 
 /** Shared with the OpenAPI transform, which documents the 426 elsewhere. */
-function isUpgradeExempt(method: string, routeUrl: string | undefined): boolean {
+function isUpgradeExempt(
+  method: string,
+  routeUrl: string | undefined,
+): boolean {
   return UPGRADE_EXEMPT_ROUTES.has(`${method} ${routeUrl}`);
 }
 
@@ -116,10 +122,7 @@ function isUpgradeExempt(method: string, routeUrl: string | undefined): boolean 
  * so the link can change without a new app build; absent, the field is left
  * out and the app falls back to the store page it works out for itself.
  */
-function clientUpgradeGate(
-  minContract: number | undefined,
-  storeUrl?: string,
-) {
+function clientUpgradeGate(minContract: number | undefined, storeUrl?: string) {
   return async function clientUpgradeGateHook(
     request: FastifyRequest,
     reply: FastifyReply,

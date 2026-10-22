@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { envSchema } from "@/schemas/env-schema";
@@ -118,21 +115,5 @@ describe("a publish on a replica whose workers are off", () => {
     pipeline.wake();
 
     expect(cycle).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("the production compose", () => {
-  const compose = readFileSync(
-    resolve(__dirname, "../../../compose.production.yaml"),
-    "utf8",
-  );
-
-  it("lets the stack switch the workers off, on by default", () => {
-    expect(compose).toMatch(
-      /\n\s+WORKERS_ENABLED: \$\{WORKERS_ENABLED:-true\}\r?\n/,
-    );
-    expect(compose).toMatch(
-      /\n\s+PIPELINE_SWEEP_INTERVAL_MS: \$\{PIPELINE_SWEEP_INTERVAL_MS:-30000\}\r?\n/,
-    );
   });
 });

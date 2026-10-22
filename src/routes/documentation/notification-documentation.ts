@@ -118,7 +118,9 @@ const allNotificationResponses = {
     preferences: z.array(preferenceRow),
     // Decision 14.6: the web's operations alert sound, per person.
     opsAlert: z.object({
-      sound: z.boolean().describe("Tocar som nos alertas da operação (balão flutuante)."),
+      sound: z
+        .boolean()
+        .describe("Tocar som nos alertas da operação (balão flutuante)."),
     }),
   }),
   preferencesUpdated: z.object({

@@ -159,7 +159,8 @@ class InMemoryVehicleChecklistRepository
       mileage: update.currentMileage,
       ...this.timelineOf(update),
       odometer: current,
-      maintenanceFloor: this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
+      maintenanceFloor:
+        this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
       previousMileage: null,
     });
 
@@ -203,10 +204,7 @@ class InMemoryVehicleChecklistRepository
       });
 
       if (!placement.fits) {
-        throw editedReadingRefusal(
-          previousMileage !== null,
-          timeline,
-        );
+        throw editedReadingRefusal(previousMileage !== null, timeline);
       }
 
       const nextOdometer =

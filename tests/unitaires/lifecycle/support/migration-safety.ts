@@ -52,7 +52,10 @@ function objectName(raw: string): string {
  * of dollar-quoted blocks (DO $$ ... $$), which are returned apart and kept
  * with their literals: dynamic DDL lives inside `EXECUTE '...'`.
  */
-function scan(sql: string, keepLiterals = false): { code: string; blocks: string[] } {
+function scan(
+  sql: string,
+  keepLiterals = false,
+): { code: string; blocks: string[] } {
   let code = "";
   const blocks: string[] = [];
   let i = 0;
@@ -157,24 +160,51 @@ function addsRequiredColumnWithoutDefault(statement: string): boolean {
 const CONTRACT = ["contract-phase"];
 
 const RULES: Rule[] = [
-  { name: "DROP COLUMN", matches: (s) => /\bDROP\s+COLUMN\b/i.test(s), markers: CONTRACT },
-  { name: "DROP TABLE", matches: (s) => /\bDROP\s+TABLE\b/i.test(s), markers: CONTRACT },
-  { name: "DROP TYPE", matches: (s) => /\bDROP\s+TYPE\b/i.test(s), markers: CONTRACT },
-  { name: "RENAME COLUMN", matches: (s) => /\bRENAME\s+COLUMN\b/i.test(s), markers: CONTRACT },
+  {
+    name: "DROP COLUMN",
+    matches: (s) => /\bDROP\s+COLUMN\b/i.test(s),
+    markers: CONTRACT,
+  },
+  {
+    name: "DROP TABLE",
+    matches: (s) => /\bDROP\s+TABLE\b/i.test(s),
+    markers: CONTRACT,
+  },
+  {
+    name: "DROP TYPE",
+    matches: (s) => /\bDROP\s+TYPE\b/i.test(s),
+    markers: CONTRACT,
+  },
+  {
+    name: "RENAME COLUMN",
+    matches: (s) => /\bRENAME\s+COLUMN\b/i.test(s),
+    markers: CONTRACT,
+  },
   {
     // An index is never named by the client: renaming one is harmless.
     name: "RENAME TO",
     matches: (s) => /\bRENAME\s+TO\b/i.test(s) && !/^ALTER\s+INDEX\b/i.test(s),
     markers: CONTRACT,
   },
-  { name: "RENAME VALUE", matches: (s) => /\bRENAME\s+VALUE\b/i.test(s), markers: CONTRACT },
+  {
+    name: "RENAME VALUE",
+    matches: (s) => /\bRENAME\s+VALUE\b/i.test(s),
+    markers: CONTRACT,
+  },
   {
     name: "ALTER COLUMN ... TYPE",
     matches: (s) =>
-      new RegExp(String.raw`\bALTER\s+COLUMN\s+${IDENTIFIER}\s+(?:SET\s+DATA\s+)?TYPE\b`, "i").test(s),
+      new RegExp(
+        String.raw`\bALTER\s+COLUMN\s+${IDENTIFIER}\s+(?:SET\s+DATA\s+)?TYPE\b`,
+        "i",
+      ).test(s),
     markers: CONTRACT,
   },
-  { name: "SET NOT NULL", matches: (s) => /\bSET\s+NOT\s+NULL\b/i.test(s), markers: CONTRACT },
+  {
+    name: "SET NOT NULL",
+    matches: (s) => /\bSET\s+NOT\s+NULL\b/i.test(s),
+    markers: CONTRACT,
+  },
   {
     // Loosening, but the previous client still reads the column as required
     // and throws (P2032) on the first NULL the new release writes: the same
@@ -188,8 +218,16 @@ const RULES: Rule[] = [
     matches: addsRequiredColumnWithoutDefault,
     markers: CONTRACT,
   },
-  { name: "DELETE FROM", matches: (s) => /\bDELETE\s+FROM\b/i.test(s), markers: CONTRACT },
-  { name: "TRUNCATE", matches: (s) => /\bTRUNCATE\b/i.test(s), markers: CONTRACT },
+  {
+    name: "DELETE FROM",
+    matches: (s) => /\bDELETE\s+FROM\b/i.test(s),
+    markers: CONTRACT,
+  },
+  {
+    name: "TRUNCATE",
+    matches: (s) => /\bTRUNCATE\b/i.test(s),
+    markers: CONTRACT,
+  },
   {
     // Additive for the schema, but the previous client throws on reading a
     // value its enum does not have: write it only in a later release.
@@ -244,18 +282,25 @@ function hasMarker(sql: string, markers: string[]): boolean {
  * Every statement of `migrations` (name → SQL, applied in name order after
  * the baseline) that the previous release could not live with.
  */
-function violationsIn(migrations: Array<{ name: string; sql: string }>): Violation[] {
+function violationsIn(
+  migrations: Array<{ name: string; sql: string }>,
+): Violation[] {
   const created = new Set<string>();
   const violations: Violation[] = [];
 
-  for (const { name, sql } of [...migrations].sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const { name, sql } of [...migrations].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  )) {
     const { code, blocks } = scan(sql);
 
     const checked = [
       ...statementsOf(code).map((statement) => ({ statement, inBlock: false })),
       // Inside DO blocks the target is dynamic: never exempt by creation.
       ...blocks.flatMap((block) =>
-        statementsOf(scan(block, true).code).map((statement) => ({ statement, inBlock: true })),
+        statementsOf(scan(block, true).code).map((statement) => ({
+          statement,
+          inBlock: true,
+        })),
       ),
     ];
 
@@ -264,7 +309,8 @@ function violationsIn(migrations: Array<{ name: string; sql: string }>): Violati
         if (!rule.matches(statement)) continue;
 
         const targets = inBlock ? null : targetOf(statement);
-        const isNew = targets !== null && targets.every((target) => created.has(target));
+        const isNew =
+          targets !== null && targets.every((target) => created.has(target));
 
         if (isNew || hasMarker(sql, rule.markers)) continue;
 
@@ -285,7 +331,10 @@ function violationsIn(migrations: Array<{ name: string; sql: string }>): Violati
 }
 
 /** The migration directories of `dir` after `baseline`, with their SQL. */
-function migrationsAfter(dir: string, baseline: string): Array<{ name: string; sql: string }> {
+function migrationsAfter(
+  dir: string,
+  baseline: string,
+): Array<{ name: string; sql: string }> {
   return readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name > baseline)
     .map((entry) => ({

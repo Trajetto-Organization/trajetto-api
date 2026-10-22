@@ -51,7 +51,9 @@ const prisma = new PrismaClient();
 const CARRIER = "018fe500-0000-7000-8000-00000000000a";
 const BUDGET = 2;
 
-async function peakOf<T>(run: () => Promise<T>): Promise<{ peak: number; result: T }> {
+async function peakOf<T>(
+  run: () => Promise<T>,
+): Promise<{ peak: number; result: T }> {
   pool.inFlight = 0;
   pool.peak = 0;
 
@@ -64,12 +66,20 @@ beforeAll(async () => {
   await seedCarrier(prisma, CARRIER);
 
   const branchId = await seedBranch(prisma, CARRIER, "Filial");
-  const vehicleId = await seedVehicle(prisma, CARRIER, { plate: "PQR8S88", branchId });
+  const vehicleId = await seedVehicle(prisma, CARRIER, {
+    plate: "PQR8S88",
+    branchId,
+  });
   const supplierId = await seedSupplier(prisma, CARRIER, "Oficina");
   const admin = await seedUser(prisma, "Gestora", "BUSINESS_ADMIN", CARRIER);
 
   const part = await prisma.part.create({
-    data: { description: "Filtro", unit_price: 10, businessId: CARRIER, supplierId },
+    data: {
+      description: "Filtro",
+      unit_price: 10,
+      businessId: CARRIER,
+      supplierId,
+    },
   });
 
   for (const completed of [false, true, false]) {
@@ -113,17 +123,26 @@ describe("one maintenance list, at most two connections", () => {
       }),
     );
 
-    expect(peak, `as ordens de serviço ocuparam ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(
+      peak,
+      `as ordens de serviço ocuparam ${peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
     expect(result.data).toHaveLength(2);
     expect(result.branchCounts).toHaveLength(1);
   });
 
   it("the parts catalog", async () => {
     const { peak, result } = await peakOf(() =>
-      new PartRepository().listParts({ businessId: CARRIER, page: 1, pageSize: 10 }),
+      new PartRepository().listParts({
+        businessId: CARRIER,
+        page: 1,
+        pageSize: 10,
+      }),
     );
 
-    expect(peak, `as peças ocuparam ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(peak, `as peças ocuparam ${peak} conexões`).toBeLessThanOrEqual(
+      BUDGET,
+    );
     expect(result.data).toHaveLength(1);
   });
 
@@ -136,7 +155,14 @@ describe("one maintenance list, at most two connections", () => {
       }),
     );
 
-    expect(peak, `as peças das ordens ocuparam ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
-    expect(result.aggregate).toEqual({ count: 3, withDiscount: 0, totalValue: 60 });
+    expect(
+      peak,
+      `as peças das ordens ocuparam ${peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
+    expect(result.aggregate).toEqual({
+      count: 3,
+      withDiscount: 0,
+      totalValue: 60,
+    });
   });
 });

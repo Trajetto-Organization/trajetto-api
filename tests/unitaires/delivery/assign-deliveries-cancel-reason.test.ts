@@ -90,8 +90,18 @@ function makeContext() {
   } as User);
 
   driverRepository.drivers.push(
-    { id: JOAO, name: "João", status: "ACTIVE", businessId: BUSINESS } as Driver,
-    { id: MARIA, name: "Maria", status: "ACTIVE", businessId: BUSINESS } as Driver,
+    {
+      id: JOAO,
+      name: "João",
+      status: "ACTIVE",
+      businessId: BUSINESS,
+    } as Driver,
+    {
+      id: MARIA,
+      name: "Maria",
+      status: "ACTIVE",
+      businessId: BUSINESS,
+    } as Driver,
   );
 
   vehicleRepository.vehicles.push(

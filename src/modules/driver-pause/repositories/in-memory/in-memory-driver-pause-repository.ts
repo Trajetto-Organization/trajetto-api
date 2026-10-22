@@ -63,7 +63,10 @@ interface PauseTypeMirror {
   is_active?: boolean;
 }
 
-const byStart = (a: DriverPause | PauseReportRoute, b: DriverPause | PauseReportRoute) =>
+const byStart = (
+  a: DriverPause | PauseReportRoute,
+  b: DriverPause | PauseReportRoute,
+) =>
   compareForOrder(a.started_at, b.started_at, "asc") ||
   compareForOrder(a.id, b.id, "asc");
 
@@ -88,7 +91,10 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
    * does not exist gets nothing, and the lookup then throws, as Prisma's
    * findUniqueOrThrow does.
    */
-  private defaultPauseTypeId(businessId: string, kind: DriverPauseKind): string {
+  private defaultPauseTypeId(
+    businessId: string,
+    kind: DriverPauseKind,
+  ): string {
     const key = DEFAULT_PAUSE_TYPE_KEY[kind];
     const find = () =>
       this.occurrenceTypes.find(
@@ -101,7 +107,9 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
     if (this.businesses.some((business) => business.id === businessId)) {
       for (const seed of DEFAULT_OCCURRENCE_TYPES) {
         const taken = this.occurrenceTypes.some(
-          (type) => type.businessId === businessId && type.system_key === seed.system_key,
+          (type) =>
+            type.businessId === businessId &&
+            type.system_key === seed.system_key,
         );
 
         if (!taken) {
@@ -119,13 +127,17 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
     }
 
     const seeded = find();
-    if (!seeded) throw new Error(`No occurrence type ${key} for company ${businessId}`);
+    if (!seeded)
+      throw new Error(`No occurrence type ${key} for company ${businessId}`);
 
     return seeded.id;
   }
 
   async timeZoneOf(businessId: string): Promise<string | null> {
-    return this.businesses.find((business) => business.id === businessId)?.timezone ?? null;
+    return (
+      this.businesses.find((business) => business.id === businessId)
+        ?.timezone ?? null
+    );
   }
 
   async findByStartSubmission(
@@ -186,7 +198,8 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
             (route.status === "COMPLETED" &&
               route.completed_at !== null &&
               route.completed_at.getTime() >= time) ||
-            (route.status === "CANCELLED" && route.updated_at.getTime() >= time)),
+            (route.status === "CANCELLED" &&
+              route.updated_at.getTime() >= time)),
       )
       .sort(
         (a, b) =>
@@ -204,7 +217,10 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
     dayKey: string,
   ): Promise<string | null> {
     const routes = this.routes
-      .filter((route) => route.businessId === businessId && route.driverId === driverId)
+      .filter(
+        (route) =>
+          route.businessId === businessId && route.driverId === driverId,
+      )
       .map((route) => ({
         ...route,
         released_at: route.released_at ?? null,
@@ -229,27 +245,38 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
     occurrenceTypeId: string,
   ): Promise<PauseTypeInfo | null> {
     const type = this.occurrenceTypes.find(
-      (entry) => entry.id === occurrenceTypeId && entry.businessId === businessId,
+      (entry) =>
+        entry.id === occurrenceTypeId && entry.businessId === businessId,
     );
 
     return type ? this.infoOf(type) : null;
   }
 
-  async defaultPauseType(businessId: string, kind: DriverPauseKind): Promise<PauseTypeInfo> {
+  async defaultPauseType(
+    businessId: string,
+    kind: DriverPauseKind,
+  ): Promise<PauseTypeInfo> {
     const id = this.defaultPauseTypeId(businessId, kind);
 
     return this.infoOf(this.occurrenceTypes.find((type) => type.id === id)!);
   }
 
-  async pauseTypeNames(businessId: string, ids: string[]): Promise<Map<string, string>> {
+  async pauseTypeNames(
+    businessId: string,
+    ids: string[],
+  ): Promise<Map<string, string>> {
     return new Map(
       this.occurrenceTypes
-        .filter((type) => type.businessId === businessId && ids.includes(type.id))
+        .filter(
+          (type) => type.businessId === businessId && ids.includes(type.id),
+        )
         .map((type) => [type.id, type.name ?? "Tipo"]),
     );
   }
 
-  async createPause(data: CreateDriverPauseData): Promise<CreateDriverPauseResult> {
+  async createPause(
+    data: CreateDriverPauseData,
+  ): Promise<CreateDriverPauseResult> {
     // Resolved before the unique checks, as the Prisma repository does.
     const occurrenceTypeId = data.occurrenceTypeId
       ? (this.occurrenceTypes.find(
@@ -267,14 +294,20 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
       (pause) => pause.businessId === data.businessId,
     );
 
-    if (sameCompany.some((pause) => pause.start_submission_id === data.start_submission_id)) {
+    if (
+      sameCompany.some(
+        (pause) => pause.start_submission_id === data.start_submission_id,
+      )
+    ) {
       return { status: "start-submission-taken" };
     }
 
     // A NULL never collides in a unique index.
     if (
       data.end_submission_id &&
-      sameCompany.some((pause) => pause.end_submission_id === data.end_submission_id)
+      sameCompany.some(
+        (pause) => pause.end_submission_id === data.end_submission_id,
+      )
     ) {
       return { status: "end-submission-taken" };
     }
@@ -282,7 +315,9 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
     // The partial index is on driverId alone, across companies.
     if (
       !data.ended_at &&
-      this.pauses.some((pause) => pause.driverId === data.driverId && pause.ended_at === null)
+      this.pauses.some(
+        (pause) => pause.driverId === data.driverId && pause.ended_at === null,
+      )
     ) {
       return { status: "already-open" };
     }
@@ -314,7 +349,9 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
     return { status: "created", pause: { ...pause } };
   }
 
-  async closePause(data: CloseDriverPauseData): Promise<CloseDriverPauseResult> {
+  async closePause(
+    data: CloseDriverPauseData,
+  ): Promise<CloseDriverPauseResult> {
     const index = this.pauses.findIndex(
       (pause) =>
         pause.id === data.pauseId &&
@@ -390,8 +427,9 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
         start_submission_id: pause.start_submission_id,
         end_submission_id: pause.end_submission_id,
         occurrence_type_name:
-          this.occurrenceTypes.find((type) => type.id === pause.occurrenceTypeId)?.name ??
-          "Tipo",
+          this.occurrenceTypes.find(
+            (type) => type.id === pause.occurrenceTypeId,
+          )?.name ?? "Tipo",
       }));
 
     const routes: PauseReportRoute[] = this.routes
@@ -426,7 +464,9 @@ class InMemoryDriverPauseRepository implements IDriverPauseRepository {
     ]);
 
     const drivers = this.drivers
-      .filter((driver) => driver.businessId === businessId && wanted.has(driver.id))
+      .filter(
+        (driver) => driver.businessId === businessId && wanted.has(driver.id),
+      )
       .map((driver) => ({ id: driver.id, name: driver.name }));
 
     return { pauses, routes, drivers };

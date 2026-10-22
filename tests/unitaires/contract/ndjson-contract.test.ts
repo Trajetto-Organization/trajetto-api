@@ -165,7 +165,9 @@ describe("every listing that streams NDJSON", () => {
  * really writes, for both kinds of listing.
  */
 async function firstLine(
-  result: Parameters<typeof sendAsNDJSON>[0]["dataPromise"] extends Promise<infer R>
+  result: Parameters<typeof sendAsNDJSON>[0]["dataPromise"] extends Promise<
+    infer R
+  >
     ? R
     : never,
   pagination: { page?: number; pageSize?: number } = {},

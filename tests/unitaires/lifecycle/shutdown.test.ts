@@ -67,10 +67,15 @@ async function serverWithConnectedClient(): Promise<{
   return { app, io };
 }
 
-function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+function settlesWithin(
+  promise: Promise<unknown>,
+  ms: number,
+): Promise<boolean> {
   return Promise.race([
     promise.then(() => true),
-    new Promise<boolean>((resolveLate) => setTimeout(() => resolveLate(false), ms)),
+    new Promise<boolean>((resolveLate) =>
+      setTimeout(() => resolveLate(false), ms),
+    ),
   ]);
 }
 

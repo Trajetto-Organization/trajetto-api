@@ -24,12 +24,16 @@
 # authorized_keys), the image arrives in SSH_ORIGINAL_COMMAND instead — and is
 # validated exactly the same way, because it is the only input a caller has.
 #
-# Environment (all optional):
-#   STACK_NAME               the Swarm stack: the Dokploy app name of the API
-#                            compose (default trajetto)
-#   API_SERVICE              service whose env the job reuses (default <stack>_api)
-#   MIGRATE_NETWORK          network to join (default <stack>_backend, the
-#                            stack's internal network, where the database is)
+# Environment:
+#   API_SERVICE              REQUIRED. The Swarm service whose env the job
+#                            reuses: the appName of the API Application in
+#                            Dokploy (Dokploy names the service after it, the
+#                            same value as the repository variable
+#                            SWARM_API_SERVICE). Set it in the forced command:
+#                            command="API_SERVICE=<appName> .../run-release-migrations.sh"
+#   MIGRATE_NETWORK          network to join (default dokploy-network, the
+#                            overlay Dokploy puts every Application and
+#                            Database on, where the Postgres service is)
 #   MIGRATE_TIMEOUT_SECONDS  how long to wait for the job (default 900)
 #
 # See docs/deploy.md ("Migrations"), including what to do with a P3009.
@@ -54,25 +58,39 @@ if [ "$IMAGE_LINES" != one ] \
   exit 2
 fi
 
-STACK="${STACK_NAME:-trajetto}"
-API_SERVICE="${API_SERVICE:-${STACK}_api}"
+API_SERVICE="${API_SERVICE:-}"
 TIMEOUT="${MIGRATE_TIMEOUT_SECONDS:-900}"
 POLL="${MIGRATE_POLL_SECONDS:-5}"
 
-# The stack's internal network: the database is on it and on nothing else.
-# Missing means STACK_NAME is not the stack running here — under Dokploy the
-# stack is named after the app, not after this repository.
-MIGRATE_NETWORK="${MIGRATE_NETWORK:-${STACK}_backend}"
+# No default: a Dokploy Application's service is named after its appName,
+# which carries a random suffix (trajetto-api-x1y2z3). Guessing a name would
+# run the job with another service's credentials, or with none.
+case "$API_SERVICE" in
+  *'
+'*) API_SERVICE_LINES=many ;;
+  *) API_SERVICE_LINES=one ;;
+esac
+
+if [ "$API_SERVICE_LINES" != one ] \
+  || ! printf '%s\n' "$API_SERVICE" | grep -Eqx '[A-Za-z0-9][A-Za-z0-9_.-]{0,127}'; then
+  echo "[release-migrations] ERRO: defina API_SERVICE com o appName do Application da API no Dokploy (recebido: '${API_SERVICE}')." >&2
+  exit 2
+fi
+
+# The overlay Dokploy attaches every Application and Database to: the
+# Postgres service is reachable there by its appName, the host in the API's
+# DATABASE_URL.
+MIGRATE_NETWORK="${MIGRATE_NETWORK:-dokploy-network}"
 
 if ! docker network inspect "$MIGRATE_NETWORK" > /dev/null 2>&1; then
   echo "[release-migrations] ERRO: a rede '${MIGRATE_NETWORK}' não existe neste nó." >&2
-  echo "[release-migrations] Confira STACK_NAME (o nome do app no Dokploy) ou defina MIGRATE_NETWORK." >&2
+  echo "[release-migrations] Defina MIGRATE_NETWORK com a rede em que o Postgres do Dokploy está." >&2
   exit 1
 fi
 
 if ! docker service inspect "$API_SERVICE" > /dev/null 2>&1; then
   echo "[release-migrations] ERRO: o serviço '${API_SERVICE}' não existe." >&2
-  echo "[release-migrations] Confira STACK_NAME (o nome do app no Dokploy) ou defina API_SERVICE." >&2
+  echo "[release-migrations] Confira API_SERVICE: o appName do Application da API no Dokploy." >&2
   exit 1
 fi
 

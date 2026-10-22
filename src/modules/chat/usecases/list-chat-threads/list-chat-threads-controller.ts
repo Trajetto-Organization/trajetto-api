@@ -19,15 +19,13 @@ class ListChatThreadsController {
 
     const listChatThreadsUseCase = container.resolve(ListChatThreadsUseCase);
 
-    const { data, total, totalUnread } = await listChatThreadsUseCase.execute(
-      {
-        userId: id,
-        page,
-        pageSize,
-        search,
-        businessId,
-      },
-    );
+    const { data, total, totalUnread } = await listChatThreadsUseCase.execute({
+      userId: id,
+      page,
+      pageSize,
+      search,
+      businessId,
+    });
 
     // Presence is transport state, so it is stitched in here — asked about
     // the drivers on THIS page only. Asking about the whole company fetched

@@ -191,7 +191,9 @@ function pings(
     speed: 30,
     heading: 90,
     battery: 80,
-    recorded_at: new Date(at.getTime() - (count - index) * everyMs).toISOString(),
+    recorded_at: new Date(
+      at.getTime() - (count - index) * everyMs,
+    ).toISOString(),
   }));
 }
 
@@ -232,7 +234,10 @@ function spacingWithinToday(total: number): number {
  */
 function earlierToday(fraction: number): Date {
   const now = Date.now();
-  const midnight = businessDayRange(new Date(now), "America/Sao_Paulo").start.getTime();
+  const midnight = businessDayRange(
+    new Date(now),
+    "America/Sao_Paulo",
+  ).start.getTime();
 
   return new Date(midnight + Math.floor((now - midnight) * fraction));
 }
@@ -310,7 +315,11 @@ beforeAll(async () => {
   });
   await seedDriver(COUNTER_DRIVER, COUNTER);
   await prisma.shipper.create({
-    data: { id: COUNTER_SHIPPER, name: "Embarcador do Acre", businessId: COUNTER },
+    data: {
+      id: COUNTER_SHIPPER,
+      name: "Embarcador do Acre",
+      businessId: COUNTER,
+    },
   });
   await prisma.occurrenceType.create({
     data: {
@@ -323,9 +332,15 @@ beforeAll(async () => {
 
   // Seeded like the others, then the contract taken away.
   await seedBusiness(NO_MODULE, "11222888000133");
-  await prisma.businessEntitlement.deleteMany({ where: { businessId: NO_MODULE } });
+  await prisma.businessEntitlement.deleteMany({
+    where: { businessId: NO_MODULE },
+  });
 
-  const readerProfile = await seedProfile(CARRIER, "Despacho", "delivery_manage");
+  const readerProfile = await seedProfile(
+    CARRIER,
+    "Despacho",
+    "delivery_manage",
+  );
   const mechanicProfile = await seedProfile(CARRIER, "Oficina", "fuel_manage");
 
   await prisma.user.createMany({
@@ -385,9 +400,13 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(async () => {
-  await prisma.driverLastPosition.deleteMany({ where: { businessId: CARRIER } });
+  await prisma.driverLastPosition.deleteMany({
+    where: { businessId: CARRIER },
+  });
   await prisma.driverPosition.deleteMany({ where: { businessId: CARRIER } });
-  await prisma.routeStop.deleteMany({ where: { route: { businessId: CARRIER } } });
+  await prisma.routeStop.deleteMany({
+    where: { route: { businessId: CARRIER } },
+  });
   await prisma.route.deleteMany({ where: { businessId: CARRIER } });
 
   const route = await prisma.route.create({
@@ -418,9 +437,13 @@ afterAll(async () => {
     where: { userId: { in: [MANAGER, DRIVER_USER] } },
   });
 
-  await prisma.user.deleteMany({ where: { id: { in: [MANAGER, DRIVER_USER] } } });
+  await prisma.user.deleteMany({
+    where: { id: { in: [MANAGER, DRIVER_USER] } },
+  });
   await prisma.vehicle.deleteMany({ where: { businessId: CARRIER } });
-  await prisma.driver.deleteMany({ where: { id: { in: [DRIVER, OTHER_DRIVER] } } });
+  await prisma.driver.deleteMany({
+    where: { id: { in: [DRIVER, OTHER_DRIVER] } },
+  });
   await prisma.shipper.deleteMany({ where: { businessId: CARRIER } });
 
   await prisma.fuelType.deleteMany({ where: { businessId: CARRIER } });
@@ -444,7 +467,11 @@ const post = (url: string, token: string, body: unknown) =>
   });
 
 const get = (url: string, token: string) =>
-  app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
+  app.inject({
+    method: "GET",
+    url,
+    headers: { authorization: `Bearer ${token}` },
+  });
 
 describe("the partitioned table", () => {
   it("has a partition for today, and the row lands in it", async () => {
@@ -590,7 +617,10 @@ describe("the tower a manager opens", () => {
     expect(positions).toHaveLength(1);
     expect(positions[0].driverId).toBe(DRIVER);
     expect(positions[0].fresh).toBe(true);
-    expect(positions[0]).toMatchObject({ state: "moving", routeStatus: "IN_PROGRESS" });
+    expect(positions[0]).toMatchObject({
+      state: "moving",
+      routeStatus: "IN_PROGRESS",
+    });
 
     // Named, so the dispatcher can act on it without a second lookup.
     expect(positions[0].driverName).toBeTruthy();
@@ -614,13 +644,21 @@ describe("the tower a manager opens", () => {
     });
 
     try {
-      const paused = (await get("/route/control-tower", managerToken)).json().data.positions;
+      const paused = (await get("/route/control-tower", managerToken)).json()
+        .data.positions;
 
-      expect(paused[0]).toMatchObject({ driverId: DRIVER, pausedSince: startedAt.toISOString() });
+      expect(paused[0]).toMatchObject({
+        driverId: DRIVER,
+        pausedSince: startedAt.toISOString(),
+      });
 
-      await prisma.driverPause.update({ where: { id: pause.id }, data: { ended_at: new Date() } });
+      await prisma.driverPause.update({
+        where: { id: pause.id },
+        data: { ended_at: new Date() },
+      });
 
-      const back = (await get("/route/control-tower", managerToken)).json().data.positions;
+      const back = (await get("/route/control-tower", managerToken)).json().data
+        .positions;
 
       expect(back[0]).toMatchObject({ driverId: DRIVER, pausedSince: null });
     } finally {
@@ -680,8 +718,9 @@ describe("the tower a manager opens", () => {
 
     // "Nenhuma entrega falhou hoje" is the best thing this screen can say, and
     // a funnel missing the column could never say it.
-    expect(funnel.find((entry: { status: string }) => entry.status === "FAILED"))
-      .toMatchObject({ total: 0 });
+    expect(
+      funnel.find((entry: { status: string }) => entry.status === "FAILED"),
+    ).toMatchObject({ total: 0 });
   });
 
   it("refuses a driver token", async () => {
@@ -708,8 +747,9 @@ describe("one company's trucks are not another's", () => {
       },
     });
 
-    const { positions } = (await get("/route/control-tower", managerToken))
-      .json().data;
+    const { positions } = (
+      await get("/route/control-tower", managerToken)
+    ).json().data;
 
     expect(positions).toHaveLength(1);
     expect(positions[0].driverId).toBe(DRIVER);
@@ -876,7 +916,9 @@ describe("keeping the partitions ahead of the trucks", () => {
 
 describe("where the driver IS, apart from where they have been", () => {
   async function lastPosition() {
-    return prisma.driverLastPosition.findUnique({ where: { driverId: DRIVER } });
+    return prisma.driverLastPosition.findUnique({
+      where: { driverId: DRIVER },
+    });
   }
 
   it("keeps one row per driver, however many pings arrive", async () => {
@@ -949,7 +991,8 @@ describe("where the driver IS, apart from where they have been", () => {
     const after = await lastPosition();
 
     expect(
-      (after?.recorded_at.getTime() ?? 0) > (before?.recorded_at.getTime() ?? 0),
+      (after?.recorded_at.getTime() ?? 0) >
+        (before?.recorded_at.getTime() ?? 0),
     ).toBe(true);
   });
 
@@ -1022,7 +1065,10 @@ describe("the trail's day is the company's day", () => {
 
     await seedBothEndsOfTheDay(today);
 
-    const response = await get(`/route/driver-trail/${TRAIL_DRIVER}`, managerToken);
+    const response = await get(
+      `/route/driver-trail/${TRAIL_DRIVER}`,
+      managerToken,
+    );
 
     expect(response.statusCode, response.body.slice(0, 200)).toBe(200);
 
@@ -1040,7 +1086,10 @@ describe("the trail's day is the company's day", () => {
 
     await driverPositionPartitionsJob.handler();
 
-    const yesterday = businessDateKey(new Date(Date.now() - 24 * 60 * 60 * 1000), ZONE);
+    const yesterday = businessDateKey(
+      new Date(Date.now() - 24 * 60 * 60 * 1000),
+      ZONE,
+    );
 
     await seedBothEndsOfTheDay(yesterday);
 
@@ -1071,17 +1120,22 @@ describe("the trail's day is the company's day", () => {
       zonedWallTimeToUtc(RIO_BRANCO, year, month, date, hour, minute);
 
     await prisma.driverPosition.createMany({
-      data: [at(0, 30), at(23, 30), at(0, -1), at(24, 0)].map((recorded_at, index) => ({
-        businessId: COUNTER,
-        driverId: COUNTER_DRIVER,
-        latitude: -9.97 + index * 0.001,
-        longitude: -67.81,
-        accuracy: 10,
-        recorded_at,
-      })),
+      data: [at(0, 30), at(23, 30), at(0, -1), at(24, 0)].map(
+        (recorded_at, index) => ({
+          businessId: COUNTER,
+          driverId: COUNTER_DRIVER,
+          latitude: -9.97 + index * 0.001,
+          longitude: -67.81,
+          accuracy: 10,
+          recorded_at,
+        }),
+      ),
     });
 
-    const response = await get(`/route/driver-trail/${COUNTER_DRIVER}`, counterToken);
+    const response = await get(
+      `/route/driver-trail/${COUNTER_DRIVER}`,
+      counterToken,
+    );
 
     expect(response.statusCode, response.body.slice(0, 200)).toBe(200);
     expect(response.json().data).toMatchObject({ day: today, recorded: 2 });
@@ -1089,7 +1143,9 @@ describe("the trail's day is the company's day", () => {
     // The two ends of the company's day — not one minute of the day before
     // standing in for the late evening, which a São Paulo window returns.
     expect(
-      response.json().data.points.map((point: { recordedAt: string }) => point.recordedAt),
+      response
+        .json()
+        .data.points.map((point: { recordedAt: string }) => point.recordedAt),
     ).toEqual([at(0, 30).toISOString(), at(23, 30).toISOString()]);
   });
 
@@ -1116,7 +1172,8 @@ describe("the tower's numbers are the company's day (TWR-1/TWR-2, DLV-MON-1/2)",
 
   let range: { start: Date; end: Date };
 
-  const minutes = (base: Date, delta: number) => new Date(base.getTime() + delta * 60_000);
+  const minutes = (base: Date, delta: number) =>
+    new Date(base.getTime() + delta * 60_000);
 
   beforeAll(async () => {
     range = businessDayRange(new Date(), ZONE);
@@ -1173,7 +1230,10 @@ describe("the tower's numbers are the company's day (TWR-1/TWR-2, DLV-MON-1/2)",
     });
 
     // Delivered one minute before it: yesterday.
-    await make("antes", { status: "DELIVERED", delivered_at: minutes(range.start, -1) });
+    await make("antes", {
+      status: "DELIVERED",
+      delivered_at: minutes(range.start, -1),
+    });
 
     // Imported yesterday, out with a driver now.
     await make("na-rua", {
@@ -1183,8 +1243,14 @@ describe("the tower's numbers are the company's day (TWR-1/TWR-2, DLV-MON-1/2)",
     });
 
     // On today's route, and on tomorrow's.
-    const loaded = await make("carregada", { status: "PENDING", driverId: COUNTER_DRIVER });
-    const later = await make("amanha", { status: "PENDING", driverId: COUNTER_DRIVER });
+    const loaded = await make("carregada", {
+      status: "PENDING",
+      driverId: COUNTER_DRIVER,
+    });
+    const later = await make("amanha", {
+      status: "PENDING",
+      driverId: COUNTER_DRIVER,
+    });
 
     await prisma.routeStop.createMany({
       data: [
@@ -1241,7 +1307,10 @@ describe("the tower's numbers are the company's day (TWR-1/TWR-2, DLV-MON-1/2)",
     expect(day).toBe(businessDateKey(new Date(), ZONE));
 
     const totals = Object.fromEntries(
-      funnel.map((entry: { status: string; total: number }) => [entry.status, entry.total]),
+      funnel.map((entry: { status: string; total: number }) => [
+        entry.status,
+        entry.total,
+      ]),
     );
 
     expect(totals).toEqual({
@@ -1286,7 +1355,9 @@ describe("the tower's numbers are the company's day (TWR-1/TWR-2, DLV-MON-1/2)",
     const { routes, meta } = response.json().data;
 
     // Today's route, not tomorrow's.
-    expect(routes.map((entry: { code: number }) => entry.code)).toEqual([900001]);
+    expect(routes.map((entry: { code: number }) => entry.code)).toEqual([
+      900001,
+    ]);
     expect(meta.total).toBe(1);
     expect(routes[0].stops).toHaveLength(1);
   });
@@ -1329,7 +1400,9 @@ describe("punctuality is judged at the current hour, on today's routes (TWR-3/TW
       ],
     });
 
-    const { punctuality } = (await get("/route/control-tower", managerToken)).json().data;
+    const { punctuality } = (
+      await get("/route/control-tower", managerToken)
+    ).json().data;
 
     // The fixture's route left on time; the missed one weighs as late.
     expect(punctuality).toEqual({
@@ -1359,12 +1432,20 @@ describe("a running route whose phone went quiet long ago (TWR-9)", () => {
       },
     });
 
-    const { positions, activeRoutes } = (await get("/route/control-tower", managerToken)).json().data;
-
-    expect(positions.find((position: { driverId: string }) => position.driverId === DRIVER)).toBeUndefined();
+    const { positions, activeRoutes } = (
+      await get("/route/control-tower", managerToken)
+    ).json().data;
 
     expect(
-      activeRoutes.find((route: { routeId: string }) => route.routeId === routeId)?.lastSignalAt,
+      positions.find(
+        (position: { driverId: string }) => position.driverId === DRIVER,
+      ),
+    ).toBeUndefined();
+
+    expect(
+      activeRoutes.find(
+        (route: { routeId: string }) => route.routeId === routeId,
+      )?.lastSignalAt,
     ).toBe(quietSince.toISOString());
   });
 });
@@ -1385,7 +1466,11 @@ describe("the feed says what happened today (TWR-6/TWR-7)", () => {
     });
 
     const absent = await prisma.occurrenceType.create({
-      data: { name: `Ausente ${randomUUID().slice(0, 6)}`, blocks_delivery: true, businessId: CARRIER },
+      data: {
+        name: `Ausente ${randomUUID().slice(0, 6)}`,
+        blocks_delivery: true,
+        businessId: CARRIER,
+      },
     });
 
     await prisma.deliveryOccurrence.create({
@@ -1427,7 +1512,8 @@ describe("the feed says what happened today (TWR-6/TWR-7)", () => {
       },
     });
 
-    const { events } = (await get("/route/control-tower", managerToken)).json().data;
+    const { events } = (await get("/route/control-tower", managerToken)).json()
+      .data;
 
     const occurrence = events.find(
       (event: { type: string; deliveryId: string | null }) =>
@@ -1441,19 +1527,27 @@ describe("the feed says what happened today (TWR-6/TWR-7)", () => {
       recipientName: "Cliente recusou",
     });
 
-    const types = events.map((event: { type: string; routeId: string | null }) => `${event.type}:${event.routeId}`);
+    const types = events.map(
+      (event: { type: string; routeId: string | null }) =>
+        `${event.type}:${event.routeId}`,
+    );
 
     expect(types).toContain(`ROUTE_STARTED:${routeId}`);
     expect(types).toContain(`ROUTE_CANCELLED:${cancelled.id}`);
     expect(types).toContain(`ROUTE_STARTED:${cancelled.id}`);
 
-    expect(events.some((event: { type: string }) => event.type === "PROOF")).toBe(false);
+    expect(
+      events.some((event: { type: string }) => event.type === "PROOF"),
+    ).toBe(false);
   });
 });
 
 describe("who may read the operation", () => {
   it("lets a MASTER read the company picked in the selector", async () => {
-    const response = await get(`/route/control-tower?businessId=${COUNTER}`, masterToken);
+    const response = await get(
+      `/route/control-tower?businessId=${COUNTER}`,
+      masterToken,
+    );
 
     expect(response.statusCode, response.body.slice(0, 300)).toBe(200);
     expect(response.json().data.timeZone).toBe("America/Rio_Branco");
@@ -1552,11 +1646,20 @@ describe("who may read the operation", () => {
   });
 
   it("refuses a malformed day and an oversized page", async () => {
-    expect((await get("/route/monitoring?day=17-09-2026", managerToken)).statusCode).toBe(400);
-    expect((await get("/route/monitoring?pageSize=500", managerToken)).statusCode).toBe(400);
-    expect((await get("/route/monitoring/drivers?day=17-09-2026", managerToken)).statusCode).toBe(400);
-    expect((await get("/route/monitoring/drivers?day=2026-02-30", managerToken)).json().code).toBe(
-      "INVALID_DAY",
-    );
+    expect(
+      (await get("/route/monitoring?day=17-09-2026", managerToken)).statusCode,
+    ).toBe(400);
+    expect(
+      (await get("/route/monitoring?pageSize=500", managerToken)).statusCode,
+    ).toBe(400);
+    expect(
+      (await get("/route/monitoring/drivers?day=17-09-2026", managerToken))
+        .statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await get("/route/monitoring/drivers?day=2026-02-30", managerToken)
+      ).json().code,
+    ).toBe("INVALID_DAY");
   });
 });

@@ -137,13 +137,22 @@ function accessKey(nfDigits) {
 const RECEIPT_DEFAULTS = {
   emitente: "DISTRIBUIDORA ALIANÇA DE ALIMENTOS LTDA",
   destinatario: "MERCADO BOA VISTA LTDA",
-  endereco: "AV. DAS AMOREIRAS, 1450 - JARDIM PROFESSORA TARCÍLIA - CAMPINAS/SP",
+  endereco:
+    "AV. DAS AMOREIRAS, 1450 - JARDIM PROFESSORA TARCÍLIA - CAMPINAS/SP",
   emissao: "25/09/2026",
   valor: "R$ 3.482,90",
   serie: "1",
 };
 
-function danfeHeader({ nf, serie, emitente, destinatario, endereco, emissao, seed }) {
+function danfeHeader({
+  nf,
+  serie,
+  emitente,
+  destinatario,
+  endereco,
+  emissao,
+  seed,
+}) {
   const nfDigits = nf.replace(/\D/g, "");
   const cell = "border:1.6px solid #222;padding:6px 9px;vertical-align:top";
 
@@ -250,9 +259,12 @@ function nfceCoupon(seed) {
       const finder =
         (row < 7 && col < 7) || (row < 7 && col > 21) || (row > 21 && col < 7);
       const on = finder
-        ? row % 6 === 0 || col % 6 === 0 || (row % 22 > 1 && row % 22 < 5 && col % 22 > 1 && col % 22 < 5)
+        ? row % 6 === 0 ||
+          col % 6 === 0 ||
+          (row % 22 > 1 && row % 22 < 5 && col % 22 > 1 && col % 22 < 5)
         : random() > 0.5;
-      if (on) qr += `<rect x="${col * 8}" y="${row * 8}" width="8" height="8" fill="#111"/>`;
+      if (on)
+        qr += `<rect x="${col * 8}" y="${row * 8}" width="8" height="8" fill="#111"/>`;
     }
   }
 
@@ -299,8 +311,16 @@ function cardboardBox(seed) {
 // ---------------------------------------------------------------------------
 
 const SEGMENTS = {
-  0: "abcdef", 1: "bc", 2: "abged", 3: "abgcd", 4: "fgbc",
-  5: "afgcd", 6: "afgedc", 7: "abc", 8: "abcdefg", 9: "abcdfg",
+  0: "abcdef",
+  1: "bc",
+  2: "abged",
+  3: "abgcd",
+  4: "fgbc",
+  5: "afgcd",
+  6: "afgedc",
+  7: "abc",
+  8: "abcdefg",
+  9: "abcdfg",
 };
 
 function segmentPolygon(name, w, h, t) {
@@ -312,17 +332,27 @@ function segmentPolygon(name, w, h, t) {
     `${x},${y0 + gap} ${x + half},${y0 + half + gap} ${x + half},${y1 - half - gap} ${x},${y1 - gap} ${x - half},${y1 - half - gap} ${x - half},${y0 + half + gap}`;
 
   switch (name) {
-    case "a": return horizontal(half);
-    case "g": return horizontal(h / 2);
-    case "d": return horizontal(h - half);
-    case "f": return vertical(half, half, h / 2);
-    case "b": return vertical(w - half, half, h / 2);
-    case "e": return vertical(half, h / 2, h - half);
-    default: return vertical(w - half, h / 2, h - half); // c
+    case "a":
+      return horizontal(half);
+    case "g":
+      return horizontal(h / 2);
+    case "d":
+      return horizontal(h - half);
+    case "f":
+      return vertical(half, half, h / 2);
+    case "b":
+      return vertical(w - half, half, h / 2);
+    case "e":
+      return vertical(half, h / 2, h - half);
+    default:
+      return vertical(w - half, h / 2, h - half); // c
   }
 }
 
-function sevenSegment(text, { x, y, digitWidth, digitHeight, color, ghost, spacing = 1.28 }) {
+function sevenSegment(
+  text,
+  { x, y, digitWidth, digitHeight, color, ghost, spacing = 1.28 },
+) {
   let out = "";
   let cursor = x;
   const t = digitWidth * 0.2;
@@ -351,7 +381,18 @@ function sevenSegment(text, { x, y, digitWidth, digitHeight, color, ghost, spaci
   return out;
 }
 
-function dial({ cx, cy, r, max, step, labelEvery, unit, needle = 0, redFrom = null, accent = "#e8e8e8" }) {
+function dial({
+  cx,
+  cy,
+  r,
+  max,
+  step,
+  labelEvery,
+  unit,
+  needle = 0,
+  redFrom = null,
+  accent = "#e8e8e8",
+}) {
   const start = 225;
   const sweep = 270;
   let ticks = "";
@@ -380,9 +421,24 @@ function dial({ cx, cy, r, max, step, labelEvery, unit, needle = 0, redFrom = nu
 }
 
 const LCD_STYLES = {
-  lcd: { panel: "#9fb49b", ink: "#161a16", ghost: "rgba(0,0,0,.07)", label: "#1d241d" },
-  amber: { panel: "#0b0906", ink: "#ffae1a", ghost: "rgba(255,174,26,.06)", label: "#ffae1a" },
-  blue: { panel: "#05080d", ink: "#9fd4ff", ghost: "rgba(159,212,255,.05)", label: "#9fd4ff" },
+  lcd: {
+    panel: "#9fb49b",
+    ink: "#161a16",
+    ghost: "rgba(0,0,0,.07)",
+    label: "#1d241d",
+  },
+  amber: {
+    panel: "#0b0906",
+    ink: "#ffae1a",
+    ghost: "rgba(255,174,26,.06)",
+    label: "#ffae1a",
+  },
+  blue: {
+    panel: "#05080d",
+    ink: "#9fd4ff",
+    ghost: "rgba(159,212,255,.05)",
+    label: "#9fd4ff",
+  },
 };
 
 /**
@@ -390,7 +446,14 @@ const LCD_STYLES = {
  * the sizes so the trip meter is the prominent number — the distractor a
  * model has to see past.
  */
-function digitalCluster({ odo, trip = "345.6", style = "lcd", clock = "07:42", tripBig = false, speedMax = 220 }) {
+function digitalCluster({
+  odo,
+  trip = "345.6",
+  style = "lcd",
+  clock = "07:42",
+  tripBig = false,
+  speedMax = 220,
+}) {
   const s = LCD_STYLES[style];
   const glow = style === "lcd" ? "" : `filter="url(#glow)"`;
   const odoSize = tripBig ? { w: 26, h: 44 } : { w: 38, h: 66 };
@@ -421,7 +484,7 @@ function digitalCluster({ odo, trip = "345.6", style = "lcd", clock = "07:42", t
 }
 
 /** Mechanical odometer: white digits on rolling black drums. */
-function drumCluster({ odo, trip = "0345" , seed = 1 }) {
+function drumCluster({ odo, trip = "0345", seed = 1 }) {
   const random = seeded(seed);
   const drums = (text, x, y, w, h, lastRed = false) =>
     text
@@ -461,7 +524,17 @@ function pumpIcon(x, y, size, color) {
   </g>`;
 }
 
-function gauge({ cx, cy, r, level, left, right, mid, redLow = false, redHigh = false }) {
+function gauge({
+  cx,
+  cy,
+  r,
+  level,
+  left,
+  right,
+  mid,
+  redLow = false,
+  redHigh = false,
+}) {
   const angleFor = (fraction) => ((150 - fraction * 120) * Math.PI) / 180;
   let ticks = "";
 

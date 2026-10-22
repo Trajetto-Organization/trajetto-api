@@ -82,7 +82,11 @@ class UpdatePermissionUseCase {
     }
 
     // The permission's tenant, which is also the only one it may end in.
-    assertTenantAccessToRecord(findUser, existingPermission.businessId, () => new PermissionNotFoundError());
+    assertTenantAccessToRecord(
+      findUser,
+      existingPermission.businessId,
+      () => new PermissionNotFoundError(),
+    );
 
     // Spread first: a caller passing a businessId anyway cannot override it.
     const permissionData: UpdatePermission = {

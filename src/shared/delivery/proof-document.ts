@@ -465,7 +465,8 @@ function factOf(source: ProofDocumentSource): Fact {
       longitude: occurrence?.longitude ?? null,
       photoKey: occurrence?.photoKey ?? null,
       signatureKey: null,
-      occurrence: occurrence?.typeName ?? (failure?.reasonName?.trim() || MISSING),
+      occurrence:
+        occurrence?.typeName ?? (failure?.reasonName?.trim() || MISSING),
     };
   }
 
@@ -566,7 +567,12 @@ function buildProofDocumentModel(
               value: business.corporate_reason,
             },
           ],
-          [{ label: "CNPJ", value: business.cnpj.replace(/\D/g, "") || MISSING }],
+          [
+            {
+              label: "CNPJ",
+              value: business.cnpj.replace(/\D/g, "") || MISSING,
+            },
+          ],
         ],
       },
       {
@@ -668,7 +674,7 @@ function buildProofDocumentModel(
     // failed delivery the fix is the occurrence's, which has no cache.
     const address =
       !failed && source.proof?.gps_address_source === "PROVIDER"
-        ? source.proof.gps_address ?? null
+        ? (source.proof.gps_address ?? null)
         : null;
 
     const lines = address ? gpsAddressLines(address) : [];
@@ -766,7 +772,10 @@ function buildProofDocumentModel(
         qrUrl: ITI_VALIDATOR_URL,
         // Whoever holds the paper cannot submit "this file": /verificar is
         // where they download the original to submit (design §6.6, §11.2).
-        verificationLine: { label: "Original e integridade:", url: verificationUrl },
+        verificationLine: {
+          label: "Original e integridade:",
+          url: verificationUrl,
+        },
       }
     : {
         title: "Autenticação:",
@@ -811,7 +820,10 @@ function buildProofDocumentModel(
     },
 
     map: gps
-      ? { latitude: fact.latitude as number, longitude: fact.longitude as number }
+      ? {
+          latitude: fact.latitude as number,
+          longitude: fact.longitude as number,
+        }
       : null,
 
     receipt: {

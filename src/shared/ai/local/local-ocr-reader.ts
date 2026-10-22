@@ -136,22 +136,27 @@ class LocalOcrReader implements ImageReader {
 
     const startedAt = Date.now();
 
-    const response = await this.fetchImpl(`${this.url}/v1/read?profile=${profile}`, {
-      method: "POST",
-      headers: {
-        // Never logged; the error messages below never carry it either.
-        Authorization: `Bearer ${this.token}`,
-        "Content-Type": image.mediaType,
+    const response = await this.fetchImpl(
+      `${this.url}/v1/read?profile=${profile}`,
+      {
+        method: "POST",
+        headers: {
+          // Never logged; the error messages below never carry it either.
+          Authorization: `Bearer ${this.token}`,
+          "Content-Type": image.mediaType,
+        },
+        body: image.bytes,
+        signal: AbortSignal.timeout(this.timeoutMs),
       },
-      body: image.bytes,
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
+    );
 
     const body: unknown = await response.json().catch(() => null);
 
     if (!response.ok) {
       const code =
-        body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+        body &&
+        typeof body === "object" &&
+        typeof (body as { error?: unknown }).error === "string"
           ? String((body as { error: string }).error).slice(0, 40)
           : null;
 
@@ -172,7 +177,9 @@ class LocalOcrReader implements ImageReader {
 
     if (!parsedBody.success) {
       throw new PaidInvalidResponseError(
-        new InvalidModelResponseError("resposta do serviço de OCR fora do contrato").message,
+        new InvalidModelResponseError(
+          "resposta do serviço de OCR fora do contrato",
+        ).message,
         usage,
       );
     }
@@ -180,11 +187,16 @@ class LocalOcrReader implements ImageReader {
     const lines: OcrLine[] = parsedBody.data.lines;
 
     const answer =
-      target.kind === "proof" ? proofFromLines(lines) : odometerFromLines(lines);
+      target.kind === "proof"
+        ? proofFromLines(lines)
+        : odometerFromLines(lines);
 
     try {
       return {
-        parsed: parseModelAnswer(target.kind, JSON.stringify(answer)) as AnswerByKind[T["kind"]],
+        parsed: parseModelAnswer(
+          target.kind,
+          JSON.stringify(answer),
+        ) as AnswerByKind[T["kind"]],
         usage,
       };
     } catch (error) {

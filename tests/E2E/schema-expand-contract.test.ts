@@ -60,7 +60,9 @@ async function columnsOf(table: string): Promise<Map<string, ColumnRow>> {
  * one statement each).
  */
 function migrationStatements(name: string): string[] {
-  return sqlStatements(resolve(process.cwd(), "prisma/migrations", name, "migration.sql"));
+  return sqlStatements(
+    resolve(process.cwd(), "prisma/migrations", name, "migration.sql"),
+  );
 }
 
 /** The same split for any SQL file (the owner-run backfills too). */
@@ -94,7 +96,8 @@ function sqlStatements(path: string): string[] {
       continue;
     }
 
-    const tag = char === "$" ? /^\$[A-Za-z_]*\$/.exec(sql.slice(i))?.[0] : undefined;
+    const tag =
+      char === "$" ? /^\$[A-Za-z_]*\$/.exec(sql.slice(i))?.[0] : undefined;
 
     if (tag) {
       const end = sql.indexOf(tag, i + tag.length);
@@ -233,11 +236,14 @@ describe("new columns", () => {
     "account_payable_businessId_client_submission_id_key",
     "service_order_businessId_client_submission_id_key",
     "delivery_businessId_client_submission_id_key",
-  ])("the client's idempotency key is unique per company (%s)", async (name) => {
-    expect(await indexDefinition(name)).toMatch(
-      /UNIQUE INDEX .*\("businessId", client_submission_id\)/,
-    );
-  });
+  ])(
+    "the client's idempotency key is unique per company (%s)",
+    async (name) => {
+      expect(await indexDefinition(name)).toMatch(
+        /UNIQUE INDEX .*\("businessId", client_submission_id\)/,
+      );
+    },
+  );
 });
 
 describe("new tables", () => {
@@ -348,7 +354,9 @@ describe("one point per driver per instant", () => {
 
     expect(second).toBe(0);
     expect(
-      await prisma.driverPosition.count({ where: { driverId: "driver-resend" } }),
+      await prisma.driverPosition.count({
+        where: { driverId: "driver-resend" },
+      }),
     ).toBe(1);
   });
 });
@@ -489,11 +497,14 @@ const MEETING_NULLABLE_COLUMNS: Array<[string, string]> = [
 ];
 
 describe("final phase: new columns", () => {
-  it.each(FINAL_PHASE_NULLABLE_COLUMNS)("%s.%s exists and is nullable", async (table, column) => {
-    const columns = await columnsOf(table);
+  it.each(FINAL_PHASE_NULLABLE_COLUMNS)(
+    "%s.%s exists and is nullable",
+    async (table, column) => {
+      const columns = await columnsOf(table);
 
-    expect(columns.get(column)?.is_nullable).toBe("YES");
-  });
+      expect(columns.get(column)?.is_nullable).toBe("YES");
+    },
+  );
 
   it.each([
     ["business", "timezone", "'America/Sao_Paulo'::text"],
@@ -551,13 +562,18 @@ describe("final phase: new columns", () => {
           continue;
         }
 
-        expect(literalOf(real?.column_default), `${table}.${column}`).toBe(value);
+        expect(literalOf(real?.column_default), `${table}.${column}`).toBe(
+          value,
+        );
       }
     }
 
     // Every nullable column this phase added reads back as null in the fakes
     // too: a new one missing from the constants fails here.
-    const missing = [...FINAL_PHASE_NULLABLE_COLUMNS, ...MEETING_NULLABLE_COLUMNS].filter(
+    const missing = [
+      ...FINAL_PHASE_NULLABLE_COLUMNS,
+      ...MEETING_NULLABLE_COLUMNS,
+    ].filter(
       ([table, column]) =>
         (COLUMN_DEFAULTS_BY_TABLE as Record<string, Record<string, unknown>>)[
           table
@@ -569,9 +585,15 @@ describe("final phase: new columns", () => {
 
   it("stores the planned days and the CNH expiry as civil dates", async () => {
     // Decision 1.3: what the operator picks is a day, not an instant.
-    expect((await columnsOf("delivery")).get("scheduled_date")?.data_type).toBe("date");
-    expect((await columnsOf("route")).get("scheduled_date")?.data_type).toBe("date");
-    expect((await columnsOf("driver")).get("cnh_expires_at")?.data_type).toBe("date");
+    expect((await columnsOf("delivery")).get("scheduled_date")?.data_type).toBe(
+      "date",
+    );
+    expect((await columnsOf("route")).get("scheduled_date")?.data_type).toBe(
+      "date",
+    );
+    expect((await columnsOf("driver")).get("cnh_expires_at")?.data_type).toBe(
+      "date",
+    );
   });
 
   it("takes a fractional km/l", async () => {
@@ -582,7 +604,9 @@ describe("final phase: new columns", () => {
   });
 
   it("has the enums the decisions name, with every value", async () => {
-    const rows = await prisma.$queryRawUnsafe<Array<{ type: string; value: string }>>(
+    const rows = await prisma.$queryRawUnsafe<
+      Array<{ type: string; value: string }>
+    >(
       `SELECT t.typname AS type, e.enumlabel AS value
          FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
         WHERE t.typname IN ('CnhCategory', 'OccurrenceAuthorizationStatus',
@@ -592,7 +616,17 @@ describe("final phase: new columns", () => {
     const valuesOf = (type: string) =>
       rows.filter((row) => row.type === type).map((row) => row.value);
 
-    expect(valuesOf("CnhCategory")).toEqual(["A", "B", "C", "D", "E", "AB", "AC", "AD", "AE"]);
+    expect(valuesOf("CnhCategory")).toEqual([
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "AB",
+      "AC",
+      "AD",
+      "AE",
+    ]);
     expect(valuesOf("OccurrenceAuthorizationStatus")).toEqual([
       "NOT_REQUIRED",
       "PENDING",
@@ -728,11 +762,15 @@ describe("final phase: the planned-day conversion (20260928120300)", () => {
       await tx.$executeRawUnsafe(toDateDelivery);
       await tx.$executeRawUnsafe(toDateRoute);
 
-      const deliveries = await tx.$queryRawUnsafe<Array<{ id: string; day: string }>>(
+      const deliveries = await tx.$queryRawUnsafe<
+        Array<{ id: string; day: string }>
+      >(
         `SELECT "id", "scheduled_date"::text AS day FROM "delivery"
           WHERE "id" LIKE 'delivery-%' ORDER BY "id"`,
       );
-      const routes = await tx.$queryRawUnsafe<Array<{ id: string; day: string }>>(
+      const routes = await tx.$queryRawUnsafe<
+        Array<{ id: string; day: string }>
+      >(
         `SELECT "id", "scheduled_date"::text AS day FROM "route"
           WHERE "id" LIKE 'route-%' ORDER BY "id"`,
       );
@@ -826,11 +864,18 @@ describe("final phase: uniques are per company (decision 8.1)", () => {
     await prisma.vehicle.create({ data: await vehicleData(carrierA) });
     await expect(
       prisma.vehicle.create({ data: await vehicleData(carrierB) }),
-    ).resolves.toMatchObject({ license_plate: "ABC1D23", businessId: carrierB });
+    ).resolves.toMatchObject({
+      license_plate: "ABC1D23",
+      businessId: carrierB,
+    });
 
-    await prisma.branch.create({ data: branchData(carrierA, `branch-a-${carrierA}`) });
+    await prisma.branch.create({
+      data: branchData(carrierA, `branch-a-${carrierA}`),
+    });
     await expect(
-      prisma.branch.create({ data: branchData(carrierB, `branch-b-${carrierB}`) }),
+      prisma.branch.create({
+        data: branchData(carrierB, `branch-b-${carrierB}`),
+      }),
     ).resolves.toMatchObject({ corporate_reason: "Filial Centro Ltda" });
   });
 
@@ -839,13 +884,18 @@ describe("final phase: uniques are per company (decision 8.1)", () => {
 
     await prisma.driver.create({ data: driverData(carrier, "1") });
     await prisma.vehicle.create({ data: await vehicleData(carrier) });
-    await prisma.branch.create({ data: branchData(carrier, `branch-1-${carrier}`) });
+    await prisma.branch.create({
+      data: branchData(carrier, `branch-1-${carrier}`),
+    });
 
     const refusedOn = async (create: Promise<unknown>) =>
       create.then(
         () => null,
         (error: Prisma.PrismaClientKnownRequestError) =>
-          [error.code, (error.meta?.target as string[] | undefined)?.join(",")].join(" "),
+          [
+            error.code,
+            (error.meta?.target as string[] | undefined)?.join(","),
+          ].join(" "),
       );
 
     expect(
@@ -879,7 +929,10 @@ describe("final phase: uniques are per company (decision 8.1)", () => {
     expect(
       await refusedOn(
         prisma.branch.create({
-          data: { ...branchData(carrier, `branch-2-${carrier}`), email: "outro@filial.com.br" },
+          data: {
+            ...branchData(carrier, `branch-2-${carrier}`),
+            email: "outro@filial.com.br",
+          },
         }),
       ),
     ).toBe("P2002 businessId,corporate_reason");
@@ -896,7 +949,9 @@ describe("final phase: uniques are per company (decision 8.1)", () => {
   });
 
   it("keeps the branch CNPJ national", async () => {
-    expect(await indexDefinition("branch_cnpj_key")).toMatch(/UNIQUE INDEX .*\(cnpj\)/);
+    expect(await indexDefinition("branch_cnpj_key")).toMatch(
+      /UNIQUE INDEX .*\(cnpj\)/,
+    );
   });
 
   it.each([
@@ -916,24 +971,36 @@ describe("final phase: one shipper per CNPJ per company (20260928120000)", () =>
     const carrier = await seedBusiness();
     const other = await seedBusiness();
 
-    await prisma.shipper.create({ data: { name: "Alfa", cnpj: "11222333000181", businessId: carrier } });
-    await prisma.shipper.create({ data: { name: "Sem CNPJ 1", businessId: carrier } });
+    await prisma.shipper.create({
+      data: { name: "Alfa", cnpj: "11222333000181", businessId: carrier },
+    });
+    await prisma.shipper.create({
+      data: { name: "Sem CNPJ 1", businessId: carrier },
+    });
 
     await expect(
-      prisma.shipper.create({ data: { name: "Beta", cnpj: "11222333000181", businessId: carrier } }),
+      prisma.shipper.create({
+        data: { name: "Beta", cnpj: "11222333000181", businessId: carrier },
+      }),
     ).rejects.toMatchObject({ code: "P2002" });
 
     // Another company, and shippers without a CNPJ, do not collide.
     await expect(
-      prisma.shipper.create({ data: { name: "Alfa", cnpj: "11222333000181", businessId: other } }),
+      prisma.shipper.create({
+        data: { name: "Alfa", cnpj: "11222333000181", businessId: other },
+      }),
     ).resolves.toBeTruthy();
     await expect(
-      prisma.shipper.create({ data: { name: "Sem CNPJ 2", businessId: carrier } }),
+      prisma.shipper.create({
+        data: { name: "Sem CNPJ 2", businessId: carrier },
+      }),
     ).resolves.toBeTruthy();
   });
 
   it("fails the migration on existing duplicates, naming them, before building the index", async () => {
-    const [blankToNull, guard] = migrationStatements("20260928120000_shipper_cnpj_unique");
+    const [blankToNull, guard] = migrationStatements(
+      "20260928120000_shipper_cnpj_unique",
+    );
 
     const failure = await rolledBack(async (tx) => {
       await tx.$executeRawUnsafe(`DROP INDEX "shipper_businessId_cnpj_key"`);
@@ -1026,7 +1093,11 @@ describe("final phase: one open pause per driver", () => {
 
     const mealType = await pauseTypeId(prisma, businessId, "MEAL");
 
-    const start = (id: string, submission: string, endedAt: string | null = null) =>
+    const start = (
+      id: string,
+      submission: string,
+      endedAt: string | null = null,
+    ) =>
       prisma.$executeRawUnsafe(
         `INSERT INTO "driver_pause" ("id", "kind", "started_at", "ended_at",
            "start_submission_id", "driverId", "businessId", "occurrenceTypeId", "updated_at")
@@ -1042,7 +1113,9 @@ describe("final phase: one open pause per driver", () => {
     // Prisma's raw error carries Postgres's key detail, not the index name:
     // ("driverId") alone is driver_pause_one_open_idx.
     await start("pause-1", "start-1");
-    await expect(start("pause-2", "start-2")).rejects.toThrow(/Key \("driverId"\)=/);
+    await expect(start("pause-2", "start-2")).rejects.toThrow(
+      /Key \("driverId"\)=/,
+    );
 
     await prisma.$executeRawUnsafe(
       `UPDATE "driver_pause" SET "ended_at" = now(), "end_submission_id" = 'end-1'
@@ -1061,12 +1134,18 @@ describe("final phase: one open pause per driver", () => {
 
 describe("final phase: data migrations", () => {
   it("marks the proof audit's occurrence type as a system type (20260928120600)", async () => {
-    const [markSystem] = migrationStatements("20260928120600_occurrence_type_system_flag");
+    const [markSystem] = migrationStatements(
+      "20260928120600_occurrence_type_system_flag",
+    );
 
     const flags = await rolledBack(async (tx) => {
       const carrier = await seedBusiness(tx);
 
-      for (const name of ["Comprovante rejeitado", "Avaria", "comprovante rejeitado (manual)"]) {
+      for (const name of [
+        "Comprovante rejeitado",
+        "Avaria",
+        "comprovante rejeitado (manual)",
+      ]) {
         await tx.$executeRawUnsafe(
           `INSERT INTO "occurrence_type" ("id", "name", "businessId", "updated_at")
            VALUES ($1, $1, $2, now())`,
@@ -1093,7 +1172,9 @@ describe("final phase: data migrations", () => {
   });
 
   it("turns document.* subscriptions into the three document families (20260928120700)", async () => {
-    const [rewrite] = migrationStatements("20260928120700_webhook_document_wildcard");
+    const [rewrite] = migrationStatements(
+      "20260928120700_webhook_document_wildcard",
+    );
 
     const topics = await rolledBack(async (tx) => {
       const carrier = await seedBusiness(tx);
@@ -1116,7 +1197,9 @@ describe("final phase: data migrations", () => {
       // Idempotent: nothing left to rewrite.
       const second = await tx.$executeRawUnsafe(rewrite);
 
-      const rows = await tx.$queryRawUnsafe<Array<{ id: string; topics: string[] }>>(
+      const rows = await tx.$queryRawUnsafe<
+        Array<{ id: string; topics: string[] }>
+      >(
         `SELECT "id", "topics" FROM "webhook_endpoint" WHERE "businessId" = $1 ORDER BY "id"`,
         carrier,
       );
@@ -1130,7 +1213,10 @@ describe("final phase: data migrations", () => {
         id: "all-documents",
         topics: ["route.released", "delivery.*", "occurrence.*", "proof.*"],
       },
-      { id: "partly-covered", topics: ["occurrence.*", "delivery.*", "proof.*"] },
+      {
+        id: "partly-covered",
+        topics: ["occurrence.*", "delivery.*", "proof.*"],
+      },
       { id: "untouched", topics: ["route.*", "delivery.delivered"] },
     ]);
   });
@@ -1138,7 +1224,10 @@ describe("final phase: data migrations", () => {
 
 // ── The meeting of 01/10/2026: schema (20261005120000..0600) ──
 
-type RawClient = Pick<Prisma.TransactionClient, "$executeRawUnsafe" | "$queryRawUnsafe">;
+type RawClient = Pick<
+  Prisma.TransactionClient,
+  "$executeRawUnsafe" | "$queryRawUnsafe"
+>;
 
 let meetingSequence = 0;
 
@@ -1148,7 +1237,11 @@ function meetingKey(prefix: string): string {
   return `${prefix}-${meetingSequence}-${Date.now()}`;
 }
 
-async function seedDriverRow(client: RawClient, businessId: string, id: string): Promise<void> {
+async function seedDriverRow(
+  client: RawClient,
+  businessId: string,
+  id: string,
+): Promise<void> {
   await client.$executeRawUnsafe(
     `INSERT INTO "driver" ("id", "name", "birth_date", "cnh", "cpf", "rg", "cep", "city", "uf",
        "street", "address_number", "status", "contract_type", "businessId", "updated_at")
@@ -1205,29 +1298,45 @@ async function seedDeliveryRow(
 }
 
 /** The one statement of a migration file that starts with `prefix`. */
-function statementStartingWith(migration: string, prefix: string, occurrence = 0): string {
+function statementStartingWith(
+  migration: string,
+  prefix: string,
+  occurrence = 0,
+): string {
   const found = migrationStatements(migration).filter((statement) =>
     statement.startsWith(prefix),
   );
   const statement = found[occurrence];
 
-  if (!statement) throw new Error(`${migration}: nenhum comando começa com ${prefix}`);
+  if (!statement)
+    throw new Error(`${migration}: nenhum comando começa com ${prefix}`);
   return statement;
 }
 
 describe("meeting: new columns", () => {
-  it.each(MEETING_NULLABLE_COLUMNS)("%s.%s exists and is nullable", async (table, column) => {
-    expect((await columnsOf(table)).get(column)?.is_nullable).toBe("YES");
-  });
+  it.each(MEETING_NULLABLE_COLUMNS)(
+    "%s.%s exists and is nullable",
+    async (table, column) => {
+      expect((await columnsOf(table)).get(column)?.is_nullable).toBe("YES");
+    },
+  );
 
   it.each([
     ["occurrence_type", "category", `'NOT_DELIVERED'::"OccurrenceCategory"`],
     ["occurrence_type", "requires_receipt_photo", "false"],
     ["occurrence_type", "requires_signature", "false"],
-    ["delivery_occurrence", "category", `'NOT_DELIVERED'::"OccurrenceCategory"`],
+    [
+      "delivery_occurrence",
+      "category",
+      `'NOT_DELIVERED'::"OccurrenceCategory"`,
+    ],
     ["route", "plan_version", "0"],
     ["delivery_proof_document", "layout_version", "1"],
-    ["delivery_proof_document", "signature_status", `'UNSIGNED'::"ProofSignatureStatus"`],
+    [
+      "delivery_proof_document",
+      "signature_status",
+      `'UNSIGNED'::"ProofSignatureStatus"`,
+    ],
     ["user", "ops_alert_sound_enabled", "true"],
   ])(
     "%s.%s is NOT NULL with a default the previous image's INSERTs rely on",
@@ -1240,7 +1349,9 @@ describe("meeting: new columns", () => {
   );
 
   it("requires the pause type on every pause (backfilled, then NOT NULL)", async () => {
-    expect((await columnsOf("driver_pause")).get("occurrenceTypeId")).toMatchObject({
+    expect(
+      (await columnsOf("driver_pause")).get("occurrenceTypeId"),
+    ).toMatchObject({
       is_nullable: "NO",
       column_default: null,
     });
@@ -1254,7 +1365,9 @@ describe("meeting: new columns", () => {
   });
 
   it("has the enums the designs name, with every value", async () => {
-    const rows = await prisma.$queryRawUnsafe<Array<{ type: string; value: string }>>(
+    const rows = await prisma.$queryRawUnsafe<
+      Array<{ type: string; value: string }>
+    >(
       `SELECT t.typname AS type, e.enumlabel AS value
          FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
         WHERE t.typname IN ('OccurrenceCategory', 'DeliveryGeoSource', 'GeocodeSource',
@@ -1267,10 +1380,18 @@ describe("meeting: new columns", () => {
     const valuesOf = (type: string) =>
       rows.filter((row) => row.type === type).map((row) => row.value);
 
-    expect(valuesOf("OccurrenceCategory")).toEqual(["DELIVERED", "NOT_DELIVERED", "PAUSE"]);
+    expect(valuesOf("OccurrenceCategory")).toEqual([
+      "DELIVERED",
+      "NOT_DELIVERED",
+      "PAUSE",
+    ]);
     expect(valuesOf("DeliveryGeoSource")).toEqual(["MANUAL", "GEOCODER"]);
     expect(valuesOf("GeocodeSource")).toEqual(["PROVIDER", "UNAVAILABLE"]);
-    expect(valuesOf("DeviceAgreement")).toEqual(["AGREE", "DISAGREE", "NOT_APPLICABLE"]);
+    expect(valuesOf("DeviceAgreement")).toEqual([
+      "AGREE",
+      "DISAGREE",
+      "NOT_APPLICABLE",
+    ]);
     expect(valuesOf("ProofSignatureStatus")).toEqual(["UNSIGNED", "SIGNED"]);
     expect(valuesOf("ProofUnsignedReason")).toEqual([
       "LEGACY",
@@ -1279,7 +1400,10 @@ describe("meeting: new columns", () => {
       "CERTIFICATE_INVALID",
       "SIGNING_DISABLED",
     ]);
-    expect(valuesOf("ProofSignatureProfile")).toEqual(["PADES_AD_RB", "CMS_DETACHED"]);
+    expect(valuesOf("ProofSignatureProfile")).toEqual([
+      "PADES_AD_RB",
+      "CMS_DETACHED",
+    ]);
     expect(valuesOf("SupportTicketKind")).toEqual([
       "OCCURRENCE",
       "DELIVERY",
@@ -1295,7 +1419,12 @@ describe("meeting: new columns", () => {
       "LEGACY_ROUTING",
       "MIGRATION",
     ]);
-    expect(valuesOf("SupportTicketOutcome")).toEqual(["RESOLVED", "APPROVED", "DENIED", "MIGRATED"]);
+    expect(valuesOf("SupportTicketOutcome")).toEqual([
+      "RESOLVED",
+      "APPROVED",
+      "DENIED",
+      "MIGRATED",
+    ]);
     expect(valuesOf("SupportTicketEventType")).toEqual([
       "OPENED",
       "ASSIGNED",
@@ -1312,15 +1441,17 @@ describe("meeting: new columns", () => {
   });
 
   it("keys a route's create and a ticket's create per company", async () => {
-    expect(await indexDefinition("route_businessId_client_submission_id_key")).toMatch(
-      /UNIQUE INDEX .*\("businessId", client_submission_id\)/,
-    );
-    expect(await indexDefinition("support_ticket_businessId_client_submission_id_key")).toMatch(
-      /UNIQUE INDEX .*\("businessId", client_submission_id\)/,
-    );
-    expect(await indexDefinition("support_ticket_businessId_number_key")).toMatch(
-      /UNIQUE INDEX .*\("businessId", number\)/,
-    );
+    expect(
+      await indexDefinition("route_businessId_client_submission_id_key"),
+    ).toMatch(/UNIQUE INDEX .*\("businessId", client_submission_id\)/);
+    expect(
+      await indexDefinition(
+        "support_ticket_businessId_client_submission_id_key",
+      ),
+    ).toMatch(/UNIQUE INDEX .*\("businessId", client_submission_id\)/);
+    expect(
+      await indexDefinition("support_ticket_businessId_number_key"),
+    ).toMatch(/UNIQUE INDEX .*\("businessId", number\)/);
   });
 });
 
@@ -1351,14 +1482,26 @@ describe("meeting: occurrence type rules in the database (14.3, 14.4)", () => {
     const carrier = await seedBusiness();
 
     await expect(
-      insertType(carrier, { name: "Almoço", category: "PAUSE", pause_kind: null }),
+      insertType(carrier, {
+        name: "Almoço",
+        category: "PAUSE",
+        pause_kind: null,
+      }),
     ).rejects.toThrow(/occurrence_type_pause_kind_chk/);
     await expect(
-      insertType(carrier, { name: "Recusa", category: "NOT_DELIVERED", pause_kind: "MEAL" }),
+      insertType(carrier, {
+        name: "Recusa",
+        category: "NOT_DELIVERED",
+        pause_kind: "MEAL",
+      }),
     ).rejects.toThrow(/occurrence_type_pause_kind_chk/);
 
     await expect(
-      insertType(carrier, { name: "Almoço", category: "PAUSE", pause_kind: "MEAL" }),
+      insertType(carrier, {
+        name: "Almoço",
+        category: "PAUSE",
+        pause_kind: "MEAL",
+      }),
     ).resolves.toBe(1);
   });
 
@@ -1366,14 +1509,27 @@ describe("meeting: occurrence type rules in the database (14.3, 14.4)", () => {
     const carrier = await seedBusiness();
 
     await expect(
-      insertType(carrier, { name: "Entrega bloqueada", category: "DELIVERED", blocks_delivery: true }),
+      insertType(carrier, {
+        name: "Entrega bloqueada",
+        category: "DELIVERED",
+        blocks_delivery: true,
+      }),
     ).rejects.toThrow(/occurrence_type_blocks_only_not_delivered_chk/);
     await expect(
-      insertType(carrier, { name: "Pausa bloqueada", category: "PAUSE", pause_kind: "REST", blocks_delivery: true }),
+      insertType(carrier, {
+        name: "Pausa bloqueada",
+        category: "PAUSE",
+        pause_kind: "REST",
+        blocks_delivery: true,
+      }),
     ).rejects.toThrow(/occurrence_type_blocks_only_not_delivered_chk/);
 
     await expect(
-      insertType(carrier, { name: "Ausente", category: "NOT_DELIVERED", blocks_delivery: true }),
+      insertType(carrier, {
+        name: "Ausente",
+        category: "NOT_DELIVERED",
+        blocks_delivery: true,
+      }),
     ).resolves.toBe(1);
   });
 
@@ -1386,12 +1542,21 @@ describe("meeting: occurrence type rules in the database (14.3, 14.4)", () => {
     const carrier = await seedBusiness();
 
     await expect(
-      insertType(carrier, { name: "Café", category: "PAUSE", pause_kind: "OTHER", [requirement]: true }),
+      insertType(carrier, {
+        name: "Café",
+        category: "PAUSE",
+        pause_kind: "OTHER",
+        [requirement]: true,
+      }),
     ).rejects.toThrow(/occurrence_type_pause_requirements_chk/);
 
     // The same requirement on a delivery type is the point of 14.3.
     await expect(
-      insertType(carrier, { name: `Entrega com ${requirement}`, category: "DELIVERED", [requirement]: true }),
+      insertType(carrier, {
+        name: `Entrega com ${requirement}`,
+        category: "DELIVERED",
+        [requirement]: true,
+      }),
     ).resolves.toBe(1);
   });
 
@@ -1399,13 +1564,25 @@ describe("meeting: occurrence type rules in the database (14.3, 14.4)", () => {
     const carrier = await seedBusiness();
     const other = await seedBusiness();
 
-    await insertType(carrier, { name: "Entrega A", category: "DELIVERED", system_key: "delivered_default" });
+    await insertType(carrier, {
+      name: "Entrega A",
+      category: "DELIVERED",
+      system_key: "delivered_default",
+    });
     await expect(
-      insertType(carrier, { name: "Entrega B", category: "DELIVERED", system_key: "delivered_default" }),
+      insertType(carrier, {
+        name: "Entrega B",
+        category: "DELIVERED",
+        system_key: "delivered_default",
+      }),
     ).rejects.toThrow(/Key \("businessId", system_key\)=/);
 
     await expect(
-      insertType(other, { name: "Entrega A", category: "DELIVERED", system_key: "delivered_default" }),
+      insertType(other, {
+        name: "Entrega A",
+        category: "DELIVERED",
+        system_key: "delivered_default",
+      }),
     ).resolves.toBe(1);
     await expect(insertType(carrier, { name: "Sem chave 1" })).resolves.toBe(1);
     await expect(insertType(carrier, { name: "Sem chave 2" })).resolves.toBe(1);
@@ -1455,7 +1632,10 @@ describe("meeting: data migrations of 20261005120100_occurrence_categories", () 
     );
 
   it("seeds the four defaults in every company, beside the types it already has", async () => {
-    const seed = statementStartingWith(MIGRATION, `INSERT INTO "occurrence_type"`);
+    const seed = statementStartingWith(
+      MIGRATION,
+      `INSERT INTO "occurrence_type"`,
+    );
 
     const outcome = await rolledBack(async (tx) => {
       const carrier = await seedBusiness(tx);
@@ -1480,27 +1660,80 @@ describe("meeting: data migrations of 20261005120100_occurrence_categories", () 
 
     expect(outcome.second).toBe(0);
     expect(
-      outcome.types.map(({ name, category, system_key, pause_kind, requires_receipt_photo }) => ({
-        name,
-        category,
-        system_key,
-        pause_kind,
-        requires_receipt_photo,
-      })),
+      outcome.types.map(
+        ({
+          name,
+          category,
+          system_key,
+          pause_kind,
+          requires_receipt_photo,
+        }) => ({
+          name,
+          category,
+          system_key,
+          pause_kind,
+          requires_receipt_photo,
+        }),
+      ),
     ).toEqual([
-      { name: "Cliente ausente", category: "NOT_DELIVERED", system_key: null, pause_kind: null, requires_receipt_photo: false },
-      { name: "Descanso", category: "PAUSE", system_key: "pause_rest", pause_kind: "REST", requires_receipt_photo: false },
-      { name: "Entrega normal", category: "DELIVERED", system_key: "delivered_default", pause_kind: null, requires_receipt_photo: true },
-      { name: "Outra pausa", category: "PAUSE", system_key: "pause_other", pause_kind: "OTHER", requires_receipt_photo: false },
+      {
+        name: "Cliente ausente",
+        category: "NOT_DELIVERED",
+        system_key: null,
+        pause_kind: null,
+        requires_receipt_photo: false,
+      },
+      {
+        name: "Descanso",
+        category: "PAUSE",
+        system_key: "pause_rest",
+        pause_kind: "REST",
+        requires_receipt_photo: false,
+      },
+      {
+        name: "Entrega normal",
+        category: "DELIVERED",
+        system_key: "delivered_default",
+        pause_kind: null,
+        requires_receipt_photo: true,
+      },
+      {
+        name: "Outra pausa",
+        category: "PAUSE",
+        system_key: "pause_other",
+        pause_kind: "OTHER",
+        requires_receipt_photo: false,
+      },
       // The company's types are untouched; the default takes the first free name.
-      { name: "Refeição", category: "NOT_DELIVERED", system_key: null, pause_kind: null, requires_receipt_photo: false },
-      { name: "Refeição (padrão 2)", category: "PAUSE", system_key: "pause_meal", pause_kind: "MEAL", requires_receipt_photo: false },
-      { name: "Refeição (padrão)", category: "NOT_DELIVERED", system_key: null, pause_kind: null, requires_receipt_photo: false },
+      {
+        name: "Refeição",
+        category: "NOT_DELIVERED",
+        system_key: null,
+        pause_kind: null,
+        requires_receipt_photo: false,
+      },
+      {
+        name: "Refeição (padrão 2)",
+        category: "PAUSE",
+        system_key: "pause_meal",
+        pause_kind: "MEAL",
+        requires_receipt_photo: false,
+      },
+      {
+        name: "Refeição (padrão)",
+        category: "NOT_DELIVERED",
+        system_key: null,
+        pause_kind: null,
+        requires_receipt_photo: false,
+      },
     ]);
   });
 
   it("writes exactly what ensureDefaultOccurrenceTypes writes for a new company", async () => {
-    const seed = statementStartingWith(MIGRATION, `INSERT INTO "occurrence_type"`);
+    const seed = statementStartingWith(
+      MIGRATION,
+      `INSERT INTO "occurrence_type"`,
+    );
 
     const outcome = await rolledBack(async (tx) => {
       const byMigration = await seedBusiness(tx);
@@ -1571,12 +1804,15 @@ describe("meeting: data migrations of 20261005120100_occurrence_categories", () 
     expect(outcome.types).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "Refeição", system_key: null }),
-        expect.objectContaining({ name: "Refeição (padrão)", system_key: "pause_meal" }),
+        expect.objectContaining({
+          name: "Refeição (padrão)",
+          system_key: "pause_meal",
+        }),
       ]),
     );
-    expect(outcome.types.filter((type) => type.system_key !== null)).toHaveLength(
-      DEFAULT_OCCURRENCE_TYPES.length,
-    );
+    expect(
+      outcome.types.filter((type) => type.system_key !== null),
+    ).toHaveLength(DEFAULT_OCCURRENCE_TYPES.length);
   });
 
   it("links every existing pause to its company's default type of the same nature", async () => {
@@ -1610,7 +1846,9 @@ describe("meeting: data migrations of 20261005120100_occurrence_categories", () 
       const second = await tx.$executeRawUnsafe(link);
       await tx.$executeRawUnsafe(guard);
 
-      const rows = await tx.$queryRawUnsafe<Array<{ kind: string; system_key: string }>>(
+      const rows = await tx.$queryRawUnsafe<
+        Array<{ kind: string; system_key: string }>
+      >(
         `SELECT p."kind"::text AS kind, t."system_key"
            FROM "driver_pause" p JOIN "occurrence_type" t ON t."id" = p."occurrenceTypeId"
           WHERE p."businessId" = $1 ORDER BY p."kind"`,
@@ -1657,12 +1895,17 @@ describe("meeting: data migrations of 20261005120100_occurrence_categories", () 
       );
     });
 
-    expect(failure).toContain("driver_pause sem tipo de pausa padrão da empresa");
+    expect(failure).toContain(
+      "driver_pause sem tipo de pausa padrão da empresa",
+    );
     expect(failure).toContain("pause-without-default");
   });
 
   it("dates the deactivation of inactive types and the release of routes that left", async () => {
-    const deactivate = statementStartingWith(MIGRATION, `UPDATE "occurrence_type"`);
+    const deactivate = statementStartingWith(
+      MIGRATION,
+      `UPDATE "occurrence_type"`,
+    );
     const release = statementStartingWith(MIGRATION, `UPDATE "route"`);
 
     const outcome = await rolledBack(async (tx) => {
@@ -1700,13 +1943,20 @@ describe("meeting: data migrations of 20261005120100_occurrence_categories", () 
 
       await tx.$executeRawUnsafe(deactivate);
       await tx.$executeRawUnsafe(release);
-      const again = [await tx.$executeRawUnsafe(deactivate), await tx.$executeRawUnsafe(release)];
+      const again = [
+        await tx.$executeRawUnsafe(deactivate),
+        await tx.$executeRawUnsafe(release),
+      ];
 
-      const types = await tx.$queryRawUnsafe<Array<{ id: string; deactivated_at: Date | null }>>(
+      const types = await tx.$queryRawUnsafe<
+        Array<{ id: string; deactivated_at: Date | null }>
+      >(
         `SELECT "id", "deactivated_at" FROM "occurrence_type" WHERE "businessId" = $1 ORDER BY "id"`,
         carrier,
       );
-      const routes = await tx.$queryRawUnsafe<Array<{ id: string; released_at: Date | null }>>(
+      const routes = await tx.$queryRawUnsafe<
+        Array<{ id: string; released_at: Date | null }>
+      >(
         `SELECT "id", "released_at" FROM "route" WHERE "businessId" = $1 ORDER BY "code"`,
         carrier,
       );
@@ -1721,10 +1971,19 @@ describe("meeting: data migrations of 20261005120100_occurrence_categories", () 
     ]);
     expect(outcome.routes).toEqual([
       { id: "route-planned", released_at: null },
-      { id: "route-released", released_at: new Date("2026-10-01T07:00:00.000Z") },
-      { id: "route-running", released_at: new Date("2026-10-01T08:00:00.000Z") },
+      {
+        id: "route-released",
+        released_at: new Date("2026-10-01T07:00:00.000Z"),
+      },
+      {
+        id: "route-running",
+        released_at: new Date("2026-10-01T08:00:00.000Z"),
+      },
       { id: "route-cancelled-home", released_at: null },
-      { id: "route-cancelled-street", released_at: new Date("2026-10-01T09:00:00.000Z") },
+      {
+        id: "route-cancelled-street",
+        released_at: new Date("2026-10-01T09:00:00.000Z"),
+      },
     ]);
   });
 });
@@ -1743,7 +2002,13 @@ describe("meeting: data migration of 20261005120300_proof_model_icp", () => {
         ["doc-old", "UNSIGNED"],
         ["doc-signed", "SIGNED"],
       ] as const) {
-        await seedDeliveryRow(tx, carrier, `delivery-${id}`, "Destinatário", null);
+        await seedDeliveryRow(
+          tx,
+          carrier,
+          `delivery-${id}`,
+          "Destinatário",
+          null,
+        );
         await tx.$executeRawUnsafe(
           `INSERT INTO "delivery_proof_document" ("id", "deliveryId", "storage_key", "sha256",
              "verification_token", "size_bytes", "businessId", "signature_status", "updated_at")
@@ -1759,7 +2024,12 @@ describe("meeting: data migration of 20261005120300_proof_model_icp", () => {
       const second = await tx.$executeRawUnsafe(legacy);
 
       const rows = await tx.$queryRawUnsafe<
-        Array<{ id: string; unsigned_reason: string | null; layout_version: number; updated_at: Date }>
+        Array<{
+          id: string;
+          unsigned_reason: string | null;
+          layout_version: number;
+          updated_at: Date;
+        }>
       >(
         `SELECT "id", "unsigned_reason"::text AS unsigned_reason, "layout_version", "updated_at"
            FROM "delivery_proof_document" WHERE "businessId" = $1 ORDER BY "id"`,
@@ -1794,7 +2064,13 @@ describe("meeting: one OPEN ticket per delivery and per route (14.5)", () => {
       const carrier = await seedBusiness(tx);
       const driverId = meetingKey("driver");
       await seedDriverRow(tx, carrier, driverId);
-      await seedDeliveryRow(tx, carrier, "ticket-delivery", "Mercado Sol", driverId);
+      await seedDeliveryRow(
+        tx,
+        carrier,
+        "ticket-delivery",
+        "Mercado Sol",
+        driverId,
+      );
       await tx.$executeRawUnsafe(
         `INSERT INTO "chat_thread" ("id", "businessId", "driverId", "updated_at")
          VALUES ('ticket-thread', $1, $2, now())`,
@@ -1824,7 +2100,9 @@ describe("meeting: one OPEN ticket per delivery and per route (14.5)", () => {
       );
     });
 
-    expect(outcome).toMatch(/Key \("deliveryId"\)=\(ticket-delivery\) already exists/);
+    expect(outcome).toMatch(
+      /Key \("deliveryId"\)=\(ticket-delivery\) already exists/,
+    );
   });
 });
 
@@ -1836,7 +2114,8 @@ describe("meeting: the conversations become tickets (20261005120600)", () => {
     const carrier = await seedBusiness(tx);
     const k = (name: string) => `${name}-${carrier}`;
 
-    for (const driver of ["d1", "d2", "d3", "d4"]) await seedDriverRow(tx, carrier, k(driver));
+    for (const driver of ["d1", "d2", "d3", "d4"])
+      await seedDriverRow(tx, carrier, k(driver));
     await seedUserRow(tx, carrier, k("staff"));
     await seedUserRow(tx, carrier, k("u-d1"), k("d1"));
     await seedUserRow(tx, carrier, k("u-d2"), k("d2"));
@@ -1966,7 +2245,11 @@ describe("meeting: the conversations become tickets (20261005120600)", () => {
 
       const tickets = await ticketsOf(tx, carrier);
       const messages = await tx.$queryRawUnsafe<
-        Array<{ id: string; ticket: number | null; same_thread: boolean | null }>
+        Array<{
+          id: string;
+          ticket: number | null;
+          same_thread: boolean | null;
+        }>
       >(
         `SELECT m."id", t."number" AS ticket, t."threadId" = m."threadId" AS same_thread
            FROM "chat_message" m
@@ -1984,7 +2267,12 @@ describe("meeting: the conversations become tickets (20261005120600)", () => {
         carrier,
       );
       const events = await tx.$queryRawUnsafe<
-        Array<{ number: number; type: string; actor_kind: string; outcome: string | null }>
+        Array<{
+          number: number;
+          type: string;
+          actor_kind: string;
+          outcome: string | null;
+        }>
       >(
         `SELECT t."number", e."type"::text AS type, e."actor_kind"::text AS actor_kind,
                 e."outcome"::text AS outcome
@@ -1992,7 +2280,9 @@ describe("meeting: the conversations become tickets (20261005120600)", () => {
           WHERE e."businessId" = $1 ORDER BY t."number", e."type"`,
         carrier,
       );
-      const [counter] = await tx.$queryRawUnsafe<Array<{ last_number: number }>>(
+      const [counter] = await tx.$queryRawUnsafe<
+        Array<{ last_number: number }>
+      >(
         `SELECT "last_number" FROM "support_ticket_counter" WHERE "businessId" = $1`,
         carrier,
       );
@@ -2007,19 +2297,33 @@ describe("meeting: the conversations become tickets (20261005120600)", () => {
     const { k } = outcome;
 
     expect(
-      outcome.tickets.map(({ number, kind, status, subject, threadId, driverId, deliveryId, occurrenceId, close_outcome, has_closed_at, closedById }) => ({
-        number,
-        kind,
-        status,
-        subject,
-        threadId,
-        driverId,
-        deliveryId,
-        occurrenceId,
-        close_outcome,
-        has_closed_at,
-        closedById,
-      })),
+      outcome.tickets.map(
+        ({
+          number,
+          kind,
+          status,
+          subject,
+          threadId,
+          driverId,
+          deliveryId,
+          occurrenceId,
+          close_outcome,
+          has_closed_at,
+          closedById,
+        }) => ({
+          number,
+          kind,
+          status,
+          subject,
+          threadId,
+          driverId,
+          deliveryId,
+          occurrenceId,
+          close_outcome,
+          has_closed_at,
+          closedById,
+        }),
+      ),
     ).toEqual([
       // The conversation that began first (two days ago), answered by the
       // staff: closed by the migration, by nobody.
@@ -2099,8 +2403,16 @@ describe("meeting: the conversations become tickets (20261005120600)", () => {
 
     // The cursors carried over, at the same instant: no false unread counts.
     expect(outcome.reads).toEqual([
-      { number: 2, userId: k("staff"), last_read_at: new Date("2026-10-05T10:00:00.000Z") },
-      { number: 2, userId: k("u-d1"), last_read_at: new Date("2026-10-05T11:00:00.000Z") },
+      {
+        number: 2,
+        userId: k("staff"),
+        last_read_at: new Date("2026-10-05T10:00:00.000Z"),
+      },
+      {
+        number: 2,
+        userId: k("u-d1"),
+        last_read_at: new Date("2026-10-05T11:00:00.000Z"),
+      },
     ]);
 
     expect(outcome.events).toEqual([
@@ -2123,7 +2435,14 @@ describe("meeting: the conversations become tickets (20261005120600)", () => {
       const { carrier } = await seedChat(tx);
 
       const snapshot = async () =>
-        tx.$queryRawUnsafe<Array<{ tickets: bigint; events: bigint; reads: bigint; ticketed: bigint }>>(
+        tx.$queryRawUnsafe<
+          Array<{
+            tickets: bigint;
+            events: bigint;
+            reads: bigint;
+            ticketed: bigint;
+          }>
+        >(
           `SELECT (SELECT count(*) FROM "support_ticket" WHERE "businessId" = $1) AS tickets,
                   (SELECT count(*) FROM "support_ticket_event" WHERE "businessId" = $1) AS events,
                   (SELECT count(*) FROM "support_ticket_read" r JOIN "support_ticket" t ON t."id" = r."ticketId"
@@ -2144,7 +2463,9 @@ describe("meeting: the conversations become tickets (20261005120600)", () => {
       return { first, second, firstTickets, secondTickets };
     });
 
-    expect(outcome.first).toEqual([{ tickets: 4n, events: 5n, reads: 2n, ticketed: 4n }]);
+    expect(outcome.first).toEqual([
+      { tickets: 4n, events: 5n, reads: 2n, ticketed: 4n },
+    ]);
     expect(outcome.second).toEqual(outcome.first);
     expect(outcome.secondTickets).toEqual(outcome.firstTickets);
   });
@@ -2185,7 +2506,9 @@ describe("meeting: a pause started with its nature alone (the installed app's bo
     // A company created after the migration, before create-business seeds:
     // no default types at all.
     expect(
-      await prisma.occurrenceType.count({ where: { businessId: carrier, system_key: { not: null } } }),
+      await prisma.occurrenceType.count({
+        where: { businessId: carrier, system_key: { not: null } },
+      }),
     ).toBe(0);
 
     const repository = new DriverPauseRepository(prisma);
@@ -2202,7 +2525,10 @@ describe("meeting: a pause started with its nature alone (the installed app's bo
 
     const stored = await prisma.driverPause.findFirstOrThrow({
       where: { businessId: carrier, driverId },
-      select: { kind: true, occurrenceType: { select: { system_key: true, pause_kind: true } } },
+      select: {
+        kind: true,
+        occurrenceType: { select: { system_key: true, pause_kind: true } },
+      },
     });
 
     expect(stored).toEqual({
@@ -2210,12 +2536,17 @@ describe("meeting: a pause started with its nature alone (the installed app's bo
       occurrenceType: { system_key: "pause_rest", pause_kind: "REST" },
     });
     expect(
-      await prisma.occurrenceType.count({ where: { businessId: carrier, system_key: { not: null } } }),
+      await prisma.occurrenceType.count({
+        where: { businessId: carrier, system_key: { not: null } },
+      }),
     ).toBe(DEFAULT_OCCURRENCE_TYPES.length);
   });
 });
 
-const PROOF_BACKFILL = resolve(process.cwd(), "prisma/backfills/proof-occurrences.sql");
+const PROOF_BACKFILL = resolve(
+  process.cwd(),
+  "prisma/backfills/proof-occurrences.sql",
+);
 
 describe("meeting: the recorded proofs become DELIVERED occurrences (prisma/backfills)", () => {
   it("is not a migration: migrate deploy must not run it before the readers filter", () => {
@@ -2224,7 +2555,9 @@ describe("meeting: the recorded proofs become DELIVERED occurrences (prisma/back
     // that shows every past proof as an occurrence.
     const migrations = readdirSync(resolve(process.cwd(), "prisma/migrations"));
 
-    expect(migrations.filter((name) => name.includes("proof_occurrences"))).toEqual([]);
+    expect(
+      migrations.filter((name) => name.includes("proof_occurrences")),
+    ).toEqual([]);
     expect(sqlStatements(PROOF_BACKFILL)).toHaveLength(1);
   });
 
@@ -2237,7 +2570,13 @@ describe("meeting: the recorded proofs become DELIVERED occurrences (prisma/back
 
       const author = meetingKey("author");
       await seedUserRow(tx, carrier, author);
-      await seedDeliveryRow(tx, carrier, `delivery-${author}`, "Mercado Lua", null);
+      await seedDeliveryRow(
+        tx,
+        carrier,
+        `delivery-${author}`,
+        "Mercado Lua",
+        null,
+      );
 
       await tx.$executeRawUnsafe(
         `INSERT INTO "delivery_event" ("id", "type", "photo", "deliveryId", "businessId",
@@ -2250,7 +2589,8 @@ describe("meeting: the recorded proofs become DELIVERED occurrences (prisma/back
       );
 
       const counts: number[] = [];
-      for (let run = 0; run < 3; run += 1) counts.push(await tx.$executeRawUnsafe(backfill));
+      for (let run = 0; run < 3; run += 1)
+        counts.push(await tx.$executeRawUnsafe(backfill));
 
       return counts;
     });
@@ -2267,7 +2607,13 @@ describe("meeting: the recorded proofs become DELIVERED occurrences (prisma/back
 
       const author = meetingKey("author");
       await seedUserRow(tx, carrier, author);
-      await seedDeliveryRow(tx, carrier, `delivery-${author}`, "Mercado Sol", null);
+      await seedDeliveryRow(
+        tx,
+        carrier,
+        `delivery-${author}`,
+        "Mercado Sol",
+        null,
+      );
 
       await tx.$executeRawUnsafe(
         `INSERT INTO "delivery_event" ("id", "type", "photo", "signature", "received_by",

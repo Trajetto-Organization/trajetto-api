@@ -34,7 +34,10 @@ function utc(instant: Date): Prisma.Sql {
  * São Paulo under the next day; the process zone (the old basis) is UTC in
  * the container and says nothing about a carrier in Manaus.
  */
-function createdBucket(granularity: PeriodGranularity, timeZone: string): Prisma.Sql {
+function createdBucket(
+  granularity: PeriodGranularity,
+  timeZone: string,
+): Prisma.Sql {
   const unit = granularity === "day" ? "day" : "month";
   const format = granularity === "day" ? "YYYY-MM-DD" : "YYYY-MM";
 
@@ -86,7 +89,12 @@ class DashboardRepository implements IDashboardRepository {
   /** One arm of the union: an entity's rows of the window, per bucket. */
   private static countArm(
     entity: DashboardEntity,
-    params: { from: Date; to: Date; granularity: PeriodGranularity; timeZone: string },
+    params: {
+      from: Date;
+      to: Date;
+      granularity: PeriodGranularity;
+      timeZone: string;
+    },
     businessId?: string,
   ): Prisma.Sql {
     const source = DashboardRepository.MONTHLY_SOURCES[entity];
@@ -105,13 +113,20 @@ class DashboardRepository implements IDashboardRepository {
     // with the tenant's (businessId, created_at) index, but a MASTER view has
     // no tenant and no table has a created_at-only index, so every bucket
     // became its own full scan, 30 per table for the 30-day trends.
-    const buckets = periodBuckets(params.from, params.to, params.granularity, params.timeZone);
+    const buckets = periodBuckets(
+      params.from,
+      params.to,
+      params.granularity,
+      params.timeZone,
+    );
 
     if (buckets.length === 0) {
       return Prisma.sql`SELECT NULL::text AS entity, NULL::text AS period, 0::bigint AS count WHERE FALSE`;
     }
 
-    const periods = Prisma.join(buckets.map((bucket) => Prisma.sql`${bucket.period}::text`));
+    const periods = Prisma.join(
+      buckets.map((bucket) => Prisma.sql`${bucket.period}::text`),
+    );
 
     // Contiguous buckets: every start, then the last end. width_bucket gives
     // 1..n for a row inside [first start, last end), the WHERE keeps only those.
@@ -163,7 +178,10 @@ class DashboardRepository implements IDashboardRepository {
     return Object.fromEntries(
       Object.entries(byPeriod).map(([entity, buckets]) => [
         entity,
-        buckets.map((bucket) => ({ month: bucket.period, count: bucket.count })),
+        buckets.map((bucket) => ({
+          month: bucket.period,
+          count: bucket.count,
+        })),
       ]),
     );
   }
@@ -183,7 +201,8 @@ class DashboardRepository implements IDashboardRepository {
       (entity) => DashboardRepository.MONTHLY_SOURCES[entity],
     );
 
-    for (const entity of params.entities) result[entity] = { total: 0, before: 0 };
+    for (const entity of params.entities)
+      result[entity] = { total: 0, before: 0 };
 
     if (wanted.length === 0) return result;
 
@@ -211,7 +230,10 @@ class DashboardRepository implements IDashboardRepository {
     >(Prisma.join(parts, " UNION ALL "));
 
     for (const row of rows) {
-      result[row.entity] = { total: Number(row.total), before: Number(row.before) };
+      result[row.entity] = {
+        total: Number(row.total),
+        before: Number(row.before),
+      };
     }
 
     return result;

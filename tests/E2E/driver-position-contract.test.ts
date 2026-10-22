@@ -50,7 +50,8 @@ const DEPARTURE = T(30);
  * hands the double back at fifteen digits: a difference of float printing,
  * not of the repository, and not what this suite is about.
  */
-const coordinate = (base: number, index: number) => Number((base + index * 0.0001).toFixed(4));
+const coordinate = (base: number, index: number) =>
+  Number((base + index * 0.0001).toFixed(4));
 
 function ping(at: Date, index: number): AcceptedPing {
   return {
@@ -74,7 +75,10 @@ const both = (): Implementation[] => [
   ["in-memory", twin],
 ];
 
-const batches: Record<string, RecordedBatch[]> = { Postgres: [], "in-memory": [] };
+const batches: Record<string, RecordedBatch[]> = {
+  Postgres: [],
+  "in-memory": [],
+};
 
 let carrierDriver = "";
 let otherDriver = "";
@@ -141,10 +145,14 @@ beforeAll(async () => {
       });
 
     // Out of order, across the company's midnight.
-    batches[name].push(await flush([ping(T(0), 1), ping(T(-1), 0), ping(T(45), 2)]));
+    batches[name].push(
+      await flush([ping(T(0), 1), ping(T(-1), 0), ping(T(45), 2)]),
+    );
 
     // A lost response: the same points again, and one new.
-    batches[name].push(await flush([ping(T(0), 1), ping(T(45), 2), ping(T(50), 3)]));
+    batches[name].push(
+      await flush([ping(T(0), 1), ping(T(45), 2), ping(T(50), 3)]),
+    );
 
     // A backlog out of a dead zone, older than the last position.
     batches[name].push(await flush([ping(T(-1), 0), ping(T(40), 4)]));
@@ -196,18 +204,24 @@ describe("the map", () => {
     },
   );
 
-  it.each(both())("%s shows a company only its own drivers", async (_name, repository) => {
-    const latest = await repository.listLatestByBusiness(OTHER, since());
+  it.each(both())(
+    "%s shows a company only its own drivers",
+    async (_name, repository) => {
+      const latest = await repository.listLatestByBusiness(OTHER, since());
 
-    expect(latest.map((row) => [row.driverId, row.routeId, row.routeCode])).toEqual([
-      [otherDriver, null, null],
-    ]);
+      expect(
+        latest.map((row) => [row.driverId, row.routeId, row.routeCode]),
+      ).toEqual([[otherDriver, null, null]]);
 
-    // Nothing after the newest point.
-    expect(await repository.listLatestByBusiness(CARRIER, new Date(T(50).getTime() + 1))).toEqual(
-      [],
-    );
-  });
+      // Nothing after the newest point.
+      expect(
+        await repository.listLatestByBusiness(
+          CARRIER,
+          new Date(T(50).getTime() + 1),
+        ),
+      ).toEqual([]);
+    },
+  );
 
   it("gives the same map from both", async () => {
     for (const businessId of [CARRIER, OTHER]) {
@@ -231,9 +245,13 @@ describe("the last signal of a quiet driver", () => {
         randomUUID(),
       ]);
 
-      expect(signals).toEqual([{ driverId: carrierDriver, recorded_at: T(50) }]);
+      expect(signals).toEqual([
+        { driverId: carrierDriver, recorded_at: T(50) },
+      ]);
       expect(await repository.listLastSignals(CARRIER, [])).toEqual([]);
-      expect(await repository.listLastSignals(OTHER, [carrierDriver])).toEqual([]);
+      expect(await repository.listLastSignals(OTHER, [carrierDriver])).toEqual(
+        [],
+      );
     },
   );
 });
@@ -251,7 +269,9 @@ describe("the trail of the day", () => {
 
       // T(-1) is yesterday's; T(0) is today's first. Before the departure a
       // point is not the route's.
-      expect(day.map((point) => [point.recorded_at.toISOString(), point.routeId])).toEqual([
+      expect(
+        day.map((point) => [point.recorded_at.toISOString(), point.routeId]),
+      ).toEqual([
         [T(0).toISOString(), null],
         [T(40).toISOString(), routeId],
         [T(45).toISOString(), routeId],
@@ -274,16 +294,19 @@ describe("the trail of the day", () => {
     },
   );
 
-  it.each(both())("%s never reads another company's trail", async (_name, repository) => {
-    expect(
-      await repository.listTrail({
-        businessId: OTHER,
-        driverId: carrierDriver,
-        from: T(-60),
-        to: DAY.end,
-      }),
-    ).toEqual([]);
-  });
+  it.each(both())(
+    "%s never reads another company's trail",
+    async (_name, repository) => {
+      expect(
+        await repository.listTrail({
+          businessId: OTHER,
+          driverId: carrierDriver,
+          from: T(-60),
+          to: DAY.end,
+        }),
+      ).toEqual([]);
+    },
+  );
 
   it("gives the same trail from both", async () => {
     const window = {
@@ -304,30 +327,36 @@ describe("the trail of the day", () => {
 });
 
 describe("whose driver it is", () => {
-  it.each(both())("%s knows only the company's drivers", async (_name, repository) => {
-    expect(await repository.hasDriver(CARRIER, carrierDriver)).toBe(true);
-    expect(await repository.hasDriver(CARRIER, otherDriver)).toBe(false);
-    expect(await repository.hasDriver(CARRIER, randomUUID())).toBe(false);
-  });
+  it.each(both())(
+    "%s knows only the company's drivers",
+    async (_name, repository) => {
+      expect(await repository.hasDriver(CARRIER, carrierDriver)).toBe(true);
+      expect(await repository.hasDriver(CARRIER, otherDriver)).toBe(false);
+      expect(await repository.hasDriver(CARRIER, randomUUID())).toBe(false);
+    },
+  );
 });
 
 describe("the route page's reads (decision 14.7)", () => {
-  it.each(both())("%s narrows the trail to one route", async (_name, repository) => {
-    const trail = await repository.listTrail({
-      businessId: CARRIER,
-      driverId: carrierDriver,
-      routeId,
-      from: T(-60),
-      to: DAY.end,
-    });
+  it.each(both())(
+    "%s narrows the trail to one route",
+    async (_name, repository) => {
+      const trail = await repository.listTrail({
+        businessId: CARRIER,
+        driverId: carrierDriver,
+        routeId,
+        from: T(-60),
+        to: DAY.end,
+      });
 
-    // The point before the departure carries no route and stays out.
-    expect(trail.map((point) => point.recorded_at.toISOString())).toEqual([
-      T(40).toISOString(),
-      T(45).toISOString(),
-      T(50).toISOString(),
-    ]);
-  });
+      // The point before the departure carries no route and stays out.
+      expect(trail.map((point) => point.recorded_at.toISOString())).toEqual([
+        T(40).toISOString(),
+        T(45).toISOString(),
+        T(50).toISOString(),
+      ]);
+    },
+  );
 
   it.each(both())(
     "%s answers the last point within the company only",

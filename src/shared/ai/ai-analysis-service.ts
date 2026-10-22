@@ -5,7 +5,11 @@ import { sendAIVerificationEvent } from "@/websocket";
 import { logger } from "@/shared/logging/logger";
 import { getRequestContext } from "@/shared/http/request-context";
 
-import { getOrCreateCurrentPeriod, getQuotaUsage, reserveUnits } from "./ai-quota-service";
+import {
+  getOrCreateCurrentPeriod,
+  getQuotaUsage,
+  reserveUnits,
+} from "./ai-quota-service";
 import { aiProviderConfigured } from "./ai-provider";
 import {
   aiRecordTypeOf,
@@ -87,7 +91,11 @@ class AIAnalysisService {
 
     // Only the photos the reader answers become units: a checklist of eight
     // photos with one odometer spends one (ADR 0010 §5).
-    const units = buildAnalysisUnits(request.type, request.input, readerSupports);
+    const units = buildAnalysisUnits(
+      request.type,
+      request.input,
+      readerSupports,
+    );
 
     if (units.length === 0) {
       await this.markRecordSkipped(request);
@@ -100,7 +108,11 @@ class AIAnalysisService {
       request.input,
     );
 
-    const outcome = await this.createRequest(request, idempotencyKey, units.length);
+    const outcome = await this.createRequest(
+      request,
+      idempotencyKey,
+      units.length,
+    );
 
     if (outcome === "queued") {
       AIAnalysisPipelineService.getInstance().wake();
@@ -127,7 +139,10 @@ class AIAnalysisService {
 
         // Same input, job still in flight or already done: nothing to redo.
         if (existing) {
-          if (existing.status === "PENDING" || existing.status === "PROCESSING") {
+          if (
+            existing.status === "PENDING" ||
+            existing.status === "PROCESSING"
+          ) {
             return "already_running";
           }
 

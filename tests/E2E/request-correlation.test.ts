@@ -146,11 +146,9 @@ beforeAll(async () => {
     async () => ({ ok: true }),
   );
 
-  app.get(
-    "/__test__/machine",
-    { onRequest: [ensureApiKey] },
-    async () => ({ ok: true }),
-  );
+  app.get("/__test__/machine", { onRequest: [ensureApiKey] }, async () => ({
+    ok: true,
+  }));
 
   app.post(
     "/__test__/publish",
@@ -224,7 +222,9 @@ afterAll(async () => {
   await prisma.activity.deleteMany({ where: { businessId: BUSINESS } });
   await prisma.refreshToken.deleteMany({ where: { userId: USER } });
   await prisma.apiKey.deleteMany({ where: { businessId: BUSINESS } });
-  await prisma.businessEntitlement.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.businessEntitlement.deleteMany({
+    where: { businessId: BUSINESS },
+  });
   await prisma.user.deleteMany({ where: { id: USER } });
   await prisma.business.deleteMany({ where: { id: BUSINESS } });
 
@@ -260,7 +260,10 @@ describe("the request id", () => {
   });
 
   it("is the one on the request's own log lines", async () => {
-    const response = await app.inject({ method: "GET", url: "/health/liveness" });
+    const response = await app.inject({
+      method: "GET",
+      url: "/health/liveness",
+    });
     const id = response.headers["x-request-id"];
 
     const reqIds = lines()
@@ -373,18 +376,18 @@ describe("an event published by a request", () => {
     // entered here — a leak a real socket-borne request cannot have.
     await withoutRequestContext(() =>
       new OutboxService().publishAfterCommit({
-      topic: "account-payable.created",
-      aggregateType: "account-payable",
-      aggregateId: randomUUID(),
-      businessId: BUSINESS,
-      actorId: USER,
-      payload: {
-        accountPayableId: randomUUID(),
+        topic: "account-payable.created",
+        aggregateType: "account-payable",
+        aggregateId: randomUUID(),
         businessId: BUSINESS,
-        amount: 1,
-        serviceOrderId: null,
-        registrationUserId: USER,
-      },
+        actorId: USER,
+        payload: {
+          accountPayableId: randomUUID(),
+          businessId: BUSINESS,
+          amount: 1,
+          serviceOrderId: null,
+          registrationUserId: USER,
+        },
       }),
     );
 
@@ -406,9 +409,7 @@ describe("what the pipeline writes about each delivery", () => {
     await drainUntil(async () => {
       const rows = await prisma.notificationDelivery.findMany();
 
-      return (
-        rows.length > 0 && rows.every((row) => row.status === "DELIVERED")
-      );
+      return rows.length > 0 && rows.every((row) => row.status === "DELIVERED");
     });
 
     const [event] = await prisma.domainOutboxEvent.findMany();
@@ -421,18 +422,20 @@ describe("what the pipeline writes about each delivery", () => {
 
     expect(accepted).toHaveLength(rows.length);
 
-    expect(accepted.find((line) => line.deliveryId === email.id)).toMatchObject({
-      level: 30,
-      component: "notification-pipeline",
-      deliveryId: email.id,
-      outboxEventId: event.id,
-      correlationId: requestId,
-      topic: "account-payable.created",
-      businessId: BUSINESS,
-      channel: "EMAIL",
-      attempt: 1,
-      providerMessageId: "<m@x>",
-    });
+    expect(accepted.find((line) => line.deliveryId === email.id)).toMatchObject(
+      {
+        level: 30,
+        component: "notification-pipeline",
+        deliveryId: email.id,
+        outboxEventId: event.id,
+        correlationId: requestId,
+        topic: "account-payable.created",
+        businessId: BUSINESS,
+        channel: "EMAIL",
+        attempt: 1,
+        providerMessageId: "<m@x>",
+      },
+    );
   });
 
   it("a failed attempt is a warn line with the same fields and the reason", async () => {

@@ -19,12 +19,24 @@ const DAY = 24 * 60 * 60 * 1000;
 async function seeded() {
   const repo = new InMemoryFineRepository();
 
-  repo.branches.set("centro", { businessId: A, corporate_reason: "Filial Centro" });
-  repo.branches.set("norte", { businessId: A, corporate_reason: "Filial Norte" });
-  repo.branches.set("secreta", { businessId: B, corporate_reason: "Filial Secreta" });
+  repo.branches.set("centro", {
+    businessId: A,
+    corporate_reason: "Filial Centro",
+  });
+  repo.branches.set("norte", {
+    businessId: A,
+    corporate_reason: "Filial Norte",
+  });
+  repo.branches.set("secreta", {
+    businessId: B,
+    corporate_reason: "Filial Secreta",
+  });
   repo.drivers.set("zeca", { name: "Zeca Alves", cpf: "111" });
   repo.drivers.set("ana", { name: "Ana Borges", cpf: "222" });
-  repo.vehicles.set("v1", { license_plate: "FNE1A01", description: "Caminhão 1" });
+  repo.vehicles.set("v1", {
+    license_plate: "FNE1A01",
+    description: "Caminhão 1",
+  });
   repo.codes.set("speed", {
     code: "7455",
     sub_code: 0,
@@ -44,7 +56,8 @@ async function seeded() {
       due_date: new Date(
         TODAY_START.getTime() + (index % 3 === 1 ? -10 : 20) * DAY,
       ),
-      payment_date: index % 3 === 0 ? new Date(TODAY_START.getTime() - 20 * DAY) : null,
+      payment_date:
+        index % 3 === 0 ? new Date(TODAY_START.getTime() - 20 * DAY) : null,
       amount: 100 + index * 10,
       points: 4,
       created_from: "WEB_DASHBOARD",
@@ -71,7 +84,10 @@ async function seeded() {
   return repo;
 }
 
-const list = (repo: InMemoryFineRepository, extra: Record<string, unknown> = {}) =>
+const list = (
+  repo: InMemoryFineRepository,
+  extra: Record<string, unknown> = {},
+) =>
   repo.listFines({
     page: 1,
     pageSize: 10,
@@ -84,7 +100,9 @@ describe("InMemoryFineRepository.listFines", () => {
   it("lists one company, newest first, with the status of each row", async () => {
     const { data } = await list(await seeded());
 
-    expect(data.map((fine) => Number(fine.amount))).toEqual([150, 140, 130, 120, 110, 100]);
+    expect(data.map((fine) => Number(fine.amount))).toEqual([
+      150, 140, 130, 120, 110, 100,
+    ]);
     expect(data.map((fine) => fine.status)).toEqual([
       "PENDING",
       "OVERDUE",
@@ -96,9 +114,14 @@ describe("InMemoryFineRepository.listFines", () => {
   });
 
   it("orders by a join with the newest first inside a tie", async () => {
-    const { data } = await list(await seeded(), { sort: "driverName", order: "asc" });
+    const { data } = await list(await seeded(), {
+      sort: "driverName",
+      order: "asc",
+    });
 
-    expect(data.map((fine) => Number(fine.amount))).toEqual([150, 130, 110, 140, 120, 100]);
+    expect(data.map((fine) => Number(fine.amount))).toEqual([
+      150, 130, 110, 140, 120, 100,
+    ]);
   });
 
   it("filters by status and searches the joins", async () => {
@@ -141,7 +164,9 @@ describe("InMemoryFineRepository writes", () => {
       client_submission_id: "018f0000-0000-7000-8000-00000000c0de",
     });
 
-    expect(keyed.client_submission_id).toBe("018f0000-0000-7000-8000-00000000c0de");
+    expect(keyed.client_submission_id).toBe(
+      "018f0000-0000-7000-8000-00000000c0de",
+    );
     expect(repo.fines[0].client_submission_id).toBeNull();
   });
 
@@ -163,7 +188,11 @@ describe("InMemoryFineRepository writes", () => {
     const foreign = repo.fines.find((fine) => fine.businessId === B)!;
 
     await expect(
-      repo.updateFine({ fineId: foreign.id, businessId: A, fineData: { amount: 1 } }),
+      repo.updateFine({
+        fineId: foreign.id,
+        businessId: A,
+        fineData: { amount: 1 },
+      }),
     ).rejects.toThrow();
     await expect(repo.deleteFine(foreign.id, A)).rejects.toThrow();
     expect(repo.fines.find((fine) => fine.id === foreign.id)).toBeDefined();

@@ -44,7 +44,10 @@ function readIntegrationIdempotencyKey(
 
   if (raw === undefined || raw === "") throw new IdempotencyKeyRequiredError();
 
-  if (typeof raw !== "string" || !INTEGRATION_IDEMPOTENCY_KEY_PATTERN.test(raw)) {
+  if (
+    typeof raw !== "string" ||
+    !INTEGRATION_IDEMPOTENCY_KEY_PATTERN.test(raw)
+  ) {
     throw new IdempotencyKeyInvalidError();
   }
 

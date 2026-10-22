@@ -7,7 +7,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * must tell the open route page and, on a RELEASED route, the driver —
  * after its commit, like every other plan write.
  */
-const routeEvents: Array<{ room: "business" | "driver"; id: string | null; event: any }> = [];
+const routeEvents: Array<{
+  room: "business" | "driver";
+  id: string | null;
+  event: any;
+}> = [];
 
 vi.mock("@/websocket", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/websocket")>()),
@@ -23,7 +27,9 @@ vi.mock("@/websocket", async (importOriginal) => ({
 }));
 
 vi.mock("@/../infra/database", () => ({
-  default: { $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}) },
+  default: {
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}),
+  },
 }));
 
 import { ReportDeliveryOccurrenceUseCase } from "@/modules/delivery/usecases/report-delivery-occurrence/report-delivery-occurrence-usecase";
@@ -59,7 +65,12 @@ function makeContext() {
   deliveries.routeStops = routes.stops;
 
   users.user.push(
-    { id: DISPATCHER, name: "Despacho", role: "BUSINESS_ADMIN", businessId: BUSINESS } as User,
+    {
+      id: DISPATCHER,
+      name: "Despacho",
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+    } as User,
     {
       id: DRIVER_USER,
       name: "João",
@@ -82,7 +93,9 @@ function makeContext() {
     deliveries,
     routes,
     reasons,
-    { createActivityIfEnabled: async () => undefined } as unknown as NotificationService,
+    {
+      createActivityIfEnabled: async () => undefined,
+    } as unknown as NotificationService,
     { publish: async () => undefined } as unknown as OutboxService,
     new InMemoryWebhookFanOutService().asService(),
   );
@@ -94,7 +107,9 @@ function makeContext() {
     types,
     deliveries,
     routes,
-    { createActivityIfEnabled: async () => undefined } as unknown as NotificationService,
+    {
+      createActivityIfEnabled: async () => undefined,
+    } as unknown as NotificationService,
     {
       resolvePresignedUploads: async (photos: Array<{ key: string }>) =>
         photos.map(({ key }) => ({ path: key })),
@@ -110,7 +125,9 @@ function makeContext() {
   return { deliveries, routes, setStatus, report, types };
 }
 
-async function seedDelivery(context: ReturnType<typeof makeContext>): Promise<string> {
+async function seedDelivery(
+  context: ReturnType<typeof makeContext>,
+): Promise<string> {
   const created = await context.deliveries.createDelivery({
     businessId: BUSINESS,
     recipient_name: "Mercado",
@@ -145,7 +162,9 @@ describe("a delivery cancelled from the panel while its route has not left", () 
       status: "RELEASED",
     });
 
-    const before = context.routes.routes.find((entry) => entry.id === route.id)!.plan_version;
+    const before = context.routes.routes.find(
+      (entry) => entry.id === route.id,
+    )!.plan_version;
 
     await context.setStatus.execute({
       userId: DISPATCHER,
@@ -155,14 +174,21 @@ describe("a delivery cancelled from the panel while its route has not left", () 
       reasonId: REASON,
     });
 
-    const after = context.routes.routes.find((entry) => entry.id === route.id)!.plan_version;
+    const after = context.routes.routes.find(
+      (entry) => entry.id === route.id,
+    )!.plan_version;
 
     expect(after).toBe(before + 1);
-    expect(routeEvents.filter((entry) => entry.event.type === "route.stops_changed")).toEqual([
+    expect(
+      routeEvents.filter((entry) => entry.event.type === "route.stops_changed"),
+    ).toEqual([
       expect.objectContaining({
         room: "business",
         id: BUSINESS,
-        event: expect.objectContaining({ routeId: route.id, planVersion: after }),
+        event: expect.objectContaining({
+          routeId: route.id,
+          planVersion: after,
+        }),
       }),
       expect.objectContaining({ room: "driver", id: DRIVER_USER }),
     ]);
@@ -203,12 +229,19 @@ describe("a blocking occurrence the driver reports on a released route that has 
       client_submission_id: "018f0000-0000-7000-8000-0000000000e9",
     });
 
-    const version = context.routes.routes.find((entry) => entry.id === route.id)!.plan_version;
+    const version = context.routes.routes.find(
+      (entry) => entry.id === route.id,
+    )!.plan_version;
 
-    expect(routeEvents.filter((entry) => entry.event.type === "route.stops_changed")).toEqual([
+    expect(
+      routeEvents.filter((entry) => entry.event.type === "route.stops_changed"),
+    ).toEqual([
       expect.objectContaining({
         room: "business",
-        event: expect.objectContaining({ routeId: route.id, planVersion: version }),
+        event: expect.objectContaining({
+          routeId: route.id,
+          planVersion: version,
+        }),
       }),
       expect.objectContaining({ room: "driver", id: DRIVER_USER }),
     ]);

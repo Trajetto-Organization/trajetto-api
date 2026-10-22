@@ -36,19 +36,25 @@ const LAST_MIGRATION_IN_PRODUCTION = "20260808130000_harden_auth_sessions";
 const MIGRATIONS_DIR = resolve(process.cwd(), "prisma/migrations");
 
 function violations(...files: Array<[name: string, sql: string]>) {
-  return violationsIn(files.map(([name, sql]) => ({ name, sql }))).map((violation) => ({
-    rule: violation.rule,
-    target: violation.target,
-  }));
+  return violationsIn(files.map(([name, sql]) => ({ name, sql }))).map(
+    (violation) => ({
+      rule: violation.rule,
+      target: violation.target,
+    }),
+  );
 }
 
 describe("the migrations of this repository", () => {
   it("name a production baseline that exists", () => {
-    expect(existsSync(resolve(MIGRATIONS_DIR, LAST_MIGRATION_IN_PRODUCTION))).toBe(true);
+    expect(
+      existsSync(resolve(MIGRATIONS_DIR, LAST_MIGRATION_IN_PRODUCTION)),
+    ).toBe(true);
   });
 
   it("are all safe for the release that is serving while they run", () => {
-    const found = violationsIn(migrationsAfter(MIGRATIONS_DIR, LAST_MIGRATION_IN_PRODUCTION));
+    const found = violationsIn(
+      migrationsAfter(MIGRATIONS_DIR, LAST_MIGRATION_IN_PRODUCTION),
+    );
 
     expect(found.map(describeViolation)).toEqual([]);
   });
@@ -58,7 +64,10 @@ describe("the expand/contract check", () => {
   describe("on what the previous release reads or writes", () => {
     it("refuses dropping a column", () => {
       expect(
-        violations(["1_a", 'ALTER TABLE "user" DROP COLUMN "whatsapp_instance_connected";']),
+        violations([
+          "1_a",
+          'ALTER TABLE "user" DROP COLUMN "whatsapp_instance_connected";',
+        ]),
       ).toEqual([{ rule: "DROP COLUMN", target: "user" }]);
     });
 
@@ -72,7 +81,12 @@ describe("the expand/contract check", () => {
     });
 
     it("does not take an empty marker for a reason", () => {
-      expect(violations(["1_a", '-- contract-phase:\nALTER TABLE "user" DROP COLUMN "x";'])).toHaveLength(1);
+      expect(
+        violations([
+          "1_a",
+          '-- contract-phase:\nALTER TABLE "user" DROP COLUMN "x";',
+        ]),
+      ).toHaveLength(1);
     });
 
     it("refuses what harden_auth_sessions did: delete, rename, and a required column with no default", () => {
@@ -89,7 +103,10 @@ describe("the expand/contract check", () => {
       ).toEqual([
         { rule: "DELETE FROM", target: "refresh_token" },
         { rule: "RENAME COLUMN", target: "refresh_token" },
-        { rule: "ADD COLUMN ... NOT NULL without DEFAULT", target: "refresh_token" },
+        {
+          rule: "ADD COLUMN ... NOT NULL without DEFAULT",
+          target: "refresh_token",
+        },
       ]);
     });
 
@@ -124,9 +141,9 @@ describe("the expand/contract check", () => {
     });
 
     it("refuses a new enum value unless it says no running image reads it", () => {
-      expect(violations(["1_a", `ALTER TYPE "Role" ADD VALUE 'AUDITOR';`])).toEqual([
-        { rule: "ALTER TYPE ... ADD VALUE", target: "Role" },
-      ]);
+      expect(
+        violations(["1_a", `ALTER TYPE "Role" ADD VALUE 'AUDITOR';`]),
+      ).toEqual([{ rule: "ALTER TYPE ... ADD VALUE", target: "Role" }]);
 
       expect(
         violations([
@@ -140,7 +157,10 @@ describe("the expand/contract check", () => {
       // The previous client reads the column as required: the first NULL the
       // new release writes fails its reads of that row (P2032).
       expect(
-        violations(["1_a", 'ALTER TABLE "delivery" ALTER COLUMN "driverId" DROP NOT NULL;']),
+        violations([
+          "1_a",
+          'ALTER TABLE "delivery" ALTER COLUMN "driverId" DROP NOT NULL;',
+        ]),
       ).toEqual([{ rule: "DROP NOT NULL", target: "delivery" }]);
 
       expect(
@@ -153,7 +173,10 @@ describe("the expand/contract check", () => {
 
     it("looks inside DO blocks, where the target cannot be told", () => {
       expect(
-        violations(["1_a", `DO $$ BEGIN EXECUTE 'ALTER TABLE "user" DROP COLUMN "x"'; END $$;`]),
+        violations([
+          "1_a",
+          `DO $$ BEGIN EXECUTE 'ALTER TABLE "user" DROP COLUMN "x"'; END $$;`,
+        ]),
       ).toEqual([{ rule: "DROP COLUMN", target: "?" }]);
     });
   });
@@ -162,8 +185,14 @@ describe("the expand/contract check", () => {
     it("accepts tightening a table created after the baseline", () => {
       expect(
         violations(
-          ["1_create", 'CREATE TABLE "delivery_event" ("id" TEXT NOT NULL, "businessId" TEXT);'],
-          ["2_tighten", 'ALTER TABLE "delivery_event" ALTER COLUMN "businessId" SET NOT NULL;'],
+          [
+            "1_create",
+            'CREATE TABLE "delivery_event" ("id" TEXT NOT NULL, "businessId" TEXT);',
+          ],
+          [
+            "2_tighten",
+            'ALTER TABLE "delivery_event" ALTER COLUMN "businessId" SET NOT NULL;',
+          ],
         ),
       ).toEqual([]);
     });
@@ -183,8 +212,14 @@ describe("the expand/contract check", () => {
     it("accepts making a column optional on a table created after the baseline", () => {
       expect(
         violations(
-          ["1_create", 'CREATE TABLE "delivery_event" ("id" TEXT NOT NULL, "reportedById" TEXT NOT NULL);'],
-          ["2_loosen", 'ALTER TABLE "delivery_event" ALTER COLUMN "reportedById" DROP NOT NULL;'],
+          [
+            "1_create",
+            'CREATE TABLE "delivery_event" ("id" TEXT NOT NULL, "reportedById" TEXT NOT NULL);',
+          ],
+          [
+            "2_loosen",
+            'ALTER TABLE "delivery_event" ALTER COLUMN "reportedById" DROP NOT NULL;',
+          ],
         ),
       ).toEqual([]);
     });
@@ -192,15 +227,24 @@ describe("the expand/contract check", () => {
     it("accepts a new value on an enum created after the baseline", () => {
       expect(
         violations(
-          ["1_create", `CREATE TYPE "ImportStatus" AS ENUM ('PENDING', 'COMPLETED');`],
-          ["2_add", `ALTER TYPE "ImportStatus" ADD VALUE IF NOT EXISTS 'IN_PROGRESS' BEFORE 'COMPLETED';`],
+          [
+            "1_create",
+            `CREATE TYPE "ImportStatus" AS ENUM ('PENDING', 'COMPLETED');`,
+          ],
+          [
+            "2_add",
+            `ALTER TYPE "ImportStatus" ADD VALUE IF NOT EXISTS 'IN_PROGRESS' BEFORE 'COMPLETED';`,
+          ],
         ),
       ).toEqual([]);
     });
 
     it("does not count a table dropped and then re-created as new", () => {
       expect(
-        violations(["1_a", 'DROP TABLE "notification";\nCREATE TABLE "notification" ("id" TEXT);']),
+        violations([
+          "1_a",
+          'DROP TABLE "notification";\nCREATE TABLE "notification" ("id" TEXT);',
+        ]),
       ).toEqual([{ rule: "DROP TABLE", target: "notification" }]);
     });
   });
@@ -217,12 +261,20 @@ describe("the expand/contract check", () => {
 
     it("is not thrown off by an apostrophe in a comment", () => {
       expect(
-        violations(["1_a", `-- the previous image's client\nALTER TABLE "user" DROP COLUMN "x";`]),
+        violations([
+          "1_a",
+          `-- the previous image's client\nALTER TABLE "user" DROP COLUMN "x";`,
+        ]),
       ).toEqual([{ rule: "DROP COLUMN", target: "user" }]);
     });
 
     it("accepts renaming an index, which the client never names", () => {
-      expect(violations(["1_a", 'ALTER INDEX "claim_idx_new" RENAME TO "claim_idx";'])).toEqual([]);
+      expect(
+        violations([
+          "1_a",
+          'ALTER INDEX "claim_idx_new" RENAME TO "claim_idx";',
+        ]),
+      ).toEqual([]);
     });
   });
 });

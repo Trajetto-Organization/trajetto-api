@@ -45,11 +45,24 @@ const USER = {
   access_revoked: false,
   driverId: null,
   profileAccess: null,
-  business: { id: "business-1", is_active: true, entitlements: [{ module: "FLEET", enabled: true }] },
+  business: {
+    id: "business-1",
+    is_active: true,
+    entitlements: [{ module: "FLEET", enabled: true }],
+  },
 };
 
 const token = (payload: Record<string, unknown>, secret = auth.secret_token) =>
-  sign({ sub: "user-1", tokenType: "access", sessionVersion: 3, familyId: "family-1", ...payload }, secret);
+  sign(
+    {
+      sub: "user-1",
+      tokenType: "access",
+      sessionVersion: 3,
+      familyId: "family-1",
+      ...payload,
+    },
+    secret,
+  );
 
 const logger = () => {
   const log = { child: vi.fn(), warn: vi.fn() };
@@ -57,15 +70,21 @@ const logger = () => {
   return log;
 };
 
-function fakeRequest(authorization: string | undefined, where: Record<string, unknown> = {}) {
+function fakeRequest(
+  authorization: string | undefined,
+  where: Record<string, unknown> = {},
+) {
   return {
     headers: authorization === undefined ? {} : { authorization },
     log: logger(),
     ...where,
-  } as unknown as Parameters<typeof ensureAuthenticated>[0] & { user?: Record<string, unknown> };
+  } as unknown as Parameters<typeof ensureAuthenticated>[0] & {
+    user?: Record<string, unknown>;
+  };
 }
 
-const reply = () => ({ log: logger() }) as unknown as Parameters<typeof ensureAuthenticated>[1];
+const reply = () =>
+  ({ log: logger() }) as unknown as Parameters<typeof ensureAuthenticated>[1];
 
 async function refusalOf(run: () => Promise<unknown>) {
   try {
@@ -73,7 +92,11 @@ async function refusalOf(run: () => Promise<unknown>) {
     return null;
   } catch (error) {
     if (!(error instanceof AppError)) throw error;
-    return { status: error.statusCode, code: error.code, message: error.message };
+    return {
+      status: error.statusCode,
+      code: error.code,
+      message: error.message,
+    };
   }
 }
 
@@ -84,16 +107,39 @@ beforeEach(() => {
 });
 
 describe("the token", () => {
-  const MISSING = { status: 401, code: "AUTH_TOKEN_MISSING", message: "Token de autenticação ausente." };
+  const MISSING = {
+    status: 401,
+    code: "AUTH_TOKEN_MISSING",
+    message: "Token de autenticação ausente.",
+  };
 
   it("is required as a Bearer token with something in it", async () => {
-    expect(await refusalOf(() => ensureAuthenticated(fakeRequest(undefined), reply()))).toEqual(MISSING);
-    expect(await refusalOf(() => ensureAuthenticated(fakeRequest(`Basic ${token({})}`), reply()))).toEqual(MISSING);
-    expect(await refusalOf(() => ensureAuthenticated(fakeRequest("Bearer    "), reply()))).toEqual(MISSING);
+    expect(
+      await refusalOf(() =>
+        ensureAuthenticated(fakeRequest(undefined), reply()),
+      ),
+    ).toEqual(MISSING);
+    expect(
+      await refusalOf(() =>
+        ensureAuthenticated(fakeRequest(`Basic ${token({})}`), reply()),
+      ),
+    ).toEqual(MISSING);
+    expect(
+      await refusalOf(() =>
+        ensureAuthenticated(fakeRequest("Bearer    "), reply()),
+      ),
+    ).toEqual(MISSING);
   });
 
   it("must verify with the access secret", async () => {
-    expect(await refusalOf(() => ensureAuthenticated(fakeRequest(`Bearer ${token({}, "other-secret")}`), reply()))).toEqual({
+    expect(
+      await refusalOf(() =>
+        ensureAuthenticated(
+          fakeRequest(`Bearer ${token({}, "other-secret")}`),
+          reply(),
+        ),
+      ),
+    ).toEqual({
       status: 401,
       code: "AUTH_TOKEN_INVALID",
       message: "Token de autenticação inválido ou expirado.",
@@ -101,10 +147,23 @@ describe("the token", () => {
   });
 
   it("must be an access token carrying a subject, a session version and a family", async () => {
-    const INVALID = { status: 401, code: "AUTH_TOKEN_INVALID", message: "Token de autenticação inválido." };
+    const INVALID = {
+      status: 401,
+      code: "AUTH_TOKEN_INVALID",
+      message: "Token de autenticação inválido.",
+    };
 
-    for (const bad of [{ sub: "" }, { tokenType: "refresh" }, { sessionVersion: "3" }, { familyId: "" }]) {
-      expect(await refusalOf(() => ensureAuthenticated(fakeRequest(`Bearer ${token(bad)}`), reply()))).toEqual(INVALID);
+    for (const bad of [
+      { sub: "" },
+      { tokenType: "refresh" },
+      { sessionVersion: "3" },
+      { familyId: "" },
+    ]) {
+      expect(
+        await refusalOf(() =>
+          ensureAuthenticated(fakeRequest(`Bearer ${token(bad)}`), reply()),
+        ),
+      ).toEqual(INVALID);
     }
     expect(repositories.findUserById).not.toHaveBeenCalled();
   });
@@ -113,30 +172,51 @@ describe("the token", () => {
 describe("the session", () => {
   it("ends when the user is gone, the version moved, or the family was closed", async () => {
     repositories.findUserById.mockResolvedValueOnce(null);
-    expect(await refusalOf(() => ensureAuthenticated(fakeRequest(`Bearer ${token({})}`), reply()))).toEqual({
+    expect(
+      await refusalOf(() =>
+        ensureAuthenticated(fakeRequest(`Bearer ${token({})}`), reply()),
+      ),
+    ).toEqual({
       status: 401,
       code: "AUTH_SESSION_INVALID",
       message: "Sessão inválida.",
     });
 
-    repositories.findUserById.mockResolvedValueOnce({ ...USER, session_version: 4 });
-    expect(await refusalOf(() => ensureAuthenticated(fakeRequest(`Bearer ${token({})}`), reply()))).toEqual({
+    repositories.findUserById.mockResolvedValueOnce({
+      ...USER,
+      session_version: 4,
+    });
+    expect(
+      await refusalOf(() =>
+        ensureAuthenticated(fakeRequest(`Bearer ${token({})}`), reply()),
+      ),
+    ).toEqual({
       status: 401,
       code: "AUTH_SESSION_INVALIDATED",
       message: "Sessão expirada ou invalidada.",
     });
 
     repositories.hasActiveRefreshTokenFamily.mockResolvedValueOnce(false);
-    expect(await refusalOf(() => ensureAuthenticated(fakeRequest(`Bearer ${token({})}`), reply()))).toEqual({
+    expect(
+      await refusalOf(() =>
+        ensureAuthenticated(fakeRequest(`Bearer ${token({})}`), reply()),
+      ),
+    ).toEqual({
       status: 401,
       code: "AUTH_SESSION_INVALIDATED",
       message: "Sessão expirada ou encerrada.",
     });
-    expect(repositories.hasActiveRefreshTokenFamily).toHaveBeenLastCalledWith("user-1", "family-1");
+    expect(repositories.hasActiveRefreshTokenFamily).toHaveBeenLastCalledWith(
+      "user-1",
+      "family-1",
+    );
   });
 
   it("reads a missing session version as zero", async () => {
-    repositories.findUserById.mockResolvedValueOnce({ ...USER, session_version: null });
+    repositories.findUserById.mockResolvedValueOnce({
+      ...USER,
+      session_version: null,
+    });
 
     const request = fakeRequest(`Bearer ${token({ sessionVersion: 0 })}`);
     await ensureAuthenticated(request, reply());
@@ -161,44 +241,75 @@ describe("the session", () => {
       driver: null,
       entitlements: [{ module: "FLEET", enabled: true }],
     });
-    expect((request.log as unknown as { child: ReturnType<typeof vi.fn> }).child).toHaveBeenCalledWith({
+    expect(
+      (request.log as unknown as { child: ReturnType<typeof vi.fn> }).child,
+    ).toHaveBeenCalledWith({
       userId: "user-1",
       businessId: "business-1",
     });
-    expect((response.log as unknown as { child: ReturnType<typeof vi.fn> }).child).toHaveBeenCalledWith({
+    expect(
+      (response.log as unknown as { child: ReturnType<typeof vi.fn> }).child,
+    ).toHaveBeenCalledWith({
       userId: "user-1",
       businessId: "business-1",
     });
   });
 
   it("gives a user without a company null ids and null entitlements", async () => {
-    repositories.findUserById.mockResolvedValueOnce({ ...USER, role: "MASTER", businessId: null, business: null });
+    repositories.findUserById.mockResolvedValueOnce({
+      ...USER,
+      role: "MASTER",
+      businessId: null,
+      business: null,
+    });
 
     const request = fakeRequest(`Bearer ${token({})}`);
     await ensureAuthenticated(request, reply());
 
-    expect(request.user).toMatchObject({ businessId: null, entitlements: null });
+    expect(request.user).toMatchObject({
+      businessId: null,
+      entitlements: null,
+    });
   });
 
   it("checks the tenant the request names", async () => {
     expect(
-      await refusalOf(() => ensureAuthenticated(fakeRequest(`Bearer ${token({})}`, { params: { businessId: "business-2" } }), reply())),
-    ).toEqual({ status: 403, code: "TENANT_ACCESS_DENIED", message: "Acesso negado aos dados desta empresa." });
+      await refusalOf(() =>
+        ensureAuthenticated(
+          fakeRequest(`Bearer ${token({})}`, {
+            params: { businessId: "business-2" },
+          }),
+          reply(),
+        ),
+      ),
+    ).toEqual({
+      status: 403,
+      code: "TENANT_ACCESS_DENIED",
+      message: "Acesso negado aos dados desta empresa.",
+    });
   });
 });
 
 describe("a database that does not answer", () => {
   it("is a 503, logged, never a 401", async () => {
-    repositories.findUserById.mockRejectedValueOnce(new Prisma.PrismaClientInitializationError("down", "test"));
+    repositories.findUserById.mockRejectedValueOnce(
+      new Prisma.PrismaClientInitializationError("down", "test"),
+    );
     const request = fakeRequest(`Bearer ${token({})}`);
 
-    expect(await refusalOf(() => ensureAuthenticated(request, reply()))).toEqual({
+    expect(
+      await refusalOf(() => ensureAuthenticated(request, reply())),
+    ).toEqual({
       status: 503,
       code: "AUTH_SESSION_UNAVAILABLE",
       message: "Não foi possível verificar sua sessão agora. Tente novamente.",
     });
-    expect((request.log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.any(Prisma.PrismaClientInitializationError) }),
+    expect(
+      (request.log as unknown as { warn: ReturnType<typeof vi.fn> }).warn,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: expect.any(Prisma.PrismaClientInitializationError),
+      }),
       "Session check failed: database unavailable",
     );
   });
@@ -207,6 +318,8 @@ describe("a database that does not answer", () => {
     const bug = new TypeError("cannot read x of undefined");
     repositories.findUserById.mockRejectedValueOnce(bug);
 
-    await expect(ensureAuthenticated(fakeRequest(`Bearer ${token({})}`), reply())).rejects.toBe(bug);
+    await expect(
+      ensureAuthenticated(fakeRequest(`Bearer ${token({})}`), reply()),
+    ).rejects.toBe(bug);
   });
 });

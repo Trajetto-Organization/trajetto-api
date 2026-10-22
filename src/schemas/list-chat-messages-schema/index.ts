@@ -31,7 +31,9 @@ const listChatMessagesSchema = z
       .string()
       .datetime("Cursor beforeAt deve ser uma data ISO.")
       .optional()
-      .describe("O `created_at` de `nextCursor`: busca as mais antigas. Vai junto com beforeId."),
+      .describe(
+        "O `created_at` de `nextCursor`: busca as mais antigas. Vai junto com beforeId.",
+      ),
     beforeId: z
       .string()
       .uuid("Cursor beforeId é inválido.")
@@ -43,7 +45,9 @@ const listChatMessagesSchema = z
       .string()
       .datetime("Cursor afterAt deve ser uma data ISO.")
       .optional()
-      .describe("O `created_at` de `previousCursor`: busca as mais novas. Vai junto com afterId."),
+      .describe(
+        "O `created_at` de `previousCursor`: busca as mais novas. Vai junto com afterId.",
+      ),
     afterId: z
       .string()
       .uuid("Cursor afterId é inválido.")

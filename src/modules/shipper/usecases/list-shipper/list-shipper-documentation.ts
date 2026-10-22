@@ -11,7 +11,9 @@ const shipperListSearchMetaDoc = searchMetaDoc(
     total: z
       .number()
       .int()
-      .describe("Embarcadores da busca, sem o filtro de status (cartão Total)."),
+      .describe(
+        "Embarcadores da busca, sem o filtro de status (cartão Total).",
+      ),
     active: z.number().int().describe("Destes, os ativos."),
     withCnpj: z.number().int().describe("Destes, os que têm CNPJ."),
   },

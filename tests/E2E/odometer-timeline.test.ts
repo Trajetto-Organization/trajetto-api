@@ -41,7 +41,8 @@ const storedKeys: string[] = [];
 const HOUR = 60 * 60 * 1000;
 
 /** Hours before now, so no date is ever "in the future". */
-const hoursAgo = (hours: number) => new Date(Date.now() - hours * HOUR).toISOString();
+const hoursAgo = (hours: number) =>
+  new Date(Date.now() - hours * HOUR).toISOString();
 
 async function storedPhoto(
   uploadType: "odometerPhotos" | "checklistPhotos",
@@ -82,7 +83,10 @@ async function fueling(mileage: number, at: string) {
 async function checklist(mileage: number, at: string) {
   const photos = await Promise.all(
     ["current_mileage", "fuel_level_adequate", "tires_condition"].map(
-      async (fieldName) => ({ key: await storedPhoto("checklistPhotos"), fieldName }),
+      async (fieldName) => ({
+        key: await storedPhoto("checklistPhotos"),
+        fieldName,
+      }),
     ),
   );
 

@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 
-import { seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
+import {
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
 
 /**
  * The legacy departure of loose deliveries, replayed late, through the real

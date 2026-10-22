@@ -32,7 +32,9 @@ class GetSupportTicketsSummaryUseCase {
 
     // The route refuses driver tokens too; restated for any other caller.
     if (scope.driverId) {
-      throw permissionDenied("Motoristas não possuem permissão para acessar este recurso.");
+      throw permissionDenied(
+        "Motoristas não possuem permissão para acessar este recurso.",
+      );
     }
 
     return this.tickets.counts({

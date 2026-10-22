@@ -16,11 +16,18 @@ import { readOperationSummary } from "@/modules/delivery/usecases/operation-summ
 import { getBusinessEntitlements } from "@/shared/entitlements/entitlement-service";
 import { isModuleEnabled } from "@/shared/entitlements/entitlement-rules";
 
-import { businessDateKey, businessMonthWindow } from "@/shared/time/business-day";
+import {
+  businessDateKey,
+  businessMonthWindow,
+} from "@/shared/time/business-day";
 import { loadBusinessTimeZone } from "@/shared/time/business-time-zone";
 import { operationDay } from "@/shared/route/operation-day-rules";
 
-import { basisOf, currentMonthStart, samePointLastMonth } from "../shared/count-comparison";
+import {
+  basisOf,
+  currentMonthStart,
+  samePointLastMonth,
+} from "../shared/count-comparison";
 import {
   DASHBOARD_ENTITIES,
   SERIES_KEY,
@@ -133,8 +140,12 @@ class GetDashboardOverviewUseCase {
        * last month up to the same point. In sequence after the monthly
        * counts: one connection per page view.
        */
-      const stocks = visible.filter((entity) => basisOf(entity.key) === "total");
-      const flows = visible.filter((entity) => basisOf(entity.key) === "month_to_date");
+      const stocks = visible.filter(
+        (entity) => basisOf(entity.key) === "total",
+      );
+      const flows = visible.filter(
+        (entity) => basisOf(entity.key) === "month_to_date",
+      );
 
       const totals = await this.dashboardRepository.countManyTotals(
         {
@@ -160,7 +171,10 @@ class GetDashboardOverviewUseCase {
           : {};
 
       const spanFor = (key: string): number =>
-        (lastSpanCounts[key] ?? []).reduce((sum, bucket) => sum + bucket.count, 0);
+        (lastSpanCounts[key] ?? []).reduce(
+          (sum, bucket) => sum + bucket.count,
+          0,
+        );
 
       const counts = Object.fromEntries(
         DASHBOARD_ENTITIES.map((entity) => {
@@ -194,7 +208,9 @@ class GetDashboardOverviewUseCase {
        * hired the module; the chart draws a line per key it receives.
        */
       const activityTrends = months.keys.map((month) => {
-        const point: Record<string, string | number> = { month: monthLabel(month) };
+        const point: Record<string, string | number> = {
+          month: monthLabel(month),
+        };
 
         for (const entity of visible) {
           point[SERIES_KEY[entity.key]] = countFor(entity.key, month);
@@ -229,7 +245,8 @@ class GetDashboardOverviewUseCase {
           await this.dashboardRepository.countVehiclesByType(businessId);
       }
 
-      const maintenanceCosts: DashboardOverviewResponse["maintenanceCosts"] = [];
+      const maintenanceCosts: DashboardOverviewResponse["maintenanceCosts"] =
+        [];
 
       // Service orders are Frotas: no costs without the module (DASH-MOD-1).
       if (fleetEnabled && canReadKey(user, "service_order_manage")) {

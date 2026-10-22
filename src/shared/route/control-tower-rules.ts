@@ -168,9 +168,11 @@ function buildFunnel(
  */
 const FINISHED_STATUSES: FunnelStatus[] = ["DELIVERED", "FAILED", "CANCELLED"];
 
-function dayProgress(
-  counts: Array<{ status: string; total: number }>,
-): { finished: number; total: number; rate: number | null } {
+function dayProgress(counts: Array<{ status: string; total: number }>): {
+  finished: number;
+  total: number;
+  rate: number | null;
+} {
   let finished = 0;
   let total = 0;
 
@@ -218,11 +220,18 @@ interface DriverDayLoad {
 }
 
 function driverDayLoads(
-  counts: ReadonlyArray<{ driverId: string | null; status: string; total: number }>,
+  counts: ReadonlyArray<{
+    driverId: string | null;
+    status: string;
+    total: number;
+  }>,
 ): DriverDayLoad[] {
   const loads = new Map<string, DriverDayLoad>();
 
-  const field: Record<string, keyof Omit<DriverDayLoad, "driverId"> | undefined> = {
+  const field: Record<
+    string,
+    keyof Omit<DriverDayLoad, "driverId"> | undefined
+  > = {
     PENDING: "designated",
     IN_TRANSIT: "inRoute",
     DELIVERED: "deliveredToday",
@@ -384,7 +393,11 @@ function routeProgress(stops: readonly RouteStopLike[]): RouteProgress {
   };
 
   const onTheWayStopId = currentOnTheWayStopId(
-    stops.map(({ id, status, on_the_way_at }) => ({ id, status, on_the_way_at })),
+    stops.map(({ id, status, on_the_way_at }) => ({
+      id,
+      status,
+      on_the_way_at,
+    })),
   );
 
   for (const stop of stops) {

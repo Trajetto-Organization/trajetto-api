@@ -61,7 +61,9 @@ interface CertificateInput {
 }
 
 /** An attribute's value as text: forge leaves UTF8String as raw bytes. */
-function attributeText(attribute: { value?: unknown; valueTagClass?: number } | null): string | null {
+function attributeText(
+  attribute: { value?: unknown; valueTagClass?: number } | null,
+): string | null {
   if (!attribute || typeof attribute.value !== "string") return null;
 
   if (attribute.valueTagClass === forge.asn1.Type.UTF8) {
@@ -79,13 +81,18 @@ function fieldText(
   name: forge.pki.Certificate["subject"],
   shortName: string,
 ): string | null {
-  const attribute = name.attributes.find((entry) => entry.shortName === shortName);
+  const attribute = name.attributes.find(
+    (entry) => entry.shortName === shortName,
+  );
 
   return attributeText(attribute ?? null)?.trim() || null;
 }
 
 /** "RAZAO SOCIAL:12345678000199" → name and CNPJ (the e-CNPJ convention). */
-function splitCommonName(commonName: string): { name: string; cnpj: string | null } {
+function splitCommonName(commonName: string): {
+  name: string;
+  cnpj: string | null;
+} {
   const separator = commonName.lastIndexOf(":");
 
   if (separator > 0) {
@@ -159,11 +166,14 @@ function loadSigningCertificate(
     ...(pfx.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[
       forge.pki.oids.pkcs8ShroudedKeyBag
     ] ?? []),
-    ...(pfx.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag] ?? []),
+    ...(pfx.getBags({ bagType: forge.pki.oids.keyBag })[
+      forge.pki.oids.keyBag
+    ] ?? []),
   ];
 
   const certificates = (
-    pfx.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] ?? []
+    pfx.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] ??
+    []
   )
     .map((bag) => bag.cert)
     .filter((cert): cert is forge.pki.Certificate => Boolean(cert));
@@ -177,11 +187,13 @@ function loadSigningCertificate(
 
   if (!signer) return { state: "INVALID", reason: "KEY_CERTIFICATE_MISMATCH" };
 
-  if (!isIcpBrasil(signer)) return { state: "INVALID", reason: "NOT_ICP_BRASIL" };
+  if (!isIcpBrasil(signer))
+    return { state: "INVALID", reason: "NOT_ICP_BRASIL" };
 
-  const usage = signer.getExtension("keyUsage") as
-    | { digitalSignature?: boolean; nonRepudiation?: boolean }
-    | null;
+  const usage = signer.getExtension("keyUsage") as {
+    digitalSignature?: boolean;
+    nonRepudiation?: boolean;
+  } | null;
 
   if (usage && !usage.digitalSignature && !usage.nonRepudiation) {
     return { state: "INVALID", reason: "KEY_USAGE" };

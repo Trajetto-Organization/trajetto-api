@@ -55,9 +55,7 @@ async function storedPhoto(): Promise<string> {
   return key;
 }
 
-async function deliveryFor(
-  status: "PENDING" | "IN_TRANSIT",
-): Promise<string> {
+async function deliveryFor(status: "PENDING" | "IN_TRANSIT"): Promise<string> {
   const delivery = await prisma.delivery.create({
     data: {
       recipient_name: "Destinatário",
@@ -167,7 +165,12 @@ describe("an arrival sent three hours late by a phone two hours fast", () => {
     const before = Date.now();
     const response = await post(
       deliveryUrl("arrival", deliveryId),
-      { client_submission_id: key, latitude: -23.55, longitude: -46.63, occurred_at },
+      {
+        client_submission_id: key,
+        latitude: -23.55,
+        longitude: -46.63,
+        occurred_at,
+      },
       headers,
     );
     const after = Date.now();
@@ -373,7 +376,9 @@ describe("the legacy departure replayed after a new route was released", () => {
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json().data).toEqual({ started: 0 });
 
-    const route = await prisma.route.findUniqueOrThrow({ where: { id: routeId } });
+    const route = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
     expect(route.status).toBe("RELEASED");
   });
 
@@ -386,7 +391,9 @@ describe("the legacy departure replayed after a new route was released", () => {
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json().data).toEqual({ started: 0 });
 
-    const route = await prisma.route.findUniqueOrThrow({ where: { id: routeId } });
+    const route = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
     expect(route.status).toBe("RELEASED");
   });
 });

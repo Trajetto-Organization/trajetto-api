@@ -40,7 +40,10 @@ describe("the payload builder", () => {
   it("writes null when the event is not a fact from the field", () => {
     // Additive: the key is always there, so a subscriber's parser meets one
     // shape on every document event.
-    expect(deliveryEventPayload({ id: "x" })).toHaveProperty("occurred_at", null);
+    expect(deliveryEventPayload({ id: "x" })).toHaveProperty(
+      "occurred_at",
+      null,
+    );
 
     expect(
       deliveryAssignedPayload({ id: "x" }, { id: "r", code: 1, driverId: "d" }),

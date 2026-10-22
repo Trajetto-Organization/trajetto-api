@@ -77,10 +77,14 @@ class ListBusinessUseCase {
         order,
       });
 
-      const { total, searchMeta } = summarizeBusinessList(result.groups, result.topCities, {
-        statuses,
-        ufs,
-      });
+      const { total, searchMeta } = summarizeBusinessList(
+        result.groups,
+        result.topCities,
+        {
+          statuses,
+          ufs,
+        },
+      );
 
       return { data: result.data, total, searchMeta };
     } catch (error) {

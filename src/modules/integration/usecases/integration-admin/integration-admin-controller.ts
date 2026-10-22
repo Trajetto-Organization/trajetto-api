@@ -46,9 +46,7 @@ class IntegrationAdminController {
   /** The query's company for the MASTER, the person's own otherwise. */
   private queryBusiness(request: FastifyRequest, businessId?: string): string {
     return (
-      businessId ??
-      (request.user as { businessId?: string }).businessId ??
-      ""
+      businessId ?? (request.user as { businessId?: string }).businessId ?? ""
     );
   }
 

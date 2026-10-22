@@ -81,11 +81,14 @@ class CreateVehicleChecklistController {
       // Codes in `x-error-code` as well: the route's response schema strips
       // unknown body fields, and the app's queue decides from the code whether
       // a refusal is on the merits or a contract its build no longer meets.
-      return reply.header("x-error-code", "VALIDATION_ERROR").status(400).send({
-        code: "VALIDATION_ERROR",
-        message: "Dados do formulário inválidos",
-        details: error instanceof Error ? error.message : "Erro de validação",
-      });
+      return reply
+        .header("x-error-code", "VALIDATION_ERROR")
+        .status(400)
+        .send({
+          code: "VALIDATION_ERROR",
+          message: "Dados do formulário inválidos",
+          details: error instanceof Error ? error.message : "Erro de validação",
+        });
     }
 
     const photoValidation =
@@ -95,14 +98,17 @@ class CreateVehicleChecklistController {
       );
 
     if (!photoValidation.isValid) {
-      return reply.header("x-error-code", "PHOTOS_REQUIRED").status(400).send({
-        code: "PHOTOS_REQUIRED",
-        message: "Fotos obrigatórias não fornecidas",
-        errors: photoValidation.errors,
-        missingPhotos: photoValidation.missingPhotos,
-        photoRequirements:
-          PhotoValidationService.validatePhotosRequired(checklistData),
-      });
+      return reply
+        .header("x-error-code", "PHOTOS_REQUIRED")
+        .status(400)
+        .send({
+          code: "PHOTOS_REQUIRED",
+          message: "Fotos obrigatórias não fornecidas",
+          errors: photoValidation.errors,
+          missingPhotos: photoValidation.missingPhotos,
+          photoRequirements:
+            PhotoValidationService.validatePhotosRequired(checklistData),
+        });
     }
 
     try {

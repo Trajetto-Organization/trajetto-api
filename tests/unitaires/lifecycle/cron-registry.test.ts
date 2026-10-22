@@ -23,11 +23,12 @@ afterEach(() => {
 function registered(): CronJobDefinition[] {
   const jobs: CronJobDefinition[] = [];
 
-  vi.spyOn(CronSchedulerService.getInstance(), "registerJob").mockImplementation(
-    (definition: CronJobDefinition) => {
-      jobs.push(definition);
-    },
-  );
+  vi.spyOn(
+    CronSchedulerService.getInstance(),
+    "registerJob",
+  ).mockImplementation((definition: CronJobDefinition) => {
+    jobs.push(definition);
+  });
 
   registerCronJobs();
 

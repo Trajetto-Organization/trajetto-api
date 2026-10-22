@@ -62,8 +62,14 @@ async function seedPostgres(): Promise<void> {
 
   const typeA = await seedFuelType(prisma, F.A, "Diesel S10");
   const typeB = await seedFuelType(prisma, F.B, "Diesel S10");
-  await prisma.fuelType.update({ where: { id: typeA.id }, data: { id: F.typeA } });
-  await prisma.fuelType.update({ where: { id: typeB.id }, data: { id: F.typeB } });
+  await prisma.fuelType.update({
+    where: { id: typeA.id },
+    data: { id: F.typeA },
+  });
+  await prisma.fuelType.update({
+    where: { id: typeB.id },
+    data: { id: F.typeB },
+  });
 
   for (const [n, driver] of DRIVERS.entries()) {
     await seedDriver(prisma, driver.businessId, n + 1, {
@@ -82,8 +88,14 @@ async function seedPostgres(): Promise<void> {
 }
 
 function seedTwin(): void {
-  memory.branches.set(F.branchA, { businessId: F.A, corporate_reason: "Filial Contrato 1" });
-  memory.branches.set(F.branchB, { businessId: F.B, corporate_reason: "Filial Contrato 2" });
+  memory.branches.set(F.branchA, {
+    businessId: F.A,
+    corporate_reason: "Filial Contrato 1",
+  });
+  memory.branches.set(F.branchB, {
+    businessId: F.B,
+    corporate_reason: "Filial Contrato 2",
+  });
 
   for (const vehicle of VEHICLES) {
     memory.vehicles.set(vehicle.id, {
@@ -120,7 +132,9 @@ beforeAll(async () => {
           data: { created_at: minute(row.minute) },
         });
       } else {
-        memory.fuels.find((entry) => entry.id === fuel.id)!.created_at = minute(row.minute);
+        memory.fuels.find((entry) => entry.id === fuel.id)!.created_at = minute(
+          row.minute,
+        );
       }
     }
 

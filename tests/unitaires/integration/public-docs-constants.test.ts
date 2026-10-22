@@ -11,7 +11,9 @@ import { describe, expect, it, vi } from "vitest";
  * to prove the text reads them.
  */
 vi.mock("@/shared/integration/webhook-signature", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/shared/integration/webhook-signature")>()),
+  ...(await importOriginal<
+    typeof import("@/shared/integration/webhook-signature")
+  >()),
   SIGNATURE_TOLERANCE_SECONDS: 120,
   WEBHOOK_SECRET_ROTATION_GRACE_MS: 48 * 60 * 60 * 1000,
 }));
@@ -24,7 +26,9 @@ import {
 } from "@/shared/integration/public-docs";
 
 const document = buildPublicApiDocument({}, {});
-const description = String((document.info as { description: string }).description);
+const description = String(
+  (document.info as { description: string }).description,
+);
 
 describe("the signature tolerance in the public reference", () => {
   it("is the one the constant sets, in the text and in every sample", () => {

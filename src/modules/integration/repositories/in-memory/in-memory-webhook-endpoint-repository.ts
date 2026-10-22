@@ -133,7 +133,9 @@ class InMemoryWebhookEndpointRepository implements IWebhookEndpointRepository {
   async listByBusiness(businessId: string): Promise<WebhookEndpointSummary[]> {
     return this.endpoints
       .filter((endpoint) => endpoint.businessId === businessId)
-      .sort((left, right) => right.created_at.getTime() - left.created_at.getTime())
+      .sort(
+        (left, right) => right.created_at.getTime() - left.created_at.getTime(),
+      )
       .map((endpoint) => ({
         id: endpoint.id,
         name: endpoint.name,

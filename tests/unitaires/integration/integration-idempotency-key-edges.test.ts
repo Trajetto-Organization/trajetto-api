@@ -12,30 +12,46 @@ const refusal = (headers: Record<string, unknown>) => {
   try {
     readIntegrationIdempotencyKey(headers);
   } catch (error) {
-    return { message: (error as Error).message, code: (error as { code?: string }).code };
+    return {
+      message: (error as Error).message,
+      code: (error as { code?: string }).code,
+    };
   }
   return null;
 };
 
 const INVALID = {
-  message: "Idempotency-Key inválida: use de 8 a 128 caracteres entre letras, números e . _ : - (um UUID serve).",
+  message:
+    "Idempotency-Key inválida: use de 8 a 128 caracteres entre letras, números e . _ : - (um UUID serve).",
   code: "IDEMPOTENCY_KEY_INVALID",
 };
 
 describe("readIntegrationIdempotencyKey", () => {
   it("accepts 8 to 128 allowed characters", () => {
-    expect(readIntegrationIdempotencyKey({ "idempotency-key": "pedido-1" })).toBe("pedido-1");
-    expect(readIntegrationIdempotencyKey({ "idempotency-key": "a".repeat(128) })).toBe("a".repeat(128));
+    expect(
+      readIntegrationIdempotencyKey({ "idempotency-key": "pedido-1" }),
+    ).toBe("pedido-1");
+    expect(
+      readIntegrationIdempotencyKey({ "idempotency-key": "a".repeat(128) }),
+    ).toBe("a".repeat(128));
   });
 
   it("refuses a key too short, too long, or with anything around it", () => {
-    for (const key of ["pedido1", "a".repeat(129), " pedido-10", "pedido-10 ", "pedido 10"]) {
+    for (const key of [
+      "pedido1",
+      "a".repeat(129),
+      " pedido-10",
+      "pedido-10 ",
+      "pedido 10",
+    ]) {
       expect(refusal({ "idempotency-key": key })).toEqual(INVALID);
     }
   });
 
   it("refuses a repeated header", () => {
-    expect(refusal({ "idempotency-key": ["pedido-10", "pedido-10"] })).toEqual(INVALID);
+    expect(refusal({ "idempotency-key": ["pedido-10", "pedido-10"] })).toEqual(
+      INVALID,
+    );
     // One element still is not a string: it would print as a valid key.
     expect(refusal({ "idempotency-key": ["pedido-10"] })).toEqual(INVALID);
   });

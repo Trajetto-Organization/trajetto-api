@@ -62,10 +62,15 @@ let cnpjSeq = 0;
 function cnpj(): string {
   cnpjSeq += 1;
 
-  return String(41222555000100 + cnpjSeq + Math.floor(Math.random() * 1e6) * 100);
+  return String(
+    41222555000100 + cnpjSeq + Math.floor(Math.random() * 1e6) * 100,
+  );
 }
 
-async function seedBusiness(id: string, modules: Array<"FLEET" | "DELIVERIES">) {
+async function seedBusiness(
+  id: string,
+  modules: Array<"FLEET" | "DELIVERIES">,
+) {
   await prisma.business.create({
     data: {
       id,
@@ -222,10 +227,14 @@ async function seedUser(
 
   return {
     id,
-    token: sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-      subject: id,
-      expiresIn: "15m",
-    }),
+    token: sign(
+      { tokenType: "access", sessionVersion: 0, familyId },
+      auth.secret_token,
+      {
+        subject: id,
+        expiresIn: "15m",
+      },
+    ),
   };
 }
 
@@ -250,7 +259,10 @@ interface FineMeta {
     overdue: number;
     totalAmount: number;
     openAmount: number;
-    facets: Record<string, Array<{ value: string; label?: string; count: number }>>;
+    facets: Record<
+      string,
+      Array<{ value: string; label?: string; count: number }>
+    >;
   };
 }
 
@@ -335,7 +347,8 @@ beforeAll(async () => {
     await code({
       code: "7455",
       sub_code: 0,
-      description: "Transitar em velocidade superior à máxima permitida em até 20%",
+      description:
+        "Transitar em velocidade superior à máxima permitida em até 20%",
       points: 4,
       gravity: "MEDIUM",
     })
@@ -451,7 +464,9 @@ describe("GET /fines/list-fine — order and paging", () => {
 
     expect(status).toBe(200);
     expect(meta.total).toBe(12);
-    expect(amounts(rows)).toEqual([210, 200, 190, 180, 170, 160, 150, 140, 130, 120]);
+    expect(amounts(rows)).toEqual([
+      210, 200, 190, 180, 170, 160, 150, 140, 130, 120,
+    ]);
     expect(rows.map((row) => row.status).slice(0, 3)).toEqual([
       "PENDING",
       "OVERDUE",
@@ -473,7 +488,9 @@ describe("GET /fines/list-fine — order and paging", () => {
       .slice(1)
       .map((line) => JSON.parse(line) as FineLine);
 
-    expect(amounts(asc.rows)).toEqual([100, 110, 120, 130, 140, 150, 160, 170, 180, 190]);
+    expect(amounts(asc.rows)).toEqual([
+      100, 110, 120, 130, 140, 150, 160, 170, 180, 190,
+    ]);
     expect(amounts(second)).toEqual([200, 210]);
 
     const desc = await list("sort=amount&order=desc");
@@ -554,7 +571,9 @@ describe("GET /fines/list-fine — filters and cards", () => {
     const { meta, rows } = await list(`branchId=${ids.branchNorte}`);
 
     expect(meta.total).toBe(6);
-    expect(rows.every((row) => row.branch.corporate_reason === "Filial Norte")).toBe(true);
+    expect(
+      rows.every((row) => row.branch.corporate_reason === "Filial Norte"),
+    ).toBe(true);
     expect(meta.searchMeta.facets.branchId).toEqual([
       { value: ids.branchCentro, label: "Filial Centro", count: 6 },
       { value: ids.branchNorte, label: "Filial Norte", count: 6 },
@@ -595,9 +614,9 @@ describe("GET /fines/list-fine — walls", () => {
     const { rows, meta, body } = await list(`branchId=${ids.branchB}`);
 
     expect(rows).toEqual([]);
-    expect(meta.searchMeta.facets.branchId.map((option) => option.value)).not.toContain(
-      ids.branchB,
-    );
+    expect(
+      meta.searchMeta.facets.branchId.map((option) => option.value),
+    ).not.toContain(ids.branchB);
     expect(body).not.toContain("Filial Secreta da B");
     expect((await list("search=Secreta")).rows).toEqual([]);
   });
@@ -645,7 +664,10 @@ describe("GET /fines/export-fine", () => {
   }
 
   it("exports what the list shows, for the company the MASTER names", async () => {
-    const response = await exportFines(`businessId=${A}&status=OVERDUE`, tokens.master);
+    const response = await exportFines(
+      `businessId=${A}&status=OVERDUE`,
+      tokens.master,
+    );
 
     expect(response.statusCode).toBe(200);
 
@@ -692,7 +714,10 @@ describe("POST /fines/create-fine/:businessId", () => {
     ...overrides,
   });
 
-  async function create(payload: Record<string, unknown>, token = tokens.admin) {
+  async function create(
+    payload: Record<string, unknown>,
+    token = tokens.admin,
+  ) {
     return app.inject({
       method: "POST",
       url: `/fines/create-fine/${A}`,
@@ -703,7 +728,11 @@ describe("POST /fines/create-fine/:businessId", () => {
 
   it("keeps the origin and signs a point placed on the web map", async () => {
     const response = await create(
-      body({ observation: "radar-map-signature", latitude: "-23.55", longitude: "-46.63" }),
+      body({
+        observation: "radar-map-signature",
+        latitude: "-23.55",
+        longitude: "-46.63",
+      }),
     );
 
     expect(response.statusCode).toBe(201);
@@ -739,7 +768,11 @@ describe("POST /fines/create-fine/:businessId", () => {
 
     expect(response.statusCode).toBe(201);
     expect(
-      (await prisma.fine.findFirstOrThrow({ where: { observation: "zero-points" } })).points,
+      (
+        await prisma.fine.findFirstOrThrow({
+          where: { observation: "zero-points" },
+        })
+      ).points,
     ).toBe(0);
   });
 
@@ -782,9 +815,13 @@ describe("POST /fines/create-fine/:businessId", () => {
     });
 
     // São Paulo's midnight (UTC-3, no daylight saving since 2019).
-    expect(fine.violation_date.toISOString()).toBe(`${violationDay}T03:00:00.000Z`);
+    expect(fine.violation_date.toISOString()).toBe(
+      `${violationDay}T03:00:00.000Z`,
+    );
     expect(fine.due_date.toISOString()).toBe(`${dueDay}T03:00:00.000Z`);
-    expect(fine.payment_date?.toISOString()).toBe(`${violationDay}T03:00:00.000Z`);
+    expect(fine.payment_date?.toISOString()).toBe(
+      `${violationDay}T03:00:00.000Z`,
+    );
 
     const { rows } = await list(`search=${fine.id}`);
 
@@ -804,13 +841,19 @@ describe("POST /fines/create-fine/:businessId", () => {
   });
 
   it("takes the code's points when the request has none", async () => {
-    const { points: _points, ...withoutPoints } = body({ observation: "code-points" });
+    const { points: _points, ...withoutPoints } = body({
+      observation: "code-points",
+    });
 
     const response = await create(withoutPoints);
 
     expect(response.statusCode).toBe(201);
     expect(
-      (await prisma.fine.findFirstOrThrow({ where: { observation: "code-points" } })).points,
+      (
+        await prisma.fine.findFirstOrThrow({
+          where: { observation: "code-points" },
+        })
+      ).points,
     ).toBe(4);
   });
 
@@ -826,9 +869,18 @@ describe("POST /fines/create-fine/:businessId", () => {
   it("refuses another company's manager, a read-only profile and a driver", async () => {
     const before = await prisma.fine.count({ where: { businessId: A } });
 
-    const foreign = await create(body({ observation: "cross-tenant" }), tokens.adminB);
-    const readOnly = await create(body({ observation: "cross-tenant" }), tokens.readOnly);
-    const driver = await create(body({ observation: "cross-tenant" }), tokens.driver);
+    const foreign = await create(
+      body({ observation: "cross-tenant" }),
+      tokens.adminB,
+    );
+    const readOnly = await create(
+      body({ observation: "cross-tenant" }),
+      tokens.readOnly,
+    );
+    const driver = await create(
+      body({ observation: "cross-tenant" }),
+      tokens.driver,
+    );
     const noFleet = await app.inject({
       method: "POST",
       url: `/fines/create-fine/${NO_FLEET}`,
@@ -886,7 +938,10 @@ describe("PATCH /fines/update-fine/:fineId/business/:businessId", () => {
     expect(foreign.json()).toEqual(unknown.json());
     expect(foreign.json().code).toBe("FINE_NOT_FOUND");
     expect(
-      Number((await prisma.fine.findUniqueOrThrow({ where: { id: ids.fineB } })).amount),
+      Number(
+        (await prisma.fine.findUniqueOrThrow({ where: { id: ids.fineB } }))
+          .amount,
+      ),
     ).toBe(999);
   });
 
@@ -904,7 +959,9 @@ describe("PATCH /fines/update-fine/:fineId/business/:businessId", () => {
 
     expect(response.statusCode).toBe(200);
 
-    const saved = await prisma.fine.findUniqueOrThrow({ where: { id: fine.id } });
+    const saved = await prisma.fine.findUniqueOrThrow({
+      where: { id: fine.id },
+    });
 
     expect(Number(saved.amount)).toBe(60);
     expect(saved.location_edited_by).toBeNull();
@@ -916,26 +973,36 @@ describe("PATCH /fines/update-fine/:fineId/business/:businessId", () => {
     const fine = await seedOwnFine();
 
     expect(
-      (await patch(fine.id, A, { latitude: "-23.5", longitude: "-46.6" })).statusCode,
+      (await patch(fine.id, A, { latitude: "-23.5", longitude: "-46.6" }))
+        .statusCode,
     ).toBe(200);
 
-    const saved = await prisma.fine.findUniqueOrThrow({ where: { id: fine.id } });
+    const saved = await prisma.fine.findUniqueOrThrow({
+      where: { id: fine.id },
+    });
 
     expect(saved.location_edited_by).toBe(adminId);
     expect(saved.location_source).toBe("USER_MANUAL");
   });
 
   it("undoes a payment sent empty", async () => {
-    const fine = await seedOwnFine({ payment_date: new Date(Date.now() - 2 * DAY) });
+    const fine = await seedOwnFine({
+      payment_date: new Date(Date.now() - 2 * DAY),
+    });
 
-    expect((await patch(fine.id, A, { payment_date: "" })).statusCode).toBe(200);
+    expect((await patch(fine.id, A, { payment_date: "" })).statusCode).toBe(
+      200,
+    );
     expect(
-      (await prisma.fine.findUniqueOrThrow({ where: { id: fine.id } })).payment_date,
+      (await prisma.fine.findUniqueOrThrow({ where: { id: fine.id } }))
+        .payment_date,
     ).toBeNull();
   });
 
   it("checks the dates as they will be saved", async () => {
-    const fine = await seedOwnFine({ payment_date: new Date(Date.now() - 20 * DAY) });
+    const fine = await seedOwnFine({
+      payment_date: new Date(Date.now() - 20 * DAY),
+    });
 
     const response = await patch(fine.id, A, {
       violation_date: new Date(Date.now() - 10 * DAY).toISOString(),
@@ -948,7 +1015,9 @@ describe("PATCH /fines/update-fine/:fineId/business/:businessId", () => {
   it("is a write: the read-only profile is refused", async () => {
     const fine = await seedOwnFine();
 
-    expect((await patch(fine.id, A, { amount: "10" }, tokens.readOnly)).statusCode).toBe(403);
+    expect(
+      (await patch(fine.id, A, { amount: "10" }, tokens.readOnly)).statusCode,
+    ).toBe(403);
   });
 });
 
@@ -969,7 +1038,9 @@ describe("GET /traffic-violation/search-traffic-violation-codes", () => {
               .trim()
               .split("\n")
               .slice(1)
-              .map((line) => JSON.parse(line) as { id: string; fullCode: string })
+              .map(
+                (line) => JSON.parse(line) as { id: string; fullCode: string },
+              )
           : [],
     };
   }

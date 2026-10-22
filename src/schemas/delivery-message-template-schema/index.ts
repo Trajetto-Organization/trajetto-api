@@ -60,7 +60,8 @@ const saveDeliveryMessageTemplateSchema = z.object({
   ...tenantLockedShape,
   topic: z.enum(["DISPATCHED", "ON_THE_WAY", "DELIVERED", "FAILED"], {
     errorMap: () => ({
-      message: "O momento deve ser DISPATCHED, ON_THE_WAY, DELIVERED ou FAILED.",
+      message:
+        "O momento deve ser DISPATCHED, ON_THE_WAY, DELIVERED ou FAILED.",
     }),
   }),
 
@@ -130,7 +131,4 @@ const listDeliveryMessageTemplateSchema = z.object({
     .describe("Só o MASTER envia; ausente, a empresa do usuário."),
 });
 
-export {
-  listDeliveryMessageTemplateSchema,
-  saveDeliveryMessageTemplateSchema,
-};
+export { listDeliveryMessageTemplateSchema, saveDeliveryMessageTemplateSchema };

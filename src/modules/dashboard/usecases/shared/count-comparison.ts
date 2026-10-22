@@ -42,7 +42,10 @@ function basisOf(entity: DashboardEntity): CountBasis {
 
 /** The UTC instant the company's current civil month began. */
 function currentMonthStart(now: Date, timeZone: string): Date {
-  return businessMonthStart(businessDateKey(now, timeZone).slice(0, 7), timeZone);
+  return businessMonthStart(
+    businessDateKey(now, timeZone).slice(0, 7),
+    timeZone,
+  );
 }
 
 /**
@@ -51,7 +54,10 @@ function currentMonthStart(now: Date, timeZone: string): Date {
  * company's zone. A day the previous month does not have (the 31st after a
  * 30-day month) takes the whole previous month.
  */
-function samePointLastMonth(now: Date, timeZone: string): { from: Date; to: Date } {
+function samePointLastMonth(
+  now: Date,
+  timeZone: string,
+): { from: Date; to: Date } {
   const today = businessDateKey(now, timeZone);
   const monthKey = today.slice(0, 7);
   const monthStart = businessMonthStart(monthKey, timeZone);
@@ -64,8 +70,12 @@ function samePointLastMonth(now: Date, timeZone: string): { from: Date; to: Date
 
   if (day > daysInPrevious) return { from, to: monthStart };
 
-  const intoDay = now.getTime() - businessDayRange(now, timeZone).start.getTime();
-  const sameDay = businessDayStart(`${previousKey}-${String(day).padStart(2, "0")}`, timeZone);
+  const intoDay =
+    now.getTime() - businessDayRange(now, timeZone).start.getTime();
+  const sameDay = businessDayStart(
+    `${previousKey}-${String(day).padStart(2, "0")}`,
+    timeZone,
+  );
 
   return {
     from,

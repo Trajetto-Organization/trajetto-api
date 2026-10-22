@@ -246,7 +246,11 @@ class StartRouteUseCase {
         // resolve. Every composition write locks this row first, so what is
         // read here is what the departure carries. Refused; all of it rolls
         // back.
-        const departing = await this.route.findRouteById(routeId, businessId, tx);
+        const departing = await this.route.findRouteById(
+          routeId,
+          businessId,
+          tx,
+        );
 
         if (!departing?.stops.some((stop) => isStopOpen(stop.status))) {
           throw routeWithoutStops();

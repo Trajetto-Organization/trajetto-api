@@ -92,7 +92,10 @@ function categoryLabel(bill: Related): string {
 }
 
 /** One file row: every value already a string, formatted in pt-BR. */
-function exportRow(bill: Related, clock: BusinessClock): Record<string, string> {
+function exportRow(
+  bill: Related,
+  clock: BusinessClock,
+): Record<string, string> {
   const situation = accountPayableSituation(bill, clock);
 
   return {

@@ -69,7 +69,7 @@ async function publicRoutes(app: FastifyInstance) {
         tags: ["public"],
         summary: "Acompanha uma entrega pelo link enviado ao destinatário",
         description:
-          "Portal do destinatário. Sem login: o link é a autorização, e ele é encaminhado em grupo de família — por isso a resposta é escrita como uma SUBTRAÇÃO. Fica de fora tudo que é da operação: nome e telefone do motorista, placa, rota, outras paradas, embarcador e qualquer anotação interna. Sobra a resposta para a única pergunta que o destinatário tem, que é onde está a carga dele e quando chega. O tipo da ocorrência atravessa (\"destinatário ausente\" é o que ele precisa ouvir); a descrição livre não, porque é escrita por um motorista na rua, para o escritório.",
+          'Portal do destinatário. Sem login: o link é a autorização, e ele é encaminhado em grupo de família — por isso a resposta é escrita como uma SUBTRAÇÃO. Fica de fora tudo que é da operação: nome e telefone do motorista, placa, rota, outras paradas, embarcador e qualquer anotação interna. Sobra a resposta para a única pergunta que o destinatário tem, que é onde está a carga dele e quando chega. O tipo da ocorrência atravessa ("destinatário ausente" é o que ele precisa ouvir); a descrição livre não, porque é escrita por um motorista na rua, para o escritório.',
         params: proofDocumentSchemas.publicTokenParams,
         response: {
           200: proofDocumentResponses.tracking,

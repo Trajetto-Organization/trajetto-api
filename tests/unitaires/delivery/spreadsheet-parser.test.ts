@@ -14,20 +14,20 @@ import { parseDeliverySpreadsheet } from "@/shared/delivery/spreadsheet-parser";
  * An import screen that refuses two hundred deliveries over one cell is an
  * import screen people stop using — and then they phone the numbers in instead.
  */
-const HEADER = [
-  "Destinatário",
-  "CEP",
-  "Cidade",
-  "UF",
-  "Logradouro",
-  "Número",
-];
+const HEADER = ["Destinatário", "CEP", "Cidade", "UF", "Logradouro", "Número"];
 
 function sheet(...rows: unknown[][]) {
   return parseDeliverySpreadsheet([HEADER, ...rows]);
 }
 
-const GOOD = ["Padaria Central", "01001000", "São Paulo", "SP", "Praça da Sé", "100"];
+const GOOD = [
+  "Padaria Central",
+  "01001000",
+  "São Paulo",
+  "SP",
+  "Praça da Sé",
+  "100",
+];
 
 describe("reading the header row", () => {
   it("accepts the headers exactly as the template publishes them", () => {
@@ -152,7 +152,15 @@ describe("the fields as people actually type them", () => {
   it("strips punctuation from the CEP and the document", () => {
     const result = parseDeliverySpreadsheet([
       [...HEADER, "Documento"],
-      ["Padaria Central", "01001-000", "São Paulo", "SP", "Praça da Sé", "100", "11.222.333/0001-81"],
+      [
+        "Padaria Central",
+        "01001-000",
+        "São Paulo",
+        "SP",
+        "Praça da Sé",
+        "100",
+        "11.222.333/0001-81",
+      ],
     ]);
 
     expect(result.rows[0].cep).toBe("01001000");
@@ -209,7 +217,10 @@ describe("the fields as people actually type them", () => {
   });
 
   it("reads a Date object, which is what a formatted cell produces", () => {
-    const result = withColumn("Data prevista", new Date("2026-09-16T00:00:00Z"));
+    const result = withColumn(
+      "Data prevista",
+      new Date("2026-09-16T00:00:00Z"),
+    );
 
     expect(result.rows[0].scheduled_date?.toISOString()).toBe(
       "2026-09-16T00:00:00.000Z",
@@ -268,7 +279,12 @@ describe("what kind of stop this is", () => {
 });
 
 describe("the columns that create a route", () => {
-  const ROUTE_HEADER = [...HEADER, "Rota", "CNH do motorista", "Placa do veículo"];
+  const ROUTE_HEADER = [
+    ...HEADER,
+    "Rota",
+    "CNH do motorista",
+    "Placa do veículo",
+  ];
 
   it("carries the route when the columns are filled", () => {
     const result = parseDeliverySpreadsheet([

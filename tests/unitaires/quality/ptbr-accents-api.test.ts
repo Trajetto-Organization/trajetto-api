@@ -29,7 +29,8 @@ function sources(dir: string, out: string[] = []): string[] {
     const full = path.join(dir, entry.name);
 
     if (entry.isDirectory()) sources(full, out);
-    else if (entry.name.endsWith(".ts") && !entry.name.includes("generated")) out.push(full);
+    else if (entry.name.endsWith(".ts") && !entry.name.includes("generated"))
+      out.push(full);
   }
 
   return out;
@@ -39,11 +40,13 @@ function unaccentedLiterals(file: string, text: string): string[] {
   return text.split(/\r?\n/).flatMap((line, index) => {
     if (/^\s*(\/\/|\*)/.test(line)) return [];
 
-    return [...line.matchAll(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g)]
-      .map(([literal]) => literal)
-      // A slug or a file name is an identifier, not a sentence.
-      .filter((literal) => /\s/.test(literal) && UNACCENTED.test(literal))
-      .map((literal) => `${file}:${index + 1} ${literal.slice(0, 90)}`);
+    return (
+      [...line.matchAll(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g)]
+        .map(([literal]) => literal)
+        // A slug or a file name is an identifier, not a sentence.
+        .filter((literal) => /\s/.test(literal) && UNACCENTED.test(literal))
+        .map((literal) => `${file}:${index + 1} ${literal.slice(0, 90)}`)
+    );
   });
 }
 
@@ -52,15 +55,29 @@ describe("pt-BR sentences of the API", () => {
     const offenders = sources(SRC).flatMap((full) => {
       const file = path.relative(SRC, full).split(path.sep).join("/");
 
-      return NOT_PROSE.has(file) ? [] : unaccentedLiterals(file, readFileSync(full, "utf8"));
+      return NOT_PROSE.has(file)
+        ? []
+        : unaccentedLiterals(file, readFileSync(full, "utf8"));
     });
 
     expect(offenders).toEqual([]);
   });
 
   it("flags a sentence without accents and leaves identifiers alone (self-test)", () => {
-    expect(unaccentedLiterals("x.ts", 'throw new AppError("Sessao invalida.", 401);')).toHaveLength(1);
-    expect(unaccentedLiterals("x.ts", 'throw new AppError("Sessão inválida.", 401);')).toEqual([]);
-    expect(unaccentedLiterals("x.ts", 'const name = "relatorio-veiculos";')).toEqual([]);
+    expect(
+      unaccentedLiterals(
+        "x.ts",
+        'throw new AppError("Sessao invalida.", 401);',
+      ),
+    ).toHaveLength(1);
+    expect(
+      unaccentedLiterals(
+        "x.ts",
+        'throw new AppError("Sessão inválida.", 401);',
+      ),
+    ).toEqual([]);
+    expect(
+      unaccentedLiterals("x.ts", 'const name = "relatorio-veiculos";'),
+    ).toEqual([]);
   });
 });

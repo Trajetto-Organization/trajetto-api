@@ -82,7 +82,9 @@ function isBrazilianTimeZone(timeZone: string): timeZone is BrazilianTimeZone {
 
 /** Falls back to the default when a row carries an empty or unknown zone. */
 function resolveTimeZone(timeZone: string | null | undefined): string {
-  return timeZone && isValidTimeZone(timeZone) ? timeZone : DEFAULT_BUSINESS_TIMEZONE;
+  return timeZone && isValidTimeZone(timeZone)
+    ? timeZone
+    : DEFAULT_BUSINESS_TIMEZONE;
 }
 
 function wallClock(instant: Date, timeZone: string): WallClock {
@@ -105,16 +107,30 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Local wall time minus UTC, in ms, at that instant (negative west of UTC).
 function zoneOffsetMs(instant: Date, timeZone: string): number {
   const wall = wallClock(instant, timeZone);
-  const wallAsUtc = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second);
+  const wallAsUtc = Date.UTC(
+    wall.year,
+    wall.month - 1,
+    wall.day,
+    wall.hour,
+    wall.minute,
+    wall.second,
+  );
   const wholeSeconds = Math.floor(instant.getTime() / 1000) * 1000;
 
   return wallAsUtc - wholeSeconds;
 }
 
-function showsWallTime(utc: number, timeZone: string, wallAsUtc: number): boolean {
+function showsWallTime(
+  utc: number,
+  timeZone: string,
+  wallAsUtc: number,
+): boolean {
   const wall = wallClock(new Date(utc), timeZone);
 
-  return Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute) === wallAsUtc;
+  return (
+    Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute) ===
+    wallAsUtc
+  );
 }
 
 /**
@@ -150,9 +166,13 @@ function zonedWallTimeToUtc(
 
   if (candidates.length === 1) return new Date(candidates[0]);
 
-  const matching = candidates.filter((utc) => showsWallTime(utc, timeZone, wallAsUtc));
+  const matching = candidates.filter((utc) =>
+    showsWallTime(utc, timeZone, wallAsUtc),
+  );
 
-  return new Date(matching.length > 0 ? Math.min(...matching) : Math.max(...candidates));
+  return new Date(
+    matching.length > 0 ? Math.min(...matching) : Math.max(...candidates),
+  );
 }
 
 /** "YYYY-MM-DD" of the civil day the instant falls on, in that zone. */
@@ -173,7 +193,11 @@ function businessDayRange(instant: Date, timeZone: string): BusinessDayRange {
 }
 
 /** [start, end) of the last `days` civil days, today included. */
-function businessDaysRange(instant: Date, timeZone: string, days: number): BusinessDayRange {
+function businessDaysRange(
+  instant: Date,
+  timeZone: string,
+  days: number,
+): BusinessDayRange {
   const { year, month, day } = wallClock(instant, timeZone);
 
   return {
@@ -296,7 +320,11 @@ interface BusinessWindow {
 }
 
 /** The last `days` civil days, today included, as "YYYY-MM-DD" buckets. */
-function businessDayWindow(instant: Date, timeZone: string, days: number): BusinessWindow {
+function businessDayWindow(
+  instant: Date,
+  timeZone: string,
+  days: number,
+): BusinessWindow {
   const today = businessDateKey(instant, timeZone);
   const keys = Array.from({ length: days }, (_, index) =>
     shiftDateKey(today, index - (days - 1)),
@@ -310,7 +338,11 @@ function businessDayWindow(instant: Date, timeZone: string, days: number): Busin
 }
 
 /** The last `months` civil months, the current one included, as "YYYY-MM" buckets. */
-function businessMonthWindow(instant: Date, timeZone: string, months: number): BusinessWindow {
+function businessMonthWindow(
+  instant: Date,
+  timeZone: string,
+  months: number,
+): BusinessWindow {
   const current = businessMonthKey(instant, timeZone);
   const keys = Array.from({ length: months }, (_, index) =>
     shiftMonthKey(current, index - (months - 1)),

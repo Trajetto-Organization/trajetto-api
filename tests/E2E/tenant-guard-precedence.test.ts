@@ -203,7 +203,9 @@ afterAll(async () => {
   await prisma.kanbanCard.deleteMany({
     where: { columnId: { in: [columnA, columnB] } },
   });
-  await prisma.kanbanColumn.deleteMany({ where: { businessId: { in: [A, B] } } });
+  await prisma.kanbanColumn.deleteMany({
+    where: { businessId: { in: [A, B] } },
+  });
 
   await prisma.accountPayable.deleteMany({
     where: { businessId: { in: [A, B] } },
@@ -285,7 +287,9 @@ describe("creating a user in another company", () => {
     );
 
     expect(response.statusCode).toBe(403);
-    expect(await prisma.user.count({ where: { email: intruder.email } })).toBe(0);
+    expect(await prisma.user.count({ where: { email: intruder.email } })).toBe(
+      0,
+    );
   });
 
   it("refuses an empty ?businessId= instead of skipping the check", async () => {
@@ -299,7 +303,9 @@ describe("creating a user in another company", () => {
     );
 
     expect(response.statusCode).toBe(403);
-    expect(await prisma.user.count({ where: { email: intruder.email } })).toBe(0);
+    expect(await prisma.user.count({ where: { email: intruder.email } })).toBe(
+      0,
+    );
   });
 
   it("refuses a repeated ?businessId= instead of skipping the check", async () => {
@@ -313,7 +319,9 @@ describe("creating a user in another company", () => {
     );
 
     expect(response.statusCode).toBe(403);
-    expect(await prisma.user.count({ where: { email: intruder.email } })).toBe(0);
+    expect(await prisma.user.count({ where: { email: intruder.email } })).toBe(
+      0,
+    );
   });
 
   it("leaves company B with no administrator it did not create", async () => {
@@ -350,7 +358,9 @@ describe("kanban reorder across companies", () => {
     expect(response.statusCode).toBeGreaterThanOrEqual(400);
     expect(response.statusCode).toBeLessThan(500);
 
-    const card = await prisma.kanbanCard.findUniqueOrThrow({ where: { id: cardB } });
+    const card = await prisma.kanbanCard.findUniqueOrThrow({
+      where: { id: cardB },
+    });
     expect(card.columnId).toBe(columnB);
   });
 });
@@ -372,7 +382,9 @@ describe("account payable responsible user", () => {
 
     expect(response.statusCode).toBeGreaterThanOrEqual(400);
     expect(response.statusCode).toBeLessThan(500);
-    expect(await prisma.accountPayable.count({ where: { businessId: A } })).toBe(0);
+    expect(
+      await prisma.accountPayable.count({ where: { businessId: A } }),
+    ).toBe(0);
   });
 });
 
@@ -393,7 +405,12 @@ describe("module gate and tenant guard agree on the company", () => {
   const message = { driverIds: [DRIVER_A], kind: "TEXT", body: "oi" };
 
   it("control: a company without DELIVERIES is refused", async () => {
-    const response = await call("POST", "/chat/send-message", adminToken, message);
+    const response = await call(
+      "POST",
+      "/chat/send-message",
+      adminToken,
+      message,
+    );
 
     // The 403 response schema keeps only `message`, so the code is not on the
     // wire; the sentence is what tells the two refusals apart.

@@ -77,8 +77,7 @@ async function notificationRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
         tags: ["notification"],
         summary: "Conta as notificações não lidas",
-        description:
-          "Total de notificações não lidas do usuário autenticado.",
+        description: "Total de notificações não lidas do usuário autenticado.",
         response: {
           200: notificationResponses.unreadCount,
           404: notificationResponses.sessionUserNotFound,

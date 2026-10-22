@@ -67,7 +67,8 @@ const DRIVER_OWN_READS: Record<string, string> = {
     "only a ticket of the driver's own conversation (another driver's is 404)",
   "GET /chat/tickets/{ticketId}/messages":
     "only a ticket of the driver's own conversation (another driver's is 404)",
-  "GET /dashboard/overview": "every count is gated by a profile key a driver does not hold",
+  "GET /dashboard/overview":
+    "every count is gated by a profile key a driver does not hold",
   "GET /delivery/list-delivery": "scoped to the driver's deliveries",
   "GET /delivery/my-deliveries/{businessId}": "the driver's day",
   "GET /delivery/export-delivery": "scoped to the driver's deliveries",
@@ -78,17 +79,22 @@ const DRIVER_OWN_READS: Record<string, string> = {
     "only a delivery assigned to the driver",
   "GET /kanban/list/{businessId}": "the driver's own board",
   "GET /route/list-routes": "scoped to the driver's routes",
-  "GET /route/get-route/{routeId}/business/{businessId}": "only the driver's route",
+  "GET /route/get-route/{routeId}/business/{businessId}":
+    "only the driver's route",
   "GET /fuel/list-fuel": "scoped to the driver's fuelings",
-  "GET /fuel/search-fuel-by-vehicle/{vehicleId}": "only a vehicle the driver drives",
+  "GET /fuel/search-fuel-by-vehicle/{vehicleId}":
+    "only a vehicle the driver drives",
   "GET /fuel/get-previous-fuel/{vehicleId}": "only a vehicle the driver drives",
   "GET /service-order/search-service-order-by-vehicle/{vehicleId}":
     "only a vehicle the driver drives",
-  "GET /vehicle-checklist/list-vehicle-checklist": "scoped to the driver's checklists",
-  "GET /vehicle/search-vehicle-business": "scoped to the vehicles the driver drives",
+  "GET /vehicle-checklist/list-vehicle-checklist":
+    "scoped to the driver's checklists",
+  "GET /vehicle/search-vehicle-business":
+    "scoped to the vehicles the driver drives",
   "GET /vehicle/get-vehicle/{vehicleId}/business/{businessId}":
     "only a vehicle the driver drives",
-  "GET /driver-pause/current/{businessId}": "the driver's own open pause and today's pauses",
+  "GET /driver-pause/current/{businessId}":
+    "the driver's own open pause and today's pauses",
 };
 
 /**
@@ -105,10 +111,12 @@ const PENDING_FIX_500 = new Set<string>([
 
 /** Refusals that carry a use-case code of their own instead of PERMISSION_DENIED. */
 const REFUSED_WITH: Record<string, string> = {
-  "GET /route/assignment-preview/{businessId}": "DRIVER_CANNOT_MANAGE_DELIVERIES",
+  "GET /route/assignment-preview/{businessId}":
+    "DRIVER_CANNOT_MANAGE_DELIVERIES",
   // The route page's dispatcher reads (decision 14.7), as documented.
   "GET /route/open-stops/{businessId}": "DRIVER_CANNOT_MANAGE_DELIVERIES",
-  "GET /route/unrouted-deliveries/{businessId}": "DRIVER_CANNOT_MANAGE_DELIVERIES",
+  "GET /route/unrouted-deliveries/{businessId}":
+    "DRIVER_CANNOT_MANAGE_DELIVERIES",
   "GET /delivery/operation-summary": "DRIVER_CANNOT_VIEW_PANELS",
   "GET /route/control-tower": "DRIVER_CANNOT_VIEW_PANELS",
   "GET /route/driver-trail/{driverId}": "DRIVER_CANNOT_VIEW_PANELS",
@@ -183,7 +191,8 @@ function sample(name: string, schema: SchemaLike = {}): string {
 
   const type = Array.isArray(schema.type) ? schema.type[0] : schema.type;
 
-  if (type === "integer" || type === "number") return String(schema.minimum ?? 1);
+  if (type === "integer" || type === "number")
+    return String(schema.minimum ?? 1);
   if (type === "boolean") return "true";
   if (type === "array") return sample(name, schema.items);
 
@@ -229,7 +238,8 @@ function sessionReads(): SessionRead[] {
       {
         id: `GET ${path}`,
         url: search ? `${url}?${search}` : url,
-        roleRestricted: Array.isArray(roles) && !roles.includes("BUSINESS_USER"),
+        roleRestricted:
+          Array.isArray(roles) && !roles.includes("BUSINESS_USER"),
       },
     ];
   });
@@ -301,7 +311,11 @@ beforeAll(async () => {
 
   supplierId = (
     await prisma.supplier.create({
-      data: { businessId: COMPANY, name: `Fornecedor ${RUN}`, cnpj: "11222333000181" },
+      data: {
+        businessId: COMPANY,
+        name: `Fornecedor ${RUN}`,
+        cnpj: "11222333000181",
+      },
     })
   ).id;
 
@@ -417,9 +431,9 @@ describe("a driver token on every GET route behind a session", () => {
     expect(own.map((route) => route.id).sort()).toEqual(
       Object.keys(DRIVER_OWN_READS).sort(),
     );
-    expect([...PENDING_FIX_500].filter((id) => !(id in DRIVER_OWN_READS))).toEqual(
-      [],
-    );
+    expect(
+      [...PENDING_FIX_500].filter((id) => !(id in DRIVER_OWN_READS)),
+    ).toEqual([]);
 
     const wrong: string[] = [];
 
@@ -466,8 +480,16 @@ describe("a driver token on every GET route behind a session", () => {
 
 describe("the colleague's records are reachable (control)", () => {
   it.each([
-    ["their delivery", () => `/delivery/list-delivery?businessId=${COMPANY}&page=1&pageSize=5`, () => colleague.deliveryId],
-    ["their fueling", () => `/fuel/list-fuel?businessId=${COMPANY}&page=1&pageSize=5`, () => colleague.fuelId],
+    [
+      "their delivery",
+      () => `/delivery/list-delivery?businessId=${COMPANY}&page=1&pageSize=5`,
+      () => colleague.deliveryId,
+    ],
+    [
+      "their fueling",
+      () => `/fuel/list-fuel?businessId=${COMPANY}&page=1&pageSize=5`,
+      () => colleague.fuelId,
+    ],
     [
       "their vehicle",
       () => `/vehicle/get-vehicle/${colleague.vehicleId}/business/${COMPANY}`,

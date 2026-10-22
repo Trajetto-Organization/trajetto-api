@@ -50,7 +50,11 @@ function logVerdict(reasons: string[], now: number): void {
 
   const key = reasons.map((reason) => reason.replace(/\d+/g, "#")).join("\n");
 
-  if (lastLogged && lastLogged.key === key && now - lastLogged.at < REPEAT_LOG_MS) {
+  if (
+    lastLogged &&
+    lastLogged.key === key &&
+    now - lastLogged.at < REPEAT_LOG_MS
+  ) {
     return;
   }
 
@@ -126,7 +130,12 @@ async function sendHeartbeat(reasons: string[]): Promise<void> {
 
   const healthy = reasons.length === 0;
   const remember = (delivered: boolean, status: number | null) => {
-    lastOutcome = { at: new Date().toISOString(), healthy, delivered, http_status: status };
+    lastOutcome = {
+      at: new Date().toISOString(),
+      healthy,
+      delivered,
+      http_status: status,
+    };
   };
   const explicitFailUrl = env.HEALTHCHECK_FAIL_URL;
 
@@ -151,7 +160,10 @@ async function sendHeartbeat(reasons: string[]): Promise<void> {
     remember(response.ok, response.status);
 
     if (!response.ok) {
-      log.warn({ status: response.status, healthy }, "heartbeat check answered an error");
+      log.warn(
+        { status: response.status, healthy },
+        "heartbeat check answered an error",
+      );
     }
   } catch (error) {
     remember(false, null);

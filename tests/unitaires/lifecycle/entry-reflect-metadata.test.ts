@@ -17,7 +17,10 @@ const firstImport = (file: string) =>
     .find((line) => /^\s*import\b/.test(line));
 
 describe("the process entry points", () => {
-  it.each(["src/server.ts"])("%s loads reflect-metadata before anything else", (file) => {
-    expect(firstImport(file)).toBe('import "reflect-metadata";');
-  });
+  it.each(["src/server.ts"])(
+    "%s loads reflect-metadata before anything else",
+    (file) => {
+      expect(firstImport(file)).toBe('import "reflect-metadata";');
+    },
+  );
 });

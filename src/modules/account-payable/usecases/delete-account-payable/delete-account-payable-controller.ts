@@ -24,11 +24,7 @@ class DeleteAccountPayableController {
 
     // 404 ACCOUNT_PAYABLE_NOT_FOUND, 403 ACCOUNT_PAYABLE_TENANT_MISMATCH and
     // 409 ACCOUNT_PAYABLE_ALREADY_PAID are AppErrors, answered with their code.
-    await deleteAccountPayableUseCase.execute(
-      accountPayableId,
-      businessId,
-      id,
-    );
+    await deleteAccountPayableUseCase.execute(accountPayableId, businessId, id);
 
     return reply
       .status(200)

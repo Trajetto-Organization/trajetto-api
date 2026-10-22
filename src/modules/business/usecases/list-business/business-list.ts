@@ -13,8 +13,32 @@ import type { SortOrder, SortSpec } from "@/shared/pagination/list-query";
  */
 
 const BRAZILIAN_UFS = [
-  "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT",
-  "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP",
+  "AC",
+  "AL",
+  "AM",
+  "AP",
+  "BA",
+  "CE",
+  "DF",
+  "ES",
+  "GO",
+  "MA",
+  "MG",
+  "MS",
+  "MT",
+  "PA",
+  "PB",
+  "PE",
+  "PI",
+  "PR",
+  "RJ",
+  "RN",
+  "RO",
+  "RR",
+  "RS",
+  "SC",
+  "SE",
+  "SP",
   "TO",
 ] as const;
 
@@ -44,7 +68,10 @@ type BusinessSortKey = (typeof BUSINESS_SORT_KEYS)[number];
 
 const BUSINESS_SORT_FALLBACK = { sort: "created_at", order: "desc" } as const;
 
-const BUSINESS_SORT: SortSpec<BusinessSortKey, Prisma.BusinessOrderByWithRelationInput> = {
+const BUSINESS_SORT: SortSpec<
+  BusinessSortKey,
+  Prisma.BusinessOrderByWithRelationInput
+> = {
   keys: BUSINESS_SORT_KEYS,
   fallback: BUSINESS_SORT_FALLBACK,
   columns: {
@@ -52,11 +79,15 @@ const BUSINESS_SORT: SortSpec<BusinessSortKey, Prisma.BusinessOrderByWithRelatio
     updated_at: (order: SortOrder) => ({ updated_at: order }),
     corporate_reason: (order: SortOrder) => ({ corporate_reason: order }),
     // Without a trade name or an ERP code, last either way.
-    fantasy_name: (order: SortOrder) => ({ fantasy_name: { sort: order, nulls: "last" } }),
+    fantasy_name: (order: SortOrder) => ({
+      fantasy_name: { sort: order, nulls: "last" },
+    }),
     cnpj: (order: SortOrder) => ({ cnpj: order }),
     city: (order: SortOrder) => ({ city: order }),
     uf: (order: SortOrder) => ({ uf: order }),
-    erp_code: (order: SortOrder) => ({ erp_code: { sort: order, nulls: "last" } }),
+    erp_code: (order: SortOrder) => ({
+      erp_code: { sort: order, nulls: "last" },
+    }),
     responsible_name: (order: SortOrder) => ({ responsible_name: order }),
     email: (order: SortOrder) => ({ email: order }),
     is_active: (order: SortOrder) => ({ is_active: order }),
@@ -83,7 +114,8 @@ interface BusinessListFilters {
 /** Digits of a term, for the columns stored as digits (CNPJ, CEP, phone). */
 function digitsOf(term: string): { digits: string; phoneDigits: string } {
   const digits = term.replace(/\D/g, "");
-  const phoneDigits = digits.startsWith("55") && digits.length > 10 ? digits.slice(2) : digits;
+  const phoneDigits =
+    digits.startsWith("55") && digits.length > 10 ? digits.slice(2) : digits;
 
   return { digits, phoneDigits };
 }
@@ -181,7 +213,11 @@ function cityLabel(city: string, uf: string): string {
 function topPlaces(counts: Map<string, number>): PlaceCount[] {
   return Array.from(counts, ([value, count]) => ({ value, count }))
     .filter((place) => place.count > 0)
-    .sort((a, b) => b.count - a.count || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0))
+    .sort(
+      (a, b) =>
+        b.count - a.count ||
+        (a.value < b.value ? -1 : a.value > b.value ? 1 : 0),
+    )
     .slice(0, TOP_PLACES);
 }
 
@@ -196,21 +232,27 @@ function summarizeBusinessList(
   topCities: PlaceCount[],
   filters: Pick<BusinessListFilters, "statuses" | "ufs">,
 ): { total: number; searchMeta: BusinessListSearchMeta } {
-  const statusFilter = filters.statuses?.length === 1 ? filters.statuses[0] : undefined;
+  const statusFilter =
+    filters.statuses?.length === 1 ? filters.statuses[0] : undefined;
   const ufFilter = filters.ufs?.length ? new Set<string>(filters.ufs) : null;
 
   const matchesStatus = (group: BusinessGroupCount) =>
     !statusFilter || group.is_active === (statusFilter === "active");
-  const matchesUf = (group: BusinessGroupCount) => !ufFilter || ufFilter.has(group.uf);
+  const matchesUf = (group: BusinessGroupCount) =>
+    !ufFilter || ufFilter.has(group.uf);
 
-  const kept = groups.filter((group) => matchesStatus(group) && matchesUf(group));
+  const kept = groups.filter(
+    (group) => matchesStatus(group) && matchesUf(group),
+  );
   const total = sumCounts(kept);
 
   // Each facet counted with the OTHER one applied, never itself.
   const forStatus = groups.filter(matchesUf);
   const statusOptions: FacetCount[] = BUSINESS_STATUSES.map((status) => ({
     value: status,
-    count: sumCounts(forStatus.filter((group) => group.is_active === (status === "active"))),
+    count: sumCounts(
+      forStatus.filter((group) => group.is_active === (status === "active")),
+    ),
   }));
 
   const byUf = new Map<string, number>();

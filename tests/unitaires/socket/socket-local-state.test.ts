@@ -14,10 +14,7 @@ import { describe, expect, it } from "vitest";
  * and a per-replica count, when one is needed, is the local adapter's own room
  * index, which cleans itself up.
  */
-const source = readFileSync(
-  resolve(process.cwd(), "src/websocket.ts"),
-  "utf8",
-);
+const source = readFileSync(resolve(process.cwd(), "src/websocket.ts"), "utf8");
 
 describe("the socket server's local state", () => {
   it("keeps no map of connected users", () => {

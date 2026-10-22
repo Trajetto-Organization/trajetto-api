@@ -78,42 +78,46 @@ describe("two replicas firing the same job in the same minute", () => {
     }
   });
 
-  it("run the handler once, and the run is recorded as it ended", { timeout: 90_000 }, async () => {
-    // runExclusively truncates "now" to the minute; both calls must fall in
-    // the same one, or they are two firings and both SHOULD run.
-    const seconds = new Date().getSeconds();
-    if (seconds > 50) await sleep((61 - seconds) * 1000);
+  it(
+    "run the handler once, and the run is recorded as it ended",
+    { timeout: 90_000 },
+    async () => {
+      // runExclusively truncates "now" to the minute; both calls must fall in
+      // the same one, or they are two firings and both SHOULD run.
+      const seconds = new Date().getSeconds();
+      if (seconds > 50) await sleep((61 - seconds) * 1000);
 
-    let runs = 0;
+      let runs = 0;
 
-    const definition: CronJobDefinition = {
-      name: `lock-${randomUUID()}`,
-      schedule: "* * * * *",
-      handler: async () => {
-        runs += 1;
+      const definition: CronJobDefinition = {
+        name: `lock-${randomUUID()}`,
+        schedule: "* * * * *",
+        handler: async () => {
+          runs += 1;
 
-        // Long enough that the loser's attempt lands while the winner is
-        // still running — the moment a second claim of the slot would let
-        // it in.
-        await sleep(2_000);
-      },
-    };
+          // Long enough that the loser's attempt lands while the winner is
+          // still running — the moment a second claim of the slot would let
+          // it in.
+          await sleep(2_000);
+        },
+      };
 
-    await Promise.all([
-      replicaA.runExclusively(definition),
-      replicaB.runExclusively(definition),
-    ]);
+      await Promise.all([
+        replicaA.runExclusively(definition),
+        replicaB.runExclusively(definition),
+      ]);
 
-    expect(runs).toBe(1);
+      expect(runs).toBe(1);
 
-    const rows = await prisma.scheduledJobExecution.findMany({
-      where: { jobName: definition.name },
-    });
+      const rows = await prisma.scheduledJobExecution.findMany({
+        where: { jobName: definition.name },
+      });
 
-    expect(rows).toHaveLength(1);
-    expect(rows[0].status).toBe("SUCCEEDED");
-    expect(rows[0].finishedAt).not.toBeNull();
-  });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].status).toBe("SUCCEEDED");
+      expect(rows[0].finishedAt).not.toBeNull();
+    },
+  );
 });
 
 describe("a firing another replica already holds", () => {
@@ -157,10 +161,9 @@ describe("a firing another replica already holds", () => {
         },
       });
 
-      expect(
-        await replicaA.claimExecution(jobName, scheduledFor),
-        status,
-      ).toBe(false);
+      expect(await replicaA.claimExecution(jobName, scheduledFor), status).toBe(
+        false,
+      );
     }
   });
 });

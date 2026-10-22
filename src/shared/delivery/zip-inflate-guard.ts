@@ -68,7 +68,8 @@ function assertZipInflatesWithin(buffer: Buffer, maxTotalBytes: number): void {
       throw new SpreadsheetTooLargeError("ZIP64 entries are not accepted");
     }
 
-    if (localOffset + 30 > buffer.length) throw new Error("Truncated zip archive");
+    if (localOffset + 30 > buffer.length)
+      throw new Error("Truncated zip archive");
     if (buffer.readUInt32LE(localOffset) !== LOCAL_SIGNATURE) {
       throw new Error("Corrupt zip local header");
     }
@@ -85,8 +86,9 @@ function assertZipInflatesWithin(buffer: Buffer, maxTotalBytes: number): void {
       inflated = data.length;
     } else if (method === DEFLATED) {
       try {
-        inflated = inflateRawSync(data, { maxOutputLength: remaining + 1 })
-          .length;
+        inflated = inflateRawSync(data, {
+          maxOutputLength: remaining + 1,
+        }).length;
       } catch (error) {
         // Past the ceiling, Node refuses with a RangeError before allocating.
         if (error instanceof RangeError) {

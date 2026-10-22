@@ -281,9 +281,8 @@ class AssignDeliveriesUseCase {
         for (const emptied of detached.emptiedRoutes) {
           if (emptied.status !== "RELEASED") continue;
 
-          const { afterCommit: cancelled } = await this.cancelRoute.cancelWithin(
-            tx,
-            {
+          const { afterCommit: cancelled } =
+            await this.cancelRoute.cancelWithin(tx, {
               userId,
               businessId,
               route: emptied,
@@ -295,8 +294,7 @@ class AssignDeliveriesUseCase {
                 emptied.driverId === driverId
                   ? "Todas as paradas foram movidas para uma nova rota."
                   : "Todas as paradas foram redesignadas para outro motorista.",
-            },
-          );
+            });
 
           cancelledIds.add(emptied.id);
           afterCommit.push(cancelled);

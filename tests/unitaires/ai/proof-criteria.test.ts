@@ -195,7 +195,9 @@ describe("a photo that is not a receipt", () => {
 
 describe("a delivery with no invoice number to compare", () => {
   it("is neither doubt nor failure", () => {
-    const assessment = assessProof(reading({ documentMatches: "not_applicable" }));
+    const assessment = assessProof(
+      reading({ documentMatches: "not_applicable" }),
+    );
 
     expect(assessment.suggestion).toBe("looks_good");
     expect(assessment.uncertain).toEqual([]);
@@ -226,7 +228,9 @@ describe("what the model is not sure about", () => {
   it("says what could not be confirmed, in plain words", () => {
     expect(
       describeAssessment(
-        assessProof(reading({ hasSignature: "unknown", documentMatches: "unknown" })),
+        assessProof(
+          reading({ hasSignature: "unknown", documentMatches: "unknown" }),
+        ),
       ),
     ).toBe(
       "Não foi possível confirmar se há assinatura e se o número da NF-e confere.",

@@ -76,7 +76,9 @@ class InMemoryApiKeyRepository implements IApiKeyRepository {
   async listByBusiness(businessId: string): Promise<ApiKeySummary[]> {
     return this.keys
       .filter((key) => key.businessId === businessId)
-      .sort((left, right) => right.created_at.getTime() - left.created_at.getTime())
+      .sort(
+        (left, right) => right.created_at.getTime() - left.created_at.getTime(),
+      )
       .map((key) => ({
         id: key.id,
         name: key.name,
@@ -127,7 +129,9 @@ class InMemoryApiKeyRepository implements IApiKeyRepository {
           (left.route < right.route ? -1 : left.route > right.route ? 1 : 0),
       )
       .map((row) => {
-        const key = this.keys.find((candidate) => candidate.id === row.apiKeyId);
+        const key = this.keys.find(
+          (candidate) => candidate.id === row.apiKeyId,
+        );
 
         return {
           apiKeyId: row.apiKeyId,
@@ -136,12 +140,16 @@ class InMemoryApiKeyRepository implements IApiKeyRepository {
           route: row.route,
           status_class: row.status_class,
           count: row.count,
-          apiKey: key ? { id: key.id, name: key.name, prefix: key.prefix } : null,
+          apiKey: key
+            ? { id: key.id, name: key.name, prefix: key.prefix }
+            : null,
         };
       });
   }
 
-  async findCredentialByPrefix(prefix: string): Promise<ApiKeyCredential | null> {
+  async findCredentialByPrefix(
+    prefix: string,
+  ): Promise<ApiKeyCredential | null> {
     const key = this.keys.find((candidate) => candidate.prefix === prefix);
 
     if (!key) return null;
@@ -157,7 +165,8 @@ class InMemoryApiKeyRepository implements IApiKeyRepository {
       businessId: key.businessId,
       business: {
         is_active: !this.inactiveBusinesses.has(key.businessId),
-        timezone: this.timeZones.get(key.businessId) ?? DEFAULT_BUSINESS_TIMEZONE,
+        timezone:
+          this.timeZones.get(key.businessId) ?? DEFAULT_BUSINESS_TIMEZONE,
       },
     };
   }

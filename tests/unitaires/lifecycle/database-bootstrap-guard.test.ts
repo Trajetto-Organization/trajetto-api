@@ -18,9 +18,11 @@ function fakeClient(tablePresent: boolean, applied: number) {
     async $queryRawUnsafe<T>(query: string) {
       queries.push(query);
 
-      return (query.includes("to_regclass")
-        ? [{ present: tablePresent }]
-        : [{ applied }]) as T;
+      return (
+        query.includes("to_regclass")
+          ? [{ present: tablePresent }]
+          : [{ applied }]
+      ) as T;
     },
   };
 
@@ -30,36 +32,55 @@ function fakeClient(tablePresent: boolean, applied: number) {
 describe("freshDatabaseRefusal", () => {
   it("refuses production with no applied migration", () => {
     expect(
-      freshDatabaseRefusal({ nodeEnv: "production", appliedMigrations: 0, allowBootstrap: false }),
+      freshDatabaseRefusal({
+        nodeEnv: "production",
+        appliedMigrations: 0,
+        allowBootstrap: false,
+      }),
     ).toMatch(/ALLOW_EMPTY_DATABASE_BOOTSTRAP/);
   });
 
   it("goes ahead when a new installation says so", () => {
     expect(
-      freshDatabaseRefusal({ nodeEnv: "production", appliedMigrations: 0, allowBootstrap: true }),
+      freshDatabaseRefusal({
+        nodeEnv: "production",
+        appliedMigrations: 0,
+        allowBootstrap: true,
+      }),
     ).toBeNull();
   });
 
   it("goes ahead on a database that has been migrated before", () => {
     expect(
-      freshDatabaseRefusal({ nodeEnv: "production", appliedMigrations: 5, allowBootstrap: false }),
+      freshDatabaseRefusal({
+        nodeEnv: "production",
+        appliedMigrations: 5,
+        allowBootstrap: false,
+      }),
     ).toBeNull();
   });
 
-  it.each(["development", "test", undefined])("never stands in the way of %s", (nodeEnv) => {
-    expect(
-      freshDatabaseRefusal({ nodeEnv, appliedMigrations: 0, allowBootstrap: false }),
-    ).toBeNull();
-  });
+  it.each(["development", "test", undefined])(
+    "never stands in the way of %s",
+    (nodeEnv) => {
+      expect(
+        freshDatabaseRefusal({
+          nodeEnv,
+          appliedMigrations: 0,
+          allowBootstrap: false,
+        }),
+      ).toBeNull();
+    },
+  );
 });
 
 describe("emptyDatabaseRefusal", () => {
   it("refuses a database without _prisma_migrations, without counting rows", async () => {
     const { client, queries } = fakeClient(false, 0);
 
-    await expect(emptyDatabaseRefusal(client, { NODE_ENV: "production" })).resolves.toMatch(
-      /Banco vazio em produção/,
-    );
+    await expect(
+      emptyDatabaseRefusal(client, { NODE_ENV: "production" }),
+    ).resolves.toMatch(/Banco vazio em produção/);
     expect(queries).toHaveLength(1);
   });
 
@@ -74,7 +95,9 @@ describe("emptyDatabaseRefusal", () => {
   it("accepts a migrated database", async () => {
     const { client } = fakeClient(true, 108);
 
-    await expect(emptyDatabaseRefusal(client, { NODE_ENV: "production" })).resolves.toBeNull();
+    await expect(
+      emptyDatabaseRefusal(client, { NODE_ENV: "production" }),
+    ).resolves.toBeNull();
   });
 
   it("does not even ask when the answer cannot matter", async () => {

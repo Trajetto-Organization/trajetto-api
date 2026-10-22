@@ -4,7 +4,10 @@ import { AIAnalysisType, AIAnalysisUnit, Prisma } from "@prisma/client";
 
 import { sendAIVerificationEvent } from "@/websocket";
 
-import { nextRetryDelayMs, withRetryJitter } from "@/shared/notifications/pipeline-rules";
+import {
+  nextRetryDelayMs,
+  withRetryJitter,
+} from "@/shared/notifications/pipeline-rules";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { withoutRequestContext } from "@/shared/http/request-context";
@@ -29,7 +32,11 @@ import {
 } from "./ai-provider";
 import { checklistFieldSpec } from "./ai-prompts";
 import { LOCAL_AI_MAX_RETRIES } from "./ai-provider-defaults";
-import { consumeReservedUnit, getQuotaUsage, releaseReservedUnits } from "./ai-quota-service";
+import {
+  consumeReservedUnit,
+  getQuotaUsage,
+  releaseReservedUnits,
+} from "./ai-quota-service";
 import {
   AI_CLAIM_LEASE_SECONDS,
   FRAUD_NOT_ASSESSED_NOTE,
@@ -323,17 +330,21 @@ class AIAnalysisPipelineService {
    * pipeline can read — tests that swap the reader stay consistent.
    */
   public supports(kind: ReadingKind): boolean {
-    const supports = (this.provider as { supports?: (kind: ReadingKind) => boolean })
-      .supports;
+    const supports = (
+      this.provider as { supports?: (kind: ReadingKind) => boolean }
+    ).supports;
 
     // An analyzer without the method (a test double of the queue mechanics)
     // reads everything.
-    return typeof supports === "function" ? supports.call(this.provider, kind) : true;
+    return typeof supports === "function"
+      ? supports.call(this.provider, kind)
+      : true;
   }
 
   /** Requests in flight: the pool, lowered by what the reader takes. */
   private slots(): number {
-    const readerMax = (this.provider as { maxConcurrency?: unknown }).maxConcurrency;
+    const readerMax = (this.provider as { maxConcurrency?: unknown })
+      .maxConcurrency;
 
     return typeof readerMax === "number" && readerMax >= 1
       ? Math.min(AI_CONCURRENCY, Math.floor(readerMax))
@@ -823,7 +834,11 @@ class AIAnalysisPipelineService {
       : null;
 
     if (attached === 1 && feedback) {
-      await this.publishProofFeedback(request, feedback, input.expectedRecipient);
+      await this.publishProofFeedback(
+        request,
+        feedback,
+        input.expectedRecipient,
+      );
     }
 
     await this.finalizeRequest(request, "COMPLETED");
@@ -1026,7 +1041,11 @@ class AIAnalysisPipelineService {
       pendingCount === 0 &&
       settledUnits.every((unit) => unit.status !== "CONSUMED")
     ) {
-      await this.finalizeRequest(request, "COMPLETED", UNSUPPORTED_BY_READER_MARKER);
+      await this.finalizeRequest(
+        request,
+        "COMPLETED",
+        UNSUPPORTED_BY_READER_MARKER,
+      );
       await markChecklistSkipped(request.recordId).catch(() => undefined);
       return;
     }
@@ -1246,7 +1265,9 @@ class AIAnalysisPipelineService {
             unitId: unit.id,
             status: "FAILED",
             // The marker's "_" is a LIKE wildcard: matched literally.
-            errorMessage: { startsWith: escapeLikePattern(INVALID_RESPONSE_MARKER) },
+            errorMessage: {
+              startsWith: escapeLikePattern(INVALID_RESPONSE_MARKER),
+            },
           },
         });
 
@@ -1694,10 +1715,7 @@ class AIAnalysisPipelineService {
   // Websocket events
   // ==========================================================================
 
-  private emit(
-    request: ClaimedRequest,
-    event: Record<string, unknown>,
-  ): void {
+  private emit(request: ClaimedRequest, event: Record<string, unknown>): void {
     sendAIVerificationEvent(request.requestedById, {
       recordType: aiRecordTypeOf(request.type),
       recordId: request.recordId,
@@ -1740,7 +1758,9 @@ class AIAnalysisPipelineService {
               await database.fuel.findUnique({
                 where: { id: request.recordId },
                 select: {
-                  vehicle: { select: { license_plate: true, description: true } },
+                  vehicle: {
+                    select: { license_plate: true, description: true },
+                  },
                 },
               })
             )?.vehicle
@@ -1748,7 +1768,9 @@ class AIAnalysisPipelineService {
               await database.vehicleChecklist.findUnique({
                 where: { id: request.recordId },
                 select: {
-                  vehicle: { select: { license_plate: true, description: true } },
+                  vehicle: {
+                    select: { license_plate: true, description: true },
+                  },
                 },
               })
             )?.vehicle;

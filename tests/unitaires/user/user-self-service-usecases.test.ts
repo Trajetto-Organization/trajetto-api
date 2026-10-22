@@ -19,7 +19,10 @@ const realtime = vi.hoisted(() => ({
 }));
 
 vi.mock("@/shared/services/transactional-mail-service", () => ({
-  sendTransactionalMail: async (props: { email: string; templateName: string }) => {
+  sendTransactionalMail: async (props: {
+    email: string;
+    templateName: string;
+  }) => {
     if (mail.fail) throw new Error("smtp 421: try again later");
     mail.sent.push({ email: props.email, templateName: props.templateName });
   },
@@ -68,7 +71,9 @@ function storage(overrides: Partial<UploadService> = {}) {
     deleteFile: vi.fn(async (path: string) => {
       deleted.push(path);
     }),
-    getFileUrl: vi.fn(async (path: string) => `https://cdn.test/${path}?signed`),
+    getFileUrl: vi.fn(
+      async (path: string) => `https://cdn.test/${path}?signed`,
+    ),
     ...overrides,
   } as unknown as UploadService;
 
@@ -105,7 +110,10 @@ beforeEach(async () => {
       businessId: null,
     } as unknown as User,
   );
-  businesses.business.push({ id: CARRIER, ai_analysis_limit: 0 } as unknown as Business);
+  businesses.business.push({
+    id: CARRIER,
+    ai_analysis_limit: 0,
+  } as unknown as Business);
 });
 
 describe("renaming yourself", () => {
@@ -142,11 +150,18 @@ describe("changing your password", () => {
       newPassword: "senha-nova-456",
     });
 
-    await expect(compareSecret("senha-nova-456", users.user[0].password)).resolves.toBe(true);
+    await expect(
+      compareSecret("senha-nova-456", users.user[0].password),
+    ).resolves.toBe(true);
     expect(users.user[0].session_version).toBe(1);
-    expect(realtime.securityEvents).toEqual([{ userId: PERSON, reason: "password_changed" }]);
+    expect(realtime.securityEvents).toEqual([
+      { userId: PERSON, reason: "password_changed" },
+    ]);
     expect(mail.sent).toEqual([
-      { email: "ana@transportadora.com.br", templateName: "user-password-updated.hbs" },
+      {
+        email: "ana@transportadora.com.br",
+        templateName: "user-password-updated.hbs",
+      },
     ]);
   });
 
@@ -159,7 +174,10 @@ describe("changing your password", () => {
         currentPassword: "errada",
         newPassword: "senha-nova-456",
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "PASSWORD_CURRENT_INCORRECT" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "PASSWORD_CURRENT_INCORRECT",
+    });
 
     expect(users.user[0].password).toBe(before);
   });
@@ -171,7 +189,10 @@ describe("changing your password", () => {
         currentPassword: "senha-atual-123",
         newPassword: "senha-atual-123",
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "PASSWORD_SAME_AS_CURRENT" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "PASSWORD_SAME_AS_CURRENT",
+    });
 
     expect(users.user[0].session_version).toBe(0);
   });
@@ -190,7 +211,9 @@ describe("changing your password", () => {
       }),
     ).resolves.toBeUndefined();
 
-    await expect(compareSecret("senha-nova-456", users.user[0].password)).resolves.toBe(true);
+    await expect(
+      compareSecret("senha-nova-456", users.user[0].password),
+    ).resolves.toBe(true);
   });
 });
 
@@ -255,7 +278,9 @@ describe("checking a forgot-password link", () => {
 describe("reading your own session (/user/me)", () => {
   it("gives the MASTER every module and no offline pre-check", async () => {
     const { service } = storage();
-    const me = await new GetUserUseCase(users, service, businesses).execute(MASTER);
+    const me = await new GetUserUseCase(users, service, businesses).execute(
+      MASTER,
+    );
 
     expect(me.enabledModules).toEqual(expect.arrayContaining(["FLEET"]));
     expect(me.ai).toEqual({ precheck: false, reason: "not_contracted" });
@@ -270,7 +295,9 @@ describe("reading your own session (/user/me)", () => {
     } as never;
 
     const { service } = storage();
-    const me = await new GetUserUseCase(users, service, businesses).execute(PERSON);
+    const me = await new GetUserUseCase(users, service, businesses).execute(
+      PERSON,
+    );
 
     expect(me.enabledModules).toEqual(["FLEET"]);
     expect(me.ai).toEqual({ precheck: false, reason: "not_contracted" });
@@ -281,7 +308,9 @@ describe("reading your own session (/user/me)", () => {
     users.user[0].avatar = "avatars/ana.png";
 
     const { service } = storage();
-    const me = await new GetUserUseCase(users, service, businesses).execute(PERSON);
+    const me = await new GetUserUseCase(users, service, businesses).execute(
+      PERSON,
+    );
 
     expect(me.avatar).toBe("https://cdn.test/avatars/ana.png?signed");
   });
@@ -300,12 +329,17 @@ describe("uploading an avatar", () => {
     users.user[0].avatar = "avatars/old.png";
     const { service, deleted } = storage();
 
-    const updated = await new UploadAvatarUseCase(users, service).execute(PERSON, {
-      key: "new.png",
-    });
+    const updated = await new UploadAvatarUseCase(users, service).execute(
+      PERSON,
+      {
+        key: "new.png",
+      },
+    );
 
     expect(users.user[0].avatar).toBe(`avatars/${PERSON}/new.png`);
-    expect(updated.avatar).toBe(`https://cdn.test/avatars/${PERSON}/new.png?signed`);
+    expect(updated.avatar).toBe(
+      `https://cdn.test/avatars/${PERSON}/new.png?signed`,
+    );
     expect(deleted).toEqual(["avatars/old.png"]);
   });
 
@@ -316,7 +350,9 @@ describe("uploading an avatar", () => {
     };
 
     await expect(
-      new UploadAvatarUseCase(users, service).execute(PERSON, { key: "new.png" }),
+      new UploadAvatarUseCase(users, service).execute(PERSON, {
+        key: "new.png",
+      }),
     ).rejects.toMatchObject({ statusCode: 500 });
 
     expect(deleted).toEqual([`avatars/${PERSON}/new.png`]);
@@ -351,7 +387,10 @@ describe("uploading an avatar", () => {
       }) as never,
     });
 
-    const updated = await new UploadAvatarUseCase(users, service).execute(PERSON, { key: "new.png" });
+    const updated = await new UploadAvatarUseCase(users, service).execute(
+      PERSON,
+      { key: "new.png" },
+    );
 
     expect(users.user[0].avatar).toBe(`avatars/${PERSON}/new.png`);
     // No URL to show yet; the next /user/me signs it again.
@@ -366,17 +405,24 @@ describe("uploading an avatar", () => {
       }) as never,
     });
 
-    const updated = await new UploadAvatarUseCase(users, service).execute(PERSON, { key: "new.png" });
+    const updated = await new UploadAvatarUseCase(users, service).execute(
+      PERSON,
+      { key: "new.png" },
+    );
 
     expect(users.user[0].avatar).toBe(`avatars/${PERSON}/new.png`);
-    expect(updated.avatar).toBe(`https://cdn.test/avatars/${PERSON}/new.png?signed`);
+    expect(updated.avatar).toBe(
+      `https://cdn.test/avatars/${PERSON}/new.png?signed`,
+    );
   });
 
   it("refuses an unknown caller before touching storage", async () => {
     const { service } = storage();
 
     await expect(
-      new UploadAvatarUseCase(users, service).execute(UNKNOWN, { key: "x.png" }),
+      new UploadAvatarUseCase(users, service).execute(UNKNOWN, {
+        key: "x.png",
+      }),
     ).rejects.toMatchObject({ statusCode: 404 });
     expect(service.resolvePresignedUploads).not.toHaveBeenCalled();
   });
@@ -387,7 +433,9 @@ describe("removing your avatar", () => {
     users.user[0].avatar = "avatars/ana.png";
     const { service, deleted } = storage();
 
-    const updated = await new DeleteAvatarUseCase(users, service).execute(PERSON);
+    const updated = await new DeleteAvatarUseCase(users, service).execute(
+      PERSON,
+    );
 
     expect(updated.avatar).toBeNull();
     expect(users.user[0].avatar).toBeNull();

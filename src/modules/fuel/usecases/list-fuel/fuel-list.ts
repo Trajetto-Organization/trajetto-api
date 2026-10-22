@@ -146,7 +146,10 @@ function fuelListWhere(
 
   // The tenant stays a top-level key: the (businessId, created_at) index
   // serves every read, and no OR can widen past it.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Refuelings of one combination of the facet columns, over the base. */
@@ -287,7 +290,9 @@ function summarizeFuelList(
       total,
       totalLiters: Number(liters.toFixed(3)),
       totalAmount: Number(amount.toFixed(2)),
-      verifiedOdometer: sumCounts(kept.filter((group) => group.odometer_verified)),
+      verifiedOdometer: sumCounts(
+        kept.filter((group) => group.odometer_verified),
+      ),
       facets: {
         branchId: facetOptions("branchId"),
         vehicleId: facetOptions("vehicleId"),

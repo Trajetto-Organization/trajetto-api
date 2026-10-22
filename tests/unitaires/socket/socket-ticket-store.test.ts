@@ -57,6 +57,9 @@ describe("CreateSocketTicketUseCase", () => {
 
     await expect(
       new CreateSocketTicketUseCase(broken).execute(claims),
-    ).rejects.toMatchObject({ statusCode: 503, code: "SOCKET_TICKET_UNAVAILABLE" });
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "SOCKET_TICKET_UNAVAILABLE",
+    });
   });
 });

@@ -20,12 +20,24 @@ import {
   decidePermission,
   verifyPermission,
 } from "@/modules/middlewares/verify-permission";
-import { requireModuleForPlugin, verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
+import {
+  requireModuleForPlugin,
+  verifyModuleEnabled,
+} from "@/modules/middlewares/verify-module-enabled";
 import { AppError } from "@/shared/errors/AppError";
 
-const driver = { role: "BUSINESS_USER", driverId: "driver-1", profileAccess: null } as const;
+const driver = {
+  role: "BUSINESS_USER",
+  driverId: "driver-1",
+  profileAccess: null,
+} as const;
 
-const explain = (error: AppError | null) => error && { status: error.statusCode, code: error.code, message: error.message };
+const explain = (error: AppError | null) =>
+  error && {
+    status: error.statusCode,
+    code: error.code,
+    message: error.message,
+  };
 
 describe("decidePermission for a driver", () => {
   it("follows the driver's table exactly", () => {
@@ -49,7 +61,8 @@ describe("decidePermission for a driver", () => {
           expect(explain(refusal)).toEqual({
             status: 403,
             code: "PERMISSION_DENIED",
-            message: "Motoristas não possuem permissão para acessar este recurso.",
+            message:
+              "Motoristas não possuem permissão para acessar este recurso.",
           });
         }
       }
@@ -60,14 +73,32 @@ describe("decidePermission for a driver", () => {
     const employee = {
       role: "BUSINESS_USER",
       driverId: null,
-      profileAccess: { permissions: [{ permissionKey: "fine_manage", canRead: true, canWrite: false }] },
+      profileAccess: {
+        permissions: [
+          { permissionKey: "fine_manage", canRead: true, canWrite: false },
+        ],
+      },
     };
 
-    expect(decidePermission(employee as never, "fine_manage", "read")).toBeNull();
+    expect(
+      decidePermission(employee as never, "fine_manage", "read"),
+    ).toBeNull();
   });
 
   it("says a missing profile is a configuration problem", () => {
-    expect(explain(decidePermission({ role: "BUSINESS_USER", driverId: null, profileAccess: null } as never, "fine_manage", "read"))).toEqual({
+    expect(
+      explain(
+        decidePermission(
+          {
+            role: "BUSINESS_USER",
+            driverId: null,
+            profileAccess: null,
+          } as never,
+          "fine_manage",
+          "read",
+        ),
+      ),
+    ).toEqual({
       status: 403,
       code: "AUTH_PROFILE_NOT_CONFIGURED",
       message: "Perfil de acesso não associado ao usuário.",
@@ -79,7 +110,11 @@ describe("decideAnyPermission", () => {
   const readOnly = {
     role: "BUSINESS_USER",
     driverId: null,
-    profileAccess: { permissions: [{ permissionKey: "driver_manage", canRead: true, canWrite: false }] },
+    profileAccess: {
+      permissions: [
+        { permissionKey: "driver_manage", canRead: true, canWrite: false },
+      ],
+    },
   };
 
   it("keeps the first alternative's refusal", () => {
@@ -88,7 +123,9 @@ describe("decideAnyPermission", () => {
       { key: "delivery_manage", access: "write" },
     ]);
 
-    expect("refusal" in outcome && outcome.refusal.message).toBe("Seu perfil de acesso permite apenas a leitura desta seção.");
+    expect("refusal" in outcome && outcome.refusal.message).toBe(
+      "Seu perfil de acesso permite apenas a leitura desta seção.",
+    );
   });
 
   it("denies by default with no alternative", () => {
@@ -104,20 +141,29 @@ describe("decideAnyPermission", () => {
 
 describe("verifyPermission", () => {
   it("publishes its key and access for /docs", () => {
-    expect(verifyPermission("fuel_manage", "write").openapi).toEqual({ permission: { key: "fuel_manage", access: "write" } });
+    expect(verifyPermission("fuel_manage", "write").openapi).toEqual({
+      permission: { key: "fuel_manage", access: "write" },
+    });
   });
 });
 
 describe("verifyModuleEnabled", () => {
   const gate = verifyModuleEnabled("DELIVERIES");
 
-  async function refusalOf(user: Record<string, unknown> | undefined, where: Record<string, unknown> = {}) {
+  async function refusalOf(
+    user: Record<string, unknown> | undefined,
+    where: Record<string, unknown> = {},
+  ) {
     try {
       await gate({ user, ...where } as never, {} as never);
       return null;
     } catch (error) {
       if (!(error instanceof AppError)) throw error;
-      return { status: error.statusCode, code: error.code, message: error.message };
+      return {
+        status: error.statusCode,
+        code: error.code,
+        message: error.message,
+      };
     }
   }
 
@@ -127,7 +173,9 @@ describe("verifyModuleEnabled", () => {
   });
 
   it("refuses a request without a company with 400", async () => {
-    expect(await refusalOf({ role: "BUSINESS_USER", businessId: null })).toEqual({
+    expect(
+      await refusalOf({ role: "BUSINESS_USER", businessId: null }),
+    ).toEqual({
       status: 400,
       code: "MODULE_BUSINESS_MISSING",
       message: "Empresa não identificada na requisição.",
@@ -142,10 +190,17 @@ describe("verifyModuleEnabled", () => {
   it("asks the database when the session carries no snapshot, and says why it refuses", async () => {
     service.hasModule.mockResolvedValue(false);
 
-    expect(await refusalOf({ role: "BUSINESS_USER", businessId: "b1", entitlements: null })).toEqual({
+    expect(
+      await refusalOf({
+        role: "BUSINESS_USER",
+        businessId: "b1",
+        entitlements: null,
+      }),
+    ).toEqual({
       status: 403,
       code: "MODULE_NOT_ENABLED",
-      message: "Este módulo não está habilitado para a sua empresa. Fale com o suporte para contratar.",
+      message:
+        "Este módulo não está habilitado para a sua empresa. Fale com o suporte para contratar.",
     });
     expect(service.hasModule).toHaveBeenCalledWith("b1", "DELIVERIES");
   });
@@ -157,15 +212,29 @@ describe("verifyModuleEnabled", () => {
     ]);
 
     expect(
-      await refusalOf({ role: "MASTER" }, { params: { businessId: "b1" }, query: { businessId: ["b1", "", "b2"] }, body: { businessId: 5 } }),
+      await refusalOf(
+        { role: "MASTER" },
+        {
+          params: { businessId: "b1" },
+          query: { businessId: ["b1", "", "b2"] },
+          body: { businessId: 5 },
+        },
+      ),
     ).toBeNull();
-    expect(service.getCompaniesModuleState).toHaveBeenCalledWith(["b1", "b2"], "DELIVERIES");
+    expect(service.getCompaniesModuleState).toHaveBeenCalledWith(
+      ["b1", "b2"],
+      "DELIVERIES",
+    );
   });
 
   it("names the module the MASTER must enable", async () => {
-    service.getCompaniesModuleState.mockResolvedValue([{ id: "b1", isActive: true, moduleEnabled: false }]);
+    service.getCompaniesModuleState.mockResolvedValue([
+      { id: "b1", isActive: true, moduleEnabled: false },
+    ]);
 
-    expect(await refusalOf({ role: "MASTER" }, { params: { businessId: "b1" } })).toEqual({
+    expect(
+      await refusalOf({ role: "MASTER" }, { params: { businessId: "b1" } }),
+    ).toEqual({
       status: 403,
       code: "MODULE_NOT_ENABLED",
       message:
@@ -173,7 +242,12 @@ describe("verifyModuleEnabled", () => {
     });
 
     const fleet = verifyModuleEnabled("FLEET");
-    await expect(fleet({ user: { role: "MASTER" }, params: { businessId: "b1" } } as never, {} as never)).rejects.toThrow(
+    await expect(
+      fleet(
+        { user: { role: "MASTER" }, params: { businessId: "b1" } } as never,
+        {} as never,
+      ),
+    ).rejects.toThrow(
       "O módulo Gestão de Frota não está habilitado para esta empresa.",
     );
   });
@@ -181,14 +255,24 @@ describe("verifyModuleEnabled", () => {
   it("publishes its module for /docs, on the hook and on every route of a plugin", () => {
     expect(gate.openapi).toEqual({ module: "DELIVERIES" });
 
-    const hooks: Record<string, (route: { config?: Record<string, unknown> }) => void> = {};
-    const app = { addHook: (name: string, hook: never) => void (hooks[name] = hook) };
+    const hooks: Record<
+      string,
+      (route: { config?: Record<string, unknown> }) => void
+    > = {};
+    const app = {
+      addHook: (name: string, hook: never) => void (hooks[name] = hook),
+    };
     requireModuleForPlugin(app as never, "FLEET");
 
-    const route: { config?: Record<string, unknown> } = { config: { rateLimit: false, openapi: { roles: ["MASTER"] } } };
+    const route: { config?: Record<string, unknown> } = {
+      config: { rateLimit: false, openapi: { roles: ["MASTER"] } },
+    };
     hooks.onRoute(route);
 
-    expect(route.config).toEqual({ rateLimit: false, openapi: { roles: ["MASTER"], module: "FLEET" } });
+    expect(route.config).toEqual({
+      rateLimit: false,
+      openapi: { roles: ["MASTER"], module: "FLEET" },
+    });
     expect(typeof hooks.preHandler).toBe("function");
   });
 });

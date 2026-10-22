@@ -9,7 +9,9 @@ vi.mock("@/websocket", () => ({ sendSecurityEventToBusiness }));
 // The switch and its audit entry run in one transaction on the real client;
 // here the callback runs with a stand-in client.
 vi.mock("@/../infra/database", () => ({
-  default: { $transaction: (callback: (tx: unknown) => unknown) => callback({}) },
+  default: {
+    $transaction: (callback: (tx: unknown) => unknown) => callback({}),
+  },
 }));
 
 import { ToggleBusinessActiveUseCase } from "@/modules/business/usecases/toggle-business-active/toggle-business-active-usecase";
@@ -65,8 +67,17 @@ describe("who may switch a company on or off", () => {
     // siblings (create, update, delete) already re-check with assertCallerRole.
     const toggleBusinessActive = vi.fn();
     const toggle = new ToggleBusinessActiveUseCase(
-      { findUserById: async () => ({ id: "admin", role: "BUSINESS_ADMIN", businessId: BUSINESS }) } as never,
-      { findBusinessById: async () => ({ id: BUSINESS, is_active: true }), toggleBusinessActive } as never,
+      {
+        findUserById: async () => ({
+          id: "admin",
+          role: "BUSINESS_ADMIN",
+          businessId: BUSINESS,
+        }),
+      } as never,
+      {
+        findBusinessById: async () => ({ id: BUSINESS, is_active: true }),
+        toggleBusinessActive,
+      } as never,
       { createActivityIfEnabled: vi.fn() } as never,
     );
 

@@ -16,7 +16,12 @@ import {
   fuelTypeSchemas,
   fuelTypeResponses,
 } from "./documentation/fuel-type-documentation";
-import { itemOf, ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import {
+  itemOf,
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
 import { fuelTypeListSearchMetaDoc } from "@/modules/fuel-type/usecases/list-fuel-type/list-fuel-type-documentation";
 import { errorResponse } from "./documentation/common-responses";
 

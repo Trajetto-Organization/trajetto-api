@@ -51,23 +51,47 @@ const ANSWERS = {
   overall_condition: "approved",
 };
 
-const stub = <T>(value: T) => async () => value;
+const stub =
+  <T>(value: T) =>
+  async () =>
+    value;
 
-const drivers: Record<string, { id: string; businessId: string; status: string }> = {
+const drivers: Record<
+  string,
+  { id: string; businessId: string; status: string }
+> = {
   [DRIVER]: { id: DRIVER, businessId: BUSINESS, status: "ACTIVE" },
-  [FORMER_DRIVER]: { id: FORMER_DRIVER, businessId: BUSINESS, status: "INACTIVE" },
+  [FORMER_DRIVER]: {
+    id: FORMER_DRIVER,
+    businessId: BUSINESS,
+    status: "INACTIVE",
+  },
 };
 
-const branches: Record<string, { id: string; businessId: string; is_active: boolean }> = {
+const branches: Record<
+  string,
+  { id: string; businessId: string; is_active: boolean }
+> = {
   [BRANCH]: { id: BRANCH, businessId: BUSINESS, is_active: true },
-  [CLOSED_BRANCH]: { id: CLOSED_BRANCH, businessId: BUSINESS, is_active: false },
+  [CLOSED_BRANCH]: {
+    id: CLOSED_BRANCH,
+    businessId: BUSINESS,
+    is_active: false,
+  },
 };
 
 const collaborators = (timezone: string) => ({
   user: {
-    findUserById: stub({ id: "admin", role: "BUSINESS_ADMIN", businessId: BUSINESS, driverId: null }),
+    findUserById: stub({
+      id: "admin",
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+      driverId: null,
+    }),
   },
-  business: { findBusinessById: stub({ id: BUSINESS, ai_analysis_limit: 0, timezone }) },
+  business: {
+    findBusinessById: stub({ id: BUSINESS, ai_analysis_limit: 0, timezone }),
+  },
   vehicle: {
     findVehicleById: stub({
       id: VEHICLE,
@@ -94,15 +118,23 @@ describe("isChecklistDateInTheFuture", () => {
     const now = new Date("2026-09-29T23:30:00-04:00");
     const tomorrowInManaus = new Date("2026-09-30T08:00:00-04:00");
 
-    expect(isChecklistDateInTheFuture(tomorrowInManaus, "America/Manaus", now)).toBe(true);
-    expect(isChecklistDateInTheFuture(tomorrowInManaus, "America/Sao_Paulo", now)).toBe(false);
+    expect(
+      isChecklistDateInTheFuture(tomorrowInManaus, "America/Manaus", now),
+    ).toBe(true);
+    expect(
+      isChecklistDateInTheFuture(tomorrowInManaus, "America/Sao_Paulo", now),
+    ).toBe(false);
   });
 
   it("accepts any moment of the company's today", () => {
     const now = new Date("2026-09-29T08:00:00-03:00");
 
     expect(
-      isChecklistDateInTheFuture(new Date("2026-09-29T23:59:00-03:00"), "America/Sao_Paulo", now),
+      isChecklistDateInTheFuture(
+        new Date("2026-09-29T23:59:00-03:00"),
+        "America/Sao_Paulo",
+        now,
+      ),
     ).toBe(false);
   });
 
@@ -110,16 +142,29 @@ describe("isChecklistDateInTheFuture", () => {
   // as an instant it was the previous evening in Brazil, so tomorrow passed.
   it.each([
     ["São Paulo at noon", "America/Sao_Paulo", "2026-09-29T15:00:00Z"],
-    ["São Paulo at 22:00, the UTC day already the 30th", "America/Sao_Paulo", "2026-09-30T01:00:00Z"],
+    [
+      "São Paulo at 22:00, the UTC day already the 30th",
+      "America/Sao_Paulo",
+      "2026-09-30T01:00:00Z",
+    ],
     ["Manaus at 23:30", "America/Manaus", "2026-09-30T03:30:00Z"],
-  ])("refuses a date-only tomorrow and accepts a date-only today — %s", (_, zone, at) => {
-    const now = new Date(at);
+  ])(
+    "refuses a date-only tomorrow and accepts a date-only today — %s",
+    (_, zone, at) => {
+      const now = new Date(at);
 
-    expect(isChecklistDateInTheFuture("2026-09-30", zone, now)).toBe(true);
-    expect(isChecklistDateInTheFuture(new Date("2026-09-30T00:00:00.000Z"), zone, now)).toBe(true);
-    expect(isChecklistDateInTheFuture("2026-09-29", zone, now)).toBe(false);
-    expect(isChecklistDateInTheFuture("2026-09-28", zone, now)).toBe(false);
-  });
+      expect(isChecklistDateInTheFuture("2026-09-30", zone, now)).toBe(true);
+      expect(
+        isChecklistDateInTheFuture(
+          new Date("2026-09-30T00:00:00.000Z"),
+          zone,
+          now,
+        ),
+      ).toBe(true);
+      expect(isChecklistDateInTheFuture("2026-09-29", zone, now)).toBe(false);
+      expect(isChecklistDateInTheFuture("2026-09-28", zone, now)).toBe(false);
+    },
+  );
 });
 
 describe("checklistDateMoved", () => {
@@ -138,7 +183,11 @@ describe("checklistDateMoved", () => {
 });
 
 describe("changedChecklistLinks", () => {
-  const current = { vehicleId: VEHICLE, driverId: FORMER_DRIVER, branchId: CLOSED_BRANCH };
+  const current = {
+    vehicleId: VEHICLE,
+    driverId: FORMER_DRIVER,
+    branchId: CLOSED_BRANCH,
+  };
 
   it("sees no change when the links are resent as they are", () => {
     expect(changedChecklistLinks(current, { ...current })).toEqual({
@@ -149,7 +198,9 @@ describe("changedChecklistLinks", () => {
   });
 
   it("flags only the link that points somewhere else", () => {
-    expect(changedChecklistLinks(current, { driverId: DRIVER, branchId: "" })).toEqual({
+    expect(
+      changedChecklistLinks(current, { driverId: DRIVER, branchId: "" }),
+    ).toEqual({
       vehicle: false,
       driver: true,
       branch: false,
@@ -172,7 +223,9 @@ describe("withChecklistDate", () => {
 
     const noDate: { notes: string; checklist_date?: string } = { notes: "y" };
 
-    expect(withChecklistDate(noDate, "America/Sao_Paulo")).toEqual({ notes: "y" });
+    expect(withChecklistDate(noDate, "America/Sao_Paulo")).toEqual({
+      notes: "y",
+    });
   });
 
   it("keeps an instant as it is", () => {
@@ -201,7 +254,10 @@ describe("creating a checklist dated tomorrow in the company's zone", () => {
       deps.vehicle as never,
       deps.driver as never,
       deps.branch as never,
-      { findBySubmissionId: stub(null), createVehicleChecklistWithMileage: created } as never,
+      {
+        findBySubmissionId: stub(null),
+        createVehicleChecklistWithMileage: created,
+      } as never,
       { publish: vi.fn() } as never,
       { resolvePresignedUploads: stub([]), deleteFile: vi.fn() } as never,
     );
@@ -219,7 +275,9 @@ describe("creating a checklist dated tomorrow in the company's zone", () => {
     // The controller adds the company from the path, as here.
     const checklist = { ...parsed, businessId: BUSINESS };
 
-    await expect(useCase.execute(checklist as never, "admin", [])).rejects.toMatchObject({
+    await expect(
+      useCase.execute(checklist as never, "admin", []),
+    ).rejects.toMatchObject({
       code: "CHECKLIST_DATE_IN_FUTURE",
     });
     expect(created).not.toHaveBeenCalled();
@@ -227,7 +285,10 @@ describe("creating a checklist dated tomorrow in the company's zone", () => {
 });
 
 describe("editing a past checklist", () => {
-  function buildUpdate(repository: InMemoryVehicleChecklistRepository, timezone = "America/Sao_Paulo") {
+  function buildUpdate(
+    repository: InMemoryVehicleChecklistRepository,
+    timezone = "America/Sao_Paulo",
+  ) {
     const deps = collaborators(timezone);
 
     return new UpdateVehicleChecklistUseCase(
@@ -238,13 +299,22 @@ describe("editing a past checklist", () => {
       deps.branch as never,
       repository,
       { createActivityIfEnabled: () => undefined } as never,
-      { resolvePresignedUploads: stub([]), deleteFile: vi.fn(), extractFilePath: (p: string) => p } as never,
+      {
+        resolvePresignedUploads: stub([]),
+        deleteFile: vi.fn(),
+        extractFilePath: (p: string) => p,
+      } as never,
     );
   }
 
   async function seed(
     repository: InMemoryVehicleChecklistRepository,
-    input: { mileage: number; daysAgo: number; driverId?: string; branchId?: string },
+    input: {
+      mileage: number;
+      daysAgo: number;
+      driverId?: string;
+      branchId?: string;
+    },
   ) {
     return repository.createVehicleChecklist({
       ...ANSWERS,
@@ -264,7 +334,8 @@ describe("editing a past checklist", () => {
     useCase: UpdateVehicleChecklistUseCase,
     checklistId: string,
     data: Record<string, unknown>,
-  ) => useCase.execute(data as never, "admin", checklistId, BUSINESS, {}, [], []);
+  ) =>
+    useCase.execute(data as never, "admin", checklistId, BUSINESS, {}, [], []);
 
   it("keeps the driver who left and the closed branch when they are resent unchanged", async () => {
     const repository = new InMemoryVehicleChecklistRepository();
@@ -290,10 +361,14 @@ describe("editing a past checklist", () => {
     const current = await seed(repository, { mileage: 16_000, daysAgo: 3 });
     const useCase = buildUpdate(repository);
 
-    await expect(edit(useCase, current.id, { driverId: FORMER_DRIVER })).rejects.toMatchObject({
+    await expect(
+      edit(useCase, current.id, { driverId: FORMER_DRIVER }),
+    ).rejects.toMatchObject({
       code: "DRIVER_INACTIVE",
     });
-    await expect(edit(useCase, current.id, { branchId: CLOSED_BRANCH })).rejects.toMatchObject({
+    await expect(
+      edit(useCase, current.id, { branchId: CLOSED_BRANCH }),
+    ).rejects.toMatchObject({
       code: "BRANCH_INACTIVE",
     });
   });
@@ -317,10 +392,14 @@ describe("editing a past checklist", () => {
     const current = await seed(repository, { mileage: 16_000, daysAgo: 3 });
 
     await expect(
-      edit(buildUpdate(repository), current.id, { checklist_date: "2026-09-30" }),
+      edit(buildUpdate(repository), current.id, {
+        checklist_date: "2026-09-30",
+      }),
     ).rejects.toMatchObject({ code: "CHECKLIST_DATE_IN_FUTURE" });
 
-    const today = await edit(buildUpdate(repository), current.id, { checklist_date: "2026-09-29" });
+    const today = await edit(buildUpdate(repository), current.id, {
+      checklist_date: "2026-09-29",
+    });
 
     // The day starts in the company's zone (São Paulo), not at 00:00 UTC.
     expect(today.checklist_date).toEqual(new Date("2026-09-29T03:00:00.000Z"));
@@ -338,10 +417,17 @@ describe("editing a past checklist", () => {
       const late = await seed(repository, { mileage: 18_200, daysAgo: 8 });
       const newest = await seed(repository, { mileage: 20_000, daysAgo: 1 });
 
-      return { repository, middle, late, newest, useCase: buildUpdate(repository) };
+      return {
+        repository,
+        middle,
+        late,
+        newest,
+        useCase: buildUpdate(repository),
+      };
     }
 
-    const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const daysAgo = (days: number) =>
+      new Date(Date.now() - days * 86_400_000).toISOString();
 
     it("refuses a move that puts the reading before a lower one", async () => {
       // Red before: only a changed reading was checked, so this date move
@@ -357,8 +443,12 @@ describe("editing a past checklist", () => {
 
       const stored = await repository.findVehicleChecklistById(late.id);
 
-      expect(new Date(stored!.checklist_date).getTime()).toBeLessThan(Date.now() - 7 * 86_400_000);
-      expect(new Date(stored!.checklist_date).getTime()).toBeGreaterThan(Date.now() - 9 * 86_400_000);
+      expect(new Date(stored!.checklist_date).getTime()).toBeLessThan(
+        Date.now() - 7 * 86_400_000,
+      );
+      expect(new Date(stored!.checklist_date).getTime()).toBeGreaterThan(
+        Date.now() - 9 * 86_400_000,
+      );
     });
 
     it("accepts a move that keeps the order, the newest record's included", async () => {
@@ -377,9 +467,9 @@ describe("editing a past checklist", () => {
       // mileage", to someone who only changed the date.
       const { late, useCase } = await history();
 
-      const refusal = await edit(useCase, late.id, { checklist_date: daysAgo(20) }).catch(
-        (error: unknown) => error,
-      );
+      const refusal = await edit(useCase, late.id, {
+        checklist_date: daysAgo(20),
+      }).catch((error: unknown) => error);
 
       expect(refusal).toBeInstanceOf(VehicleMileageOutOfOrderError);
       expect((refusal as Error).message).toContain("menor que 17.000 km");
@@ -390,12 +480,14 @@ describe("editing a past checklist", () => {
       // jumped to 25 000 with the 18 200 of 8 days ago after it.
       const { repository, middle, useCase } = await history();
 
-      await expect(edit(useCase, middle.id, { current_mileage: 25_000 })).rejects.toBeInstanceOf(
-        VehicleMileageOutOfOrderError,
-      );
+      await expect(
+        edit(useCase, middle.id, { current_mileage: 25_000 }),
+      ).rejects.toBeInstanceOf(VehicleMileageOutOfOrderError);
 
       expect(repository.vehicleMileage[VEHICLE]).toBe(20_000);
-      expect((await repository.findVehicleChecklistById(middle.id))!.current_mileage).toBe(17_900);
+      expect(
+        (await repository.findVehicleChecklistById(middle.id))!.current_mileage,
+      ).toBe(17_900);
     });
 
     it("lets the newest reading be corrected down, the odometer following it", async () => {
@@ -412,9 +504,9 @@ describe("editing a past checklist", () => {
       expect(repository.vehicleMileage[VEHICLE]).toBe(21_000);
 
       // Never below the readings before it.
-      await expect(edit(useCase, newest.id, { current_mileage: 18_100 })).rejects.toBeInstanceOf(
-        VehicleMileageOutOfOrderError,
-      );
+      await expect(
+        edit(useCase, newest.id, { current_mileage: 18_100 }),
+      ).rejects.toBeInstanceOf(VehicleMileageOutOfOrderError);
       expect(repository.vehicleMileage[VEHICLE]).toBe(21_000);
     });
   });
@@ -490,12 +582,12 @@ describe("editing a past checklist", () => {
     expect(fixed.current_mileage).toBe(17_100);
     expect(repository.vehicleMileage[VEHICLE]).toBe(20_000);
 
-    await expect(edit(useCase, typo.id, { current_mileage: 18_300 })).rejects.toBeInstanceOf(
-      VehicleMileageInvalidError,
-    );
-    await expect(edit(useCase, typo.id, { current_mileage: 16_900 })).rejects.toBeInstanceOf(
-      VehicleMileageInvalidError,
-    );
+    await expect(
+      edit(useCase, typo.id, { current_mileage: 18_300 }),
+    ).rejects.toBeInstanceOf(VehicleMileageInvalidError);
+    await expect(
+      edit(useCase, typo.id, { current_mileage: 16_900 }),
+    ).rejects.toBeInstanceOf(VehicleMileageInvalidError);
   });
 });
 
@@ -570,7 +662,9 @@ describe("deleting a checklist", () => {
           vehicleId: VEHICLE,
           photos: [`checklistPhotos/${BUSINESS}/pneus.jpg`],
         }),
-        deleteVehicleChecklist: vi.fn().mockRejectedValue(new Error("conexão caiu")),
+        deleteVehicleChecklist: vi
+          .fn()
+          .mockRejectedValue(new Error("conexão caiu")),
       } as never,
       deps.vehicle as never,
       { createActivityIfEnabled: () => undefined } as never,
@@ -578,7 +672,11 @@ describe("deleting a checklist", () => {
     );
 
     await expect(
-      useCase.execute({ checklistId: "c1", businessId: BUSINESS, userId: "admin" }),
+      useCase.execute({
+        checklistId: "c1",
+        businessId: BUSINESS,
+        userId: "admin",
+      }),
     ).rejects.toMatchObject({ statusCode: 500 });
     expect(deleteFile).not.toHaveBeenCalled();
   });

@@ -43,10 +43,14 @@ async function tokenFor(userId: string): Promise<string> {
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: userId,
-    expiresIn: "1h",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: userId,
+      expiresIn: "1h",
+    },
+  );
 }
 
 async function seedRoute(
@@ -71,7 +75,9 @@ async function seedRoute(
   return route.id;
 }
 
-async function cancelAndReadPayload(routeId: string): Promise<Record<string, unknown>> {
+async function cancelAndReadPayload(
+  routeId: string,
+): Promise<Record<string, unknown>> {
   const response = await app.inject({
     method: "PATCH",
     url: `/route/cancel-route/${routeId}/business/${CARRIER}`,
@@ -82,7 +88,11 @@ async function cancelAndReadPayload(routeId: string): Promise<Record<string, unk
   expect(response.statusCode, response.body.slice(0, 300)).toBe(200);
 
   const row = await prisma.webhookDelivery.findFirstOrThrow({
-    where: { businessId: CARRIER, topic: "route.cancelled", payload: { path: ["data", "route_id"], equals: routeId } },
+    where: {
+      businessId: CARRIER,
+      topic: "route.cancelled",
+      payload: { path: ["data", "route_id"], equals: routeId },
+    },
     select: { payload: true },
   });
 
@@ -185,7 +195,9 @@ afterAll(async () => {
   await prisma.user.deleteMany({ where: { id: ADMIN } });
   await prisma.driver.deleteMany({ where: { id: DRIVER } });
 
-  await prisma.businessEntitlement.deleteMany({ where: { businessId: CARRIER } });
+  await prisma.businessEntitlement.deleteMany({
+    where: { businessId: CARRIER },
+  });
   await prisma.business.deleteMany({ where: { id: CARRIER } });
 
   await app?.close();

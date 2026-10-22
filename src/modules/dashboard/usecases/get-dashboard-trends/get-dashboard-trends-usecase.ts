@@ -61,15 +61,30 @@ function windowFor(
 ): { granularity: "day" | "month"; window: BusinessWindow } {
   switch (period) {
     case "7d":
-      return { granularity: "day", window: businessDayWindow(now, timeZone, 7) };
+      return {
+        granularity: "day",
+        window: businessDayWindow(now, timeZone, 7),
+      };
     case "30d":
-      return { granularity: "day", window: businessDayWindow(now, timeZone, 30) };
+      return {
+        granularity: "day",
+        window: businessDayWindow(now, timeZone, 30),
+      };
     case "3m":
-      return { granularity: "month", window: businessMonthWindow(now, timeZone, 4) };
+      return {
+        granularity: "month",
+        window: businessMonthWindow(now, timeZone, 4),
+      };
     case "6m":
-      return { granularity: "month", window: businessMonthWindow(now, timeZone, 7) };
+      return {
+        granularity: "month",
+        window: businessMonthWindow(now, timeZone, 7),
+      };
     case "12m":
-      return { granularity: "month", window: businessMonthWindow(now, timeZone, 13) };
+      return {
+        granularity: "month",
+        window: businessMonthWindow(now, timeZone, 13),
+      };
   }
 }
 
@@ -182,7 +197,8 @@ class GetDashboardTrendsUseCase {
         const point: TrendPoint = { date: label };
 
         for (const entity of visible) {
-          point[SERIES_KEY[entity.key]] = byEntity.get(entity.key)?.get(key) ?? 0;
+          point[SERIES_KEY[entity.key]] =
+            byEntity.get(entity.key)?.get(key) ?? 0;
         }
 
         activityTrends.push(point);

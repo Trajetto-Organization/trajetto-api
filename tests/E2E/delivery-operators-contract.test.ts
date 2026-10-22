@@ -40,18 +40,66 @@ const people: Array<{
   minutes: number;
 }> = [
   { key: "admin", role: "BUSINESS_ADMIN", business: "A", minutes: 1 },
-  { key: "operator", role: "BUSINESS_USER", business: "A", profile: "writes", minutes: 2 },
-  { key: "reader", role: "BUSINESS_USER", business: "A", profile: "reads", minutes: 3 },
-  { key: "fleet", role: "BUSINESS_USER", business: "A", profile: "fleet", minutes: 4 },
-  { key: "revoked", role: "BUSINESS_USER", business: "A", profile: "writes", revoked: true, minutes: 5 },
-  { key: "driver", role: "BUSINESS_USER", business: "A", profile: "writes", driver: true, minutes: 6 },
+  {
+    key: "operator",
+    role: "BUSINESS_USER",
+    business: "A",
+    profile: "writes",
+    minutes: 2,
+  },
+  {
+    key: "reader",
+    role: "BUSINESS_USER",
+    business: "A",
+    profile: "reads",
+    minutes: 3,
+  },
+  {
+    key: "fleet",
+    role: "BUSINESS_USER",
+    business: "A",
+    profile: "fleet",
+    minutes: 4,
+  },
+  {
+    key: "revoked",
+    role: "BUSINESS_USER",
+    business: "A",
+    profile: "writes",
+    revoked: true,
+    minutes: 5,
+  },
+  {
+    key: "driver",
+    role: "BUSINESS_USER",
+    business: "A",
+    profile: "writes",
+    driver: true,
+    minutes: 6,
+  },
   { key: "no-profile", role: "BUSINESS_USER", business: "A", minutes: 7 },
-  { key: "tie-1", role: "BUSINESS_USER", business: "A", profile: "writes", minutes: 8 },
-  { key: "tie-2", role: "BUSINESS_USER", business: "A", profile: "writes", minutes: 8 },
+  {
+    key: "tie-1",
+    role: "BUSINESS_USER",
+    business: "A",
+    profile: "writes",
+    minutes: 8,
+  },
+  {
+    key: "tie-2",
+    role: "BUSINESS_USER",
+    business: "A",
+    profile: "writes",
+    minutes: 8,
+  },
   { key: "other-admin", role: "BUSINESS_ADMIN", business: "B", minutes: 9 },
 ];
 
-const harnesses: Array<{ name: string; repo: IUserRepository; ids: Map<string, string> }> = [
+const harnesses: Array<{
+  name: string;
+  repo: IUserRepository;
+  ids: Map<string, string>;
+}> = [
   { name: "prisma", repo: new UserRepository(prisma as never), ids: new Map() },
   { name: "in-memory", repo: memory, ids: new Map() },
 ];
@@ -77,13 +125,24 @@ async function seedBusiness(id: string): Promise<void> {
   });
 }
 
-async function profile(permissionKey: string, canWrite: boolean): Promise<string> {
+async function profile(
+  permissionKey: string,
+  canWrite: boolean,
+): Promise<string> {
   const created = await prisma.profileAccess.create({
     data: {
       name: `Perfil ${randomUUID().slice(0, 8)}`,
       businessId: A,
       permissions: {
-        create: [{ permissionKey, action: permissionKey, canRead: true, canWrite, businessId: A }],
+        create: [
+          {
+            permissionKey,
+            action: permissionKey,
+            canRead: true,
+            canWrite,
+            businessId: A,
+          },
+        ],
       },
     },
     include: { permissions: true },
@@ -156,7 +215,10 @@ beforeAll(async () => {
       if (harness.name === "prisma") {
         await prisma.user.update({ where: { id: created.id }, data: fields });
       } else {
-        Object.assign(memory.user.find((user) => user.id === created.id)!, fields);
+        Object.assign(
+          memory.user.find((user) => user.id === created.id)!,
+          fields,
+        );
       }
     }
   }
@@ -192,7 +254,9 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
     it("answers another company with its own people", async () => {
       const operators = await harness.repo.findDeliveryOperators(B);
 
-      expect(operators.map((user) => user.id)).toEqual([harness.ids.get("other-admin")]);
+      expect(operators.map((user) => user.id)).toEqual([
+        harness.ids.get("other-admin"),
+      ]);
     });
   },
 );

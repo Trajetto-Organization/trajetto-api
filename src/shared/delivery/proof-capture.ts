@@ -1,4 +1,7 @@
-import { CLIENT_VERSION_HEADER, parseClientVersion } from "@/shared/http/client-version";
+import {
+  CLIENT_VERSION_HEADER,
+  parseClientVersion,
+} from "@/shared/http/client-version";
 
 import { CLIENT_SENT_AT_HEADER, resolveOccurredAt } from "./occurred-at";
 
@@ -53,7 +56,9 @@ function normalizeDeviceId(value: unknown): string | null {
 
   const trimmed = value.trim();
 
-  return ANDROID_ID.test(trimmed) || UUID.test(trimmed) ? trimmed.toLowerCase() : null;
+  return ANDROID_ID.test(trimmed) || UUID.test(trimmed)
+    ? trimmed.toLowerCase()
+    : null;
 }
 
 /**
@@ -67,7 +72,9 @@ function deviceLabel(headers: Record<string, unknown>): string | null {
   if (client?.platform || client?.version) {
     const name = [client.platform, client.version].filter(Boolean).join(" ");
 
-    return client.build !== undefined ? `${name} (build ${client.build})` : name;
+    return client.build !== undefined
+      ? `${name} (build ${client.build})`
+      : name;
   }
 
   const userAgent = headers["user-agent"];

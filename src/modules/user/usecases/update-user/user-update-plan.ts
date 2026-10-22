@@ -74,7 +74,9 @@ type UserUpdatePlan =
   | { ok: false; error: UserUpdatePlanError };
 
 /** Undefined stays "not sent"; "" and null both mean "unlink". */
-function linkInput(value: string | null | undefined): string | null | undefined {
+function linkInput(
+  value: string | null | undefined,
+): string | null | undefined {
   if (value === undefined) return undefined;
 
   return value && value.trim() !== "" ? value : null;
@@ -144,8 +146,7 @@ function planUserUpdate(
     driver: driverId !== current.driverId,
   };
 
-  const assignmentTouched =
-    changes.role || changes.profile || changes.driver;
+  const assignmentTouched = changes.role || changes.profile || changes.driver;
 
   // Only when the link itself is being edited: a legacy user with neither
   // can still have a typo in the name fixed.

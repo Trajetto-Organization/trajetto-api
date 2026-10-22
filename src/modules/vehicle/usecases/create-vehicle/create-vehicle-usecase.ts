@@ -102,10 +102,11 @@ class CreateVehicleUseCase {
 
     // Per company, like the unique index (decision 8.1): a lookup across
     // companies refused a truck another carrier also runs, and said so.
-    const findVehicleByLicensePlate = await this.vehicle.findVehicleByLicensePlate(
-      licensePlate,
-      vehicleData.businessId,
-    );
+    const findVehicleByLicensePlate =
+      await this.vehicle.findVehicleByLicensePlate(
+        licensePlate,
+        vehicleData.businessId,
+      );
 
     if (findVehicleByLicensePlate) {
       throw new VehicleAlreadyExistsError();

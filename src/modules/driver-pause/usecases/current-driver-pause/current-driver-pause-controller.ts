@@ -21,7 +21,9 @@ class CurrentDriverPauseController {
       timeZone: current.timeZone,
       day: current.day,
       open: current.open ? toPauseView(current.open, current.typeNames) : null,
-      today: current.today.map((pause) => toPauseView(pause, current.typeNames)),
+      today: current.today.map((pause) =>
+        toPauseView(pause, current.typeNames),
+      ),
       pause_allowed: current.pauseAllowed,
       journey_route_id: current.journeyRouteId,
     });

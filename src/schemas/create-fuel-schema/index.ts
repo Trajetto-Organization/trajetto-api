@@ -265,7 +265,6 @@ const createFuelSchema = z
     }
   });
 
-
 // The odometer photo is validated by `presignedPhotoSchema`: it never reaches
 // this API as a file, only as a key pointing at an object already in storage.
 export { createFuelSchema };

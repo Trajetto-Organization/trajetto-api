@@ -13,7 +13,11 @@ import {
   generateApiKey,
 } from "@/shared/integration/api-key-rules";
 
-import { audit, scopedBusiness, type ActivityRecorder } from "./integration-admin-access";
+import {
+  audit,
+  scopedBusiness,
+  type ActivityRecorder,
+} from "./integration-admin-access";
 
 interface CreateApiKeyRequest {
   userId: string;
@@ -35,7 +39,11 @@ class CreateApiKeyUseCase {
   async execute(
     request: CreateApiKeyRequest,
   ): Promise<{ id: string; prefix: string; token: string }> {
-    const user = await scopedBusiness(this.users, request.userId, request.businessId);
+    const user = await scopedBusiness(
+      this.users,
+      request.userId,
+      request.businessId,
+    );
 
     // The ceiling is the platform's to raise, not the tenant's.
     if (

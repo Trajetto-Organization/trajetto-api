@@ -51,7 +51,12 @@ async function resolvePauseType(
 
   if (kind && kind !== type.pause_kind) {
     log.warn(
-      { businessId, occurrenceTypeId, sentKind: kind, typeKind: type.pause_kind },
+      {
+        businessId,
+        occurrenceTypeId,
+        sentKind: kind,
+        typeKind: type.pause_kind,
+      },
       "Pause kind differs from its type's nature; the type's is recorded",
     );
   }

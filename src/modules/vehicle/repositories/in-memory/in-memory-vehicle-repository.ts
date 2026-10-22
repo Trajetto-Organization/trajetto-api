@@ -1,8 +1,14 @@
-import { recordNotFound, uniqueViolation } from "@/shared/in-memory/prisma-errors";
+import {
+  recordNotFound,
+  uniqueViolation,
+} from "@/shared/in-memory/prisma-errors";
 import { afterCursor } from "@/shared/in-memory/cursor";
 import { v7 as uuidV7 } from "uuid";
 import { IVehicleRepository } from "../IVehicle-repository";
-import { tallyStatuses, VEHICLE_STATUSES } from "@/shared/vehicle/vehicle-rules";
+import {
+  tallyStatuses,
+  VEHICLE_STATUSES,
+} from "@/shared/vehicle/vehicle-rules";
 
 import {
   Vehicle,
@@ -48,7 +54,11 @@ type Comparable = string | number | Date | null | undefined;
  * descending (its default NULLS LAST / NULLS FIRST), which is what the
  * relation sorts do for a vehicle with no driver, type or branch.
  */
-function compareNullable(a: Comparable, b: Comparable, order: SortOrder): number {
+function compareNullable(
+  a: Comparable,
+  b: Comparable,
+  order: SortOrder,
+): number {
   const aNull = a === null || a === undefined;
   const bNull = b === null || b === undefined;
 
@@ -217,7 +227,9 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       vehicle.renavam,
       vehicle.fleet_id,
       vehicle.driverId ? this.driverNames[vehicle.driverId] : null,
-      vehicle.vehicleTypeId ? this.vehicleTypeNames[vehicle.vehicleTypeId] : null,
+      vehicle.vehicleTypeId
+        ? this.vehicleTypeNames[vehicle.vehicleTypeId]
+        : null,
       vehicle.branchId ? this.branchNames[vehicle.branchId] : null,
     ].some((value) => (value ?? "").toLowerCase().includes(term));
   }
@@ -260,7 +272,11 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       .filter((vehicle) => this.matches(vehicle, filters))
       .sort(
         (a, b) =>
-          compareNullable(this.sortValue(a, key), this.sortValue(b, key), direction) ||
+          compareNullable(
+            this.sortValue(a, key),
+            this.sortValue(b, key),
+            direction,
+          ) ||
           compareNullable(asDate(a.created_at), asDate(b.created_at), "desc") ||
           compareNullable(a.id, b.id, "desc"),
       );
@@ -277,7 +293,8 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       VEHICLE_STATUSES.map((status) => ({
         status,
         _count: {
-          _all: statusBase.filter((vehicle) => vehicle.status === status).length,
+          _all: statusBase.filter((vehicle) => vehicle.status === status)
+            .length,
         },
       })).filter((group) => group._count._all > 0),
     );
@@ -496,7 +513,9 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     return canDriverOperateVehicle(
       vehicle,
       driverId,
-      this.routeSource().filter((route) => route.businessId === vehicle.businessId),
+      this.routeSource().filter(
+        (route) => route.businessId === vehicle.businessId,
+      ),
     );
   }
 
@@ -550,7 +569,8 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       vehicle.vehicleTypeId && this.vehicleTypeNames[vehicle.vehicleTypeId]
         ? {
             description: this.vehicleTypeNames[vehicle.vehicleTypeId],
-            required_cnh_category: this.vehicleTypeCnh[vehicle.vehicleTypeId] ?? null,
+            required_cnh_category:
+              this.vehicleTypeCnh[vehicle.vehicleTypeId] ?? null,
           }
         : null;
 
@@ -601,7 +621,8 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     businessId: string,
   ): Promise<OpenRouteCounts> {
     const routes = this.routeSource().filter(
-      (route) => route.vehicleId === vehicleId && route.businessId === businessId,
+      (route) =>
+        route.vehicleId === vehicleId && route.businessId === businessId,
     );
 
     const countOf = (status: string) =>

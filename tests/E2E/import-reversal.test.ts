@@ -157,12 +157,18 @@ describe("undoing an upload nobody touched", () => {
 
     expect(result).toMatchObject({ removedDeliveries: 2, removedRoutes: 1 });
 
-    expect(await prisma.delivery.findUnique({ where: { id: first.id } })).toBeNull();
-    expect(await prisma.route.findUnique({ where: { id: route.id } })).toBeNull();
+    expect(
+      await prisma.delivery.findUnique({ where: { id: first.id } }),
+    ).toBeNull();
+    expect(
+      await prisma.route.findUnique({ where: { id: route.id } }),
+    ).toBeNull();
 
     // The stops went with the route — a stop with no route is a row nothing
     // can ever reach.
-    expect(await prisma.routeStop.count({ where: { routeId: route.id } })).toBe(0);
+    expect(await prisma.routeStop.count({ where: { routeId: route.id } })).toBe(
+      0,
+    );
   });
 
   it("deletes the route before its deliveries, which is the only order that works", async () => {

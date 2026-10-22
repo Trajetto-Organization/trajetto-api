@@ -38,7 +38,7 @@ const configured = Boolean(endpoint && accessKeyId && secretAccessKey);
 
 if (!configured && process.env.REQUIRE_MINIO === "1") {
   throw new Error(
-    "upload-storage-roundtrip: REQUIRE_MINIO=1 but MINIO_TEST_ENDPOINT/ACCESS_KEY/SECRET_KEY are not set (bash tests/support/minio/minio-test.sh start && eval \"$(bash tests/support/minio/minio-test.sh env)\")",
+    'upload-storage-roundtrip: REQUIRE_MINIO=1 but MINIO_TEST_ENDPOINT/ACCESS_KEY/SECRET_KEY are not set (bash tests/support/minio/minio-test.sh start && eval "$(bash tests/support/minio/minio-test.sh env)")',
   );
 }
 

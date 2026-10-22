@@ -62,7 +62,11 @@ class FuelTypeRepository implements IFuelTypeRepository {
       // company), which also answers the pager total.
       this.prisma.fuelType.findMany({
         where,
-        select: { id: true, description: true, _count: { select: { vehicles: true } } },
+        select: {
+          id: true,
+          description: true,
+          _count: { select: { vehicles: true } },
+        },
       }),
       refuelWindow
         ? this.prisma.fuel.groupBy({

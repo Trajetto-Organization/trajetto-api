@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -88,12 +96,16 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(async () => {
-  await prisma.domainOutboxEvent.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.domainOutboxEvent.deleteMany({
+    where: { businessId: BUSINESS },
+  });
   vi.restoreAllMocks();
 });
 
 afterAll(async () => {
-  await prisma.domainOutboxEvent.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.domainOutboxEvent.deleteMany({
+    where: { businessId: BUSINESS },
+  });
   await prisma.notification.deleteMany({ where: { userId: RECIPIENT } });
   await prisma.activity.deleteMany({ where: { businessId: BUSINESS } });
   await prisma.user.deleteMany({ where: { id: RECIPIENT } });

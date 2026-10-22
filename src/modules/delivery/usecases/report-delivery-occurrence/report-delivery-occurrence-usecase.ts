@@ -227,7 +227,11 @@ class ReportDeliveryOccurrenceUseCase {
   }
 
   private get proofDeps(): DeliveryProofEffectDeps {
-    return { ...this.effectDeps, audits: this.audits, tickets: this.occurrenceTickets };
+    return {
+      ...this.effectDeps,
+      audits: this.audits,
+      tickets: this.occurrenceTickets,
+    };
   }
 
   async execute({
@@ -264,7 +268,11 @@ class ReportDeliveryOccurrenceUseCase {
     // occurrence, and the status flip it caused the first time is not
     // replayed. The answer says where the first one stands.
     if (client_submission_id) {
-      const replay = await this.replayIfRecorded(client_submission_id, businessId, deliveryId);
+      const replay = await this.replayIfRecorded(
+        client_submission_id,
+        businessId,
+        deliveryId,
+      );
 
       if (replay) return replay;
     }
@@ -295,7 +303,8 @@ class ReportDeliveryOccurrenceUseCase {
       throw new OccurrenceTypeNotReportableError();
     }
 
-    const category: OccurrenceCategoryKey = findType.category ?? "NOT_DELIVERED";
+    const category: OccurrenceCategoryKey =
+      findType.category ?? "NOT_DELIVERED";
     const delivered = category === "DELIVERED";
     const byDriver = Boolean(findUser.driverId);
 
@@ -392,14 +401,25 @@ class ReportDeliveryOccurrenceUseCase {
     // submission is what made it so (a twin committed after the pre-check),
     // the same refusal the proof route always gave (IDEMP-07).
     if (delivered) {
-      const transition = canTransitionDelivery(findDelivery.status, "DELIVERED");
+      const transition = canTransitionDelivery(
+        findDelivery.status,
+        "DELIVERED",
+      );
 
       if (!transition.allowed) {
-        const twin = await this.replayIfRecorded(client_submission_id!, businessId, deliveryId);
+        const twin = await this.replayIfRecorded(
+          client_submission_id!,
+          businessId,
+          deliveryId,
+        );
 
         if (twin) return twin;
 
-        throw new AppError(transition.reason!, 400, "INVALID_STATUS_TRANSITION");
+        throw new AppError(
+          transition.reason!,
+          400,
+          "INVALID_STATUS_TRANSITION",
+        );
       }
     }
 
@@ -424,12 +444,16 @@ class ReportDeliveryOccurrenceUseCase {
     // The effect applies now only for these two; a request (PENDING or
     // SUPERSEDED) applies nothing.
     const appliesNow =
-      authorizationStatus === "NOT_REQUIRED" || authorizationStatus === "APPROVED";
+      authorizationStatus === "NOT_REQUIRED" ||
+      authorizationStatus === "APPROVED";
 
     // Only ownership and existence are left to check before the keys
     // become rows — the bytes went straight to the bucket.
     const photoPaths = await this.resolveKeys(photos, businessId);
-    const [receiptPath = null] = await this.resolveKeys(receiptKey ? [receiptKey] : [], businessId);
+    const [receiptPath = null] = await this.resolveKeys(
+      receiptKey ? [receiptKey] : [],
+      businessId,
+    );
     const [signaturePath = null] = await this.resolveKeys(
       signatureKey ? [signatureKey] : [],
       businessId,
@@ -468,7 +492,11 @@ class ReportDeliveryOccurrenceUseCase {
       const droppedPlans: PlanBump[] = [];
       // Cast, not annotated: assigned inside the transaction callback, where
       // control-flow narrowing cannot see it.
-      let openedTicket = null as { id: string; number: number; linked: boolean } | null;
+      let openedTicket = null as {
+        id: string;
+        number: number;
+        linked: boolean;
+      } | null;
 
       // When the driver reported it: the tap for a report the app sent later
       // (MOB-08), the receipt otherwise. The stop and the webhook say the
@@ -528,9 +556,12 @@ class ReportDeliveryOccurrenceUseCase {
             form_answers: verdict.answers,
             form_version: fields ? currentVersion : null,
             authorization_status:
-              authorizationStatus === "NOT_REQUIRED" ? undefined : authorizationStatus,
+              authorizationStatus === "NOT_REQUIRED"
+                ? undefined
+                : authorizationStatus,
             authorizedById: authorizationStatus === "APPROVED" ? userId : null,
-            authorized_at: authorizationStatus === "APPROVED" ? new Date() : null,
+            authorized_at:
+              authorizationStatus === "APPROVED" ? new Date() : null,
             // Copied from the type (immutable once used), so lists and
             // counters filter without a join (decision 14.3).
             category,
@@ -773,7 +804,9 @@ class ReportDeliveryOccurrenceUseCase {
         replayed: false,
         category,
         delivery_status: nextStatus,
-        ticket: openedTicket ? { id: openedTicket.id, number: openedTicket.number } : null,
+        ticket: openedTicket
+          ? { id: openedTicket.id, number: openedTicket.number }
+          : null,
       };
     } catch (error) {
       // A resend whose twin committed after the pre-check above: its insert
@@ -785,7 +818,11 @@ class ReportDeliveryOccurrenceUseCase {
         (isUniqueViolation(error) ||
           error instanceof DeliveryStatusConflictError)
       ) {
-        const twin = await this.replayIfRecorded(client_submission_id, businessId, deliveryId);
+        const twin = await this.replayIfRecorded(
+          client_submission_id,
+          businessId,
+          deliveryId,
+        );
 
         if (twin && twin.id !== attemptedId) return twin;
       }
@@ -834,7 +871,10 @@ class ReportDeliveryOccurrenceUseCase {
       };
     }
 
-    const event = await this.delivery.findEventBySubmissionId(clientSubmissionId, businessId);
+    const event = await this.delivery.findEventBySubmissionId(
+      clientSubmissionId,
+      businessId,
+    );
 
     if (event && event.type === "PROOF") {
       return {
@@ -849,13 +889,21 @@ class ReportDeliveryOccurrenceUseCase {
     return null;
   }
 
-  private async statusOf(deliveryId: string, businessId: string): Promise<DeliveryStatus> {
+  private async statusOf(
+    deliveryId: string,
+    businessId: string,
+  ): Promise<DeliveryStatus> {
     const found = await this.delivery.findDeliveryById(deliveryId);
 
-    return found && found.businessId === businessId ? found.status : "DELIVERED";
+    return found && found.businessId === businessId
+      ? found.status
+      : "DELIVERED";
   }
 
-  private async resolveKeys(keys: string[], businessId: string): Promise<string[]> {
+  private async resolveKeys(
+    keys: string[],
+    businessId: string,
+  ): Promise<string[]> {
     if (keys.length === 0) return [];
 
     const resolved = await this.uploadService.resolvePresignedUploads(

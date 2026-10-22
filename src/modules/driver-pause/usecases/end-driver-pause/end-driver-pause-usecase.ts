@@ -15,7 +15,10 @@ import {
   PauseTypeWrongCategoryError,
 } from "../errors/driver-pause-errors";
 import { assertPauseDriver } from "../pause-ownership";
-import { journeyRouteOrRefuse, resolvePauseType } from "../pause-type-and-journey";
+import {
+  journeyRouteOrRefuse,
+  resolvePauseType,
+} from "../pause-type-and-journey";
 
 interface EndDriverPauseRequest {
   businessId: string;
@@ -111,7 +114,10 @@ class EndDriverPauseUseCase {
 
     if (closedByThisKey) return this.replay(closedByThisKey, request, driverId);
 
-    let pause = await this.pauses.findByStartSubmission(businessId, startSubmissionId);
+    let pause = await this.pauses.findByStartSubmission(
+      businessId,
+      startSubmissionId,
+    );
 
     if (!pause) {
       if (!request.start) throw new PauseNotFoundError();
@@ -120,18 +126,25 @@ class EndDriverPauseUseCase {
       // its arrival: a pause the driver never took, today. An end of a pause
       // that exists is still taken below, stale or not, so the one open
       // slot is always freed (the report flags a pause closed that late).
-      if (request.staleTap || request.start.staleTap) throw new PauseTooOldError();
+      if (request.staleTap || request.start.staleTap)
+        throw new PauseTooOldError();
 
       const created = await this.createClosed(request, driverId, now);
 
       if (created) return { pause: created, replayed: false };
 
       // The start (or a twin of this end) got there first; go on with it.
-      const byEnd = await this.pauses.findByEndSubmission(businessId, endSubmissionId);
+      const byEnd = await this.pauses.findByEndSubmission(
+        businessId,
+        endSubmissionId,
+      );
 
       if (byEnd) return this.replay(byEnd, request, driverId);
 
-      pause = await this.pauses.findByStartSubmission(businessId, startSubmissionId);
+      pause = await this.pauses.findByStartSubmission(
+        businessId,
+        startSubmissionId,
+      );
 
       if (!pause) throw new PauseNotFoundError();
     }
@@ -149,11 +162,15 @@ class EndDriverPauseUseCase {
       end_longitude: request.longitude ?? null,
     });
 
-    if (result.status === "closed") return { pause: result.pause, replayed: false };
+    if (result.status === "closed")
+      return { pause: result.pause, replayed: false };
 
     // Somebody closed it between the read and the write: the same key (a
     // racing resend) is this answer; another key is a real conflict.
-    const byEnd = await this.pauses.findByEndSubmission(businessId, endSubmissionId);
+    const byEnd = await this.pauses.findByEndSubmission(
+      businessId,
+      endSubmissionId,
+    );
 
     if (byEnd) return this.replay(byEnd, request, driverId);
 
@@ -218,7 +235,8 @@ class EndDriverPauseUseCase {
     });
 
     // The type changed between the read and the insert: the start's 400.
-    if (result.status === "invalid-type") throw new PauseTypeWrongCategoryError();
+    if (result.status === "invalid-type")
+      throw new PauseTypeWrongCategoryError();
 
     return result.status === "created" ? result.pause : null;
   }

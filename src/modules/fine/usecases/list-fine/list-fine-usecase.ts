@@ -98,7 +98,10 @@ class ListFineUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
-    const timeZone = await loadBusinessTimeZone(this.business, resolvedBusinessId);
+    const timeZone = await loadBusinessTimeZone(
+      this.business,
+      resolvedBusinessId,
+    );
     const { start: todayStart } = businessDayRange(now, timeZone);
 
     const facets = { statuses, branchIds, trafficViolationCodeIds };
@@ -123,7 +126,10 @@ class ListFineUseCase {
 
       // Each date also as the day it is in the company's zone: the screens
       // show that day, never the instant read in the viewer's zone.
-      const data = result.data.map((fine) => ({ ...fine, ...fineDays(fine, timeZone) }));
+      const data = result.data.map((fine) => ({
+        ...fine,
+        ...fineDays(fine, timeZone),
+      }));
 
       return { data, total, searchMeta };
     } catch (error) {

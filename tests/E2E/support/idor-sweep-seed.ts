@@ -173,7 +173,12 @@ async function seedSweepCarrier(
   ids.vehicleId = vehicle.id;
 
   const part = await prisma.part.create({
-    data: { description: `${tag} peça`, unit_price: 10, businessId, supplierId: supplier.id },
+    data: {
+      description: `${tag} peça`,
+      unit_price: 10,
+      businessId,
+      supplierId: supplier.id,
+    },
   });
   ids.partId = part.id;
 
@@ -297,7 +302,13 @@ async function seedSweepCarrier(
   ids.cardId = card.id;
 
   const notification = await prisma.notification.create({
-    data: { type: "INFO", title: tag, message: tag, userId: user.id, businessId },
+    data: {
+      type: "INFO",
+      title: tag,
+      message: tag,
+      userId: user.id,
+      businessId,
+    },
   });
   ids.notificationId = notification.id;
 
@@ -392,7 +403,9 @@ async function seedSweepCarrier(
       shipperId: shipper.id,
       status: "PENDING",
       driverId: driver.id,
-      scheduled_date: dateOnlyFromKey(businessDateKey(new Date(), "America/Sao_Paulo")),
+      scheduled_date: dateOnlyFromKey(
+        businessDateKey(new Date(), "America/Sao_Paulo"),
+      ),
     },
   });
   ids.driverDeliveryId = onTheStreet.id;
@@ -406,7 +419,9 @@ async function seedSweepCarrier(
       vehicleId: vehicle.id,
       status: "RELEASED",
       released_at: new Date(),
-      scheduled_date: dateOnlyFromKey(businessDateKey(new Date(), "America/Sao_Paulo")),
+      scheduled_date: dateOnlyFromKey(
+        businessDateKey(new Date(), "America/Sao_Paulo"),
+      ),
     },
   });
   ids.journeyRouteId = journey.id;
@@ -471,7 +486,9 @@ async function seedSweepCarrier(
     data: {
       kind: "MEAL",
       started_at: new Date(Date.now() - 60 * 60 * 1000),
-      ended_at: options.openPause ? null : new Date(Date.now() - 30 * 60 * 1000),
+      ended_at: options.openPause
+        ? null
+        : new Date(Date.now() - 30 * 60 * 1000),
       end_submission_id: options.openPause ? null : randomUUID(),
       start_submission_id: pauseSubmission,
       driverId: driver.id,
@@ -489,7 +506,12 @@ async function seedSweepCarrier(
       name: `${tag} chave`,
       prefix: key.prefix,
       token_hash: key.tokenHash,
-      scopes: ["routes:read", "deliveries:read", "deliveries:write", "events:read"],
+      scopes: [
+        "routes:read",
+        "deliveries:read",
+        "deliveries:write",
+        "events:read",
+      ],
       businessId,
     },
   });
@@ -554,10 +576,14 @@ async function sweepToken(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "30m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "30m",
+    },
+  );
 }
 
 export { SECRET_MARKER, seedSweepCarrier, sweepToken };

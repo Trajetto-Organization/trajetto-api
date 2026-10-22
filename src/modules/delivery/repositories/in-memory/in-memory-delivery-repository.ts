@@ -39,8 +39,15 @@ import {
   type DeliverySortKey,
 } from "../../usecases/list-delivery/delivery-list";
 
-import { recordNotFound, uniqueViolation } from "@/shared/in-memory/prisma-errors";
-import { byCreationThenId, deliveryExportRow, occurrenceExportRow } from "../export-rows";
+import {
+  recordNotFound,
+  uniqueViolation,
+} from "@/shared/in-memory/prisma-errors";
+import {
+  byCreationThenId,
+  deliveryExportRow,
+  occurrenceExportRow,
+} from "../export-rows";
 
 import {
   compareForOrder,
@@ -89,7 +96,11 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
   > = [];
   // created_at is the column's now() default, as in the table.
   public events: Array<
-    CreateDeliveryEventProps & { id: string; created_at: Date; businessId?: string }
+    CreateDeliveryEventProps & {
+      id: string;
+      created_at: Date;
+      businessId?: string;
+    }
   > = [];
 
   /**
@@ -111,7 +122,10 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
   public occurrenceTypeRequiresPhoto = new Map<string, boolean>();
 
   /** occurrence_type.category (decision 14.3); absent reads as NOT_DELIVERED. */
-  public occurrenceTypeCategory = new Map<string, "DELIVERED" | "NOT_DELIVERED" | "PAUSE">();
+  public occurrenceTypeCategory = new Map<
+    string,
+    "DELIVERED" | "NOT_DELIVERED" | "PAUSE"
+  >();
   public driverDirectory = new Map<string, { name: string; cnh: string }>();
 
   /** shipper.name by id: the listing's embedded shipper and its facet. */
@@ -234,7 +248,9 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     // race branches read the second insert's failure.
     if (
       delivery.client_submission_id &&
-      this.submissions.has(`${delivery.businessId}:${delivery.client_submission_id}`)
+      this.submissions.has(
+        `${delivery.businessId}:${delivery.client_submission_id}`,
+      )
     ) {
       throw uniqueViolation(["businessId", "client_submission_id"]);
     }
@@ -303,16 +319,23 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     const shipperName = (delivery: Delivery) =>
       this.shipperNames.get(delivery.shipperId) ?? "";
     const driverName = (delivery: Delivery) =>
-      (delivery.driverId && this.driverDirectory.get(delivery.driverId)?.name) ||
+      (delivery.driverId &&
+        this.driverDirectory.get(delivery.driverId)?.name) ||
       null;
 
     const key = sort ?? DELIVERY_SORT_FALLBACK.sort;
-    const direction = (order ?? (sort ? "asc" : DELIVERY_SORT_FALLBACK.order)) === "asc" ? 1 : -1;
+    const direction =
+      (order ?? (sort ? "asc" : DELIVERY_SORT_FALLBACK.order)) === "asc"
+        ? 1
+        : -1;
 
     const time = (value: unknown) =>
       value ? new Date(value as string).getTime() : null;
 
-    const valueOf: Record<DeliverySortKey, (d: Delivery) => string | number | null> = {
+    const valueOf: Record<
+      DeliverySortKey,
+      (d: Delivery) => string | number | null
+    > = {
       created_at: (d) => time(d.created_at),
       updated_at: (d) => time(d.updated_at ?? d.created_at),
       recipient_name: (d) => d.recipient_name,
@@ -330,7 +353,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       // and first in DESC for a plain column (the driver's name).
       if (x === null || y === null) {
         if (x === y) return 0;
-        const nullsLast = key === "scheduled_date" || key === "delivered_at" || direction === 1;
+        const nullsLast =
+          key === "scheduled_date" || key === "delivered_at" || direction === 1;
         return (x === null ? 1 : -1) * (nullsLast ? 1 : -1);
       }
 
@@ -486,7 +510,10 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
           ...event,
           reportedBy: user(event.reportedById),
           reason: event.reasonId
-            ? { id: event.reasonId, name: this.reasonNames.get(event.reasonId) ?? "" }
+            ? {
+                id: event.reasonId,
+                name: this.reasonNames.get(event.reasonId) ?? "",
+              }
             : null,
         })),
       occurrences: this.occurrences
@@ -496,13 +523,21 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
           ...occurrence,
           occurrenceType: {
             id: occurrence.occurrenceTypeId,
-            name: this.occurrenceTypeNames.get(occurrence.occurrenceTypeId) ?? "",
+            name:
+              this.occurrenceTypeNames.get(occurrence.occurrenceTypeId) ?? "",
             blocks_delivery:
-              this.occurrenceTypeBlocking.get(occurrence.occurrenceTypeId) === true,
+              this.occurrenceTypeBlocking.get(occurrence.occurrenceTypeId) ===
+              true,
             requires_authorization:
-              this.occurrenceTypeRequiresAuthorization.get(occurrence.occurrenceTypeId) === true,
-            form_fields: this.occurrenceTypeFormFields.get(occurrence.occurrenceTypeId) ?? null,
-            form_version: this.occurrenceTypeFormVersion.get(occurrence.occurrenceTypeId) ?? 1,
+              this.occurrenceTypeRequiresAuthorization.get(
+                occurrence.occurrenceTypeId,
+              ) === true,
+            form_fields:
+              this.occurrenceTypeFormFields.get(occurrence.occurrenceTypeId) ??
+              null,
+            form_version:
+              this.occurrenceTypeFormVersion.get(occurrence.occurrenceTypeId) ??
+              1,
           },
           reportedBy: user(occurrence.reportedById),
           authorizedBy: user(occurrence.authorizedById),
@@ -560,8 +595,7 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     // writes the repository refuses, and a race test proves nothing.
     const index = this.deliveries.findIndex(
       (d) =>
-        d.id === deliveryId &&
-        (!expectedStatus || d.status === expectedStatus),
+        d.id === deliveryId && (!expectedStatus || d.status === expectedStatus),
     );
 
     if (index === -1) {
@@ -596,7 +630,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       updated_at: new Date(),
     };
 
-    if (items !== undefined) this.deliveryItems.set(deliveryId, asStoredItems(items));
+    if (items !== undefined)
+      this.deliveryItems.set(deliveryId, asStoredItems(items));
 
     return this.deliveries[index];
   }
@@ -702,14 +737,17 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       occurrenceData.client_submission_id &&
       this.occurrences.some(
         (occurrence) =>
-          occurrence.client_submission_id === occurrenceData.client_submission_id,
+          occurrence.client_submission_id ===
+          occurrenceData.client_submission_id,
       )
     ) {
       throw uniqueViolation(["client_submission_id"]);
     }
 
     // tenantOfDelivery: findUniqueOrThrow, P2025 for a delivery that is not there.
-    const delivery = this.deliveries.find((row) => row.id === occurrenceData.deliveryId);
+    const delivery = this.deliveries.find(
+      (row) => row.id === occurrenceData.deliveryId,
+    );
 
     if (!delivery) throw recordNotFound("update");
 
@@ -717,7 +755,10 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     const now = new Date();
 
     this.occurrences.push({
-      ...withColumnDefaults(DELIVERY_OCCURRENCE_COLUMN_DEFAULTS, occurrenceData),
+      ...withColumnDefaults(
+        DELIVERY_OCCURRENCE_COLUMN_DEFAULTS,
+        occurrenceData,
+      ),
       // As the Prisma create: the delivery's tenant copied, empty text NULL.
       businessId: delivery.businessId,
       description: occurrenceData.description || null,
@@ -856,8 +897,9 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
         occurrenceType: {
           ...typeOf(occurrence.occurrenceTypeId),
           requires_photo:
-            this.occurrenceTypeRequiresPhoto.get(occurrence.occurrenceTypeId) ===
-            true,
+            this.occurrenceTypeRequiresPhoto.get(
+              occurrence.occurrenceTypeId,
+            ) === true,
         },
         reportedBy: {
           id: occurrence.reportedById,
@@ -927,7 +969,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     day: OperationDay,
   ): Promise<OperationBacklog> {
     const inDay = (value: Date): boolean =>
-      value.getTime() >= day.start.getTime() && value.getTime() < day.end.getTime();
+      value.getTime() >= day.start.getTime() &&
+      value.getTime() < day.end.getTime();
 
     // PENDING without a driver, of any date (see the Prisma repository).
     const unassigned = this.deliveries.filter(
@@ -951,7 +994,9 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
         this.driverUserIds.has(occurrence.reportedById) &&
         this.occurrenceTypeSystem.get(occurrence.occurrenceTypeId) !== true &&
         (occurrence.category ?? "NOT_DELIVERED") === "NOT_DELIVERED" &&
-        inDay(factInstant(occurrence.occurred_at ?? null, occurrence.created_at)),
+        inDay(
+          factInstant(occurrence.occurred_at ?? null, occurrence.created_at),
+        ),
     ).length;
 
     return { unassigned, occurrencesToday };
@@ -974,7 +1019,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
                 (stop) =>
                   stop.deliveryId === delivery.id &&
                   (stop.status === "PENDING" || stop.status === "ARRIVED") &&
-                  (stop.routeStatus === "RELEASED" || stop.routeStatus === "IN_PROGRESS"),
+                  (stop.routeStatus === "RELEASED" ||
+                    stop.routeStatus === "IN_PROGRESS"),
               ))),
       )
       .map((delivery) => ({
@@ -989,7 +1035,10 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
             (stop.status === "PENDING" || stop.status === "ARRIVED"),
         ),
 
-        authorization_request: this.latestAuthorizationRequest(delivery.id!, driverId),
+        authorization_request: this.latestAuthorizationRequest(
+          delivery.id!,
+          driverId,
+        ),
       }));
   }
 
@@ -1002,7 +1051,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       .filter(
         (occurrence) =>
           occurrence.deliveryId === deliveryId &&
-          (occurrence.authorization_status ?? "NOT_REQUIRED") !== "NOT_REQUIRED" &&
+          (occurrence.authorization_status ?? "NOT_REQUIRED") !==
+            "NOT_REQUIRED" &&
           // reportedBy.driverId = driverId: only this driver's own request.
           this.driverOfUser.get(occurrence.reportedById) === driverId,
       )
@@ -1018,7 +1068,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       occurrenceId: latest.id,
       occurrenceTypeId: latest.occurrenceTypeId,
       occurrenceTypeName:
-        this.occurrenceTypeNames.get(latest.occurrenceTypeId) ?? "Tipo de ocorrência",
+        this.occurrenceTypeNames.get(latest.occurrenceTypeId) ??
+        "Tipo de ocorrência",
       status: latest.authorization_status!,
       note: latest.authorization_note ?? null,
       decidedAt: latest.authorized_at ?? null,
@@ -1136,7 +1187,10 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       // `stops orderBy created_at desc take 1`: the latest stop's route.
       const latestStop = this.routeStops
         .filter((stop) => stop.deliveryId === delivery.id)
-        .sort((a, b) => (b.created_at?.getTime() ?? 0) - (a.created_at?.getTime() ?? 0))[0];
+        .sort(
+          (a, b) =>
+            (b.created_at?.getTime() ?? 0) - (a.created_at?.getTime() ?? 0),
+        )[0];
 
       yield deliveryExportRow(delivery, {
         shipperName: this.shipperNames.get(delivery.shipperId) ?? null,
@@ -1192,7 +1246,8 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       if (
         blocking !== undefined &&
         (rowCategory !== "NOT_DELIVERED" ||
-          (this.occurrenceTypeBlocking.get(occurrence.occurrenceTypeId) === true) !==
+          (this.occurrenceTypeBlocking.get(occurrence.occurrenceTypeId) ===
+            true) !==
             blocking)
       ) {
         continue;
@@ -1214,9 +1269,14 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
       yield occurrenceExportRow(
         { ...occurrence, category: rowCategory },
         {
-          typeName: this.occurrenceTypeNames.get(occurrence.occurrenceTypeId) ?? null,
-          blocksDelivery: this.occurrenceTypeBlocking.get(occurrence.occurrenceTypeId) === true,
-          formFields: this.occurrenceTypeFormFields.get(occurrence.occurrenceTypeId) ?? null,
+          typeName:
+            this.occurrenceTypeNames.get(occurrence.occurrenceTypeId) ?? null,
+          blocksDelivery:
+            this.occurrenceTypeBlocking.get(occurrence.occurrenceTypeId) ===
+            true,
+          formFields:
+            this.occurrenceTypeFormFields.get(occurrence.occurrenceTypeId) ??
+            null,
           delivery: {
             id: delivery.id!,
             recipient_name: delivery.recipient_name,
@@ -1247,14 +1307,19 @@ class InMemoryDeliveryRepository implements IDeliveryRepository {
     eventData: CreateDeliveryEventProps,
   ): Promise<void> {
     // tenantOfDelivery: P2025 for a delivery that is not there.
-    const delivery = this.deliveries.find((row) => row.id === eventData.deliveryId);
+    const delivery = this.deliveries.find(
+      (row) => row.id === eventData.deliveryId,
+    );
 
     if (!delivery) throw recordNotFound("update");
 
     // client_submission_id is @unique on the whole table.
     if (
       eventData.client_submission_id &&
-      this.events.some((event) => event.client_submission_id === eventData.client_submission_id)
+      this.events.some(
+        (event) =>
+          event.client_submission_id === eventData.client_submission_id,
+      )
     ) {
       throw uniqueViolation(["client_submission_id"]);
     }

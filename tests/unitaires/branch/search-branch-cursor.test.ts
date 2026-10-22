@@ -22,7 +22,12 @@ let users: InMemoryUserRepository;
 let businesses: InMemoryBusinessRepository;
 let branches: InMemoryBranchRepository;
 
-const branch = (id: string, businessId: string, minute: number, extra: Partial<Branch> = {}) =>
+const branch = (
+  id: string,
+  businessId: string,
+  minute: number,
+  extra: Partial<Branch> = {},
+) =>
   ({
     id,
     businessId,
@@ -65,7 +70,11 @@ const search = () => new SearchBranchCursorUseCase(users, branches, businesses);
 
 describe("SearchBranchCursorUseCase", () => {
   it("walks the company's active branches newest first, id breaking ties, no row twice", async () => {
-    const first = await search().execute({ userId: ADMIN_A, businessId: A, limit: 2 });
+    const first = await search().execute({
+      userId: ADMIN_A,
+      businessId: A,
+      limit: 2,
+    });
 
     expect(first.data.map((row) => row.id.slice(-1))).toEqual(["4", "3"]);
     expect(first.hasMore).toBe(true);
@@ -84,7 +93,11 @@ describe("SearchBranchCursorUseCase", () => {
   });
 
   it("searches case-insensitively inside the company only", async () => {
-    const result = await search().execute({ userId: ADMIN_A, businessId: A, search: "sorocaba" });
+    const result = await search().execute({
+      userId: ADMIN_A,
+      businessId: A,
+      search: "sorocaba",
+    });
 
     expect(result.data.map((row) => row.id.slice(-1))).toEqual(["2"]);
   });
@@ -100,7 +113,9 @@ describe("SearchBranchCursorUseCase", () => {
   });
 
   it("refuses another company's branches (403 TENANT_ACCESS_DENIED)", async () => {
-    await expect(search().execute({ userId: ADMIN_B, businessId: A })).rejects.toMatchObject({
+    await expect(
+      search().execute({ userId: ADMIN_B, businessId: A }),
+    ).rejects.toMatchObject({
       statusCode: 403,
       code: "TENANT_ACCESS_DENIED",
     });
@@ -111,12 +126,17 @@ describe("SearchBranchCursorUseCase", () => {
     expect(result.data).toHaveLength(1);
 
     await expect(
-      search().execute({ userId: MASTER, businessId: "018f3100-0000-7000-8000-0000000000fe" }),
+      search().execute({
+        userId: MASTER,
+        businessId: "018f3100-0000-7000-8000-0000000000fe",
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "BUSINESS_NOT_FOUND" });
   });
 
   it("answers 404 USER_NOT_FOUND for an unknown session user", async () => {
-    await expect(search().execute({ userId: "nobody", businessId: A })).rejects.toMatchObject({
+    await expect(
+      search().execute({ userId: "nobody", businessId: A }),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "USER_NOT_FOUND",
     });

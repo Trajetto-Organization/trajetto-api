@@ -1,5 +1,13 @@
 import "@/shared";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -47,7 +55,10 @@ import { aiCredentialFailuresSql } from "@/shared/health/operational-snapshot";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 import { sendAIVerificationEvent } from "@/websocket";
 
-import { seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
+import {
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
 import { seedProofCard } from "./support/proof-card-seed";
 
 /**
@@ -108,7 +119,9 @@ function ocrReader(options: FakeImageReaderOptions = {}) {
 }
 
 async function ledger() {
-  const period = await prisma.aIUsagePeriod.findUniqueOrThrow({ where: { id: periodId } });
+  const period = await prisma.aIUsagePeriod.findUniqueOrThrow({
+    where: { id: periodId },
+  });
 
   return { reserved: period.reservedUnits, consumed: period.consumedUnits };
 }
@@ -118,7 +131,9 @@ function completedEvent(recordId: string): Record<string, unknown> | undefined {
   const events = vi
     .mocked(sendAIVerificationEvent)
     .mock.calls.map(([, event]) => event as Record<string, unknown>)
-    .filter((event) => event.recordId === recordId && event.step === "completed");
+    .filter(
+      (event) => event.recordId === recordId && event.step === "completed",
+    );
 
   return events[events.length - 1];
 }
@@ -179,7 +194,10 @@ async function queueFuel() {
 /** A checklist whose units were reserved as a reader that read EVERY photo left them. */
 async function queueChecklist(fields: string[]) {
   const photosByField = Object.fromEntries(
-    fields.map((field) => [field, [`checklistPhotos/${BUSINESS}/${randomUUID()}-${field}.jpg`]]),
+    fields.map((field) => [
+      field,
+      [`checklistPhotos/${BUSINESS}/${randomUUID()}-${field}.jpg`],
+    ]),
   );
 
   const checklist = await prisma.vehicleChecklist.create({
@@ -216,7 +234,11 @@ async function queueChecklist(fields: string[]) {
         checklistData: Object.fromEntries(
           fields.map((field) => [
             field,
-            field === "current_mileage" ? 1000 : field === "fuel_level_adequate" ? true : "good",
+            field === "current_mileage"
+              ? 1000
+              : field === "fuel_level_adequate"
+                ? true
+                : "good",
           ]),
         ),
       },
@@ -225,7 +247,9 @@ async function queueChecklist(fields: string[]) {
 
   // One by one: the pipeline walks them in creation order.
   for (const field of fields) {
-    await prisma.aIAnalysisUnit.create({ data: { requestId: request.id, unitKey: field } });
+    await prisma.aIAnalysisUnit.create({
+      data: { requestId: request.id, unitKey: field },
+    });
   }
 
   await reserve(fields.length);
@@ -264,25 +288,38 @@ async function queueProof(signature: string | null) {
     },
   });
 
-  await prisma.aIAnalysisUnit.create({ data: { requestId: request.id, unitKey: "proof" } });
+  await prisma.aIAnalysisUnit.create({
+    data: { requestId: request.id, unitKey: "proof" },
+  });
   await reserve(1);
 
   return { requestId: request.id, deliveryId };
 }
 
 beforeAll(async () => {
-  vi.spyOn(AIAnalysisPipelineService.prototype, "wake").mockImplementation(() => undefined);
+  vi.spyOn(AIAnalysisPipelineService.prototype, "wake").mockImplementation(
+    () => undefined,
+  );
   vi.spyOn(OutboxService.prototype as never, "wakePipeline").mockImplementation(
     (() => undefined) as never,
   );
 
-  fleet = await seedFleetDriver(prisma, { businessId: BUSINESS, cnpj: "62777999000190" });
+  fleet = await seedFleetDriver(prisma, {
+    businessId: BUSINESS,
+    cnpj: "62777999000190",
+  });
 
-  await prisma.business.update({ where: { id: BUSINESS }, data: { ai_analysis_limit: 1000 } });
+  await prisma.business.update({
+    where: { id: BUSINESS },
+    data: { ai_analysis_limit: 1000 },
+  });
 
   periodId = (
     await prisma.aIUsagePeriod.create({
-      data: { businessId: BUSINESS, periodStart: quotaPeriodFor(new Date(), null).periodStart },
+      data: {
+        businessId: BUSINESS,
+        periodStart: quotaPeriodFor(new Date(), null).periodStart,
+      },
     })
   ).id;
 }, 60_000);
@@ -328,9 +365,13 @@ describe("a busy reader (its queue full, HTTP 503): back-pressure, not failure",
     // unit's lastError, so the audit trail filled with failures that never were.
     expect(row.units[0].lastError).toBeNull();
     expect(
-      await prisma.aIProviderAttempt.count({ where: { unitId: row.units[0].id } }),
+      await prisma.aIProviderAttempt.count({
+        where: { unitId: row.units[0].id },
+      }),
     ).toBe(0);
-    expect(row.availableAt.getTime()).toBeGreaterThanOrEqual(startedAt + AI_BUSY_RETRY_MIN_MS - 1_000);
+    expect(row.availableAt.getTime()).toBeGreaterThanOrEqual(
+      startedAt + AI_BUSY_RETRY_MIN_MS - 1_000,
+    );
     expect(row.availableAt.getTime()).toBeLessThanOrEqual(
       Date.now() + AI_BUSY_RETRY_MIN_MS + AI_BUSY_RETRY_SPREAD_MS + 1_000,
     );
@@ -358,7 +399,10 @@ describe("a busy reader (its queue full, HTTP 503): back-pressure, not failure",
         select: { attemptNo: true, status: true },
       }),
     ).toEqual([{ attemptNo: 1, status: "SUCCEEDED" }]);
-    expect(await ledger()).toEqual({ reserved: before.reserved - 1, consumed: before.consumed + 1 });
+    expect(await ledger()).toEqual({
+      reserved: before.reserved - 1,
+      consumed: before.consumed + 1,
+    });
 
     const fuel = await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } });
     expect(fuel.odometer_ai_status).toBe("verified");
@@ -379,7 +423,9 @@ describe("a busy reader (its queue full, HTTP 503): back-pressure, not failure",
       where: { id: { in: queued.map((entry) => entry.requestId) } },
     });
 
-    expect(rows.every((row) => row.status === "PENDING" && row.attempts === 0)).toBe(true);
+    expect(
+      rows.every((row) => row.status === "PENDING" && row.attempts === 0),
+    ).toBe(true);
   });
 
   it("in a checklist keeps the fields already read, and waits with the rest", async () => {
@@ -389,11 +435,18 @@ describe("a busy reader (its queue full, HTTP 503): back-pressure, not failure",
       failures: [null, "busy"],
       answers: {
         odometer: ODOMETER,
-        condition: { condicao_observada: "good", confianca: 0.9, observacao: "" },
+        condition: {
+          condicao_observada: "good",
+          confianca: 0.9,
+          observacao: "",
+        },
       },
     });
 
-    const { requestId } = await queueChecklist(["current_mileage", "tires_condition"]);
+    const { requestId } = await queueChecklist([
+      "current_mileage",
+      "tires_condition",
+    ]);
     const before = await ledger();
 
     await pipeline.runCycle();
@@ -403,14 +456,20 @@ describe("a busy reader (its queue full, HTTP 503): back-pressure, not failure",
       include: { units: { orderBy: { created_at: "asc" } } },
     });
 
-    expect(reader.calls.map((call) => call.kind)).toEqual(["odometer", "condition"]);
+    expect(reader.calls.map((call) => call.kind)).toEqual([
+      "odometer",
+      "condition",
+    ]);
     expect(row.status).toBe("PENDING");
     expect(row.attempts).toBe(0);
     expect(row.units.map((unit) => [unit.unitKey, unit.status])).toEqual([
       ["current_mileage", "CONSUMED"],
       ["tires_condition", "RESERVED"],
     ]);
-    expect(await ledger()).toEqual({ reserved: before.reserved - 1, consumed: before.consumed + 1 });
+    expect(await ledger()).toEqual({
+      reserved: before.reserved - 1,
+      consumed: before.consumed + 1,
+    });
   });
 });
 
@@ -430,8 +489,14 @@ describe("a refused token (HTTP 401)", () => {
 
     expect(row.status).toBe("FAILED");
     expect(row.units[0].status).toBe("RELEASED");
-    expect(await ledger()).toEqual({ reserved: before.reserved - 1, consumed: before.consumed });
-    expect(pipeline.circuit.snapshot()).toMatchObject({ state: "open", reason: "unauthorized" });
+    expect(await ledger()).toEqual({
+      reserved: before.reserved - 1,
+      consumed: before.consumed,
+    });
+    expect(pipeline.circuit.snapshot()).toMatchObject({
+      state: "open",
+      reason: "unauthorized",
+    });
 
     // The backlog waits for the probe instead of failing with it.
     const second = await queueFuel();
@@ -455,12 +520,17 @@ describe("a refused AI_LOCAL_TOKEN, through the real LocalOcrReader", () => {
       // Like trajetto-ai: the body is read before the refusal is sent.
       request.resume();
       request.on("end", () => {
-        response.writeHead(401, { "Content-Type": "application/json", Connection: "close" });
+        response.writeHead(401, {
+          "Content-Type": "application/json",
+          Connection: "close",
+        });
         response.end(JSON.stringify({ error: "unauthorized" }));
       });
     });
 
-    await new Promise<void>((resolve) => service.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) =>
+      service.listen(0, "127.0.0.1", resolve),
+    );
     const { port } = service.address() as AddressInfo;
 
     try {
@@ -475,14 +545,20 @@ describe("a refused AI_LOCAL_TOKEN, through the real LocalOcrReader", () => {
 
       const since = new Date(Date.now() - 1_000);
       const credentialFailures = async () =>
-        (await prisma.$queryRaw<Array<{ n: number }>>(aiCredentialFailuresSql(since)))[0].n;
+        (
+          await prisma.$queryRaw<Array<{ n: number }>>(
+            aiCredentialFailuresSql(since),
+          )
+        )[0].n;
 
       const before = await credentialFailures();
       const { requestId } = await queueFuel();
 
       await pipeline.runCycle();
 
-      const row = await prisma.aIAnalysisRequest.findUniqueOrThrow({ where: { id: requestId } });
+      const row = await prisma.aIAnalysisRequest.findUniqueOrThrow({
+        where: { id: requestId },
+      });
 
       expect(row.status).toBe("FAILED");
       expect(row.lastError).toMatch(/^401 unauthorized: /);
@@ -515,14 +591,21 @@ describe("units reserved under a reader that covered more (ADR 0010 §5)", () =>
 
     expect(reader.calls.map((call) => call.kind)).toEqual(["odometer"]);
     expect(row.status).toBe("COMPLETED");
-    expect(row.units.map((unit) => [unit.unitKey, unit.status, unit.lastError])).toEqual([
+    expect(
+      row.units.map((unit) => [unit.unitKey, unit.status, unit.lastError]),
+    ).toEqual([
       ["current_mileage", "CONSUMED", null],
       ["tires_condition", "RELEASED", UNSUPPORTED_BY_READER_MARKER],
       ["fuel_level_adequate", "RELEASED", UNSUPPORTED_BY_READER_MARKER],
     ]);
-    expect(await ledger()).toEqual({ reserved: before.reserved - 3, consumed: before.consumed + 1 });
+    expect(await ledger()).toEqual({
+      reserved: before.reserved - 3,
+      consumed: before.consumed + 1,
+    });
 
-    const checklist = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: checklistId } });
+    const checklist = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: checklistId },
+    });
     expect(checklist.ai_verification_details).toMatchObject({
       current_mileage: { status: "confirmed", fraudAssessed: false },
     });
@@ -533,14 +616,18 @@ describe("units reserved under a reader that covered more (ADR 0010 §5)", () =>
       overallStatus: "verified",
       currentResult: {
         fraudAssessed: false,
-        details: expect.stringMatching(/^Km lida confere com a informada\. A leitura automática não identifica foto de tela/),
+        details: expect.stringMatching(
+          /^Km lida confere com a informada\. A leitura automática não identifica foto de tela/,
+        ),
       },
     });
   });
 
   it("with nothing covered, settles without a call and marks the checklist not analysed — never 'error'", async () => {
     const reader = ocrReader();
-    const { requestId, checklistId } = await queueChecklist(["tires_condition"]);
+    const { requestId, checklistId } = await queueChecklist([
+      "tires_condition",
+    ]);
     const before = await ledger();
 
     await pipeline.runCycle();
@@ -554,9 +641,14 @@ describe("units reserved under a reader that covered more (ADR 0010 §5)", () =>
     expect(row.status).toBe("COMPLETED");
     expect(row.lastError).toBe(UNSUPPORTED_BY_READER_MARKER);
     expect(row.units[0].status).toBe("RELEASED");
-    expect(await ledger()).toEqual({ reserved: before.reserved - 1, consumed: before.consumed });
+    expect(await ledger()).toEqual({
+      reserved: before.reserved - 1,
+      consumed: before.consumed,
+    });
 
-    const checklist = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: checklistId } });
+    const checklist = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: checklistId },
+    });
     expect(checklist.ai_verification_status).toBe("skipped");
   });
 });
@@ -589,11 +681,15 @@ describe("what OCR does not judge never reaches the record as judged", () => {
   it("a clean receipt with the on-screen signature goes to a person, never 'looks_good'", async () => {
     ocrReader({ answers: { proof: { ...RECEIPT } } });
 
-    const { deliveryId } = await queueProof(`deliverySignatures/${BUSINESS}/assinatura.png`);
+    const { deliveryId } = await queueProof(
+      `deliverySignatures/${BUSINESS}/assinatura.png`,
+    );
 
     await pipeline.runCycle();
 
-    const card = await prisma.deliveryProofAudit.findUniqueOrThrow({ where: { deliveryId } });
+    const card = await prisma.deliveryProofAudit.findUniqueOrThrow({
+      where: { deliveryId },
+    });
 
     // Red before: the on-screen signature settled it and the card read
     // "looks_good" on the machine's word alone.
@@ -615,13 +711,17 @@ describe("what OCR does not judge never reaches the record as judged", () => {
   });
 
   it("a receipt of another invoice is 'looks_wrong' and the driver is told", async () => {
-    ocrReader({ answers: { proof: { ...RECEIPT, numero_documento_lido: "000099999" } } });
+    ocrReader({
+      answers: { proof: { ...RECEIPT, numero_documento_lido: "000099999" } },
+    });
 
     const { deliveryId } = await queueProof(null);
 
     await pipeline.runCycle();
 
-    const card = await prisma.deliveryProofAudit.findUniqueOrThrow({ where: { deliveryId } });
+    const card = await prisma.deliveryProofAudit.findUniqueOrThrow({
+      where: { deliveryId },
+    });
 
     expect(card.ai_suggestion).toMatchObject({
       assessment: { suggestion: "looks_wrong", failed: ["documentMatches"] },
@@ -689,19 +789,32 @@ describe("one photo = one unit, once (ADR 0010 §5)", () => {
     const before = await ledger();
 
     // The outbox replays the same submission; the screen asks again.
-    const outcomes = await Promise.all([submit(), submit(), submit(), submit(), submit()]);
+    const outcomes = await Promise.all([
+      submit(),
+      submit(),
+      submit(),
+      submit(),
+      submit(),
+    ]);
     expect(outcomes.filter((outcome) => outcome === "queued")).toHaveLength(1);
 
     for (let pass = 0; pass < 3; pass++) {
-      const requests = await prisma.aIAnalysisRequest.findMany({ where: { recordId: fuel.id } });
+      const requests = await prisma.aIAnalysisRequest.findMany({
+        where: { recordId: fuel.id },
+      });
       for (const request of requests) await makeDue(request.id);
       await pipeline.runCycle();
       expect(await submit()).toBe("already_completed");
     }
 
     expect(reader.calls).toHaveLength(1);
-    expect(await prisma.aIAnalysisRequest.count({ where: { recordId: fuel.id } })).toBe(1);
-    expect(await ledger()).toEqual({ reserved: before.reserved, consumed: before.consumed + 1 });
+    expect(
+      await prisma.aIAnalysisRequest.count({ where: { recordId: fuel.id } }),
+    ).toBe(1);
+    expect(await ledger()).toEqual({
+      reserved: before.reserved,
+      consumed: before.consumed + 1,
+    });
   });
 
   it("a checklist of eight photos with one odometer reserves and consumes one", async () => {
@@ -717,7 +830,10 @@ describe("one photo = one unit, once (ADR 0010 §5)", () => {
       "fire_extinguisher_valid",
     ];
     const photosByField = Object.fromEntries(
-      fields.map((field) => [field, [`checklistPhotos/${BUSINESS}/${randomUUID()}.jpg`]]),
+      fields.map((field) => [
+        field,
+        [`checklistPhotos/${BUSINESS}/${randomUUID()}.jpg`],
+      ]),
     );
 
     const checklist = await prisma.vehicleChecklist.create({
@@ -754,12 +870,18 @@ describe("one photo = one unit, once (ADR 0010 §5)", () => {
     });
 
     expect(outcome).toBe("queued");
-    expect(await ledger()).toEqual({ reserved: before.reserved + 1, consumed: before.consumed });
+    expect(await ledger()).toEqual({
+      reserved: before.reserved + 1,
+      consumed: before.consumed,
+    });
 
     await pipeline.runCycle();
 
     expect(reader.calls.map((call) => call.kind)).toEqual(["odometer"]);
-    expect(await ledger()).toEqual({ reserved: before.reserved, consumed: before.consumed + 1 });
+    expect(await ledger()).toEqual({
+      reserved: before.reserved,
+      consumed: before.consumed + 1,
+    });
   });
 });
 
@@ -800,7 +922,9 @@ describe("the device pre-check's agreement with the server's reading", () => {
 
     await pipeline.runCycle();
 
-    const card = await prisma.deliveryProofAudit.findUniqueOrThrow({ where: { deliveryId } });
+    const card = await prisma.deliveryProofAudit.findUniqueOrThrow({
+      where: { deliveryId },
+    });
 
     expect(card.device_agreement).toBe("AGREE");
     // The device's declaration is kept as it was sent.
@@ -819,7 +943,9 @@ describe("the device pre-check's agreement with the server's reading", () => {
 
     await pipeline.runCycle();
 
-    const card = await prisma.deliveryProofAudit.findUniqueOrThrow({ where: { deliveryId } });
+    const card = await prisma.deliveryProofAudit.findUniqueOrThrow({
+      where: { deliveryId },
+    });
 
     expect(card.device_agreement).toBe("DISAGREE");
   });
@@ -830,7 +956,9 @@ describe("the device pre-check's agreement with the server's reading", () => {
 
     await pipeline.runCycle();
 
-    const card = await prisma.deliveryProofAudit.findUniqueOrThrow({ where: { deliveryId } });
+    const card = await prisma.deliveryProofAudit.findUniqueOrThrow({
+      where: { deliveryId },
+    });
 
     expect(card.ai_suggestion).not.toBeNull();
     expect(card.device_agreement).toBeNull();
@@ -857,7 +985,9 @@ describe("the device pre-check's agreement with the server's reading", () => {
   });
 
   it("is NOT_APPLICABLE when the server could not read the odometer", async () => {
-    ocrReader({ answers: { odometer: { ...ODOMETER, legivel: false, valor_lido: null } } });
+    ocrReader({
+      answers: { odometer: { ...ODOMETER, legivel: false, valor_lido: null } },
+    });
     const { fuelId } = await queueFuel();
 
     await prisma.fuel.update({

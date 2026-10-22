@@ -13,7 +13,10 @@ import { WebhookDeliveryRepository } from "./repositories/webhook-delivery-repos
  * Idempotent: a second import registers nothing new.
  */
 if (!container.isRegistered("ApiKeyRepository")) {
-  container.registerSingleton<IApiKeyRepository>("ApiKeyRepository", ApiKeyRepository);
+  container.registerSingleton<IApiKeyRepository>(
+    "ApiKeyRepository",
+    ApiKeyRepository,
+  );
 }
 
 if (!container.isRegistered("WebhookEndpointRepository")) {

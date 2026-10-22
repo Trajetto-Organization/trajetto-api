@@ -50,7 +50,10 @@ async function seedBusiness(id: string, cnpj: string): Promise<void> {
   });
 }
 
-async function seedSupplier(businessId: string, createdAt: Date): Promise<void> {
+async function seedSupplier(
+  businessId: string,
+  createdAt: Date,
+): Promise<void> {
   await prisma.supplier.create({
     data: {
       name: `Fornecedor ${randomUUID().slice(0, 8)}`,
@@ -97,7 +100,10 @@ describe("counting a month in the database", () => {
       const [year, month] = entry.month.split("-").map(Number);
 
       for (let n = 0; n < entry.rows; n += 1) {
-        await seedSupplier(CARRIER, zonedWallTimeToUtc(SP, year, month, 10, 12));
+        await seedSupplier(
+          CARRIER,
+          zonedWallTimeToUtc(SP, year, month, 10, 12),
+        );
       }
     }
 
@@ -106,7 +112,9 @@ describe("counting a month in the database", () => {
       CARRIER,
     );
 
-    const found = new Map(grouped.map((bucket) => [bucket.month, bucket.count]));
+    const found = new Map(
+      grouped.map((bucket) => [bucket.month, bucket.count]),
+    );
 
     for (const entry of plan) {
       // The reference answer, asked directly on the company's month bounds.
@@ -148,7 +156,10 @@ describe("counting a month in the database", () => {
 
   it("follows the company's own zone, not a national one", async () => {
     // 23:30 on 31 Aug in Manaus is 00:30 on 1 Sep in São Paulo.
-    await seedSupplier(CARRIER, zonedWallTimeToUtc(MANAUS, 2025, 8, 31, 23, 30));
+    await seedSupplier(
+      CARRIER,
+      zonedWallTimeToUtc(MANAUS, 2025, 8, 31, 23, 30),
+    );
 
     const inManaus = await repository.countByMonth(
       { entity: "supplier", ...months(MANAUS, "2025-08", "2025-10") },
@@ -338,7 +349,10 @@ describe("the catalogue totals", () => {
 
   it("counts every row and those created before the company's month began", async () => {
     const totals = await repository.countManyTotals(
-      { entities: ["supplier", "vehicle"], before: businessMonthStart("2026-10", SP) },
+      {
+        entities: ["supplier", "vehicle"],
+        before: businessMonthStart("2026-10", SP),
+      },
       STOCK,
     );
 
@@ -366,12 +380,20 @@ describe("the catalogue totals", () => {
 
   it("never counts another company's rows, and answers zeros for an unknown entity", async () => {
     const totals = await repository.countManyTotals(
-      { entities: ["supplier", "inventado" as never], before: businessMonthStart("2026-10", SP) },
+      {
+        entities: ["supplier", "inventado" as never],
+        before: businessMonthStart("2026-10", SP),
+      },
       STOCK,
     );
 
     expect(totals.supplier.total).toBe(3);
     expect(totals.inventado).toEqual({ total: 0, before: 0 });
-    expect(await repository.countManyTotals({ entities: [], before: new Date() }, STOCK)).toEqual({});
+    expect(
+      await repository.countManyTotals(
+        { entities: [], before: new Date() },
+        STOCK,
+      ),
+    ).toEqual({});
   });
 });

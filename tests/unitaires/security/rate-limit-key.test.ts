@@ -15,8 +15,12 @@ const FORWARDER_SECRET = "f".repeat(40);
 
 vi.mock("@/env", () => ({
   env: {
-    get RATE_LIMIT_TRUSTED_PROXY() { return mode; },
-    get RATE_LIMIT_FORWARDER_SECRET() { return forwarderSecret; },
+    get RATE_LIMIT_TRUSTED_PROXY() {
+      return mode;
+    },
+    get RATE_LIMIT_FORWARDER_SECRET() {
+      return forwarderSecret;
+    },
     JWT_SECRET: "access-secret-for-this-test-only",
     JWT_SECRET_REFRESH_TOKEN: "refresh-secret-for-this-test-only",
   },
@@ -190,17 +194,15 @@ describe("a call relayed by the web server", () => {
   it("is counted by the browser's address when the secret matches", () => {
     forwarderSecret = FORWARDER_SECRET;
 
-    expect(clientRateLimitKey(relayed(FORWARDER_SECRET))).toBe(
-      "ip:189.40.1.7",
-    );
+    expect(clientRateLimitKey(relayed(FORWARDER_SECRET))).toBe("ip:189.40.1.7");
   });
 
   it("keeps two browsers behind the same web server apart", () => {
     forwarderSecret = FORWARDER_SECRET;
 
-    expect(clientRateLimitKey(relayed(FORWARDER_SECRET, "189.40.1.7"))).not.toBe(
-      clientRateLimitKey(relayed(FORWARDER_SECRET, "177.12.9.3")),
-    );
+    expect(
+      clientRateLimitKey(relayed(FORWARDER_SECRET, "189.40.1.7")),
+    ).not.toBe(clientRateLimitKey(relayed(FORWARDER_SECRET, "177.12.9.3")));
   });
 
   it("ignores the header without the secret — anybody can send it", () => {
@@ -215,9 +217,7 @@ describe("a call relayed by the web server", () => {
   it("ignores the header when this API holds no secret at all", () => {
     forwarderSecret = undefined;
 
-    expect(clientRateLimitKey(relayed(FORWARDER_SECRET))).toBe(
-      "ip:10.0.0.50",
-    );
+    expect(clientRateLimitKey(relayed(FORWARDER_SECRET))).toBe("ip:10.0.0.50");
   });
 
   it("ignores a forwarded value that is not an address", () => {

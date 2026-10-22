@@ -169,10 +169,11 @@ describe("who a customer message goes to", () => {
       is_active: true,
     });
 
-    const [recipient] = await deliveryDispatchedPolicy.resolveExternalRecipients!(
-      payload({ recipientTelephone: "5511900000000" }),
-      withTemplate,
-    );
+    const [recipient] =
+      await deliveryDispatchedPolicy.resolveExternalRecipients!(
+        payload({ recipientTelephone: "5511900000000" }),
+        withTemplate,
+      );
 
     expect(recipient.telephone).toBe("5511911110000");
     expect(recipients.recipients[0].telephone).toBe("5511911110000");

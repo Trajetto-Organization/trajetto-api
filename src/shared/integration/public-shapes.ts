@@ -91,7 +91,9 @@ interface PublicEvent {
 function toIso(value: Date | string | null | undefined): string | null {
   if (!value) return null;
 
-  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+  return value instanceof Date
+    ? value.toISOString()
+    : new Date(value).toISOString();
 }
 
 /**

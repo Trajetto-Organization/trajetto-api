@@ -243,14 +243,9 @@ const HEADER_LOOKUP: Map<string, string> = (() => {
   return lookup;
 })();
 
-const REQUIRED_KEYS = TEMPLATE_COLUMNS.filter(
-  (column) => column.required,
-).map((column) => column.key);
+const REQUIRED_KEYS = TEMPLATE_COLUMNS.filter((column) => column.required).map(
+  (column) => column.key,
+);
 
-export {
-  HEADER_LOOKUP,
-  REQUIRED_KEYS,
-  TEMPLATE_COLUMNS,
-  normalizeHeader,
-};
+export { HEADER_LOOKUP, REQUIRED_KEYS, TEMPLATE_COLUMNS, normalizeHeader };
 export type { TemplateColumn };

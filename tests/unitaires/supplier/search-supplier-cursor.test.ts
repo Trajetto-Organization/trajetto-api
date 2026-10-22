@@ -22,7 +22,13 @@ let users: InMemoryUserRepository;
 let businesses: InMemoryBusinessRepository;
 let suppliers: InMemorySupplierRepository;
 
-const supplierOf = (id: string, businessId: string, name: string, createdAt: string, cnpj: string | null = null) =>
+const supplierOf = (
+  id: string,
+  businessId: string,
+  name: string,
+  createdAt: string,
+  cnpj: string | null = null,
+) =>
   ({
     id,
     businessId,
@@ -43,23 +49,55 @@ beforeEach(() => {
     { id: ADMIN, role: "BUSINESS_ADMIN", businessId: CARRIER } as User,
     { id: MASTER, role: "MASTER", businessId: null } as unknown as User,
   );
-  businesses.business.push({ id: CARRIER } as Business, { id: OTHER } as Business);
+  businesses.business.push(
+    { id: CARRIER } as Business,
+    { id: OTHER } as Business,
+  );
 
   suppliers.suppliers.push(
-    supplierOf("018f3800-0000-7000-8000-000000000001", CARRIER, "Oficina Central", "2026-09-01T12:00:00Z", "11222333000181"),
-    supplierOf("018f3800-0000-7000-8000-000000000002", CARRIER, "Auto Peças Sul", "2026-09-02T12:00:00Z"),
-    supplierOf("018f3800-0000-7000-8000-000000000003", CARRIER, "Pneus Norte", "2026-09-03T12:00:00Z"),
-    supplierOf("018f3800-0000-7000-8000-000000000004", OTHER, "Oficina Central", "2026-09-04T12:00:00Z"),
+    supplierOf(
+      "018f3800-0000-7000-8000-000000000001",
+      CARRIER,
+      "Oficina Central",
+      "2026-09-01T12:00:00Z",
+      "11222333000181",
+    ),
+    supplierOf(
+      "018f3800-0000-7000-8000-000000000002",
+      CARRIER,
+      "Auto Peças Sul",
+      "2026-09-02T12:00:00Z",
+    ),
+    supplierOf(
+      "018f3800-0000-7000-8000-000000000003",
+      CARRIER,
+      "Pneus Norte",
+      "2026-09-03T12:00:00Z",
+    ),
+    supplierOf(
+      "018f3800-0000-7000-8000-000000000004",
+      OTHER,
+      "Oficina Central",
+      "2026-09-04T12:00:00Z",
+    ),
   );
 });
 
-const search = () => new SearchSupplierCursorUseCase(users, suppliers, businesses);
+const search = () =>
+  new SearchSupplierCursorUseCase(users, suppliers, businesses);
 
 describe("the supplier picker", () => {
   it("pages the company's suppliers newest first", async () => {
-    const first = await search().execute({ userId: ADMIN, businessId: CARRIER, limit: 2 });
+    const first = await search().execute({
+      userId: ADMIN,
+      businessId: CARRIER,
+      limit: 2,
+    });
 
-    expect(first.data.map((row) => row.name)).toEqual(["Pneus Norte", "Auto Peças Sul"]);
+    expect(first.data.map((row) => row.name)).toEqual([
+      "Pneus Norte",
+      "Auto Peças Sul",
+    ]);
     expect(first.hasMore).toBe(true);
 
     const second = await search().execute({
@@ -74,15 +112,23 @@ describe("the supplier picker", () => {
   });
 
   it("finds by name and by a masked CNPJ, never another company's row", async () => {
-    const byName = await search().execute({ userId: ADMIN, businessId: CARRIER, search: "oficina" });
-    expect(byName.data.map((row) => row.id)).toEqual(["018f3800-0000-7000-8000-000000000001"]);
+    const byName = await search().execute({
+      userId: ADMIN,
+      businessId: CARRIER,
+      search: "oficina",
+    });
+    expect(byName.data.map((row) => row.id)).toEqual([
+      "018f3800-0000-7000-8000-000000000001",
+    ]);
 
     const byCnpj = await search().execute({
       userId: ADMIN,
       businessId: CARRIER,
       search: "11.222.333/0001-81",
     });
-    expect(byCnpj.data.map((row) => row.id)).toEqual(["018f3800-0000-7000-8000-000000000001"]);
+    expect(byCnpj.data.map((row) => row.id)).toEqual([
+      "018f3800-0000-7000-8000-000000000001",
+    ]);
   });
 
   it("refuses another company (403), an unknown company (404) and an unknown caller (404)", async () => {

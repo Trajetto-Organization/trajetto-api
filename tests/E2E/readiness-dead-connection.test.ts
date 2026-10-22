@@ -44,21 +44,28 @@ afterAll(async () => {
 });
 
 describe("readiness after its connection dies in silence", () => {
-  it("says no while the connection is dead, then yes on a fresh one", { timeout: 20_000 }, async () => {
-    expect(await probe.probeDatabase()).toBe(true);
+  it(
+    "says no while the connection is dead, then yes on a fresh one",
+    { timeout: 20_000 },
+    async () => {
+      expect(await probe.probeDatabase()).toBe(true);
 
-    proxy.forgetOpenFlows();
+      proxy.forgetOpenFlows();
 
-    // The dead connection: a "no", within the probe's own timeout.
-    const dead = await settle(probe.probeDatabase(), probe.READINESS_TIMEOUT_MS + 1_000);
+      // The dead connection: a "no", within the probe's own timeout.
+      const dead = await settle(
+        probe.probeDatabase(),
+        probe.READINESS_TIMEOUT_MS + 1_000,
+      );
 
-    expect(dead).toMatchObject({ kind: "answered", value: false });
+      expect(dead).toMatchObject({ kind: "answered", value: false });
 
-    // The database never went anywhere. The next probe must not go out on
-    // the same dead socket again.
-    const next = await settle(probe.probeDatabase(), 2_500);
+      // The database never went anywhere. The next probe must not go out on
+      // the same dead socket again.
+      const next = await settle(probe.probeDatabase(), 2_500);
 
-    expect(next).toMatchObject({ kind: "answered", value: true });
-    expect(next.ms).toBeLessThan(1_500);
-  });
+      expect(next).toMatchObject({ kind: "answered", value: true });
+      expect(next.ms).toBeLessThan(1_500);
+    },
+  );
 });

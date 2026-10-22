@@ -23,7 +23,8 @@ import { renderProofPdf } from "@/shared/services/proof-pdf-service";
  * - Unsigned: one QR, to /verificar; nothing points at the ITI.
  */
 const BASE = "https://app.trajetto.com.br";
-const TOKEN = "9f1c2a4e6b8d0f3a5c7e9b1d3f5a7c9e9f1c2a4e6b8d0f3a5c7e9b1d3f5a7c9e";
+const TOKEN =
+  "9f1c2a4e6b8d0f3a5c7e9b1d3f5a7c9e9f1c2a4e6b8d0f3a5c7e9b1d3f5a7c9e";
 const VERIFY_URL = `${BASE}/verificar/${TOKEN}`;
 const ITI = "https://validar.iti.gov.br";
 
@@ -48,7 +49,10 @@ function source(): ProofDocumentSource {
       received_by: "Maria Souza",
       shipper: { name: "Distribuidora Norte", cnpj: "11222333000199" },
     },
-    business: { corporate_reason: "Transportes Silva Ltda", cnpj: "11222333000166" },
+    business: {
+      corporate_reason: "Transportes Silva Ltda",
+      cnpj: "11222333000166",
+    },
     driver: { name: "João Motorista", cpf: "12345678900" },
     route: { code: 42, name: null },
     proof: {
@@ -71,7 +75,9 @@ const model = (signing: ProofSigningIntent) =>
 
 /** Every URI a link annotation in the file points at. */
 function linkTargets(bytes: Buffer): string[] {
-  return [...bytes.toString("latin1").matchAll(/\/URI \(([^)]*)\)/g)].map((match) => match[1]);
+  return [...bytes.toString("latin1").matchAll(/\/URI \(([^)]*)\)/g)].map(
+    (match) => match[1],
+  );
 }
 
 const pageCount = (bytes: Buffer): number =>
@@ -87,7 +93,8 @@ describe("the links of an UNSIGNED receipt", () => {
     const targets = linkTargets(rendered.bytes);
 
     expect(
-      (rendered.bytes.toString("latin1").match(/\/Subtype \/Link/g) ?? []).length,
+      (rendered.bytes.toString("latin1").match(/\/Subtype \/Link/g) ?? [])
+        .length,
     ).toBe(targets.length);
 
     // The printed URL (one annotation per line) plus the QR.
@@ -103,7 +110,10 @@ describe("the links of a SIGNED receipt", () => {
   };
 
   it("point the main QR at the ITI validator, and the rest at /verificar, whole", async () => {
-    const rendered = await renderProofPdf(model(signing), { photo: null, signature: null });
+    const rendered = await renderProofPdf(model(signing), {
+      photo: null,
+      signature: null,
+    });
 
     const targets = linkTargets(rendered.bytes);
 
@@ -117,9 +127,16 @@ describe("the links of a SIGNED receipt", () => {
   }, 30_000);
 
   it("keeps the authentication block on the first page when the photo leaves room", async () => {
-    const photo = await QRCode.toBuffer("foto do canhoto", { type: "png", width: 600, margin: 1 });
+    const photo = await QRCode.toBuffer("foto do canhoto", {
+      type: "png",
+      width: 600,
+      margin: 1,
+    });
 
-    const rendered = await renderProofPdf(model(signing), { photo, signature: null });
+    const rendered = await renderProofPdf(model(signing), {
+      photo,
+      signature: null,
+    });
 
     expect(pageCount(rendered.bytes)).toBe(1);
   }, 30_000);

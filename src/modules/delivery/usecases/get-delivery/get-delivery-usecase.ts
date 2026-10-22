@@ -59,28 +59,22 @@ class GetDeliveryUseCase {
       throw new DeliveryNotFoundError();
     }
 
-    const detail = (await this.delivery.findDeliveryDetailById(
-      deliveryId,
-    )) as
+    const detail = (await this.delivery.findDeliveryDetailById(deliveryId)) as
       | ({
-          occurrences?: Array<
-            { photos?: string[] } & Record<string, unknown>
-          >;
+          occurrences?: Array<{ photos?: string[] } & Record<string, unknown>>;
           events?: Array<
             {
               photo?: string | null;
               signature?: string | null;
             } & Record<string, unknown>
           >;
-          chatMessages?: Array<
-            {
-              id: string;
-              kind: string;
-              body?: string | null;
-              created_at: Date | string;
-              sender?: { name: string } | null;
-            }
-          >;
+          chatMessages?: Array<{
+            id: string;
+            kind: string;
+            body?: string | null;
+            created_at: Date | string;
+            sender?: { name: string } | null;
+          }>;
         } & Record<string, unknown>)
       | null;
 

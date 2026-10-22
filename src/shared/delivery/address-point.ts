@@ -5,9 +5,18 @@
  * moves the address leaves the old pin pointing where the delivery no longer
  * is, so the point is cleared and the stop goes back to "sem localização".
  */
-const ADDRESS_FIELDS = ["street", "address_number", "neighborhood", "city", "uf", "cep"] as const;
+const ADDRESS_FIELDS = [
+  "street",
+  "address_number",
+  "neighborhood",
+  "city",
+  "uf",
+  "cep",
+] as const;
 
-type AddressFields = Partial<Record<(typeof ADDRESS_FIELDS)[number], string | null>>;
+type AddressFields = Partial<
+  Record<(typeof ADDRESS_FIELDS)[number], string | null>
+>;
 
 function normalized(value: string | null | undefined): string {
   return (value ?? "").trim().toLocaleLowerCase("pt-BR");
@@ -20,7 +29,9 @@ function normalized(value: string | null | undefined): string {
  */
 function addressChanged(current: AddressFields, next: AddressFields): boolean {
   return ADDRESS_FIELDS.some(
-    (field) => next[field] !== undefined && normalized(next[field]) !== normalized(current[field]),
+    (field) =>
+      next[field] !== undefined &&
+      normalized(next[field]) !== normalized(current[field]),
   );
 }
 

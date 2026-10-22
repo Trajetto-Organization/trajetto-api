@@ -21,7 +21,11 @@ import {
   accountPayableSchemas,
   accountPayableResponses,
 } from "./documentation/account-payable-documentation";
-import { ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
 import { panelIdempotencyHeaders } from "./documentation/idempotency-documentation";
 import { exportFileResponse } from "./documentation/doc-only-responses";
 

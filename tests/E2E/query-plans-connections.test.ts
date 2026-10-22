@@ -8,11 +8,11 @@ import { randomUUID } from "node:crypto";
  * above the budget of tests/E2E/connection-fan-out.test.ts: two — a page and
  * one count side by side, everything else after them.
  *
- * A replica has ten (compose.production.yaml, connection_limit=10). The route
- * builder's picker took six at once, the ticket counters and the webhook
- * monitor five, a branch deletion seven: two route builders opening together
- * held the whole pool, and a proof of delivery (a write in a transaction)
- * waited behind them. With the indexes of 20261007120000 each of those
+ * A replica has ten (connection_limit=10, the production DATABASE_URL in
+ * .env.example). The route builder's picker took six at once, the ticket
+ * counters and the webhook monitor five, a branch deletion seven: two route
+ * builders opening together held the whole pool, and a proof of delivery (a
+ * write in a transaction) waited behind them. With the indexes of 20261007120000 each of those
  * queries takes milliseconds, so running them in turn costs little and keeps
  * the pool for everyone else.
  *
@@ -57,7 +57,9 @@ const BUDGET = 2;
 const CARRIER = randomUUID();
 const MANAGER = randomUUID();
 
-async function peakOf<T>(run: () => Promise<T>): Promise<{ peak: number; operations: number; result: T }> {
+async function peakOf<T>(
+  run: () => Promise<T>,
+): Promise<{ peak: number; operations: number; result: T }> {
   pool.inFlight = 0;
   pool.peak = 0;
   pool.operations = 0;
@@ -96,7 +98,9 @@ beforeAll(async () => {
     },
   });
 
-  const shipper = await prisma.shipper.create({ data: { name: "Embarcador", businessId: CARRIER } });
+  const shipper = await prisma.shipper.create({
+    data: { name: "Embarcador", businessId: CARRIER },
+  });
 
   await prisma.delivery.createMany({
     data: Array.from({ length: 5 }, (_, index) => ({
@@ -118,17 +122,28 @@ afterAll(async () => {
 describe("reads that held more than two connections", () => {
   it(`the route builder's picker holds at most ${BUDGET}, with every facet`, async () => {
     const { peak, result } = await peakOf(() =>
-      new RouteRepository().listUnroutedDeliveries({ businessId: CARRIER, page: 1, pageSize: 20, includeUnscheduled: true }),
+      new RouteRepository().listUnroutedDeliveries({
+        businessId: CARRIER,
+        page: 1,
+        pageSize: 20,
+        includeUnscheduled: true,
+      }),
     );
 
     expect(result.total).toBe(5);
-    expect(result.facets.city.map((facet) => facet.value).sort()).toEqual(["Campinas", "Santos"]);
+    expect(result.facets.city.map((facet) => facet.value).sort()).toEqual([
+      "Campinas",
+      "Santos",
+    ]);
     expect(peak).toBeLessThanOrEqual(BUDGET);
   });
 
   it(`the ticket counters hold at most ${BUDGET}`, async () => {
     const { peak, result } = await peakOf(() =>
-      new SupportTicketRepository().counts({ businessId: CARRIER, requesterUserId: MANAGER }),
+      new SupportTicketRepository().counts({
+        businessId: CARRIER,
+        requesterUserId: MANAGER,
+      }),
     );
 
     expect(result.open).toBe(0);
@@ -166,7 +181,12 @@ describe("reads that held more than two connections", () => {
 
   it(`the conversations list holds at most ${BUDGET}`, async () => {
     const { peak, result } = await peakOf(() =>
-      new ChatRepository().listThreads({ businessId: CARRIER, requesterUserId: MANAGER, page: 1, pageSize: 20 }),
+      new ChatRepository().listThreads({
+        businessId: CARRIER,
+        requesterUserId: MANAGER,
+        page: 1,
+        pageSize: 20,
+      }),
     );
 
     expect(result.total).toBe(0);
@@ -174,7 +194,9 @@ describe("reads that held more than two connections", () => {
   });
 
   it(`a branch's dependency check holds at most ${BUDGET}`, async () => {
-    const { peak, result } = await peakOf(() => new BranchRepository().countBranchDependencies(randomUUID()));
+    const { peak, result } = await peakOf(() =>
+      new BranchRepository().countBranchDependencies(randomUUID()),
+    );
 
     expect(Object.values(result).every((count) => count === 0)).toBe(true);
     expect(peak).toBeLessThanOrEqual(BUDGET);
@@ -227,7 +249,9 @@ describe("reads that held more than two connections", () => {
     await driverIn(branch.id, 2);
     await driverIn(other.id, 3);
 
-    const { peak, operations, result } = await peakOf(() => new BranchRepository().countBranchDependencies(branch.id));
+    const { peak, operations, result } = await peakOf(() =>
+      new BranchRepository().countBranchDependencies(branch.id),
+    );
 
     expect(result).toEqual({
       vehicles: 0,

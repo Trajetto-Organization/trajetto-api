@@ -39,7 +39,8 @@ beforeAll(async () => {
 
   close = introspected.close;
   published = introspected.routes.filter(
-    (route): route is Published => !route.hidden && route.operation !== undefined,
+    (route): route is Published =>
+      !route.hidden && route.operation !== undefined,
   );
 }, APP_BOOT_TIMEOUT_MS);
 

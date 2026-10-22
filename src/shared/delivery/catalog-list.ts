@@ -109,7 +109,9 @@ function yesNoOf(value: boolean | null | undefined): YesNo {
   return value === true ? "yes" : "no";
 }
 
-function yesNoFilter(values: readonly YesNo[] | undefined): boolean | undefined {
+function yesNoFilter(
+  values: readonly YesNo[] | undefined,
+): boolean | undefined {
   if (!values?.length || values.length === YES_NO.length) return undefined;
 
   return values[0] === "yes";

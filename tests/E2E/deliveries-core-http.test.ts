@@ -105,7 +105,11 @@ async function seedUser(
   );
 }
 
-function nfe(accessKey: string, issuerCnpj: string, issuerName: string): string {
+function nfe(
+  accessKey: string,
+  issuerCnpj: string,
+  issuerName: string,
+): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
   <NFe>
@@ -128,7 +132,8 @@ function nfe(accessKey: string, issuerCnpj: string, issuerName: string): string 
 </nfeProc>`;
 }
 
-const KEY = (n: number) => `352406112223330001815500100000${String(n).padStart(4, "0")}1000012345`;
+const KEY = (n: number) =>
+  `352406112223330001815500100000${String(n).padStart(4, "0")}1000012345`;
 
 beforeAll(async () => {
   await seedBusiness(CARRIER);
@@ -165,7 +170,11 @@ beforeAll(async () => {
         is_active: false,
       },
       { id: OTHER_SHIPPER, name: "Embarcador alheio", businessId: OTHER },
-      { id: SUSPENDED_SHIPPER, name: "Embarcador suspenso", businessId: SUSPENDED },
+      {
+        id: SUSPENDED_SHIPPER,
+        name: "Embarcador suspenso",
+        businessId: SUSPENDED,
+      },
     ],
   });
 
@@ -290,7 +299,9 @@ describe("the deliveries listing on the server (decision 8.8)", () => {
 
     // The shipper facet is counted without itself: both shippers offered.
     expect(
-      meta.searchMeta.facets.shipperId.map((option: { label: string }) => option.label),
+      meta.searchMeta.facets.shipperId.map(
+        (option: { label: string }) => option.label,
+      ),
     ).toEqual(["Atacado Sul", "Bebidas Norte"]);
   });
 
@@ -311,7 +322,11 @@ describe("the deliveries listing on the server (decision 8.8)", () => {
 
     const byId = ndjson(
       (
-        await call("GET", `/delivery/list-delivery?page=1&pageSize=10&search=${id}`, tokens.admin)
+        await call(
+          "GET",
+          `/delivery/list-delivery?page=1&pageSize=10&search=${id}`,
+          tokens.admin,
+        )
       ).body,
     );
 
@@ -331,7 +346,9 @@ describe("the deliveries listing on the server (decision 8.8)", () => {
 
     const names = sorted.rows.map((row) => row.recipient_name);
 
-    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, "pt-BR")));
+    expect(names).toEqual(
+      [...names].sort((a, b) => a.localeCompare(b, "pt-BR")),
+    );
 
     const refused = await call(
       "GET",
@@ -352,7 +369,13 @@ describe("the deliveries listing on the server (decision 8.8)", () => {
     expect(foreign.statusCode).toBe(403);
 
     const mine = ndjson(
-      (await call("GET", "/delivery/list-delivery?page=1&pageSize=10", tokens.driver)).body,
+      (
+        await call(
+          "GET",
+          "/delivery/list-delivery?page=1&pageSize=10",
+          tokens.driver,
+        )
+      ).body,
     );
 
     expect(mine.meta.total).toBe(3);
@@ -372,7 +395,11 @@ describe("exporting what the screen shows (decisions 5.8, DLV-EXP-1/2)", () => {
   });
 
   it("tells a MASTER who names no company to pick one", async () => {
-    const response = await call("GET", "/delivery/export-delivery", tokens.master);
+    const response = await call(
+      "GET",
+      "/delivery/export-delivery",
+      tokens.master,
+    );
 
     expect(response.statusCode).toBe(400);
     expect(JSON.parse(response.body).code).toBe("BUSINESS_NOT_IDENTIFIED");
@@ -435,7 +462,9 @@ describe("exporting what the screen shows (decisions 5.8, DLV-EXP-1/2)", () => {
         tokens.admin,
       );
 
-      expect(csvRows(response.body).map((row) => row[0])).toEqual([occurrence.id]);
+      expect(csvRows(response.body).map((row) => row[0])).toEqual([
+        occurrence.id,
+      ]);
     }
 
     const informational = await call(
@@ -466,10 +495,20 @@ describe("a deactivated shipper takes no new deliveries (decision 5.7)", () => {
   });
 
   it("refuses it as the forced shipper of an XML upload", async () => {
-    const response = await call("POST", `/delivery/import-xml/${CARRIER}`, tokens.admin, {
-      shipperId: RETIRED_SHIPPER,
-      files: [{ filename: "nota.xml", content: nfe(KEY(1), "11222333000181", "Indústria X") }],
-    });
+    const response = await call(
+      "POST",
+      `/delivery/import-xml/${CARRIER}`,
+      tokens.admin,
+      {
+        shipperId: RETIRED_SHIPPER,
+        files: [
+          {
+            filename: "nota.xml",
+            content: nfe(KEY(1), "11222333000181", "Indústria X"),
+          },
+        ],
+      },
+    );
 
     expect(response.statusCode).toBe(400);
     expect(JSON.parse(response.body).code).toBe("SHIPPER_INACTIVE");
@@ -500,7 +539,9 @@ describe("the NF-e key is set once (decision 5.2)", () => {
     });
 
     expect(stored.invoice_key).toBe(KEY(50));
-    expect(stored.items.map((item) => item.description)).toEqual(["Peça de picanha"]);
+    expect(stored.items.map((item) => item.description)).toEqual([
+      "Peça de picanha",
+    ]);
 
     const changed = await call(
       "PATCH",
@@ -510,7 +551,9 @@ describe("the NF-e key is set once (decision 5.2)", () => {
     );
 
     expect(changed.statusCode).toBe(400);
-    expect(JSON.parse(changed.body).code).toBe("DELIVERY_INVOICE_KEY_IMMUTABLE");
+    expect(JSON.parse(changed.body).code).toBe(
+      "DELIVERY_INVOICE_KEY_IMMUTABLE",
+    );
   });
 
   it("answers 409 for a key another delivery holds", async () => {
@@ -519,7 +562,10 @@ describe("the NF-e key is set once (decision 5.2)", () => {
       take: 2,
     });
 
-    await prisma.delivery.update({ where: { id: a.id }, data: { invoice_key: KEY(60) } });
+    await prisma.delivery.update({
+      where: { id: a.id },
+      data: { invoice_key: KEY(60) },
+    });
 
     const response = await call(
       "PATCH",
@@ -554,16 +600,21 @@ describe("the NF-e key is set once (decision 5.2)", () => {
 
 describe("the expected date is a day (decision 1.3)", () => {
   it("stores the day sent and refuses an instant", async () => {
-    const created = await call("POST", `/delivery/create-delivery/${CARRIER}`, tokens.admin, {
-      shipperId: SHIPPER,
-      recipient_name: "Cliente com data",
-      cep: "01001000",
-      city: "São Paulo",
-      uf: "SP",
-      street: "Praça da Sé",
-      scheduled_date: "2026-09-17",
-      notes: "Portão azul.\n\nTocar o 2.",
-    });
+    const created = await call(
+      "POST",
+      `/delivery/create-delivery/${CARRIER}`,
+      tokens.admin,
+      {
+        shipperId: SHIPPER,
+        recipient_name: "Cliente com data",
+        cep: "01001000",
+        city: "São Paulo",
+        uf: "SP",
+        street: "Praça da Sé",
+        scheduled_date: "2026-09-17",
+        notes: "Portão azul.\n\nTocar o 2.",
+      },
+    );
 
     expect(created.statusCode).toBe(201);
 
@@ -571,17 +622,24 @@ describe("the expected date is a day (decision 1.3)", () => {
       where: { id: JSON.parse(created.body).data.id },
     });
 
-    expect(stored.scheduled_date?.toISOString()).toBe("2026-09-17T00:00:00.000Z");
+    expect(stored.scheduled_date?.toISOString()).toBe(
+      "2026-09-17T00:00:00.000Z",
+    );
 
-    const refused = await call("POST", `/delivery/create-delivery/${CARRIER}`, tokens.admin, {
-      shipperId: SHIPPER,
-      recipient_name: "Cliente com instante",
-      cep: "01001000",
-      city: "São Paulo",
-      uf: "SP",
-      street: "Praça da Sé",
-      scheduled_date: "2026-09-17T03:00:00.000Z",
-    });
+    const refused = await call(
+      "POST",
+      `/delivery/create-delivery/${CARRIER}`,
+      tokens.admin,
+      {
+        shipperId: SHIPPER,
+        recipient_name: "Cliente com instante",
+        cep: "01001000",
+        city: "São Paulo",
+        uf: "SP",
+        street: "Praça da Sé",
+        scheduled_date: "2026-09-17T03:00:00.000Z",
+      },
+    );
 
     expect(refused.statusCode).toBe(400);
   });
@@ -652,13 +710,24 @@ describe("an XML upload in Importações (decision 5.6)", () => {
   let importId: string;
 
   it("writes the row, stamps its deliveries and lists as NFE_XML", async () => {
-    const response = await call("POST", `/delivery/import-xml/${CARRIER}`, tokens.admin, {
-      scheduled_date: "2026-09-20",
-      files: [
-        { filename: "nota-1.xml", content: nfe(KEY(1), "11222333000181", "Indústria Doce") },
-        { filename: "nota-2.xml", content: nfe(KEY(2), "11222333000181", "Indústria Doce") },
-      ],
-    });
+    const response = await call(
+      "POST",
+      `/delivery/import-xml/${CARRIER}`,
+      tokens.admin,
+      {
+        scheduled_date: "2026-09-20",
+        files: [
+          {
+            filename: "nota-1.xml",
+            content: nfe(KEY(1), "11222333000181", "Indústria Doce"),
+          },
+          {
+            filename: "nota-2.xml",
+            content: nfe(KEY(2), "11222333000181", "Indústria Doce"),
+          },
+        ],
+      },
+    );
 
     expect(response.statusCode).toBe(200);
 
@@ -670,10 +739,18 @@ describe("an XML upload in Importações (decision 5.6)", () => {
     const stamped = await prisma.delivery.findMany({ where: { importId } });
 
     expect(stamped).toHaveLength(2);
-    expect(stamped[0].scheduled_date?.toISOString()).toBe("2026-09-20T00:00:00.000Z");
+    expect(stamped[0].scheduled_date?.toISOString()).toBe(
+      "2026-09-20T00:00:00.000Z",
+    );
 
     const listed = ndjson(
-      (await call("GET", "/import/list-imports?page=1&pageSize=10", tokens.admin)).body,
+      (
+        await call(
+          "GET",
+          "/import/list-imports?page=1&pageSize=10",
+          tokens.admin,
+        )
+      ).body,
     );
 
     expect(listed.rows.find((row) => row.id === importId)).toMatchObject({
@@ -704,7 +781,11 @@ describe("an XML upload in Importações (decision 5.6)", () => {
 
     expect(
       cancelled
-        .map((row) => (row.payload as { data?: { delivery_id?: string } }).data?.delivery_id)
+        .map(
+          (row) =>
+            (row.payload as { data?: { delivery_id?: string } }).data
+              ?.delivery_id,
+        )
         .sort(),
     ).toEqual(created.map((row) => row.id).sort());
   });
@@ -712,25 +793,40 @@ describe("an XML upload in Importações (decision 5.6)", () => {
 
 describe("the shipper catalogue", () => {
   it("refuses a second shipper with the same CNPJ (409), and an invalid CNPJ (400)", async () => {
-    const first = await call("POST", `/shipper/create-shipper/${CARRIER}`, tokens.admin, {
-      name: "Matriz Ltda",
-      cnpj: "11.444.777/0001-61",
-    });
+    const first = await call(
+      "POST",
+      `/shipper/create-shipper/${CARRIER}`,
+      tokens.admin,
+      {
+        name: "Matriz Ltda",
+        cnpj: "11.444.777/0001-61",
+      },
+    );
 
     expect(first.statusCode).toBe(201);
 
-    const twin = await call("POST", `/shipper/create-shipper/${CARRIER}`, tokens.admin, {
-      name: "Filial Ltda",
-      cnpj: "11444777000161",
-    });
+    const twin = await call(
+      "POST",
+      `/shipper/create-shipper/${CARRIER}`,
+      tokens.admin,
+      {
+        name: "Filial Ltda",
+        cnpj: "11444777000161",
+      },
+    );
 
     expect(twin.statusCode).toBe(409);
     expect(JSON.parse(twin.body).code).toBe("SHIPPER_CNPJ_TAKEN");
 
-    const invalid = await call("POST", `/shipper/create-shipper/${CARRIER}`, tokens.admin, {
-      name: "CNPJ errado",
-      cnpj: "11444777000162",
-    });
+    const invalid = await call(
+      "POST",
+      `/shipper/create-shipper/${CARRIER}`,
+      tokens.admin,
+      {
+        name: "CNPJ errado",
+        cnpj: "11444777000162",
+      },
+    );
 
     expect(invalid.statusCode).toBe(400);
   });
@@ -793,7 +889,11 @@ describe("the shipper catalogue", () => {
     await prisma.shipper.createMany({
       data: [
         { name: "Loja 2 Irmãos", cnpj: "45723174000110", businessId: CARRIER },
-        { name: "Distribuidora Leste", cnpj: "22333444000181", businessId: CARRIER },
+        {
+          name: "Distribuidora Leste",
+          cnpj: "22333444000181",
+          businessId: CARRIER,
+        },
       ],
     });
 
@@ -849,7 +949,9 @@ describe("the shipper catalogue", () => {
       ).body,
     );
 
-    expect(pickedByCnpj.rows.map((row) => row.name)).toEqual(["Distribuidora Leste"]);
+    expect(pickedByCnpj.rows.map((row) => row.name)).toEqual([
+      "Distribuidora Leste",
+    ]);
   });
 
   it("lets a suspended company delete nothing from its catalogue (DLV-SHP-7)", async () => {
@@ -873,7 +975,9 @@ describe("the shipper catalogue", () => {
     expect(type.statusCode).toBe(403);
     expect(JSON.parse(type.body).code).toBe("TENANT_INACTIVE");
 
-    expect(await prisma.shipper.count({ where: { id: SUSPENDED_SHIPPER } })).toBe(1);
+    expect(
+      await prisma.shipper.count({ where: { id: SUSPENDED_SHIPPER } }),
+    ).toBe(1);
   });
 });
 
@@ -937,7 +1041,10 @@ describe("the platform's own occurrence type (DLVP-OCC-3)", () => {
       },
     });
 
-    const response = await app.inject({ method: "GET", url: `/public/track/${token}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/public/track/${token}`,
+    });
 
     expect(response.statusCode).toBe(200);
 
@@ -972,11 +1079,21 @@ describe("the platform's own occurrence type (DLVP-OCC-3)", () => {
       where: { businessId: CARRIER, role: "BUSINESS_ADMIN" },
     });
 
-    const statuses = ["NOT_REQUIRED", "APPROVED", "PENDING", "DENIED", "SUPERSEDED"] as const;
+    const statuses = [
+      "NOT_REQUIRED",
+      "APPROVED",
+      "PENDING",
+      "DENIED",
+      "SUPERSEDED",
+    ] as const;
 
     for (const status of statuses) {
       const type = await prisma.occurrenceType.create({
-        data: { name: `Pedido ${status}`, businessId: CARRIER, requires_authorization: status !== "NOT_REQUIRED" },
+        data: {
+          name: `Pedido ${status}`,
+          businessId: CARRIER,
+          requires_authorization: status !== "NOT_REQUIRED",
+        },
       });
 
       await prisma.deliveryOccurrence.create({
@@ -993,31 +1110,42 @@ describe("the platform's own occurrence type (DLVP-OCC-3)", () => {
     const token = "e".repeat(64);
 
     await prisma.externalRecipient.create({
-      data: { access_token: token, deliveryId: delivery.id, businessId: CARRIER, telephone: "11999999999" },
+      data: {
+        access_token: token,
+        deliveryId: delivery.id,
+        businessId: CARRIER,
+        telephone: "11999999999",
+      },
     });
 
-    const response = await app.inject({ method: "GET", url: `/public/track/${token}` });
+    const response = await app.inject({
+      method: "GET",
+      url: `/public/track/${token}`,
+    });
 
     expect(response.statusCode).toBe(200);
 
-    const titles = JSON.parse(response.body).data.events.map((event: { title: string }) => event.title);
+    const titles = JSON.parse(response.body).data.events.map(
+      (event: { title: string }) => event.title,
+    );
 
-    expect(titles.filter((title: string) => title.startsWith("Pedido ")).sort()).toEqual([
-      "Pedido APPROVED",
-      "Pedido NOT_REQUIRED",
-    ]);
+    expect(
+      titles.filter((title: string) => title.startsWith("Pedido ")).sort(),
+    ).toEqual(["Pedido APPROVED", "Pedido NOT_REQUIRED"]);
 
     // The proof PDF reads the same set: a pending, denied or superseded
     // request is not something that happened to the delivery either.
     const { ProofDocumentRepository } = await import(
       "@/modules/delivery/repositories/proof-document-repository"
     );
-    const source = await new ProofDocumentRepository(prisma).loadSource(delivery.id, CARRIER);
+    const source = await new ProofDocumentRepository(prisma).loadSource(
+      delivery.id,
+      CARRIER,
+    );
 
-    expect(source!.occurrences.map((occurrence) => occurrence.typeName).sort()).toEqual([
-      "Pedido APPROVED",
-      "Pedido NOT_REQUIRED",
-    ]);
+    expect(
+      source!.occurrences.map((occurrence) => occurrence.typeName).sort(),
+    ).toEqual(["Pedido APPROVED", "Pedido NOT_REQUIRED"]);
   });
 
   it("is created as a system type and never offered to the driver", async () => {
@@ -1043,6 +1171,8 @@ describe("the platform's own occurrence type (DLVP-OCC-3)", () => {
     const offered = await repository.listActiveOccurrenceTypes(CARRIER);
 
     expect(offered.map((type) => type.id)).not.toContain(system.id);
-    expect(offered.map((type) => type.name)).toContain("Endereço não encontrado");
+    expect(offered.map((type) => type.name)).toContain(
+      "Endereço não encontrado",
+    );
   });
 });

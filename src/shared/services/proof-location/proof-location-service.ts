@@ -1,7 +1,10 @@
 import { instanceCachingFactory, registry } from "tsyringe";
 
 import { env } from "@/env";
-import type { GpsAddress, ProofDocumentSource } from "@/shared/delivery/proof-document";
+import type {
+  GpsAddress,
+  ProofDocumentSource,
+} from "@/shared/delivery/proof-document";
 
 import { fetchProofMap, type ProofMapImage, type TileFetch } from "./map-tiles";
 import {
@@ -40,8 +43,7 @@ interface AddressResolution {
 
 function userAgent(): string {
   return (
-    env.REVERSE_GEOCODER_USER_AGENT ??
-    `Trajetto/1.0 (+${env.HTTP_REQUEST})`
+    env.REVERSE_GEOCODER_USER_AGENT ?? `Trajetto/1.0 (+${env.HTTP_REQUEST})`
   );
 }
 
@@ -120,7 +122,8 @@ class ProofLocationService {
     const release = this.lookups.tryAcquire();
 
     // Busy: render with the fallback and let the next request try.
-    if (!release) return { address: null, source: "UNAVAILABLE", persist: false };
+    if (!release)
+      return { address: null, source: "UNAVAILABLE", persist: false };
 
     try {
       const address = await reverseGeocode(
@@ -154,5 +157,9 @@ class ProofLocationService {
   }
 }
 
-export { ProofLocationService, UNAVAILABLE_RETRY_MS, configFromEnv as proofLocationConfigFromEnv };
+export {
+  ProofLocationService,
+  UNAVAILABLE_RETRY_MS,
+  configFromEnv as proofLocationConfigFromEnv,
+};
 export type { AddressResolution, ProofLocationConfig };

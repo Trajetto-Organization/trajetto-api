@@ -91,7 +91,10 @@ beforeEach(() => {
     businessId: BUSINESS,
   } as User);
 
-  businesses.business.push({ ...BUSINESS_COLUMN_DEFAULTS, id: BUSINESS } as Business);
+  businesses.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
+    id: BUSINESS,
+  } as Business);
 
   importXml = new ImportDeliveryXmlUseCase(
     users,
@@ -134,7 +137,9 @@ describe("importing NF-e files", () => {
 
     const ids = deliveries.deliveries.map((delivery) => delivery.id).sort();
 
-    expect(created.map((event) => event.payload.delivery_id).sort()).toEqual(ids);
+    expect(created.map((event) => event.payload.delivery_id).sort()).toEqual(
+      ids,
+    );
 
     for (const event of created) {
       expect(event.businessId).toBe(BUSINESS);

@@ -40,7 +40,9 @@ const deliveriesModule = verifyModuleEnabled("DELIVERIES");
  * screen that shows it (decision 4.2: the menu and the API answer alike). A
  * driver token is refused: the report is every driver's day.
  */
-const reportReaders = verifyPermission("delivery_manage", "read", { allowDriver: false });
+const reportReaders = verifyPermission("delivery_manage", "read", {
+  allowDriver: false,
+});
 
 /**
  * The report is built in memory from up to 34 days of a company's routes and
@@ -128,7 +130,10 @@ async function driverPauseRoutes(app: FastifyInstance) {
     "/current/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["driver-pause"],

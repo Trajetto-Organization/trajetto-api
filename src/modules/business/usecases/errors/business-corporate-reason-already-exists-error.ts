@@ -6,7 +6,11 @@ import { AppError } from "@/shared/errors/AppError";
  */
 class BusinessCorporateReasonAlreadyExistsError extends AppError {
   constructor() {
-    super("Já existe uma empresa com esta razão social.", 409, "BUSINESS_NAME_TAKEN");
+    super(
+      "Já existe uma empresa com esta razão social.",
+      409,
+      "BUSINESS_NAME_TAKEN",
+    );
   }
 }
 

@@ -11,7 +11,10 @@ import {
   type ProofDocumentSource,
 } from "@/shared/delivery/proof-document";
 import { renderProofPdf } from "@/shared/services/proof-pdf-service";
-import { AD_RB_POLICY, CMS_OID } from "@/shared/services/proof-signing/cms-signer";
+import {
+  AD_RB_POLICY,
+  CMS_OID,
+} from "@/shared/services/proof-signing/cms-signer";
 import {
   ProofSigningService,
   configFromEnv,
@@ -75,7 +78,9 @@ function source(): ProofDocumentSource {
   };
 }
 
-function config(overrides: Partial<ProofSigningConfig> = {}): ProofSigningConfig {
+function config(
+  overrides: Partial<ProofSigningConfig> = {},
+): ProofSigningConfig {
   const certificate = makeTestSigningCertificate();
 
   return {
@@ -92,7 +97,8 @@ function config(overrides: Partial<ProofSigningConfig> = {}): ProofSigningConfig
 async function signedPdf(service: ProofSigningService): Promise<Buffer> {
   const plan = service.plan();
 
-  if (plan.status !== "SIGNED") throw new Error(`expected SIGNED, got ${plan.reason}`);
+  if (plan.status !== "SIGNED")
+    throw new Error(`expected SIGNED, got ${plan.reason}`);
 
   const model = buildProofDocumentModel(source(), {
     verificationBaseUrl: "https://app.trajetto.com.br",
@@ -127,10 +133,9 @@ function extractSignature(pdf: Buffer): {
   const hex = text.slice(byteRange[1] + 1, byteRange[2] - 1);
   const der = Buffer.from(hex, "hex");
 
-  const cms = (forge.asn1.fromDer as unknown as (b: unknown, o: unknown) => Node)(
-    forge.util.createBuffer(der.toString("binary")),
-    { parseAllBytes: false },
-  );
+  const cms = (
+    forge.asn1.fromDer as unknown as (b: unknown, o: unknown) => Node
+  )(forge.util.createBuffer(der.toString("binary")), { parseAllBytes: false });
 
   const covered = Buffer.concat([
     pdf.subarray(byteRange[0], byteRange[0] + byteRange[1]),
@@ -143,11 +148,12 @@ function extractSignature(pdf: Buffer): {
 const oidOf = (node: Node) => forge.asn1.derToOid(node.value as string);
 
 function signerInfo(cms: Node) {
-  const signedData = ((cms.value as Node[])[1].value as Node[])[0].value as Node[];
+  const signedData = ((cms.value as Node[])[1].value as Node[])[0]
+    .value as Node[];
   const certificates = (signedData[3].value as Node[]).map((node) =>
     Buffer.from(forge.asn1.toDer(node).getBytes(), "binary"),
   );
-  const info = ((signedData[4].value as Node[])[0].value as Node[]);
+  const info = (signedData[4].value as Node[])[0].value as Node[];
 
   const attributesNode = info[3];
   const attributes = new Map(
@@ -166,7 +172,11 @@ function signerInfo(cms: Node) {
   };
 }
 
-function verifyRsa(attributesNode: Node, signature: Buffer, certificateDer: Buffer): boolean {
+function verifyRsa(
+  attributesNode: Node,
+  signature: Buffer,
+  certificateDer: Buffer,
+): boolean {
   // Signed as an explicit SET OF: the [0] IMPLICIT tag swapped back to 0x31.
   const set = forge.asn1.create(
     forge.asn1.Class.UNIVERSAL,
@@ -176,14 +186,20 @@ function verifyRsa(attributesNode: Node, signature: Buffer, certificateDer: Buff
   );
 
   const der = Buffer.from(forge.asn1.toDer(set).getBytes(), "binary");
-  const publicKey = createPublicKey({ key: certificateDer, format: "der", type: "spki" } as never);
+  const publicKey = createPublicKey({
+    key: certificateDer,
+    format: "der",
+    type: "spki",
+  } as never);
 
   return verify("sha256", der, publicKey, signature);
 }
 
 function publicKeyDer(certificateDer: Buffer): Buffer {
   const cert = forge.pki.certificateFromAsn1(
-    forge.asn1.fromDer(forge.util.createBuffer(certificateDer.toString("binary"))),
+    forge.asn1.fromDer(
+      forge.util.createBuffer(certificateDer.toString("binary")),
+    ),
   );
   const pem = forge.pki.publicKeyToPem(cert.publicKey);
 
@@ -193,7 +209,10 @@ function publicKeyDer(certificateDer: Buffer): Buffer {
 describe("the platform certificate", () => {
   it("is READY with the signer's name and CNPJ read from its CN", () => {
     const certificate = makeTestSigningCertificate();
-    const state = loadSigningCertificate({ pfx: certificate.pfx, password: certificate.password });
+    const state = loadSigningCertificate({
+      pfx: certificate.pfx,
+      password: certificate.password,
+    });
 
     expect(state.state).toBe("READY");
     if (state.state !== "READY") return;
@@ -204,14 +223,21 @@ describe("the platform certificate", () => {
   });
 
   it("leaves the CNPJ out when the CN does not carry a valid one", () => {
-    const certificate = makeTestSigningCertificate({ commonName: "EMPRESA SEM CNPJ:12345678000100" });
-    const state = loadSigningCertificate({ pfx: certificate.pfx, password: certificate.password });
+    const certificate = makeTestSigningCertificate({
+      commonName: "EMPRESA SEM CNPJ:12345678000100",
+    });
+    const state = loadSigningCertificate({
+      pfx: certificate.pfx,
+      password: certificate.password,
+    });
 
     expect(state.state).toBe("READY");
     if (state.state !== "READY") return;
 
     expect(state.certificate.signerCnpj).toBeNull();
-    expect(state.certificate.signerName).toBe("EMPRESA SEM CNPJ:12345678000100");
+    expect(state.certificate.signerName).toBe(
+      "EMPRESA SEM CNPJ:12345678000100",
+    );
   });
 
   it("is EXPIRED past notAfter, and READY turns EXPIRED as time passes", () => {
@@ -220,14 +246,17 @@ describe("the platform certificate", () => {
       notAfter: new Date(Date.now() - DAY),
     });
 
-    expect(loadSigningCertificate({ pfx: expired.pfx, password: expired.password }).state).toBe(
-      "EXPIRED",
-    );
+    expect(
+      loadSigningCertificate({ pfx: expired.pfx, password: expired.password })
+        .state,
+    ).toBe("EXPIRED");
 
     const service = new ProofSigningService(config());
 
     expect(service.state().state).toBe("READY");
-    expect(service.state(new Date(Date.now() + 400 * DAY)).state).toBe("EXPIRED");
+    expect(service.state(new Date(Date.now() + 400 * DAY)).state).toBe(
+      "EXPIRED",
+    );
     expect(service.plan(new Date(Date.now() + 400 * DAY))).toMatchObject({
       status: "UNSIGNED",
       reason: "CERTIFICATE_EXPIRED",
@@ -245,14 +274,22 @@ describe("the platform certificate", () => {
       config({ pfx: early.pfx, password: early.password }),
     );
 
-    expect(service.state()).toMatchObject({ state: "INVALID", reason: "NOT_YET_VALID" });
-    expect(service.plan()).toMatchObject({ status: "UNSIGNED", reason: "CERTIFICATE_INVALID" });
+    expect(service.state()).toMatchObject({
+      state: "INVALID",
+      reason: "NOT_YET_VALID",
+    });
+    expect(service.plan()).toMatchObject({
+      status: "UNSIGNED",
+      reason: "CERTIFICATE_INVALID",
+    });
 
     const later = new Date(Date.now() + 2 * DAY);
 
     expect(service.state(later).state).toBe("READY");
     expect(service.plan(later).status).toBe("SIGNED");
-    expect(service.state(new Date(Date.now() + 401 * DAY)).state).toBe("EXPIRED");
+    expect(service.state(new Date(Date.now() + 401 * DAY)).state).toBe(
+      "EXPIRED",
+    );
   });
 
   it("is opened at boot by warmUp, which never throws", () => {
@@ -283,8 +320,14 @@ describe("the platform certificate", () => {
       }),
     );
 
-    expect(broken.warmUp()).toEqual({ state: "INVALID", reason: "PFX_FILE_UNREADABLE" });
-    expect(broken.plan()).toMatchObject({ status: "UNSIGNED", reason: "CERTIFICATE_INVALID" });
+    expect(broken.warmUp()).toEqual({
+      state: "INVALID",
+      reason: "PFX_FILE_UNREADABLE",
+    });
+    expect(broken.plan()).toMatchObject({
+      status: "UNSIGNED",
+      reason: "CERTIFICATE_INVALID",
+    });
   });
 
   it("never throws from plan() when the secret read fails and warmUp never ran", () => {
@@ -297,9 +340,15 @@ describe("the platform certificate", () => {
     );
 
     expect(() => broken.plan()).not.toThrow();
-    expect(broken.plan()).toMatchObject({ status: "UNSIGNED", reason: "CERTIFICATE_INVALID" });
+    expect(broken.plan()).toMatchObject({
+      status: "UNSIGNED",
+      reason: "CERTIFICATE_INVALID",
+    });
     expect(broken.available()).toBe(false);
-    expect(broken.state()).toEqual({ state: "INVALID", reason: "PFX_FILE_UNREADABLE" });
+    expect(broken.state()).toEqual({
+      state: "INVALID",
+      reason: "PFX_FILE_UNREADABLE",
+    });
   });
 
   it("tells a missing PFX file apart from a wrong password", () => {
@@ -315,12 +364,18 @@ describe("the platform certificate", () => {
     const missingFile = new ProofSigningService(
       configFromEnv({
         ...base,
-        PROOF_SIGNING_PFX_PATH: join(tmpdir(), `trajetto-no-such-${randomUUID()}.pfx`),
+        PROOF_SIGNING_PFX_PATH: join(
+          tmpdir(),
+          `trajetto-no-such-${randomUUID()}.pfx`,
+        ),
         PROOF_SIGNING_PFX_PASSWORD: certificate.password,
       } as unknown as ProofSigningEnv),
     );
 
-    expect(missingFile.warmUp()).toEqual({ state: "INVALID", reason: "PFX_FILE_UNREADABLE" });
+    expect(missingFile.warmUp()).toEqual({
+      state: "INVALID",
+      reason: "PFX_FILE_UNREADABLE",
+    });
 
     const wrongPassword = new ProofSigningService(
       configFromEnv({
@@ -331,16 +386,33 @@ describe("the platform certificate", () => {
       } as unknown as ProofSigningEnv),
     );
 
-    expect(wrongPassword.warmUp()).toEqual({ state: "INVALID", reason: "PFX_UNREADABLE" });
+    expect(wrongPassword.warmUp()).toEqual({
+      state: "INVALID",
+      reason: "PFX_UNREADABLE",
+    });
   });
 
   it.each([
     ["the wrong password", { password: "outra" }, "PFX_UNREADABLE"],
-    ["a certificate for another key", { mismatchedKey: true }, "KEY_CERTIFICATE_MISMATCH"],
-    ["an issuer outside ICP-Brasil", { organization: "Outra AC" }, "NOT_ICP_BRASIL"],
+    [
+      "a certificate for another key",
+      { mismatchedKey: true },
+      "KEY_CERTIFICATE_MISMATCH",
+    ],
+    [
+      "an issuer outside ICP-Brasil",
+      { organization: "Outra AC" },
+      "NOT_ICP_BRASIL",
+    ],
     [
       "a key usage that does not allow signing",
-      { keyUsage: { digitalSignature: false, nonRepudiation: false, keyEncipherment: true } },
+      {
+        keyUsage: {
+          digitalSignature: false,
+          nonRepudiation: false,
+          keyEncipherment: true,
+        },
+      },
       "KEY_USAGE",
     ],
   ] as const)("is INVALID with %s", (_, options, reason) => {
@@ -357,24 +429,35 @@ describe("the platform certificate", () => {
   });
 
   it("is ABSENT without a PFX and DISABLED when switched off", () => {
-    expect(loadSigningCertificate({ pfx: null, password: undefined }).state).toBe("ABSENT");
+    expect(
+      loadSigningCertificate({ pfx: null, password: undefined }).state,
+    ).toBe("ABSENT");
 
     const certificate = makeTestSigningCertificate();
 
     expect(
-      loadSigningCertificate({ pfx: certificate.pfx, password: certificate.password, disabled: true })
-        .state,
+      loadSigningCertificate({
+        pfx: certificate.pfx,
+        password: certificate.password,
+        disabled: true,
+      }).state,
     ).toBe("DISABLED");
 
-    expect(new ProofSigningService(config({ pfx: null })).plan()).toMatchObject({
-      status: "UNSIGNED",
-      reason: "NO_CERTIFICATE",
-    });
-    expect(new ProofSigningService(config({ disabled: true })).plan()).toMatchObject({
+    expect(new ProofSigningService(config({ pfx: null })).plan()).toMatchObject(
+      {
+        status: "UNSIGNED",
+        reason: "NO_CERTIFICATE",
+      },
+    );
+    expect(
+      new ProofSigningService(config({ disabled: true })).plan(),
+    ).toMatchObject({
       status: "UNSIGNED",
       reason: "SIGNING_DISABLED",
     });
-    expect(new ProofSigningService(config({ password: "errada" })).plan()).toMatchObject({
+    expect(
+      new ProofSigningService(config({ password: "errada" })).plan(),
+    ).toMatchObject({
       status: "UNSIGNED",
       reason: "CERTIFICATE_INVALID",
     });
@@ -395,7 +478,10 @@ describe("the platform certificate", () => {
       "PROOF_SIGNING_PFX_PATH",
     ]);
 
-    expect(envSchema.safeParse({ ...base, PROOF_SIGNING_PFX_BASE64: "AAAA" }).success).toBe(true);
+    expect(
+      envSchema.safeParse({ ...base, PROOF_SIGNING_PFX_BASE64: "AAAA" })
+        .success,
+    ).toBe(true);
   });
 
   it("requires the map's attribution with its URL, and refuses a CNPJ that is not one", () => {
@@ -410,12 +496,17 @@ describe("the platform certificate", () => {
       "PROOF_MAP_TILE_ATTRIBUTION",
     ]);
 
-    const cnpj = envSchema.safeParse({ ...base, PROOF_ISSUER_CNPJ: "11.222.333/0001-80" });
+    const cnpj = envSchema.safeParse({
+      ...base,
+      PROOF_ISSUER_CNPJ: "11.222.333/0001-80",
+    });
 
-    expect(cnpj.error?.issues.map((issue) => issue.path.join("."))).toEqual(["PROOF_ISSUER_CNPJ"]);
+    expect(cnpj.error?.issues.map((issue) => issue.path.join("."))).toEqual([
+      "PROOF_ISSUER_CNPJ",
+    ]);
     expect(
-      envSchema.safeParse({ ...base, PROOF_ISSUER_CNPJ: "11.222.333/0001-81" }).data
-        ?.PROOF_ISSUER_CNPJ,
+      envSchema.safeParse({ ...base, PROOF_ISSUER_CNPJ: "11.222.333/0001-81" })
+        .data?.PROOF_ISSUER_CNPJ,
     ).toBe("11222333000181");
   });
 });
@@ -460,26 +551,37 @@ describe("a signed proof PDF (PAdES ICP-Brasil AD-RB)", () => {
     expect(info.attributes.has(CMS_OID.signingTime)).toBe(false);
 
     // messageDigest = SHA-256 of exactly what the ByteRange covers.
-    const digest = Buffer.from(info.attributes.get(CMS_OID.messageDigest)!.value as string, "binary");
-    expect(digest.equals(createHash("sha256").update(covered).digest())).toBe(true);
+    const digest = Buffer.from(
+      info.attributes.get(CMS_OID.messageDigest)!.value as string,
+      "binary",
+    );
+    expect(digest.equals(createHash("sha256").update(covered).digest())).toBe(
+      true,
+    );
 
     // sigPolicyId: the AD-RB v1.1 OID and the hash of the policy file.
     const policy = info.attributes.get(CMS_OID.sigPolicyId)!.value as Node[];
     expect(oidOf(policy[0])).toBe(AD_RB_POLICY.oid);
     const policyHash = (policy[1].value as Node[])[1];
-    expect(Buffer.from(policyHash.value as string, "binary").toString("hex")).toBe(
-      "95752d26ca974d46675ae7fb787b606a71ea941f26b59f6b6a321f97d63b9cb1",
-    );
+    expect(
+      Buffer.from(policyHash.value as string, "binary").toString("hex"),
+    ).toBe("95752d26ca974d46675ae7fb787b606a71ea941f26b59f6b6a321f97d63b9cb1");
 
     // signingCertificateV2 binds the signer's certificate by its SHA-256.
     const signerCert = info.certificates[0];
-    const essCertId = (((info.attributes.get(CMS_OID.signingCertificateV2)!.value as Node[])[0]
-      .value as Node[])[0].value as Node[]);
-    expect(Buffer.from(essCertId[0].value as string, "binary").equals(
-      createHash("sha256").update(signerCert).digest(),
-    )).toBe(true);
+    const essCertId = (
+      (info.attributes.get(CMS_OID.signingCertificateV2)!.value as Node[])[0]
+        .value as Node[]
+    )[0].value as Node[];
+    expect(
+      Buffer.from(essCertId[0].value as string, "binary").equals(
+        createHash("sha256").update(signerCert).digest(),
+      ),
+    ).toBe(true);
 
-    expect(verifyRsa(info.attributesNode, info.signature, publicKeyDer(signerCert))).toBe(true);
+    expect(
+      verifyRsa(info.attributesNode, info.signature, publicKeyDer(signerCert)),
+    ).toBe(true);
   });
 
   it("no longer verifies once a covered byte changes", async () => {
@@ -492,9 +594,14 @@ describe("a signed proof PDF (PAdES ICP-Brasil AD-RB)", () => {
 
     const { cms, covered } = extractSignature(tampered);
     const info = signerInfo(cms);
-    const digest = Buffer.from(info.attributes.get(CMS_OID.messageDigest)!.value as string, "binary");
+    const digest = Buffer.from(
+      info.attributes.get(CMS_OID.messageDigest)!.value as string,
+      "binary",
+    );
 
-    expect(digest.equals(createHash("sha256").update(covered).digest())).toBe(false);
+    expect(digest.equals(createHash("sha256").update(covered).digest())).toBe(
+      false,
+    );
   });
 
   it("prints the signed wording, with the signer taken from the certificate", async () => {
@@ -508,7 +615,9 @@ describe("a signed proof PDF (PAdES ICP-Brasil AD-RB)", () => {
       status: "SIGNED",
       signer: { name: "TRAJETTO SISTEMAS TESTE LTDA", cnpj: "11222333000181" },
     });
-    expect(ProofSigningService.record(plan, new Date("2026-10-05T12:00:00Z"))).toMatchObject({
+    expect(
+      ProofSigningService.record(plan, new Date("2026-10-05T12:00:00Z")),
+    ).toMatchObject({
       signature_status: "SIGNED",
       unsigned_reason: null,
       signature_profile: "PADES_AD_RB",
@@ -526,7 +635,9 @@ describe("a signed proof PDF (PAdES ICP-Brasil AD-RB)", () => {
 
 describe("a signed proof PDF (the model's plain CMS)", () => {
   it("uses adbe.pkcs7.detached with contentType, signingTime and messageDigest", async () => {
-    const pdf = await signedPdf(new ProofSigningService(config({ profile: "CMS_DETACHED" })));
+    const pdf = await signedPdf(
+      new ProofSigningService(config({ profile: "CMS_DETACHED" })),
+    );
     const { cms, covered } = extractSignature(pdf);
     const info = signerInfo(cms);
 
@@ -535,10 +646,19 @@ describe("a signed proof PDF (the model's plain CMS)", () => {
       [CMS_OID.contentType, CMS_OID.messageDigest, CMS_OID.signingTime].sort(),
     );
 
-    const digest = Buffer.from(info.attributes.get(CMS_OID.messageDigest)!.value as string, "binary");
-    expect(digest.equals(createHash("sha256").update(covered).digest())).toBe(true);
-    expect(verifyRsa(info.attributesNode, info.signature, publicKeyDer(info.certificates[0]))).toBe(
+    const digest = Buffer.from(
+      info.attributes.get(CMS_OID.messageDigest)!.value as string,
+      "binary",
+    );
+    expect(digest.equals(createHash("sha256").update(covered).digest())).toBe(
       true,
     );
+    expect(
+      verifyRsa(
+        info.attributesNode,
+        info.signature,
+        publicKeyDer(info.certificates[0]),
+      ),
+    ).toBe(true);
   });
 });

@@ -27,7 +27,10 @@ interface Operation {
   description?: string;
   parameters?: Array<{ in: string; name: string; description?: string }>;
   requestBody?: { content?: Record<string, { schema?: JsonSchema }> };
-  responses: Record<string, { content?: Record<string, { schema?: JsonSchema }> }>;
+  responses: Record<
+    string,
+    { content?: Record<string, { schema?: JsonSchema }> }
+  >;
 }
 
 let paths: Record<string, Record<string, Operation>>;
@@ -38,7 +41,10 @@ beforeAll(async () => {
 
   await app.ready();
 
-  const portal = await app.inject({ method: "GET", url: "/integration/docs/openapi.json" });
+  const portal = await app.inject({
+    method: "GET",
+    url: "/integration/docs/openapi.json",
+  });
 
   paths = portal.json().paths;
   close = () => app.close();
@@ -55,7 +61,8 @@ const createDelivery = () => paths["/integration/v1/deliveries"].post;
 
 describe("the public document says what the API really sends", () => {
   it("does not promise a Portuguese sentence in a read's 400 message", () => {
-    const message = bodyOf(paths["/integration/v1/deliveries"].get, "400").properties?.message;
+    const message = bodyOf(paths["/integration/v1/deliveries"].get, "400")
+      .properties?.message;
 
     expect(message?.description).not.toMatch(/pronta para mostrar/);
     expect(message?.description).toContain("primeiro campo recusado");
@@ -63,14 +70,16 @@ describe("the public document says what the API really sends", () => {
   });
 
   it("publishes `code` as required on every refusal of the public create", () => {
-    const refusals = Object.keys(createDelivery().responses).filter(
-      (status) => ["400", "404", "409"].includes(status),
+    const refusals = Object.keys(createDelivery().responses).filter((status) =>
+      ["400", "404", "409"].includes(status),
     );
 
     expect(refusals.length).toBeGreaterThan(0);
 
     for (const status of refusals) {
-      expect(bodyOf(createDelivery(), status).required, status).toContain("code");
+      expect(bodyOf(createDelivery(), status).required, status).toContain(
+        "code",
+      );
     }
   });
 
@@ -83,7 +92,9 @@ describe("the public document says what the API really sends", () => {
   });
 
   it("says the create accepts masks on the fields published cleaned", () => {
-    const fields = createDelivery().requestBody?.content?.["application/json"]?.schema?.properties ?? {};
+    const fields =
+      createDelivery().requestBody?.content?.["application/json"]?.schema
+        ?.properties ?? {};
 
     for (const name of ["cep", "recipient_document", "recipient_telephone"]) {
       expect(fields[name]?.description, name).toMatch(/com ou sem máscara/);

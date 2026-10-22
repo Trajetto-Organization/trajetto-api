@@ -44,12 +44,17 @@ type TrustedProxyMode = "none" | "xff" | "cloudflare";
  * CLIENT wrote (a fresh bucket per request for an attacker); the trusted proxy
  * appends the real address at the end.
  */
-function lastForwardedAddress(value: string | string[] | undefined): string | null {
+function lastForwardedAddress(
+  value: string | string[] | undefined,
+): string | null {
   const raw = Array.isArray(value) ? value[value.length - 1] : value;
 
   if (!raw) return null;
 
-  const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  const parts = raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
 
   return parts.length > 0 ? parts[parts.length - 1] : null;
 }
@@ -200,7 +205,10 @@ function rateLimitAddressKey(address: string): string {
   const groups = ipv6Groups(plain);
 
   // ::ffff:a.b.c.d is an IPv4 client on a dual-stack socket.
-  if (groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff) {
+  if (
+    groups.slice(0, 5).every((group) => group === 0) &&
+    groups[5] === 0xffff
+  ) {
     return `ip:${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
   }
 
@@ -335,7 +343,10 @@ function refreshSessionRateLimitKey(request: FastifyRequest): string {
 
   if (typeof token === "string" && token.length > 0) {
     try {
-      const payload = verify(token, hmacVerifyKey(auth.secret_refresh_token)) as {
+      const payload = verify(
+        token,
+        hmacVerifyKey(auth.secret_refresh_token),
+      ) as {
         tokenType?: string;
         familyId?: string;
       };

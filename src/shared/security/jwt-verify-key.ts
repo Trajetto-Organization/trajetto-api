@@ -15,11 +15,16 @@ const keys = new Map<string, KeyObject>();
 
 function hmacVerifyKey(secret: string | Buffer): KeyObject {
   // Buffers (derived keys) are cached by content, like the env strings.
-  const id = typeof secret === "string" ? `s:${secret}` : `b:${secret.toString("base64")}`;
+  const id =
+    typeof secret === "string"
+      ? `s:${secret}`
+      : `b:${secret.toString("base64")}`;
   let key = keys.get(id);
 
   if (!key) {
-    key = createSecretKey(typeof secret === "string" ? Buffer.from(secret) : secret);
+    key = createSecretKey(
+      typeof secret === "string" ? Buffer.from(secret) : secret,
+    );
     keys.set(id, key);
   }
 

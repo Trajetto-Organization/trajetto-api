@@ -115,9 +115,18 @@ const MASTER_WITHOUT_COMPANY: Record<string, Probe> = {
   },
   // Support tickets (decision 14.5): a MASTER always names the company.
   "GET /chat/tickets": { url: "/chat/tickets?status=OPEN", answer: "refused" },
-  "GET /chat/tickets/assignees": { url: "/chat/tickets/assignees", answer: "refused" },
-  "GET /chat/tickets/summary": { url: "/chat/tickets/summary", answer: "refused" },
-  "GET /chat/tickets/{ticketId}": { url: `/chat/tickets/${ANY}`, answer: "refused" },
+  "GET /chat/tickets/assignees": {
+    url: "/chat/tickets/assignees",
+    answer: "refused",
+  },
+  "GET /chat/tickets/summary": {
+    url: "/chat/tickets/summary",
+    answer: "refused",
+  },
+  "GET /chat/tickets/{ticketId}": {
+    url: `/chat/tickets/${ANY}`,
+    answer: "refused",
+  },
   "GET /chat/tickets/{ticketId}/events": {
     url: `/chat/tickets/${ANY}/events`,
     answer: "refused",
@@ -238,7 +247,10 @@ const MASTER_WITHOUT_COMPANY: Record<string, Probe> = {
     url: "/part/list-part?page=1&pageSize=5",
     answer: "refused",
   },
-  "GET /route/control-tower": { url: "/route/control-tower", answer: "refused" },
+  "GET /route/control-tower": {
+    url: "/route/control-tower",
+    answer: "refused",
+  },
   "GET /route/driver-trail/{driverId}": {
     url: `/route/driver-trail/${ANY}`,
     answer: "refused",
@@ -248,7 +260,10 @@ const MASTER_WITHOUT_COMPANY: Record<string, Probe> = {
     answer: "refused",
   },
   "GET /route/monitoring": { url: "/route/monitoring", answer: "refused" },
-  "GET /route/monitoring/drivers": { url: "/route/monitoring/drivers", answer: "refused" },
+  "GET /route/monitoring/drivers": {
+    url: "/route/monitoring/drivers",
+    answer: "refused",
+  },
   "POST /route/positions": {
     url: "/route/positions",
     payload: {
@@ -319,7 +334,10 @@ interface DocumentOperation {
 }
 
 /** The module routes behind a session where the company is not required. */
-function companyOptionalModuleRoutes(): Array<{ id: string; queryCompany: boolean }> {
+function companyOptionalModuleRoutes(): Array<{
+  id: string;
+  queryCompany: boolean;
+}> {
   const document = app.swagger() as unknown as {
     paths: Record<string, Record<string, DocumentOperation>>;
   };
@@ -339,9 +357,9 @@ function companyOptionalModuleRoutes(): Array<{ id: string; queryCompany: boolea
 
       if (company && (company.in === "path" || company.required)) return [];
 
-      const bodyRequires = Object.values(operation.requestBody?.content ?? {}).some(
-        (media) => media.schema?.required?.includes("businessId"),
-      );
+      const bodyRequires = Object.values(
+        operation.requestBody?.content ?? {},
+      ).some((media) => media.schema?.required?.includes("businessId"));
       if (bodyRequires) return [];
 
       return [
@@ -379,7 +397,11 @@ async function seedBusiness(
 
   if (modules.length > 0) {
     await prisma.businessEntitlement.createMany({
-      data: modules.map((module) => ({ businessId: id, module, enabled: true })),
+      data: modules.map((module) => ({
+        businessId: id,
+        module,
+        enabled: true,
+      })),
     });
   }
 }
@@ -426,13 +448,21 @@ beforeAll(async () => {
 
   supplierBare = (
     await prisma.supplier.create({
-      data: { businessId: BARE, name: `Fornecedor sem frota ${RUN}`, cnpj: "11222333000181" },
+      data: {
+        businessId: BARE,
+        name: `Fornecedor sem frota ${RUN}`,
+        cnpj: "11222333000181",
+      },
     })
   ).id;
 
   supplierHired = (
     await prisma.supplier.create({
-      data: { businessId: HIRED, name: `Fornecedor com frota ${RUN}`, cnpj: "11222333000181" },
+      data: {
+        businessId: HIRED,
+        name: `Fornecedor com frota ${RUN}`,
+        cnpj: "11222333000181",
+      },
     })
   ).id;
 
@@ -463,7 +493,9 @@ afterAll(async () => {
 
   await prisma.apiKey.deleteMany({ where: { businessId: { in: companies } } });
   await prisma.shipper.deleteMany({ where: { businessId: { in: companies } } });
-  await prisma.supplier.deleteMany({ where: { businessId: { in: companies } } });
+  await prisma.supplier.deleteMany({
+    where: { businessId: { in: companies } },
+  });
 
   await prisma.refreshToken.deleteMany({ where: { userId: MASTER } });
   await prisma.activity.deleteMany({
@@ -493,12 +525,21 @@ function call(method: string, url: string, payload?: Record<string, unknown>) {
 
 /** Anything a leak would carry: the companies and the records seeded in them. */
 function seededIds(): string[] {
-  return [HIRED, BARE, supplierBare, supplierHired, shipperBare, apiKeyHiredPrefix];
+  return [
+    HIRED,
+    BARE,
+    supplierBare,
+    supplierHired,
+    shipperBare,
+    apiKeyHiredPrefix,
+  ];
 }
 
 describe("a MASTER request that names no company", () => {
   it("is possible only on the routes in the table", () => {
-    const found = companyOptionalModuleRoutes().map((route) => route.id).sort();
+    const found = companyOptionalModuleRoutes()
+      .map((route) => route.id)
+      .sort();
 
     // A new module route where the company may be left out lands here until
     // its answer to a MASTER is added to MASTER_WITHOUT_COMPANY and proven.
@@ -549,10 +590,18 @@ describe("a MASTER request that names a company without the module", () => {
 
     for (const [id, probe] of routes) {
       const separator = probe.url.includes("?") ? "&" : "?";
-      const response = await call("GET", `${probe.url}${separator}businessId=${BARE}`);
+      const response = await call(
+        "GET",
+        `${probe.url}${separator}businessId=${BARE}`,
+      );
 
-      if (response.statusCode !== 403 || response.json().code !== "MODULE_NOT_ENABLED") {
-        wrong.push(`${id} → ${response.statusCode} ${response.body.slice(0, 120)}`);
+      if (
+        response.statusCode !== 403 ||
+        response.json().code !== "MODULE_NOT_ENABLED"
+      ) {
+        wrong.push(
+          `${id} → ${response.statusCode} ${response.body.slice(0, 120)}`,
+        );
       }
     }
 
@@ -573,7 +622,9 @@ describe("a MASTER request that names a company without the module", () => {
     expect(response.statusCode, response.body).toBe(403);
     expect(response.json().code).toBe("SUPPLIER_TENANT_MISMATCH");
 
-    const row = await prisma.supplier.findUnique({ where: { id: supplierBare } });
+    const row = await prisma.supplier.findUnique({
+      where: { id: supplierBare },
+    });
 
     expect(row?.businessId).toBe(BARE);
     expect(row?.name).toBe(`Fornecedor sem frota ${RUN}`);

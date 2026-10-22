@@ -146,7 +146,9 @@ describe("rows queued before the endpoint was switched off", () => {
 
     await dispatcher.processBatch();
 
-    expect(received, "o evento saiu para um endpoint desligado").toHaveLength(0);
+    expect(received, "o evento saiu para um endpoint desligado").toHaveLength(
+      0,
+    );
 
     const [row] = await rows();
 
@@ -203,7 +205,9 @@ describe("rows queued before the endpoint was switched off", () => {
 
     await prisma.webhookDelivery.updateMany({
       where: { businessId: CARRIER },
-      data: { created_at: new Date(Date.now() - (REPLAY_WINDOW_DAYS + 1) * DAY_MS) },
+      data: {
+        created_at: new Date(Date.now() - (REPLAY_WINDOW_DAYS + 1) * DAY_MS),
+      },
     });
 
     await prisma.webhookEndpoint.update({
@@ -260,7 +264,10 @@ describe("a held row whose replay window ran out", () => {
 
     await dispatcher.processBatch();
 
-    expect(received, "um evento de fora da janela de 30 dias foi enviado").toHaveLength(0);
+    expect(
+      received,
+      "um evento de fora da janela de 30 dias foi enviado",
+    ).toHaveLength(0);
 
     const [row] = await rows();
 
@@ -282,7 +289,10 @@ describe("events that happen while the breaker is open", () => {
 
     const held = await rows();
 
-    expect(held, "eventos gerados com o disjuntor aberto foram descartados").toHaveLength(3);
+    expect(
+      held,
+      "eventos gerados com o disjuntor aberto foram descartados",
+    ).toHaveLength(3);
 
     for (const row of held) {
       expect(row.status).toBe("PENDING");

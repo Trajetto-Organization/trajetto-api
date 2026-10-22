@@ -32,7 +32,9 @@ import {
 type UniqueField = "cnpj" | "corporate_reason" | "email" | "erp_code";
 
 /** The P2002 Postgres raises for the branch table's unique indexes. */
-function uniqueViolation(field: UniqueField): Prisma.PrismaClientKnownRequestError {
+function uniqueViolation(
+  field: UniqueField,
+): Prisma.PrismaClientKnownRequestError {
   const target = field === "cnpj" ? ["cnpj"] : ["businessId", field];
 
   return new Prisma.PrismaClientKnownRequestError(
@@ -122,7 +124,10 @@ class InMemoryBranchRepository implements IBranchRepository {
         if ((branch.is_active ?? true) !== wanted) return false;
       }
 
-      if (filters.ufs?.length && !(filters.ufs as string[]).includes(branch.uf)) {
+      if (
+        filters.ufs?.length &&
+        !(filters.ufs as string[]).includes(branch.uf)
+      ) {
         return false;
       }
     }
@@ -157,7 +162,8 @@ class InMemoryBranchRepository implements IBranchRepository {
   private compare(sort: BranchSortKey, order: "asc" | "desc") {
     const valueOf = (branch: Branch): OrderValue => {
       if (sort === "is_active") return branch.is_active ?? true;
-      if (sort === "created_at" || sort === "updated_at") return new Date(branch[sort]);
+      if (sort === "created_at" || sort === "updated_at")
+        return new Date(branch[sort]);
 
       return branch[sort] ?? null;
     };
@@ -247,10 +253,13 @@ class InMemoryBranchRepository implements IBranchRepository {
 
     if (branchIndex === -1) {
       // What Prisma's update raises for a missing row.
-      throw new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
-        code: "P2025",
-        clientVersion: "in-memory",
-      });
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Record to update not found.",
+        {
+          code: "P2025",
+          clientVersion: "in-memory",
+        },
+      );
     }
 
     const sent = Object.fromEntries(
@@ -296,7 +305,8 @@ class InMemoryBranchRepository implements IBranchRepository {
   ): Promise<Branch | null> {
     return (
       this.branches.find(
-        (branch) => branch.businessId === businessId && sameText(branch.email, email),
+        (branch) =>
+          branch.businessId === businessId && sameText(branch.email, email),
       ) || null
     );
   }
@@ -320,10 +330,13 @@ class InMemoryBranchRepository implements IBranchRepository {
     );
 
     if (branchIndex === -1) {
-      throw new Prisma.PrismaClientKnownRequestError("Record to delete does not exist.", {
-        code: "P2025",
-        clientVersion: "in-memory",
-      });
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Record to delete does not exist.",
+        {
+          code: "P2025",
+          clientVersion: "in-memory",
+        },
+      );
     }
 
     const [deletedBranch] = this.branches.splice(branchIndex, 1);
@@ -340,7 +353,8 @@ class InMemoryBranchRepository implements IBranchRepository {
     let filtered = this.branches
       .filter(
         (branch) =>
-          branch.businessId === businessId && (branch.is_active ?? true) === true,
+          branch.businessId === businessId &&
+          (branch.is_active ?? true) === true,
       )
       .sort(this.compare("created_at", "desc"));
 
@@ -359,7 +373,12 @@ class InMemoryBranchRepository implements IBranchRepository {
 
     // Prisma's cursor: positioned on the cursor ROW, skip 1; an unknown
     // cursor yields nothing (it used to restart the list from the top).
-    filtered = afterCursor(filtered, this.branches, cursor, this.compare("created_at", "desc"));
+    filtered = afterCursor(
+      filtered,
+      this.branches,
+      cursor,
+      this.compare("created_at", "desc"),
+    );
 
     const hasMore = filtered.length > limit;
 

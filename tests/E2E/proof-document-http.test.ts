@@ -13,7 +13,10 @@ import { InMemoryProofDocumentRepository } from "@/modules/delivery/repositories
 import { buildProofDocumentModel } from "@/shared/delivery/proof-document";
 import type { UploadService } from "@/shared/services/upload-service";
 
-import { testCertificateSigning, unsignedSigning } from "../support/proof-services";
+import {
+  testCertificateSigning,
+  unsignedSigning,
+} from "../support/proof-services";
 
 /**
  * The receipt, end to end: generated on first request, stored, hashed, and
@@ -284,13 +287,28 @@ describe("producing the receipt", () => {
 
   it("documents every refusal of the route, 401 included", () => {
     const document = app.swagger() as unknown as {
-      paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
+      paths: Record<
+        string,
+        Record<string, { responses: Record<string, unknown> }>
+      >;
     };
 
-    const route = document.paths["/delivery/proof-document/{deliveryId}/business/{businessId}"].get;
+    const route =
+      document.paths[
+        "/delivery/proof-document/{deliveryId}/business/{businessId}"
+      ].get;
 
     expect(Object.keys(route.responses)).toEqual(
-      expect.arrayContaining(["200", "400", "401", "403", "404", "409", "429", "503"]),
+      expect.arrayContaining([
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "409",
+        "429",
+        "503",
+      ]),
     );
   });
 });
@@ -371,7 +389,6 @@ describe("the page the QR code lands on", () => {
     expect(response.statusCode).toBe(400);
   });
 });
-
 
 describe("the link the customer receives", () => {
   /**
@@ -592,17 +609,41 @@ describe("what the repository reads for the receipt, and its twin", () => {
       },
     });
     const delivered = await prisma.occurrenceType.create({
-      data: { name: `Entregue ${randomUUID().slice(0, 8)}`, businessId: CARRIER, category: "DELIVERED" },
+      data: {
+        name: `Entregue ${randomUUID().slice(0, 8)}`,
+        businessId: CARRIER,
+        category: "DELIVERED",
+      },
     });
 
-    const reporter = await prisma.user.findFirstOrThrow({ where: { businessId: CARRIER } });
+    const reporter = await prisma.user.findFirstOrThrow({
+      where: { businessId: CARRIER },
+    });
 
     for (const [type, category, createdAt, occurredAt, latitude] of [
-      [blocking.id, "NOT_DELIVERED", "2026-09-16T12:00:00.000Z", "2026-09-16T12:00:00.000Z", -23.1],
+      [
+        blocking.id,
+        "NOT_DELIVERED",
+        "2026-09-16T12:00:00.000Z",
+        "2026-09-16T12:00:00.000Z",
+        -23.1,
+      ],
       // Uploaded half an hour later, recorded an hour earlier.
-      [blocking.id, "NOT_DELIVERED", "2026-09-16T12:30:00.000Z", "2026-09-16T11:00:00.000Z", -23.2],
+      [
+        blocking.id,
+        "NOT_DELIVERED",
+        "2026-09-16T12:30:00.000Z",
+        "2026-09-16T11:00:00.000Z",
+        -23.2,
+      ],
       // A "delivered" occurrence (decision 14.3) is not a problem: never read here.
-      [delivered.id, "DELIVERED", "2026-09-16T13:00:00.000Z", "2026-09-16T13:00:00.000Z", -23.3],
+      [
+        delivered.id,
+        "DELIVERED",
+        "2026-09-16T13:00:00.000Z",
+        "2026-09-16T13:00:00.000Z",
+        -23.3,
+      ],
     ] as const) {
       await prisma.deliveryOccurrence.create({
         data: {
@@ -620,9 +661,14 @@ describe("what the repository reads for the receipt, and its twin", () => {
       });
     }
 
-    const loaded = await new ProofDocumentRepository(prisma).loadSource(delivery.id, CARRIER);
+    const loaded = await new ProofDocumentRepository(prisma).loadSource(
+      delivery.id,
+      CARRIER,
+    );
 
-    expect(loaded!.occurrences.map((occurrence) => occurrence.latitude)).toEqual([-23.1, -23.2]);
+    expect(
+      loaded!.occurrences.map((occurrence) => occurrence.latitude),
+    ).toEqual([-23.1, -23.2]);
 
     const model = buildProofDocumentModel(loaded!, {
       verificationBaseUrl: "https://app.trajetto.com.br",
@@ -632,7 +678,9 @@ describe("what the repository reads for the receipt, and its twin", () => {
     // 12:00 UTC is the latest MOMENT, though 12:30 was the latest upload.
     expect(model.map).toEqual({ latitude: -23.1, longitude: -46.6 });
     expect(
-      model.sections.delivery.blocks[0].lines.flat().find((field) => field.label === "Hora")?.value,
+      model.sections.delivery.blocks[0].lines
+        .flat()
+        .find((field) => field.label === "Hora")?.value,
     ).toBe("09:00:00 (horário de Brasília, UTC-3)");
   });
 
@@ -664,14 +712,24 @@ describe("what the repository reads for the receipt, and its twin", () => {
     });
 
     const reason = await prisma.statusChangeReason.create({
-      data: { name: `Cancelado ${randomUUID().slice(0, 8)}`, businessId: CARRIER },
+      data: {
+        name: `Cancelado ${randomUUID().slice(0, 8)}`,
+        businessId: CARRIER,
+      },
     });
     const older = await prisma.statusChangeReason.create({
       data: { name: `Antigo ${randomUUID().slice(0, 8)}`, businessId: CARRIER },
     });
-    const reporter = await prisma.user.findFirstOrThrow({ where: { businessId: CARRIER } });
+    const reporter = await prisma.user.findFirstOrThrow({
+      where: { businessId: CARRIER },
+    });
 
-    const event = (deliveryId: string, reasonId: string, to: "FAILED" | "PENDING", at: string) =>
+    const event = (
+      deliveryId: string,
+      reasonId: string,
+      to: "FAILED" | "PENDING",
+      at: string,
+    ) =>
       prisma.deliveryEvent.create({
         data: {
           type: "STATUS_CHANGE",
@@ -692,7 +750,10 @@ describe("what the repository reads for the receipt, and its twin", () => {
     await event(delivery.id, older.id, "PENDING", "2026-09-16T19:00:00.000Z");
     await event(sibling.id, older.id, "FAILED", "2026-09-16T20:00:00.000Z");
 
-    const loaded = await new ProofDocumentRepository(prisma).loadSource(delivery.id, CARRIER);
+    const loaded = await new ProofDocumentRepository(prisma).loadSource(
+      delivery.id,
+      CARRIER,
+    );
 
     expect(loaded!.failure).toEqual({
       occurred_at: new Date("2026-09-16T18:45:10.000Z"),
@@ -705,24 +766,40 @@ describe("what the repository reads for the receipt, and its twin", () => {
       verificationToken: "t",
     }).sections.delivery.blocks[0].lines.flat();
 
-    expect(fields.find((field) => field.label === "Ocorrência")?.value).toBe(reason.name);
+    expect(fields.find((field) => field.label === "Ocorrência")?.value).toBe(
+      reason.name,
+    );
     expect(fields.find((field) => field.label === "Hora")?.value).toBe(
       "15:45:10 (horário de Brasília, UTC-3)",
     );
 
     // A delivered one never pays for the extra read.
-    expect((await new ProofDocumentRepository(prisma).loadSource(deliveredId, CARRIER))!.failure).toBeNull();
+    expect(
+      (await new ProofDocumentRepository(prisma).loadSource(
+        deliveredId,
+        CARRIER,
+      ))!.failure,
+    ).toBeNull();
   });
 
   it("prints the later manual FAILED over a stale occurrence, but never an approval's own change", async () => {
     // Regression: the blocking occurrence always won, so a delivery reopened
     // and failed again from the panel printed the old occurrence.
-    const reporter = await prisma.user.findFirstOrThrow({ where: { businessId: CARRIER } });
+    const reporter = await prisma.user.findFirstOrThrow({
+      where: { businessId: CARRIER },
+    });
     const type = await prisma.occurrenceType.create({
-      data: { name: `Ausente ${randomUUID().slice(0, 8)}`, businessId: CARRIER, blocks_delivery: true },
+      data: {
+        name: `Ausente ${randomUUID().slice(0, 8)}`,
+        businessId: CARRIER,
+        blocks_delivery: true,
+      },
     });
     const reason = await prisma.statusChangeReason.create({
-      data: { name: `Cliente cancelou ${randomUUID().slice(0, 8)}`, businessId: CARRIER },
+      data: {
+        name: `Cliente cancelou ${randomUUID().slice(0, 8)}`,
+        businessId: CARRIER,
+      },
     });
 
     const failedDelivery = () =>
@@ -771,7 +848,10 @@ describe("what the repository reads for the receipt, and its twin", () => {
         },
       });
     const occurrenceField = async (deliveryId: string) => {
-      const loaded = await new ProofDocumentRepository(prisma).loadSource(deliveryId, CARRIER);
+      const loaded = await new ProofDocumentRepository(prisma).loadSource(
+        deliveryId,
+        CARRIER,
+      );
       const fields = buildProofDocumentModel(loaded!, {
         verificationBaseUrl: "https://app.trajetto.com.br",
         verificationToken: "t",
@@ -787,7 +867,9 @@ describe("what the repository reads for the receipt, and its twin", () => {
     // Reopened and failed again from the panel at 18:00 local: the reason wins.
     const reopened = await failedDelivery();
     await occurrenceOn(reopened.id);
-    await toFailed(reopened.id, "2026-09-16T21:00:00.000Z", { reasonId: reason.id });
+    await toFailed(reopened.id, "2026-09-16T21:00:00.000Z", {
+      reasonId: reason.id,
+    });
 
     const late = await occurrenceField(reopened.id);
     expect(late.occurrence).toBe(reason.name);
@@ -797,7 +879,9 @@ describe("what the repository reads for the receipt, and its twin", () => {
     // points at it: the occurrence is still the fact.
     const approved = await failedDelivery();
     const occurrence = await occurrenceOn(approved.id);
-    await toFailed(approved.id, "2026-09-16T13:05:00.000Z", { occurrenceId: occurrence.id });
+    await toFailed(approved.id, "2026-09-16T13:05:00.000Z", {
+      occurrenceId: occurrence.id,
+    });
 
     const tower = await occurrenceField(approved.id);
     expect(tower.loaded.failure?.occurrenceId).toBe(occurrence.id);
@@ -1131,7 +1215,9 @@ describe("the validated model and its signature (decision 14.8)", () => {
       signing_available: false,
     });
 
-    const row = await prisma.deliveryProofDocument.findUniqueOrThrow({ where: { deliveryId } });
+    const row = await prisma.deliveryProofDocument.findUniqueOrThrow({
+      where: { deliveryId },
+    });
 
     expect(row).toMatchObject({
       layout_version: 2,
@@ -1162,7 +1248,9 @@ describe("the validated model and its signature (decision 14.8)", () => {
     });
     expect(data.signing_available).toBe(true);
 
-    const row = await prisma.deliveryProofDocument.findUniqueOrThrow({ where: { deliveryId } });
+    const row = await prisma.deliveryProofDocument.findUniqueOrThrow({
+      where: { deliveryId },
+    });
     const bytes = (await uploads().readObject(row.storage_key))!;
 
     // The stored file is the signed one, and the recorded hash is of it.
@@ -1186,14 +1274,19 @@ describe("the validated model and its signature (decision 14.8)", () => {
   }, 60_000);
 
   it("answers 503 PROOF_SIGNING_FAILED and writes no row when signing fails", async () => {
-    container.registerInstance("ProofSigningService", testCertificateSigning({ signatureLength: 64 }));
+    container.registerInstance(
+      "ProofSigningService",
+      testCertificateSigning({ signatureLength: 64 }),
+    );
 
     const { deliveryId } = await settledDelivery();
     const response = await fetchProof(deliveryId);
 
     expect(response.statusCode).toBe(503);
     expect(response.json().code).toBe("PROOF_SIGNING_FAILED");
-    expect(await prisma.deliveryProofDocument.findUnique({ where: { deliveryId } })).toBeNull();
+    expect(
+      await prisma.deliveryProofDocument.findUnique({ where: { deliveryId } }),
+    ).toBeNull();
   }, 60_000);
 
   it("replaces the signature on a regeneration, keeping the token", async () => {
@@ -1204,7 +1297,9 @@ describe("the validated model and its signature (decision 14.8)", () => {
 
     container.registerInstance("ProofSigningService", unsignedSigning());
 
-    const second = (await fetchProof(deliveryId, token, "?regenerate=true")).json().data;
+    const second = (
+      await fetchProof(deliveryId, token, "?regenerate=true")
+    ).json().data;
 
     expect(second.verificationUrl).toBe(first.verificationUrl);
     expect(second.version).toBe(first.version + 1);
@@ -1227,7 +1322,11 @@ describe("the validated model and its signature (decision 14.8)", () => {
     });
 
     const type = await prisma.occurrenceType.create({
-      data: { name: `Entrega normal ${randomUUID().slice(0, 6)}`, businessId: CARRIER, category: "DELIVERED" },
+      data: {
+        name: `Entrega normal ${randomUUID().slice(0, 6)}`,
+        businessId: CARRIER,
+        category: "DELIVERED",
+      },
     });
 
     await prisma.shipper.update({
@@ -1242,7 +1341,9 @@ describe("the validated model and its signature (decision 14.8)", () => {
       routeId: route.id,
     });
 
-    const reporter = await prisma.user.findFirstOrThrow({ where: { businessId: CARRIER } });
+    const reporter = await prisma.user.findFirstOrThrow({
+      where: { businessId: CARRIER },
+    });
     const occurrence = await prisma.deliveryOccurrence.create({
       data: {
         deliveryId,
@@ -1253,9 +1354,15 @@ describe("the validated model and its signature (decision 14.8)", () => {
       },
     });
 
-    await prisma.deliveryEvent.update({ where: { id: eventId }, data: { occurrenceId: occurrence.id } });
+    await prisma.deliveryEvent.update({
+      where: { id: eventId },
+      data: { occurrenceId: occurrence.id },
+    });
 
-    const loaded = (await new ProofDocumentRepository(prisma).loadSource(deliveryId, CARRIER))!;
+    const loaded = (await new ProofDocumentRepository(prisma).loadSource(
+      deliveryId,
+      CARRIER,
+    ))!;
 
     expect(loaded.proof).toMatchObject({
       eventId,
@@ -1264,7 +1371,9 @@ describe("the validated model and its signature (decision 14.8)", () => {
       created_at: new Date("2026-09-30T16:30:26.000Z"),
     });
     expect(loaded.deliveredTypeName).toBe(type.name);
-    expect(loaded.delivery.shipper?.corporate_reason).toBe("Distribuidora Norte Comércio Ltda");
+    expect(loaded.delivery.shipper?.corporate_reason).toBe(
+      "Distribuidora Norte Comércio Ltda",
+    );
     // The proof's own route, read through the event (design §3 #4).
     expect(loaded.route?.code).toBe(route.code);
   }, 60_000);
@@ -1272,7 +1381,13 @@ describe("the validated model and its signature (decision 14.8)", () => {
   it("caches the GPS address on the company's own event only", async () => {
     const { deliveryId, eventId } = await settledDelivery();
     const repository = new ProofDocumentRepository(prisma);
-    const address = { line: "Rua A, 1", district: "Centro", city: "Vila Velha", state: "ES", cep: "29100000" };
+    const address = {
+      line: "Rua A, 1",
+      district: "Centro",
+      city: "Vila Velha",
+      state: "ES",
+      cep: "29100000",
+    };
 
     // Another company naming this event changes nothing.
     await repository.saveGpsAddress(eventId, OTHER, {
@@ -1281,7 +1396,10 @@ describe("the validated model and its signature (decision 14.8)", () => {
       gps_geocoded_at: new Date(),
     });
 
-    expect((await repository.loadSource(deliveryId, CARRIER))!.proof!.gps_address_source).toBeNull();
+    expect(
+      (await repository.loadSource(deliveryId, CARRIER))!.proof!
+        .gps_address_source,
+    ).toBeNull();
 
     await repository.saveGpsAddress(eventId, CARRIER, {
       gps_address: address,
@@ -1301,11 +1419,15 @@ describe("the validated model and its signature (decision 14.8)", () => {
       gps_geocoded_at: new Date(),
     });
 
-    expect((await repository.loadSource(deliveryId, CARRIER))!.proof!.gps_address).toBeNull();
+    expect(
+      (await repository.loadSource(deliveryId, CARRIER))!.proof!.gps_address,
+    ).toBeNull();
   }, 60_000);
 
   it("never shows another company the new fields: the same 404", async () => {
-    const { deliveryId } = await settledDelivery({ device_id: "23be03c084165505" });
+    const { deliveryId } = await settledDelivery({
+      device_id: "23be03c084165505",
+    });
 
     const response = await app.inject({
       method: "GET",

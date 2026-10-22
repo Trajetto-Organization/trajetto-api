@@ -17,5 +17,7 @@
   "longitude_original": -46.6333,
   "location_source": "GPS_MANUAL",
   "created_from": "MOBILE_APP",
-  "photo": { "key": "odometerPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-odometer-5e6f7a8b.jpg" }
+  "photo": {
+    "key": "odometerPhotos/018fd960-0000-7000-8000-0000000000a1/1790000000000-odometer-5e6f7a8b.jpg"
+  }
 }

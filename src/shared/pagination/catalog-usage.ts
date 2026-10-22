@@ -50,12 +50,18 @@ function compareLeaders(a: CatalogUsage, b: CatalogUsage): number {
 }
 
 function pickLeader(usage: ReadonlyArray<CatalogUsage>): CatalogLeader | null {
-  const leader = usage.filter((entry) => entry.count > 0).sort(compareLeaders)[0];
+  const leader = usage
+    .filter((entry) => entry.count > 0)
+    .sort(compareLeaders)[0];
 
-  return leader ? { id: leader.id, label: leader.label, count: leader.count } : null;
+  return leader
+    ? { id: leader.id, label: leader.label, count: leader.count }
+    : null;
 }
 
-function summarizeCatalogUsage(usage: ReadonlyArray<CatalogUsage>): CatalogUsageSummary {
+function summarizeCatalogUsage(
+  usage: ReadonlyArray<CatalogUsage>,
+): CatalogUsageSummary {
   return {
     total: usage.length,
     linked: usage.reduce((sum, entry) => sum + entry.count, 0),

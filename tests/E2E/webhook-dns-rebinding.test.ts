@@ -1,4 +1,12 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import dnsCallbacks from "node:dns";
@@ -55,7 +63,10 @@ vi.mock("node:dns/promises", () => ({
   Resolver: resolution.Resolver,
 }));
 
-import { WebhookDispatchService, fanOutWebhookEvent } from "@/shared/integration/webhook-dispatch-service";
+import {
+  WebhookDispatchService,
+  fanOutWebhookEvent,
+} from "@/shared/integration/webhook-dispatch-service";
 
 const prisma = new PrismaClient();
 

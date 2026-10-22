@@ -169,17 +169,24 @@ describe("the fair pool", () => {
       key: index % 3 === 0 ? "slow" : `fast-${index % 4}`,
     }));
 
-    await inFairPool(items, { concurrency: 5, perKey: 2, keyOf: (item) => item.key }, async (item) => {
-      running += 1;
-      runningByKey.set(item.key, (runningByKey.get(item.key) ?? 0) + 1);
-      peak = Math.max(peak, running);
-      peakByKey.set(item.key, Math.max(peakByKey.get(item.key) ?? 0, runningByKey.get(item.key)!));
+    await inFairPool(
+      items,
+      { concurrency: 5, perKey: 2, keyOf: (item) => item.key },
+      async (item) => {
+        running += 1;
+        runningByKey.set(item.key, (runningByKey.get(item.key) ?? 0) + 1);
+        peak = Math.max(peak, running);
+        peakByKey.set(
+          item.key,
+          Math.max(peakByKey.get(item.key) ?? 0, runningByKey.get(item.key)!),
+        );
 
-      await sleep(item.key === "slow" ? 20 : 2);
+        await sleep(item.key === "slow" ? 20 : 2);
 
-      running -= 1;
-      runningByKey.set(item.key, runningByKey.get(item.key)! - 1);
-    });
+        running -= 1;
+        runningByKey.set(item.key, runningByKey.get(item.key)! - 1);
+      },
+    );
 
     expect(peak).toBeLessThanOrEqual(5);
     expect(Math.max(...peakByKey.values())).toBeLessThanOrEqual(2);
@@ -193,10 +200,14 @@ describe("the fair pool", () => {
       ...Array.from({ length: 6 }, (_, index) => ({ key: `fast-${index}` })),
     ];
 
-    await inFairPool(items, { concurrency: 5, perKey: 2, keyOf: (item) => item.key }, async (item) => {
-      await sleep(item.key === "slow" ? 40 : 1);
-      finished.push(item.key);
-    });
+    await inFairPool(
+      items,
+      { concurrency: 5, perKey: 2, keyOf: (item) => item.key },
+      async (item) => {
+        await sleep(item.key === "slow" ? 40 : 1);
+        finished.push(item.key);
+      },
+    );
 
     // In waves, the fast ones would have waited for the slow ones in front.
     const firstSlow = finished.indexOf("slow");
@@ -208,10 +219,14 @@ describe("the fair pool", () => {
   it("finishes the rest when one piece of work throws", async () => {
     const done: number[] = [];
 
-    await inFairPool([1, 2, 3], { concurrency: 2, perKey: 2, keyOf: () => "k" }, async (item) => {
-      if (item === 2) throw new Error("boom");
-      done.push(item);
-    });
+    await inFairPool(
+      [1, 2, 3],
+      { concurrency: 2, perKey: 2, keyOf: () => "k" },
+      async (item) => {
+        if (item === 2) throw new Error("boom");
+        done.push(item);
+      },
+    );
 
     expect(done.sort()).toEqual([1, 3]);
   });

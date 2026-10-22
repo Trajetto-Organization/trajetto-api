@@ -18,9 +18,7 @@ class DeleteKanbanColumnController {
     );
 
     await deleteKanbanColumnUseCase.execute(columnId, businessId, id);
-    return reply
-      .status(200)
-      .send({ message: "Coluna deletada com sucesso!" });
+    return reply.status(200).send({ message: "Coluna deletada com sucesso!" });
   }
 }
 

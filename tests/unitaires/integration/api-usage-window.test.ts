@@ -12,14 +12,22 @@ import { apiUsageWindow } from "@/shared/integration/api-usage-window";
 describe("the days the usage screen asks for", () => {
   it("is the company's today at 21:30 in São Paulo, not tomorrow in UTC", () => {
     // 2026-09-16T00:30Z is 21:30 of the 15th in São Paulo.
-    const window = apiUsageWindow(new Date("2026-09-16T00:30:00.000Z"), "America/Sao_Paulo", 1);
+    const window = apiUsageWindow(
+      new Date("2026-09-16T00:30:00.000Z"),
+      "America/Sao_Paulo",
+      1,
+    );
 
     expect(window.dayKeys).toEqual(["2026-09-15"]);
     expect(window.since.toISOString()).toBe("2026-09-15T00:00:00.000Z");
   });
 
   it("has already turned at 00:30 in São Paulo, which UTC turned three hours before", () => {
-    const window = apiUsageWindow(new Date("2026-09-16T03:30:00.000Z"), "America/Sao_Paulo", 1);
+    const window = apiUsageWindow(
+      new Date("2026-09-16T03:30:00.000Z"),
+      "America/Sao_Paulo",
+      1,
+    );
 
     expect(window.dayKeys).toEqual(["2026-09-16"]);
   });
@@ -27,12 +35,17 @@ describe("the days the usage screen asks for", () => {
   it("is each company's own calendar", () => {
     // 03:30Z is 23:30 of the 15th in Manaus.
     expect(
-      apiUsageWindow(new Date("2026-09-16T03:30:00.000Z"), "America/Manaus", 1).dayKeys,
+      apiUsageWindow(new Date("2026-09-16T03:30:00.000Z"), "America/Manaus", 1)
+        .dayKeys,
     ).toEqual(["2026-09-15"]);
   });
 
   it("covers whole days, today included, oldest first, across a month", () => {
-    const window = apiUsageWindow(new Date("2026-10-02T15:00:00.000Z"), "America/Sao_Paulo", 7);
+    const window = apiUsageWindow(
+      new Date("2026-10-02T15:00:00.000Z"),
+      "America/Sao_Paulo",
+      7,
+    );
 
     expect(window.dayKeys).toEqual([
       "2026-09-26",

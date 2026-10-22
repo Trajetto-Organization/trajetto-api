@@ -70,7 +70,10 @@ function optionalLine(label: string, max: number) {
 }
 
 const optionalId = (message: string) =>
-  z.preprocess(emptyStringToNull, z.string().uuid(message).optional().nullable());
+  z.preprocess(
+    emptyStringToNull,
+    z.string().uuid(message).optional().nullable(),
+  );
 
 const accountPayableFields = {
   category: z
@@ -152,7 +155,10 @@ const ONE_PAYEE_MESSAGE =
 
 const createAccountPayableSchema = z
   .object(accountPayableFields)
-  .refine(paymentConsistent, { message: PAYMENT_MESSAGE, path: ["amount_paid"] })
+  .refine(paymentConsistent, {
+    message: PAYMENT_MESSAGE,
+    path: ["amount_paid"],
+  })
   .refine(
     (data) => data.category !== "OTHER" || Boolean(data.category_description),
     {

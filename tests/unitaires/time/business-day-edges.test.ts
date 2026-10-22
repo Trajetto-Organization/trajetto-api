@@ -43,14 +43,21 @@ const instantsShowing = (wall: string, near: number) => {
 
 describe("zonedWallTimeToUtc on DST nights", () => {
   it("takes the earliest instant of a wall time that happened twice (2019-02-16 23:30)", () => {
-    const shown = instantsShowing("2019-02-16 23:30", Date.UTC(2019, 1, 17, 2, 30));
+    const shown = instantsShowing(
+      "2019-02-16 23:30",
+      Date.UTC(2019, 1, 17, 2, 30),
+    );
     expect(shown).toHaveLength(2);
 
-    expect(zonedWallTimeToUtc(SP, 2019, 2, 16, 23, 30).getTime()).toBe(Math.min(...shown));
+    expect(zonedWallTimeToUtc(SP, 2019, 2, 16, 23, 30).getTime()).toBe(
+      Math.min(...shown),
+    );
   });
 
   it("starts a day whose midnight never happened at its first instant (2018-11-04)", () => {
-    expect(instantsShowing("2018-11-04 00:00", Date.UTC(2018, 10, 4, 3))).toEqual([]);
+    expect(
+      instantsShowing("2018-11-04 00:00", Date.UTC(2018, 10, 4, 3)),
+    ).toEqual([]);
 
     const start = zonedWallTimeToUtc(SP, 2018, 11, 4).getTime();
 
@@ -60,31 +67,35 @@ describe("zonedWallTimeToUtc on DST nights", () => {
 
   it("moves a wall time inside a spring-forward gap past the gap, east of UTC too", () => {
     // Berlin skipped 02:00-03:00 on 2026-03-29: 02:30 is read as 03:30 CEST.
-    expect(zonedWallTimeToUtc("Europe/Berlin", 2026, 3, 29, 2, 30).toISOString()).toBe("2026-03-29T01:30:00.000Z");
+    expect(
+      zonedWallTimeToUtc("Europe/Berlin", 2026, 3, 29, 2, 30).toISOString(),
+    ).toBe("2026-03-29T01:30:00.000Z");
   });
 
   it("takes the earliest instant of a repeated wall time east of UTC too", () => {
     // Berlin went back from 03:00 CEST to 02:00 CET on 2026-10-25: 02:30
     // happened at 00:30Z and again at 01:30Z. Red before: the later one,
     // because both guesses read the offset after the change.
-    expect(zonedWallTimeToUtc("Europe/Berlin", 2026, 10, 25, 2, 30).toISOString()).toBe(
-      "2026-10-25T00:30:00.000Z",
-    );
+    expect(
+      zonedWallTimeToUtc("Europe/Berlin", 2026, 10, 25, 2, 30).toISOString(),
+    ).toBe("2026-10-25T00:30:00.000Z");
     // Sydney went back from 03:00 AEDT to 02:00 AEST on 2026-04-05.
-    expect(zonedWallTimeToUtc("Australia/Sydney", 2026, 4, 5, 2, 30).toISOString()).toBe(
-      "2026-04-04T15:30:00.000Z",
-    );
+    expect(
+      zonedWallTimeToUtc("Australia/Sydney", 2026, 4, 5, 2, 30).toISOString(),
+    ).toBe("2026-04-04T15:30:00.000Z");
     // An hour that happened once stays where it is, on both sides.
-    expect(zonedWallTimeToUtc("Europe/Berlin", 2026, 10, 25, 1, 30).toISOString()).toBe(
-      "2026-10-24T23:30:00.000Z",
-    );
-    expect(zonedWallTimeToUtc("Europe/Berlin", 2026, 10, 25, 3, 30).toISOString()).toBe(
-      "2026-10-25T02:30:00.000Z",
-    );
+    expect(
+      zonedWallTimeToUtc("Europe/Berlin", 2026, 10, 25, 1, 30).toISOString(),
+    ).toBe("2026-10-24T23:30:00.000Z");
+    expect(
+      zonedWallTimeToUtc("Europe/Berlin", 2026, 10, 25, 3, 30).toISOString(),
+    ).toBe("2026-10-25T02:30:00.000Z");
   });
 
   it("is the plain offset on an ordinary day", () => {
-    expect(zonedWallTimeToUtc(SP, 2026, 10, 6, 8, 15).toISOString()).toBe("2026-10-06T11:15:00.000Z");
+    expect(zonedWallTimeToUtc(SP, 2026, 10, 6, 8, 15).toISOString()).toBe(
+      "2026-10-06T11:15:00.000Z",
+    );
   });
 });
 
@@ -95,9 +106,13 @@ describe("keys", () => {
 
   it("refuses a date key with anything around it, naming it", () => {
     for (const key of ["x2026-10-06", "2026-10-06x", "2026-10-6"]) {
-      expect(() => dateOnlyFromKey(key)).toThrow(`Invalid date-only key: ${key}`);
+      expect(() => dateOnlyFromKey(key)).toThrow(
+        `Invalid date-only key: ${key}`,
+      );
     }
-    expect(() => dateOnlyFromKey("2026-02-30")).toThrow("Invalid date-only key: 2026-02-30");
+    expect(() => dateOnlyFromKey("2026-02-30")).toThrow(
+      "Invalid date-only key: 2026-02-30",
+    );
   });
 
   it("refuses a month key with anything around it or out of range, naming it", () => {

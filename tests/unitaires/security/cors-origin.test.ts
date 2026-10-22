@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { isOriginAllowed } from "@/config/cors-origin";
 
-const PRODUCTION = { allowedOrigin: "https://app.trajetto.com", isProduction: true };
-const DEVELOPMENT = { allowedOrigin: "http://localhost:3000", isProduction: false };
+const PRODUCTION = {
+  allowedOrigin: "https://app.trajetto.com",
+  isProduction: true,
+};
+const DEVELOPMENT = {
+  allowedOrigin: "http://localhost:3000",
+  isProduction: false,
+};
 
 describe("CORS origin — always allowed", () => {
   /**

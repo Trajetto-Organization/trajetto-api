@@ -4,7 +4,10 @@ import { z } from "zod";
 
 import { EndDriverPauseUseCase } from "./end-driver-pause-usecase";
 
-import { businessParam, endPauseBody } from "../../schemas/driver-pause-schemas";
+import {
+  businessParam,
+  endPauseBody,
+} from "../../schemas/driver-pause-schemas";
 import { toPauseView } from "../../rules/pause-rules";
 
 import {
@@ -57,7 +60,9 @@ class EndDriverPauseController {
       start: body.start ? repeatedStart(body.start, clientSentAt) : undefined,
     });
 
-    return reply.status(200).send({ pause: toPauseView(pause, typeNames), replayed });
+    return reply
+      .status(200)
+      .send({ pause: toPauseView(pause, typeNames), replayed });
   }
 }
 

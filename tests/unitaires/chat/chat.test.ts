@@ -144,10 +144,34 @@ function makeRepositories() {
   // status is a required column: the send asks the login rule whether the
   // driver can read the thread, and that rule refuses a driver not ACTIVE.
   const drivers: Array<Partial<Driver>> = [
-    { id: JOAO_DRIVER_ID, name: "João Motorista", cnh: "111", businessId: BUSINESS, status: "ACTIVE" },
-    { id: MARIA_DRIVER_ID, name: "Maria Motorista", cnh: "222", businessId: BUSINESS, status: "ACTIVE" },
-    { id: NO_APP_DRIVER_ID, name: "Sem Aplicativo", cnh: "444", businessId: BUSINESS, status: "ACTIVE" },
-    { id: FOREIGN_DRIVER_ID, name: "De Outra Empresa", cnh: "333", businessId: OTHER_BUSINESS, status: "ACTIVE" },
+    {
+      id: JOAO_DRIVER_ID,
+      name: "João Motorista",
+      cnh: "111",
+      businessId: BUSINESS,
+      status: "ACTIVE",
+    },
+    {
+      id: MARIA_DRIVER_ID,
+      name: "Maria Motorista",
+      cnh: "222",
+      businessId: BUSINESS,
+      status: "ACTIVE",
+    },
+    {
+      id: NO_APP_DRIVER_ID,
+      name: "Sem Aplicativo",
+      cnh: "444",
+      businessId: BUSINESS,
+      status: "ACTIVE",
+    },
+    {
+      id: FOREIGN_DRIVER_ID,
+      name: "De Outra Empresa",
+      cnh: "333",
+      businessId: OTHER_BUSINESS,
+      status: "ACTIVE",
+    },
   ];
 
   drivers.forEach((driver) => driverRepository.drivers.push(driver as Driver));
@@ -169,7 +193,12 @@ function makeRepositories() {
     cnh: "222",
   });
 
-  return { userRepository, driverRepository, deliveryRepository, chatRepository };
+  return {
+    userRepository,
+    driverRepository,
+    deliveryRepository,
+    chatRepository,
+  };
 }
 
 type Repositories = ReturnType<typeof makeRepositories>;
@@ -382,7 +411,10 @@ describe("send-chat-message", () => {
         driverIds: [JOAO_DRIVER_ID],
         kind: "IMAGE",
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "CHAT_ATTACHMENT_REQUIRED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CHAT_ATTACHMENT_REQUIRED",
+    });
 
     await expect(
       useCase.execute({
@@ -391,11 +423,22 @@ describe("send-chat-message", () => {
         kind: "AUDIO",
         attachmentKey: `chatAttachments/${BUSINESS}/voz.m4a`,
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "CHAT_AUDIO_DURATION_REQUIRED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CHAT_AUDIO_DURATION_REQUIRED",
+    });
 
     await expect(
-      useCase.execute({ userId: MANAGER_ID, driverIds: [], kind: "TEXT", body: "Oi" }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "CHAT_RECIPIENTS_REQUIRED" });
+      useCase.execute({
+        userId: MANAGER_ID,
+        driverIds: [],
+        kind: "TEXT",
+        body: "Oi",
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CHAT_RECIPIENTS_REQUIRED",
+    });
 
     await expect(
       useCase.execute({
@@ -405,7 +448,10 @@ describe("send-chat-message", () => {
         body: "Aviso",
         clientSubmissionId: "018f0000-0000-7000-8000-0000000000c2",
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "CHAT_BROADCAST_REFERENCE_NOT_ALLOWED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CHAT_BROADCAST_REFERENCE_NOT_ALLOWED",
+    });
 
     expect(repos.chatRepository.messages).toEqual([]);
   });
@@ -1471,9 +1517,10 @@ describe("search-chat-messages", () => {
     });
 
     expect(forStaff.data).toHaveLength(2);
-    expect(
-      forStaff.data.map((hit) => hit.driver.name).sort(),
-    ).toEqual(["João Motorista", "Maria Motorista"]);
+    expect(forStaff.data.map((hit) => hit.driver.name).sort()).toEqual([
+      "João Motorista",
+      "Maria Motorista",
+    ]);
 
     const forDriver = await search.execute({
       userId: JOAO_USER_ID,
@@ -1497,7 +1544,11 @@ describe("chat push policy", () => {
     };
 
     expect(
-      renderChatMessagePush({ ...base, kind: "TEXT", bodyPreview: "Chegou aí?" }),
+      renderChatMessagePush({
+        ...base,
+        kind: "TEXT",
+        bodyPreview: "Chegou aí?",
+      }),
     ).toMatchObject({ title: "💬 Gestora Web", body: "Chegou aí?" });
 
     expect(

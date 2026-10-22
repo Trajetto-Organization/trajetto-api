@@ -112,4 +112,10 @@ function resetCircuit(pipeline: unknown): void {
   (pipeline as { circuit: ProviderCircuit }).circuit = new ProviderCircuit();
 }
 
-export { FAKE_USAGE, FakeProviderError, fakeAnalyzer, fakeVision, resetCircuit };
+export {
+  FAKE_USAGE,
+  FakeProviderError,
+  fakeAnalyzer,
+  fakeVision,
+  resetCircuit,
+};

@@ -35,7 +35,11 @@ class ReleaseRouteController {
         : released
           ? "Rota liberada para o motorista!"
           : "Rota devolvida ao planejamento!",
-      data: { unchanged, status: route.status, planVersion: route.plan_version },
+      data: {
+        unchanged,
+        status: route.status,
+        planVersion: route.plan_version,
+      },
     });
   }
 }

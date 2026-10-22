@@ -15,7 +15,13 @@ const line = (text, x, y, w, h, score = 0.98) => ({
 });
 
 const STUB = [
-  line("RECEBEMOS DE DISTRIBUIDORA LTDA ... EMISSÃO: 25/09/2026 VALOR TOTAL: R$ 3.482,90", 100, 100, 900, 20),
+  line(
+    "RECEBEMOS DE DISTRIBUIDORA LTDA ... EMISSÃO: 25/09/2026 VALOR TOTAL: R$ 3.482,90",
+    100,
+    100,
+    900,
+    20,
+  ),
   line("NF-e", 1100, 110, 60, 30),
   line("N° 000.045.181", 1060, 150, 160, 24),
   line("DATA DE RECEBIMENTO", 100, 160, 150, 14),
@@ -24,7 +30,11 @@ const STUB = [
 
 describe("proofFromLines", () => {
   it("reads the number and the handwritten date under its label, never the EMISSÃO date", () => {
-    const answer = proofFromLines([...STUB, line("27/09/2026", 110, 200, 160, 40), line("Carla M. Souza", 560, 215, 150, 22)]);
+    const answer = proofFromLines([
+      ...STUB,
+      line("27/09/2026", 110, 200, 160, 40),
+      line("Carla M. Souza", 560, 215, 150, 22),
+    ]);
 
     expect(answer.e_canhoto).toBe("sim");
     expect(answer.numero_documento_lido).toBe("000045181");
@@ -38,7 +48,11 @@ describe("proofFromLines", () => {
   });
 
   it("does not call a box label a receipt", () => {
-    const answer = proofFromLines([line("REMETENTE", 0, 0, 100, 20), line("NF 45181", 0, 40, 100, 20), line("FRÁGIL", 0, 80, 100, 20)]);
+    const answer = proofFromLines([
+      line("REMETENTE", 0, 0, 100, 20),
+      line("NF 45181", 0, 40, 100, 20),
+      line("FRÁGIL", 0, 80, 100, 20),
+    ]);
     expect(answer.e_canhoto).toBe("nao");
   });
 });
@@ -57,8 +71,12 @@ describe("odometerFromLines", () => {
   });
 
   it("merges a drum odometer read one digit per box", () => {
-    const digits = "056719".split("").map((digit, index) => line(digit, 500 + index * 42, 600, 36, 50));
-    expect(odometerFromLines([line("km/h", 400, 300, 60, 20), ...digits]).valor_lido).toBe(56719);
+    const digits = "056719"
+      .split("")
+      .map((digit, index) => line(digit, 500 + index * 42, 600, 36, 50));
+    expect(
+      odometerFromLines([line("km/h", 400, 300, 60, 20), ...digits]).valor_lido,
+    ).toBe(56719);
   });
 
   it("is unreadable when no digit run looks like an odometer", () => {

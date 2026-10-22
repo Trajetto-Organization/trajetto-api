@@ -3,7 +3,10 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { IntegrationReadController } from "@/modules/integration/usecases/integration-read/integration-read-controller";
 import { CreateIntegrationDeliveryController } from "@/modules/integration/usecases/create-delivery/create-integration-delivery-controller";
 
-import { ensureApiKey, verifyApiScope } from "@/modules/middlewares/ensure-api-key";
+import {
+  ensureApiKey,
+  verifyApiScope,
+} from "@/modules/middlewares/ensure-api-key";
 
 import { rateLimitExceeded } from "@/config/rate-limit";
 import { BUSINESS_API_RATE_PER_MINUTE } from "@/shared/integration/api-key-rules";
@@ -77,7 +80,8 @@ async function limitBusinessApiRate(
   // The per-key limiter ran first and left the KEY's x-ratelimit-* on the
   // reply; on this refusal they would read "remaining 119" and invite the
   // client to keep calling. Only retry-after describes it (as documented).
-  for (const header of COMPANY_REFUSAL_HIDDEN_HEADERS) reply.removeHeader(header);
+  for (const header of COMPANY_REFUSAL_HIDDEN_HEADERS)
+    reply.removeHeader(header);
 
   // A fixed window: waiting this long always finds it reset.
   reply.header("retry-after", String(INTEGRATION_RATE_WINDOW_SECONDS));

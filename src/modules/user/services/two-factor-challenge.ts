@@ -42,7 +42,13 @@ const CHALLENGE_TYPE = "two-factor-challenge";
 const CHALLENGE_LIFETIME = "30m";
 
 const key = Buffer.from(
-  hkdfSync("sha256", auth.secret_token, "", "trajetto/two-factor-challenge", 32),
+  hkdfSync(
+    "sha256",
+    auth.secret_token,
+    "",
+    "trajetto/two-factor-challenge",
+    32,
+  ),
 );
 
 interface ChallengedUser {

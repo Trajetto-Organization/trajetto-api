@@ -23,7 +23,6 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import database from "@/../infra/database";
 
-
 interface GetEntitlementsRequest {
   userId: string;
   businessId: string;
@@ -100,7 +99,10 @@ class GetModuleImpactUseCase {
     private business: IBusinessRepository,
   ) {}
 
-  async execute({ businessId, module }: ModuleImpactRequest): Promise<ModuleImpact> {
+  async execute({
+    businessId,
+    module,
+  }: ModuleImpactRequest): Promise<ModuleImpact> {
     const findBusiness = await this.business.findBusinessById(businessId);
 
     if (!findBusiness) {

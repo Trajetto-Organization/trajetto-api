@@ -58,7 +58,9 @@ const MANAGER = "018fde00-0000-7000-8000-0000000000a1";
 
 const BUDGET = 2;
 
-async function peakOf<T>(run: () => Promise<T>): Promise<{ peak: number; result: T }> {
+async function peakOf<T>(
+  run: () => Promise<T>,
+): Promise<{ peak: number; result: T }> {
   pool.inFlight = 0;
   pool.peak = 0;
 
@@ -137,7 +139,10 @@ const page = { userId: MANAGER, page: 1, pageSize: 10 };
 
 describe("the Entregas catalog tabs stay within two connections", () => {
   it("the shippers tab", async () => {
-    const useCase = new ListShipperUseCase(new UserRepository(), new ShipperRepository());
+    const useCase = new ListShipperUseCase(
+      new UserRepository(),
+      new ShipperRepository(),
+    );
 
     const { peak, result } = await peakOf(() =>
       useCase.execute({ ...page, statuses: ["active"] }),
@@ -174,7 +179,10 @@ describe("the Entregas catalog tabs stay within two connections", () => {
   });
 
   it("the imports tab", async () => {
-    const useCase = new ListImportsUseCase(new UserRepository(), new ImportRepository());
+    const useCase = new ListImportsUseCase(
+      new UserRepository(),
+      new ImportRepository(),
+    );
 
     const { peak, result } = await peakOf(() => useCase.execute(page));
 

@@ -4,10 +4,7 @@ import { IRouteRepository } from "../../repositories/IRoute-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import database from "@/../infra/database";
-import {
-  sendRouteEventToBusiness,
-  sendRouteEventToDriver,
-} from "@/websocket";
+import { sendRouteEventToBusiness, sendRouteEventToDriver } from "@/websocket";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";

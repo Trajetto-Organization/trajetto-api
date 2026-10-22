@@ -45,7 +45,9 @@ interface OccurrenceEffectDeps {
   webhooks: WebhookFanOutService;
 }
 
-type SettledStop = Awaited<ReturnType<IRouteRepository["settleStopForDelivery"]>>;
+type SettledStop = Awaited<
+  ReturnType<IRouteRepository["settleStopForDelivery"]>
+>;
 
 /**
  * The status the occurrence leads to, written when it changes anything.
@@ -63,7 +65,10 @@ async function flipDeliveryForOccurrence(
     blocksDelivery: boolean;
   },
 ): Promise<DeliveryStatus> {
-  const nextStatus = statusAfterOccurrence(input.currentStatus, input.blocksDelivery);
+  const nextStatus = statusAfterOccurrence(
+    input.currentStatus,
+    input.blocksDelivery,
+  );
 
   if (nextStatus !== input.currentStatus) {
     await deps.delivery.updateDeliveryStatus(

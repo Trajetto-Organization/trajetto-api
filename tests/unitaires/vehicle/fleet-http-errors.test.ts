@@ -59,22 +59,41 @@ function answer(
 
 describe("the vehicle routes' answers", () => {
   it.each([
-    ["vehicle type", new VehicleTypeNotBelongBusinessError(), new VehicleTypeNotFoundError()],
-    ["fuel type", new FuelTypeNotBelongBusinessError(), new FuelTypeNotFoundError()],
+    [
+      "vehicle type",
+      new VehicleTypeNotBelongBusinessError(),
+      new VehicleTypeNotFoundError(),
+    ],
+    [
+      "fuel type",
+      new FuelTypeNotBelongBusinessError(),
+      new FuelTypeNotFoundError(),
+    ],
     ["driver", new DriverNotBelongBusinessError(), new DriverNotFoundError()],
     ["branch", new BranchNotBelongBusinessError(), new BranchNotFoundError()],
-    ["vehicle", new VehicleNotBelongBusinessError(), new VehicleNotFoundError()],
-  ])("answers another company's %s like a missing one", (_, foreign, missing) => {
-    const fromForeign = answer(replyVehicleError, foreign);
+    [
+      "vehicle",
+      new VehicleNotBelongBusinessError(),
+      new VehicleNotFoundError(),
+    ],
+  ])(
+    "answers another company's %s like a missing one",
+    (_, foreign, missing) => {
+      const fromForeign = answer(replyVehicleError, foreign);
 
-    expect(fromForeign).toEqual(answer(replyVehicleError, missing));
-    expect(fromForeign.body?.message).not.toMatch(/pertence/);
-  });
+      expect(fromForeign).toEqual(answer(replyVehicleError, missing));
+      expect(fromForeign.body?.message).not.toMatch(/pertence/);
+    },
+  );
 });
 
 describe("the checklist routes' answers", () => {
   it.each([
-    ["vehicle", new VehicleNotBelongBusinessError(), new VehicleNotFoundError()],
+    [
+      "vehicle",
+      new VehicleNotBelongBusinessError(),
+      new VehicleNotFoundError(),
+    ],
     ["driver", new DriverNotBelongBusinessError(), new DriverNotFoundError()],
     ["branch", new BranchNotBelongBusinessError(), new BranchNotFoundError()],
     [
@@ -82,13 +101,16 @@ describe("the checklist routes' answers", () => {
       new VehicleChecklistBusinessNotFoundError(),
       new VehicleChecklistNotFoundError(),
     ],
-  ])("answers another company's %s like a missing one", (_, foreign, missing) => {
-    const fromForeign = answer(replyChecklistError, foreign);
+  ])(
+    "answers another company's %s like a missing one",
+    (_, foreign, missing) => {
+      const fromForeign = answer(replyChecklistError, foreign);
 
-    expect(fromForeign).toEqual(answer(replyChecklistError, missing));
-    expect(fromForeign.body?.message).not.toMatch(/pertence/);
-    expect(fromForeign.header).toBe(fromForeign.body?.code);
-  });
+      expect(fromForeign).toEqual(answer(replyChecklistError, missing));
+      expect(fromForeign.body?.message).not.toMatch(/pertence/);
+      expect(fromForeign.header).toBe(fromForeign.body?.code);
+    },
+  );
 
   it("gives an edit out of order among its neighbours its own code and sentence", () => {
     // Red before: VEHICLE_MILEAGE_INVALID and "must be greater than the
@@ -105,14 +127,18 @@ describe("the checklist routes' answers", () => {
     });
     expect(outOfOrder.body?.message).toContain("entre 17.000 km e 18.200 km");
 
-    expect(answer(replyChecklistError, new VehicleMileageInvalidError())).toMatchObject({
+    expect(
+      answer(replyChecklistError, new VehicleMileageInvalidError()),
+    ).toMatchObject({
       status: 400,
       body: { code: "VEHICLE_MILEAGE_INVALID" },
     });
   });
 
   it("refuses a driver's vehicle they may not operate as the other fleet routes do", () => {
-    expect(answer(replyChecklistError, new VehicleNotAssignedToDriverError())).toMatchObject({
+    expect(
+      answer(replyChecklistError, new VehicleNotAssignedToDriverError()),
+    ).toMatchObject({
       status: 403,
       header: "VEHICLE_NOT_ASSIGNED_TO_DRIVER",
       body: { code: "VEHICLE_NOT_ASSIGNED_TO_DRIVER" },

@@ -38,7 +38,12 @@ async function makeFeed() {
   const deliveries = new InMemoryDeliveryRepository();
 
   users.user.push(
-    { id: MANAGER_ID, name: "Gestora", role: "BUSINESS_ADMIN", businessId: BUSINESS } as User,
+    {
+      id: MANAGER_ID,
+      name: "Gestora",
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+    } as User,
     {
       id: FOREIGN_MANAGER_ID,
       name: "Gestor de outra",
@@ -116,7 +121,11 @@ async function makeFeed() {
 
 type FeedRow = {
   delivery: { recipient_name: string };
-  occurrenceType: { name: string; blocks_delivery: boolean; requires_photo: boolean };
+  occurrenceType: {
+    name: string;
+    blocks_delivery: boolean;
+    requires_photo: boolean;
+  };
   reportedBy: { name: string };
 };
 
@@ -133,33 +142,32 @@ describe("occurrence feed order", () => {
   it("sorts by the recipient on request, both ways", async () => {
     const { list } = await makeFeed();
 
-    expect(recipients((await list({ sort: "recipient", order: "asc" })).data)).toEqual([
-      "Ana",
-      "Bruno",
-      "Carla",
-    ]);
-    expect(recipients((await list({ sort: "recipient", order: "desc" })).data)).toEqual([
-      "Carla",
-      "Bruno",
-      "Ana",
-    ]);
+    expect(
+      recipients((await list({ sort: "recipient", order: "asc" })).data),
+    ).toEqual(["Ana", "Bruno", "Carla"]);
+    expect(
+      recipients((await list({ sort: "recipient", order: "desc" })).data),
+    ).toEqual(["Carla", "Bruno", "Ana"]);
   });
 
   it("breaks a tie on the sorted column by newest first", async () => {
     const { list } = await makeFeed();
 
     // Two "Destinatário ausente": Bruno (10 min) before Carla (30 min).
-    expect(recipients((await list({ sort: "typeName", order: "asc" })).data)).toEqual([
-      "Bruno",
-      "Carla",
-      "Ana",
-    ]);
+    expect(
+      recipients((await list({ sort: "typeName", order: "asc" })).data),
+    ).toEqual(["Bruno", "Carla", "Ana"]);
   });
 
   it("sorts the whole set before paging it", async () => {
     const { list } = await makeFeed();
 
-    const second = await list({ sort: "recipient", order: "asc", page: 2, pageSize: 2 });
+    const second = await list({
+      sort: "recipient",
+      order: "asc",
+      page: 2,
+      pageSize: 2,
+    });
 
     expect(recipients(second.data)).toEqual(["Carla"]);
     expect(second.total).toBe(3);
@@ -180,7 +188,9 @@ describe("occurrence feed filters and cards", () => {
     expect(first.reportedBy.name).toBe("João Motorista");
 
     // The type's own requires_photo, not a constant.
-    const recusa = ((await list({ occurrenceTypeIds: [RECUSA] })).data as FeedRow[])[0];
+    const recusa = (
+      (await list({ occurrenceTypeIds: [RECUSA] })).data as FeedRow[]
+    )[0];
 
     expect(recusa.occurrenceType.requires_photo).toBe(true);
   });
@@ -197,16 +207,15 @@ describe("occurrence feed filters and cards", () => {
   it("filters by severity, type and delivery status on the whole set", async () => {
     const { list } = await makeFeed();
 
-    expect(recipients((await list({ severity: ["informational"] })).data)).toEqual([
-      "Bruno",
-      "Carla",
-    ]);
-    expect(recipients((await list({ occurrenceTypeIds: [RECUSA] })).data)).toEqual([
-      "Ana",
-    ]);
-    expect(recipients((await list({ deliveryStatuses: ["FAILED"] })).data)).toEqual([
-      "Ana",
-    ]);
+    expect(
+      recipients((await list({ severity: ["informational"] })).data),
+    ).toEqual(["Bruno", "Carla"]);
+    expect(
+      recipients((await list({ occurrenceTypeIds: [RECUSA] })).data),
+    ).toEqual(["Ana"]);
+    expect(
+      recipients((await list({ deliveryStatuses: ["FAILED"] })).data),
+    ).toEqual(["Ana"]);
   });
 
   it("keeps the cards whole under a severity filter", async () => {
@@ -215,7 +224,11 @@ describe("occurrence feed filters and cards", () => {
     const result = await list({ severity: ["blocking"] });
 
     expect(result.total).toBe(1);
-    expect(result.searchMeta).toMatchObject({ total: 3, blocking: 1, informational: 2 });
+    expect(result.searchMeta).toMatchObject({
+      total: 3,
+      blocking: 1,
+      informational: 2,
+    });
   });
 
   it("counts the type options over the search and the other filters", async () => {

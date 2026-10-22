@@ -20,7 +20,9 @@ class ReorderRouteStopsController {
     const { orderedStopIds, expectedPlanVersion } =
       reorderRouteStopsSchema.parse(request.body);
 
-    const reorderRouteStopsUseCase = container.resolve(ReorderRouteStopsUseCase);
+    const reorderRouteStopsUseCase = container.resolve(
+      ReorderRouteStopsUseCase,
+    );
 
     const { planVersion } = await reorderRouteStopsUseCase.execute({
       userId: id,

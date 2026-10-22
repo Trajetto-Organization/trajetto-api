@@ -30,7 +30,8 @@ const prisma = new PrismaClient();
 const CARRIER = "018fa000-0000-7000-8000-00000000000a";
 const OTHER = "018fa000-0000-7000-8000-00000000000b";
 
-const id = (suffix: string) => `018fa000-0000-7000-8000-${suffix.padStart(12, "0")}`;
+const id = (suffix: string) =>
+  `018fa000-0000-7000-8000-${suffix.padStart(12, "0")}`;
 
 const D1 = id("d1");
 const D2 = id("d2");
@@ -51,7 +52,10 @@ const at = (iso: string) => new Date(iso);
 const date = (key: string) => new Date(`${key}T00:00:00.000Z`);
 
 /** 2026-09-17 in Rio Branco: [05:00Z, 05:00Z of the 18th). */
-const DAY: OperationDay = operationDay("America/Rio_Branco", at("2026-09-17T20:00:00.000Z"));
+const DAY: OperationDay = operationDay(
+  "America/Rio_Branco",
+  at("2026-09-17T20:00:00.000Z"),
+);
 
 function scenario(): OperationRows {
   const route = (
@@ -133,7 +137,12 @@ function scenario(): OperationRows {
     ],
     drivers: [
       { id: D1, businessId: CARRIER, name: "Ana", cnh: `cnh-${D1.slice(-6)}` },
-      { id: D2, businessId: CARRIER, name: "Bruno", cnh: `cnh-${D2.slice(-6)}` },
+      {
+        id: D2,
+        businessId: CARRIER,
+        name: "Bruno",
+        cnh: `cnh-${D2.slice(-6)}`,
+      },
       { id: DX, businessId: OTHER, name: "Xavier", cnh: `cnh-${DX.slice(-6)}` },
     ],
     vehicles: [{ id: V1, license_plate: "ACR1B23" }],
@@ -178,25 +187,52 @@ function scenario(): OperationRows {
       },
     ],
     deliveries: [
-      delivery("a", { status: "DELIVERED", driverId: D1, delivered_at: at("2026-09-17T13:00:00.000Z") }),
-      delivery("b", { status: "FAILED", driverId: D1, updated_at: at("2026-09-17T13:31:00.000Z") }),
+      delivery("a", {
+        status: "DELIVERED",
+        driverId: D1,
+        delivered_at: at("2026-09-17T13:00:00.000Z"),
+      }),
+      delivery("b", {
+        status: "FAILED",
+        driverId: D1,
+        updated_at: at("2026-09-17T13:31:00.000Z"),
+      }),
       delivery("c", { status: "IN_TRANSIT", driverId: D1 }),
       delivery("e", { status: "IN_TRANSIT", driverId: D2 }),
       delivery("f", { status: "PENDING", driverId: D1 }),
       // 23:59 of the 16th in Rio Branco.
-      delivery("g", { status: "DELIVERED", delivered_at: at("2026-09-17T04:59:00.000Z") }),
+      delivery("g", {
+        status: "DELIVERED",
+        delivered_at: at("2026-09-17T04:59:00.000Z"),
+      }),
       // 00:01 of the 17th in Rio Branco.
-      delivery("h", { status: "DELIVERED", delivered_at: at("2026-09-17T05:01:00.000Z") }),
+      delivery("h", {
+        status: "DELIVERED",
+        delivered_at: at("2026-09-17T05:01:00.000Z"),
+      }),
       // Failed on the 16th, edited on the 17th.
-      delivery("i", { status: "FAILED", updated_at: at("2026-09-17T15:00:00.000Z") }),
-      delivery("j", { status: "CANCELLED", updated_at: at("2026-09-17T16:00:00.000Z") }),
-      delivery("k", { status: "CANCELLED", updated_at: at("2026-09-16T16:00:00.000Z") }),
+      delivery("i", {
+        status: "FAILED",
+        updated_at: at("2026-09-17T15:00:00.000Z"),
+      }),
+      delivery("j", {
+        status: "CANCELLED",
+        updated_at: at("2026-09-17T16:00:00.000Z"),
+      }),
+      delivery("k", {
+        status: "CANCELLED",
+        updated_at: at("2026-09-16T16:00:00.000Z"),
+      }),
       delivery("l", { status: "PENDING" }),
       delivery("m", { status: "PENDING", driverId: D2 }),
       delivery("n", { status: "PENDING", driverId: D2 }),
       // Delivered yesterday on the route that is still running today: yesterday's
       // work, not today's Entregues.
-      delivery("o", { status: "DELIVERED", driverId: D2, delivered_at: at("2026-09-16T21:00:00.000Z") }),
+      delivery("o", {
+        status: "DELIVERED",
+        driverId: D2,
+        delivered_at: at("2026-09-16T21:00:00.000Z"),
+      }),
       // Failed today on Ana's route 1, then back in the queue (FAILED →
       // PENDING) on Bruno's route 8 tomorrow: today's Insucesso, Ana's.
       delivery("p", { status: "PENDING", driverId: D2 }),
@@ -207,7 +243,10 @@ function scenario(): OperationRows {
       // document, today's open work again.
       delivery("s", { status: "PENDING", driverId: D2 }),
       {
-        ...delivery("x", { status: "DELIVERED", delivered_at: at("2026-09-17T13:00:00.000Z") }),
+        ...delivery("x", {
+          status: "DELIVERED",
+          delivered_at: at("2026-09-17T13:00:00.000Z"),
+        }),
         businessId: OTHER,
       },
       {
@@ -232,7 +271,12 @@ function scenario(): OperationRows {
       stop("e", 6, "s", 2, "PENDING"),
     ],
     events: [
-      event("1", "a", { type: "ARRIVAL", actor: "DRIVER_APP", routeId: R(1), created_at: at("2026-09-17T12:50:00.000Z") }),
+      event("1", "a", {
+        type: "ARRIVAL",
+        actor: "DRIVER_APP",
+        routeId: R(1),
+        created_at: at("2026-09-17T12:50:00.000Z"),
+      }),
       event("2", "a", {
         type: "PROOF",
         actor: "DRIVER_APP",
@@ -245,10 +289,20 @@ function scenario(): OperationRows {
         occurred_at: at("2026-09-16T20:00:00.000Z"),
         created_at: at("2026-09-16T20:00:00.000Z"),
       }),
-      event("4", "j", { status_to: "CANCELLED", created_at: at("2026-09-17T16:00:00.000Z") }),
-      event("5", "k", { status_to: "CANCELLED", created_at: at("2026-09-16T16:00:00.000Z") }),
+      event("4", "j", {
+        status_to: "CANCELLED",
+        created_at: at("2026-09-17T16:00:00.000Z"),
+      }),
+      event("5", "k", {
+        status_to: "CANCELLED",
+        created_at: at("2026-09-16T16:00:00.000Z"),
+      }),
       {
-        ...event("6", "x", { type: "PROOF", actor: "DRIVER_APP", created_at: at("2026-09-17T13:00:00.000Z") }),
+        ...event("6", "x", {
+          type: "PROOF",
+          actor: "DRIVER_APP",
+          created_at: at("2026-09-17T13:00:00.000Z"),
+        }),
         businessId: OTHER,
       },
       // The OCCURRENCE event of a blocking report still waiting for a
@@ -399,7 +453,10 @@ async function seedPostgres(rows: OperationRows): Promise<void> {
 
   for (const business of rows.businesses) {
     const shipper = await prisma.shipper.create({
-      data: { name: `Embarcador ${business.id.slice(-4)}`, businessId: business.id },
+      data: {
+        name: `Embarcador ${business.id.slice(-4)}`,
+        businessId: business.id,
+      },
     });
 
     shippers.set(business.id, shipper.id);
@@ -421,7 +478,9 @@ async function seedPostgres(rows: OperationRows): Promise<void> {
   }
 
   for (const stop of rows.stops) {
-    await prisma.routeStop.create({ data: { ...stop, status: stop.status as never } });
+    await prisma.routeStop.create({
+      data: { ...stop, status: stop.status as never },
+    });
   }
 
   for (const occurrence of rows.occurrences) {
@@ -481,16 +540,21 @@ const both = (): Implementation[] => [
   ["in-memory", twin],
 ];
 
-const sortCounts = (rows: Array<{ driverId: string | null; status: string; total: number }>) =>
+const sortCounts = (
+  rows: Array<{ driverId: string | null; status: string; total: number }>,
+) =>
   [...rows].sort((a, b) =>
-    `${a.status}|${a.driverId ?? ""}`.localeCompare(`${b.status}|${b.driverId ?? ""}`),
+    `${a.status}|${a.driverId ?? ""}`.localeCompare(
+      `${b.status}|${b.driverId ?? ""}`,
+    ),
   );
 
 const feedKey = (entries: FeedEntry[]) =>
   [...entries]
     .sort(
       (a, b) =>
-        b.receivedAt.getTime() - a.receivedAt.getTime() || a.id.localeCompare(b.id),
+        b.receivedAt.getTime() - a.receivedAt.getTime() ||
+        a.id.localeCompare(b.id),
     )
     .map((entry) => ({
       ...entry,
@@ -499,10 +563,13 @@ const feedKey = (entries: FeedEntry[]) =>
     }));
 
 describe("the company's zone", () => {
-  it.each(both())("%s reads the zone of the company", async (_name, repository) => {
-    expect(await repository.timeZoneOf(CARRIER)).toBe("America/Rio_Branco");
-    expect(await repository.timeZoneOf(id("404"))).toBeNull();
-  });
+  it.each(both())(
+    "%s reads the zone of the company",
+    async (_name, repository) => {
+      expect(await repository.timeZoneOf(CARRIER)).toBe("America/Rio_Branco");
+      expect(await repository.timeZoneOf(id("404"))).toBeNull();
+    },
+  );
 
   it("places the day at 05:00 UTC in Rio Branco", () => {
     expect(DAY.start.toISOString()).toBe("2026-09-17T05:00:00.000Z");
@@ -521,51 +588,86 @@ describe("the active documents of the day", () => {
     { driverId: D2, status: "PENDING", total: 2 }, // n and s on today's released route; not q, failed yesterday
   ];
 
-  it.each(both())("%s counts exactly the day's documents", async (_name, repository) => {
-    expect(sortCounts(await repository.countDayDeliveries(CARRIER, { ...DAY, isToday: true }))).toEqual(
-      sortCounts(expected),
-    );
-  });
+  it.each(both())(
+    "%s counts exactly the day's documents",
+    async (_name, repository) => {
+      expect(
+        sortCounts(
+          await repository.countDayDeliveries(CARRIER, {
+            ...DAY,
+            isToday: true,
+          }),
+        ),
+      ).toEqual(sortCounts(expected));
+    },
+  );
 
   it.each(both())(
     "%s leaves out what is running now when the day is not today",
     async (_name, repository) => {
-      const counts = await repository.countDayDeliveries(CARRIER, { ...DAY, isToday: false });
+      const counts = await repository.countDayDeliveries(CARRIER, {
+        ...DAY,
+        isToday: false,
+      });
 
       // e is on yesterday's route and only belongs to "today" while it runs.
-      expect(counts.find((row) => row.driverId === D2 && row.status === "IN_TRANSIT")).toBeUndefined();
+      expect(
+        counts.find(
+          (row) => row.driverId === D2 && row.status === "IN_TRANSIT",
+        ),
+      ).toBeUndefined();
     },
   );
 
   it.each(both())(
     "%s leaves out what a still-running route resolved on an earlier day",
     async (_name, repository) => {
-      const counts = await repository.countDayDeliveries(CARRIER, { ...DAY, isToday: true });
+      const counts = await repository.countDayDeliveries(CARRIER, {
+        ...DAY,
+        isToday: true,
+      });
 
       // o was delivered on the 16th on route 2, which is still running: its
       // open stop (e) is today's work, its delivered one is not.
-      expect(counts.find((row) => row.driverId === D2 && row.status === "DELIVERED")).toBeUndefined();
-      expect(counts.find((row) => row.driverId === D2 && row.status === "IN_TRANSIT")?.total).toBe(1);
+      expect(
+        counts.find((row) => row.driverId === D2 && row.status === "DELIVERED"),
+      ).toBeUndefined();
+      expect(
+        counts.find((row) => row.driverId === D2 && row.status === "IN_TRANSIT")
+          ?.total,
+      ).toBe(1);
     },
   );
 
   it.each(both())(
     "%s counts a document that failed today and went back to the queue as that route's Insucesso",
     async (_name, repository) => {
-      const counts = await repository.countDayDeliveries(CARRIER, { ...DAY, isToday: true });
+      const counts = await repository.countDayDeliveries(CARRIER, {
+        ...DAY,
+        isToday: true,
+      });
 
       // p is PENDING now, with Bruno, on tomorrow's route 8. Under its
       // current status it sat in today's Pendentes as Bruno's, and Ana's
       // failure of today was nowhere.
-      expect(counts.find((row) => row.driverId === D1 && row.status === "FAILED")?.total).toBe(2);
-      expect(counts.find((row) => row.driverId === D2 && row.status === "PENDING")?.total).toBe(2);
+      expect(
+        counts.find((row) => row.driverId === D1 && row.status === "FAILED")
+          ?.total,
+      ).toBe(2);
+      expect(
+        counts.find((row) => row.driverId === D2 && row.status === "PENDING")
+          ?.total,
+      ).toBe(2);
     },
   );
 
   it.each(both())(
     "%s leaves out what a still-running route failed on an earlier day and was requeued",
     async (_name, repository) => {
-      const counts = await repository.countDayDeliveries(CARRIER, { ...DAY, isToday: true });
+      const counts = await repository.countDayDeliveries(CARRIER, {
+        ...DAY,
+        isToday: true,
+      });
 
       // q failed on the 16th on route 2 and went back to the queue: the
       // route still running does not make it today's work.
@@ -575,54 +677,80 @@ describe("the active documents of the day", () => {
     },
   );
 
-  it.each(both())("%s never counts another company's documents", async (_name, repository) => {
-    const counts = await repository.countDayDeliveries(OTHER, { ...DAY, isToday: true });
+  it.each(both())(
+    "%s never counts another company's documents",
+    async (_name, repository) => {
+      const counts = await repository.countDayDeliveries(OTHER, {
+        ...DAY,
+        isToday: true,
+      });
 
-    expect(sortCounts(counts)).toEqual(
-      sortCounts([
-        { driverId: null, status: "DELIVERED", total: 1 },
-        { driverId: null, status: "IN_TRANSIT", total: 1 },
-      ]),
-    );
-  });
+      expect(sortCounts(counts)).toEqual(
+        sortCounts([
+          { driverId: null, status: "DELIVERED", total: 1 },
+          { driverId: null, status: "IN_TRANSIT", total: 1 },
+        ]),
+      );
+    },
+  );
 });
 
 describe("the drivers the board by driver names", () => {
-  it.each(both())("%s names only the company's drivers", async (_name, repository) => {
-    const drivers = await repository.listDrivers(CARRIER, [D1, D2, DX, id("404")]);
+  it.each(both())(
+    "%s names only the company's drivers",
+    async (_name, repository) => {
+      const drivers = await repository.listDrivers(CARRIER, [
+        D1,
+        D2,
+        DX,
+        id("404"),
+      ]);
 
-    expect([...drivers].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
-      { id: D1, name: "Ana", cnh: `cnh-${D1.slice(-6)}` },
-      { id: D2, name: "Bruno", cnh: `cnh-${D2.slice(-6)}` },
-    ]);
+      expect([...drivers].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+        { id: D1, name: "Ana", cnh: `cnh-${D1.slice(-6)}` },
+        { id: D2, name: "Bruno", cnh: `cnh-${D2.slice(-6)}` },
+      ]);
 
-    expect(await repository.listDrivers(CARRIER, [])).toEqual([]);
-  });
+      expect(await repository.listDrivers(CARRIER, [])).toEqual([]);
+    },
+  );
 });
 
 describe("the routes the tower reasons about", () => {
   const endedSince = at("2026-09-17T09:00:00.000Z");
 
-  it.each(both())("%s lists today's, running and recently ended routes", async (_name, repository) => {
-    const routes = await repository.listTowerRoutes(CARRIER, { ...DAY, isToday: true }, endedSince);
+  it.each(both())(
+    "%s lists today's, running and recently ended routes",
+    async (_name, repository) => {
+      const routes = await repository.listTowerRoutes(
+        CARRIER,
+        { ...DAY, isToday: true },
+        endedSince,
+      );
 
-    expect(routes.map((route) => route.code)).toEqual([101, 102, 103, 104, 106]);
+      expect(routes.map((route) => route.code)).toEqual([
+        101, 102, 103, 104, 106,
+      ]);
 
-    const running = routes.find((route) => route.code === 101);
+      const running = routes.find((route) => route.code === 101);
 
-    expect(running).toMatchObject({ driverName: "Ana", vehiclePlate: "ACR1B23" });
-    expect(running?.stops.map((stop) => stop.status).sort()).toEqual([
-      "COMPLETED",
-      "FAILED",
-      "FAILED",
-      "FAILED",
-      "PENDING",
-    ]);
+      expect(running).toMatchObject({
+        driverName: "Ana",
+        vehiclePlate: "ACR1B23",
+      });
+      expect(running?.stops.map((stop) => stop.status).sort()).toEqual([
+        "COMPLETED",
+        "FAILED",
+        "FAILED",
+        "FAILED",
+        "PENDING",
+      ]);
 
-    expect(routes.find((route) => route.code === 104)?.ended_at?.toISOString()).toBe(
-      "2026-09-17T09:30:00.000Z",
-    );
-  });
+      expect(
+        routes.find((route) => route.code === 104)?.ended_at?.toISOString(),
+      ).toBe("2026-09-17T09:30:00.000Z");
+    },
+  );
 
   it("gives the same answer from both", async () => {
     const [fromDatabase, fromTwin] = await Promise.all([
@@ -633,7 +761,9 @@ describe("the routes the tower reasons about", () => {
     const normalise = (routes: typeof fromDatabase) =>
       routes.map((route) => ({
         ...route,
-        stops: [...route.stops].sort((a, b) => a.status.localeCompare(b.status)),
+        stops: [...route.stops].sort((a, b) =>
+          a.status.localeCompare(b.status),
+        ),
       }));
 
     expect(normalise(fromDatabase)).toEqual(normalise(fromTwin));
@@ -644,7 +774,9 @@ describe("the feed of the day", () => {
   it.each(both())(
     "%s lists occurrences and route moves next to the delivery events",
     async (_name, repository) => {
-      const feed = feedKey(await repository.listFeed(CARRIER, { ...DAY, isToday: true }, 15));
+      const feed = feedKey(
+        await repository.listFeed(CARRIER, { ...DAY, isToday: true }, 15),
+      );
 
       expect(feed.map((entry) => entry.type)).toEqual([
         "STATUS_CHANGE", // j cancelled, 16:00
@@ -660,7 +792,9 @@ describe("the feed of the day", () => {
         "ROUTE_STARTED", // r3, 08:00
       ]);
 
-      const blocking = feed.find((entry) => entry.id === `occurrence:${id("0b1")}`);
+      const blocking = feed.find(
+        (entry) => entry.id === `occurrence:${id("0b1")}`,
+      );
 
       expect(blocking).toMatchObject({
         detail: "Cliente ausente",
@@ -671,12 +805,16 @@ describe("the feed of the day", () => {
 
       // Blocking, but waiting for a manager: the same line from the event
       // as from the row, and not red (decision 6.3).
-      expect(feed.find((entry) => entry.id === `delivery_event:${id("e7")}`)).toMatchObject({
+      expect(
+        feed.find((entry) => entry.id === `delivery_event:${id("e7")}`),
+      ).toMatchObject({
         source: "delivery_event",
         detail: "Cliente ausente",
         failure: false,
       });
-      expect(feed.some((entry) => entry.id === `occurrence:${id("0c2")}`)).toBe(false);
+      expect(feed.some((entry) => entry.id === `occurrence:${id("0c2")}`)).toBe(
+        false,
+      );
 
       // The proof keeps the hour it happened, and yesterday's failure of i
       // is not in today's feed.
@@ -700,9 +838,13 @@ describe("the feed of the day", () => {
     async (_name, repository) => {
       // The widget shows fifteen lines; a big tenant starts hundreds of
       // routes a day, and each poll used to read all of them.
-      const feed = feedKey(await repository.listFeed(CARRIER, { ...DAY, isToday: true }, 1));
+      const feed = feedKey(
+        await repository.listFeed(CARRIER, { ...DAY, isToday: true }, 1),
+      );
 
-      const routeLines = feed.filter((entry) => entry.source === "route").map((entry) => entry.id);
+      const routeLines = feed
+        .filter((entry) => entry.source === "route")
+        .map((entry) => entry.id);
 
       expect(routeLines).toEqual([
         `route:${R(1)}:started`, // 12:05, the newest start; not r4 (09:00) nor r3 (08:00)
@@ -714,29 +856,40 @@ describe("the feed of the day", () => {
 });
 
 describe("the monitoring board by route", () => {
-  it.each(both())("%s orders running, released, then finished", async (_name, repository) => {
-    const { total, routes } = await repository.listMonitoringRoutes(
-      CARRIER,
-      { ...DAY, isToday: true },
-      { skip: 0, take: 20 },
-    );
+  it.each(both())(
+    "%s orders running, released, then finished",
+    async (_name, repository) => {
+      const { total, routes } = await repository.listMonitoringRoutes(
+        CARRIER,
+        { ...DAY, isToday: true },
+        { skip: 0, take: 20 },
+      );
 
-    expect(total).toBe(4);
-    expect(routes.map((route) => route.code)).toEqual([101, 102, 106, 103]);
-    expect(routes[0].stops.map((stop) => stop.sequence)).toEqual([1, 2, 3, 4, 5]);
-    expect(routes[0].stops[1]).toMatchObject({ status: "FAILED", recipientName: "Cliente b" });
-  });
+      expect(total).toBe(4);
+      expect(routes.map((route) => route.code)).toEqual([101, 102, 106, 103]);
+      expect(routes[0].stops.map((stop) => stop.sequence)).toEqual([
+        1, 2, 3, 4, 5,
+      ]);
+      expect(routes[0].stops[1]).toMatchObject({
+        status: "FAILED",
+        recipientName: "Cliente b",
+      });
+    },
+  );
 
-  it.each(both())("%s keeps the total past the last page", async (_name, repository) => {
-    const { total, routes } = await repository.listMonitoringRoutes(
-      CARRIER,
-      { ...DAY, isToday: true },
-      { skip: 40, take: 20 },
-    );
+  it.each(both())(
+    "%s keeps the total past the last page",
+    async (_name, repository) => {
+      const { total, routes } = await repository.listMonitoringRoutes(
+        CARRIER,
+        { ...DAY, isToday: true },
+        { skip: 40, take: 20 },
+      );
 
-    expect(routes).toEqual([]);
-    expect(total).toBe(4);
-  });
+      expect(routes).toEqual([]);
+      expect(total).toBe(4);
+    },
+  );
 
   it("gives the same answer from both", async () => {
     const page = { skip: 1, take: 2 };

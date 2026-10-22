@@ -42,7 +42,11 @@ function openRoutesRefusal(counts: OpenRouteCounts): string {
     counts.IN_PROGRESS > 0 &&
       plural(counts.IN_PROGRESS, "rota em andamento", "rotas em andamento"),
     waiting > 0 &&
-      plural(waiting, "rota planejada ou liberada", "rotas planejadas ou liberadas"),
+      plural(
+        waiting,
+        "rota planejada ou liberada",
+        "rotas planejadas ou liberadas",
+      ),
   ].filter(Boolean);
 
   const steps = [
@@ -145,7 +149,10 @@ type CnhCategoryCode = "A" | "B" | "C" | "D" | "E" | "AB" | "AC" | "AD" | "AE";
  */
 const FOUR_WHEEL_LEVEL: Record<string, number> = { B: 1, C: 2, D: 3, E: 4 };
 
-function cnhParts(category: CnhCategoryCode): { motorcycle: boolean; level: number } {
+function cnhParts(category: CnhCategoryCode): {
+  motorcycle: boolean;
+  level: number;
+} {
   const motorcycle = category.startsWith("A");
   const fourWheel = motorcycle ? category.slice(1) : category;
 

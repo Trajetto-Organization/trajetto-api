@@ -55,7 +55,10 @@ function sourceFiles(dir: string): string[] {
  * `console.log(` inside a comment or a string is not a call, and
  * `console["warn"]` or `const say = console.error` still are.
  */
-function consoleUses(path: string, text = readFileSync(path, "utf8")): string[] {
+function consoleUses(
+  path: string,
+  text = readFileSync(path, "utf8"),
+): string[] {
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
 
   const found: string[] = [];

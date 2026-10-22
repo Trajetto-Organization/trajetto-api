@@ -11,7 +11,11 @@ import { resolve } from "node:path";
  * one that sweeps its sessions every second.
  */
 interface ReplicaCommand {
-  kind: "routeEvent" | "driverPosition" | "securityToBusiness" | "securityToUser";
+  kind:
+    | "routeEvent"
+    | "driverPosition"
+    | "securityToBusiness"
+    | "securityToUser";
   businessId: string;
   payload: Record<string, unknown>;
 }

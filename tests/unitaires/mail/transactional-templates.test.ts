@@ -255,47 +255,46 @@ describe("the scan itself", () => {
 });
 
 describe("every e-mail has a template to render", () => {
-  it.each(CALLS.map((call) => [`${call.file} → ${call.template}`, call] as const))(
-    "%s",
-    (_name, call) => {
-      expect(
-        existsSync(pathOf(call)),
-        `arquivo não encontrado: src/modules/${call.module}/views/${call.template}`,
-      ).toBe(true);
-    },
-  );
+  it.each(
+    CALLS.map((call) => [`${call.file} → ${call.template}`, call] as const),
+  )("%s", (_name, call) => {
+    expect(
+      existsSync(pathOf(call)),
+      `arquivo não encontrado: src/modules/${call.module}/views/${call.template}`,
+    ).toBe(true);
+  });
 });
 
 describe("and a subject a person can read", () => {
-  it.each(CALLS.map((call) => [`${call.file} → ${call.template}`, call] as const))(
-    "%s",
-    (_name, call) => {
-      // Not a style rule: a blank subject is what a spam filter reads first.
-      expect(call.subject, `sem assunto em ${call.file}`).not.toBeNull();
-      expect(call.subject, `assunto vazio em ${call.file}`).not.toBe("");
-    },
-  );
+  it.each(
+    CALLS.map((call) => [`${call.file} → ${call.template}`, call] as const),
+  )("%s", (_name, call) => {
+    // Not a style rule: a blank subject is what a spam filter reads first.
+    expect(call.subject, `sem assunto em ${call.file}`).not.toBeNull();
+    expect(call.subject, `assunto vazio em ${call.file}`).not.toBe("");
+  });
 });
 
 describe("and every variable it needs", () => {
-  it.each(CALLS.map((call) => [`${call.file} → ${call.template}`, call] as const))(
-    "%s",
-    (_name, call) => {
-      const needed = variablesOf(readFileSync(pathOf(call), "utf8"));
+  it.each(
+    CALLS.map((call) => [`${call.file} → ${call.template}`, call] as const),
+  )("%s", (_name, call) => {
+    const needed = variablesOf(readFileSync(pathOf(call), "utf8"));
 
-      const missing = [...needed].filter((variable) => !call.provided.has(variable));
+    const missing = [...needed].filter(
+      (variable) => !call.provided.has(variable),
+    );
 
-      /*
+    /*
         Handlebars renders a missing variable as an empty string, so this is
         not a crash waiting to happen — it is a two-factor e-mail arriving with
         nothing where the code should be.
       */
-      expect(
-        missing,
-        `${call.template} usa ${missing.join(", ")} e ${call.file} não passa`,
-      ).toEqual([]);
-    },
-  );
+    expect(
+      missing,
+      `${call.template} usa ${missing.join(", ")} e ${call.file} não passa`,
+    ).toEqual([]);
+  });
 });
 
 describe("and the template really places what it is given", () => {
@@ -321,7 +320,9 @@ describe("and the template really places what it is given", () => {
 
       const rendered = renderMailTemplate(pathOf(call), variables);
 
-      expect(rendered.length, "o template renderizou vazio").toBeGreaterThan(50);
+      expect(rendered.length, "o template renderizou vazio").toBeGreaterThan(
+        50,
+      );
 
       /*
         Conditionals and loops are references too, and a `{{#if logo}}` block

@@ -90,7 +90,8 @@ class ListPermissionUseCase {
 
     if (businessId) assertTenantAccess(findUser, businessId);
 
-    const findBusiness = await this.business.findBusinessById(resolvedBusinessId);
+    const findBusiness =
+      await this.business.findBusinessById(resolvedBusinessId);
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
@@ -124,7 +125,10 @@ class ListPermissionUseCase {
 
       return { data: result.data, total, searchMeta };
     } catch (error) {
-      throw new AppError("Não foi possível recuperar a lista de permissões!", 500);
+      throw new AppError(
+        "Não foi possível recuperar a lista de permissões!",
+        500,
+      );
     }
   }
 }

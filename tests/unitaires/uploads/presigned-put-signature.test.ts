@@ -49,7 +49,10 @@ describe("the presigned PUT signature (R2)", () => {
     uploadConfig.r2.bucket = saved.bucket;
   });
 
-  const signedHeaders = async (contentType: string, uploadType = "odometerPhotos" as const) => {
+  const signedHeaders = async (
+    contentType: string,
+    uploadType = "odometerPhotos" as const,
+  ) => {
     const { uploadUrl } = await service.createPresignedUpload(
       { originalFilename: "foto.jpg", contentType, size: 1000 },
       uploadType,

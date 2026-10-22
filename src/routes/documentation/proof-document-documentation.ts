@@ -25,7 +25,9 @@ const signatureStatus = z
 const signatureProfile = z
   .enum(["PADES_AD_RB", "CMS_DETACHED"])
   .nullable()
-  .describe("PAdES ICP-Brasil AD-RB v1.1 ou CMS destacado simples; null sem assinatura.");
+  .describe(
+    "PAdES ICP-Brasil AD-RB v1.1 ou CMS destacado simples; null sem assinatura.",
+  );
 
 const proofDocumentSchemas = {
   proofDocumentParams: proofDocumentParamsSchema,
@@ -77,7 +79,9 @@ const proofDocumentResponses = {
         signer_name: z
           .string()
           .nullable()
-          .describe("Razão social do certificado (CN antes de ':'), nunca de configuração."),
+          .describe(
+            "Razão social do certificado (CN antes de ':'), nunca de configuração.",
+          ),
         signer_cnpj: z
           .string()
           .nullable()

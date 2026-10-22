@@ -143,7 +143,9 @@ describe("a secret that cannot be opened", () => {
       disabled_at: null,
     });
 
-    await prisma.webhookDelivery.deleteMany({ where: { endpointId: endpoint.id } });
+    await prisma.webhookDelivery.deleteMany({
+      where: { endpointId: endpoint.id },
+    });
     await prisma.webhookEndpoint.delete({ where: { id: endpoint.id } });
   });
 
@@ -179,7 +181,9 @@ describe("a secret that cannot be opened", () => {
       disabled_at: null,
     });
 
-    await prisma.webhookDelivery.deleteMany({ where: { endpointId: endpoint.id } });
+    await prisma.webhookDelivery.deleteMany({
+      where: { endpointId: endpoint.id },
+    });
     await prisma.webhookEndpoint.delete({ where: { id: endpoint.id } });
   });
 });
@@ -210,7 +214,9 @@ describe("headers that cannot be opened", () => {
       disabled_at: null,
     });
 
-    await prisma.webhookDelivery.deleteMany({ where: { endpointId: endpoint.id } });
+    await prisma.webhookDelivery.deleteMany({
+      where: { endpointId: endpoint.id },
+    });
     await prisma.webhookEndpoint.delete({ where: { id: endpoint.id } });
   });
 });

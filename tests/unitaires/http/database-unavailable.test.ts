@@ -71,7 +71,8 @@ const infrastructure: Record<string, () => Error> = {
 };
 
 const notInfrastructure: Record<string, () => Error> = {
-  unique: () => known("P2002", "Unique constraint failed on the fields: (`cnpj`)"),
+  unique: () =>
+    known("P2002", "Unique constraint failed on the fields: (`cnpj`)"),
   "not-found": () => known("P2025", "Record to update not found."),
   "transaction-closed": () =>
     known(
@@ -81,7 +82,10 @@ const notInfrastructure: Record<string, () => Error> = {
   // Raw queries Postgres answered: SQLSTATEs are answers about the SQL, the
   // statement_timeout (57014) included — a live server that cancelled it.
   "raw-sql-error": () =>
-    rawFailure("42P01", 'ERROR: relation "gap6_4_no_such_table" does not exist'),
+    rawFailure(
+      "42P01",
+      'ERROR: relation "gap6_4_no_such_table" does not exist',
+    ),
   "raw-statement-timeout": () =>
     rawFailure("57014", "ERROR: canceling statement due to statement timeout"),
   // No SQLSTATE either, but the engine says what went wrong: our query.
@@ -90,7 +94,8 @@ const notInfrastructure: Record<string, () => Error> = {
       "N/A",
       "Failed to deserialize column of type 'void'. If you're using $queryRaw and this column is explicitly marked as `Unsupported` in your Prisma schema, try casting this column to any supported Prisma type such as `String`.",
     ),
-  bug: () => new TypeError("Cannot read properties of undefined (reading 'role')"),
+  bug: () =>
+    new TypeError("Cannot read properties of undefined (reading 'role')"),
   // Only the message says "database": nothing proves it came from Prisma.
   "plain-error": () => new Error("Can't reach database server"),
 };

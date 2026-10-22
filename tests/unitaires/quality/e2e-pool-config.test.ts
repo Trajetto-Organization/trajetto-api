@@ -20,7 +20,9 @@ import config from "../../../vite.config.mjs";
  */
 const ROOT = resolve(__dirname, "..", "..", "..");
 
-const vitestRequire = createRequire(createRequire(join(ROOT, "package.json")).resolve("vitest"));
+const vitestRequire = createRequire(
+  createRequire(join(ROOT, "package.json")).resolve("vitest"),
+);
 const mm = vitestRequire("micromatch") as {
   isMatch: (file: string, glob: string, options: { cwd: string }) => boolean;
 };
@@ -43,6 +45,8 @@ describe("E2E pool configuration", () => {
   });
 
   it("keeps unit files on the default threads pool", () => {
-    expect(poolFor("tests/unitaires/quality/e2e-pool-config.test.ts")).toBe("threads");
+    expect(poolFor("tests/unitaires/quality/e2e-pool-config.test.ts")).toBe(
+      "threads",
+    );
   });
 });

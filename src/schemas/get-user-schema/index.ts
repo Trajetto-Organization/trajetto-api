@@ -54,7 +54,9 @@ const getUserSchema = z.object({
   ai: z
     .object({
       precheck: z.boolean(),
-      reason: z.enum(["not_contracted", "quota_exhausted", "unavailable"]).nullable(),
+      reason: z
+        .enum(["not_contracted", "quota_exhausted", "unavailable"])
+        .nullable(),
     })
     .optional()
     .describe(

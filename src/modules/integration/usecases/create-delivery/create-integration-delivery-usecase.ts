@@ -99,7 +99,11 @@ class CreateIntegrationDeliveryUseCase {
     // rounded one way by the database and another by the comparison).
     const fields = { ...rest, items: items?.map(itemAtColumnScale) };
 
-    const shipper = await this.findShipper(businessId, shipper_id, shipper_cnpj);
+    const shipper = await this.findShipper(
+      businessId,
+      shipper_id,
+      shipper_cnpj,
+    );
 
     const draft: DeliveryDraft = { ...fields, shipperId: shipper?.id ?? null };
 
@@ -190,7 +194,10 @@ class CreateIntegrationDeliveryUseCase {
       businessId,
     });
 
-    return { replayed: false, delivery: await this.published(businessId, created.id) };
+    return {
+      replayed: false,
+      delivery: await this.published(businessId, created.id),
+    };
   }
 
   /** Scoped to the key's company: another tenant's shipper is null. */
@@ -215,7 +222,10 @@ class CreateIntegrationDeliveryUseCase {
     idempotencyKey: string,
     draft: DeliveryDraft,
   ): Promise<CreateIntegrationDeliveryResult | null> {
-    const stored = await this.integration.findSubmission(businessId, idempotencyKey);
+    const stored = await this.integration.findSubmission(
+      businessId,
+      idempotencyKey,
+    );
 
     if (!stored) return null;
 
@@ -230,7 +240,10 @@ class CreateIntegrationDeliveryUseCase {
       throw new IdempotencyKeyReusedError(stored.id);
     }
 
-    return { replayed: true, delivery: await this.published(businessId, stored.id) };
+    return {
+      replayed: true,
+      delivery: await this.published(businessId, stored.id),
+    };
   }
 
   /** The delivery as GET /integration/v1/deliveries/:id shows it. */

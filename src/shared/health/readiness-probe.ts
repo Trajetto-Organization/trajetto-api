@@ -17,7 +17,9 @@ import { PrismaClient } from "@prisma/client";
  * still does, because a timeout here is a "no" and never a "yes".
  *
  * The cost is one more connection per replica: replicas × (connection_limit +
- * 1) + tooling must stay under max_connections (see compose.production.yaml).
+ * 1) + tooling must stay under max_connections (connection_limit is in the
+ * production DATABASE_URL modelled in .env.example; replicas are a field of
+ * the API Application in Dokploy).
  */
 
 /** Answer or give up well inside Traefik's 5 s health-check timeout. */

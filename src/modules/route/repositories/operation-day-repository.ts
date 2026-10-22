@@ -28,7 +28,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The earliest `scheduled_date` (date-only) these reads look at. */
 function lookbackFrom(day: OperationDay): Date {
-  return new Date(dateOnlyFromKey(day.date).getTime() - ROUTE_LOOKBACK_DAYS * DAY_MS);
+  return new Date(
+    dateOnlyFromKey(day.date).getTime() - ROUTE_LOOKBACK_DAYS * DAY_MS,
+  );
 }
 
 /** A UTC timestamp column compared with an instant, whatever the session zone. */
@@ -52,7 +54,9 @@ const towerRouteSelect = {
   vehicle: { select: { license_plate: true } },
 } satisfies Prisma.RouteSelect;
 
-type TowerRouteRow = Prisma.RouteGetPayload<{ select: typeof towerRouteSelect }>;
+type TowerRouteRow = Prisma.RouteGetPayload<{
+  select: typeof towerRouteSelect;
+}>;
 
 function toTowerRoute(row: TowerRouteRow): TowerRoute {
   const status = row.status as RouteStatusName;
@@ -131,7 +135,11 @@ class OperationDayRepository implements IOperationDayRepository {
     day: OperationDay,
   ): Promise<DayDeliveryCount[]> {
     const rows = await this.prisma.$queryRaw<
-      Array<{ driverId: string | null; status: DeliveryStatusName; total: number }>
+      Array<{
+        driverId: string | null;
+        status: DeliveryStatusName;
+        total: number;
+      }>
     >`
       WITH "day_route" AS (
         SELECT r."id", r."driverId", (r."scheduled_date" = ${day.date}::date) AS "of_day"
@@ -333,7 +341,12 @@ class OperationDayRepository implements IOperationDayRepository {
       running.length > 0
         ? await this.prisma.routeStop.findMany({
             where: { routeId: { in: running } },
-            select: { id: true, routeId: true, status: true, on_the_way_at: true },
+            select: {
+              id: true,
+              routeId: true,
+              status: true,
+              on_the_way_at: true,
+            },
           })
         : [];
 
@@ -501,7 +514,10 @@ class OperationDayRepository implements IOperationDayRepository {
         failure:
           event.status_to === "FAILED" ||
           (event.type === "OCCURRENCE" &&
-            isFailureOccurrence(type?.blocks_delivery, occurrence?.authorization_status)),
+            isFailureOccurrence(
+              type?.blocks_delivery,
+              occurrence?.authorization_status,
+            )),
         occurredAt: factInstant(event.occurred_at, event.created_at),
         receivedAt: event.created_at,
       });
@@ -544,7 +560,9 @@ class OperationDayRepository implements IOperationDayRepository {
   ): Promise<{ total: number; routes: MonitoringRoute[] }> {
     // The page of ids first, in the order a dispatcher reads the board:
     // what is on the street, then what is about to leave, then the rest.
-    const ids = await this.prisma.$queryRaw<Array<{ id: string; total: number }>>`
+    const ids = await this.prisma.$queryRaw<
+      Array<{ id: string; total: number }>
+    >`
       SELECT r."id", (count(*) OVER ())::int AS "total"
       FROM "route" r
       WHERE r."businessId" = ${businessId}

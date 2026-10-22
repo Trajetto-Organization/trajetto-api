@@ -133,7 +133,11 @@ class MarkStopOnTheWayUseCase {
       throw stopNotFound();
     }
 
-    const replayed = await this.replayOf(client_submission_id, businessId, target);
+    const replayed = await this.replayOf(
+      client_submission_id,
+      businessId,
+      target,
+    );
 
     if (replayed) return replayed;
 

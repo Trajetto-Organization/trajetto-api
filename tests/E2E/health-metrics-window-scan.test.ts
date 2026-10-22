@@ -77,7 +77,7 @@ beforeAll(async () => {
       ("id", "outboxEventId", "userId", "channel", "status", "attempts",
        "lastError", "availableAt", "created_at", "updated_at")
     SELECT
-      ${uuid7At('e."created_at"', "e.\"id\" || c.channel")},
+      ${uuid7At('e."created_at"', 'e."id" || c.channel')},
       e."id", '${USER}', c.channel::"NotificationChannel", 'DELIVERED', 1,
       repeat('x', 600), e."created_at", e."created_at", e."created_at"
     FROM "domain_outbox_event" e
@@ -98,7 +98,9 @@ beforeAll(async () => {
 
   // INDEX_CLEANUP ON: with this few dead rows VACUUM would otherwise skip its
   // second pass and never tell the free space map about the freed pages.
-  await prisma.$executeRawUnsafe(`VACUUM (INDEX_CLEANUP ON) "notification_delivery"`);
+  await prisma.$executeRawUnsafe(
+    `VACUUM (INDEX_CLEANUP ON) "notification_delivery"`,
+  );
 
   // Today's deliveries land in that space, as the free space map directs.
   const recentEvents = Math.ceil((freed * 2) / 5);
@@ -121,7 +123,7 @@ beforeAll(async () => {
       ("id", "outboxEventId", "userId", "channel", "status", "attempts",
        "lastError", "availableAt", "created_at", "updated_at")
     SELECT
-      ${uuid7At('e."created_at"', "e.\"id\" || c.channel")},
+      ${uuid7At('e."created_at"', 'e."id" || c.channel')},
       e."id", '${USER}', c.channel::"NotificationChannel", 'DELIVERED', 1,
       repeat('x', 600), e."created_at", e."created_at", e."created_at"
     FROM "domain_outbox_event" e
@@ -171,10 +173,9 @@ describe("the 24 h window on a table that has lived", () => {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const query = deliveriesInWindowSql(since);
 
-    const [row] = await prisma.$queryRawUnsafe<Array<{ "QUERY PLAN": unknown }>>(
-      `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${query.text}`,
-      ...query.values,
-    );
+    const [row] = await prisma.$queryRawUnsafe<
+      Array<{ "QUERY PLAN": unknown }>
+    >(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${query.text}`, ...query.values);
 
     const plan = (row["QUERY PLAN"] as Array<{ Plan: PlanNode }>)[0].Plan;
     const buffers =

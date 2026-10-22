@@ -73,7 +73,10 @@ interface PrecheckEntitlement {
  * buy the reading, and when the month's quota is spent the device hint is the
  * only one the reviewer gets. Keeping it costs no unit.
  */
-function precheckStorable({ aiAnalysisLimit, providerConfigured }: PrecheckEntitlement): boolean {
+function precheckStorable({
+  aiAnalysisLimit,
+  providerConfigured,
+}: PrecheckEntitlement): boolean {
   return (aiAnalysisLimit ?? 0) > 0 && providerConfigured;
 }
 
@@ -118,7 +121,8 @@ function sessionPrecheckFlag(input: {
     return { precheck: false, reason: "not_contracted" };
   }
 
-  if (!input.providerConfigured) return { precheck: false, reason: "unavailable" };
+  if (!input.providerConfigured)
+    return { precheck: false, reason: "unavailable" };
 
   if (input.remaining !== null && input.remaining <= 0) {
     return { precheck: false, reason: "quota_exhausted" };
@@ -146,9 +150,14 @@ function proofDeviceAgreement(
 
   if (!parsed.success || parsed.data.kind !== "proof" || !reading) return null;
 
-  const device = parsed.data.outcome === "error" ? null : parsed.data.invoice_number_found;
+  const device =
+    parsed.data.outcome === "error" ? null : parsed.data.invoice_number_found;
   const server =
-    reading.documentMatches === "yes" ? true : reading.documentMatches === "no" ? false : null;
+    reading.documentMatches === "yes"
+      ? true
+      : reading.documentMatches === "no"
+        ? false
+        : null;
 
   if (device === null || server === null) return "NOT_APPLICABLE";
 
@@ -171,7 +180,8 @@ function odometerDeviceAgreement(
 
   if (!parsed.success || parsed.data.kind !== "odometer") return null;
 
-  const device = parsed.data.outcome === "error" ? null : parsed.data.typed_mileage_found;
+  const device =
+    parsed.data.outcome === "error" ? null : parsed.data.typed_mileage_found;
 
   if (device === null || serverMatches === null) return "NOT_APPLICABLE";
 

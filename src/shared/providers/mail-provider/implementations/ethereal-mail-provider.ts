@@ -1,7 +1,4 @@
-import {
-  MailProviderProps,
-  MailSendResult,
-} from "../dtos/mail-provider-dto";
+import { MailProviderProps, MailSendResult } from "../dtos/mail-provider-dto";
 import { IMailProvider } from "../IMail-provider";
 
 import nodemailer, { Transporter } from "nodemailer";
@@ -78,10 +75,7 @@ class EtherealMailProvider implements IMailProvider {
         // exercises the behaviour rather than diverging from it.
         ...(referenceId
           ? {
-              messageId: buildMessageId(
-                referenceId,
-                "intrajetto.com",
-              ),
+              messageId: buildMessageId(referenceId, "intrajetto.com"),
             }
           : {}),
 
@@ -104,7 +98,10 @@ class EtherealMailProvider implements IMailProvider {
       return { messageId: message.messageId };
     } catch (error) {
       // No recipient in the text (OBS-15), as in the production provider.
-      const deliveryError = toMailDeliveryError(error, "Falha ao enviar e-mail");
+      const deliveryError = toMailDeliveryError(
+        error,
+        "Falha ao enviar e-mail",
+      );
 
       log.error(
         { err: deliveryError, retryable: deliveryError.retryable, referenceId },

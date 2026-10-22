@@ -77,7 +77,9 @@ class DriverPositionRepository implements IDriverPositionRepository {
 
       // The nightly job is late, not the point: keep failing so the phone
       // keeps the batch until the partition exists (see the rule).
-      if (orphaned.some((ping) => partitionMayStillBeCreated(ping.recorded_at))) {
+      if (
+        orphaned.some((ping) => partitionMayStillBeCreated(ping.recorded_at))
+      ) {
         throw error;
       }
 
@@ -93,7 +95,8 @@ class DriverPositionRepository implements IDriverPositionRepository {
       );
 
       return {
-        stored: writable.length > 0 ? await this.writeBatch(owner, writable) : 0,
+        stored:
+          writable.length > 0 ? await this.writeBatch(owner, writable) : 0,
         dropped: orphaned.length,
       };
     }

@@ -110,12 +110,14 @@ function configFromEnv(source: ProofSigningEnv = env): ProofSigningConfig {
       // A read failure is thrown on purpose: state() turns it into
       // PFX_FILE_UNREADABLE and logs its errno, so a missing mount is told
       // apart from a wrong password.
-      if (source.PROOF_SIGNING_PFX_PATH) return fs.readFileSync(source.PROOF_SIGNING_PFX_PATH);
+      if (source.PROOF_SIGNING_PFX_PATH)
+        return fs.readFileSync(source.PROOF_SIGNING_PFX_PATH);
 
       return null;
     },
     password: source.PROOF_SIGNING_PFX_PASSWORD,
-    profile: source.PROOF_SIGNATURE_PROFILE === "cms" ? "CMS_DETACHED" : "PADES_AD_RB",
+    profile:
+      source.PROOF_SIGNATURE_PROFILE === "cms" ? "CMS_DETACHED" : "PADES_AD_RB",
     disabled: source.PROOF_SIGNING_DISABLED,
     location: source.PROOF_SIGNER_LOCATION,
     contact: source.PROOF_SIGNER_CONTACT,
@@ -181,11 +183,16 @@ class ProofSigningService {
     let pfx: Buffer | null;
 
     try {
-      pfx = typeof this.config.pfx === "function" ? this.config.pfx() : this.config.pfx;
+      pfx =
+        typeof this.config.pfx === "function"
+          ? this.config.pfx()
+          : this.config.pfx;
     } catch (error) {
       // The errno only (ENOENT, EACCES...): a message could carry the path.
       log.error(
-        { code: (error as NodeJS.ErrnoException | undefined)?.code ?? "UNKNOWN" },
+        {
+          code: (error as NodeJS.ErrnoException | undefined)?.code ?? "UNKNOWN",
+        },
         "proof signing certificate file could not be read",
       );
 
@@ -207,7 +214,8 @@ class ProofSigningService {
   warmUp(now: Date = new Date()): CertificateState {
     const current = this.state(now);
 
-    const certificate = "certificate" in current ? current.certificate : undefined;
+    const certificate =
+      "certificate" in current ? current.certificate : undefined;
 
     // Dates and state only: no serial, subject, CNPJ or password.
     log.info(
@@ -230,7 +238,8 @@ class ProofSigningService {
    */
   health(now: Date = new Date()): ProofSigningHealth {
     const current = this.state(now);
-    const certificate = "certificate" in current ? current.certificate : undefined;
+    const certificate =
+      "certificate" in current ? current.certificate : undefined;
     const notAfter = certificate?.notAfter ?? null;
 
     return {
@@ -240,7 +249,9 @@ class ProofSigningService {
       signer_name: certificate?.signerName ?? null,
       not_after: notAfter?.toISOString() ?? null,
       days_left:
-        notAfter === null ? null : Math.floor((notAfter.getTime() - now.getTime()) / DAY_MS),
+        notAfter === null
+          ? null
+          : Math.floor((notAfter.getTime() - now.getTime()) / DAY_MS),
     };
   }
 
@@ -299,7 +310,10 @@ class ProofSigningService {
    * may be written after it (append-only, SigFlags 3), and its SHA-256 is
    * the one recorded and checked by /verificar.
    */
-  async sign(pdf: Buffer, plan: Extract<SigningPlan, { status: "SIGNED" }>): Promise<Buffer> {
+  async sign(
+    pdf: Buffer,
+    plan: Extract<SigningPlan, { status: "SIGNED" }>,
+  ): Promise<Buffer> {
     const signer = new ProofCmsSigner(plan.certificate, plan.profile);
 
     return new SignPdf().sign(pdf, signer);

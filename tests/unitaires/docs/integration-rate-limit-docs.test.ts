@@ -20,7 +20,10 @@ interface OpenApiResponse {
 }
 
 type OpenApiDocument = {
-  paths: Record<string, Record<string, { responses: Record<string, OpenApiResponse> }>>;
+  paths: Record<
+    string,
+    Record<string, { responses: Record<string, OpenApiResponse> }>
+  >;
 };
 
 let document: OpenApiDocument;

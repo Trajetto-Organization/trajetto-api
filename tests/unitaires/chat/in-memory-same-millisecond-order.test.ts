@@ -23,7 +23,10 @@ const SENDER = "018f6100-0000-7000-8000-0000000000a0";
 const ROWS = 24;
 
 beforeEach(() => {
-  vi.useFakeTimers({ now: new Date("2026-10-06T12:00:00.000Z"), toFake: ["Date"] });
+  vi.useFakeTimers({
+    now: new Date("2026-10-06T12:00:00.000Z"),
+    toFake: ["Date"],
+  });
 });
 
 afterEach(() => {
@@ -33,7 +36,11 @@ afterEach(() => {
 describe("the in-memory ticket trail", () => {
   it("lists events created in the same millisecond in creation order", async () => {
     const tickets = new InMemorySupportTicketRepository();
-    const types: SupportTicketEventType[] = ["OPENED", "ASSIGNED", "UNASSIGNED"];
+    const types: SupportTicketEventType[] = [
+      "OPENED",
+      "ASSIGNED",
+      "UNASSIGNED",
+    ];
     const written: string[] = [];
 
     for (let index = 0; index < ROWS; index += 1) {
@@ -50,7 +57,9 @@ describe("the in-memory ticket trail", () => {
 
     const trail = await tickets.listEvents(TICKET, BUSINESS, ROWS);
 
-    expect(new Set(trail.map((event) => event.created_at.getTime())).size).toBe(1);
+    expect(new Set(trail.map((event) => event.created_at.getTime())).size).toBe(
+      1,
+    );
     expect(trail.map((event) => event.id)).toEqual(written);
     expect(trail.map((event) => event.note)).toEqual(
       Array.from({ length: ROWS }, (_, index) => `#${index}`),

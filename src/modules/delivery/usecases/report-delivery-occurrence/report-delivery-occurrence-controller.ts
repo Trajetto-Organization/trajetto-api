@@ -106,7 +106,8 @@ class ReportDeliveryOccurrenceController {
         }),
       });
 
-      const messages = result.category === "DELIVERED" ? DELIVERED_MESSAGES : MESSAGES;
+      const messages =
+        result.category === "DELIVERED" ? DELIVERED_MESSAGES : MESSAGES;
 
       const message =
         result.authorization_status === "PENDING" ||

@@ -4,7 +4,10 @@ import { IActivityRepository } from "../../repositories/IActivity-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
-import { ActivityListFilters, ListActivityProps } from "../../dtos/activity-dto";
+import {
+  ActivityListFilters,
+  ListActivityProps,
+} from "../../dtos/activity-dto";
 
 import { AppError } from "@/shared/errors/AppError";
 

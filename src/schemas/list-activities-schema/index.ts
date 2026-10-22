@@ -26,7 +26,7 @@ const listActivitiesSchema = listPagesSchema.extend({
   ...sortFields(["created_at"] as const, { sort: "created_at", order: "desc" }),
   status: facetField(
     ACTIVITY_STATUS_VALUES,
-    "Status registrado. Cada valor também encontra as grafias antigas (\"Em Rota\", \"PLANNED\"…).",
+    'Status registrado. Cada valor também encontra as grafias antigas ("Em Rota", "PLANNED"…).',
   ),
   type: facetField(ACTIVITY_TYPE_VALUES, "Tipo do registro (a entidade)."),
   action: facetField(ACTIVITY_ACTIONS, "Ação: create, update ou delete."),

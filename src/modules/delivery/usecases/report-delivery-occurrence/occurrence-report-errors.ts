@@ -122,10 +122,16 @@ class LegacyProofNeedsAppUpdateError extends AppError {
 
   constructor(missing: Array<"signature" | "photos" | "form">) {
     const what = missing.map((item) =>
-      item === "signature" ? "a assinatura" : item === "photos" ? "fotos" : "um formulário",
+      item === "signature"
+        ? "a assinatura"
+        : item === "photos"
+          ? "fotos"
+          : "um formulário",
     );
     const list =
-      what.length > 1 ? `${what.slice(0, -1).join(", ")} e ${what[what.length - 1]}` : what[0];
+      what.length > 1
+        ? `${what.slice(0, -1).join(", ")} e ${what[what.length - 1]}`
+        : what[0];
 
     super(
       `Atualize o aplicativo Trajetto para registrar esta entrega: a empresa passou a exigir ${list}.`,

@@ -14,7 +14,9 @@ class AssignmentPreviewController {
 
     const query = assignmentPreviewSchema.parse(request.query);
 
-    const assignmentPreviewUseCase = container.resolve(AssignmentPreviewUseCase);
+    const assignmentPreviewUseCase = container.resolve(
+      AssignmentPreviewUseCase,
+    );
 
     const data = await assignmentPreviewUseCase.execute({
       userId: id,

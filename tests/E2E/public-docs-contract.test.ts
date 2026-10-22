@@ -33,7 +33,11 @@ const keys = new Map<string, string>();
 
 let noModuleKey: string;
 
-async function seedBusiness(id: string, deliveries: boolean, cnpj: string): Promise<void> {
+async function seedBusiness(
+  id: string,
+  deliveries: boolean,
+  cnpj: string,
+): Promise<void> {
   await prisma.business.create({
     data: {
       id,
@@ -74,7 +78,9 @@ async function seedKey(businessId: string, scopes: string[]): Promise<string> {
   return key.token;
 }
 
-const GRANTABLE = API_SCOPES.filter((scope) => !RESERVED_API_SCOPES.includes(scope));
+const GRANTABLE = API_SCOPES.filter(
+  (scope) => !RESERVED_API_SCOPES.includes(scope),
+);
 
 beforeAll(async () => {
   await seedBusiness(CARRIER, true, "11222999000110");
@@ -118,24 +124,24 @@ interface Read {
 
 /** The keyed reads the document publishes (writes are proven by their own suite). */
 function keyedReads(): Read[] {
-  return Object.entries(document.paths as Record<string, Record<string, any>>).flatMap(
-    ([path, item]) => {
-      const operation = item.get;
-      const requirement = operation?.security?.[0]?.apiKey;
+  return Object.entries(
+    document.paths as Record<string, Record<string, any>>,
+  ).flatMap(([path, item]) => {
+    const operation = item.get;
+    const requirement = operation?.security?.[0]?.apiKey;
 
-      if (!requirement) return [];
+    if (!requirement) return [];
 
-      return [
-        {
-          name: `GET ${path}`,
-          path,
-          scope: requirement[0],
-          operation,
-          single: path.includes("{id}"),
-        },
-      ];
-    },
-  );
+    return [
+      {
+        name: `GET ${path}`,
+        path,
+        scope: requirement[0],
+        operation,
+        single: path.includes("{id}"),
+      },
+    ];
+  });
 }
 
 function urlOf(path: string, id: string = randomUUID()): string {
@@ -155,7 +161,10 @@ function call(url: string, token?: string) {
  * required key there, no key the schema closes out, and each value of the
  * declared primitive type.
  */
-function violations(body: Record<string, unknown>, schema: Record<string, any>): string[] {
+function violations(
+  body: Record<string, unknown>,
+  schema: Record<string, any>,
+): string[] {
   const problems: string[] = [];
   const properties: Record<string, any> = schema?.properties ?? {};
 
@@ -167,19 +176,26 @@ function violations(body: Record<string, unknown>, schema: Record<string, any>):
     const declared = properties[key];
 
     if (!declared) {
-      if (schema?.additionalProperties === false) problems.push(`"${key}" não publicado`);
+      if (schema?.additionalProperties === false)
+        problems.push(`"${key}" não publicado`);
       continue;
     }
 
     const types = ([] as string[]).concat(declared.type ?? []);
-    const actual = Array.isArray(value) ? "array" : value === null ? "null" : typeof value;
+    const actual = Array.isArray(value)
+      ? "array"
+      : value === null
+        ? "null"
+        : typeof value;
 
     if (types.length > 0 && !types.includes(actual)) {
       problems.push(`"${key}" é ${actual}, publicado ${types.join("|")}`);
     }
 
     if (declared.enum && !declared.enum.includes(value)) {
-      problems.push(`"${key}" = ${String(value)} fora de ${declared.enum.join(",")}`);
+      problems.push(
+        `"${key}" = ${String(value)} fora de ${declared.enum.join(",")}`,
+      );
     }
   }
 
@@ -194,17 +210,27 @@ async function expectPublished(
   const status = String(response.statusCode);
   const published = read.operation.responses[status];
 
-  expect(published, `${read.name} ${label}: ${status} não publicado`).toBeDefined();
+  expect(
+    published,
+    `${read.name} ${label}: ${status} não publicado`,
+  ).toBeDefined();
 
   const schema = published.content?.["application/json"]?.schema;
 
-  expect(violations(response.json(), schema), `${read.name} ${label} (${status})`).toEqual([]);
+  expect(
+    violations(response.json(), schema),
+    `${read.name} ${label} (${status})`,
+  ).toEqual([]);
 
   // Published on every response, and actually sent on every one.
-  expect(Object.keys(published.headers ?? {}), `${read.name} ${status}`).toContain(
-    "x-request-id",
-  );
-  expect(response.headers["x-request-id"], `${read.name} ${label}`).toBeTruthy();
+  expect(
+    Object.keys(published.headers ?? {}),
+    `${read.name} ${status}`,
+  ).toContain("x-request-id");
+  expect(
+    response.headers["x-request-id"],
+    `${read.name} ${label}`,
+  ).toBeTruthy();
 }
 
 describe("the published document covers the keyed reads", () => {
@@ -222,7 +248,10 @@ describe("the published document covers the keyed reads", () => {
 describe("the scope each endpoint publishes is the one it enforces", () => {
   it("refuses every other scope and accepts its own", async () => {
     for (const read of keyedReads()) {
-      const without = await call(urlOf(read.path), keys.get(`except:${read.scope}`));
+      const without = await call(
+        urlOf(read.path),
+        keys.get(`except:${read.scope}`),
+      );
 
       expect(without.statusCode, `${read.name} sem ${read.scope}`).toBe(403);
       expect(without.json().code, read.name).toBe("MISSING_API_SCOPE");
@@ -230,7 +259,9 @@ describe("the scope each endpoint publishes is the one it enforces", () => {
       const only = await call(urlOf(read.path), keys.get(`only:${read.scope}`));
 
       // Its own scope is enough: 200 for a list, 404 for an unknown id.
-      expect([200, 404], `${read.name} com ${read.scope}`).toContain(only.statusCode);
+      expect([200, 404], `${read.name} com ${read.scope}`).toContain(
+        only.statusCode,
+      );
     }
   });
 });
@@ -337,19 +368,28 @@ describe("the company ceiling's 429 carries what the document says", () => {
 
         expect(response.statusCode, name).toBe(429);
         expect(response.json().code, name).toBe("RATE_LIMITED");
-        expect(Number(response.headers["retry-after"]), name).toBeGreaterThan(0);
+        expect(Number(response.headers["retry-after"]), name).toBeGreaterThan(
+          0,
+        );
 
         expect(
-          Object.keys(response.headers).filter((header) => header.startsWith("x-ratelimit-")),
+          Object.keys(response.headers).filter((header) =>
+            header.startsWith("x-ratelimit-"),
+          ),
           name,
         ).toEqual([]);
 
         const published = operation.responses["429"];
 
         expect(published, `${name}: 429 não publicado`).toBeDefined();
-        expect(published.description, name).toContain("sem os cabeçalhos `x-ratelimit-*`");
+        expect(published.description, name).toContain(
+          "sem os cabeçalhos `x-ratelimit-*`",
+        );
         expect(
-          violations(response.json(), published.content["application/json"].schema),
+          violations(
+            response.json(),
+            published.content["application/json"].schema,
+          ),
           name,
         ).toEqual([]);
       }
@@ -411,7 +451,12 @@ describe("the published request example", () => {
       invoice_key: example.invoice_key,
       status: "PENDING",
     });
-    expect(violations(created.json(), operation.responses["201"].content["application/json"].schema)).toEqual([]);
+    expect(
+      violations(
+        created.json(),
+        operation.responses["201"].content["application/json"].schema,
+      ),
+    ).toEqual([]);
 
     const replayed = await send();
 

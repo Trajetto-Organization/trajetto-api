@@ -59,7 +59,9 @@ describe("ai-verification.issue policy", () => {
     );
 
     expect(rendered.title).toContain("divergências");
-    expect(rendered.link).toContain("/dashboard/vehicle-checklist?search=check-1");
+    expect(rendered.link).toContain(
+      "/dashboard/vehicle-checklist?search=check-1",
+    );
   });
 
   it("survives a record without vehicle data", () => {

@@ -93,36 +93,147 @@ class ExportDeliveryUseCase {
     // The company's zone (decision 1.1): the day in the file name and the
     // hour in "Entregue em", which the server's zone (UTC) put a day ahead
     // from 21:00 in São Paulo.
-    const findBusiness = await this.business.findBusinessById(resolvedBusinessId);
+    const findBusiness =
+      await this.business.findBusinessById(resolvedBusinessId);
     const timeZone = resolveTimeZone(
       (findBusiness as { timezone?: string | null } | null)?.timezone,
     );
 
     const columns: ExportColumn[] = [
-      { header: "ID", key: "id", width: 38, formatter: ExportFormatters.fallback },
-      { header: "Pedido", key: "code", width: 18, formatter: ExportFormatters.fallback },
-      { header: "Chave da NF-e", key: "invoice_key", width: 46, formatter: ExportFormatters.fallback },
-      { header: "Número da NF", key: "invoice_number", width: 14, formatter: ExportFormatters.fallback },
-      { header: "Status", key: "status", width: 14, formatter: ExportFormatters.fallback },
-      { header: "Destinatário", key: "recipient_name", width: 32, formatter: ExportFormatters.fallback },
-      { header: "Documento", key: "recipient_document", width: 20, formatter: ExportFormatters.fallback },
-      { header: "Telefone", key: "recipient_telephone", width: 18, formatter: ExportFormatters.phone },
-      { header: "Logradouro", key: "street", width: 32, formatter: ExportFormatters.fallback },
-      { header: "Número", key: "address_number", width: 10, formatter: ExportFormatters.fallback },
-      { header: "Bairro", key: "neighborhood", width: 20, formatter: ExportFormatters.fallback },
-      { header: "Cidade", key: "city", width: 24, formatter: ExportFormatters.fallback },
-      { header: "UF", key: "uf", width: 6, formatter: ExportFormatters.fallback },
-      { header: "CEP", key: "cep", width: 12, formatter: ExportFormatters.fallback },
-      { header: "Embarcador", key: "shipperName", width: 28, formatter: ExportFormatters.fallback },
-      { header: "Motorista", key: "driverName", width: 28, formatter: ExportFormatters.fallback },
-      { header: "Veículo", key: "vehiclePlate", width: 12, formatter: ExportFormatters.fallback },
-      { header: "Rota", key: "routeCode", width: 10, formatter: ExportFormatters.fallback },
+      {
+        header: "ID",
+        key: "id",
+        width: 38,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Pedido",
+        key: "code",
+        width: 18,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Chave da NF-e",
+        key: "invoice_key",
+        width: 46,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Número da NF",
+        key: "invoice_number",
+        width: 14,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Status",
+        key: "status",
+        width: 14,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Destinatário",
+        key: "recipient_name",
+        width: 32,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Documento",
+        key: "recipient_document",
+        width: 20,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Telefone",
+        key: "recipient_telephone",
+        width: 18,
+        formatter: ExportFormatters.phone,
+      },
+      {
+        header: "Logradouro",
+        key: "street",
+        width: 32,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Número",
+        key: "address_number",
+        width: 10,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Bairro",
+        key: "neighborhood",
+        width: 20,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Cidade",
+        key: "city",
+        width: 24,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "UF",
+        key: "uf",
+        width: 6,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "CEP",
+        key: "cep",
+        width: 12,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Embarcador",
+        key: "shipperName",
+        width: 28,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Motorista",
+        key: "driverName",
+        width: 28,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Veículo",
+        key: "vehiclePlate",
+        width: 12,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Rota",
+        key: "routeCode",
+        width: 10,
+        formatter: ExportFormatters.fallback,
+      },
       // A civil day (decision 1.3): read as the day it stores, never shifted
       // by the process's zone like the instant columns.
-      { header: "Data prevista", key: "scheduled_date", width: 16, formatter: (value) => formatDateOnlyBR(value as Date | string | null) },
-      { header: "Entregue em", key: "delivered_at", width: 20, formatter: (value) => formatInstant(value, timeZone) },
-      { header: "Recebido por", key: "received_by", width: 24, formatter: ExportFormatters.fallback },
-      { header: "Observações", key: "notes", width: 40, formatter: ExportFormatters.fallback },
+      {
+        header: "Data prevista",
+        key: "scheduled_date",
+        width: 16,
+        formatter: (value) => formatDateOnlyBR(value as Date | string | null),
+      },
+      {
+        header: "Entregue em",
+        key: "delivered_at",
+        width: 20,
+        formatter: (value) => formatInstant(value, timeZone),
+      },
+      {
+        header: "Recebido por",
+        key: "received_by",
+        width: 24,
+        formatter: ExportFormatters.fallback,
+      },
+      {
+        header: "Observações",
+        key: "notes",
+        width: 40,
+        formatter: ExportFormatters.fallback,
+      },
     ];
 
     const today = businessDateKey(new Date(), timeZone);

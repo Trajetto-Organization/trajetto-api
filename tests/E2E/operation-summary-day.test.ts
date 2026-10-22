@@ -98,7 +98,9 @@ async function seedBusiness(id: string, shipper: string, timezone?: string) {
     },
   });
 
-  await prisma.shipper.create({ data: { id: shipper, name: "Embarcador", businessId: id } });
+  await prisma.shipper.create({
+    data: { id: shipper, name: "Embarcador", businessId: id },
+  });
 }
 
 async function seedDriver(id: string, businessId: string) {
@@ -191,9 +193,24 @@ beforeAll(async () => {
 
   await prisma.user.createMany({
     data: [
-      { id: MANAGER, role: "BUSINESS_ADMIN", businessId: CARRIER, driverId: null },
-      { id: DRIVER_USER, role: "BUSINESS_USER", businessId: CARRIER, driverId: DRIVER },
-      { id: OTHER_DRIVER_USER, role: "BUSINESS_USER", businessId: OTHER, driverId: OTHER_DRIVER },
+      {
+        id: MANAGER,
+        role: "BUSINESS_ADMIN",
+        businessId: CARRIER,
+        driverId: null,
+      },
+      {
+        id: DRIVER_USER,
+        role: "BUSINESS_USER",
+        businessId: CARRIER,
+        driverId: DRIVER,
+      },
+      {
+        id: OTHER_DRIVER_USER,
+        role: "BUSINESS_USER",
+        businessId: OTHER,
+        driverId: OTHER_DRIVER,
+      },
     ].map((user) => ({
       ...user,
       name: `Usuário ${user.id.slice(-2)}`,
@@ -204,16 +221,29 @@ beforeAll(async () => {
 
   await prisma.occurrenceType.createMany({
     data: [
-      { id: BLOCKING, name: "Recusada", blocks_delivery: true, businessId: CARRIER },
+      {
+        id: BLOCKING,
+        name: "Recusada",
+        blocks_delivery: true,
+        businessId: CARRIER,
+      },
       { id: INFO, name: "Atraso", businessId: CARRIER },
-      { id: SYSTEM, name: "Comprovante rejeitado", is_system: true, businessId: CARRIER },
+      {
+        id: SYSTEM,
+        name: "Comprovante rejeitado",
+        is_system: true,
+        businessId: CARRIER,
+      },
       { id: OTHER_INFO, name: "Atraso", businessId: OTHER },
     ],
   });
 
   // ---- DELIVERED ----
   await delivery("D-today", { status: "DELIVERED", delivered_at: TODAY });
-  await delivery("D-yesterday", { status: "DELIVERED", delivered_at: YESTERDAY });
+  await delivery("D-yesterday", {
+    status: "DELIVERED",
+    delivered_at: YESTERDAY,
+  });
   await delivery("D-tomorrow", { status: "DELIVERED", delivered_at: TOMORROW });
 
   // ---- FAILED ----
@@ -233,7 +263,11 @@ beforeAll(async () => {
 
   // Failed today by a blocking report from the app.
   const blocked = await delivery("F-blocked", { status: "FAILED" });
-  await occurrence(blocked, { type: BLOCKING, reportedById: DRIVER_USER, occurred_at: TODAY });
+  await occurrence(blocked, {
+    type: BLOCKING,
+    reportedById: DRIVER_USER,
+    occurred_at: TODAY,
+  });
 
   // Failed yesterday; a blocking report still waiting for the tower today
   // has not applied, so it is not a failure fact.
@@ -298,7 +332,10 @@ beforeAll(async () => {
 
   // A legacy failure with no fact, moved today / yesterday.
   await delivery("F-legacy-today", { status: "FAILED", driverId: null });
-  await delivery("F-legacy-yesterday", { status: "FAILED", updated_at: YESTERDAY });
+  await delivery("F-legacy-yesterday", {
+    status: "FAILED",
+    updated_at: YESTERDAY,
+  });
 
   // ---- PENDING ---- the day's load is decided by the route of the open stop.
   const pendingOn = async (
@@ -318,7 +355,12 @@ beforeAll(async () => {
       },
     });
     await prisma.routeStop.create({
-      data: { routeId: planned.id, deliveryId: id, sequence: 10, status: "PENDING" },
+      data: {
+        routeId: planned.id,
+        deliveryId: id,
+        sequence: 10,
+        status: "PENDING",
+      },
     });
   };
 
@@ -333,7 +375,11 @@ beforeAll(async () => {
   const open = await delivery("T-open", { status: "IN_TRANSIT" });
 
   await occurrence(open, { type: INFO, reportedById: DRIVER_USER }); // counts
-  await occurrence(open, { type: INFO, reportedById: DRIVER_USER, occurred_at: TODAY }); // counts
+  await occurrence(open, {
+    type: INFO,
+    reportedById: DRIVER_USER,
+    occurred_at: TODAY,
+  }); // counts
   await occurrence(open, { type: INFO, reportedById: MANAGER }); // panel note
   await occurrence(open, { type: SYSTEM, reportedById: DRIVER_USER }); // platform's
   await occurrence(open, {
@@ -341,7 +387,11 @@ beforeAll(async () => {
     reportedById: DRIVER_USER,
     occurred_at: YESTERDAY, // offline, arrived today
   });
-  await occurrence(open, { type: INFO, reportedById: DRIVER_USER, created_at: YESTERDAY });
+  await occurrence(open, {
+    type: INFO,
+    reportedById: DRIVER_USER,
+    created_at: YESTERDAY,
+  });
 
   // ---- ANOTHER COMPANY, all of it "today" ----
   const foreign = await delivery("X-1", {
@@ -350,7 +400,11 @@ beforeAll(async () => {
     businessId: OTHER,
     driverId: OTHER_DRIVER,
   });
-  await delivery("X-2", { status: "FAILED", businessId: OTHER, driverId: OTHER_DRIVER });
+  await delivery("X-2", {
+    status: "FAILED",
+    businessId: OTHER,
+    driverId: OTHER_DRIVER,
+  });
   await occurrence(foreign, {
     type: OTHER_INFO,
     reportedById: OTHER_DRIVER_USER,
@@ -372,7 +426,9 @@ async function deliveryTwinFromDatabase(): Promise<InMemoryDeliveryRepository> {
   const tenants = { in: [CARRIER, OTHER] };
 
   twin.deliveries.push(
-    ...((await prisma.delivery.findMany({ where: { businessId: tenants } })) as never[]),
+    ...((await prisma.delivery.findMany({
+      where: { businessId: tenants },
+    })) as never[]),
   );
   twin.occurrences.push(
     ...((await prisma.deliveryOccurrence.findMany({
@@ -406,7 +462,10 @@ async function operationTwinFromDatabase(): Promise<InMemoryOperationDayReposito
         where: { id: tenants },
         select: { id: true, timezone: true },
       })
-    ).map((business) => ({ id: business.id, timezone: business.timezone ?? undefined })),
+    ).map((business) => ({
+      id: business.id,
+      timezone: business.timezone ?? undefined,
+    })),
     drivers: await prisma.driver.findMany({
       where: { businessId: tenants },
       select: { id: true, businessId: true, name: true, cnh: true },
@@ -416,7 +475,9 @@ async function operationTwinFromDatabase(): Promise<InMemoryOperationDayReposito
       where: { businessId: tenants },
       select: { id: true, name: true, blocks_delivery: true },
     }),
-    routes: (await prisma.route.findMany({ where: { businessId: tenants } })) as never[],
+    routes: (await prisma.route.findMany({
+      where: { businessId: tenants },
+    })) as never[],
     stops: (await prisma.routeStop.findMany({
       where: { route: { businessId: tenants } },
     })) as never[],
@@ -510,7 +571,10 @@ describe("the operation summary of a company's day", () => {
     });
 
     expect(summary.drivers).toEqual([
-      expect.objectContaining({ driverId: OTHER_DRIVER, driverName: "Motorista d2" }),
+      expect.objectContaining({
+        driverId: OTHER_DRIVER,
+        driverName: "Motorista d2",
+      }),
     ]);
   });
 });
@@ -524,22 +588,28 @@ describe("the operation summary of a company's day", () => {
 describe("the same day as the tower", () => {
   const users = new UserRepository();
 
-  it.each(CASES)("totals are the tower's counts, %s", async (_, businessId, day) => {
-    const counts = await operation.countDayDeliveries(businessId, day);
-    const summary = await read(businessId, day);
+  it.each(CASES)(
+    "totals are the tower's counts, %s",
+    async (_, businessId, day) => {
+      const counts = await operation.countDayDeliveries(businessId, day);
+      const summary = await read(businessId, day);
 
-    const sum = (status: string, withDriver = false) =>
-      counts
-        .filter((entry) => entry.status === status && (!withDriver || entry.driverId))
-        .reduce((total, entry) => total + entry.total, 0);
+      const sum = (status: string, withDriver = false) =>
+        counts
+          .filter(
+            (entry) =>
+              entry.status === status && (!withDriver || entry.driverId),
+          )
+          .reduce((total, entry) => total + entry.total, 0);
 
-    expect(summary.totals).toMatchObject({
-      designated: sum("PENDING", true),
-      inRoute: sum("IN_TRANSIT"),
-      deliveredToday: sum("DELIVERED"),
-      failedToday: sum("FAILED"),
-    });
-  });
+      expect(summary.totals).toMatchObject({
+        designated: sum("PENDING", true),
+        inRoute: sum("IN_TRANSIT"),
+        deliveredToday: sum("DELIVERED"),
+        failedToday: sum("FAILED"),
+      });
+    },
+  );
 
   it("the funnel of the control tower says the same about today", async () => {
     const tower = await new ControlTowerUseCase(
@@ -549,7 +619,9 @@ describe("the same day as the tower", () => {
     ).execute({ userId: MANAGER, now: CLOCK });
 
     const summary = await read(CARRIER, DAY);
-    const funnel = Object.fromEntries(tower.funnel.map((step) => [step.status, step.total]));
+    const funnel = Object.fromEntries(
+      tower.funnel.map((step) => [step.status, step.total]),
+    );
 
     // Every PENDING of the day has a driver here (routes carry one).
     expect(funnel).toMatchObject({

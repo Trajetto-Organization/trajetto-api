@@ -162,9 +162,9 @@ describe("occurrence feed", () => {
     // The foreign company's occurrence never crosses the tenant line.
     expect(result.total).toBe(2);
 
-    const withPhoto = (
-      result.data as Array<{ photos: string[] }>
-    ).find((entry) => entry.photos.length > 0);
+    const withPhoto = (result.data as Array<{ photos: string[] }>).find(
+      (entry) => entry.photos.length > 0,
+    );
 
     expect(withPhoto?.photos[0]).toBe(
       `http://storage.local/deliveryPhotos/${BUSINESS}/a.webp`,
@@ -183,9 +183,9 @@ describe("occurrence feed", () => {
     });
 
     expect(result.total).toBe(1);
-    expect(
-      (result.data as Array<{ deliveryId: string }>)[0].deliveryId,
-    ).toBe(mine.id);
+    expect((result.data as Array<{ deliveryId: string }>)[0].deliveryId).toBe(
+      mine.id,
+    );
   });
 
   it("finds a row by the ids the row menu copies", async () => {
@@ -232,9 +232,9 @@ describe("occurrence feed", () => {
     });
 
     expect(result.total).toBe(1);
-    expect(
-      (result.data as Array<{ deliveryId: string }>)[0].deliveryId,
-    ).toBe(mine.id);
+    expect((result.data as Array<{ deliveryId: string }>)[0].deliveryId).toBe(
+      mine.id,
+    );
   });
 });
 
@@ -252,8 +252,18 @@ describe("operation summary", () => {
     const tower = new InMemoryOperationDayRepository();
 
     tower.rows.drivers.push(
-      { id: DRIVER_ID, businessId: BUSINESS, name: "João Motorista", cnh: "111" },
-      { id: OTHER_DRIVER_ID, businessId: BUSINESS, name: "Maria Motorista", cnh: "222" },
+      {
+        id: DRIVER_ID,
+        businessId: BUSINESS,
+        name: "João Motorista",
+        cnh: "111",
+      },
+      {
+        id: OTHER_DRIVER_ID,
+        businessId: BUSINESS,
+        name: "Maria Motorista",
+        cnh: "222",
+      },
     );
 
     for (const delivery of repos.deliveryRepository.deliveries) {
@@ -264,7 +274,9 @@ describe("operation summary", () => {
         driverId: delivery.driverId ?? null,
         recipient_name: delivery.recipient_name,
         city: delivery.city,
-        delivered_at: delivery.delivered_at ? new Date(delivery.delivered_at) : null,
+        delivered_at: delivery.delivered_at
+          ? new Date(delivery.delivered_at)
+          : null,
         updated_at: new Date(delivery.updated_at ?? Date.now()),
       });
     }

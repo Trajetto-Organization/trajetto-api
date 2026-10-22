@@ -26,7 +26,10 @@ import { Delivery, UpdateDeliveryProps } from "../../dtos/delivery-dto";
 import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
 import { isDeliveryEditable } from "@/shared/delivery/delivery-rules";
-import { CLEARED_ADDRESS_POINT, addressChanged } from "@/shared/delivery/address-point";
+import {
+  CLEARED_ADDRESS_POINT,
+  addressChanged,
+} from "@/shared/delivery/address-point";
 
 interface UpdateDeliveryRequest {
   userId: string;
@@ -127,7 +130,11 @@ class UpdateDeliveryUseCase {
         ? { ...deliveryData, ...CLEARED_ADDRESS_POINT }
         : deliveryData;
 
-      return await this.delivery.updateDelivery(deliveryId, data, findDelivery.status);
+      return await this.delivery.updateDelivery(
+        deliveryId,
+        data,
+        findDelivery.status,
+      );
     } catch (error) {
       if (error instanceof DeliveryStatusConflictError) {
         throw new AppError(error.message, 409, "DELIVERY_STATUS_CONFLICT");
@@ -161,7 +168,8 @@ class UpdateDeliveryUseCase {
     const currentKey = current.invoice_key ?? null;
 
     const keyChanges =
-      patch.invoice_key !== undefined && (patch.invoice_key ?? null) !== currentKey;
+      patch.invoice_key !== undefined &&
+      (patch.invoice_key ?? null) !== currentKey;
 
     const numberChanges =
       patch.invoice_number !== undefined &&

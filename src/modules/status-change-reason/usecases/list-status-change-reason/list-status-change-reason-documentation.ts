@@ -16,7 +16,9 @@ const statusReasonListSearchMetaDoc = searchMetaDoc(
     used: z
       .number()
       .int()
-      .describe("Destes, os que já explicam alguma mudança de status (não podem ser excluídos)."),
+      .describe(
+        "Destes, os que já explicam alguma mudança de status (não podem ser excluídos).",
+      ),
   },
   ["status"],
 );

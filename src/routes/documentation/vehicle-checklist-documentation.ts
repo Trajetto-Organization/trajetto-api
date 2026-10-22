@@ -13,7 +13,6 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
 import { updateVehicleChecklistSchema } from "@/schemas/update-vehicle-checklist-schema";
 
-
 import { presignedPhotosSchema } from "@/schemas/presigned-photos-schema";
 import { idempotencyHeaders } from "./idempotency-documentation";
 
@@ -39,7 +38,9 @@ const checklistRefusal = errorResponse.extend({
   photoRequirements: z
     .record(z.string(), z.unknown())
     .optional()
-    .describe("PHOTOS_REQUIRED: a regra de foto de cada item, conforme as respostas."),
+    .describe(
+      "PHOTOS_REQUIRED: a regra de foto de cada item, conforme as respostas.",
+    ),
   fieldsSent: z.array(z.string()).optional(),
   photosSent: z.array(z.string()).optional(),
   existingPhotos: z.array(z.string()).optional(),

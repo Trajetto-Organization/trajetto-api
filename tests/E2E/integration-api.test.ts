@@ -159,9 +159,9 @@ describe("the catalogue", () => {
     expect(body.version).toBe("v1");
     expect(body.topics.length).toBeGreaterThan(5);
 
-    expect(body.scopes.map((entry: { scope: string }) => entry.scope)).toContain(
-      "deliveries:read",
-    );
+    expect(
+      body.scopes.map((entry: { scope: string }) => entry.scope),
+    ).toContain("deliveries:read");
   });
 
   it("describes every topic it lists", async () => {
@@ -193,7 +193,10 @@ describe("the key", () => {
   it("refuses a forged key with the same answer", async () => {
     // A distinct message for "revoked" and "unknown" would together be an
     // oracle for which keys are real.
-    const forged = await call("/deliveries", `tjk_live_deadbeef.${"a".repeat(64)}`);
+    const forged = await call(
+      "/deliveries",
+      `tjk_live_deadbeef.${"a".repeat(64)}`,
+    );
     const revoked = await call("/deliveries", revokedKey);
 
     expect(forged.statusCode).toBe(revoked.statusCode);
@@ -278,10 +281,7 @@ describe("the tenant boundary", () => {
      * to the schema. Together they cover the two-step mistake: step one is
      * caught there, step two here.
      */
-    const response = await call(
-      `/deliveries?businessId=${OTHER}`,
-      readKey,
-    );
+    const response = await call(`/deliveries?businessId=${OTHER}`, readKey);
 
     const codes = response
       .json()
@@ -308,7 +308,12 @@ describe("what a document looks like", () => {
       (await call(`/deliveries/${ourDelivery}`, readKey)).json(),
     );
 
-    for (const internal of ["businessId", "shipperId", "importId", "driverId"]) {
+    for (const internal of [
+      "businessId",
+      "shipperId",
+      "importId",
+      "driverId",
+    ]) {
       expect(body, internal).not.toContain(internal);
     }
   });
@@ -372,12 +377,17 @@ describe("paging by cursor", () => {
  */
 describe("the public documentation portal", () => {
   it("serves a page that points at the filtered document", async () => {
-    const response = await app.inject({ method: "GET", url: "/integration/docs" });
+    const response = await app.inject({
+      method: "GET",
+      url: "/integration/docs",
+    });
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/html");
 
-    expect(response.body).toContain('data-url="/integration/docs/openapi.json"');
+    expect(response.body).toContain(
+      'data-url="/integration/docs/openapi.json"',
+    );
   });
 
   it("publishes the integration endpoints and nothing else", async () => {
@@ -501,7 +511,9 @@ describe("counting what a customer's system asked for", () => {
       "@/shared/integration/api-usage-recorder"
     );
 
-    await prisma.apiKeyUsageDaily.deleteMany({ where: { businessId: CARRIER } });
+    await prisma.apiKeyUsageDaily.deleteMany({
+      where: { businessId: CARRIER },
+    });
 
     await apiUsageRecorder.flush();
 
@@ -570,7 +582,9 @@ describe("the per-key limit", () => {
 
     // Quinze chamadas num teto de dez.
     for (let attempt = 0; attempt < 15; attempt += 1) {
-      statuses.push((await call("/deliveries?limit=1", tight.token)).statusCode);
+      statuses.push(
+        (await call("/deliveries?limit=1", tight.token)).statusCode,
+      );
     }
 
     expect(statuses.filter((status) => status === 200).length).toBeLessThan(15);
@@ -630,9 +644,12 @@ describe("a page size that is not one", () => {
    * Prisma as a negative `take` — "the last N rows" — and loaded the whole
    * history before the paging code choked on it with a 500.
    */
-  it.each(["-1000000", "0", "abc"])("answers a normal page for limit=%s", async (limit) => {
-    const response = await call(`/deliveries?limit=${limit}`, readKey);
+  it.each(["-1000000", "0", "abc"])(
+    "answers a normal page for limit=%s",
+    async (limit) => {
+      const response = await call(`/deliveries?limit=${limit}`, readKey);
 
-    expect(response.statusCode).toBe(200);
-  });
+      expect(response.statusCode).toBe(200);
+    },
+  );
 });

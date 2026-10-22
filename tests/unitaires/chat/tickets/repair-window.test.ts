@@ -29,8 +29,8 @@ describe("repairWindowStart", () => {
   it("looks back 7 days at most", () => {
     const later = new Date("2026-11-01T00:00:00.000Z");
 
-    expect(repairWindowStart(later, new Date("2026-10-01T00:00:00.000Z"))).toEqual(
-      new Date("2026-10-25T00:00:00.000Z"),
-    );
+    expect(
+      repairWindowStart(later, new Date("2026-10-01T00:00:00.000Z")),
+    ).toEqual(new Date("2026-10-25T00:00:00.000Z"));
   });
 });

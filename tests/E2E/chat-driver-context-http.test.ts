@@ -77,7 +77,11 @@ async function seedBusiness(id: string): Promise<void> {
   });
 }
 
-async function seedDriver(businessId: string, id: string, name: string): Promise<void> {
+async function seedDriver(
+  businessId: string,
+  id: string,
+  name: string,
+): Promise<void> {
   await prisma.driver.create({
     data: {
       id,
@@ -99,7 +103,10 @@ async function seedDriver(businessId: string, id: string, name: string): Promise
 }
 
 /** A driver's app session: the access payload plus a live refresh family. */
-async function seedDriverUser(businessId: string, driverId: string): Promise<string> {
+async function seedDriverUser(
+  businessId: string,
+  driverId: string,
+): Promise<string> {
   const id = randomUUID();
   const familyId = randomUUID();
 
@@ -232,7 +239,11 @@ afterAll(async () => {
 });
 
 /** What the app posts for the driver's own conversation. */
-const send = (token: string, driverId: string, payload: Record<string, unknown>) =>
+const send = (
+  token: string,
+  driverId: string,
+  payload: Record<string, unknown>,
+) =>
   app.inject({
     method: "POST",
     url: "/chat/send-message",
@@ -245,7 +256,8 @@ const send = (token: string, driverId: string, payload: Record<string, unknown>)
     },
   });
 
-const countBody = (body: string) => prisma.chatMessage.count({ where: { body } });
+const countBody = (body: string) =>
+  prisma.chatMessage.count({ where: { body } });
 
 describe("POST /chat/send-message from the driver's app", () => {
   it("tags a message about a delivery with the route that carries it, not the running one", async () => {
@@ -259,11 +271,20 @@ describe("POST /chat/send-message from the driver's app", () => {
     const [message] = response.json().data;
 
     expect(message.delivery).toMatchObject({ id: ON_RELEASED });
-    expect(message.route).toEqual({ id: releasedRoute, code: 22, name: "Amanhã cedo" });
+    expect(message.route).toEqual({
+      id: releasedRoute,
+      code: 22,
+      name: "Amanhã cedo",
+    });
 
-    const stored = await prisma.chatMessage.findUniqueOrThrow({ where: { id: message.id } });
+    const stored = await prisma.chatMessage.findUniqueOrThrow({
+      where: { id: message.id },
+    });
 
-    expect(stored).toMatchObject({ deliveryId: ON_RELEASED, routeId: releasedRoute });
+    expect(stored).toMatchObject({
+      deliveryId: ON_RELEASED,
+      routeId: releasedRoute,
+    });
   });
 
   it("names the route of a message about a whole route", async () => {
@@ -305,8 +326,14 @@ describe("POST /chat/send-message from the driver's app", () => {
   });
 
   it("answers another company's route exactly like a missing one", async () => {
-    const foreign = await send(joaoToken, JOAO, { body: "Rota alheia", routeId: foreignRoute });
-    const missing = await send(joaoToken, JOAO, { body: "Rota alheia", routeId: randomUUID() });
+    const foreign = await send(joaoToken, JOAO, {
+      body: "Rota alheia",
+      routeId: foreignRoute,
+    });
+    const missing = await send(joaoToken, JOAO, {
+      body: "Rota alheia",
+      routeId: randomUUID(),
+    });
 
     expect(foreign.statusCode, foreign.body).toBe(404);
     expect(foreign.json()).toEqual({
@@ -319,8 +346,14 @@ describe("POST /chat/send-message from the driver's app", () => {
   });
 
   it("answers another driver's delivery exactly like a missing one", async () => {
-    const ofMaria = await send(joaoToken, JOAO, { body: "Entrega alheia", deliveryId: OF_MARIA });
-    const missing = await send(joaoToken, JOAO, { body: "Entrega alheia", deliveryId: randomUUID() });
+    const ofMaria = await send(joaoToken, JOAO, {
+      body: "Entrega alheia",
+      deliveryId: OF_MARIA,
+    });
+    const missing = await send(joaoToken, JOAO, {
+      body: "Entrega alheia",
+      deliveryId: randomUUID(),
+    });
 
     expect(ofMaria.statusCode, ofMaria.body).toBe(404);
     expect(ofMaria.json()).toEqual({
@@ -361,7 +394,9 @@ describe("POST /chat/send-message from the driver's app", () => {
   });
 
   it("refuses a message for another driver's conversation", async () => {
-    const response = await send(joaoToken, MARIA, { body: "Na conversa da Maria" });
+    const response = await send(joaoToken, MARIA, {
+      body: "Na conversa da Maria",
+    });
 
     expect(response.statusCode, response.body).toBe(403);
     expect(response.json().code).toBe("DRIVER_CHAT_OWN_THREAD");
@@ -378,15 +413,18 @@ describe("GET /chat/list-messages for a delivery, from the driver's app", () => 
     });
 
   it("reads the driver's own thread narrowed to the delivery", async () => {
-    await send(joaoToken, JOAO, { body: "Portão fechado", deliveryId: ON_RUNNING });
+    await send(joaoToken, JOAO, {
+      body: "Portão fechado",
+      deliveryId: ON_RUNNING,
+    });
     await send(joaoToken, JOAO, { body: "Sem relação com a entrega" });
 
     const response = await listFor(joaoToken, ON_RUNNING);
 
     expect(response.statusCode, response.body).toBe(200);
-    expect(response.json().data.map((row: { body: string }) => row.body)).toEqual([
-      "Portão fechado",
-    ]);
+    expect(
+      response.json().data.map((row: { body: string }) => row.body),
+    ).toEqual(["Portão fechado"]);
   });
 
   it("shows nobody else's messages about the same delivery id", async () => {
@@ -416,18 +454,32 @@ describe("GET /chat/list-messages for a route, from the driver's app", () => {
     });
 
   it("reads the driver's own thread narrowed to the route, its stops' messages included", async () => {
-    await send(joaoToken, JOAO, { body: "Doca 3 liberada", routeId: releasedRoute });
-    await send(joaoToken, JOAO, { body: "Parada de amanhã sem acesso", deliveryId: ON_RELEASED });
-    await send(joaoToken, JOAO, { body: "Parada de hoje sem acesso", deliveryId: ON_RUNNING });
+    await send(joaoToken, JOAO, {
+      body: "Doca 3 liberada",
+      routeId: releasedRoute,
+    });
+    await send(joaoToken, JOAO, {
+      body: "Parada de amanhã sem acesso",
+      deliveryId: ON_RELEASED,
+    });
+    await send(joaoToken, JOAO, {
+      body: "Parada de hoje sem acesso",
+      deliveryId: ON_RUNNING,
+    });
 
     const response = await listFor(joaoToken, releasedRoute);
 
     expect(response.statusCode, response.body).toBe(200);
 
-    const bodies = response.json().data.map((row: { body: string }) => row.body);
+    const bodies = response
+      .json()
+      .data.map((row: { body: string }) => row.body);
 
     // Newest first; the message about a stop of another route stays out.
-    expect(bodies.slice(0, 2)).toEqual(["Parada de amanhã sem acesso", "Doca 3 liberada"]);
+    expect(bodies.slice(0, 2)).toEqual([
+      "Parada de amanhã sem acesso",
+      "Doca 3 liberada",
+    ]);
     expect(bodies).not.toContain("Parada de hoje sem acesso");
   });
 

@@ -83,12 +83,17 @@ function orderShipperFacet(
 ): LabelledFacetCount[] {
   return counts
     .slice()
-    .sort((a, b) => b.count - a.count || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0))
+    .sort(
+      (a, b) =>
+        b.count - a.count ||
+        (a.value < b.value ? -1 : a.value > b.value ? 1 : 0),
+    )
     .slice(0, UNROUTED_FACET_LIMIT)
     .map((entry) => ({ ...entry, label: nameOf(entry.value) ?? entry.value }))
-    .sort((a, b) =>
-      a.label.localeCompare(b.label, "pt-BR") ||
-      (a.value < b.value ? -1 : a.value > b.value ? 1 : 0),
+    .sort(
+      (a, b) =>
+        a.label.localeCompare(b.label, "pt-BR") ||
+        (a.value < b.value ? -1 : a.value > b.value ? 1 : 0),
     );
 }
 

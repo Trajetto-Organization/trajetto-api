@@ -15,7 +15,12 @@ import type { ProviderFailureKind } from "../vision-provider";
  * readers could never produce.
  */
 
-type Failure = "busy" | "retryable" | "unauthorized" | "permanent" | "quota_exhausted";
+type Failure =
+  | "busy"
+  | "retryable"
+  | "unauthorized"
+  | "permanent"
+  | "quota_exhausted";
 
 class FakeReaderFailure extends Error {
   constructor(readonly kind: Failure) {
@@ -127,5 +132,10 @@ async function fakeImageLoader(storagePath: string): Promise<StoredImage> {
   return { bytes: Buffer.from(storagePath), mediaType: "image/jpeg" };
 }
 
-export { FAKE_READER_USAGE, FakeImageReader, FakeReaderFailure, fakeImageLoader };
+export {
+  FAKE_READER_USAGE,
+  FakeImageReader,
+  FakeReaderFailure,
+  fakeImageLoader,
+};
 export type { FakeImageReaderOptions };

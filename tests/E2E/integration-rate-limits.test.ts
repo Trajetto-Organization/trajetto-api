@@ -80,7 +80,9 @@ afterAll(async () => {
   await app?.close();
 
   await prisma.apiKey.deleteMany({ where: { businessId: CARRIER } });
-  await prisma.businessEntitlement.deleteMany({ where: { businessId: CARRIER } });
+  await prisma.businessEntitlement.deleteMany({
+    where: { businessId: CARRIER },
+  });
   await prisma.business.deleteMany({ where: { id: CARRIER } });
 
   await prisma.$disconnect();
@@ -161,18 +163,30 @@ describe("the ceiling a key carries", () => {
 
     for (let attempt = 0; attempt < 6; attempt += 1) {
       statuses.push((await call("/deliveries?limit=1", tight)).statusCode);
-      statuses.push((await call(`/deliveries/${randomUUID()}`, tight)).statusCode);
+      statuses.push(
+        (await call(`/deliveries/${randomUUID()}`, tight)).statusCode,
+      );
     }
 
     // Twelve calls against a ceiling of ten: per-endpoint buckets let all
     // twelve through.
-    expect(statuses.filter((status) => status === 429).length).toBeGreaterThanOrEqual(2);
-    expect(statuses.filter((status) => status !== 429).length).toBeLessThanOrEqual(10);
+    expect(
+      statuses.filter((status) => status === 429).length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      statuses.filter((status) => status !== 429).length,
+    ).toBeLessThanOrEqual(10);
   });
 
   it("still keeps two keys of one company apart", async () => {
-    const first = await seedKey({ scopes: ["deliveries:read"], ratePerMinute: 10 });
-    const second = await seedKey({ scopes: ["deliveries:read"], ratePerMinute: 10 });
+    const first = await seedKey({
+      scopes: ["deliveries:read"],
+      ratePerMinute: 10,
+    });
+    const second = await seedKey({
+      scopes: ["deliveries:read"],
+      ratePerMinute: 10,
+    });
 
     for (let attempt = 0; attempt < 12; attempt += 1) {
       await call("/deliveries?limit=1", first);

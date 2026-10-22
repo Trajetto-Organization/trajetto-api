@@ -30,13 +30,17 @@ describe("in-memory repositories keep a date column's value", () => {
       deliveryIds: [],
     });
 
-    expect(created.scheduled_date.toISOString()).toBe("2026-09-17T00:00:00.000Z");
+    expect(created.scheduled_date.toISOString()).toBe(
+      "2026-09-17T00:00:00.000Z",
+    );
 
     const updated = await routes.updateRoute(created.id, BUSINESS, {
       scheduled_date: LATE_EVENING,
     });
 
-    expect(updated.scheduled_date.toISOString()).toBe("2026-09-18T00:00:00.000Z");
+    expect(updated.scheduled_date.toISOString()).toBe(
+      "2026-09-18T00:00:00.000Z",
+    );
   });
 
   it("route listing: a day filter matches the whole day, and the search applies", async () => {
@@ -142,7 +146,10 @@ describe("in-memory repositories keep a date column's value", () => {
       ...base,
       scheduled_date: WEB_MIDNIGHT,
     });
-    const undated = await deliveries.createDelivery({ ...base, scheduled_date: null });
+    const undated = await deliveries.createDelivery({
+      ...base,
+      scheduled_date: null,
+    });
 
     expect(dated.scheduled_date).toEqual(new Date("2026-09-17T00:00:00.000Z"));
     expect(undated.scheduled_date).toBeNull();

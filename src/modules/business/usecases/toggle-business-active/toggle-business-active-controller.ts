@@ -17,10 +17,7 @@ class ToggleBusinessActiveController {
       ToggleBusinessActiveUseCase,
     );
 
-    const business = await toggleBusinessActiveUseCase.execute(
-      businessId,
-      id,
-    );
+    const business = await toggleBusinessActiveUseCase.execute(businessId, id);
 
     return reply.status(200).send({
       message: `Empresa ${business.is_active ? "ativada" : "desativada"} com sucesso!`,

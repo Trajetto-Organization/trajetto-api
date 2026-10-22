@@ -20,7 +20,10 @@ const listOccurrenceTypeSchema = listPagesSchema.extend({
     ),
   ...sortFields(OCCURRENCE_TYPE_SORT_KEYS, OCCURRENCE_TYPE_SORT_FALLBACK),
   status: facetField(ACTIVE_STATUSES, "Status do tipo (active = ativo)."),
-  blocking: facetField(YES_NO, "Impeditiva: yes = marca a entrega como insucesso."),
+  blocking: facetField(
+    YES_NO,
+    "Impeditiva: yes = marca a entrega como insucesso.",
+  ),
   photo: facetField(YES_NO, "Foto: yes = exige foto do motorista."),
   category: facetField(
     OCCURRENCE_CATEGORIES,

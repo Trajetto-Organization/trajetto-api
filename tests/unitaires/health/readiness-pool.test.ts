@@ -41,7 +41,10 @@ async function readiness() {
   app.register(healthRoutes);
 
   const startedAt = Date.now();
-  const response = await app.inject({ method: "GET", url: "/health/readiness" });
+  const response = await app.inject({
+    method: "GET",
+    url: "/health/readiness",
+  });
   const elapsed = Date.now() - startedAt;
 
   await app.close();
@@ -54,20 +57,28 @@ afterEach(() => {
 });
 
 describe("GET /health/readiness with the main pool saturated", () => {
-  it("answers ready at once when the database itself answers", { timeout: 5_000 }, async () => {
-    const { response, elapsed } = await readiness();
+  it(
+    "answers ready at once when the database itself answers",
+    { timeout: 5_000 },
+    async () => {
+      const { response, elapsed } = await readiness();
 
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ready", ready: true });
-    expect(elapsed).toBeLessThan(1_000);
-  });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ status: "ready", ready: true });
+      expect(elapsed).toBeLessThan(1_000);
+    },
+  );
 
-  it("still answers not ready when the database does not", { timeout: 5_000 }, async () => {
-    probe.result = false;
+  it(
+    "still answers not ready when the database does not",
+    { timeout: 5_000 },
+    async () => {
+      probe.result = false;
 
-    const { response } = await readiness();
+      const { response } = await readiness();
 
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toEqual({ status: "not ready", ready: false });
-  });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ status: "not ready", ready: false });
+    },
+  );
 });

@@ -102,38 +102,53 @@ describe("masterModuleRefusal", () => {
 
   it("lets on a request whose companies all hired the module", () => {
     expect(
-      masterModuleRefusal([A, B], [
-        { id: A, isActive: true, moduleEnabled: true },
-        { id: B, isActive: true, moduleEnabled: true },
-      ]),
+      masterModuleRefusal(
+        [A, B],
+        [
+          { id: A, isActive: true, moduleEnabled: true },
+          { id: B, isActive: true, moduleEnabled: true },
+        ],
+      ),
     ).toBeNull();
   });
 
   it("blames the plan of an active company without the module", () => {
     expect(
-      masterModuleRefusal([A], [{ id: A, isActive: true, moduleEnabled: false }]),
+      masterModuleRefusal(
+        [A],
+        [{ id: A, isActive: true, moduleEnabled: false }],
+      ),
     ).toBe("module-not-enabled");
   });
 
   it("says a company does not exist before anything else", () => {
     expect(
-      masterModuleRefusal([A, B], [{ id: A, isActive: false, moduleEnabled: false }]),
+      masterModuleRefusal(
+        [A, B],
+        [{ id: A, isActive: false, moduleEnabled: false }],
+      ),
     ).toBe("company-not-found");
   });
 
   it("says a company is switched off before blaming its plan", () => {
     expect(
-      masterModuleRefusal([A, B], [
-        { id: A, isActive: true, moduleEnabled: false },
-        { id: B, isActive: false, moduleEnabled: false },
-      ]),
+      masterModuleRefusal(
+        [A, B],
+        [
+          { id: A, isActive: true, moduleEnabled: false },
+          { id: B, isActive: false, moduleEnabled: false },
+        ],
+      ),
     ).toBe("company-inactive");
   });
 
   it("does not refuse a switched-off company that hired the module", () => {
     // The route's tenant gate answers for it, as it did before.
     expect(
-      masterModuleRefusal([A], [{ id: A, isActive: false, moduleEnabled: true }]),
+      masterModuleRefusal(
+        [A],
+        [{ id: A, isActive: false, moduleEnabled: true }],
+      ),
     ).toBeNull();
   });
 });

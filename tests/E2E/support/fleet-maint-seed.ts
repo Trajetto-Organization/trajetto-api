@@ -40,7 +40,11 @@ async function seedCarrier(
 
   if (modules.length > 0) {
     await prisma.businessEntitlement.createMany({
-      data: modules.map((module) => ({ businessId: id, module, enabled: true })),
+      data: modules.map((module) => ({
+        businessId: id,
+        module,
+        enabled: true,
+      })),
     });
   }
 }
@@ -221,8 +225,13 @@ async function seedSupplier(
 }
 
 /** An NDJSON listing as the web reads it: the meta line, then the rows. */
-async function readNdjson<TRow = Record<string, unknown>, TMeta = Record<string, unknown>>(
-  app: { inject: (options: object) => Promise<{ statusCode: number; body: string }> },
+async function readNdjson<
+  TRow = Record<string, unknown>,
+  TMeta = Record<string, unknown>,
+>(
+  app: {
+    inject: (options: object) => Promise<{ statusCode: number; body: string }>;
+  },
   url: string,
   token: string,
 ): Promise<{ status: number; meta: TMeta; rows: TRow[]; body: string }> {
@@ -233,7 +242,12 @@ async function readNdjson<TRow = Record<string, unknown>, TMeta = Record<string,
   });
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, meta: {} as TMeta, rows: [], body: response.body };
+    return {
+      status: response.statusCode,
+      meta: {} as TMeta,
+      rows: [],
+      body: response.body,
+    };
   }
 
   const [first, ...rest] = response.body

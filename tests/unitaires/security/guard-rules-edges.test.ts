@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import { clientRateLimitKey } from "@/config/rate-limit";
 import { readDriverUserIdPayload } from "@/modules/chat/usecases/shared/chat-access-rules";
 import { getRateLimiterConfig } from "@/modules/middlewares/rate-limiter";
-import { canReactivateVehicle, canRegisterVehicle } from "@/shared/entitlements/entitlement-rules";
+import {
+  canReactivateVehicle,
+  canRegisterVehicle,
+} from "@/shared/entitlements/entitlement-rules";
 import { AppError } from "@/shared/errors/AppError";
 import {
   KEY_NAMESPACE,
@@ -34,7 +37,10 @@ const at = (ms: number) => new Date(T.getTime() + ms);
 describe("parseApiKey", () => {
   it("splits a trimmed key whose secret has at least 32 characters", () => {
     expect(KEY_NAMESPACE).toBe("tjk_live");
-    expect(parseApiKey(`  tjk_live_ab12.${SECRET_32}  `)).toEqual({ prefix: "tjk_live_ab12", secret: SECRET_32 });
+    expect(parseApiKey(`  tjk_live_ab12.${SECRET_32}  `)).toEqual({
+      prefix: "tjk_live_ab12",
+      secret: SECRET_32,
+    });
     expect(parseApiKey(`tjk_live_ab12.${SECRET_32.slice(1)}`)).toBeNull();
   });
 
@@ -46,7 +52,9 @@ describe("parseApiKey", () => {
 
 describe("apiKeySecretMatches", () => {
   it("matches the stored hash and refuses one of another length", () => {
-    expect(apiKeySecretMatches(SECRET_32, hashApiKeySecret(SECRET_32))).toBe(true);
+    expect(apiKeySecretMatches(SECRET_32, hashApiKeySecret(SECRET_32))).toBe(
+      true,
+    );
     expect(apiKeySecretMatches(SECRET_32, "abcd")).toBe(false);
   });
 });
@@ -54,8 +62,12 @@ describe("apiKeySecretMatches", () => {
 describe("reserved scopes", () => {
   it("lists webhooks:manage alone, in a singular sentence", () => {
     expect(RESERVED_API_SCOPES).toEqual(["webhooks:manage"]);
-    expect(reservedScopesPhrase()).toBe("O escopo webhooks:manage está reservado");
-    expect(reservedScopesPhrase((scope) => `\`${scope}\``)).toBe("O escopo `webhooks:manage` está reservado");
+    expect(reservedScopesPhrase()).toBe(
+      "O escopo webhooks:manage está reservado",
+    );
+    expect(reservedScopesPhrase((scope) => `\`${scope}\``)).toBe(
+      "O escopo `webhooks:manage` está reservado",
+    );
   });
 
   it("describes every scope", () => {
@@ -80,16 +92,32 @@ describe("the login lock", () => {
 
   it("counts failures within an hour, including one exactly an hour old", () => {
     expect(FAILED_LOGIN_WINDOW_MS).toBe(3_600_000);
-    expect(afterFailedLogin({ failed_login_attempts: 4, failed_login_at: at(-3_600_000) }, T).failed_login_attempts).toBe(5);
-    expect(afterFailedLogin({ failed_login_attempts: 4, failed_login_at: at(-3_600_001) }, T).failed_login_attempts).toBe(1);
+    expect(
+      afterFailedLogin(
+        { failed_login_attempts: 4, failed_login_at: at(-3_600_000) },
+        T,
+      ).failed_login_attempts,
+    ).toBe(5);
+    expect(
+      afterFailedLogin(
+        { failed_login_attempts: 4, failed_login_at: at(-3_600_001) },
+        T,
+      ).failed_login_attempts,
+    ).toBe(1);
   });
 
   it("keeps an existing lock below the threshold", () => {
     const lockedUntil = at(60_000);
 
     expect(
-      afterFailedLogin({ failed_login_attempts: 1, failed_login_at: at(-1000), login_locked_until: lockedUntil }, T)
-        .login_locked_until,
+      afterFailedLogin(
+        {
+          failed_login_attempts: 1,
+          failed_login_at: at(-1000),
+          login_locked_until: lockedUntil,
+        },
+        T,
+      ).login_locked_until,
     ).toBe(lockedUntil);
   });
 });
@@ -116,18 +144,37 @@ describe("getRateLimiterConfig", () => {
 
   it("takes the route's own limit, window, key, hook and message", () => {
     const keyGenerator = () => "k";
-    const config = getRateLimiterConfig({ max: 3, timeWindow: 1000, keyGenerator, hook: "preHandler", message: "Calma." });
+    const config = getRateLimiterConfig({
+      max: 3,
+      timeWindow: 1000,
+      keyGenerator,
+      hook: "preHandler",
+      message: "Calma.",
+    });
 
-    expect(config).toMatchObject({ max: 3, timeWindow: 1000, keyGenerator, hook: "preHandler" });
+    expect(config).toMatchObject({
+      max: 3,
+      timeWindow: 1000,
+      keyGenerator,
+      hook: "preHandler",
+    });
     expect(config.errorResponseBuilder().message).toBe("Calma.");
   });
 });
 
 describe("readDriverUserIdPayload", () => {
   it("takes up to 64 characters from an object only", () => {
-    expect(readDriverUserIdPayload({ driverUserId: "u".repeat(64) })).toBe("u".repeat(64));
-    expect(readDriverUserIdPayload({ driverUserId: "u".repeat(65) })).toBeNull();
-    expect(readDriverUserIdPayload(Object.assign(() => undefined, { driverUserId: "u1" }))).toBeNull();
+    expect(readDriverUserIdPayload({ driverUserId: "u".repeat(64) })).toBe(
+      "u".repeat(64),
+    );
+    expect(
+      readDriverUserIdPayload({ driverUserId: "u".repeat(65) }),
+    ).toBeNull();
+    expect(
+      readDriverUserIdPayload(
+        Object.assign(() => undefined, { driverUserId: "u1" }),
+      ),
+    ).toBeNull();
   });
 });
 

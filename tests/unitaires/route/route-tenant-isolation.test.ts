@@ -100,8 +100,18 @@ function makeContext() {
   );
 
   driverRepository.drivers.push(
-    { id: DRIVER_A, name: "João (A)", status: "ACTIVE", businessId: A } as Driver,
-    { id: DRIVER_B, name: "Maria (B)", status: "ACTIVE", businessId: B } as Driver,
+    {
+      id: DRIVER_A,
+      name: "João (A)",
+      status: "ACTIVE",
+      businessId: A,
+    } as Driver,
+    {
+      id: DRIVER_B,
+      name: "Maria (B)",
+      status: "ACTIVE",
+      businessId: B,
+    } as Driver,
   );
 
   vehicleRepository.vehicles.push(
@@ -541,7 +551,9 @@ describe("the repository refuses on its own, without the use case", () => {
     const stopId = context.routeRepository.stops[0].id;
 
     expect(await context.routeRepository.findStopById(stopId, B)).toBeNull();
-    expect(await context.routeRepository.findStopById(stopId, A)).not.toBeNull();
+    expect(
+      await context.routeRepository.findStopById(stopId, A),
+    ).not.toBeNull();
 
     // Referenced so the helper's route id is not unused, and to pin that the
     // stop really does belong to the route under test.
@@ -557,9 +569,9 @@ describe("the mirror never crosses the line", () => {
     const foreign = await seedDelivery(B);
     const route = await routeOfA();
 
-    await context.routeRepository.addStops(route.id, A, [foreign]).catch(
-      () => undefined,
-    );
+    await context.routeRepository
+      .addStops(route.id, A, [foreign])
+      .catch(() => undefined);
 
     const untouched = context.routeRepository.deliveries.find(
       (entry) => entry.id === foreign,

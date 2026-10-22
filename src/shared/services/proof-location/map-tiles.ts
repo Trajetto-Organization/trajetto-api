@@ -118,7 +118,12 @@ async function fetchProofMap(
 
   const fetched = await Promise.all(
     viewport.tiles.map((tile) =>
-      fetchTile(tileUrl(options.template!, tile), signal, fetcher, options.userAgent),
+      fetchTile(
+        tileUrl(options.template!, tile),
+        signal,
+        fetcher,
+        options.userAgent,
+      ),
     ),
   );
 
@@ -137,5 +142,11 @@ async function fetchProofMap(
   };
 }
 
-export { MAP_VIEWPORT, MAP_ZOOM, MAX_TILE_BYTES, fetchProofMap, isAcceptableTile };
+export {
+  MAP_VIEWPORT,
+  MAP_ZOOM,
+  MAX_TILE_BYTES,
+  fetchProofMap,
+  isAcceptableTile,
+};
 export type { MapTileImage, ProofMapImage, TileFetch };

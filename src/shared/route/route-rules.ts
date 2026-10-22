@@ -226,7 +226,9 @@ function nextSequence(highestExisting: number | null): number {
  * a list that no longer names exactly the route's stops is refused with
  * ROUTE_REORDER_MISMATCH. A route that left meanwhile is refused as well.
  */
-function resequence(orderedStopIds: string[]): { id: string; sequence: number }[] {
+function resequence(
+  orderedStopIds: string[],
+): { id: string; sequence: number }[] {
   return orderedStopIds.map((id, index) => ({
     id,
     sequence: (index + 1) * SEQUENCE_STEP,
@@ -318,7 +320,11 @@ function stopOutcomeForDelivery(
 ): StopOutcome | null {
   switch (status) {
     case "DELIVERED":
-      return { from: OPEN_STOP_STATUSES, status: "COMPLETED", completed_at: at };
+      return {
+        from: OPEN_STOP_STATUSES,
+        status: "COMPLETED",
+        completed_at: at,
+      };
 
     case "FAILED":
       return { from: OPEN_STOP_STATUSES, status: "FAILED", completed_at: at };
@@ -331,7 +337,11 @@ function stopOutcomeForDelivery(
 
     case "PENDING":
       return previous === "IN_TRANSIT"
-        ? { from: OPEN_STOP_STATUSES, status: "CANCELLED", releaseDelivery: true }
+        ? {
+            from: OPEN_STOP_STATUSES,
+            status: "CANCELLED",
+            releaseDelivery: true,
+          }
         : null;
 
     case "IN_TRANSIT":

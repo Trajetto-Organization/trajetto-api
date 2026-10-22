@@ -52,7 +52,12 @@ function freshPings(count: number) {
   // Distinct instants: (driverId, recorded_at) is unique, and a repeated
   // instant would be absorbed as a resend rather than stored.
   return Array.from({ length: count }, (_, index) =>
-    ping(new Date(now - (count - index) * 15_000 - Math.floor(Math.random() * 1000)), index),
+    ping(
+      new Date(
+        now - (count - index) * 15_000 - Math.floor(Math.random() * 1000),
+      ),
+      index,
+    ),
   );
 }
 

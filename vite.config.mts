@@ -28,7 +28,9 @@ export default defineConfig({
       provider: "v8",
       all: true,
       include: ["src/**/*.ts"],
-      exclude: coverageConfigDefaults.exclude.map((glob) => (glob === DASHED_TEST_GLOB ? DOT_TEST_GLOB : glob)),
+      exclude: coverageConfigDefaults.exclude.map((glob) =>
+        glob === DASHED_TEST_GLOB ? DOT_TEST_GLOB : glob,
+      ),
       reporter: ["text-summary", "json-summary", "json", "lcov", "html"],
       reportsDirectory: process.env.COVERAGE_DIR ?? "coverage/unit",
       // A red test must not also hide the measurement: the CI step still

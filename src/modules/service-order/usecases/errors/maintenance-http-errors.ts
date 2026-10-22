@@ -57,7 +57,12 @@ const MAINTENANCE_HTTP_ERRORS: ReadonlyArray<MaintenanceHttpError> = [
   [BranchNotFoundError, 404, "BRANCH_NOT_FOUND", BRANCH_NOT_FOUND],
   [BranchNotBelongBusinessError, 404, "BRANCH_NOT_FOUND", BRANCH_NOT_FOUND],
   [SupplierNotFoundError, 400, "SUPPLIER_NOT_FOUND"],
-  [SupplierNotBelongBusinessError, 400, "SUPPLIER_NOT_FOUND", SUPPLIER_NOT_FOUND],
+  [
+    SupplierNotBelongBusinessError,
+    400,
+    "SUPPLIER_NOT_FOUND",
+    SUPPLIER_NOT_FOUND,
+  ],
   [UserResponsibleNotFoundError, 400, "RESPONSIBLE_USER_NOT_FOUND"],
   [
     UserNotBelongBusinessError,
@@ -75,7 +80,11 @@ const MAINTENANCE_HTTP_ERRORS: ReadonlyArray<MaintenanceHttpError> = [
     400,
     "SERVICE_ORDER_MILEAGE_REQUIRED",
   ],
-  [ServiceOrderRegistrationsMobileLocationRequiredError, 400, "LOCATION_REQUIRED"],
+  [
+    ServiceOrderRegistrationsMobileLocationRequiredError,
+    400,
+    "LOCATION_REQUIRED",
+  ],
   [
     ServiceOrderLocationNotProvidedAdjustmentValidationError,
     400,

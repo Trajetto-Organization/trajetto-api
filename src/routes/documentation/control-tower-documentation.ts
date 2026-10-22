@@ -24,7 +24,11 @@ const towerPosition = z.object({
   driverId: z.string(),
   driverName: z.string().nullable(),
 
-  routeId: z.string().describe("A rota que explica o ponto: a em andamento ou a encerrada há menos de 2 h."),
+  routeId: z
+    .string()
+    .describe(
+      "A rota que explica o ponto: a em andamento ou a encerrada há menos de 2 h.",
+    ),
   routeCode: z.number(),
   routeStatus: z.enum(["IN_PROGRESS", "COMPLETED", "CANCELLED"]),
 
@@ -39,11 +43,13 @@ const towerPosition = z.object({
 
   recordedAt: isoDateTime,
 
-  fresh: z.boolean().describe("Ponto de rota em andamento com menos de 10 min."),
+  fresh: z
+    .boolean()
+    .describe("Ponto de rota em andamento com menos de 10 min."),
   state: z
     .enum(["moving", "silent", "ended"])
     .describe(
-      "moving: rota em andamento e telefone reportando; silent: rota em andamento sem ponto há mais de 10 min (só estes contam em \"sem reportar\"); ended: rota concluída ou cancelada há menos de 2 h — depois disso o ponto sai do mapa.",
+      'moving: rota em andamento e telefone reportando; silent: rota em andamento sem ponto há mais de 10 min (só estes contam em "sem reportar"); ended: rota concluída ou cancelada há menos de 2 h — depois disso o ponto sai do mapa.',
     ),
   endedAt: isoDateTime.nullable(),
   pausedSince: isoDateTime
@@ -66,7 +72,9 @@ const towerActiveRoute = z.object({
   startedAt: isoDateTime.nullable(),
   lastSignalAt: isoDateTime
     .nullable()
-    .describe("Último ponto do telefone, mesmo fora da janela de 12 h do mapa; nulo = o telefone nunca reportou."),
+    .describe(
+      "Último ponto do telefone, mesmo fora da janela de 12 h do mapa; nulo = o telefone nunca reportou.",
+    ),
 
   progress: z.object({
     resolved: z.number().describe("Paradas entregues ou com insucesso."),
@@ -95,8 +103,12 @@ const towerEvent = z.object({
   detail: z
     .string()
     .nullable()
-    .describe("O tipo da ocorrência, ou o status para o qual uma mudança manual levou."),
-  failure: z.boolean().describe("Ocorrência impeditiva aplicada ou mudança para Insucesso."),
+    .describe(
+      "O tipo da ocorrência, ou o status para o qual uma mudança manual levou.",
+    ),
+  failure: z
+    .boolean()
+    .describe("Ocorrência impeditiva aplicada ou mudança para Insucesso."),
 
   occurredAt: isoDateTime,
 });
@@ -112,7 +124,9 @@ const routeProgress = z.object({
   completion: z
     .number()
     .nullable()
-    .describe("(entregues + insucessos) / (total − canceladas), em %; nulo sem paradas."),
+    .describe(
+      "(entregues + insucessos) / (total − canceladas), em %; nulo sem paradas.",
+    ),
   deliveredRate: z
     .number()
     .nullable()
@@ -136,7 +150,13 @@ const monitoredRoute = z.object({
   code: z.number(),
   name: z.string().nullable(),
   destination: z.string().nullable(),
-  status: z.enum(["PLANNED", "RELEASED", "IN_PROGRESS", "COMPLETED", "CANCELLED"]),
+  status: z.enum([
+    "PLANNED",
+    "RELEASED",
+    "IN_PROGRESS",
+    "COMPLETED",
+    "CANCELLED",
+  ]),
 
   scheduledDate: z.string().describe("Data sem hora (AAAA-MM-DD)."),
 
@@ -157,10 +177,14 @@ const driverDayRow = z.object({
   cnh: z.string(),
   designated: z
     .number()
-    .describe("Pendentes nas rotas do dia (ou numa rota ainda em andamento) — não as de outros dias."),
+    .describe(
+      "Pendentes nas rotas do dia (ou numa rota ainda em andamento) — não as de outros dias.",
+    ),
   inRoute: z.number().describe("Na rua agora (IN_TRANSIT)."),
   deliveredToday: z.number().describe("Entregues no dia, por delivered_at."),
-  failedToday: z.number().describe("Insucessos no dia, pelo fato que causou a falha."),
+  failedToday: z
+    .number()
+    .describe("Insucessos no dia, pelo fato que causou a falha."),
 });
 
 /**
@@ -201,35 +225,55 @@ const controlTowerResponses = {
 
   controlTower: z.object({
     data: z.object({
-      day: z.string().describe("O dia da empresa ao qual os números se referem (AAAA-MM-DD)."),
-      timeZone: z.string().describe("O fuso da empresa usado para \"hoje\"."),
+      day: z
+        .string()
+        .describe(
+          "O dia da empresa ao qual os números se referem (AAAA-MM-DD).",
+        ),
+      timeZone: z.string().describe('O fuso da empresa usado para "hoje".'),
 
       positions: z.array(towerPosition),
       activeRoutes: z
         .array(towerActiveRoute)
-        .describe("Rotas em andamento, com ou sem posição — a que não tem ponto no mapa aparece aqui."),
+        .describe(
+          "Rotas em andamento, com ou sem posição — a que não tem ponto no mapa aparece aqui.",
+        ),
 
       funnel: z.array(
         z.object({
-          status: z.enum(["PENDING", "IN_TRANSIT", "DELIVERED", "FAILED", "CANCELLED"]),
+          status: z.enum([
+            "PENDING",
+            "IN_TRANSIT",
+            "DELIVERED",
+            "FAILED",
+            "CANCELLED",
+          ]),
           label: z.string(),
           total: z.number(),
         }),
       ),
 
       progress: z.object({
-        finished: z.number().describe("Entregues, insucessos e canceladas resolvidos no dia."),
+        finished: z
+          .number()
+          .describe("Entregues, insucessos e canceladas resolvidos no dia."),
         total: z.number(),
         rate: z.number().nullable(),
       }),
 
       punctuality: z.object({
         onTime: z.number(),
-        late: z.number().describe("Saíram depois do horário planejado + 15 min."),
+        late: z
+          .number()
+          .describe("Saíram depois do horário planejado + 15 min."),
         notDeparted: z
           .number()
-          .describe("O horário planejado + 15 min já passou e a rota não saiu: entra na taxa como atraso."),
-        waiting: z.number().describe("O horário planejado ainda não chegou: fora da taxa."),
+          .describe(
+            "O horário planejado + 15 min já passou e a rota não saiu: entra na taxa como atraso.",
+          ),
+        waiting: z
+          .number()
+          .describe("O horário planejado ainda não chegou: fora da taxa."),
         notPlanned: z.number(),
         rate: z.number().nullable(),
       }),
@@ -241,7 +285,9 @@ const controlTowerResponses = {
   driverTrail: z.object({
     data: z.object({
       driverId: z.string(),
-      day: z.string().describe("O dia do trajeto no fuso da empresa (AAAA-MM-DD)."),
+      day: z
+        .string()
+        .describe("O dia do trajeto no fuso da empresa (AAAA-MM-DD)."),
 
       recorded: z
         .number()
@@ -263,7 +309,9 @@ const controlTowerResponses = {
   routeMonitoring: z.object({
     data: z.object({
       day: z.string(),
-      timeZone: z.string().describe("O fuso da empresa: as horas do quadro são mostradas nele."),
+      timeZone: z
+        .string()
+        .describe("O fuso da empresa: as horas do quadro são mostradas nele."),
       routes: z.array(monitoredRoute),
       meta: z.object({
         total: z.number(),
@@ -275,11 +323,17 @@ const controlTowerResponses = {
 
   driverMonitoring: z.object({
     data: z.object({
-      day: z.string().describe("O dia da empresa ao qual os números se referem (AAAA-MM-DD)."),
+      day: z
+        .string()
+        .describe(
+          "O dia da empresa ao qual os números se referem (AAAA-MM-DD).",
+        ),
       timeZone: z.string().describe("O fuso da empresa usado para o dia."),
       drivers: z
         .array(driverDayRow)
-        .describe("Um motorista por linha, quem está na rua primeiro; empate em ordem alfabética."),
+        .describe(
+          "Um motorista por linha, quem está na rua primeiro; empate em ordem alfabética.",
+        ),
     }),
   }),
 

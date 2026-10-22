@@ -126,7 +126,11 @@ beforeEach(async () => {
   await account("victim-1", VICTIM);
   await account("attacker-1", ATTACKER);
 
-  login = new AuthenticateUserUseCase(users as never, tokens as never, drivers as never);
+  login = new AuthenticateUserUseCase(
+    users as never,
+    tokens as never,
+    drivers as never,
+  );
   verification = new TwoFactorVerificationUseCase(
     users as never,
     tokens as never,
@@ -188,7 +192,9 @@ describe("with the challenge enforced", () => {
     ).rejects.toBeInstanceOf(UserInvalidTwoFactorCodeError);
 
     // And the refusal did not spend one of the owner's five guesses.
-    const stored = tokens.twoFactorTokens.find((entry) => entry.email === VICTIM);
+    const stored = tokens.twoFactorTokens.find(
+      (entry) => entry.email === VICTIM,
+    );
     expect(stored?.attempts).toBe(0);
   });
 
@@ -258,7 +264,9 @@ describe("over HTTP", () => {
     app.setSerializerCompiler(serializerCompiler);
     app.post(
       route,
-      { schema: { body, ...(response ? { response: { 200: response } } : {}) } } as never,
+      {
+        schema: { body, ...(response ? { response: { 200: response } } : {}) },
+      } as never,
       handler as never,
     );
     await app.ready();

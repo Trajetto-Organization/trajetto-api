@@ -35,14 +35,18 @@ const cnhCategory = z
 const vehicleTypeItem = z.object({
   id: z.string(),
   description: z.string(),
-  number_of_axles: z.number().int().describe("Eixos padrão; o veículo pode sobrescrever."),
+  number_of_axles: z
+    .number()
+    .int()
+    .describe("Eixos padrão; o veículo pode sobrescrever."),
   required_cnh_category: cnhCategory,
   businessId: z.string(),
   created_at: dateLike,
   updated_at: dateLike,
 });
 
-const message = (text: string) => z.object({ message: z.string().default(text) });
+const message = (text: string) =>
+  z.object({ message: z.string().default(text) });
 
 const vehicleTypeResponses = {
   vehicleTypeCreated: message("Tipo de veículo criado com sucesso!"),
@@ -53,7 +57,9 @@ const vehicleTypeResponses = {
   vehicleTypeListItem: vehicleTypeItem.extend({
     _count: z
       .object({ vehicles: z.number().int() })
-      .describe("Veículos cadastrados com este tipo (a exclusão é recusada enquanto houver)."),
+      .describe(
+        "Veículos cadastrados com este tipo (a exclusão é recusada enquanto houver).",
+      ),
   }),
 
   validationError: errorResponse.describe(

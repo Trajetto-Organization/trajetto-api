@@ -27,13 +27,7 @@ function verifyUserRole(allowedRoles: UserRole[]) {
     const { role } = request.user;
 
     if (!role || !allowedRoles.includes(role)) {
-      done(
-        new AppError(
-          "Usuário não autorizado!",
-          403,
-          "AUTH_ROLE_FORBIDDEN",
-        ),
-      );
+      done(new AppError("Usuário não autorizado!", 403, "AUTH_ROLE_FORBIDDEN"));
 
       return;
     }

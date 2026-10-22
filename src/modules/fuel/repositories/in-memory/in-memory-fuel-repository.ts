@@ -1,5 +1,8 @@
 import { afterCursor, newestFirst } from "@/shared/in-memory/cursor";
-import { recordNotFound, uniqueViolation } from "@/shared/in-memory/prisma-errors";
+import {
+  recordNotFound,
+  uniqueViolation,
+} from "@/shared/in-memory/prisma-errors";
 import { v7 as uuidV7 } from "uuid";
 import { FUEL_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
 
@@ -62,7 +65,10 @@ function storedTotal(
 
 /** Litres and price per litre are Decimal(10, 3). */
 function storedThreePlaces(value: number | string | Decimal): Decimal {
-  return new Decimal(value.toString()).toDecimalPlaces(3, Decimal.ROUND_HALF_UP);
+  return new Decimal(value.toString()).toDecimalPlaces(
+    3,
+    Decimal.ROUND_HALF_UP,
+  );
 }
 
 class InMemoryFuelRepository implements IFuelRepository {
@@ -140,7 +146,8 @@ class InMemoryFuelRepository implements IFuelRepository {
       laterDay: neighbours.after === null ? null : restOfDay.after,
       highest: this.highestOf(update, excludeFuelId),
       odometer,
-      maintenanceFloor: this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
+      maintenanceFloor:
+        this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
       previousMileage,
     });
 
@@ -194,7 +201,10 @@ class InMemoryFuelRepository implements IFuelRepository {
       current_mileage: fuelData.current_mileage,
       liters_amount: storedThreePlaces(fuelData.liters_amount),
       price_per_liter: storedThreePlaces(fuelData.price_per_liter),
-      total_amount: storedTotal(fuelData.liters_amount, fuelData.price_per_liter),
+      total_amount: storedTotal(
+        fuelData.liters_amount,
+        fuelData.price_per_liter,
+      ),
       odometer_photo: fuelData.odometer_photo ?? null,
       odometer_verified: fuelData.odometer_verified ?? false,
       notes: fuelData.notes ?? null,
@@ -252,7 +262,9 @@ class InMemoryFuelRepository implements IFuelRepository {
         businessId: fuelData.businessId,
         vehicleId: fuelData.vehicleId,
         currentMileage: fuelData.current_mileage,
-        at: fuelData.refueling_date ? new Date(fuelData.refueling_date) : new Date(),
+        at: fuelData.refueling_date
+          ? new Date(fuelData.refueling_date)
+          : new Date(),
         timeZone: placement?.timeZone,
       },
       null,
@@ -696,8 +708,16 @@ class InMemoryFuelRepository implements IFuelRepository {
     // insertion order here and in any order in Postgres.
     previousFuels.sort(
       (a, b) =>
-        compareForOrder(new Date(a.refueling_date), new Date(b.refueling_date), "desc") ||
-        compareForOrder(new Date(a.created_at), new Date(b.created_at), "desc") ||
+        compareForOrder(
+          new Date(a.refueling_date),
+          new Date(b.refueling_date),
+          "desc",
+        ) ||
+        compareForOrder(
+          new Date(a.created_at),
+          new Date(b.created_at),
+          "desc",
+        ) ||
         compareForOrder(a.id, b.id, "desc"),
     );
 
@@ -721,8 +741,11 @@ class InMemoryFuelRepository implements IFuelRepository {
       )
       .sort(
         (a, b) =>
-          compareForOrder(new Date(a.created_at), new Date(b.created_at), "desc") ||
-          compareForOrder(a.id, b.id, "desc"),
+          compareForOrder(
+            new Date(a.created_at),
+            new Date(b.created_at),
+            "desc",
+          ) || compareForOrder(a.id, b.id, "desc"),
       );
 
     // A cursor that names no row (deleted meanwhile, or made up) gives an

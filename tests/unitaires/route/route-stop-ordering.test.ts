@@ -151,9 +151,17 @@ function makeContext() {
       webhookStub.asService(),
     ),
     removeStop: new RemoveRouteStopUseCase(
-      new RemoveRouteStopsUseCase(routeRepository, userRepository, notificationService),
+      new RemoveRouteStopsUseCase(
+        routeRepository,
+        userRepository,
+        notificationService,
+      ),
     ),
-    reorder: new ReorderRouteStopsUseCase(routeRepository, userRepository, notificationService),
+    reorder: new ReorderRouteStopsUseCase(
+      routeRepository,
+      userRepository,
+      notificationService,
+    ),
 
     get: new GetRouteUseCase(
       routeRepository,
@@ -542,7 +550,10 @@ describe("reordering the stops", () => {
         routeId: route.id,
         orderedStopIds: [stops[1], stops[0]],
       }),
-    ).rejects.toMatchObject({ statusCode: 409, code: "ROUTE_REORDER_MISMATCH" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "ROUTE_REORDER_MISMATCH",
+    });
 
     expect(orderOf(route.id)).toEqual(before);
   });
@@ -558,7 +569,10 @@ describe("reordering the stops", () => {
         routeId: route.id,
         orderedStopIds: [stops[0], stops[1], orderOf(other.id)[0]],
       }),
-    ).rejects.toMatchObject({ statusCode: 409, code: "ROUTE_REORDER_MISMATCH" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "ROUTE_REORDER_MISMATCH",
+    });
   });
 
   it("refuses a list that repeats a stop, and says so plainly", async () => {
@@ -598,7 +612,10 @@ describe("reordering the stops", () => {
         routeId: route.id,
         orderedStopIds: [stops[2], stops[1], stops[0]],
       }),
-    ).rejects.toMatchObject({ statusCode: 409, code: "ROUTE_REORDER_MISMATCH" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "ROUTE_REORDER_MISMATCH",
+    });
 
     // Nothing partial: the new stop is still last and the three originals are
     // still in their original order.
@@ -623,7 +640,10 @@ describe("reordering the stops", () => {
         routeId: route.id,
         orderedStopIds: [stops[2], stops[1], stops[0]],
       }),
-    ).rejects.toMatchObject({ statusCode: 409, code: "ROUTE_REORDER_MISMATCH" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "ROUTE_REORDER_MISMATCH",
+    });
 
     expect(orderOf(route.id)).toEqual([stops[0], stops[2]]);
   });

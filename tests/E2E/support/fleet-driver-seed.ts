@@ -171,7 +171,12 @@ async function seedFleetDriver(
     },
   });
 
-  const driverUser = await seedUser(prisma, businessId, "BUSINESS_USER", driver.id);
+  const driverUser = await seedUser(
+    prisma,
+    businessId,
+    "BUSINESS_USER",
+    driver.id,
+  );
   const manager = await seedUser(prisma, businessId, "BUSINESS_ADMIN");
 
   return {

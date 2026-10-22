@@ -51,7 +51,9 @@ describe("when everything is up", () => {
 
 describe("when a dependency stops answering", () => {
   it("gives up on a hung probe instead of holding the answer", async () => {
-    const { RedisConnection } = await import("@/../infra/cache/redis-connection");
+    const { RedisConnection } = await import(
+      "@/../infra/cache/redis-connection"
+    );
 
     const instance = RedisConnection.getInstance();
     // A Redis that accepted the connection and then went silent — the shape
@@ -119,7 +121,10 @@ describe("liveness", () => {
     };
 
     try {
-      const response = await app.inject({ method: "GET", url: "/health/liveness" });
+      const response = await app.inject({
+        method: "GET",
+        url: "/health/liveness",
+      });
 
       // Restarting a process cannot fix a database that is down; it only
       // removes the replica that would have served the traffic when it came

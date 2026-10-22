@@ -72,9 +72,8 @@ describe("the password reset table", () => {
       expires: inAnHour(),
     });
 
-    const found = await tokens.findForgotPasswordVerificationTokenByToken(
-      mailed,
-    );
+    const found =
+      await tokens.findForgotPasswordVerificationTokenByToken(mailed);
 
     expect(found?.email).toBe(email);
 
@@ -124,9 +123,11 @@ describe("the e-mail verification table", () => {
     `;
 
     expect(row.token).toBe(sha256(mailed));
-    expect((await tokens.findEmailVerificationTokenByToken(mailed))?.email).toBe(
-      email,
-    );
-    expect(await tokens.findEmailVerificationTokenByToken(row.token)).toBeNull();
+    expect(
+      (await tokens.findEmailVerificationTokenByToken(mailed))?.email,
+    ).toBe(email);
+    expect(
+      await tokens.findEmailVerificationTokenByToken(row.token),
+    ).toBeNull();
   });
 });

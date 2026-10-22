@@ -54,8 +54,7 @@ function buildTrackingView(
       detail: null as string | null,
     })),
   ].sort(
-    (left, right) =>
-      new Date(right.at).getTime() - new Date(left.at).getTime(),
+    (left, right) => new Date(right.at).getTime() - new Date(left.at).getTime(),
   );
 
   return {
@@ -85,7 +84,9 @@ function buildTrackingView(
     // The public verification page, not the file. The customer gets the same
     // page anybody scanning the printed QR gets — one door, one story about
     // whether the document is genuine.
-    proofUrl: source.proofToken ? `${base}/verificar/${source.proofToken}` : null,
+    proofUrl: source.proofToken
+      ? `${base}/verificar/${source.proofToken}`
+      : null,
   };
 }
 

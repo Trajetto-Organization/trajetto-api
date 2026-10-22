@@ -23,8 +23,12 @@ afterEach(() => {
 
 describe("schedules", () => {
   it("retries expansion for ~42 min and deliveries for ~4h40", () => {
-    expect(OUTBOX_RETRY_DELAYS_MS).toEqual([30_000, 120_000, 600_000, 1_800_000]);
-    expect(DELIVERY_RETRY_DELAYS_MS).toEqual([30_000, 120_000, 600_000, 1_800_000, 3_600_000, 10_800_000]);
+    expect(OUTBOX_RETRY_DELAYS_MS).toEqual([
+      30_000, 120_000, 600_000, 1_800_000,
+    ]);
+    expect(DELIVERY_RETRY_DELAYS_MS).toEqual([
+      30_000, 120_000, 600_000, 1_800_000, 3_600_000, 10_800_000,
+    ]);
     expect(OUTBOX_MAX_ATTEMPTS).toBe(5);
     expect(DELIVERY_MAX_ATTEMPTS).toBe(7);
     expect(UNKNOWN_TOPIC_PATIENCE_MS).toBe(86_400_000);

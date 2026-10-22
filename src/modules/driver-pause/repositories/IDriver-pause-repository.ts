@@ -25,7 +25,10 @@ interface IDriverPauseRepository {
   ): Promise<DriverPause | null>;
 
   /** The driver's open pause (ended_at IS NULL), if any. At most one exists. */
-  findOpenPause(businessId: string, driverId: string): Promise<DriverPause | null>;
+  findOpenPause(
+    businessId: string,
+    driverId: string,
+  ): Promise<DriverPause | null>;
 
   /**
    * The driver's route that was on the street at `at`: started at or before
@@ -50,13 +53,22 @@ interface IDriverPauseRepository {
   ): Promise<string | null>;
 
   /** This company's occurrence type, any category; null for another tenant's. */
-  findPauseType(businessId: string, occurrenceTypeId: string): Promise<PauseTypeInfo | null>;
+  findPauseType(
+    businessId: string,
+    occurrenceTypeId: string,
+  ): Promise<PauseTypeInfo | null>;
 
   /** The company's seeded PAUSE type of this nature, seeding the defaults if missing. */
-  defaultPauseType(businessId: string, kind: DriverPauseKind): Promise<PauseTypeInfo>;
+  defaultPauseType(
+    businessId: string,
+    kind: DriverPauseKind,
+  ): Promise<PauseTypeInfo>;
 
   /** Names of these types, this company's only. */
-  pauseTypeNames(businessId: string, ids: string[]): Promise<Map<string, string>>;
+  pauseTypeNames(
+    businessId: string,
+    ids: string[],
+  ): Promise<Map<string, string>>;
 
   createPause(data: CreateDriverPauseData): Promise<CreateDriverPauseResult>;
 

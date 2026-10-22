@@ -6,7 +6,10 @@ import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-m
 import { InMemoryOperationDayRepository } from "@/modules/route/repositories/in-memory/in-memory-operation-day-repository";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 
-import type { CreateDeliveryProps, Delivery } from "@/modules/delivery/dtos/delivery-dto";
+import type {
+  CreateDeliveryProps,
+  Delivery,
+} from "@/modules/delivery/dtos/delivery-dto";
 import type { User } from "@/modules/user/dtos/user-dto";
 
 /**
@@ -55,7 +58,12 @@ function makeRepositories() {
 
   operation.rows.drivers.push(
     { id: DRIVER_ID, businessId: BUSINESS, name: "João Motorista", cnh: "111" },
-    { id: FOREIGN_DRIVER_ID, businessId: OTHER_BUSINESS, name: "De Outra Empresa", cnh: "999" },
+    {
+      id: FOREIGN_DRIVER_ID,
+      businessId: OTHER_BUSINESS,
+      name: "De Outra Empresa",
+      cnh: "999",
+    },
   );
 
   operation.rows.occurrenceTypes.push(
@@ -65,7 +73,12 @@ function makeRepositories() {
   );
 
   users.user.push(
-    { id: MANAGER_ID, name: "Gestora", role: "BUSINESS_ADMIN", businessId: BUSINESS } as User,
+    {
+      id: MANAGER_ID,
+      name: "Gestora",
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+    } as User,
     {
       id: DRIVER_USER_ID,
       name: "João Motorista",
@@ -113,7 +126,9 @@ async function seed(
     driverId: delivery.driverId ?? null,
     recipient_name: delivery.recipient_name,
     city: delivery.city,
-    delivered_at: delivery.delivered_at ? new Date(delivery.delivered_at) : null,
+    delivered_at: delivery.delivered_at
+      ? new Date(delivery.delivered_at)
+      : null,
     updated_at: new Date(delivery.updated_at!),
   });
 
@@ -155,7 +170,11 @@ async function onRoute(repos: Repositories, scheduled: string, status: string) {
 }
 
 function useCase(repos: Repositories) {
-  return new OperationSummaryUseCase(repos.users, repos.deliveries, repos.operation);
+  return new OperationSummaryUseCase(
+    repos.users,
+    repos.deliveries,
+    repos.operation,
+  );
 }
 
 beforeEach(() => {
@@ -271,9 +290,17 @@ describe("the day of the operation summary", () => {
   it("sem rota: every PENDING without a driver, of any date", async () => {
     const repos = makeRepositories();
 
-    await seed(repos, { status: "PENDING", driverId: null, created_at: LONG_AGO });
+    await seed(repos, {
+      status: "PENDING",
+      driverId: null,
+      created_at: LONG_AGO,
+    });
     await seed(repos, { status: "PENDING", driverId: null });
-    await seed(repos, { status: "PENDING", driverId: null, businessId: OTHER_BUSINESS });
+    await seed(repos, {
+      status: "PENDING",
+      driverId: null,
+      businessId: OTHER_BUSINESS,
+    });
 
     const summary = await useCase(repos).execute({ userId: MANAGER_ID });
 
@@ -291,7 +318,11 @@ describe("the day of the operation summary", () => {
     const summary = await useCase(repos).execute({ userId: MANAGER_ID });
 
     expect(summary.drivers).toEqual([
-      expect.objectContaining({ driverId: FOREIGN_DRIVER_ID, driverName: "", cnh: "" }),
+      expect.objectContaining({
+        driverId: FOREIGN_DRIVER_ID,
+        driverName: "",
+        cnh: "",
+      }),
     ]);
   });
 });
@@ -301,14 +332,19 @@ describe("who may read it", () => {
     const repos = makeRepositories();
 
     await expect(
-      useCase(repos).execute({ userId: OTHER_MANAGER_ID, businessId: BUSINESS }),
+      useCase(repos).execute({
+        userId: OTHER_MANAGER_ID,
+        businessId: BUSINESS,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
   });
 
   it("refuses a driver token", async () => {
     const repos = makeRepositories();
 
-    await expect(useCase(repos).execute({ userId: DRIVER_USER_ID })).rejects.toMatchObject({
+    await expect(
+      useCase(repos).execute({ userId: DRIVER_USER_ID }),
+    ).rejects.toMatchObject({
       statusCode: 403,
       code: "DRIVER_CANNOT_VIEW_PANELS",
     });
@@ -325,7 +361,10 @@ describe("who may read it", () => {
       delivered_at: TODAY_AFTERNOON,
     });
 
-    const summary = await useCase(repos).execute({ userId: MASTER_ID, businessId: BUSINESS });
+    const summary = await useCase(repos).execute({
+      userId: MASTER_ID,
+      businessId: BUSINESS,
+    });
 
     expect(summary.totals.deliveredToday).toBe(1);
   });

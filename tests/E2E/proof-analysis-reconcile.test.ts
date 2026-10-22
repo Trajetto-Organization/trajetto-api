@@ -73,7 +73,9 @@ async function seedBusiness(id: string, aiLimit: number, timezone?: string) {
       uf: "SP",
       street: "Rua",
       address_number: "1",
-      cnpj: String(60000000000000 + seq * 1000 + Math.floor(Math.random() * 900)),
+      cnpj: String(
+        60000000000000 + seq * 1000 + Math.floor(Math.random() * 900),
+      ),
       cnae: "4930202",
       responsible_name: "Responsável",
       telephone: "11999999999",
@@ -165,7 +167,11 @@ afterAll(async () => {
 
 describe("the proof analysis sweep", () => {
   it("asks again for a card left without a request, with the proof's own input", async () => {
-    const lost = await provenDelivery(WITH_AI, withAI, ageOfLastManausLateEvening());
+    const lost = await provenDelivery(
+      WITH_AI,
+      withAI,
+      ageOfLastManausLateEvening(),
+    );
 
     // Already asked: the pipeline owns it, whatever its status.
     const asked = await provenDelivery(WITH_AI, withAI, 20 * MINUTE);

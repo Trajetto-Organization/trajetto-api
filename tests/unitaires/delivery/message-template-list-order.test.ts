@@ -12,7 +12,10 @@ describe("the in-memory message templates list", () => {
   it("sorts like Postgres: topic, then channel, by enum declaration order", async () => {
     const repository = new InMemoryDeliveryMessageTemplateRepository();
 
-    const save = (topic: "DISPATCHED" | "DELIVERED" | "FAILED" | "ON_THE_WAY", channel: string) =>
+    const save = (
+      topic: "DISPATCHED" | "DELIVERED" | "FAILED" | "ON_THE_WAY",
+      channel: string,
+    ) =>
       repository.save({
         businessId: "b1",
         topic,

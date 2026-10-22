@@ -16,7 +16,6 @@ import { PartNotFoundError } from "@/modules/part/usecases/errors/part-not-found
 
 import { ServiceOrderPartAlreadyExistsError } from "../errors/service-order-part-already-exists-error";
 
-
 import { NotificationService } from "@/shared/services/notification-service";
 
 import { formatCurrency } from "@/shared/utils/format-values";
@@ -70,7 +69,10 @@ class CreateServiceOrderPartUseCase {
 
     // Another company's order is not found from here either: a distinct
     // answer confirmed the id exists elsewhere (decision 11.3).
-    if (!findServiceOrder || findServiceOrder.businessId !== serviceOrderPartData.businessId) {
+    if (
+      !findServiceOrder ||
+      findServiceOrder.businessId !== serviceOrderPartData.businessId
+    ) {
       throw new ServiceOrderNotFoundError();
     }
 

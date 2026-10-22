@@ -172,11 +172,7 @@ const routeDayField = (required: string) =>
 const plannedInstantField = (label: string) =>
   z.preprocess(
     (value) =>
-      value === ""
-        ? null
-        : value instanceof Date
-          ? value.toISOString()
-          : value,
+      value === "" ? null : value instanceof Date ? value.toISOString() : value,
     z
       .string({ invalid_type_error: `${label} deve ser uma data e hora.` })
       .datetime({
@@ -351,7 +347,9 @@ const assignmentPreviewSchema = z.object({
               .map((value) => value.trim())
               .filter(Boolean),
       z
-        .array(z.string().uuid("Cada entrega deve ter um identificador válido."))
+        .array(
+          z.string().uuid("Cada entrega deve ter um identificador válido."),
+        )
         .max(100, "Envie no máximo 100 entregas.")
         .optional(),
     )
@@ -406,7 +404,7 @@ const moveRouteStopsSchema = z.object({
 /** Where the delivery's address is, pinned by hand on the route map (D7). */
 const setDeliveryLocationSchema = z
   .object({
-  ...tenantLockedShape,
+    ...tenantLockedShape,
     latitude: z
       .number({ invalid_type_error: "A latitude deve ser um número." })
       .min(-90, "Latitude inválida.")
@@ -423,7 +421,8 @@ const setDeliveryLocationSchema = z
       .describe("true apaga o ponto: a entrega volta a ficar sem localização."),
   })
   .superRefine((body, ctx) => {
-    const hasPoint = body.latitude !== undefined || body.longitude !== undefined;
+    const hasPoint =
+      body.latitude !== undefined || body.longitude !== undefined;
 
     if (body.clear && hasPoint) {
       ctx.addIssue({
@@ -452,7 +451,11 @@ const deliveryIdParamSchema = z.object({
 });
 
 /** A comma list or the repeated form, trimmed, empty dropped. */
-const listParam = <T extends z.ZodTypeAny>(item: T, max: number, label: string) =>
+const listParam = <T extends z.ZodTypeAny>(
+  item: T,
+  max: number,
+  label: string,
+) =>
   z.preprocess(
     (raw) =>
       raw === undefined || raw === ""
@@ -466,7 +469,12 @@ const listParam = <T extends z.ZodTypeAny>(item: T, max: number, label: string) 
 
 /** The "Adicionar entregas" picker (decision 14.7, §5.5). */
 const listUnroutedDeliveriesSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1).describe("Página, a partir de 1."),
+  page: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(1)
+    .describe("Página, a partir de 1."),
   pageSize: z.coerce
     .number()
     .int()

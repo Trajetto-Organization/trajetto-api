@@ -1,6 +1,9 @@
 import { DELIVERY_STATUS_LABELS, type DeliveryStatus } from "./delivery-rules";
 
-import type { DeliveryEventActor, DeliveryEventType } from "@/modules/delivery/dtos/delivery-dto";
+import type {
+  DeliveryEventActor,
+  DeliveryEventType,
+} from "@/modules/delivery/dtos/delivery-dto";
 
 /**
  * Everything that ever happened to one delivery, in one list, newest first.
@@ -200,7 +203,11 @@ function fromEvent(event: EventSource): TimelineEntry {
 
     // An event written before the actor column existed reads as USER, which is
     // what every source was at the time.
-    author: authorOf(event.actor ?? "USER", event.reportedBy?.name, event.device),
+    author: authorOf(
+      event.actor ?? "USER",
+      event.reportedBy?.name,
+      event.device,
+    ),
 
     photos,
     location:
@@ -281,7 +288,9 @@ function buildDeliveryTimeline(sources: TimelineSources): TimelineEntry[] {
   // Every report now also writes an OCCURRENCE event (TWR-6, for the tower's
   // feed). Here the occurrence's own row already tells it, richer — type,
   // description, photos — so its event would print the same fact twice.
-  const occurrenceIds = new Set((sources.occurrences ?? []).map(({ id }) => id));
+  const occurrenceIds = new Set(
+    (sources.occurrences ?? []).map(({ id }) => id),
+  );
 
   const events = (sources.events ?? []).filter(
     (event) =>
@@ -319,9 +328,4 @@ function buildDeliveryTimeline(sources: TimelineSources): TimelineEntry[] {
 }
 
 export { buildDeliveryTimeline };
-export type {
-  TimelineAuthor,
-  TimelineEntry,
-  TimelineKind,
-  TimelineSources,
-};
+export type { TimelineAuthor, TimelineEntry, TimelineKind, TimelineSources };

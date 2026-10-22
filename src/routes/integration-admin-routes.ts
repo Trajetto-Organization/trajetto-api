@@ -135,7 +135,9 @@ async function integrationAdminRoutes(app: FastifyInstance) {
           200: integrationResponses.resent,
           400: errorResponse,
           403: errorResponse,
-          404: sessionAware("API_KEY_NOT_FOUND (inexistente, já revogada ou de outra empresa — a mesma resposta)"),
+          404: sessionAware(
+            "API_KEY_NOT_FOUND (inexistente, já revogada ou de outra empresa — a mesma resposta)",
+          ),
           500: integrationResponses.internalServerError,
         },
       },
@@ -192,7 +194,9 @@ async function integrationAdminRoutes(app: FastifyInstance) {
           200: integrationResponses.webhookEndpointSaved,
           400: errorResponse,
           403: errorResponse,
-          404: sessionAware("WEBHOOK_ENDPOINT_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)"),
+          404: sessionAware(
+            "WEBHOOK_ENDPOINT_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)",
+          ),
           500: integrationResponses.internalServerError,
         },
       },
@@ -221,7 +225,9 @@ async function integrationAdminRoutes(app: FastifyInstance) {
           200: integrationResponses.webhookEndpointReactivated,
           400: errorResponse,
           403: errorResponse,
-          404: sessionAware("WEBHOOK_ENDPOINT_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)"),
+          404: sessionAware(
+            "WEBHOOK_ENDPOINT_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)",
+          ),
           500: integrationResponses.internalServerError,
         },
       },
@@ -251,7 +257,9 @@ async function integrationAdminRoutes(app: FastifyInstance) {
           200: integrationResponses.webhookEndpointSaved,
           400: errorResponse,
           403: errorResponse,
-          404: sessionAware("WEBHOOK_ENDPOINT_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)"),
+          404: sessionAware(
+            "WEBHOOK_ENDPOINT_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)",
+          ),
           500: integrationResponses.internalServerError,
         },
       },
@@ -306,7 +314,9 @@ async function integrationAdminRoutes(app: FastifyInstance) {
           200: integrationResponses.resent,
           400: errorResponse,
           403: errorResponse,
-          404: sessionAware("WEBHOOK_ENDPOINT_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)"),
+          404: sessionAware(
+            "WEBHOOK_ENDPOINT_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)",
+          ),
           500: integrationResponses.internalServerError,
         },
       },
@@ -356,7 +366,7 @@ async function integrationAdminRoutes(app: FastifyInstance) {
         tags: ["integration-admin"],
         summary: "Uso da API: o que o sistema do cliente pediu",
         description:
-          "`webhook_delivery` responde o que MANDAMOS; isto responde o que eles PEDIRAM — que é a pergunta que chega primeiro no suporte. Agregado por dia, método e rota: a cinco milhões de entregas por mês um log por requisição seria dezenas de milhões de linhas por mês para responder uma pergunta que é sempre contagem. Os dias são os do calendário da empresa (`Business.timezone`, devolvido em `timeZone`): \"hoje\" (`days=1`) é o dia que a empresa está vivendo, não o dia UTC. Contagens gravadas antes de 28/09/2026 estão no dia UTC. A rota é o PADRÃO (`/deliveries/:id`) e não a URL, senão seria uma linha por documento consultado. As classes são 2, 4 e 5 — funcionou, o cliente errou, nós erramos. Dias sem chamada nenhuma vêm com zero em vez de faltar, porque um gráfico que pula o dia desenha uma reta por cima de um fim de semana em que a integração estava fora.",
+          '`webhook_delivery` responde o que MANDAMOS; isto responde o que eles PEDIRAM — que é a pergunta que chega primeiro no suporte. Agregado por dia, método e rota: a cinco milhões de entregas por mês um log por requisição seria dezenas de milhões de linhas por mês para responder uma pergunta que é sempre contagem. Os dias são os do calendário da empresa (`Business.timezone`, devolvido em `timeZone`): "hoje" (`days=1`) é o dia que a empresa está vivendo, não o dia UTC. Contagens gravadas antes de 28/09/2026 estão no dia UTC. A rota é o PADRÃO (`/deliveries/:id`) e não a URL, senão seria uma linha por documento consultado. As classes são 2, 4 e 5 — funcionou, o cliente errou, nós erramos. Dias sem chamada nenhuma vêm com zero em vez de faltar, porque um gráfico que pula o dia desenha uma reta por cima de um fim de semana em que a integração estava fora.',
         querystring: integrationSchemas.listApiUsage,
         response: {
           200: integrationResponses.apiUsage,
@@ -392,7 +402,9 @@ async function integrationAdminRoutes(app: FastifyInstance) {
           200: integrationResponses.resendScheduled,
           400: errorResponse,
           403: errorResponse,
-          404: sessionAware("WEBHOOK_DELIVERY_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)"),
+          404: sessionAware(
+            "WEBHOOK_DELIVERY_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)",
+          ),
           409: errorResponse,
           500: integrationResponses.internalServerError,
         },

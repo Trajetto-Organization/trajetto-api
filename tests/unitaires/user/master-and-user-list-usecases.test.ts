@@ -16,7 +16,10 @@ const realtime = vi.hoisted(() => ({
 }));
 
 vi.mock("@/shared/services/transactional-mail-service", () => ({
-  sendTransactionalMail: async (props: { email: string; templateName: string }) => {
+  sendTransactionalMail: async (props: {
+    email: string;
+    templateName: string;
+  }) => {
     mail.sent.push({ email: props.email, templateName: props.templateName });
   },
 }));
@@ -105,19 +108,55 @@ beforeEach(() => {
 
   published = [];
   outbox = {
-    publish: vi.fn(async (_tx: unknown, event: { topic: string; aggregateId: string }) => {
-      published.push({ topic: event.topic, aggregateId: event.aggregateId });
-    }),
+    publish: vi.fn(
+      async (_tx: unknown, event: { topic: string; aggregateId: string }) => {
+        published.push({ topic: event.topic, aggregateId: event.aggregateId });
+      },
+    ),
   } as unknown as OutboxService;
 
   users.user.push(
-    person({ id: MASTER, name: "Master Um", email: "um@trajetto.com.br", role: "MASTER", businessId: null }),
-    person({ id: MASTER_TWO, name: "Master Dois", email: "dois@trajetto.com.br", role: "MASTER", businessId: null }),
-    person({ id: ADMIN, name: "Admin", email: "admin@a.com.br", role: "BUSINESS_ADMIN", businessId: CARRIER }),
-    person({ id: CLERK, name: "Carla Dias", email: "carla@a.com.br", role: "BUSINESS_USER", businessId: CARRIER, created_at: new Date("2026-09-02T12:00:00Z") } as Partial<User>),
-    person({ id: OTHER_CLERK, name: "Bruno", email: "bruno@b.com.br", role: "BUSINESS_USER", businessId: OTHER }),
+    person({
+      id: MASTER,
+      name: "Master Um",
+      email: "um@trajetto.com.br",
+      role: "MASTER",
+      businessId: null,
+    }),
+    person({
+      id: MASTER_TWO,
+      name: "Master Dois",
+      email: "dois@trajetto.com.br",
+      role: "MASTER",
+      businessId: null,
+    }),
+    person({
+      id: ADMIN,
+      name: "Admin",
+      email: "admin@a.com.br",
+      role: "BUSINESS_ADMIN",
+      businessId: CARRIER,
+    }),
+    person({
+      id: CLERK,
+      name: "Carla Dias",
+      email: "carla@a.com.br",
+      role: "BUSINESS_USER",
+      businessId: CARRIER,
+      created_at: new Date("2026-09-02T12:00:00Z"),
+    } as Partial<User>),
+    person({
+      id: OTHER_CLERK,
+      name: "Bruno",
+      email: "bruno@b.com.br",
+      role: "BUSINESS_USER",
+      businessId: OTHER,
+    }),
   );
-  businesses.business.push({ id: CARRIER } as Business, { id: OTHER } as Business);
+  businesses.business.push(
+    { id: CARRIER } as Business,
+    { id: OTHER } as Business,
+  );
 });
 
 describe("creating a MASTER", () => {
@@ -179,7 +218,10 @@ describe("editing a MASTER", () => {
       "master-user.account-updated",
     ]);
     expect(mail.sent).toEqual([
-      { email: "dois@trajetto.com.br", templateName: "master-user-updated.hbs" },
+      {
+        email: "dois@trajetto.com.br",
+        templateName: "master-user-updated.hbs",
+      },
     ]);
     // A rename keeps the session.
     expect(realtime.securityEvents).toEqual([]);
@@ -209,15 +251,27 @@ describe("editing a MASTER", () => {
 
   it("refuses editing yourself, a company user and a non-MASTER caller", async () => {
     await expect(
-      update().execute({ masterUserId: MASTER, data: { name: "Eu" }, performedById: MASTER }),
+      update().execute({
+        masterUserId: MASTER,
+        data: { name: "Eu" },
+        performedById: MASTER,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
 
     await expect(
-      update().execute({ masterUserId: CLERK, data: { name: "X" }, performedById: MASTER }),
+      update().execute({
+        masterUserId: CLERK,
+        data: { name: "X" },
+        performedById: MASTER,
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "MASTER_USER_NOT_FOUND" });
 
     await expect(
-      update().execute({ masterUserId: MASTER_TWO, data: { name: "X" }, performedById: ADMIN }),
+      update().execute({
+        masterUserId: MASTER_TWO,
+        data: { name: "X" },
+        performedById: ADMIN,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
 
     expect(users.user.find((u) => u.id === CLERK)?.name).toBe("Carla Dias");
@@ -245,18 +299,27 @@ describe("editing a MASTER", () => {
         data: { name: "Outro", sendPasswordSetupLink: true },
         performedById: MASTER,
       }),
-    ).rejects.toMatchObject({ statusCode: 503, code: "PASSWORD_LINK_UNAVAILABLE" });
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "PASSWORD_LINK_UNAVAILABLE",
+    });
 
-    expect(users.user.find((u) => u.id === MASTER_TWO)?.name).toBe("Master Dois");
+    expect(users.user.find((u) => u.id === MASTER_TWO)?.name).toBe(
+      "Master Dois",
+    );
     expect(published).toEqual([]);
   });
 });
 
 describe("removing a MASTER", () => {
-  const remove = () => new DeleteMasterUserUseCase(users, orders, payables, notifications);
+  const remove = () =>
+    new DeleteMasterUserUseCase(users, orders, payables, notifications);
 
   it("removes another MASTER, logs it and closes their sockets", async () => {
-    const deleted = await remove().execute({ masterUserId: MASTER_TWO, performedById: MASTER });
+    const deleted = await remove().execute({
+      masterUserId: MASTER_TWO,
+      performedById: MASTER,
+    });
 
     expect(deleted.id).toBe(MASTER_TWO);
     expect(users.user.some((u) => u.id === MASTER_TWO)).toBe(false);
@@ -264,7 +327,9 @@ describe("removing a MASTER", () => {
       expect.objectContaining({ action: "delete", visibilityLevel: "SYSTEM" }),
       expect.anything(),
     );
-    expect(realtime.securityEvents).toEqual([{ userId: MASTER_TWO, reason: "access_denied" }]);
+    expect(realtime.securityEvents).toEqual([
+      { userId: MASTER_TWO, reason: "access_denied" },
+    ]);
   });
 
   it("refuses with a 409 when the locked delete says the target is the last MASTER", async () => {
@@ -282,18 +347,30 @@ describe("removing a MASTER", () => {
   });
 
   it("refuses a MASTER with service orders or payables in their name (409)", async () => {
-    orders.serviceOrders.push({ id: "so-1", responsibleUserId: MASTER_TWO } as ServiceOrder);
+    orders.serviceOrders.push({
+      id: "so-1",
+      responsibleUserId: MASTER_TWO,
+    } as ServiceOrder);
 
     await expect(
       remove().execute({ masterUserId: MASTER_TWO, performedById: MASTER }),
-    ).rejects.toMatchObject({ statusCode: 409, code: "USER_HAS_SERVICE_ORDERS" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "USER_HAS_SERVICE_ORDERS",
+    });
 
     orders.serviceOrders.length = 0;
-    payables.accountPayables.push({ id: "ap-1", registrationUserId: MASTER_TWO } as AccountPayable);
+    payables.accountPayables.push({
+      id: "ap-1",
+      registrationUserId: MASTER_TWO,
+    } as AccountPayable);
 
     await expect(
       remove().execute({ masterUserId: MASTER_TWO, performedById: MASTER }),
-    ).rejects.toMatchObject({ statusCode: 409, code: "USER_HAS_ACCOUNT_PAYABLES" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "USER_HAS_ACCOUNT_PAYABLES",
+    });
 
     expect(users.user.some((u) => u.id === MASTER_TWO)).toBe(true);
   });
@@ -342,7 +419,11 @@ describe("listing MASTER accounts", () => {
 
   it("refuses an unknown caller (404)", async () => {
     await expect(
-      new ListMasterUsersUseCase(users).execute({ userId: UNKNOWN, page: 1, pageSize: 10 }),
+      new ListMasterUsersUseCase(users).execute({
+        userId: UNKNOWN,
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 
@@ -350,7 +431,11 @@ describe("listing MASTER accounts", () => {
     // Red before: the use case trusted verifyUserRole(['MASTER']) above it
     // and listed every MASTER account to whoever reached it.
     await expect(
-      new ListMasterUsersUseCase(users).execute({ userId: ADMIN, page: 1, pageSize: 10 }),
+      new ListMasterUsersUseCase(users).execute({
+        userId: ADMIN,
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
   });
 });
@@ -359,24 +444,41 @@ describe("listing a company's users", () => {
   const list = () => new ListUsersUseCase(users, businesses);
 
   it("pins a company user to their own company and hides the caller", async () => {
-    const result = await list().execute({ userId: ADMIN, page: 1, pageSize: 10 });
+    const result = await list().execute({
+      userId: ADMIN,
+      page: 1,
+      pageSize: 10,
+    });
 
     expect(result.data.map((row) => row.id)).toEqual([CLERK]);
   });
 
   it("refuses a company user naming another company (403)", async () => {
     await expect(
-      list().execute({ userId: ADMIN, businessId: OTHER, page: 1, pageSize: 10 }),
+      list().execute({
+        userId: ADMIN,
+        businessId: OTHER,
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
   });
 
   it("asks the MASTER for a company (400), refuses an unknown one (404), serves the picked one", async () => {
     await expect(
       list().execute({ userId: MASTER, page: 1, pageSize: 10 }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "BUSINESS_NOT_IDENTIFIED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BUSINESS_NOT_IDENTIFIED",
+    });
 
     await expect(
-      list().execute({ userId: MASTER, businessId: UNKNOWN, page: 1, pageSize: 10 }),
+      list().execute({
+        userId: MASTER,
+        businessId: UNKNOWN,
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "BUSINESS_NOT_FOUND" });
 
     const result = await list().execute({
@@ -394,7 +496,11 @@ describe("the user picker (cursor)", () => {
   const search = () => new SearchUserCursorUseCase(users, businesses);
 
   it("finds the company's users by name or e-mail", async () => {
-    const result = await search().execute({ userId: ADMIN, businessId: CARRIER, search: "carla" });
+    const result = await search().execute({
+      userId: ADMIN,
+      businessId: CARRIER,
+      search: "carla",
+    });
 
     expect(result.data.map((row) => row.id)).toEqual([CLERK]);
   });

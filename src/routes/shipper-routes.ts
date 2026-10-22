@@ -111,7 +111,7 @@ async function shipperRoutes(app: FastifyInstance) {
         tags: ["shipper"],
         summary: "Busca embarcadores ativos (cursor)",
         description:
-          "Embarcadores ATIVOS em NDJSON com paginação por cursor, para o seletor de cadastro de entregas, em ordem de nome. `search` filtra no servidor por nome, CNPJ (com ou sem máscara; um nome com dígitos, como \"Loja 2\", não vira busca de CNPJ) ou e-mail. Empresa inexistente responde 404 TENANT_NOT_FOUND, em JSON e antes de abrir o stream. " +
+          'Embarcadores ATIVOS em NDJSON com paginação por cursor, para o seletor de cadastro de entregas, em ordem de nome. `search` filtra no servidor por nome, CNPJ (com ou sem máscara; um nome com dígitos, como "Loja 2", não vira busca de CNPJ) ou e-mail. Empresa inexistente responde 404 TENANT_NOT_FOUND, em JSON e antes de abrir o stream. ' +
           "A primeira linha traz {meta: {searchMeta: {nextCursor, hasMore}}}; as seguintes, os embarcadores. Token de motorista recebe 403 PERMISSION_DENIED.",
         querystring: shipperSchemas.searchShipperCursor,
         response: {

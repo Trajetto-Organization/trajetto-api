@@ -217,7 +217,12 @@ async function seedUser(
 
 async function seedFuel(
   businessId: string,
-  links: { branchId: string; vehicleId: string; driverId: string; fuelTypeId: string },
+  links: {
+    branchId: string;
+    vehicleId: string;
+    driverId: string;
+    fuelTypeId: string;
+  },
   createdAt?: Date,
   id?: string,
 ): Promise<string> {
@@ -272,7 +277,11 @@ function post(body: Record<string, unknown>, token = managerToken) {
   });
 }
 
-function refusal(response: { statusCode: number; json: () => unknown; headers: Record<string, unknown> }) {
+function refusal(response: {
+  statusCode: number;
+  json: () => unknown;
+  headers: Record<string, unknown>;
+}) {
   const body = response.json() as { code?: string; message?: string };
 
   return {
@@ -353,7 +362,10 @@ beforeAll(async () => {
 
   // A company user of a deactivated company is refused at sign-in; the one
   // who can still name it is the MASTER, and the route guard must stop him.
-  await prisma.business.update({ where: { id: DORMANT }, data: { is_active: false } });
+  await prisma.business.update({
+    where: { id: DORMANT },
+    data: { is_active: false },
+  });
 
   const older = new Date(Date.now() - 3 * 3_600_000);
   const newer = new Date(Date.now() - 2 * 3_600_000);
@@ -374,25 +386,47 @@ afterAll(async () => {
 
 describe("POST /fuel/create-fuel — a foreign link reads like a missing one", () => {
   it.each([
-    ["vehicle", { vehicleId: OTHER_TRUCK }, { vehicleId: randomUUID() }, "VEHICLE_NOT_FOUND"],
-    ["driver", { driverId: OTHER_DRIVER }, { driverId: randomUUID() }, "DRIVER_NOT_FOUND"],
-    ["fuel type", { fuelTypeId: OTHER_DIESEL }, { fuelTypeId: randomUUID() }, "FUEL_TYPE_NOT_FOUND"],
-  ])("answers another company's %s exactly like an unknown id", async (_what, foreign, unknown, code) => {
-    const foreignAnswer = refusal(await post(createBody(foreign)));
-    const unknownAnswer = refusal(await post(createBody(unknown)));
+    [
+      "vehicle",
+      { vehicleId: OTHER_TRUCK },
+      { vehicleId: randomUUID() },
+      "VEHICLE_NOT_FOUND",
+    ],
+    [
+      "driver",
+      { driverId: OTHER_DRIVER },
+      { driverId: randomUUID() },
+      "DRIVER_NOT_FOUND",
+    ],
+    [
+      "fuel type",
+      { fuelTypeId: OTHER_DIESEL },
+      { fuelTypeId: randomUUID() },
+      "FUEL_TYPE_NOT_FOUND",
+    ],
+  ])(
+    "answers another company's %s exactly like an unknown id",
+    async (_what, foreign, unknown, code) => {
+      const foreignAnswer = refusal(await post(createBody(foreign)));
+      const unknownAnswer = refusal(await post(createBody(unknown)));
 
-    expect(foreignAnswer).toEqual(unknownAnswer);
-    expect(foreignAnswer.status).toBe(400);
-    expect(foreignAnswer.code).toBe(code);
-    expect(foreignAnswer.header).toBe(code);
-    expect(foreignAnswer.message).not.toContain("não pertence");
-  });
+      expect(foreignAnswer).toEqual(unknownAnswer);
+      expect(foreignAnswer.status).toBe(400);
+      expect(foreignAnswer.code).toBe(code);
+      expect(foreignAnswer.header).toBe(code);
+      expect(foreignAnswer.message).not.toContain("não pertence");
+    },
+  );
 
   it("answers a branch of another company with the gate's 404, the MASTER too", async () => {
     // Red before: the MASTER passes the branch gate, and the use case's
     // BranchNotBelongBusinessError went out as 400 — one code, two statuses.
-    const asManager = refusal(await post(createBody({ branchId: OTHER_BRANCH })));
-    const asMaster = refusal(await post(createBody({ branchId: OTHER_BRANCH }), masterToken));
+    const asManager = refusal(
+      await post(createBody({ branchId: OTHER_BRANCH })),
+    );
+    const asMaster = refusal(
+      await post(createBody({ branchId: OTHER_BRANCH }), masterToken),
+    );
 
     expect(asManager).toMatchObject({ status: 404, code: "BRANCH_NOT_FOUND" });
     expect(asMaster).toMatchObject({ status: 404, code: "BRANCH_NOT_FOUND" });
@@ -421,7 +455,11 @@ describe("POST /fuel/create-fuel — a foreign link reads like a missing one", (
 });
 
 describe("PATCH /fuel/update-fuel — codes and the same foreign answer", () => {
-  const patch = (body: Record<string, unknown>, fuelId: string, token = managerToken) =>
+  const patch = (
+    body: Record<string, unknown>,
+    fuelId: string,
+    token = managerToken,
+  ) =>
     app.inject({
       method: "PATCH",
       url: `/fuel/update-fuel/${fuelId}/business/${CARRIER}`,
@@ -450,8 +488,12 @@ describe("PATCH /fuel/update-fuel — codes and the same foreign answer", () => 
   });
 
   it("answers another company's refueling like a missing one", async () => {
-    const foreign = refusal(await patch({ price_per_liter: "5" }, otherCompanyFuel));
-    const missing = refusal(await patch({ price_per_liter: "5" }, randomUUID()));
+    const foreign = refusal(
+      await patch({ price_per_liter: "5" }, otherCompanyFuel),
+    );
+    const missing = refusal(
+      await patch({ price_per_liter: "5" }, randomUUID()),
+    );
 
     expect(foreign).toEqual(missing);
     expect(foreign).toMatchObject({ status: 404, code: "FUEL_NOT_FOUND" });
@@ -460,7 +502,9 @@ describe("PATCH /fuel/update-fuel — codes and the same foreign answer", () => 
   it("refuses a driver with 403 DRIVER_CANNOT_UPDATE_FUEL", async () => {
     const fuelId = await seedFuel(CARRIER, OWN_LINKS);
 
-    expect(refusal(await patch({ price_per_liter: "5" }, fuelId, driverToken))).toMatchObject({
+    expect(
+      refusal(await patch({ price_per_liter: "5" }, fuelId, driverToken)),
+    ).toMatchObject({
       status: 403,
       code: "DRIVER_CANNOT_UPDATE_FUEL",
     });
@@ -482,7 +526,9 @@ describe("DELETE /fuel/delete-fuel", () => {
     expect(foreign).toEqual(missing);
     expect(foreign).toMatchObject({ status: 404, code: "FUEL_NOT_FOUND" });
 
-    expect(await prisma.fuel.findUnique({ where: { id: otherCompanyFuel } })).not.toBeNull();
+    expect(
+      await prisma.fuel.findUnique({ where: { id: otherCompanyFuel } }),
+    ).not.toBeNull();
   });
 
   it("refuses a driver with 403 DRIVER_CANNOT_DELETE_FUEL and a read-only profile", async () => {
@@ -492,12 +538,16 @@ describe("DELETE /fuel/delete-fuel", () => {
       status: 403,
       code: "DRIVER_CANNOT_DELETE_FUEL",
     });
-    expect(refusal(await remove(fuelId, CARRIER, readOnlyToken))).toMatchObject({
-      status: 403,
-      code: "PERMISSION_DENIED",
-    });
+    expect(refusal(await remove(fuelId, CARRIER, readOnlyToken))).toMatchObject(
+      {
+        status: 403,
+        code: "PERMISSION_DENIED",
+      },
+    );
 
-    expect(await prisma.fuel.findUnique({ where: { id: fuelId } })).not.toBeNull();
+    expect(
+      await prisma.fuel.findUnique({ where: { id: fuelId } }),
+    ).not.toBeNull();
   });
 
   it("is read-only for a deactivated company, even for the MASTER (TENANT_INACTIVE)", async () => {
@@ -505,7 +555,9 @@ describe("DELETE /fuel/delete-fuel", () => {
 
     expect(answer.status).toBe(403);
     expect(answer.code).toBe("TENANT_INACTIVE");
-    expect(await prisma.fuel.findUnique({ where: { id: dormantFuel } })).not.toBeNull();
+    expect(
+      await prisma.fuel.findUnique({ where: { id: dormantFuel } }),
+    ).not.toBeNull();
   });
 
   it("deletes the company's own refueling", async () => {
@@ -528,8 +580,13 @@ describe("DELETE /fuel-type/delete-fuel-type", () => {
       headers: { authorization: `Bearer ${masterToken}` },
     });
 
-    expect(refusal(response)).toMatchObject({ status: 403, code: "TENANT_INACTIVE" });
-    expect(await prisma.fuelType.findUnique({ where: { id: DORMANT_UNUSED_TYPE } })).not.toBeNull();
+    expect(refusal(response)).toMatchObject({
+      status: 403,
+      code: "TENANT_INACTIVE",
+    });
+    expect(
+      await prisma.fuelType.findUnique({ where: { id: DORMANT_UNUSED_TYPE } }),
+    ).not.toBeNull();
   });
 });
 
@@ -562,7 +619,9 @@ describe("GET /fuel/search-fuel-by-vehicle — a vehicle's history", () => {
   });
 
   it("refuses a driver on a colleague's vehicle with 403, not 500", async () => {
-    expect(refusal(await history(COLLEAGUE_TRUCK, "", driverToken))).toMatchObject({
+    expect(
+      refusal(await history(COLLEAGUE_TRUCK, "", driverToken)),
+    ).toMatchObject({
       status: 403,
       code: "VEHICLE_NOT_ASSIGNED_TO_DRIVER",
     });
@@ -573,7 +632,10 @@ describe("GET /fuel/search-fuel-by-vehicle — a vehicle's history", () => {
   it("shows a driver only their own refuelings of the vehicle, no colleague's CNH", async () => {
     // A colleague fueled the driver's truck. Red before: the driver's history
     // carried that refueling with `driver: { name, cnh }` of the colleague.
-    const colleagueFuel = await seedFuel(CARRIER, { ...OWN_LINKS, driverId: COLLEAGUE });
+    const colleagueFuel = await seedFuel(CARRIER, {
+      ...OWN_LINKS,
+      driverId: COLLEAGUE,
+    });
     const colleagueCnh = `${COLLEAGUE.slice(-6)}cnh`;
 
     const asDriver = await history(TRUCK, "limit=100", driverToken);
@@ -662,29 +724,50 @@ describe("GET /fuel/get-previous-fuel — a driver and a colleague's vehicle", (
 describe("the published document of the fuel routes", () => {
   it("describes create and delete in Portuguese, with the refusal codes", async () => {
     const document = app.swagger() as {
-      paths: Record<string, Record<string, { summary?: string; responses?: Record<string, { description?: string }> }>>;
+      paths: Record<
+        string,
+        Record<
+          string,
+          {
+            summary?: string;
+            responses?: Record<string, { description?: string }>;
+          }
+        >
+      >;
     };
 
     const create = document.paths["/fuel/create-fuel/{businessId}"].post;
-    const remove = document.paths["/fuel/delete-fuel/{fuelId}/business/{businessId}"].delete;
+    const remove =
+      document.paths["/fuel/delete-fuel/{fuelId}/business/{businessId}"].delete;
 
     expect(create.summary).toBe("Registra um abastecimento");
     expect(remove.summary).toBe("Exclui um abastecimento");
     expect(remove.responses?.["404"]?.description).toContain("FUEL_NOT_FOUND");
-    expect(create.responses?.["400"]?.description).toContain("VEHICLE_NOT_FOUND");
+    expect(create.responses?.["400"]?.description).toContain(
+      "VEHICLE_NOT_FOUND",
+    );
   });
 
   it("documents every status the fuel routes answer, with its codes", async () => {
     const document = app.swagger() as {
-      paths: Record<string, Record<string, { responses?: Record<string, { description?: string }> }>>;
+      paths: Record<
+        string,
+        Record<string, { responses?: Record<string, { description?: string }> }>
+      >;
     };
 
     const responsesOf = (path: string, method: string) =>
       document.paths[path][method].responses ?? {};
 
     const create = responsesOf("/fuel/create-fuel/{businessId}", "post");
-    const update = responsesOf("/fuel/update-fuel/{fuelId}/business/{businessId}", "patch");
-    const history = responsesOf("/fuel/search-fuel-by-vehicle/{vehicleId}", "get");
+    const update = responsesOf(
+      "/fuel/update-fuel/{fuelId}/business/{businessId}",
+      "patch",
+    );
+    const history = responsesOf(
+      "/fuel/search-fuel-by-vehicle/{vehicleId}",
+      "get",
+    );
     const previous = responsesOf("/fuel/get-previous-fuel/{vehicleId}", "get");
     const exported = responsesOf("/fuel/export-fuel", "get");
 
@@ -715,34 +798,58 @@ describe("the published document of the fuel routes", () => {
     type Operation = {
       description?: string;
       parameters?: Array<{ name: string; in: string; description?: string }>;
-      responses?: Record<string, { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> }>;
+      responses?: Record<
+        string,
+        {
+          content?: Record<
+            string,
+            { schema?: { properties?: Record<string, unknown> } }
+          >;
+        }
+      >;
     };
-    const document = app.swagger() as { paths: Record<string, Record<string, Operation>> };
+    const document = app.swagger() as {
+      paths: Record<string, Record<string, Operation>>;
+    };
 
     const create = document.paths["/fuel/create-fuel/{businessId}"].post;
-    const update = document.paths["/fuel/update-fuel/{fuelId}/business/{businessId}"].patch;
-    const remove = document.paths["/fuel/delete-fuel/{fuelId}/business/{businessId}"].delete;
+    const update =
+      document.paths["/fuel/update-fuel/{fuelId}/business/{businessId}"].patch;
+    const remove =
+      document.paths["/fuel/delete-fuel/{fuelId}/business/{businessId}"].delete;
     const previous = document.paths["/fuel/get-previous-fuel/{vehicleId}"].get;
-    const fuelTypes = document.paths["/fuel-type/search-fuel-type-business"].get;
+    const fuelTypes =
+      document.paths["/fuel-type/search-fuel-type-business"].get;
 
     // Red before: the create still said "à frente do odômetro" first, the
     // delete that the odometer never comes back.
-    expect(create.description).toContain("antes de qualquer mudança no odômetro");
+    expect(create.description).toContain(
+      "antes de qualquer mudança no odômetro",
+    );
     expect(update.description).toContain("mudar só a data também é conferido");
-    expect(update.description).toContain("o veículo que ele deixa volta à maior leitura restante");
+    expect(update.description).toContain(
+      "o veículo que ele deixa volta à maior leitura restante",
+    );
     expect(remove.description).not.toContain("não volta");
     expect(remove.description).toContain("volta à maior leitura restante");
 
     // Red before: the whole refueling (driver, notes, price, photo).
-    const reading = previous.responses?.["200"]?.content?.["application/json"]?.schema?.properties ?? {};
+    const reading =
+      previous.responses?.["200"]?.content?.["application/json"]?.schema
+        ?.properties ?? {};
 
-    expect(Object.keys(reading).sort()).toEqual(
-      ["current_mileage", "liters_amount", "refueling_date", "vehicleId"],
-    );
+    expect(Object.keys(reading).sort()).toEqual([
+      "current_mileage",
+      "liters_amount",
+      "refueling_date",
+      "vehicleId",
+    ]);
 
     // Red before: the cursor was documented as a page of companies.
     const param = (name: string) =>
-      fuelTypes.parameters?.find((entry) => entry.in === "query" && entry.name === name)?.description;
+      fuelTypes.parameters?.find(
+        (entry) => entry.in === "query" && entry.name === name,
+      )?.description;
 
     expect(param("limit")).toContain("tipos de combustível");
     expect(param("cursor")).toContain("último tipo de combustível");

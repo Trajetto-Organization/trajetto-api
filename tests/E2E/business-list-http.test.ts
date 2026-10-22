@@ -38,32 +38,111 @@ interface Seed {
 // Two created_at ties: in A the row inserted first has the BIGGER id, in B
 // the SMALLER one — `id desc` must decide both, in both directions.
 const SEEDS: Seed[] = [
-  { key: "E01", city: "São Paulo", uf: "SP", erp: "ERP-01", fantasy: "Alfa", at: 1 },
-  { key: "E02", city: "São Paulo", uf: "SP", erp: null, fantasy: null, at: 2 },
-  { key: "E03", city: "São Paulo", uf: "SP", erp: "ERP-03", fantasy: "Bravo", at: 3 },
-  { key: "E04", city: "São Paulo", uf: "SP", erp: null, fantasy: "Charlie", at: 4 },
-  { key: "E05", city: "Campinas", uf: "SP", erp: "ERP-05", fantasy: null, at: 5 },
-  { key: "E06", city: "São José", uf: "SC", erp: null, fantasy: "Delta", at: 6 },
-  { key: "E07", city: "São José", uf: "SC", erp: "ERP-07", fantasy: "Echo", at: 7 },
-  { key: "E08", city: "São José", uf: "SP", erp: null, fantasy: null, at: 8 },
-  { key: "E09", city: "Cuiabá", uf: "MT", erp: "ERP-09", fantasy: "Foxtrot", at: 9 },
   {
-    key: "A1", city: "Cuiabá", uf: "MT", erp: null, fantasy: "Golf", at: 10,
+    key: "E01",
+    city: "São Paulo",
+    uf: "SP",
+    erp: "ERP-01",
+    fantasy: "Alfa",
+    at: 1,
+  },
+  { key: "E02", city: "São Paulo", uf: "SP", erp: null, fantasy: null, at: 2 },
+  {
+    key: "E03",
+    city: "São Paulo",
+    uf: "SP",
+    erp: "ERP-03",
+    fantasy: "Bravo",
+    at: 3,
+  },
+  {
+    key: "E04",
+    city: "São Paulo",
+    uf: "SP",
+    erp: null,
+    fantasy: "Charlie",
+    at: 4,
+  },
+  {
+    key: "E05",
+    city: "Campinas",
+    uf: "SP",
+    erp: "ERP-05",
+    fantasy: null,
+    at: 5,
+  },
+  {
+    key: "E06",
+    city: "São José",
+    uf: "SC",
+    erp: null,
+    fantasy: "Delta",
+    at: 6,
+  },
+  {
+    key: "E07",
+    city: "São José",
+    uf: "SC",
+    erp: "ERP-07",
+    fantasy: "Echo",
+    at: 7,
+  },
+  { key: "E08", city: "São José", uf: "SP", erp: null, fantasy: null, at: 8 },
+  {
+    key: "E09",
+    city: "Cuiabá",
+    uf: "MT",
+    erp: "ERP-09",
+    fantasy: "Foxtrot",
+    at: 9,
+  },
+  {
+    key: "A1",
+    city: "Cuiabá",
+    uf: "MT",
+    erp: null,
+    fantasy: "Golf",
+    at: 10,
     id: "018fed10-0000-7000-8000-0000000000a9",
   },
   {
-    key: "A2", city: "Cuiabá", uf: "MT", erp: "ERP-A2", fantasy: "Hotel", at: 10,
+    key: "A2",
+    city: "Cuiabá",
+    uf: "MT",
+    erp: "ERP-A2",
+    fantasy: "Hotel",
+    at: 10,
     id: "018fed10-0000-7000-8000-0000000000a1",
   },
   {
-    key: "B1", city: "Manaus", uf: "AM", active: false, erp: null, fantasy: "India", at: 11,
+    key: "B1",
+    city: "Manaus",
+    uf: "AM",
+    active: false,
+    erp: null,
+    fantasy: "India",
+    at: 11,
     id: "018fed10-0000-7000-8000-0000000000b1",
   },
   {
-    key: "B2", city: "Manaus", uf: "AM", active: false, erp: "ERP-B2", fantasy: null, at: 11,
+    key: "B2",
+    city: "Manaus",
+    uf: "AM",
+    active: false,
+    erp: "ERP-B2",
+    fantasy: null,
+    at: 11,
     id: "018fed10-0000-7000-8000-0000000000b9",
   },
-  { key: "E14", city: "Rio de Janeiro", uf: "RJ", active: false, erp: null, fantasy: "Juliet", at: 12 },
+  {
+    key: "E14",
+    city: "Rio de Janeiro",
+    uf: "RJ",
+    active: false,
+    erp: null,
+    fantasy: "Juliet",
+    at: 12,
+  },
 ];
 
 async function seedUser(
@@ -94,10 +173,14 @@ async function seedUser(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "15m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "15m",
+    },
+  );
 }
 
 interface ListResult {
@@ -108,7 +191,11 @@ interface ListResult {
   body: string;
 }
 
-async function list(query: string, token = tokens.master, page = 1): Promise<ListResult> {
+async function list(
+  query: string,
+  token = tokens.master,
+  page = 1,
+): Promise<ListResult> {
   const response = await app.inject({
     method: "GET",
     url: `/business/list-business?page=${page}&pageSize=10${query ? `&${query}` : ""}`,
@@ -116,7 +203,13 @@ async function list(query: string, token = tokens.master, page = 1): Promise<Lis
   });
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, keys: [], total: 0, searchMeta: null, body: response.body };
+    return {
+      status: response.statusCode,
+      keys: [],
+      total: 0,
+      searchMeta: null,
+      body: response.body,
+    };
   }
 
   const [first, ...rows] = response.body
@@ -126,7 +219,9 @@ async function list(query: string, token = tokens.master, page = 1): Promise<Lis
 
   return {
     status: 200,
-    keys: rows.map((row) => String(row.corporate_reason).replace("Empresa ", "")),
+    keys: rows.map((row) =>
+      String(row.corporate_reason).replace("Empresa ", ""),
+    ),
     total: first.meta.total,
     searchMeta: first.meta.searchMeta,
     body: response.body,
@@ -171,7 +266,11 @@ beforeAll(async () => {
   tokens.master = await seedUser("MASTER", null);
   tokens.admin = await seedUser(
     "BUSINESS_ADMIN",
-    (await prisma.business.findFirstOrThrow({ where: { corporate_reason: "Empresa E01" } })).id,
+    (
+      await prisma.business.findFirstOrThrow({
+        where: { corporate_reason: "Empresa E01" },
+      })
+    ).id,
   );
 
   ({ app } = await import("@/http"));
@@ -188,7 +287,20 @@ describe("GET /business/list-business — order", () => {
     const keys = await allPages("");
 
     expect(keys).toEqual([
-      "E14", "B2", "B1", "A1", "A2", "E09", "E08", "E07", "E06", "E05", "E04", "E03", "E02", "E01",
+      "E14",
+      "B2",
+      "B1",
+      "A1",
+      "A2",
+      "E09",
+      "E08",
+      "E07",
+      "E06",
+      "E05",
+      "E04",
+      "E03",
+      "E02",
+      "E01",
     ]);
   });
 
@@ -196,7 +308,20 @@ describe("GET /business/list-business — order", () => {
     const keys = await allPages("sort=created_at&order=asc");
 
     expect(keys).toEqual([
-      "E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E09", "A1", "A2", "B2", "B1", "E14",
+      "E01",
+      "E02",
+      "E03",
+      "E04",
+      "E05",
+      "E06",
+      "E07",
+      "E08",
+      "E09",
+      "A1",
+      "A2",
+      "B2",
+      "B1",
+      "E14",
     ]);
   });
 
@@ -204,7 +329,9 @@ describe("GET /business/list-business — order", () => {
     const asc = await allPages("sort=corporate_reason&order=asc");
 
     expect(asc).toEqual([...asc].sort());
-    expect(await allPages("sort=corporate_reason&order=desc")).toEqual([...asc].reverse());
+    expect(await allPages("sort=corporate_reason&order=desc")).toEqual(
+      [...asc].reverse(),
+    );
   });
 
   it("keeps the companies without an ERP code or a trade name last, both ways", async () => {
@@ -214,7 +341,10 @@ describe("GET /business/list-business — order", () => {
       const keys = await allPages(`sort=erp_code&order=${order}`);
       const tail = keys.slice(keys.length - withoutErp);
 
-      expect(tail.every((key) => !SEEDS.find((seed) => seed.key === key)?.erp), order).toBe(true);
+      expect(
+        tail.every((key) => !SEEDS.find((seed) => seed.key === key)?.erp),
+        order,
+      ).toBe(true);
     }
 
     const byTradeName = await allPages("sort=fantasy_name&order=desc");
@@ -223,7 +353,9 @@ describe("GET /business/list-business — order", () => {
     );
 
     expect(
-      byTradeName.slice(firstNull).every((key) => !SEEDS.find((seed) => seed.key === key)?.fantasy),
+      byTradeName
+        .slice(firstNull)
+        .every((key) => !SEEDS.find((seed) => seed.key === key)?.fantasy),
     ).toBe(true);
     // Juliet … Alfa, then the NULLs.
     expect(byTradeName[0]).toBe("E14");
@@ -276,7 +408,9 @@ describe("GET /business/list-business — filters and cards over every company",
         { value: "SC", count: 2 },
       ]),
     );
-    expect(uf.find((option: { value: string }) => option.value === "RJ")).toBeUndefined();
+    expect(
+      uf.find((option: { value: string }) => option.value === "RJ"),
+    ).toBeUndefined();
 
     // "Por Estado" is a breakdown by UF: status applied, UF not.
     expect(result.searchMeta.topStates).toEqual([
@@ -294,7 +428,9 @@ describe("GET /business/list-business — filters and cards over every company",
 
   it("accepts a facet repeated as well as comma-separated, with the search and an order", async () => {
     const comma = await list(`uf=SC,SP&search=${SAO_JOSE}&sort=uf&order=asc`);
-    const repeated = await list(`uf=SC&uf=SP&search=${SAO_JOSE}&sort=uf&order=asc`);
+    const repeated = await list(
+      `uf=SC&uf=SP&search=${SAO_JOSE}&sort=uf&order=asc`,
+    );
 
     expect(comma.keys).toEqual(["E07", "E06", "E08"]);
     expect(repeated.keys).toEqual(comma.keys);

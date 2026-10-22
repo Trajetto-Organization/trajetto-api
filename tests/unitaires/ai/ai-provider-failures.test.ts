@@ -37,25 +37,36 @@ describe("a provider failure", () => {
     ).toBe("quota_exhausted");
 
     expect(
-      classifyProviderFailure({ status: 402, errorType: "billing_error", message: "" }),
+      classifyProviderFailure({
+        status: 402,
+        errorType: "billing_error",
+        message: "",
+      }),
     ).toBe("quota_exhausted");
   });
 
   it("is retryable on a plain rate limit, a server error, an overload and the network", () => {
     for (const status of [429, 500, 503, 529, 408, undefined]) {
-      expect(classifyProviderFailure({ status, message: "x" }), String(status)).toBe(
-        "retryable",
-      );
+      expect(
+        classifyProviderFailure({ status, message: "x" }),
+        String(status),
+      ).toBe("retryable");
     }
   });
 
   it("is unauthorized on a refused key and permanent on a request that will never work", () => {
-    expect(classifyProviderFailure({ status: 401, message: "" })).toBe("unauthorized");
-    expect(classifyProviderFailure({ status: 403, message: "" })).toBe("unauthorized");
+    expect(classifyProviderFailure({ status: 401, message: "" })).toBe(
+      "unauthorized",
+    );
+    expect(classifyProviderFailure({ status: 403, message: "" })).toBe(
+      "unauthorized",
+    );
     expect(classifyProviderFailure({ status: 400, message: "bad image" })).toBe(
       "permanent",
     );
-    expect(classifyProviderFailure({ status: 413, message: "" })).toBe("permanent");
+    expect(classifyProviderFailure({ status: 413, message: "" })).toBe(
+      "permanent",
+    );
   });
 });
 
@@ -183,6 +194,8 @@ describe("a busy reader (ADR 0010 §3.2)", () => {
     circuit.markProbeStarted();
     circuit.recordFailure("busy", at(COOLDOWNS.provider_down.firstMs + 10));
 
-    expect(circuit.snapshot(at(COOLDOWNS.provider_down.firstMs + 11)).state).toBe("closed");
+    expect(
+      circuit.snapshot(at(COOLDOWNS.provider_down.firstMs + 11)).state,
+    ).toBe("closed");
   });
 });

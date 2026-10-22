@@ -23,7 +23,10 @@ interface ResilienceSeed {
   adminToken: string;
 }
 
-async function seedResilienceTenant(prisma: PrismaClient, businessId: string): Promise<ResilienceSeed> {
+async function seedResilienceTenant(
+  prisma: PrismaClient,
+  businessId: string,
+): Promise<ResilienceSeed> {
   const adminId = randomUUID();
   const driverUserId = randomUUID();
 
@@ -88,16 +91,24 @@ async function seedResilienceTenant(prisma: PrismaClient, businessId: string): P
     },
   });
 
-  const adminToken = sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: adminId,
-    expiresIn: "1h",
-  });
+  const adminToken = sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: adminId,
+      expiresIn: "1h",
+    },
+  );
 
   return { businessId, adminId, driverUserId, adminToken };
 }
 
 /** An account payable assigned to the admin: bell, activity, e-mail, WhatsApp. */
-async function publishAccountPayables(prisma: PrismaClient, seed: ResilienceSeed, count: number): Promise<string[]> {
+async function publishAccountPayables(
+  prisma: PrismaClient,
+  seed: ResilienceSeed,
+  count: number,
+): Promise<string[]> {
   const ids: string[] = [];
 
   for (let index = 0; index < count; index += 1) {
@@ -127,7 +138,11 @@ async function publishAccountPayables(prisma: PrismaClient, seed: ResilienceSeed
 }
 
 /** A released route: one push to the driver's phone. */
-async function publishRouteReleases(prisma: PrismaClient, seed: ResilienceSeed, count: number): Promise<string[]> {
+async function publishRouteReleases(
+  prisma: PrismaClient,
+  seed: ResilienceSeed,
+  count: number,
+): Promise<string[]> {
   const ids: string[] = [];
 
   for (let index = 0; index < count; index += 1) {
@@ -166,7 +181,9 @@ async function queueWebhookRows(
   endpoints: number,
   events: number,
 ): Promise<string[]> {
-  const { fanOutWebhookEvent } = await import("@/shared/integration/webhook-dispatch-service");
+  const { fanOutWebhookEvent } = await import(
+    "@/shared/integration/webhook-dispatch-service"
+  );
 
   for (let index = 0; index < endpoints; index += 1) {
     await prisma.webhookEndpoint.create({
@@ -200,7 +217,12 @@ async function queueWebhookRows(
  * `leaseExpiresAt` / `availableAt` against the database's now().
  */
 async function expireLeases(prisma: PrismaClient): Promise<void> {
-  for (const table of ["notification_delivery", "domain_outbox_event", "webhook_delivery", "ai_analysis_request"]) {
+  for (const table of [
+    "notification_delivery",
+    "domain_outbox_event",
+    "webhook_delivery",
+    "ai_analysis_request",
+  ]) {
     await prisma.$executeRawUnsafe(
       `UPDATE "${table}" SET "leaseExpiresAt" = now() - interval '1 second'
        ${table === "domain_outbox_event" ? "" : `, "availableAt" = LEAST("availableAt", now() - interval '1 second')`}
@@ -211,7 +233,12 @@ async function expireLeases(prisma: PrismaClient): Promise<void> {
 
 /** Retries scheduled in the future, made due now (backoff is not under test). */
 async function makeRetriesDue(prisma: PrismaClient): Promise<void> {
-  for (const table of ["notification_delivery", "domain_outbox_event", "webhook_delivery", "ai_analysis_request"]) {
+  for (const table of [
+    "notification_delivery",
+    "domain_outbox_event",
+    "webhook_delivery",
+    "ai_analysis_request",
+  ]) {
     await prisma.$executeRawUnsafe(
       `UPDATE "${table}" SET "availableAt" = now() - interval '1 second' WHERE "status" = 'PENDING'`,
     );
@@ -224,23 +251,39 @@ interface QueueState {
 }
 
 /** Rows not yet settled, per queue. */
-async function openWork(prisma: PrismaClient): Promise<Record<string, QueueState>> {
+async function openWork(
+  prisma: PrismaClient,
+): Promise<Record<string, QueueState>> {
   const result: Record<string, QueueState> = {};
 
-  for (const table of ["domain_outbox_event", "notification_delivery", "webhook_delivery", "ai_analysis_request"]) {
-    const [row] = await prisma.$queryRawUnsafe<Array<{ open: bigint; processing: bigint }>>(
+  for (const table of [
+    "domain_outbox_event",
+    "notification_delivery",
+    "webhook_delivery",
+    "ai_analysis_request",
+  ]) {
+    const [row] = await prisma.$queryRawUnsafe<
+      Array<{ open: bigint; processing: bigint }>
+    >(
       `SELECT count(*) FILTER (WHERE "status" IN ('PENDING','PROCESSING')) AS open,
               count(*) FILTER (WHERE "status" = 'PROCESSING') AS processing
        FROM "${table}"`,
     );
 
-    result[table] = { open: Number(row.open), processing: Number(row.processing) };
+    result[table] = {
+      open: Number(row.open),
+      processing: Number(row.processing),
+    };
   }
 
   return result;
 }
 
-async function waitUntilSettled(prisma: PrismaClient, what: string, timeoutMs = 120_000): Promise<void> {
+async function waitUntilSettled(
+  prisma: PrismaClient,
+  what: string,
+  timeoutMs = 120_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let last: Record<string, QueueState> = {};
 
@@ -250,7 +293,9 @@ async function waitUntilSettled(prisma: PrismaClient, what: string, timeoutMs = 
     if (Object.values(last).every((state) => state.open === 0)) return;
 
     if (Date.now() > deadline) {
-      throw new Error(`${what}: trabalho em aberto depois de ${timeoutMs} ms: ${JSON.stringify(last)}`);
+      throw new Error(
+        `${what}: trabalho em aberto depois de ${timeoutMs} ms: ${JSON.stringify(last)}`,
+      );
     }
 
     await new Promise((done) => setTimeout(done, 250));
@@ -275,7 +320,14 @@ export type { ResilienceSeed };
  */
 async function queueFuelReadings(
   prisma: PrismaClient,
-  fleet: { businessId: string; branchId: string; vehicleId: string; driverId: string; fuelTypeId: string; driverUserId: string },
+  fleet: {
+    businessId: string;
+    branchId: string;
+    vehicleId: string;
+    driverId: string;
+    fuelTypeId: string;
+    driverUserId: string;
+  },
   periodId: string,
   count: number,
 ): Promise<Array<{ requestId: string; fuelId: string }>> {
@@ -312,8 +364,13 @@ async function queueFuelReadings(
       },
     });
 
-    await prisma.aIAnalysisUnit.create({ data: { requestId: request.id, unitKey: "odometer" } });
-    await prisma.aIUsagePeriod.update({ where: { id: periodId }, data: { reservedUnits: { increment: 1 } } });
+    await prisma.aIAnalysisUnit.create({
+      data: { requestId: request.id, unitKey: "odometer" },
+    });
+    await prisma.aIUsagePeriod.update({
+      where: { id: periodId },
+      data: { reservedUnits: { increment: 1 } },
+    });
 
     queued.push({ requestId: request.id, fuelId: fuel.id });
   }

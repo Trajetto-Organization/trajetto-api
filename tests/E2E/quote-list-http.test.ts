@@ -44,12 +44,44 @@ const SEEDS: Seed[] = [
   { key: "Q05", status: "CLOSED", fleet: "1-5", at: 5, contacted: 20 },
   { key: "Q06", status: "CONVERTED", fleet: "101+", at: 6 },
   { key: "Q07", status: "CONVERTED", fleet: "1-5", at: 7 },
-  { key: "Q08", status: "PENDING", fleet: "1-5", at: 8, phone: "5565999887766" },
+  {
+    key: "Q08",
+    status: "PENDING",
+    fleet: "1-5",
+    at: 8,
+    phone: "5565999887766",
+  },
   { key: "Q09", status: "PENDING", fleet: "31-50", at: 9 },
-  { key: "A1", status: "PENDING", fleet: "1-5", at: 10, id: "018fed30-0000-7000-8000-0000000000a9" },
-  { key: "A2", status: "CONTACTED", fleet: "6-15", at: 10, contacted: 40, id: "018fed30-0000-7000-8000-0000000000a1" },
-  { key: "B1", status: "PENDING", fleet: "51-100", at: 11, id: "018fed30-0000-7000-8000-0000000000b1" },
-  { key: "B2", status: "CLOSED", fleet: "1-5", at: 11, contacted: 50, id: "018fed30-0000-7000-8000-0000000000b9" },
+  {
+    key: "A1",
+    status: "PENDING",
+    fleet: "1-5",
+    at: 10,
+    id: "018fed30-0000-7000-8000-0000000000a9",
+  },
+  {
+    key: "A2",
+    status: "CONTACTED",
+    fleet: "6-15",
+    at: 10,
+    contacted: 40,
+    id: "018fed30-0000-7000-8000-0000000000a1",
+  },
+  {
+    key: "B1",
+    status: "PENDING",
+    fleet: "51-100",
+    at: 11,
+    id: "018fed30-0000-7000-8000-0000000000b1",
+  },
+  {
+    key: "B2",
+    status: "CLOSED",
+    fleet: "1-5",
+    at: 11,
+    contacted: 50,
+    id: "018fed30-0000-7000-8000-0000000000b9",
+  },
 ];
 
 async function seedUser(
@@ -80,10 +112,14 @@ async function seedUser(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "15m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "15m",
+    },
+  );
 }
 
 interface ListResult {
@@ -94,7 +130,11 @@ interface ListResult {
   body: string;
 }
 
-async function list(query: string, token = tokens.master, page = 1): Promise<ListResult> {
+async function list(
+  query: string,
+  token = tokens.master,
+  page = 1,
+): Promise<ListResult> {
   const response = await app.inject({
     method: "GET",
     url: `/quote/list-quote?page=${page}&pageSize=10${query ? `&${query}` : ""}`,
@@ -102,7 +142,13 @@ async function list(query: string, token = tokens.master, page = 1): Promise<Lis
   });
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, keys: [], total: 0, searchMeta: null, body: response.body };
+    return {
+      status: response.statusCode,
+      keys: [],
+      total: 0,
+      searchMeta: null,
+      body: response.body,
+    };
   }
 
   const [first, ...rows] = response.body
@@ -156,7 +202,9 @@ beforeAll(async () => {
         fleet_size: seed.fleet,
         status: seed.status,
         contacted_at:
-          seed.contacted === undefined ? null : new Date(BASE + seed.contacted * 60_000),
+          seed.contacted === undefined
+            ? null
+            : new Date(BASE + seed.contacted * 60_000),
         created_at: new Date(BASE + seed.at * 60_000),
       },
     });
@@ -177,23 +225,51 @@ afterAll(async () => {
 describe("GET /quote/list-quote — order", () => {
   it("defaults to newest first across pages, the ties broken by id desc", async () => {
     expect(await allPages("")).toEqual([
-      "B2", "B1", "A1", "A2", "Q09", "Q08", "Q07", "Q06", "Q05", "Q04", "Q03", "Q02", "Q01",
+      "B2",
+      "B1",
+      "A1",
+      "A2",
+      "Q09",
+      "Q08",
+      "Q07",
+      "Q06",
+      "Q05",
+      "Q04",
+      "Q03",
+      "Q02",
+      "Q01",
     ]);
   });
 
   it("orders created_at ascending with the same id tiebreaker in both pairs", async () => {
     expect(await allPages("sort=created_at&order=asc")).toEqual([
-      "Q01", "Q02", "Q03", "Q04", "Q05", "Q06", "Q07", "Q08", "Q09", "A1", "A2", "B2", "B1",
+      "Q01",
+      "Q02",
+      "Q03",
+      "Q04",
+      "Q05",
+      "Q06",
+      "Q07",
+      "Q08",
+      "Q09",
+      "A1",
+      "A2",
+      "B2",
+      "B1",
     ]);
   });
 
   it("orders the stage by the pipeline, not alphabetically", async () => {
     const keys = await allPages("sort=status&order=asc");
-    const stages = keys.map((key) => SEEDS.find((seed) => seed.key === key)?.status);
+    const stages = keys.map(
+      (key) => SEEDS.find((seed) => seed.key === key)?.status,
+    );
     const rank = { PENDING: 0, CONTACTED: 1, CLOSED: 2, CONVERTED: 3 } as const;
 
     expect(stages.map((stage) => rank[stage as keyof typeof rank])).toEqual(
-      [...stages.map((stage) => rank[stage as keyof typeof rank])].sort((a, b) => a - b),
+      [...stages.map((stage) => rank[stage as keyof typeof rank])].sort(
+        (a, b) => a - b,
+      ),
     );
     // Inside a stage, the newest first (the tiebreaker).
     expect(keys.slice(0, 6)).toEqual(["B1", "A1", "Q09", "Q08", "Q02", "Q01"]);
@@ -249,17 +325,21 @@ describe("GET /quote/list-quote — filters and cards over every quote", () => {
   });
 
   it("accepts a facet repeated as well as comma-separated, with an order", async () => {
-    const comma = await list("status=CLOSED,CONVERTED&sort=created_at&order=asc");
-    const repeated = await list("status=CLOSED&status=CONVERTED&sort=created_at&order=asc");
+    const comma = await list(
+      "status=CLOSED,CONVERTED&sort=created_at&order=asc",
+    );
+    const repeated = await list(
+      "status=CLOSED&status=CONVERTED&sort=created_at&order=asc",
+    );
 
     expect(comma.keys).toEqual(["Q05", "Q06", "Q07", "B2"]);
     expect(repeated.keys).toEqual(comma.keys);
   });
 
   it("finds a quote by the digits of its phone, the country code dropped", async () => {
-    expect((await list(`search=${encodeURIComponent("+55 (65) 99988-7766")}`)).keys).toEqual([
-      "Q08",
-    ]);
+    expect(
+      (await list(`search=${encodeURIComponent("+55 (65) 99988-7766")}`)).keys,
+    ).toEqual(["Q08"]);
   });
 
   it("refuses an order or a filter value the list does not offer", async () => {

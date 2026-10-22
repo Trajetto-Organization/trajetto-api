@@ -16,7 +16,11 @@ import {
   vehicleTypeSchemas,
   vehicleTypeResponses,
 } from "./documentation/vehicle-type-documentation";
-import { ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
 import { vehicleTypeListSearchMetaDoc } from "@/modules/vehicle-type/usecases/list-vehicle-type/list-vehicle-type-documentation";
 
 const createVehicleTypeController = new CreateVehicleTypeController();

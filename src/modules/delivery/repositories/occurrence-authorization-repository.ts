@@ -210,7 +210,9 @@ class OccurrenceAuthorizationRepository
     // LIMIT, so the total rides on the same scan. A request whose attempt is
     // over is not answerable, so it is not queued even before the sweep
     // closes it.
-    const page = await this.prisma.$queryRaw<Array<{ id: string; total: number }>>`
+    const page = await this.prisma.$queryRaw<
+      Array<{ id: string; total: number }>
+    >`
       SELECT o."id", (count(*) OVER ())::int AS "total"
       FROM "delivery_occurrence" o
       ${ATTEMPT_JOINS}
@@ -266,7 +268,9 @@ class OccurrenceAuthorizationRepository
     // The same shape as the claim below: SKIP LOCKED so a decision holding a
     // row is never waited on (it re-checks liveness under its own lock), and
     // the PENDING condition repeated on the row being written.
-    return tx.$queryRaw<Array<{ id: string; businessId: string; deliveryId: string }>>`
+    return tx.$queryRaw<
+      Array<{ id: string; businessId: string; deliveryId: string }>
+    >`
       UPDATE "delivery_occurrence" w
          SET "authorization_status" = 'SUPERSEDED',
              "updated_at" = ${utc(at)}

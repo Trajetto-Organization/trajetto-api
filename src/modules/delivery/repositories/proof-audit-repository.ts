@@ -95,7 +95,9 @@ class ProofAuditRepository implements IProofAuditRepository {
     // timestamptz: compared as they come, Postgres reads the column in the
     // SESSION zone and the window moved with the connection's TimeZone.
     // Normalised to UTC, the window starts at the company's midnight.
-    const agreement = await this.prisma.$queryRaw<Array<{ reviewed: number; agreed: number }>>`
+    const agreement = await this.prisma.$queryRaw<
+      Array<{ reviewed: number; agreed: number }>
+    >`
       SELECT
         count(*)::int AS "reviewed",
         count(*) FILTER (
@@ -144,7 +146,9 @@ class ProofAuditRepository implements IProofAuditRepository {
 
     // `in` does not keep the order the page was chosen in.
     const position = new Map(ids.map((id, index) => [id, index]));
-    rows.sort((left, right) => position.get(left.id)! - position.get(right.id)!);
+    rows.sort(
+      (left, right) => position.get(left.id)! - position.get(right.id)!,
+    );
 
     const analysis = await this.latestAnalysisStatus(
       businessId,
@@ -291,19 +295,20 @@ class ProofAuditRepository implements IProofAuditRepository {
     });
   }
 
-  async review({
-    auditId,
-    businessId,
-    reviewedById,
-    status,
-    rejection_reason,
-  }: {
-    auditId: string;
-    businessId: string;
-    reviewedById: string;
-    status: "APPROVED" | "REJECTED";
-    rejection_reason: string | null;
-  },
+  async review(
+    {
+      auditId,
+      businessId,
+      reviewedById,
+      status,
+      rejection_reason,
+    }: {
+      auditId: string;
+      businessId: string;
+      reviewedById: string;
+      status: "APPROVED" | "REJECTED";
+      rejection_reason: string | null;
+    },
     tx?: Prisma.TransactionClient,
   ): Promise<ProofAuditRecord | null> {
     // The precondition is in the `where`, not in a read above it: two

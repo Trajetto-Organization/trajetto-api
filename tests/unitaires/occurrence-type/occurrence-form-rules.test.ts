@@ -19,7 +19,10 @@ import {
  * app copies run too (fixtures/occurrence-form-cases.json).
  */
 const cases = JSON.parse(
-  readFileSync(join(__dirname, "fixtures", "occurrence-form-cases.json"), "utf8"),
+  readFileSync(
+    join(__dirname, "fixtures", "occurrence-form-cases.json"),
+    "utf8",
+  ),
 ) as {
   form: unknown[];
   answers: Array<{
@@ -39,7 +42,9 @@ describe("the shared answer cases", () => {
     (_name, entry) => {
       const verdict = validateOccurrenceAnswers(form, entry.given);
 
-      expect(Object.keys(verdict.errors).sort()).toEqual([...entry.errors].sort());
+      expect(Object.keys(verdict.errors).sort()).toEqual(
+        [...entry.errors].sort(),
+      );
 
       if (entry.errors.length === 0) {
         expect(verdict.answers).toEqual(entry.kept);
@@ -52,7 +57,9 @@ describe("the shared definition cases", () => {
   it.each(cases.definitions.map((entry) => [entry.name, entry] as const))(
     "%s",
     (_name, entry) => {
-      expect(occurrenceFormFieldsSchema.safeParse(entry.fields).success).toBe(entry.valid);
+      expect(occurrenceFormFieldsSchema.safeParse(entry.fields).success).toBe(
+        entry.valid,
+      );
     },
   );
 });
@@ -94,9 +101,22 @@ describe("the definition", () => {
     );
 
     expect(normalized).toEqual([
-      { key: "a", label: "A", type: "text", required: false, max_length: 200, multiline: false },
+      {
+        key: "a",
+        label: "A",
+        type: "text",
+        required: false,
+        max_length: 200,
+        multiline: false,
+      },
       { key: "b", label: "B", type: "number", required: true, integer: false },
-      { key: "c", label: "C", type: "select", required: false, options: ["X", "Y"] },
+      {
+        key: "c",
+        label: "C",
+        type: "select",
+        required: false,
+        options: ["X", "Y"],
+      },
     ]);
   });
 
@@ -108,15 +128,25 @@ describe("the definition", () => {
 
   it("tells a changed form from the same form sent again", () => {
     const first = normalizeFormFields(
-      occurrenceFormFieldsSchema.parse([{ key: "a", label: "A", type: "text" }]),
+      occurrenceFormFieldsSchema.parse([
+        { key: "a", label: "A", type: "text" },
+      ]),
     );
     const again = normalizeFormFields(
       occurrenceFormFieldsSchema.parse([
-        { key: "a", label: "A", type: "text", required: false, max_length: 200 },
+        {
+          key: "a",
+          label: "A",
+          type: "text",
+          required: false,
+          max_length: 200,
+        },
       ]),
     );
     const relabelled = normalizeFormFields(
-      occurrenceFormFieldsSchema.parse([{ key: "a", label: "Outro rótulo", type: "text" }]),
+      occurrenceFormFieldsSchema.parse([
+        { key: "a", label: "Outro rótulo", type: "text" },
+      ]),
     );
 
     expect(sameFormFields(first, again)).toBe(true);
@@ -124,7 +154,9 @@ describe("the definition", () => {
   });
 
   it("reads a stored form that no longer parses as no form", () => {
-    expect(readFormFields([{ key: "INVALID KEY", label: "x", type: "text" }])).toBeNull();
+    expect(
+      readFormFields([{ key: "INVALID KEY", label: "x", type: "text" }]),
+    ).toBeNull();
     expect(readFormFields("not an array")).toBeNull();
     expect(readFormFields(null)).toBeNull();
   });
@@ -136,7 +168,10 @@ describe("the answers", () => {
   ];
 
   it("a type without form keeps no answers, whatever was sent", () => {
-    expect(validateOccurrenceAnswers(null, { a: "x" })).toEqual({ answers: null, errors: {} });
+    expect(validateOccurrenceAnswers(null, { a: "x" })).toEqual({
+      answers: null,
+      errors: {},
+    });
   });
 
   it("nothing answered on an optional-only form is no answers, not an error", () => {
@@ -155,7 +190,9 @@ describe("the answers", () => {
   it("asks a sim/não question differently from a text one", () => {
     const verdict = validateOccurrenceAnswers(form, {});
 
-    expect(verdict.errors.cliente_presente).toBe('Responda "Cliente presente".');
+    expect(verdict.errors.cliente_presente).toBe(
+      'Responda "Cliente presente".',
+    );
     expect(verdict.errors.motivo).toBe('Preencha o campo "Motivo".');
   });
 
@@ -179,7 +216,9 @@ describe("the answer as a person reads it", () => {
   it("formats sim/não and dates", () => {
     expect(formatOccurrenceAnswer({ type: "boolean" }, true)).toBe("Sim");
     expect(formatOccurrenceAnswer({ type: "boolean" }, false)).toBe("Não");
-    expect(formatOccurrenceAnswer({ type: "date" }, "2026-10-01")).toBe("01/10/2026");
+    expect(formatOccurrenceAnswer({ type: "date" }, "2026-10-01")).toBe(
+      "01/10/2026",
+    );
     expect(formatOccurrenceAnswer({ type: "number" }, 3)).toBe("3");
     expect(formatOccurrenceAnswer(undefined, "texto")).toBe("texto");
   });

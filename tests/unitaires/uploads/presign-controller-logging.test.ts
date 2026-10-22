@@ -59,7 +59,9 @@ function useCaseThatThrows(error: unknown) {
   } as never);
 }
 
-const files = [{ originalFilename: "foto.jpg", contentType: "image/jpeg", size: 1024 }];
+const files = [
+  { originalFilename: "foto.jpg", contentType: "image/jpeg", size: 1024 },
+];
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -70,13 +72,21 @@ describe("a presign that fails for a reason nobody anticipated", () => {
     const boom = new Error("boom: S3 client exploded");
     useCaseThatThrows(boom);
 
-    const req = request({ uploadType: "checklistPhotos", files }, { businessId: BUSINESS });
+    const req = request(
+      { uploadType: "checklistPhotos", files },
+      { businessId: BUSINESS },
+    );
     const res = reply();
 
-    await new CreatePresignedUploadController().handle(req as never, res as never);
+    await new CreatePresignedUploadController().handle(
+      req as never,
+      res as never,
+    );
 
     expect(res.statusCode).toBe(500);
-    expect(res.payload).toEqual({ message: "Não foi possível autorizar o upload." });
+    expect(res.payload).toEqual({
+      message: "Não foi possível autorizar o upload.",
+    });
     expect(req.log.error).toHaveBeenCalledWith(
       expect.objectContaining({ err: boom, uploadType: "checklistPhotos" }),
       expect.any(String),
@@ -90,7 +100,10 @@ describe("a presign that fails for a reason nobody anticipated", () => {
     const req = request({ files });
     const res = reply();
 
-    await new CreatePresignedAvatarUploadController().handle(req as never, res as never);
+    await new CreatePresignedAvatarUploadController().handle(
+      req as never,
+      res as never,
+    );
 
     expect(res.statusCode).toBe(500);
     expect(req.log.error).toHaveBeenCalledWith(
@@ -115,7 +128,10 @@ describe("a presign that fails for a reason nobody anticipated", () => {
     // message }` and `x-error-code` (decision 11.3). The inline answer
     // used to drop the code.
     await expect(
-      new CreatePresignedAvatarUploadController().handle(req as never, res as never),
+      new CreatePresignedAvatarUploadController().handle(
+        req as never,
+        res as never,
+      ),
     ).rejects.toBe(refusal);
 
     expect(req.log.error).not.toHaveBeenCalled();

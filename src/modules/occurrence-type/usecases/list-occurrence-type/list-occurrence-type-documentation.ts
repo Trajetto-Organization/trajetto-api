@@ -11,7 +11,9 @@ const occurrenceTypeListSearchMetaDoc = searchMetaDoc(
     total: z
       .number()
       .int()
-      .describe("Tipos da busca com os filtros de impeditiva e foto, sem o de status."),
+      .describe(
+        "Tipos da busca com os filtros de impeditiva e foto, sem o de status.",
+      ),
     active: z.number().int().describe("Destes, os ativos."),
     blocking: z
       .number()
@@ -20,7 +22,9 @@ const occurrenceTypeListSearchMetaDoc = searchMetaDoc(
     requiringPhoto: z
       .number()
       .int()
-      .describe("Que exigem foto, com a busca e os filtros de status e impeditiva."),
+      .describe(
+        "Que exigem foto, com a busca e os filtros de status e impeditiva.",
+      ),
   },
   ["status", "blocking", "photo", "category"],
 );

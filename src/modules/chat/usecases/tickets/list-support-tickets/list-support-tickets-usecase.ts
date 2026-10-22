@@ -52,8 +52,14 @@ class ListSupportTicketsUseCase {
     private tickets: ISupportTicketRepository,
   ) {}
 
-  async execute(request: ListSupportTicketsRequest): Promise<ListSupportTicketsResponse> {
-    const scope = await resolveTicketScope(this.user, request.userId, request.businessId);
+  async execute(
+    request: ListSupportTicketsRequest,
+  ): Promise<ListSupportTicketsResponse> {
+    const scope = await resolveTicketScope(
+      this.user,
+      request.userId,
+      request.businessId,
+    );
     const forDriver = Boolean(scope.driverId);
 
     const [{ data, total }, counts] = await Promise.all([

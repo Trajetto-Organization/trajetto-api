@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import { periodBuckets } from "@/modules/dashboard/repositories/period-buckets";
-import { businessMonthStart, zonedWallTimeToUtc } from "@/shared/time/business-day";
+import {
+  businessMonthStart,
+  zonedWallTimeToUtc,
+} from "@/shared/time/business-day";
 
 const SP = "America/Sao_Paulo";
 const MANAUS = "America/Manaus";
 
 const iso = (buckets: ReturnType<typeof periodBuckets>) =>
-  buckets.map((bucket) => [bucket.period, bucket.start.toISOString(), bucket.end.toISOString()]);
+  buckets.map((bucket) => [
+    bucket.period,
+    bucket.start.toISOString(),
+    bucket.end.toISOString(),
+  ]);
 
 describe("periodBuckets", () => {
   it("cuts months at the company's midnight, not UTC's", () => {
@@ -21,7 +28,16 @@ describe("periodBuckets", () => {
     ]);
 
     // Manaus is an hour further west: its months start at 04:00Z.
-    expect(iso(periodBuckets(businessMonthStart("2026-08", MANAUS), businessMonthStart("2026-09", MANAUS), "month", MANAUS))).toEqual([
+    expect(
+      iso(
+        periodBuckets(
+          businessMonthStart("2026-08", MANAUS),
+          businessMonthStart("2026-09", MANAUS),
+          "month",
+          MANAUS,
+        ),
+      ),
+    ).toEqual([
       ["2026-08", "2026-08-01T04:00:00.000Z", "2026-09-01T04:00:00.000Z"],
     ]);
   });
@@ -50,7 +66,11 @@ describe("periodBuckets", () => {
     const to = zonedWallTimeToUtc(SP, 2026, 10, 2);
     const buckets = periodBuckets(from, to, "day", SP);
 
-    expect(buckets.map((bucket) => bucket.period)).toEqual(["2026-09-29", "2026-09-30", "2026-10-01"]);
+    expect(buckets.map((bucket) => bucket.period)).toEqual([
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-01",
+    ]);
 
     for (let index = 1; index < buckets.length; index++) {
       expect(buckets[index].start).toEqual(buckets[index - 1].end);

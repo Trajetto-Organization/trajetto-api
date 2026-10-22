@@ -4,7 +4,10 @@ import database from "@/../infra/database";
 
 import type { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import type { ISupportTicketRepository } from "../../../repositories/ISupport-ticket-repository";
-import type { SupportTicket, SupportTicketRow } from "../../../dtos/support-ticket-dto";
+import type {
+  SupportTicket,
+  SupportTicketRow,
+} from "../../../dtos/support-ticket-dto";
 
 import { NotificationService } from "@/shared/services/notification-service";
 import {
@@ -24,9 +27,16 @@ import {
   SupportTicketNotFoundError,
 } from "../../errors/support-ticket-errors";
 import { closeOutcomeProblem } from "../../shared/ticket-rules";
-import { presentTicket, type TicketSummary } from "../../shared/ticket-presenter";
+import {
+  presentTicket,
+  type TicketSummary,
+} from "../../shared/ticket-presenter";
 import { announceTicket } from "../../shared/ticket-operations";
-import { assertOperator, loadScopedTicket, resolveTicketScope } from "../ticket-access";
+import {
+  assertOperator,
+  loadScopedTicket,
+  resolveTicketScope,
+} from "../ticket-access";
 
 type CloseOutcome = "RESOLVED" | "APPROVED" | "DENIED";
 
@@ -67,12 +77,22 @@ class CloseSupportTicketUseCase {
     private notificationService: NotificationService,
   ) {}
 
-  async execute(request: CloseSupportTicketRequest): Promise<CloseSupportTicketResponse> {
-    const scope = await resolveTicketScope(this.user, request.userId, request.businessId);
+  async execute(
+    request: CloseSupportTicketRequest,
+  ): Promise<CloseSupportTicketResponse> {
+    const scope = await resolveTicketScope(
+      this.user,
+      request.userId,
+      request.businessId,
+    );
 
     assertOperator(scope);
 
-    const ticket = await loadScopedTicket(this.tickets, scope, request.ticketId);
+    const ticket = await loadScopedTicket(
+      this.tickets,
+      scope,
+      request.ticketId,
+    );
     const row = await this.row(ticket.id, scope.businessId);
 
     if (row.status === "CLOSED") return this.answerClosed(row, request);
@@ -110,17 +130,30 @@ class CloseSupportTicketUseCase {
     }
 
     const at = new Date();
-    const actor = { actor_kind: "USER" as const, actorId: scope.user.id, actor_name: scope.user.name };
+    const actor = {
+      actor_kind: "USER" as const,
+      actorId: scope.user.id,
+      actor_name: scope.user.name,
+    };
 
     try {
       await database.$transaction(async (tx) => {
-        const locked = await this.tickets.lockForUpdate(ticket.id, scope.businessId, tx);
+        const locked = await this.tickets.lockForUpdate(
+          ticket.id,
+          scope.businessId,
+          tx,
+        );
 
         if (!locked || locked.status !== "OPEN") throw new CloseLostError();
 
         if (locked.assigneeId === null) {
           await this.tickets.assign(
-            { id: locked.id, businessId: scope.businessId, assigneeId: scope.user.id, at },
+            {
+              id: locked.id,
+              businessId: scope.businessId,
+              assigneeId: scope.user.id,
+              at,
+            },
             tx,
           );
 
@@ -165,7 +198,10 @@ class CloseSupportTicketUseCase {
       });
     } catch (error) {
       if (error instanceof CloseLostError) {
-        return this.answerClosed(await this.row(ticket.id, scope.businessId), request);
+        return this.answerClosed(
+          await this.row(ticket.id, scope.businessId),
+          request,
+        );
       }
 
       throw error;
@@ -189,7 +225,8 @@ class CloseSupportTicketUseCase {
           `Atendimento #${after.number} encerrado na entrega para ${after.delivery.recipient_name}` +
           (note ? `: ${note}` : ""),
         status:
-          DELIVERY_STATUS_LABELS[after.delivery.status as DeliveryStatus] ?? after.delivery.status,
+          DELIVERY_STATUS_LABELS[after.delivery.status as DeliveryStatus] ??
+          after.delivery.status,
         performedBy: scope.user.id,
         businessId: scope.businessId,
       });
@@ -214,7 +251,10 @@ class CloseSupportTicketUseCase {
     row: SupportTicketRow,
     request: CloseSupportTicketRequest,
   ): CloseSupportTicketResponse {
-    if (row.closedById === request.userId && row.close_outcome === request.outcome) {
+    if (
+      row.closedById === request.userId &&
+      row.close_outcome === request.outcome
+    ) {
       return { data: presentTicket(row), replayed: true };
     }
 
@@ -227,4 +267,8 @@ class CloseSupportTicketUseCase {
 }
 
 export { CloseSupportTicketUseCase };
-export type { CloseSupportTicketRequest, CloseSupportTicketResponse, SupportTicket };
+export type {
+  CloseSupportTicketRequest,
+  CloseSupportTicketResponse,
+  SupportTicket,
+};

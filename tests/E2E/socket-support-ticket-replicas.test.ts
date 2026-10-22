@@ -61,7 +61,11 @@ const sockets: TestSocket[] = [];
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
-async function tokenFor(userId: string, businessId: string, driverId: string | null) {
+async function tokenFor(
+  userId: string,
+  businessId: string,
+  driverId: string | null,
+) {
   const familyId = randomUUID();
 
   await prisma.refreshToken.create({
@@ -77,7 +81,14 @@ async function tokenFor(userId: string, businessId: string, driverId: string | n
   const { default: auth } = await import("@/config/auth");
 
   return sign(
-    { tokenType: "access", role: "BUSINESS_USER", businessId, driverId, sessionVersion: 0, familyId },
+    {
+      tokenType: "access",
+      role: "BUSINESS_USER",
+      businessId,
+      driverId,
+      sessionVersion: 0,
+      familyId,
+    },
     auth.secret_token,
     { subject: userId, expiresIn: "1h" },
   );
@@ -91,7 +102,10 @@ function connectTo(port: number, token: string): Promise<TestSocket> {
       reconnection: false,
     });
 
-    const timer = setTimeout(() => fail(new Error(`o socket não conectou na porta ${port}`)), 20_000);
+    const timer = setTimeout(
+      () => fail(new Error(`o socket não conectou na porta ${port}`)),
+      20_000,
+    );
 
     socket.on("connect", () => {
       clearTimeout(timer);
@@ -200,10 +214,18 @@ const ticket = (version: number) => ({
   assignee: { id: STAFF, name: "Atendente" },
 });
 
-const driverView = { id: "ticket-1", number: 7, status: "OPEN", subject: "Cliente ausente — Mercado Sol" };
+const driverView = {
+  id: "ticket-1",
+  number: 7,
+  status: "OPEN",
+  subject: "Cliente ausente — Mercado Sol",
+};
 
 beforeAll(async () => {
-  const profile = await seedCompany(CARRIER, "Transportadora das Réplicas dos Atendimentos");
+  const profile = await seedCompany(
+    CARRIER,
+    "Transportadora das Réplicas dos Atendimentos",
+  );
   const foreignProfile = await seedCompany(OTHER, "Outra Transportadora");
 
   await seedDriver(DRIVER, "Motorista Um");
@@ -252,8 +274,16 @@ beforeAll(async () => {
 
   const redis = process.env.REDIS_URL ?? "redis://localhost:6379";
 
-  one = await startReplica({ REDIS_URL: redis, SOCKET_ADAPTER_KEY: ADAPTER_KEY, SOCKET_REVALIDATE_MS: NEVER_MS });
-  two = await startReplica({ REDIS_URL: redis, SOCKET_ADAPTER_KEY: ADAPTER_KEY, SOCKET_REVALIDATE_MS: NEVER_MS });
+  one = await startReplica({
+    REDIS_URL: redis,
+    SOCKET_ADAPTER_KEY: ADAPTER_KEY,
+    SOCKET_REVALIDATE_MS: NEVER_MS,
+  });
+  two = await startReplica({
+    REDIS_URL: redis,
+    SOCKET_ADAPTER_KEY: ADAPTER_KEY,
+    SOCKET_REVALIDATE_MS: NEVER_MS,
+  });
 
   replicas.push(one, two);
 
@@ -282,16 +312,36 @@ describe("supportTicket across replicas", () => {
     "reaches the tower and the ticket's driver on other replicas, and nobody else",
     { timeout: 90_000 },
     async () => {
-      const staff = await connectTo(one.port, await tokenFor(STAFF, CARRIER, null));
-      const foreignStaff = await connectTo(one.port, await tokenFor(FOREIGN_STAFF, OTHER, null));
-      const driver = await connectTo(two.port, await tokenFor(DRIVER_USER, CARRIER, DRIVER));
-      const otherDriver = await connectTo(two.port, await tokenFor(OTHER_DRIVER_USER, CARRIER, OTHER_DRIVER));
+      const staff = await connectTo(
+        one.port,
+        await tokenFor(STAFF, CARRIER, null),
+      );
+      const foreignStaff = await connectTo(
+        one.port,
+        await tokenFor(FOREIGN_STAFF, OTHER, null),
+      );
+      const driver = await connectTo(
+        two.port,
+        await tokenFor(DRIVER_USER, CARRIER, DRIVER),
+      );
+      const otherDriver = await connectTo(
+        two.port,
+        await tokenFor(OTHER_DRIVER_USER, CARRIER, OTHER_DRIVER),
+      );
 
       // Rooms are joined after the handshake's queries.
       await sleep(2_000);
 
-      const towerHears = next(staff, "supportTicket", (event) => event.type === "ticket.opened");
-      const driverHears = next(driver, "supportTicket", (event) => event.type === "ticket.opened");
+      const towerHears = next(
+        staff,
+        "supportTicket",
+        (event) => event.type === "ticket.opened",
+      );
+      const driverHears = next(
+        driver,
+        "supportTicket",
+        (event) => event.type === "ticket.opened",
+      );
       const foreignHears = next(foreignStaff, "supportTicket");
       const otherDriverHears = next(otherDriver, "supportTicket");
 
@@ -327,23 +377,48 @@ describe("supportTicket across replicas", () => {
     },
   );
 
-  it("keeps the assignee juggling inside the tower", { timeout: 60_000 }, async () => {
-    const staff = await connectTo(two.port, await tokenFor(STAFF, CARRIER, null));
-    const driver = await connectTo(one.port, await tokenFor(DRIVER_USER, CARRIER, DRIVER));
+  it(
+    "keeps the assignee juggling inside the tower",
+    { timeout: 60_000 },
+    async () => {
+      const staff = await connectTo(
+        two.port,
+        await tokenFor(STAFF, CARRIER, null),
+      );
+      const driver = await connectTo(
+        one.port,
+        await tokenFor(DRIVER_USER, CARRIER, DRIVER),
+      );
 
-    await sleep(2_000);
+      await sleep(2_000);
 
-    const towerHears = next(staff, "supportTicket", (event) => event.type === "ticket.assigned");
-    const driverHears = next(driver, "supportTicket", (event) => event.type === "ticket.assigned");
+      const towerHears = next(
+        staff,
+        "supportTicket",
+        (event) => event.type === "ticket.assigned",
+      );
+      const driverHears = next(
+        driver,
+        "supportTicket",
+        (event) => event.type === "ticket.assigned",
+      );
 
-    node.sendSupportTicketEvent(
-      CARRIER,
-      DRIVER_USER,
-      { type: "ticket.assigned", ticket: ticket(2), actor: { id: STAFF, name: "Atendente" } },
-      driverView,
-    );
+      node.sendSupportTicketEvent(
+        CARRIER,
+        DRIVER_USER,
+        {
+          type: "ticket.assigned",
+          ticket: ticket(2),
+          actor: { id: STAFF, name: "Atendente" },
+        },
+        driverView,
+      );
 
-    expect(await towerHears).toMatchObject({ type: "ticket.assigned", ticket: { version: 2 } });
-    expect(await driverHears).toBeNull();
-  });
+      expect(await towerHears).toMatchObject({
+        type: "ticket.assigned",
+        ticket: { version: 2 },
+      });
+      expect(await driverHears).toBeNull();
+    },
+  );
 });

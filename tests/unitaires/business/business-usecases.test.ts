@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendCatalogChangedEvent = vi.hoisted(() => vi.fn());
 const sendEntitlementsChangedEvent = vi.hoisted(() => vi.fn());
-const sendTransactionalMail = vi.hoisted(() => vi.fn(async (_mail: unknown) => undefined));
+const sendTransactionalMail = vi.hoisted(() =>
+  vi.fn(async (_mail: unknown) => undefined),
+);
 const quota = vi.hoisted(() => ({
   getQuotaUsage: vi.fn(),
   getQuotaUsageByType: vi.fn(),
@@ -13,9 +15,14 @@ const entitlements = vi.hoisted(() => ({
   setModuleEnabled: vi.fn(),
 }));
 
-vi.mock("@/websocket", () => ({ sendCatalogChangedEvent, sendEntitlementsChangedEvent }));
+vi.mock("@/websocket", () => ({
+  sendCatalogChangedEvent,
+  sendEntitlementsChangedEvent,
+}));
 // The e-mails are beside the point: what matters is who gets refused.
-vi.mock("@/shared/services/transactional-mail-service", () => ({ sendTransactionalMail }));
+vi.mock("@/shared/services/transactional-mail-service", () => ({
+  sendTransactionalMail,
+}));
 // The quota ledger and the module table are SQL (tests/E2E/ai-usage-http and
 // the entitlement E2E cover them); here only how the use case composes them.
 vi.mock("@/shared/ai/ai-quota-service", () => quota);
@@ -30,7 +37,10 @@ vi.mock("@/../infra/database", () => ({
 }));
 
 import type { User } from "@/modules/user/dtos/user-dto";
-import type { Business, CreateBusinessProps } from "@/modules/business/dtos/business-dto";
+import type {
+  Business,
+  CreateBusinessProps,
+} from "@/modules/business/dtos/business-dto";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
@@ -71,7 +81,9 @@ let pending: InMemoryPendingDeletionProvider;
 const notifications = { createActivityIfEnabled: vi.fn(async () => undefined) };
 const outbox = { publish: vi.fn(async () => undefined) };
 
-const company = (overrides: Partial<CreateBusinessProps> = {}): CreateBusinessProps => ({
+const company = (
+  overrides: Partial<CreateBusinessProps> = {},
+): CreateBusinessProps => ({
   corporate_reason: "Transportadora Alfa Ltda",
   fantasy_name: "Alfa",
   cep: "13010000",
@@ -98,7 +110,13 @@ beforeEach(() => {
   vi.clearAllMocks();
 
   users.user.push(
-    { id: MASTER, role: "MASTER", businessId: null, name: "Mestre", email: "mestre@trajetto.com.br" } as unknown as User,
+    {
+      id: MASTER,
+      role: "MASTER",
+      businessId: null,
+      name: "Mestre",
+      email: "mestre@trajetto.com.br",
+    } as unknown as User,
     {
       id: OTHER_MASTER,
       role: "MASTER",
@@ -111,12 +129,24 @@ beforeEach(() => {
 });
 
 const create = () =>
-  new CreateBusinessUseCase(users, businesses, branches, notifications as never);
+  new CreateBusinessUseCase(
+    users,
+    businesses,
+    branches,
+    notifications as never,
+  );
 const update = () =>
-  new UpdateBusinessUseCase(users, businesses, branches, notifications as never);
+  new UpdateBusinessUseCase(
+    users,
+    businesses,
+    branches,
+    notifications as never,
+  );
 
 /** A company created the way the screen does it, with its admin. */
-async function seedCompany(overrides: Partial<CreateBusinessProps> = {}): Promise<Business> {
+async function seedCompany(
+  overrides: Partial<CreateBusinessProps> = {},
+): Promise<Business> {
   const created = await create().execute(company(overrides), MASTER);
 
   return created;
@@ -127,7 +157,10 @@ describe("CreateBusinessUseCase", () => {
     const created = await seedCompany();
 
     expect(businesses.business).toHaveLength(1);
-    expect(created).toMatchObject({ is_active: true, timezone: "America/Sao_Paulo" });
+    expect(created).toMatchObject({
+      is_active: true,
+      timezone: "America/Sao_Paulo",
+    });
     expect(branches.branches).toHaveLength(1);
     expect(branches.branches[0]).toMatchObject({
       businessId: created.id,
@@ -141,14 +174,47 @@ describe("CreateBusinessUseCase", () => {
   });
 
   it.each([
-    ["CNPJ", { corporate_reason: "Outra", email: "o@o.com", erp_code: "X" }, "BUSINESS_CNPJ_TAKEN"],
-    ["razão social (any case)", { cnpj: "22222222000122", corporate_reason: "TRANSPORTADORA ALFA LTDA", email: "o@o.com", erp_code: "X" }, "BUSINESS_NAME_TAKEN"],
-    ["código ERP (any case)", { cnpj: "22222222000122", corporate_reason: "Outra", email: "o@o.com", erp_code: "alfa" }, "BUSINESS_ERP_CODE_TAKEN"],
-    ["e-mail (any case)", { cnpj: "22222222000122", corporate_reason: "Outra", erp_code: "X", email: "CONTATO@alfa.com.br" }, "BUSINESS_EMAIL_TAKEN"],
+    [
+      "CNPJ",
+      { corporate_reason: "Outra", email: "o@o.com", erp_code: "X" },
+      "BUSINESS_CNPJ_TAKEN",
+    ],
+    [
+      "razão social (any case)",
+      {
+        cnpj: "22222222000122",
+        corporate_reason: "TRANSPORTADORA ALFA LTDA",
+        email: "o@o.com",
+        erp_code: "X",
+      },
+      "BUSINESS_NAME_TAKEN",
+    ],
+    [
+      "código ERP (any case)",
+      {
+        cnpj: "22222222000122",
+        corporate_reason: "Outra",
+        email: "o@o.com",
+        erp_code: "alfa",
+      },
+      "BUSINESS_ERP_CODE_TAKEN",
+    ],
+    [
+      "e-mail (any case)",
+      {
+        cnpj: "22222222000122",
+        corporate_reason: "Outra",
+        erp_code: "X",
+        email: "CONTATO@alfa.com.br",
+      },
+      "BUSINESS_EMAIL_TAKEN",
+    ],
   ])("refuses a taken %s with 409", async (_label, overrides, code) => {
     await seedCompany();
 
-    await expect(create().execute(company(overrides), MASTER)).rejects.toMatchObject({
+    await expect(
+      create().execute(company(overrides), MASTER),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code,
     });
@@ -166,10 +232,18 @@ describe("CreateBusinessUseCase", () => {
 
     await expect(
       create().execute(
-        company({ cnpj: "33333333000133", corporate_reason: "Beta", email: "b@b.com", erp_code: "B" }),
+        company({
+          cnpj: "33333333000133",
+          corporate_reason: "Beta",
+          email: "b@b.com",
+          erp_code: "B",
+        }),
         MASTER,
       ),
-    ).rejects.toMatchObject({ statusCode: 409, code: "BRANCH_CNPJ_UNAVAILABLE" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "BRANCH_CNPJ_UNAVAILABLE",
+    });
   });
 
   it("does not hold another company's branch name, e-mail or ERP code against the new one", async () => {
@@ -178,7 +252,12 @@ describe("CreateBusinessUseCase", () => {
     // branch rules are per company (decision 8.1).
     await expect(
       create().execute(
-        company({ cnpj: "22222222000122", corporate_reason: "Beta", email: "b@b.com", erp_code: "B" }),
+        company({
+          cnpj: "22222222000122",
+          corporate_reason: "Beta",
+          email: "b@b.com",
+          erp_code: "B",
+        }),
         MASTER,
       ),
     ).resolves.toMatchObject({ corporate_reason: "Beta" });
@@ -188,7 +267,14 @@ describe("CreateBusinessUseCase", () => {
     // Both look before either writes; the database's unique index decides.
     const results = await Promise.allSettled([
       create().execute(company(), MASTER),
-      create().execute(company({ corporate_reason: "Alfa Duplicada", email: "d@d.com", erp_code: "D" }), MASTER),
+      create().execute(
+        company({
+          corporate_reason: "Alfa Duplicada",
+          email: "d@d.com",
+          erp_code: "D",
+        }),
+        MASTER,
+      ),
     ]);
 
     const rejected = results.filter((result) => result.status === "rejected");
@@ -220,7 +306,10 @@ describe("UpdateBusinessUseCase", () => {
       businessData: { fantasy_name: "Alfa Cargas", timezone: "America/Manaus" },
     });
 
-    expect(updated).toMatchObject({ fantasy_name: "Alfa Cargas", timezone: "America/Manaus" });
+    expect(updated).toMatchObject({
+      fantasy_name: "Alfa Cargas",
+      timezone: "America/Manaus",
+    });
     expect(branches.branches[0].fantasy_name).toBe("Alfa Cargas");
     expect(sendCatalogChangedEvent).toHaveBeenCalledWith(alfa.id, "branch");
   });
@@ -244,19 +333,36 @@ describe("UpdateBusinessUseCase", () => {
 
   it("refuses another company's CNPJ, name, ERP code or e-mail with 409", async () => {
     const alfa = await seedCompany();
-    await seedCompany({ cnpj: "22222222000122", corporate_reason: "Beta", email: "b@b.com", erp_code: "B" });
+    await seedCompany({
+      cnpj: "22222222000122",
+      corporate_reason: "Beta",
+      email: "b@b.com",
+      erp_code: "B",
+    });
 
     const attempt = (businessData: Record<string, string>) =>
-      update().execute({ businessId: alfa.id as string, userId: MASTER, businessData });
+      update().execute({
+        businessId: alfa.id as string,
+        userId: MASTER,
+        businessData,
+      });
 
-    await expect(attempt({ cnpj: "22222222000122" })).rejects.toMatchObject({ code: "BUSINESS_CNPJ_TAKEN" });
-    await expect(attempt({ corporate_reason: "beta" })).rejects.toMatchObject({ code: "BUSINESS_NAME_TAKEN" });
-    await expect(attempt({ erp_code: "b" })).rejects.toMatchObject({ code: "BUSINESS_ERP_CODE_TAKEN" });
-    await expect(attempt({ email: "B@B.COM" })).rejects.toMatchObject({ code: "BUSINESS_EMAIL_TAKEN" });
+    await expect(attempt({ cnpj: "22222222000122" })).rejects.toMatchObject({
+      code: "BUSINESS_CNPJ_TAKEN",
+    });
+    await expect(attempt({ corporate_reason: "beta" })).rejects.toMatchObject({
+      code: "BUSINESS_NAME_TAKEN",
+    });
+    await expect(attempt({ erp_code: "b" })).rejects.toMatchObject({
+      code: "BUSINESS_ERP_CODE_TAKEN",
+    });
+    await expect(attempt({ email: "B@B.COM" })).rejects.toMatchObject({
+      code: "BUSINESS_EMAIL_TAKEN",
+    });
 
-    expect(businesses.business.find((row) => row.id === alfa.id)?.corporate_reason).toBe(
-      "Transportadora Alfa Ltda",
-    );
+    expect(
+      businesses.business.find((row) => row.id === alfa.id)?.corporate_reason,
+    ).toBe("Transportadora Alfa Ltda");
   });
 
   it("refuses a name or e-mail taken by one of the company's other branches (409)", async () => {
@@ -271,25 +377,45 @@ describe("UpdateBusinessUseCase", () => {
     });
 
     const attempt = (businessData: Record<string, string>) =>
-      update().execute({ businessId: alfa.id as string, userId: MASTER, businessData });
+      update().execute({
+        businessId: alfa.id as string,
+        userId: MASTER,
+        businessData,
+      });
 
-    await expect(attempt({ corporate_reason: "Alfa Filial Sul" })).rejects.toMatchObject({
+    await expect(
+      attempt({ corporate_reason: "Alfa Filial Sul" }),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "BRANCH_NAME_TAKEN",
     });
-    await expect(attempt({ email: "sul@alfa.com.br" })).rejects.toMatchObject({ code: "BRANCH_EMAIL_TAKEN" });
-    await expect(attempt({ erp_code: "SUL" })).rejects.toMatchObject({ code: "BRANCH_ERP_CODE_TAKEN" });
-    await expect(attempt({ cnpj: "44444444000144" })).rejects.toMatchObject({ code: "BRANCH_CNPJ_UNAVAILABLE" });
+    await expect(attempt({ email: "sul@alfa.com.br" })).rejects.toMatchObject({
+      code: "BRANCH_EMAIL_TAKEN",
+    });
+    await expect(attempt({ erp_code: "SUL" })).rejects.toMatchObject({
+      code: "BRANCH_ERP_CODE_TAKEN",
+    });
+    await expect(attempt({ cnpj: "44444444000144" })).rejects.toMatchObject({
+      code: "BRANCH_CNPJ_UNAVAILABLE",
+    });
   });
 
   it("answers 404 for an unknown company or session user", async () => {
     await expect(
-      update().execute({ businessId: MISSING, userId: MASTER, businessData: { fantasy_name: "X" } }),
+      update().execute({
+        businessId: MISSING,
+        userId: MASTER,
+        businessData: { fantasy_name: "X" },
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "BUSINESS_NOT_FOUND" });
 
     const alfa = await seedCompany();
     await expect(
-      update().execute({ businessId: alfa.id as string, userId: "nobody", businessData: {} }),
+      update().execute({
+        businessId: alfa.id as string,
+        userId: "nobody",
+        businessData: {},
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "USER_NOT_FOUND" });
   });
 
@@ -303,7 +429,12 @@ describe("UpdateBusinessUseCase", () => {
       const found = await lookup(businessId, email);
 
       await branches.createBranch({
-        ...company({ cnpj: "33333333000133", corporate_reason: "Filial Norte", erp_code: "N", email }),
+        ...company({
+          cnpj: "33333333000133",
+          corporate_reason: "Filial Norte",
+          erp_code: "N",
+          email,
+        }),
         businessId,
       } as never);
 
@@ -311,19 +442,39 @@ describe("UpdateBusinessUseCase", () => {
     };
 
     const error = await update()
-      .execute({ businessId: alfa.id as string, userId: MASTER, businessData: { email: "novo@alfa.com.br" } })
+      .execute({
+        businessId: alfa.id as string,
+        userId: MASTER,
+        businessData: { email: "novo@alfa.com.br" },
+      })
       .catch((caught: unknown) => caught);
 
-    expect(error).toMatchObject({ statusCode: 409, code: "BRANCH_EMAIL_TAKEN" });
+    expect(error).toMatchObject({
+      statusCode: 409,
+      code: "BRANCH_EMAIL_TAKEN",
+    });
   });
 
   it("answers the loser of a simultaneous rename with 409, not 500", async () => {
     const alfa = await seedCompany();
-    const beta = await seedCompany({ cnpj: "22222222000122", corporate_reason: "Beta", email: "b@b.com", erp_code: "B" });
+    const beta = await seedCompany({
+      cnpj: "22222222000122",
+      corporate_reason: "Beta",
+      email: "b@b.com",
+      erp_code: "B",
+    });
 
     const results = await Promise.allSettled([
-      update().execute({ businessId: alfa.id as string, userId: MASTER, businessData: { email: "novo@x.com" } }),
-      update().execute({ businessId: beta.id as string, userId: MASTER, businessData: { email: "novo@x.com" } }),
+      update().execute({
+        businessId: alfa.id as string,
+        userId: MASTER,
+        businessData: { email: "novo@x.com" },
+      }),
+      update().execute({
+        businessId: beta.id as string,
+        userId: MASTER,
+        businessData: { email: "novo@x.com" },
+      }),
     ]);
 
     const rejected = results.filter((result) => result.status === "rejected");
@@ -339,46 +490,91 @@ describe("UpdateBusinessUseCase", () => {
 describe("SearchBusinessCursorUseCase", () => {
   it("lets the MASTER walk every active company and keeps an admin on their own", async () => {
     const alfa = await seedCompany();
-    const beta = await seedCompany({ cnpj: "22222222000122", corporate_reason: "Beta", email: "b@b.com", erp_code: "B" });
-    await seedCompany({ cnpj: "33333333000133", corporate_reason: "Gama", email: "g@g.com", erp_code: "G" });
-    businesses.business.find((row) => row.corporate_reason === "Gama")!.is_active = false;
-    users.user.push({ id: ADMIN_A, role: "BUSINESS_ADMIN", businessId: alfa.id } as User);
+    const beta = await seedCompany({
+      cnpj: "22222222000122",
+      corporate_reason: "Beta",
+      email: "b@b.com",
+      erp_code: "B",
+    });
+    await seedCompany({
+      cnpj: "33333333000133",
+      corporate_reason: "Gama",
+      email: "g@g.com",
+      erp_code: "G",
+    });
+    businesses.business.find(
+      (row) => row.corporate_reason === "Gama",
+    )!.is_active = false;
+    users.user.push({
+      id: ADMIN_A,
+      role: "BUSINESS_ADMIN",
+      businessId: alfa.id,
+    } as User);
 
-    const all = await new SearchBusinessCursorUseCase(users, businesses).execute({ userId: MASTER, limit: 1 });
+    const all = await new SearchBusinessCursorUseCase(
+      users,
+      businesses,
+    ).execute({ userId: MASTER, limit: 1 });
     expect(all.data).toHaveLength(1);
     expect(all.hasMore).toBe(true);
 
-    const rest = await new SearchBusinessCursorUseCase(users, businesses).execute({
+    const rest = await new SearchBusinessCursorUseCase(
+      users,
+      businesses,
+    ).execute({
       userId: MASTER,
       limit: 5,
       cursor: all.nextCursor as string,
     });
-    expect([...all.data, ...rest.data].map((row) => row.id).sort()).toEqual([alfa.id, beta.id].sort());
+    expect([...all.data, ...rest.data].map((row) => row.id).sort()).toEqual(
+      [alfa.id, beta.id].sort(),
+    );
 
-    const own = await new SearchBusinessCursorUseCase(users, businesses).execute({ userId: ADMIN_A, search: "beta" });
+    const own = await new SearchBusinessCursorUseCase(
+      users,
+      businesses,
+    ).execute({ userId: ADMIN_A, search: "beta" });
     expect(own.data).toEqual([]);
   });
 
   it("answers 404 USER_NOT_FOUND for an unknown session user", async () => {
     await expect(
-      new SearchBusinessCursorUseCase(users, businesses).execute({ userId: "nobody" }),
+      new SearchBusinessCursorUseCase(users, businesses).execute({
+        userId: "nobody",
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "USER_NOT_FOUND" });
   });
 });
 
 describe("deleting a company with a code by e-mail", () => {
-  const request = () => new RequestBusinessDeletionUseCase(users, businesses, pending);
-  const remove = () => new DeleteBusinessUseCase(users, businesses, pending, notifications as never);
+  const request = () =>
+    new RequestBusinessDeletionUseCase(users, businesses, pending);
+  const remove = () =>
+    new DeleteBusinessUseCase(
+      users,
+      businesses,
+      pending,
+      notifications as never,
+    );
 
   async function emptyCompany(): Promise<string> {
     // A company with no branch, user or driver left: the only deletable one.
     const id = "018f3200-0000-7000-8000-0000000000c1";
-    businesses.business.push({ id, corporate_reason: "Vazia", cnpj: "55555555000155", timezone: "America/Sao_Paulo" } as Business);
+    businesses.business.push({
+      id,
+      corporate_reason: "Vazia",
+      cnpj: "55555555000155",
+      timezone: "America/Sao_Paulo",
+    } as Business);
 
     return id;
   }
 
-  async function arm(businessId: string, code: string, expires = new Date(Date.now() + 60_000)) {
+  async function arm(
+    businessId: string,
+    code: string,
+    expires = new Date(Date.now() + 60_000),
+  ) {
     await pending.upsertPendingDeletion({
       entity_type: "business",
       entity_id: businessId,
@@ -395,14 +591,20 @@ describe("deleting a company with a code by e-mail", () => {
 
     expect(result.message).toContain("código de confirmação");
     expect(pending.pendingDeletions).toHaveLength(1);
-    expect(pending.pendingDeletions[0]).toMatchObject({ entity_type: "business", entity_id: id, userId: MASTER });
+    expect(pending.pendingDeletions[0]).toMatchObject({
+      entity_type: "business",
+      entity_id: id,
+      userId: MASTER,
+    });
     const sent = sendTransactionalMail.mock.calls[0][0] as unknown as {
       email: string;
       additionalVariablesProperties: { code: string };
     };
     expect(sent.email).toBe("mestre@trajetto.com.br");
     expect(sent.additionalVariablesProperties.code).toMatch(/^\d{6}$/);
-    expect(pending.pendingDeletions[0].code_hash).not.toBe(sent.additionalVariablesProperties.code);
+    expect(pending.pendingDeletions[0].code_hash).not.toBe(
+      sent.additionalVariablesProperties.code,
+    );
   });
 
   it("refuses to send a code for a company that still has branches, users or drivers (409)", async () => {
@@ -410,10 +612,14 @@ describe("deleting a company with a code by e-mail", () => {
     businesses.dependents.branches.push({ businessId: alfa.id as string });
     businesses.dependents.users.push({ businessId: alfa.id as string });
 
-    await expect(request().execute(alfa.id as string, MASTER)).rejects.toMatchObject({
+    await expect(
+      request().execute(alfa.id as string, MASTER),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "BUSINESS_IN_USE",
-      message: expect.stringContaining("1 filial(is) vinculada(s), 1 usuário(s) vinculado(s)"),
+      message: expect.stringContaining(
+        "1 filial(is) vinculada(s), 1 usuário(s) vinculado(s)",
+      ),
     });
     expect(sendTransactionalMail).not.toHaveBeenCalled();
   });
@@ -428,7 +634,12 @@ describe("deleting a company with a code by e-mail", () => {
     expect(businesses.business).toHaveLength(0);
     expect(pending.pendingDeletions).toHaveLength(0);
     expect(notifications.createActivityIfEnabled).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "delete", entityId: id, businessId: null, tenantName: "Vazia" }),
+      expect.objectContaining({
+        action: "delete",
+        entityId: id,
+        businessId: null,
+        tenantName: "Vazia",
+      }),
       expect.anything(),
     );
     await vi.waitFor(() =>
@@ -492,9 +703,15 @@ describe("deleting a company with a code by e-mail", () => {
   });
 
   it("answers 404 for an unknown company or session user", async () => {
-    await expect(request().execute(MISSING, MASTER)).rejects.toMatchObject({ code: "BUSINESS_NOT_FOUND" });
-    await expect(remove().execute(MISSING, MASTER, "123456")).rejects.toMatchObject({ code: "BUSINESS_NOT_FOUND" });
-    await expect(request().execute(MISSING, "nobody")).rejects.toMatchObject({ code: "USER_NOT_FOUND" });
+    await expect(request().execute(MISSING, MASTER)).rejects.toMatchObject({
+      code: "BUSINESS_NOT_FOUND",
+    });
+    await expect(
+      remove().execute(MISSING, MASTER, "123456"),
+    ).rejects.toMatchObject({ code: "BUSINESS_NOT_FOUND" });
+    await expect(request().execute(MISSING, "nobody")).rejects.toMatchObject({
+      code: "USER_NOT_FOUND",
+    });
   });
 });
 
@@ -504,9 +721,23 @@ describe("the company's AI usage and limits", () => {
 
   beforeEach(async () => {
     alfaId = (await seedCompany()).id as string;
-    betaId = (await seedCompany({ cnpj: "22222222000122", corporate_reason: "Beta", email: "b@b.com", erp_code: "B" })).id as string;
-    businesses.business.find((row) => row.id === alfaId)!.ai_analysis_limit = 50;
-    users.user.push({ id: ADMIN_A, role: "BUSINESS_ADMIN", businessId: alfaId, name: "Ana", email: "ana@alfa.com.br" } as User);
+    betaId = (
+      await seedCompany({
+        cnpj: "22222222000122",
+        corporate_reason: "Beta",
+        email: "b@b.com",
+        erp_code: "B",
+      })
+    ).id as string;
+    businesses.business.find((row) => row.id === alfaId)!.ai_analysis_limit =
+      50;
+    users.user.push({
+      id: ADMIN_A,
+      role: "BUSINESS_ADMIN",
+      businessId: alfaId,
+      name: "Ana",
+      email: "ana@alfa.com.br",
+    } as User);
   });
 
   it("composes the ledger into the response, ISO instants and remaining included", async () => {
@@ -519,9 +750,16 @@ describe("the company's AI usage and limits", () => {
       resetAt: new Date("2026-11-01T03:00:00.000Z"),
       timeZone: "America/Sao_Paulo",
     });
-    quota.getQuotaUsageByType.mockResolvedValue({ fuel: 5, checklist: 7, proof: 0 });
+    quota.getQuotaUsageByType.mockResolvedValue({
+      fuel: 5,
+      checklist: 7,
+      proof: 0,
+    });
 
-    const usage = await new GetAIUsageUseCase(users, businesses).execute({ userId: ADMIN_A, businessId: alfaId });
+    const usage = await new GetAIUsageUseCase(users, businesses).execute({
+      userId: ADMIN_A,
+      businessId: alfaId,
+    });
 
     expect(usage).toMatchObject({
       id: alfaId,
@@ -539,16 +777,26 @@ describe("the company's AI usage and limits", () => {
   it("without a ledger period yet, the whole limit remains and nothing was used", async () => {
     quota.getQuotaUsage.mockResolvedValue(null);
 
-    const usage = await new GetAIUsageUseCase(users, businesses).execute({ userId: MASTER, businessId: alfaId });
+    const usage = await new GetAIUsageUseCase(users, businesses).execute({
+      userId: MASTER,
+      businessId: alfaId,
+    });
 
-    expect(usage).toMatchObject({ ai_analysis_used: 0, ai_analysis_remaining: 50, ai_analysis_reset_at: null });
+    expect(usage).toMatchObject({
+      ai_analysis_used: 0,
+      ai_analysis_remaining: 50,
+      ai_analysis_reset_at: null,
+    });
     expect(quota.getQuotaUsageByType).not.toHaveBeenCalled();
   });
 
   it("refuses another company's usage to an admin with the route's 403 TENANT_ACCESS_DENIED", async () => {
     // Same answer as the route guard (business-routes Swagger), not a 404.
     await expect(
-      new GetAIUsageUseCase(users, businesses).execute({ userId: ADMIN_A, businessId: betaId }),
+      new GetAIUsageUseCase(users, businesses).execute({
+        userId: ADMIN_A,
+        businessId: betaId,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
     expect(quota.getQuotaUsage).not.toHaveBeenCalled();
   });
@@ -556,10 +804,17 @@ describe("the company's AI usage and limits", () => {
   it("refuses a plain user, even of another company, with 403 AUTH_ROLE_FORBIDDEN", async () => {
     // The old check only looked at BUSINESS_ADMIN: a BUSINESS_USER read any
     // company's usage.
-    users.user.push({ id: USER_B, role: "BUSINESS_USER", businessId: betaId } as User);
+    users.user.push({
+      id: USER_B,
+      role: "BUSINESS_USER",
+      businessId: betaId,
+    } as User);
 
     await expect(
-      new GetAIUsageUseCase(users, businesses).execute({ userId: USER_B, businessId: alfaId }),
+      new GetAIUsageUseCase(users, businesses).execute({
+        userId: USER_B,
+        businessId: alfaId,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "AUTH_ROLE_FORBIDDEN" });
     expect(quota.getQuotaUsage).not.toHaveBeenCalled();
   });
@@ -568,36 +823,64 @@ describe("the company's AI usage and limits", () => {
     // The route is MASTER-only; the use case let an admin raise their own
     // company's limits when that guard was missing.
     const ai = new UpdateAILimitUseCase(users, businesses, outbox as never);
-    const fleet = new UpdateVehicleLimitUseCase(users, businesses, outbox as never);
+    const fleet = new UpdateVehicleLimitUseCase(
+      users,
+      businesses,
+      outbox as never,
+    );
 
     for (const businessId of [alfaId, betaId]) {
-      await expect(ai.execute({ userId: ADMIN_A, businessId, ai_analysis_limit: 999 })).rejects.toMatchObject({
+      await expect(
+        ai.execute({ userId: ADMIN_A, businessId, ai_analysis_limit: 999 }),
+      ).rejects.toMatchObject({
         statusCode: 403,
         code: "AUTH_ROLE_FORBIDDEN",
       });
-      await expect(fleet.execute({ userId: ADMIN_A, businessId, vehicle_limit: 999 })).rejects.toMatchObject({
+      await expect(
+        fleet.execute({ userId: ADMIN_A, businessId, vehicle_limit: 999 }),
+      ).rejects.toMatchObject({
         statusCode: 403,
         code: "AUTH_ROLE_FORBIDDEN",
       });
     }
 
     expect(outbox.publish).not.toHaveBeenCalled();
-    expect(businesses.business.find((row) => row.id === alfaId)?.ai_analysis_limit).toBe(50);
+    expect(
+      businesses.business.find((row) => row.id === alfaId)?.ai_analysis_limit,
+    ).toBe(50);
   });
 
   it("refuses a limit change with an unknown user or company, before writing", async () => {
     const ai = new UpdateAILimitUseCase(users, businesses, outbox as never);
-    const fleet = new UpdateVehicleLimitUseCase(users, businesses, outbox as never);
+    const fleet = new UpdateVehicleLimitUseCase(
+      users,
+      businesses,
+      outbox as never,
+    );
 
-    await expect(ai.execute({ userId: MASTER, businessId: MISSING, ai_analysis_limit: 10 })).rejects.toMatchObject({
+    await expect(
+      ai.execute({
+        userId: MASTER,
+        businessId: MISSING,
+        ai_analysis_limit: 10,
+      }),
+    ).rejects.toMatchObject({
       code: "BUSINESS_NOT_FOUND",
     });
-    await expect(fleet.execute({ userId: "nobody", businessId: alfaId, vehicle_limit: 10 })).rejects.toMatchObject({
+    await expect(
+      fleet.execute({
+        userId: "nobody",
+        businessId: alfaId,
+        vehicle_limit: 10,
+      }),
+    ).rejects.toMatchObject({
       code: "USER_NOT_FOUND",
     });
 
     expect(outbox.publish).not.toHaveBeenCalled();
-    expect(businesses.business.find((row) => row.id === betaId)?.vehicle_limit ?? 0).toBe(0);
+    expect(
+      businesses.business.find((row) => row.id === betaId)?.vehicle_limit ?? 0,
+    ).toBe(0);
   });
 });
 
@@ -611,14 +894,31 @@ describe("the company's plan (modules)", () => {
 
   beforeEach(async () => {
     alfaId = (await seedCompany()).id as string;
-    betaId = (await seedCompany({ cnpj: "22222222000122", corporate_reason: "Beta", email: "b@b.com", erp_code: "B" })).id as string;
+    betaId = (
+      await seedCompany({
+        cnpj: "22222222000122",
+        corporate_reason: "Beta",
+        email: "b@b.com",
+        erp_code: "B",
+      })
+    ).id as string;
     businesses.business.find((row) => row.id === alfaId)!.vehicle_limit = 10;
-    users.user.push({ id: ADMIN_A, role: "BUSINESS_ADMIN", businessId: alfaId } as User);
-    entitlements.getBusinessEntitlements.mockResolvedValue([{ module: "FLEET", enabled: true }]);
+    users.user.push({
+      id: ADMIN_A,
+      role: "BUSINESS_ADMIN",
+      businessId: alfaId,
+    } as User);
+    entitlements.getBusinessEntitlements.mockResolvedValue([
+      { module: "FLEET", enabled: true },
+    ]);
   });
 
   it("answers the admin's own plan with the fleet usage", async () => {
-    const plan = await new GetBusinessEntitlementsUseCase(users, businesses, vehicles as never).execute({
+    const plan = await new GetBusinessEntitlementsUseCase(
+      users,
+      businesses,
+      vehicles as never,
+    ).execute({
       userId: ADMIN_A,
       businessId: alfaId,
     });
@@ -634,7 +934,11 @@ describe("the company's plan (modules)", () => {
 
   it("refuses another company's plan to an admin with the route's 403 TENANT_ACCESS_DENIED", async () => {
     await expect(
-      new GetBusinessEntitlementsUseCase(users, businesses, vehicles as never).execute({
+      new GetBusinessEntitlementsUseCase(
+        users,
+        businesses,
+        vehicles as never,
+      ).execute({
         userId: ADMIN_A,
         businessId: betaId,
       }),
@@ -643,10 +947,18 @@ describe("the company's plan (modules)", () => {
   });
 
   it("refuses a plain user of the company with 403 AUTH_ROLE_FORBIDDEN, like the route", async () => {
-    users.user.push({ id: USER_B, role: "BUSINESS_USER", businessId: alfaId } as User);
+    users.user.push({
+      id: USER_B,
+      role: "BUSINESS_USER",
+      businessId: alfaId,
+    } as User);
 
     await expect(
-      new GetBusinessEntitlementsUseCase(users, businesses, vehicles as never).execute({
+      new GetBusinessEntitlementsUseCase(
+        users,
+        businesses,
+        vehicles as never,
+      ).execute({
         userId: USER_B,
         businessId: alfaId,
       }),
@@ -655,7 +967,11 @@ describe("the company's plan (modules)", () => {
 
   it("refuses a module switch by the company's own admin (MASTER-only), writing nothing", async () => {
     await expect(
-      new UpdateBusinessEntitlementUseCase(users, businesses, outbox as never).execute({
+      new UpdateBusinessEntitlementUseCase(
+        users,
+        businesses,
+        outbox as never,
+      ).execute({
         userId: ADMIN_A,
         businessId: alfaId,
         module: "DELIVERIES",
@@ -669,11 +985,19 @@ describe("the company's plan (modules)", () => {
 
   it("404s the impact count and the switch for an unknown company, writing nothing", async () => {
     await expect(
-      new GetModuleImpactUseCase(businesses).execute({ userId: MASTER, businessId: MISSING, module: "FLEET" }),
+      new GetModuleImpactUseCase(businesses).execute({
+        userId: MASTER,
+        businessId: MISSING,
+        module: "FLEET",
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "BUSINESS_NOT_FOUND" });
 
     await expect(
-      new UpdateBusinessEntitlementUseCase(users, businesses, outbox as never).execute({
+      new UpdateBusinessEntitlementUseCase(
+        users,
+        businesses,
+        outbox as never,
+      ).execute({
         userId: MASTER,
         businessId: MISSING,
         module: "FLEET",
@@ -686,7 +1010,11 @@ describe("the company's plan (modules)", () => {
   });
 
   it("re-affirming the current state is no change: no write, no notice, no event", async () => {
-    await new UpdateBusinessEntitlementUseCase(users, businesses, outbox as never).execute({
+    await new UpdateBusinessEntitlementUseCase(
+      users,
+      businesses,
+      outbox as never,
+    ).execute({
       userId: MASTER,
       businessId: alfaId,
       module: "FLEET",
@@ -699,22 +1027,37 @@ describe("the company's plan (modules)", () => {
   });
 
   it("a real switch writes, publishes the movement and then tells the clients", async () => {
-    await new UpdateBusinessEntitlementUseCase(users, businesses, outbox as never).execute({
+    await new UpdateBusinessEntitlementUseCase(
+      users,
+      businesses,
+      outbox as never,
+    ).execute({
       userId: MASTER,
       businessId: alfaId,
       module: "FLEET",
       enabled: false,
     });
 
-    expect(entitlements.setModuleEnabled).toHaveBeenCalledWith(alfaId, "FLEET", false, expect.anything());
+    expect(entitlements.setModuleEnabled).toHaveBeenCalledWith(
+      alfaId,
+      "FLEET",
+      false,
+      expect.anything(),
+    );
     expect(outbox.publish).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         topic: "business-module.changed",
-        payload: expect.objectContaining({ enabled: false, previousEnabled: true }),
+        payload: expect.objectContaining({
+          enabled: false,
+          previousEnabled: true,
+        }),
       }),
     );
-    expect(sendEntitlementsChangedEvent).toHaveBeenCalledWith(alfaId, { module: "FLEET", enabled: false });
+    expect(sendEntitlementsChangedEvent).toHaveBeenCalledWith(alfaId, {
+      module: "FLEET",
+      enabled: false,
+    });
   });
 });
 
@@ -726,29 +1069,55 @@ describe("the company writes are MASTER-only inside the use case too", () => {
 
   beforeEach(async () => {
     alfaId = (await seedCompany()).id as string;
-    users.user.push({ id: ADMIN_A, role: "BUSINESS_ADMIN", businessId: alfaId, name: "Ana", email: "ana@alfa.com.br" } as User);
+    users.user.push({
+      id: ADMIN_A,
+      role: "BUSINESS_ADMIN",
+      businessId: alfaId,
+      name: "Ana",
+      email: "ana@alfa.com.br",
+    } as User);
   });
 
   it("refuses an admin creating a company", async () => {
     await expect(
-      create().execute(company({ cnpj: "44444444000144", corporate_reason: "Gama", email: "g@g.com", erp_code: "G" }), ADMIN_A),
+      create().execute(
+        company({
+          cnpj: "44444444000144",
+          corporate_reason: "Gama",
+          email: "g@g.com",
+          erp_code: "G",
+        }),
+        ADMIN_A,
+      ),
     ).rejects.toMatchObject(FORBIDDEN);
     expect(businesses.business).toHaveLength(1);
   });
 
   it("refuses an admin renaming their own company", async () => {
     await expect(
-      update().execute({ businessId: alfaId, userId: ADMIN_A, businessData: { fantasy_name: "Tomada" } }),
+      update().execute({
+        businessId: alfaId,
+        userId: ADMIN_A,
+        businessData: { fantasy_name: "Tomada" },
+      }),
     ).rejects.toMatchObject(FORBIDDEN);
     expect(businesses.business[0].fantasy_name).toBe("Alfa");
   });
 
   it("refuses an admin asking for, or confirming, the deletion of their own company", async () => {
     await expect(
-      new RequestBusinessDeletionUseCase(users, businesses, pending).execute(alfaId, ADMIN_A),
+      new RequestBusinessDeletionUseCase(users, businesses, pending).execute(
+        alfaId,
+        ADMIN_A,
+      ),
     ).rejects.toMatchObject(FORBIDDEN);
     await expect(
-      new DeleteBusinessUseCase(users, businesses, pending, notifications as never).execute(alfaId, ADMIN_A, "123456"),
+      new DeleteBusinessUseCase(
+        users,
+        businesses,
+        pending,
+        notifications as never,
+      ).execute(alfaId, ADMIN_A, "123456"),
     ).rejects.toMatchObject(FORBIDDEN);
 
     expect(pending.pendingDeletions).toHaveLength(0);

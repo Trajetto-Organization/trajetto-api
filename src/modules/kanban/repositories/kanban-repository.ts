@@ -186,7 +186,8 @@ class KanbanRepository implements IKanbanRepository {
       });
     } catch (error) {
       // Deleted between the use case's read and this write.
-      if (KanbanRepository.isMissingRow(error)) throw new KanbanColumnNotFoundError();
+      if (KanbanRepository.isMissingRow(error))
+        throw new KanbanColumnNotFoundError();
 
       throw error;
     }
@@ -214,7 +215,8 @@ class KanbanRepository implements IKanbanRepository {
       const column = await tx.kanbanColumn
         .delete({ where: { id: columnId } })
         .catch((error: unknown) => {
-          if (KanbanRepository.isMissingRow(error)) throw new KanbanColumnNotFoundError();
+          if (KanbanRepository.isMissingRow(error))
+            throw new KanbanColumnNotFoundError();
           throw error;
         });
 
@@ -368,7 +370,9 @@ class KanbanRepository implements IKanbanRepository {
     // filtered); the rest only the matching ones.
     const directColumnIds = normalizedSearch
       ? columns
-          .filter((column) => column.title.toLowerCase().includes(normalizedSearch))
+          .filter((column) =>
+            column.title.toLowerCase().includes(normalizedSearch),
+          )
           .map((column) => column.id)
       : [];
 
@@ -400,7 +404,9 @@ class KanbanRepository implements IKanbanRepository {
     });
 
     const sign = this.avatarSigner();
-    const mapped = await Promise.all(cards.map((card) => this.mapCard(card, sign)));
+    const mapped = await Promise.all(
+      cards.map((card) => this.mapCard(card, sign)),
+    );
 
     const byColumn = new Map<string, KanbanCard[]>();
 
@@ -556,7 +562,8 @@ class KanbanRepository implements IKanbanRepository {
       })
       .catch((error: unknown) => {
         // Deleted between the use case's read and this write.
-        if (KanbanRepository.isMissingRow(error)) throw new KanbanCardNotFoundError();
+        if (KanbanRepository.isMissingRow(error))
+          throw new KanbanCardNotFoundError();
 
         throw error;
       });

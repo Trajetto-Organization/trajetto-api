@@ -21,12 +21,19 @@ class StartDriverRouteController {
     // businessId is never advisory, it is somebody naming another company
     // (decision 16.100) and gets the same 400 as every other edit.
     const raw = request.body;
-    if (raw && typeof raw === "object" && (raw as Record<string, unknown>).businessId !== undefined) {
-      return reply.header("x-error-code", "VALIDATION_ERROR").status(400).send({
-        code: "VALIDATION_ERROR",
-        message: TENANT_MOVE_REFUSED,
-        issues: [TENANT_MOVE_REFUSED],
-      });
+    if (
+      raw &&
+      typeof raw === "object" &&
+      (raw as Record<string, unknown>).businessId !== undefined
+    ) {
+      return reply
+        .header("x-error-code", "VALIDATION_ERROR")
+        .status(400)
+        .send({
+          code: "VALIDATION_ERROR",
+          message: TENANT_MOVE_REFUSED,
+          issues: [TENANT_MOVE_REFUSED],
+        });
     }
 
     // Lenient on purpose (see startDriverRouteSchema): the body is optional

@@ -22,6 +22,10 @@
 # Usage:
 #   ./infra/scripts/backup-postgres.sh [output-directory]
 #
+# Which container: POSTGRES_CONTAINER when set; on the Dokploy host,
+# POSTGRES_SERVICE=<appName of the PostgreSQL database> finds its task; with
+# neither, the development container (trajetto-database).
+#
 # The position trail (driver_position and its daily partitions) is the bulk of
 # the database at fleet scale, and a dump that always carries it grows to
 # hours — one snapshot holding back vacuum on every hot table the whole time:
@@ -58,14 +62,21 @@ fi
 
 CONTAINER="${POSTGRES_CONTAINER:-}"
 
-if [ -z "$CONTAINER" ]; then
-  # Swarm appends a task suffix to the service name, so match by prefix.
+if [ -z "$CONTAINER" ] && [ -n "${POSTGRES_SERVICE:-}" ]; then
+  # Staging/production: the Dokploy PostgreSQL database is a Swarm service
+  # named after its appName; its task's container carries that name as a
+  # label, whatever suffix Swarm gives the container itself.
+  CONTAINER="$(docker ps --filter "label=com.docker.swarm.service.name=${POSTGRES_SERVICE}" --format '{{.ID}}' | head -1)"
+fi
+
+if [ -z "$CONTAINER" ] && [ -z "${POSTGRES_SERVICE:-}" ]; then
+  # Development: compose.development.yaml's container_name.
   CONTAINER="$(docker ps --filter "name=trajetto-database" --format '{{.ID}}' | head -1)"
 fi
 
 if [ -z "$CONTAINER" ]; then
-  echo "No running trajetto-database container found." >&2
-  echo "Set POSTGRES_CONTAINER explicitly if it is named differently." >&2
+  echo "No running Postgres container found${POSTGRES_SERVICE:+ for service ${POSTGRES_SERVICE}}." >&2
+  echo "On the Dokploy host set POSTGRES_SERVICE (the database's appName), or POSTGRES_CONTAINER." >&2
   exit 1
 fi
 

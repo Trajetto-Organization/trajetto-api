@@ -6,10 +6,7 @@ import { errorResponse } from "./common-responses";
 
 const whatsappSettingsData = z.object({
   enabled: z.boolean().describe("Se os avisos por WhatsApp estão ligados"),
-  phoneNumber: z
-    .string()
-    .optional()
-    .describe("Telefone que recebe os avisos"),
+  phoneNumber: z.string().optional().describe("Telefone que recebe os avisos"),
   serviceConfigured: z
     .boolean()
     .describe(

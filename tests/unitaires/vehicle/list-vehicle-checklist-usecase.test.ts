@@ -62,18 +62,40 @@ beforeEach(() => {
   users.user.push(
     { id: ADMIN, role: "BUSINESS_ADMIN", businessId: CARRIER } as User,
     { id: MASTER, role: "MASTER", businessId: null } as unknown as User,
-    { id: DRIVER_USER, role: "BUSINESS_USER", businessId: CARRIER, driverId: DRIVER } as User,
+    {
+      id: DRIVER_USER,
+      role: "BUSINESS_USER",
+      businessId: CARRIER,
+      driverId: DRIVER,
+    } as User,
   );
 
   checklists.checklists.push(
-    checklistOf("018f3700-0000-7000-8000-000000000001", CARRIER, DRIVER, "2026-09-01T12:00:00Z", {
-      photos: ["checklists/a/frente.jpg"],
-      photos_by_field: { pneus: ["checklists/a/pneu.jpg"] },
-    } as Partial<VehicleChecklist>),
-    checklistOf("018f3700-0000-7000-8000-000000000002", CARRIER, COLLEAGUE, "2026-09-02T12:00:00Z", {
-      overall_condition: "rejected",
-    } as Partial<VehicleChecklist>),
-    checklistOf("018f3700-0000-7000-8000-000000000003", OTHER, "driver-x", "2026-09-03T12:00:00Z"),
+    checklistOf(
+      "018f3700-0000-7000-8000-000000000001",
+      CARRIER,
+      DRIVER,
+      "2026-09-01T12:00:00Z",
+      {
+        photos: ["checklists/a/frente.jpg"],
+        photos_by_field: { pneus: ["checklists/a/pneu.jpg"] },
+      } as Partial<VehicleChecklist>,
+    ),
+    checklistOf(
+      "018f3700-0000-7000-8000-000000000002",
+      CARRIER,
+      COLLEAGUE,
+      "2026-09-02T12:00:00Z",
+      {
+        overall_condition: "rejected",
+      } as Partial<VehicleChecklist>,
+    ),
+    checklistOf(
+      "018f3700-0000-7000-8000-000000000003",
+      OTHER,
+      "driver-x",
+      "2026-09-03T12:00:00Z",
+    ),
   );
 });
 
@@ -81,7 +103,11 @@ const list = () => new ListVehicleChecklistUseCase(checklists, users, uploads);
 
 describe("the vehicle checklist list", () => {
   it("answers the manager every checklist of the company, newest first", async () => {
-    const result = await list().execute({ userId: ADMIN, page: 1, pageSize: 10 });
+    const result = await list().execute({
+      userId: ADMIN,
+      page: 1,
+      pageSize: 10,
+    });
 
     expect(result.data.map((row) => row.id)).toEqual([
       "018f3700-0000-7000-8000-000000000002",
@@ -91,16 +117,26 @@ describe("the vehicle checklist list", () => {
   });
 
   it("answers a driver only their own checklists", async () => {
-    const result = await list().execute({ userId: DRIVER_USER, page: 1, pageSize: 10 });
+    const result = await list().execute({
+      userId: DRIVER_USER,
+      page: 1,
+      pageSize: 10,
+    });
 
     expect(result.data.map((row) => row.driverId)).toEqual([DRIVER]);
     expect(result.total).toBe(1);
   });
 
   it("signs every photo, the flat list and the per-field one", async () => {
-    const result = await list().execute({ userId: DRIVER_USER, page: 1, pageSize: 10 });
+    const result = await list().execute({
+      userId: DRIVER_USER,
+      page: 1,
+      pageSize: 10,
+    });
 
-    expect(result.data[0].photos).toEqual(["https://cdn.test/checklists/a/frente.jpg?signed"]);
+    expect(result.data[0].photos).toEqual([
+      "https://cdn.test/checklists/a/frente.jpg?signed",
+    ]);
     expect(result.data[0].photos_by_field).toEqual({
       pneus: ["https://cdn.test/checklists/a/pneu.jpg?signed"],
     });
@@ -114,19 +150,29 @@ describe("the vehicle checklist list", () => {
       conditions: ["rejected"],
     });
 
-    expect(result.data.map((row) => row.id)).toEqual(["018f3700-0000-7000-8000-000000000002"]);
+    expect(result.data.map((row) => row.id)).toEqual([
+      "018f3700-0000-7000-8000-000000000002",
+    ]);
   });
 
   it("refuses a company user naming another company (403)", async () => {
     await expect(
-      list().execute({ userId: ADMIN, businessId: OTHER, page: 1, pageSize: 10 }),
+      list().execute({
+        userId: ADMIN,
+        businessId: OTHER,
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
   });
 
   it("asks the MASTER for a company (400), then serves the picked one", async () => {
     await expect(
       list().execute({ userId: MASTER, page: 1, pageSize: 10 }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "BUSINESS_NOT_IDENTIFIED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BUSINESS_NOT_IDENTIFIED",
+    });
 
     const result = await list().execute({
       userId: MASTER,
@@ -143,7 +189,9 @@ describe("the vehicle checklist list", () => {
       list().execute({ userId: UNKNOWN, page: 1, pageSize: 10 }),
     ).rejects.toMatchObject({ statusCode: 404 });
 
-    vi.mocked(uploads.getFileUrl).mockRejectedValueOnce(new Error("signing failed"));
+    vi.mocked(uploads.getFileUrl).mockRejectedValueOnce(
+      new Error("signing failed"),
+    );
 
     await expect(
       list().execute({ userId: DRIVER_USER, page: 1, pageSize: 10 }),

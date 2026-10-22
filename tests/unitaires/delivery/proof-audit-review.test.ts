@@ -37,7 +37,6 @@ const catalogChanged = vi.hoisted(() => vi.fn());
 
 vi.mock("@/websocket", () => ({ sendCatalogChangedEvent: catalogChanged }));
 
-
 // Nothing here asserts on webhooks; the use cases simply require one.
 const webhookStub = new InMemoryWebhookFanOutService();
 
@@ -510,12 +509,7 @@ describe("a delivery proven again", () => {
     // about a picture that is no longer the one on file.
     const card = await enqueue();
 
-    seedSuggestion(
-      DELIVERY,
-      BUSINESS,
-      suggestion("looks_good"),
-      0.9,
-    );
+    seedSuggestion(DELIVERY, BUSINESS, suggestion("looks_good"), 0.9);
 
     await review.execute({
       userId: REVIEWER,
@@ -539,19 +533,9 @@ describe("the queue a person opens", () => {
     const clean = await enqueue("clean", BUSINESS);
     const unsure = await enqueue("unsure", BUSINESS);
 
-    seedSuggestion(
-      "clean",
-      BUSINESS,
-      suggestion("looks_good"),
-      0.95,
-    );
+    seedSuggestion("clean", BUSINESS, suggestion("looks_good"), 0.95);
 
-    seedSuggestion(
-      "unsure",
-      BUSINESS,
-      suggestion("needs_review"),
-      0.4,
-    );
+    seedSuggestion("unsure", BUSINESS, suggestion("needs_review"), 0.4);
 
     const result = await list.execute({
       userId: REVIEWER,
@@ -604,19 +588,9 @@ describe("the queue a person opens", () => {
     const agreed = await enqueue("agreed", BUSINESS);
     const disagreed = await enqueue("disagreed", BUSINESS);
 
-    seedSuggestion(
-      "agreed",
-      BUSINESS,
-      suggestion("looks_good"),
-      0.9,
-    );
+    seedSuggestion("agreed", BUSINESS, suggestion("looks_good"), 0.9);
 
-    seedSuggestion(
-      "disagreed",
-      BUSINESS,
-      suggestion("looks_good"),
-      0.9,
-    );
+    seedSuggestion("disagreed", BUSINESS, suggestion("looks_good"), 0.9);
 
     await review.execute({
       userId: REVIEWER,
@@ -708,7 +682,10 @@ describe("the rejection and its occurrence (DLVB-08)", () => {
         status: "REJECTED",
         rejection_reason: "   abcd   ",
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_REJECTION_REASON" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "INVALID_REJECTION_REASON",
+    });
 
     expect(audits.audits[0].status).toBe("PENDING");
     expect(deliveries.occurrences).toEqual([]);
@@ -725,7 +702,10 @@ describe("the rejection and its occurrence (DLVB-08)", () => {
         status: "REJECTED",
         rejection_reason: "Foto  ilegível",
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_REJECTION_REASON" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "INVALID_REJECTION_REASON",
+    });
 
     expect(audits.audits[0].status).toBe("PENDING");
   });
@@ -777,9 +757,24 @@ describe("the order of each tab (DLVB-02)", () => {
   it("lists the history by decision, newest first", async () => {
     // Oldest-first put a receipt approved just now on the last page, and the
     // screen only ever asked for the first one.
-    const old = await decided("old", "APPROVED", "2026-09-20T10:00:00Z", "2026-09-01T10:00:00Z");
-    const recent = await decided("recent", "APPROVED", "2026-09-28T10:00:00Z", "2026-08-01T10:00:00Z");
-    const middle = await decided("middle", "APPROVED", "2026-09-25T10:00:00Z", "2026-09-10T10:00:00Z");
+    const old = await decided(
+      "old",
+      "APPROVED",
+      "2026-09-20T10:00:00Z",
+      "2026-09-01T10:00:00Z",
+    );
+    const recent = await decided(
+      "recent",
+      "APPROVED",
+      "2026-09-28T10:00:00Z",
+      "2026-08-01T10:00:00Z",
+    );
+    const middle = await decided(
+      "middle",
+      "APPROVED",
+      "2026-09-25T10:00:00Z",
+      "2026-09-10T10:00:00Z",
+    );
 
     const first = await list.execute({
       userId: REVIEWER,
@@ -804,8 +799,18 @@ describe("the order of each tab (DLVB-02)", () => {
   });
 
   it("does not reorder the history by the model's priority", async () => {
-    const confident = await decided("confident", "REJECTED", "2026-09-28T10:00:00Z", "2026-09-01T10:00:00Z");
-    const unsure = await decided("unsure", "REJECTED", "2026-09-27T10:00:00Z", "2026-09-02T10:00:00Z");
+    const confident = await decided(
+      "confident",
+      "REJECTED",
+      "2026-09-28T10:00:00Z",
+      "2026-09-01T10:00:00Z",
+    );
+    const unsure = await decided(
+      "unsure",
+      "REJECTED",
+      "2026-09-27T10:00:00Z",
+      "2026-09-02T10:00:00Z",
+    );
 
     confident.ai_suggestion = suggestion("looks_good");
     unsure.ai_suggestion = suggestion("needs_review");
@@ -818,7 +823,10 @@ describe("the order of each tab (DLVB-02)", () => {
       pageSize: 10,
     });
 
-    expect(result.data.map((card) => card.id)).toEqual([confident.id, unsure.id]);
+    expect(result.data.map((card) => card.id)).toEqual([
+      confident.id,
+      unsure.id,
+    ]);
   });
 
   it("orders the queue by priority across pages, then oldest first", async () => {

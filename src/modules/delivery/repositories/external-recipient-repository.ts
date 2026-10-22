@@ -64,7 +64,11 @@ class ExternalRecipientRepository implements IExternalRecipientRepository {
             delivered_at: true,
             received_by: true,
             business: {
-              select: { corporate_reason: true, fantasy_name: true, timezone: true },
+              select: {
+                corporate_reason: true,
+                fantasy_name: true,
+                timezone: true,
+              },
             },
 
             // Only the moments a customer can act on. No status overrides,

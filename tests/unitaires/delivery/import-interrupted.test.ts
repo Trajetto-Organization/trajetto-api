@@ -66,7 +66,11 @@ function makeContext() {
     businessId: BUSINESS,
   } as User);
 
-  businessRepository.business.push({ ...BUSINESS_COLUMN_DEFAULTS, id: BUSINESS, is_active: true } as Business);
+  businessRepository.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
+    id: BUSINESS,
+    is_active: true,
+  } as Business);
 
   shipperRepository.shippers.push({
     id: SHIPPER,

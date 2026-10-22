@@ -17,12 +17,21 @@ import { describe, expect, it } from "vitest";
  */
 const ROOT = process.cwd();
 
-const OTHER_LOCKFILES = ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "bun.lockb", "bun.lock"];
+const OTHER_LOCKFILES = [
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "pnpm-lock.yaml",
+  "bun.lockb",
+  "bun.lock",
+];
 
 function isIgnored(path: string): boolean {
   try {
     // --no-index: the pattern decides, whatever is or is not tracked.
-    execFileSync("git", ["check-ignore", "-q", "--no-index", path], { cwd: ROOT, stdio: "ignore" });
+    execFileSync("git", ["check-ignore", "-q", "--no-index", path], {
+      cwd: ROOT,
+      stdio: "ignore",
+    });
     return true;
   } catch (error) {
     if ((error as { status?: number }).status === 1) return false;
@@ -35,14 +44,20 @@ describe("the lockfile", () => {
     expect(existsSync(resolve(ROOT, "yarn.lock"))).toBe(true);
 
     // Fails on a machine where `npm install` left one behind: delete it.
-    expect(OTHER_LOCKFILES.filter((name) => existsSync(resolve(ROOT, name)))).toEqual([]);
+    expect(
+      OTHER_LOCKFILES.filter((name) => existsSync(resolve(ROOT, name))),
+    ).toEqual([]);
   });
 
   it("is yarn.lock, alone in the repository", () => {
-    const tracked = execFileSync("git", ["ls-files", "--", "yarn.lock", ...OTHER_LOCKFILES], {
-      cwd: ROOT,
-      encoding: "utf8",
-    })
+    const tracked = execFileSync(
+      "git",
+      ["ls-files", "--", "yarn.lock", ...OTHER_LOCKFILES],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+      },
+    )
       .split(/\r?\n/)
       .filter(Boolean);
 
@@ -55,7 +70,11 @@ describe("the lockfile", () => {
   });
 
   it("is the one every install in the pipeline reads", () => {
-    for (const path of ["Dockerfile", ".github/workflows/ci.yml", ".github/workflows/deploy.yml"]) {
+    for (const path of [
+      "Dockerfile",
+      ".github/workflows/ci.yml",
+      ".github/workflows/deploy.yml",
+    ]) {
       const text = readFileSync(resolve(ROOT, path), "utf8");
 
       expect(text, path).toMatch(/yarn install --frozen-lockfile/);

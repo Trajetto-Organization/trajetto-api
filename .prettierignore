@@ -8,3 +8,13 @@ build
 # format, so the lint gate failed on it right after the first release —
 # and formatting it once would not help, since the next release rewrites it.
 CHANGELOG.md
+
+# The load harness compose keeps its exec-form commands on one line, as
+# compose-load-harness.test.ts reads them verbatim.
+tests/load/compose.load.yaml
+
+# Byte parity with trajetto-ui: the web keeps copies of these two files and
+# its occurrence-category-rules / occurrence-form-rules tests compare them line
+# for line (the web ignores its copies in its own .prettierignore).
+src/modules/occurrence-type/rules/occurrence-category-rules.ts
+src/modules/occurrence-type/form/occurrence-form-rules.ts

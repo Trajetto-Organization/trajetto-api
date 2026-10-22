@@ -23,13 +23,14 @@ class ExportVehicleController {
     const exportVehicleUseCase = container.resolve(ExportVehicleUseCase);
 
     try {
-      const { iterator, columns, filename } = await exportVehicleUseCase.execute({
-        userId: id,
-        businessId,
-        search,
-        statuses: status,
-        branchIds: branchId,
-      });
+      const { iterator, columns, filename } =
+        await exportVehicleUseCase.execute({
+          userId: id,
+          businessId,
+          search,
+          statuses: status,
+          branchIds: branchId,
+        });
 
       const writer = format === "excel" ? new ExcelWriter() : new CsvWriter();
 

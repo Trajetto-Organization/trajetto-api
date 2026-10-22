@@ -81,11 +81,7 @@ class VerifyProofDocumentUseCase {
     // Past the retention period nobody needs the check any more, and the
     // link stops being a standing window on somebody's personal data.
     if (!found || isPastRetention(found.generated_at)) {
-      throw new AppError(
-        "Comprovante não encontrado.",
-        404,
-        "PROOF_NOT_FOUND",
-      );
+      throw new AppError("Comprovante não encontrado.", 404, "PROOF_NOT_FOUND");
     }
 
     const delivery = found.delivery as {

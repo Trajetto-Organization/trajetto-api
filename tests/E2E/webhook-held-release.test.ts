@@ -117,7 +117,11 @@ async function saveActive(endpointId: string): Promise<void> {
 
 function heldRows() {
   return prisma.webhookDelivery.count({
-    where: { businessId: CARRIER, status: "PENDING", availableAt: { gt: new Date() } },
+    where: {
+      businessId: CARRIER,
+      status: "PENDING",
+      availableAt: { gt: new Date() },
+    },
   });
 }
 
@@ -149,7 +153,9 @@ describe("a month of held events", () => {
     const url = new URL(process.env.DATABASE_URL as string);
     url.searchParams.set("options", "-c statement_timeout=600");
 
-    const capped = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+    const capped = new PrismaClient({
+      datasources: { db: { url: url.toString() } },
+    });
 
     try {
       await expect(
@@ -196,9 +202,7 @@ describe("a row parked by a worker that read the endpoint just before the save",
     await saveActive(endpointId);
 
     // The worker acts on what it read: it parks the row.
-    await (
-      dispatcher as unknown as { park(row: object): Promise<void> }
-    ).park({
+    await (dispatcher as unknown as { park(row: object): Promise<void> }).park({
       id: row.id,
       endpointId,
       topic: row.topic,

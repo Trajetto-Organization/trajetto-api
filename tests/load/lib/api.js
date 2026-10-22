@@ -222,10 +222,10 @@ const surfaces = {
 
   /** The public API, as a customer's ERP walks it. */
   integrationDeliveries() {
-    const response = http.get(
-      `${BASE}/integration/v1/deliveries?limit=50`,
-      { headers: apiKeyHeaders(), tags: { surface: "integration.deliveries" } },
-    );
+    const response = http.get(`${BASE}/integration/v1/deliveries?limit=50`, {
+      headers: apiKeyHeaders(),
+      tags: { surface: "integration.deliveries" },
+    });
 
     return record("integration.deliveries", response, [200, 429]);
   },
@@ -310,11 +310,20 @@ const surfaces = {
  * summary (and --summary-export) carries each one; they never fail a run.
  */
 const SURFACE_NAMES = [
-  "delivery.list", "delivery.get", "delivery.summary", "delivery.mine",
-  "route.list", "route.tower", "route.positions",
-  "integration.deliveries", "integration.catalogue",
-  "notification.unread", "dashboard.overview",
-  "chat.threads", "chat.messages", "system.health",
+  "delivery.list",
+  "delivery.get",
+  "delivery.summary",
+  "delivery.mine",
+  "route.list",
+  "route.tower",
+  "route.positions",
+  "integration.deliveries",
+  "integration.catalogue",
+  "notification.unread",
+  "dashboard.overview",
+  "chat.threads",
+  "chat.messages",
+  "system.health",
 ];
 
 function perSurfaceBreakdown() {

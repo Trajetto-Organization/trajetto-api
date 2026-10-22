@@ -103,9 +103,12 @@ const WEBHOOK_PAYLOAD_SCHEMAS: Record<string, JsonSchema> = {
       },
       blocks_delivery: {
         type: "boolean",
-        description: "Se a ocorrência impede a entrega (a entrega vai para FAILED).",
+        description:
+          "Se a ocorrência impede a entrega (a entrega vai para FAILED).",
       },
-      description: nullableString("O que o motorista escreveu, quando escreveu."),
+      description: nullableString(
+        "O que o motorista escreveu, quando escreveu.",
+      ),
     },
   },
 
@@ -115,7 +118,9 @@ const WEBHOOK_PAYLOAD_SCHEMAS: Record<string, JsonSchema> = {
     properties: {
       delivery_id: { type: "string", description: "Id da entrega." },
       audit_id: { type: "string", description: "Id da auditoria." },
-      rejection_reason: nullableString("O motivo, só quando o canhoto foi rejeitado."),
+      rejection_reason: nullableString(
+        "O motivo, só quando o canhoto foi rejeitado.",
+      ),
     },
   },
 
@@ -136,7 +141,9 @@ const WEBHOOK_PAYLOAD_SCHEMAS: Record<string, JsonSchema> = {
         description:
           "O dia da rota, como data civil (AAAA-MM-DD), sem hora e sem fuso: não converta para o seu fuso.",
       },
-      destination: nullableString("O destino da rota, texto livre, quando foi informado."),
+      destination: nullableString(
+        "O destino da rota, texto livre, quando foi informado.",
+      ),
       planned_departure_at: {
         type: "string",
         format: "date-time",
@@ -147,7 +154,8 @@ const WEBHOOK_PAYLOAD_SCHEMAS: Record<string, JsonSchema> = {
         type: "string",
         format: "date-time",
         nullable: true,
-        description: "O retorno previsto, em UTC. Nulo quando não foi planejado.",
+        description:
+          "O retorno previsto, em UTC. Nulo quando não foi planejado.",
       },
       driver_id: nullableString("Id do motorista."),
       vehicle_id: nullableString("Id do veículo."),
@@ -155,13 +163,15 @@ const WEBHOOK_PAYLOAD_SCHEMAS: Record<string, JsonSchema> = {
         type: "string",
         format: "date-time",
         nullable: true,
-        description: "Quando a rota saiu (a hora em que o motorista iniciou). Nulo antes da saída.",
+        description:
+          "Quando a rota saiu (a hora em que o motorista iniciou). Nulo antes da saída.",
       },
       completed_at: {
         type: "string",
         format: "date-time",
         nullable: true,
-        description: "Quando a rota terminou (a hora do fato que resolveu a última parada). Nulo antes do fim.",
+        description:
+          "Quando a rota terminou (a hora do fato que resolveu a última parada). Nulo antes do fim.",
       },
       occurred_at: {
         type: "string",
@@ -175,7 +185,10 @@ const WEBHOOK_PAYLOAD_SCHEMAS: Record<string, JsonSchema> = {
 };
 
 /** Which shape each topic's `data` takes. */
-const TOPIC_PAYLOAD: Record<WebhookTopic, keyof typeof WEBHOOK_PAYLOAD_SCHEMAS> = {
+const TOPIC_PAYLOAD: Record<
+  WebhookTopic,
+  keyof typeof WEBHOOK_PAYLOAD_SCHEMAS
+> = {
   "route.released": "WebhookRouteData",
   "route.unreleased": "WebhookRouteData",
   "route.started": "WebhookRouteData",

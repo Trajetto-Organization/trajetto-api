@@ -59,7 +59,9 @@ function proofAiState({
     // lands; then the card is "read" like any other (§P5.2).
     case "PENDING":
     case "PROCESSING":
-      return hasDevicePrecheck && aiContracted ? "device_provisional" : "analyzing";
+      return hasDevicePrecheck && aiContracted
+        ? "device_provisional"
+        : "analyzing";
 
     case "FAILED":
     case "PARTIAL":

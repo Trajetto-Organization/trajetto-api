@@ -99,11 +99,15 @@ const integrationWriteResponses = {
     .object({
       code: z.string().describe("INTERNAL_ERROR."),
       status: z.string().optional(),
-      message: z.string().describe("Texto fixo, sem tradução (`Internal server error`)."),
+      message: z
+        .string()
+        .describe("Texto fixo, sem tradução (`Internal server error`)."),
       requestId: z
         .string()
         .optional()
-        .describe("Informe ao suporte: é por ele que o erro é encontrado no registro."),
+        .describe(
+          "Informe ao suporte: é por ele que o erro é encontrado no registro.",
+        ),
     })
     .describe(
       "INTERNAL_ERROR: falha nossa. Repita com a MESMA Idempotency-Key: se a entrega chegou a ser criada, a repetição a devolve em vez de duplicar.",
@@ -133,7 +137,9 @@ const CREATE_DELIVERY_REQUEST_EXAMPLE = [
   '  -H "Idempotency-Key: pedido-10452" \\',
   '  -H "Content-Type: application/json" \\',
   "  -d '" +
-    JSON.stringify(CREATE_DELIVERY_REQUEST_BODY, null, 2).split("\n").join("\n  ") +
+    JSON.stringify(CREATE_DELIVERY_REQUEST_BODY, null, 2)
+      .split("\n")
+      .join("\n  ") +
     "'",
   "```",
 ].join("\n");

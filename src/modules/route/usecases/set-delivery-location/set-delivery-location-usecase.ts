@@ -36,7 +36,10 @@ type SetDeliveryLocationResult = NonNullable<PinnedLocation["delivery"]> & {
  */
 const BRAZIL_BOX = { minLat: -34, maxLat: 6, minLng: -74, maxLng: -34 };
 
-function isInsideBrazil(point: { latitude: number; longitude: number }): boolean {
+function isInsideBrazil(point: {
+  latitude: number;
+  longitude: number;
+}): boolean {
   return (
     point.latitude >= BRAZIL_BOX.minLat &&
     point.latitude <= BRAZIL_BOX.maxLat &&

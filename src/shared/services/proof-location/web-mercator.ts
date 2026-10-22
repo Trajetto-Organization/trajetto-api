@@ -44,7 +44,8 @@ function projectToPixels(
 
   return {
     x: ((longitude + 180) / 360) * scale,
-    y: ((1 - Math.log(Math.tan(phi) + 1 / Math.cos(phi)) / Math.PI) / 2) * scale,
+    y:
+      ((1 - Math.log(Math.tan(phi) + 1 / Math.cos(phi)) / Math.PI) / 2) * scale,
   };
 }
 
@@ -100,7 +101,10 @@ function tileViewport(
 }
 
 /** Fills an XYZ template: `{z}/{x}/{y}` and an optional `{s}` subdomain. */
-function tileUrl(template: string, tile: { z: number; x: number; y: number }): string {
+function tileUrl(
+  template: string,
+  tile: { z: number; x: number; y: number },
+): string {
   const subdomain = ["a", "b", "c"][(tile.x + tile.y) % 3];
 
   return template

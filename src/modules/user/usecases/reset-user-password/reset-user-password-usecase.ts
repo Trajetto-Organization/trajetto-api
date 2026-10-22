@@ -59,10 +59,9 @@ class ResetUserPasswordUseCase {
      * request that loses the race changes nothing and is told the token is
      * invalid, which by then it is.
      */
-    const spent =
-      await this.usersTokens.consumeForgotPasswordVerificationToken(
-        userToken.id,
-      );
+    const spent = await this.usersTokens.consumeForgotPasswordVerificationToken(
+      userToken.id,
+    );
 
     if (!spent) {
       throw new UserInvalidTokenError();

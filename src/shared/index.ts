@@ -295,7 +295,10 @@ container.registerSingleton<IDeliveryRepository>(
   DeliveryRepository,
 );
 
-container.registerSingleton<IRouteRepository>("RouteRepository", RouteRepository);
+container.registerSingleton<IRouteRepository>(
+  "RouteRepository",
+  RouteRepository,
+);
 
 // Separate from the route repository on purpose: a write-heavy stream
 // with one reader (a map), over a table partitioned by day.

@@ -1,7 +1,4 @@
-import {
-  MailProviderProps,
-  MailSendResult,
-} from "./dtos/mail-provider-dto";
+import { MailProviderProps, MailSendResult } from "./dtos/mail-provider-dto";
 
 interface IMailProvider {
   /**

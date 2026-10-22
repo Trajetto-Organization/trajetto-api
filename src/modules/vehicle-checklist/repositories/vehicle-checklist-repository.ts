@@ -371,10 +371,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
         });
 
         if (!placement.fits) {
-          throw editedReadingRefusal(
-            previousMileage !== null,
-            timeline,
-          );
+          throw editedReadingRefusal(previousMileage !== null, timeline);
         }
 
         // A date-only move re-checks the order and leaves the odometer as

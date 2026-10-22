@@ -120,7 +120,11 @@ beforeAll(async () => {
       row(off.id, new Date(Date.now() + 29 * DAY_MS), ENDPOINT_PAUSED_REASON),
       // Held too, in the last hours of its window: still held, and the one
       // an operator most needs to see before it is closed unsent.
-      row(off.id, new Date(Date.now() + 2 * 60 * 60 * 1000), ENDPOINT_PAUSED_REASON),
+      row(
+        off.id,
+        new Date(Date.now() + 2 * 60 * 60 * 1000),
+        ENDPOINT_PAUSED_REASON,
+      ),
       // Due for ten minutes and not sent: a backlog.
       row(on.id, new Date(Date.now() - 10 * 60 * 1000)),
       // Waiting out a backoff: neither due nor held.
@@ -155,10 +159,16 @@ describe("/health/metrics, on webhooks", () => {
 
     const { webhooks } = response.json();
 
-    expect(webhooks, "o /health/metrics não diz nada sobre webhooks").toBeDefined();
+    expect(
+      webhooks,
+      "o /health/metrics não diz nada sobre webhooks",
+    ).toBeDefined();
 
     expect(webhooks.disabled_endpoints).toBe(1);
-    expect(webhooks.held, "linhas retidas no último dia da janela ficaram de fora").toBe(3);
+    expect(
+      webhooks.held,
+      "linhas retidas no último dia da janela ficaram de fora",
+    ).toBe(3);
     expect(webhooks.pending_due).toBe(1);
     expect(webhooks.oldest_due_seconds).toBeGreaterThanOrEqual(10 * 60 - 5);
   });

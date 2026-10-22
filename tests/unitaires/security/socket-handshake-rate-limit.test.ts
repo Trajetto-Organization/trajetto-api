@@ -28,9 +28,9 @@ describe("which address a handshake is charged to", () => {
   };
 
   it("uses the socket address when no proxy is trusted", () => {
-    expect(
-      handshakeAddress({ address: "10.0.0.1", headers }, "none"),
-    ).toBe("10.0.0.1");
+    expect(handshakeAddress({ address: "10.0.0.1", headers }, "none")).toBe(
+      "10.0.0.1",
+    );
   });
 
   it("reads the LAST forwarded entry, never the first", () => {
@@ -49,7 +49,10 @@ describe("which address a handshake is charged to", () => {
       handshakeAddress(
         {
           address: "10.0.0.1",
-          headers: { "x-forwarded-for": "172.70.1.1", "cf-connecting-ip": "5.5.5.5" },
+          headers: {
+            "x-forwarded-for": "172.70.1.1",
+            "cf-connecting-ip": "5.5.5.5",
+          },
         },
         "cloudflare",
       ),
@@ -72,7 +75,9 @@ describe("which address a handshake is charged to", () => {
 
   it("keeps the two kinds of key apart", () => {
     // A user id and an address must never collide into one bucket.
-    expect(addressHandshakeKey("1.2.3.4")).not.toBe(userHandshakeKey("1.2.3.4"));
+    expect(addressHandshakeKey("1.2.3.4")).not.toBe(
+      userHandshakeKey("1.2.3.4"),
+    );
   });
 
   /**

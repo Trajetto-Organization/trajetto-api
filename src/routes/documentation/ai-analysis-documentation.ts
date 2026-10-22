@@ -42,17 +42,19 @@ const aiAnalysisResponses = {
         ),
       unitsTotal: z
         .number()
-        .describe("Fotos que esta análise cobra (uma unidade da cota por foto)."),
-      unitsCompleted: z
-        .number()
-        .describe("Fotos já lidas com sucesso."),
+        .describe(
+          "Fotos que esta análise cobra (uma unidade da cota por foto).",
+        ),
+      unitsCompleted: z.number().describe("Fotos já lidas com sucesso."),
       attempts: z.number(),
       availableAt: z
         .string()
         .nullable()
         .describe("Quando a próxima tentativa fica elegível (se PENDING)."),
       lastErrorCode: z
-        .enum(PROGRESS_ERROR_CODES as [ProgressErrorCode, ...ProgressErrorCode[]])
+        .enum(
+          PROGRESS_ERROR_CODES as [ProgressErrorCode, ...ProgressErrorCode[]],
+        )
         .nullable()
         .describe(
           "Por que a análise espera ou como terminou: AI_PROVIDER_PAUSED (o provedor de IA recusou o serviço; retoma sozinha), AI_INPUT_SUPERSEDED (a foto ou o valor mudou antes da leitura; o registro atual tem a própria análise), AI_QUOTA_EXCEEDED (limite do período atingido), AI_INVALID_RESPONSE (o modelo respondeu fora do formato) ou AI_ANALYSIS_ERROR (outra falha da leitura). null quando não há erro.",

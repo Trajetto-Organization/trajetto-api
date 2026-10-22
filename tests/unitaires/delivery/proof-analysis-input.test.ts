@@ -33,21 +33,23 @@ describe("the day a receipt was signed on", () => {
     // Noronha (UTC-2): the same instant, two different days.
     const instant = new Date("2026-09-17T03:30:00.000Z");
 
-    expect(buildProofAnalysisInput(source(instant, "America/Manaus")).provenOn).toBe(
-      "2026-09-16",
-    );
-    expect(buildProofAnalysisInput(source(instant, "America/Noronha")).provenOn).toBe(
-      "2026-09-17",
-    );
+    expect(
+      buildProofAnalysisInput(source(instant, "America/Manaus")).provenOn,
+    ).toBe("2026-09-16");
+    expect(
+      buildProofAnalysisInput(source(instant, "America/Noronha")).provenOn,
+    ).toBe("2026-09-17");
   });
 
   it("falls back to the default zone for an empty or unknown one", () => {
     const instant = new Date("2026-09-17T01:00:00.000Z");
 
-    expect(buildProofAnalysisInput(source(instant, null)).provenOn).toBe("2026-09-16");
-    expect(buildProofAnalysisInput(source(instant, "Mars/Olympus")).provenOn).toBe(
+    expect(buildProofAnalysisInput(source(instant, null)).provenOn).toBe(
       "2026-09-16",
     );
+    expect(
+      buildProofAnalysisInput(source(instant, "Mars/Olympus")).provenOn,
+    ).toBe("2026-09-16");
   });
 
   it("builds the same input for the same proof, so the request key is stable", () => {

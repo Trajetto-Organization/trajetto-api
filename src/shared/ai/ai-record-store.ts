@@ -117,7 +117,9 @@ async function writeFuelResult(
   return database.$transaction(async (tx) => {
     // Under the row's lock: the pre-check read is the one the verdict is
     // written beside.
-    const [row] = await tx.$queryRaw<Array<{ odometer_device_precheck: unknown }>>`
+    const [row] = await tx.$queryRaw<
+      Array<{ odometer_device_precheck: unknown }>
+    >`
       SELECT "odometer_device_precheck"
       FROM "fuel"
       WHERE "id" = ${recordId}
@@ -299,7 +301,10 @@ async function writeChecklistVerdict(
         .map(([field, outcome]) => [field, storedOutcome(outcome)]),
     );
 
-    const { merged, overallStatus } = mergeChecklistResults(existing, applicable);
+    const { merged, overallStatus } = mergeChecklistResults(
+      existing,
+      applicable,
+    );
 
     // Only when THIS request read the odometer photo the record still holds
     // (design §P5.2): beside the device's JSON, never inside it.
@@ -517,7 +522,9 @@ async function attachProofSuggestion(
   return database.$transaction(async (tx) => {
     // Timestamps as UTC wall time: the columns are timestamp WITHOUT zone, and
     // a bare now() would be read in the session's zone.
-    const rows = await tx.$queryRaw<Array<{ id: string; device_precheck: unknown }>>`
+    const rows = await tx.$queryRaw<
+      Array<{ id: string; device_precheck: unknown }>
+    >`
       UPDATE "delivery_proof_audit" AS card
       SET "ai_suggestion" = ${JSON.stringify(suggestion)}::jsonb,
           "ai_confidence" = ${confidence},
@@ -533,8 +540,9 @@ async function attachProofSuggestion(
 
     // The phone's pre-check against this reading (design §P5.2), in its own
     // column beside the device's JSON, under the row lock the UPDATE holds.
-    const reading = (suggestion as { reading?: { documentMatches?: unknown } | null } | null)
-      ?.reading;
+    const reading = (
+      suggestion as { reading?: { documentMatches?: unknown } | null } | null
+    )?.reading;
     const deviceAgreement = proofDeviceAgreement(card.device_precheck, reading);
 
     if (deviceAgreement) {

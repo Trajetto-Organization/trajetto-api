@@ -27,9 +27,7 @@ class CreateDriverController {
       id,
     );
 
-    return reply
-      .status(201)
-      .send({ message: "Motorista criado com sucesso!" });
+    return reply.status(201).send({ message: "Motorista criado com sucesso!" });
   }
 }
 

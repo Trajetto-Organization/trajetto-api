@@ -43,7 +43,8 @@ function uniqueViolation(target: string): Prisma.PrismaClientKnownRequestError {
   );
 }
 
-const time = (value: Date | undefined) => (value ? new Date(value).getTime() : 0);
+const time = (value: Date | undefined) =>
+  value ? new Date(value).getTime() : 0;
 
 /**
  * The Prisma repository's twin: tenant filter, the same facets, search and
@@ -150,29 +151,40 @@ class InMemoryPermissionRepository implements IPermissionRepository {
         (!term ||
           permission.id.toLowerCase().includes(term) ||
           permission.action.toLocaleLowerCase("pt-BR").includes(term) ||
-          this.profileName(permission).toLocaleLowerCase("pt-BR").includes(term) ||
+          this.profileName(permission)
+            .toLocaleLowerCase("pt-BR")
+            .includes(term) ||
           labelledKeys.includes(permission.permissionKey ?? "")),
     );
 
     const filtered = base.filter(
       (permission) =>
         (!permissionKeys?.length ||
-          (permissionKeys as string[]).includes(permission.permissionKey ?? "")) &&
+          (permissionKeys as string[]).includes(
+            permission.permissionKey ?? "",
+          )) &&
         (!profileAccessIds?.length ||
           profileAccessIds.includes(permission.profileAccessId)) &&
-        (read?.length !== 1 || permission.canRead === (read[0] === "enabled")) &&
-        (write?.length !== 1 || permission.canWrite === (write[0] === "enabled")),
+        (read?.length !== 1 ||
+          permission.canRead === (read[0] === "enabled")) &&
+        (write?.length !== 1 ||
+          permission.canWrite === (write[0] === "enabled")),
     );
 
     const key = sort ?? PERMISSION_SORT_FALLBACK.sort;
-    const direction: SortOrder = order ?? (sort ? "asc" : PERMISSION_SORT_FALLBACK.order);
+    const direction: SortOrder =
+      order ?? (sort ? "asc" : PERMISSION_SORT_FALLBACK.order);
 
     // The comparator every twin shares (table-infra contract): false before
     // true, code-point strings, and Postgres's created_at desc, id desc
     // tiebreaker.
     const sorted = [...filtered].sort(
       (a, b) =>
-        compareForOrder(this.sortValue(a, key), this.sortValue(b, key), direction) ||
+        compareForOrder(
+          this.sortValue(a, key),
+          this.sortValue(b, key),
+          direction,
+        ) ||
         compareForOrder(time(a.created_at), time(b.created_at), "desc") ||
         compareForOrder(a.id, b.id, "desc"),
     );
@@ -209,7 +221,8 @@ class InMemoryPermissionRepository implements IPermissionRepository {
       ...(profileAccessIds ?? []),
     ])) {
       const profile = this.profiles.get(id);
-      if (profile && profile.businessId === businessId) profileNames.set(id, profile.name);
+      if (profile && profile.businessId === businessId)
+        profileNames.set(id, profile.name);
     }
 
     const skip = (page - 1) * pageSize;

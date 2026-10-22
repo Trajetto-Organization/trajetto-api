@@ -113,7 +113,9 @@ const routeMonitoringSchema = z.object({
       `O tamanho da página deve ser no máximo ${MONITORING_PAGE_SIZE_MAX}.`,
     )
     .default(20)
-    .describe("Rotas por página (padrão 20, no máximo 50): cada uma traz todas as paradas."),
+    .describe(
+      "Rotas por página (padrão 20, no máximo 50): cada uma traz todas as paradas.",
+    ),
 });
 
 /** The board by driver: one company's day, no paging (one row per driver). */

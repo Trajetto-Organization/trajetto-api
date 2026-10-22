@@ -61,7 +61,9 @@ function verifySvixSignature(
 
     // Buffer.from(base64) drops what is not base64, so a malformed entry
     // comes out short; timingSafeEqual would throw on the length mismatch.
-    return received.length === expected.length && timingSafeEqual(received, expected);
+    return (
+      received.length === expected.length && timingSafeEqual(received, expected)
+    );
   });
 }
 
@@ -119,7 +121,11 @@ function text(value: unknown): string | null {
 function extractResendEvent(body: unknown): ResendEventReport | null {
   if (typeof body !== "object" || body === null) return null;
 
-  const { type, created_at: createdAt, data } = body as {
+  const {
+    type,
+    created_at: createdAt,
+    data,
+  } = body as {
     type?: unknown;
     created_at?: unknown;
     data?: Record<string, unknown>;

@@ -37,7 +37,9 @@ describe("the order of events", () => {
 
 describe("duplicates and refusals", () => {
   it("names a crash between the answer and our record as a cause of duplicates", () => {
-    expect(description).toMatch(/processo cai entre a sua resposta e o nosso\s+registro/);
+    expect(description).toMatch(
+      /processo cai entre a sua resposta e o nosso\s+registro/,
+    );
   });
 
   it("says a 410 switches the whole endpoint off, and how to refuse one event", () => {
@@ -57,7 +59,11 @@ describe("duplicates and refusals", () => {
     // endpoint, and only what was already queued waits for it. A reference
     // saying "desligado ou pausado, os eventos ficam guardados" had an
     // integrator pause for a migration and expect the gap to be replayed.
-    expect(description).not.toMatch(/desligado ou pausado, os eventos ficam guardados/);
-    expect(description).toMatch(/eventos gerados durante a pausa não são guardados/);
+    expect(description).not.toMatch(
+      /desligado ou pausado, os eventos ficam guardados/,
+    );
+    expect(description).toMatch(
+      /eventos gerados durante a pausa não são guardados/,
+    );
   });
 });

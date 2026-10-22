@@ -76,7 +76,11 @@ const reviewProofAuditSchema = z.object({
     .preprocess(
       (value) =>
         typeof value === "string" && value.trim() === "" ? undefined : value,
-      z.string({ invalid_type_error: "O motivo da rejeição deve ser um texto." }).optional(),
+      z
+        .string({
+          invalid_type_error: "O motivo da rejeição deve ser um texto.",
+        })
+        .optional(),
     )
     .describe(
       "Obrigatório para REJECTED. Espaços nas pontas são removidos; depois disso, de 5 a 500 caracteres, sem espaços consecutivos dentro de uma linha (quebras de linha são mantidas). Fora da regra: 400 INVALID_REJECTION_REASON; ausente numa rejeição: 400 REJECTION_REASON_REQUIRED.",

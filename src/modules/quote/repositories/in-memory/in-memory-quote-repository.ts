@@ -100,7 +100,10 @@ class InMemoryQuoteRepository implements IQuoteRepository {
     { withFacets }: { withFacets: boolean },
   ): boolean {
     if (withFacets) {
-      if (filters.statuses?.length && !(filters.statuses as string[]).includes(quote.status)) {
+      if (
+        filters.statuses?.length &&
+        !(filters.statuses as string[]).includes(quote.status)
+      ) {
         return false;
       }
 
@@ -117,7 +120,8 @@ class InMemoryQuoteRepository implements IQuoteRepository {
     if (!term) return true;
 
     const digits = term.replace(/\D/g, "");
-    const phoneDigits = digits.startsWith("55") && digits.length > 10 ? digits.slice(2) : digits;
+    const phoneDigits =
+      digits.startsWith("55") && digits.length > 10 ? digits.slice(2) : digits;
 
     return (
       [
@@ -137,7 +141,11 @@ class InMemoryQuoteRepository implements IQuoteRepository {
   private compare(sort: QuoteSortKey, order: "asc" | "desc") {
     const valueOf = (quote: Quote): OrderValue => {
       if (sort === "status") return STATUS_RANK[quote.status];
-      if (sort === "created_at" || sort === "updated_at" || sort === "contacted_at") {
+      if (
+        sort === "created_at" ||
+        sort === "updated_at" ||
+        sort === "contacted_at"
+      ) {
         const value = quote[sort];
 
         return value == null ? null : new Date(value);

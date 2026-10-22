@@ -1,4 +1,9 @@
-import { createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHmac,
+  hkdfSync,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 
 import auth from "@/config/auth";
 
@@ -55,7 +60,10 @@ function hashOneTimeCode(code: string): string {
  * issued by the new version reads as invalid on an old replica, and the
  * person asks for another.
  */
-async function verifyOneTimeCode(code: string, stored: string): Promise<boolean> {
+async function verifyOneTimeCode(
+  code: string,
+  stored: string,
+): Promise<boolean> {
   if (stored.startsWith("$2")) return compareSecret(code, stored);
 
   if (!stored.startsWith(PREFIX)) return false;

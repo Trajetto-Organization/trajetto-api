@@ -88,7 +88,11 @@ beforeAll(async () => {
   });
 
   await prisma.fuelType.create({
-    data: { id: "ft-unstarted-pending", description: "Diesel", businessId: CARRIER },
+    data: {
+      id: "ft-unstarted-pending",
+      description: "Diesel",
+      businessId: CARRIER,
+    },
   });
 
   await prisma.vehicle.create({

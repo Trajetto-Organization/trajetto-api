@@ -1,5 +1,8 @@
 import { afterCursor, newestFirst } from "@/shared/in-memory/cursor";
-import { recordNotFound, uniqueViolation } from "@/shared/in-memory/prisma-errors";
+import {
+  recordNotFound,
+  uniqueViolation,
+} from "@/shared/in-memory/prisma-errors";
 import { v7 as uuidV7 } from "uuid";
 import { IServiceOrderRepository } from "../IService-order-repository";
 
@@ -43,7 +46,10 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
   public serviceOrders: ServiceOrder[] = [];
 
   /** vehicleId → what the list joins from the vehicle. */
-  public vehicles = new Map<string, { license_plate: string; description: string }>();
+  public vehicles = new Map<
+    string,
+    { license_plate: string; description: string }
+  >();
 
   /** userId / branchId / supplierId → name, as the list joins them. */
   public userNames = new Map<string, string>();
@@ -62,7 +68,9 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
     // P2002, as in Postgres. It used to overwrite the key's owner here.
     if (
       serviceOrderData.client_submission_id &&
-      this.submissions.has(`${serviceOrderData.businessId}:${serviceOrderData.client_submission_id}`)
+      this.submissions.has(
+        `${serviceOrderData.businessId}:${serviceOrderData.client_submission_id}`,
+      )
     ) {
       throw uniqueViolation(["businessId", "client_submission_id"]);
     }
@@ -257,7 +265,9 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
     const skip = (page - 1) * pageSize;
 
     const data = rows.slice(skip, skip + pageSize).map((entry) => {
-      const parts = this.parts.filter((part) => part.serviceOrderId === entry.id);
+      const parts = this.parts.filter(
+        (part) => part.serviceOrderId === entry.id,
+      );
 
       return {
         ...entry,
@@ -484,7 +494,8 @@ class InMemoryServiceOrderRepository implements IServiceOrderRepository {
         vehicleLicensePlate: vehicle?.license_plate ?? null,
         vehicleDescription: vehicle?.description ?? null,
         responsibleUserId: order.responsibleUserId,
-        responsibleUserName: this.userNames.get(order.responsibleUserId) ?? null,
+        responsibleUserName:
+          this.userNames.get(order.responsibleUserId) ?? null,
         responsibleUserEmail: null,
         branchId: order.branchId,
         branchName: this.branchNames.get(order.branchId) ?? null,

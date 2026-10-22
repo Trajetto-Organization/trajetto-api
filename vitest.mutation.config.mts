@@ -32,7 +32,9 @@ export default defineConfig({
   ...base,
   test: {
     ...base.test,
-    include: (process.env.MUTATION_TESTS ?? "tests/unitaires/**/*.test.ts").split(","),
+    include: (
+      process.env.MUTATION_TESTS ?? "tests/unitaires/**/*.test.ts"
+    ).split(","),
     exclude: [...configDefaults.exclude, ...NOT_IN_MUTATION_RUN],
   },
 });

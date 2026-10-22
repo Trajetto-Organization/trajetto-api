@@ -30,7 +30,10 @@ const ticketCounts = z.object({
   unassigned: z.number().int(),
   mine: z.number().int(),
   pendingAuthorization: z.number().int(),
-  unreadOpen: z.number().int().describe("Atendimentos abertos com mensagem não lida por quem pede."),
+  unreadOpen: z
+    .number()
+    .int()
+    .describe("Atendimentos abertos com mensagem não lida por quem pede."),
 });
 
 const ticketPermissions = z.object({
@@ -119,7 +122,10 @@ const ticketConflict = documentedAs(
     assignee: person.nullable().optional(),
     ticketId: z.string().optional(),
     number: z.number().int().optional(),
-    decision: z.unknown().optional().describe("OCCURRENCE_ALREADY_DECIDED: a decisão que vale."),
+    decision: z
+      .unknown()
+      .optional()
+      .describe("OCCURRENCE_ALREADY_DECIDED: a decisão que vale."),
   }),
 );
 
@@ -135,32 +141,55 @@ const supportTicketSchemas = {
   messageBody: ticketMessageBodySchema,
   assignees: listTicketAssigneesSchema,
   masterQuery: z.object({
-    businessId: z.string().uuid("ID da empresa é inválido.").optional().describe("Só o MASTER."),
+    businessId: z
+      .string()
+      .uuid("ID da empresa é inválido.")
+      .optional()
+      .describe("Só o MASTER."),
   }),
 };
 
 const supportTicketResponses = {
   list: documentedAs(
-    z.object({ data: z.array(z.unknown()), total: z.number(), counts: z.unknown() }),
-    z.object({ data: z.array(ticketSummary), total: z.number().int(), counts: ticketCounts }),
+    z.object({
+      data: z.array(z.unknown()),
+      total: z.number(),
+      counts: z.unknown(),
+    }),
+    z.object({
+      data: z.array(ticketSummary),
+      total: z.number().int(),
+      counts: ticketCounts,
+    }),
   ),
   summary: documentedAs(z.object({}).passthrough(), ticketCounts),
   detail: documentedAs(
     z.object({ data: z.unknown() }),
     z.object({
-      data: ticketSummary.extend({ occurrenceDetail, permissions: ticketPermissions }),
+      data: ticketSummary.extend({
+        occurrenceDetail,
+        permissions: ticketPermissions,
+      }),
     }),
   ),
   opened: documentedAs(
     z.object({ data: z.unknown(), created: z.boolean(), message: z.unknown() }),
     z.object({
-      message: sentMessage.nullable().describe("A primeira mensagem, quando enviada."),
+      message: sentMessage
+        .nullable()
+        .describe("A primeira mensagem, quando enviada."),
       data: ticketSummary,
-      created: z.boolean().describe("false: já havia atendimento aberto da entrega/rota, ou replay da mesma Idempotency-Key."),
+      created: z
+        .boolean()
+        .describe(
+          "false: já havia atendimento aberto da entrega/rota, ou replay da mesma Idempotency-Key.",
+        ),
     }),
   ),
   closed: documentedAs(
-    z.object({ message: z.string(), data: z.unknown(), replayed: z.boolean() }).passthrough(),
+    z
+      .object({ message: z.string(), data: z.unknown(), replayed: z.boolean() })
+      .passthrough(),
     z.object({
       message: z.string(),
       data: ticketSummary,
@@ -176,13 +205,19 @@ const supportTicketResponses = {
           replayed: z.boolean(),
         })
         .optional()
-        .describe("A decisão da ocorrência, quando encerrar foi autorizar ou negar."),
+        .describe(
+          "A decisão da ocorrência, quando encerrar foi autorizar ou negar.",
+        ),
       replayed: z.boolean(),
     }),
   ),
   ticket: documentedAs(
     z.object({ message: z.string(), data: z.unknown(), replayed: z.boolean() }),
-    z.object({ message: z.string(), data: ticketSummary, replayed: z.boolean() }),
+    z.object({
+      message: z.string(),
+      data: ticketSummary,
+      replayed: z.boolean(),
+    }),
   ),
   events: documentedAs(
     z.object({ data: z.array(z.unknown()) }),
@@ -193,12 +228,22 @@ const supportTicketResponses = {
     z.object({ message: z.string(), data: sentMessage }),
   ),
   markRead: documentedAs(
-    z.object({ message: z.string(), data: z.object({ last_read_at: z.unknown() }) }),
-    z.object({ message: z.string(), data: z.object({ last_read_at: isoDateTime }) }),
+    z.object({
+      message: z.string(),
+      data: z.object({ last_read_at: z.unknown() }),
+    }),
+    z.object({
+      message: z.string(),
+      data: z.object({ last_read_at: isoDateTime }),
+    }),
   ),
   assignees: z.object({ data: z.array(person) }),
   conflict: ticketConflict,
   error: errorResponse,
 };
 
-export { supportTicketSchemas, supportTicketResponses, supportTicketDocumented };
+export {
+  supportTicketSchemas,
+  supportTicketResponses,
+  supportTicketDocumented,
+};

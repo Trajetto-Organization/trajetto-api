@@ -22,9 +22,15 @@ import { dirname, resolve } from "node:path";
 
 import { hash } from "bcrypt";
 
-import { permissionLabels, type PermissionKey } from "../../src/config/permissions";
+import {
+  permissionLabels,
+  type PermissionKey,
+} from "../../src/config/permissions";
 import { ensureDefaultOccurrenceTypes } from "../../src/shared/delivery/default-occurrence-types";
-import { businessDateKey, dateOnlyFromKey } from "../../src/shared/time/business-day";
+import {
+  businessDateKey,
+  dateOnlyFromKey,
+} from "../../src/shared/time/business-day";
 import { assertDisposableDatabase } from "./lib/disposable-database";
 
 const prisma = new PrismaClient();
@@ -39,10 +45,25 @@ const TIME_ZONE = "America/Sao_Paulo";
 
 // Fixed CNPJs (valid check digits) so a re-run finds and replaces them.
 const COMPANIES = {
-  full: { cnpj: "11444777000161", label: "E2E Completa", modules: ["FLEET", "DELIVERIES"] },
-  fleetOnly: { cnpj: "45723174000110", label: "E2E Só Frota", modules: ["FLEET"] },
-  deliveriesOnly: { cnpj: "60701190000104", label: "E2E Só Entregas", modules: ["DELIVERIES"] },
-} as const satisfies Record<string, { cnpj: string; label: string; modules: BusinessModule[] }>;
+  full: {
+    cnpj: "11444777000161",
+    label: "E2E Completa",
+    modules: ["FLEET", "DELIVERIES"],
+  },
+  fleetOnly: {
+    cnpj: "45723174000110",
+    label: "E2E Só Frota",
+    modules: ["FLEET"],
+  },
+  deliveriesOnly: {
+    cnpj: "60701190000104",
+    label: "E2E Só Entregas",
+    modules: ["DELIVERIES"],
+  },
+} as const satisfies Record<
+  string,
+  { cnpj: string; label: string; modules: BusinessModule[] }
+>;
 
 const EMAILS = {
   master: "master.e2e@trajetto.test",
@@ -121,7 +142,9 @@ async function user(data: {
   });
 
   if (data.twoFactor) {
-    await prisma.twoFactorConfirmation.deleteMany({ where: { userId: created.id } });
+    await prisma.twoFactorConfirmation.deleteMany({
+      where: { userId: created.id },
+    });
   }
 
   return created.id;
@@ -132,7 +155,9 @@ async function profile(
   name: string,
   grants: { key: PermissionKey; canRead: boolean; canWrite: boolean }[],
 ) {
-  const created = await prisma.profileAccess.create({ data: { name, businessId } });
+  const created = await prisma.profileAccess.create({
+    data: { name, businessId },
+  });
 
   await prisma.permission.createMany({
     data: grants.map((grant) => ({
@@ -380,7 +405,10 @@ async function main(): Promise<void> {
       twoFactor: { id: twoFactorId, email: EMAILS.twoFactor },
       driver: { id: driverUserId, email: EMAILS.driver, driverId: driver.id },
       fleetOnlyAdmin: { id: fleetOnlyAdminId, email: EMAILS.fleetOnlyAdmin },
-      deliveriesOnlyAdmin: { id: deliveriesOnlyAdminId, email: EMAILS.deliveriesOnlyAdmin },
+      deliveriesOnlyAdmin: {
+        id: deliveriesOnlyAdminId,
+        email: EMAILS.deliveriesOnlyAdmin,
+      },
     },
     full: {
       shipperId: shipper.id,

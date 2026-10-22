@@ -85,11 +85,7 @@ class DeliveryRouteNotStartedError extends AppError {
 /** Decision 5.3: a panel write-off has no photo or signature to back it. */
 class DeliveryReceivedByRequiredError extends AppError {
   constructor() {
-    super(
-      "Informe quem recebeu a entrega.",
-      400,
-      "RECEIVED_BY_REQUIRED",
-    );
+    super("Informe quem recebeu a entrega.", 400, "RECEIVED_BY_REQUIRED");
   }
 }
 
@@ -134,7 +130,6 @@ class DeliveryStatusConflictError extends Error {
     );
   }
 }
-
 
 export {
   DeliveryNotFoundError,

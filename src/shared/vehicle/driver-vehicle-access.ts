@@ -15,9 +15,13 @@ import type { Prisma } from "@prisma/client";
  * and do the pre-trip checklist) or IN_PROGRESS. PLANNED is still a draft the
  * dispatcher may change; COMPLETED and CANCELLED hand it back.
  */
-const ROUTE_STATUSES_HANDING_OVER_VEHICLE = ["RELEASED", "IN_PROGRESS"] as const;
+const ROUTE_STATUSES_HANDING_OVER_VEHICLE = [
+  "RELEASED",
+  "IN_PROGRESS",
+] as const;
 
-type HandingOverRouteStatus = (typeof ROUTE_STATUSES_HANDING_OVER_VEHICLE)[number];
+type HandingOverRouteStatus =
+  (typeof ROUTE_STATUSES_HANDING_OVER_VEHICLE)[number];
 
 /** A route as far as vehicle custody is concerned. */
 interface VehicleAssignment {
@@ -26,7 +30,9 @@ interface VehicleAssignment {
   status: string;
 }
 
-function routeHandsOverVehicle(status: string): status is HandingOverRouteStatus {
+function routeHandsOverVehicle(
+  status: string,
+): status is HandingOverRouteStatus {
   return (ROUTE_STATUSES_HANDING_OVER_VEHICLE as readonly string[]).includes(
     status,
   );
@@ -56,7 +62,9 @@ function canDriverOperateVehicle(
  * The same rule as a Prisma `where` on Vehicle, so a list of "my vehicles"
  * and the single-vehicle check can never disagree.
  */
-function driverOperableVehicleWhere(driverId: string): Prisma.VehicleWhereInput {
+function driverOperableVehicleWhere(
+  driverId: string,
+): Prisma.VehicleWhereInput {
   return {
     OR: [
       { driverId },

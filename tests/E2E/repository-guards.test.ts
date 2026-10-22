@@ -419,7 +419,10 @@ describe("the activity the notification pipeline records", () => {
     ]);
 
     const failures = results
-      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .filter(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      )
       .map((result) =>
         result.reason instanceof Prisma.PrismaClientKnownRequestError
           ? result.reason.code
@@ -430,8 +433,7 @@ describe("the activity the notification pipeline records", () => {
 
     const ids = new Set(
       results.map(
-        (result) =>
-          (result as PromiseFulfilledResult<{ id: string }>).value.id,
+        (result) => (result as PromiseFulfilledResult<{ id: string }>).value.id,
       ),
     );
 

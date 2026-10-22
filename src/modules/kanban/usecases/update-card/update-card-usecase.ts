@@ -90,7 +90,10 @@ class UpdateKanbanCardUseCase {
 
     // Read before the transaction: the message prints the due day in the
     // company's zone (decision 1.1), and the render never queries.
-    const timeZone = await loadBusinessTimeZone(this.business, findColumn.businessId);
+    const timeZone = await loadBusinessTimeZone(
+      this.business,
+      findColumn.businessId,
+    );
 
     try {
       // Only a hand-over pages someone: an update that keeps the assignment

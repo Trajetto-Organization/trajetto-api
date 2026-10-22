@@ -13,7 +13,10 @@ import type {
 } from "@/shared/delivery/proof-document";
 import type { User } from "@/modules/user/dtos/user-dto";
 
-import { noLocationProviders, unsignedSigning } from "../../support/proof-services";
+import {
+  noLocationProviders,
+  unsignedSigning,
+} from "../../support/proof-services";
 
 /**
  * Whose receipt it is, in the in-memory twin (review of the twin's parity).
@@ -114,14 +117,20 @@ describe("the receipt's source in the twin", () => {
     expect(await documents.loadSource(DELIVERY, OTHER)).toBeNull();
     expect(await documents.loadSource(DELIVERY, "")).toBeNull();
 
-    expect((await documents.loadSource(DELIVERY, OWNER))?.delivery.id).toBe(DELIVERY);
+    expect((await documents.loadSource(DELIVERY, OWNER))?.delivery.id).toBe(
+      DELIVERY,
+    );
   });
 
   it("gives another company's user a 404 under their own path, and renders nothing", async () => {
     const { documents, stored, useCase } = makeContext();
 
     await expect(
-      useCase.execute({ userId: OTHER_USER, businessId: OTHER, deliveryId: DELIVERY }),
+      useCase.execute({
+        userId: OTHER_USER,
+        businessId: OTHER,
+        deliveryId: DELIVERY,
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "DELIVERY_NOT_FOUND" });
 
     expect(stored).toEqual([]);

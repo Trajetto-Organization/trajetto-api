@@ -173,9 +173,9 @@ async function planOf(sql: string, params: unknown[] = []): Promise<PlanNode> {
 
   const raw = rows[0]["QUERY PLAN"] as unknown;
 
-  const parsed = (
-    typeof raw === "string" ? JSON.parse(raw) : raw
-  ) as Array<{ Plan: PlanNode }>;
+  const parsed = (typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{
+    Plan: PlanNode;
+  }>;
 
   return parsed[0].Plan;
 }
@@ -209,8 +209,12 @@ describe("the fixture is big enough to mean anything", () => {
      * reads all of it and is RIGHT to — so every assertion below would pass or
      * fail for reasons that have nothing to do with the query.
      */
-    const mine = await prisma.delivery.count({ where: { businessId: CARRIER } });
-    const theirs = await prisma.delivery.count({ where: { businessId: OTHER } });
+    const mine = await prisma.delivery.count({
+      where: { businessId: CARRIER },
+    });
+    const theirs = await prisma.delivery.count({
+      where: { businessId: OTHER },
+    });
 
     expect(mine).toBe(VOLUME);
     expect(theirs).toBe(VOLUME);
@@ -330,9 +334,11 @@ describe("the deliveries listing", () => {
 
       const raw = rows[0]["QUERY PLAN"];
 
-      return ((typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{
-        Plan: PlanNode;
-      }>)[0].Plan;
+      return (
+        (typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{
+          Plan: PlanNode;
+        }>
+      )[0].Plan;
     });
 
     expect(scansSequentially(plan, "delivery")).toBe(true);
@@ -578,10 +584,13 @@ describe("what the operations screens read by tenant", () => {
 
       const { plan, rows } = await widestScan(feed!);
 
-      expect(scansSequentially(plan, table.replace(/"/g, "")), table).toBe(false);
-      expect(rows, `a torre leu ${rows} linhas de ${table} para mostrar 15`).toBeLessThan(
-        2_000,
+      expect(scansSequentially(plan, table.replace(/"/g, "")), table).toBe(
+        false,
       );
+      expect(
+        rows,
+        `a torre leu ${rows} linhas de ${table} para mostrar 15`,
+      ).toBeLessThan(2_000);
     }
   });
 
@@ -607,7 +616,9 @@ describe("what the operations screens read by tenant", () => {
 
     const { rows } = await widestScan(page!);
 
-    expect(rows, `a lista leu ${rows} linhas para mostrar 10`).toBeLessThan(200);
+    expect(rows, `a lista leu ${rows} linhas para mostrar 10`).toBeLessThan(
+      200,
+    );
   });
 
   it("counts today's occurrences from today's rows only", async () => {
@@ -633,7 +644,9 @@ describe("what the operations screens read by tenant", () => {
 
     // Today holds a day's worth of the fixture (a delivery a minute), not the
     // company's thirty thousand.
-    expect(rows, `leu ${rows} linhas para contar as de hoje`).toBeLessThan(5_000);
+    expect(rows, `leu ${rows} linhas para contar as de hoje`).toBeLessThan(
+      5_000,
+    );
   });
 });
 
@@ -677,7 +690,10 @@ describe("what the tower reads for the day", () => {
     let sql = query.query;
 
     params.forEach((value, index) => {
-      if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(value)) {
+      if (
+        typeof value === "string" &&
+        /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(value)
+      ) {
         const placeholder = `$${index + 1}`;
 
         sql = sql
@@ -793,7 +809,9 @@ describe("what the tower reads for the day", () => {
     await prisma.routeStop.deleteMany({
       where: { route: { businessId: { in: [CARRIER, OTHER] } } },
     });
-    await prisma.route.deleteMany({ where: { businessId: { in: [CARRIER, OTHER] } } });
+    await prisma.route.deleteMany({
+      where: { businessId: { in: [CARRIER, OTHER] } },
+    });
     await prisma.driver.deleteMany({
       where: { id: { in: [DRIVER_CARRIER, DRIVER_OTHER] } },
     });
@@ -819,9 +837,13 @@ describe("what the tower reads for the day", () => {
     const operation = await repository();
     const day = await today();
 
-    const queries = await capturing(() => operation.countDayDeliveries(CARRIER, day));
+    const queries = await capturing(() =>
+      operation.countDayDeliveries(CARRIER, day),
+    );
 
-    const statement = queries.find((entry) => entry.query.includes('"day_route"'));
+    const statement = queries.find((entry) =>
+      entry.query.includes('"day_route"'),
+    );
     expect(statement).toBeDefined();
 
     const plan = await explain(statement!);
@@ -840,7 +862,9 @@ describe("what the tower reads for the day", () => {
         (node) =>
           node["Relation Name"] === "route_stop" &&
           (node["Node Type"] === "Seq Scan" ||
-            String(node["Index Cond"] ?? node["Recheck Cond"] ?? "").includes('"routeId"')),
+            String(node["Index Cond"] ?? node["Recheck Cond"] ?? "").includes(
+              '"routeId"',
+            )),
       )
       .reduce(
         (sum, node) =>
@@ -862,7 +886,9 @@ describe("what the tower reads for the day", () => {
     expect(failureProbes).toHaveLength(1);
 
     // Forty routes and eight hundred stops today, of 2.400 and 48.000.
-    expect(routes, `leu ${routes} rotas para contar o dia`).toBeLessThan(ROUTES_PER_DAY * 5);
+    expect(routes, `leu ${routes} rotas para contar o dia`).toBeLessThan(
+      ROUTES_PER_DAY * 5,
+    );
     expect(stops, `leu ${stops} paradas para contar o dia`).toBeLessThan(
       ROUTES_PER_DAY * STOPS_PER_ROUTE * 2,
     );
@@ -885,7 +911,9 @@ describe("what the tower reads for the day", () => {
 
     const routes = rowsTouched(plan, "route");
 
-    expect(routes, `leu ${routes} rotas para mostrar 20`).toBeLessThan(ROUTES_PER_DAY * 5);
+    expect(routes, `leu ${routes} rotas para mostrar 20`).toBeLessThan(
+      ROUTES_PER_DAY * 5,
+    );
   });
 
   it("reads the day's route moves inside the lookback week", async () => {
@@ -894,7 +922,9 @@ describe("what the tower reads for the day", () => {
 
     const queries = await capturing(() => operation.listFeed(CARRIER, day, 15));
 
-    const moves = queries.find((entry) => entry.query.includes("'ROUTE_STARTED'"));
+    const moves = queries.find((entry) =>
+      entry.query.includes("'ROUTE_STARTED'"),
+    );
     expect(moves).toBeDefined();
 
     const plan = await explain(moves!);
@@ -904,6 +934,8 @@ describe("what the tower reads for the day", () => {
     const routes = rowsTouched(plan, "route");
 
     // At most a week and a day of routes per arm, never sixty days' worth.
-    expect(routes, `leu ${routes} rotas para o feed`).toBeLessThan(ROUTES_PER_DAY * 8 * 3);
+    expect(routes, `leu ${routes} rotas para o feed`).toBeLessThan(
+      ROUTES_PER_DAY * 8 * 3,
+    );
   });
 });

@@ -136,7 +136,9 @@ beforeAll(async () => {
       driverId: DRIVER,
       status: "IN_TRANSIT",
       items: {
-        create: [{ description: "Caixa", quantity: 2, unit: "UN", unit_value: 10.5 }],
+        create: [
+          { description: "Caixa", quantity: 2, unit: "UN", unit_value: 10.5 },
+        ],
       },
     },
   });
@@ -232,7 +234,14 @@ afterAll(async () => {
 
 describe("the delivery bodies, as documented", () => {
   it("describes the driver's day exactly as the app receives it", async () => {
-    const { deliveries, routes, occurrenceTypes, deliveredTypes, pauseTypes, journey } = await container
+    const {
+      deliveries,
+      routes,
+      occurrenceTypes,
+      deliveredTypes,
+      pauseTypes,
+      journey,
+    } = await container
       .resolve(ListMyDeliveriesUseCase)
       .execute({ userId: DRIVER_USER, businessId: CARRIER });
 
@@ -254,9 +263,9 @@ describe("the delivery bodies, as documented", () => {
     expect(body.data[0].items).toHaveLength(1);
     expect(routes).toHaveLength(1);
 
-    expect(strictIssues(documented(deliveryResponses.myDeliveries), body)).toEqual(
-      [],
-    );
+    expect(
+      strictIssues(documented(deliveryResponses.myDeliveries), body),
+    ).toEqual([]);
   });
 
   /**
@@ -271,8 +280,9 @@ describe("the delivery bodies, as documented", () => {
       .resolve(ListMyDeliveriesUseCase)
       .execute({ userId: DRIVER_USER, businessId: CARRIER });
 
-    const [stop] = (wire(deliveries) as Array<{ stops: Array<Record<string, unknown>> }>)[0]
-      .stops;
+    const [stop] = (
+      wire(deliveries) as Array<{ stops: Array<Record<string, unknown>> }>
+    )[0].stops;
 
     expect(stop.arrived_at).toBe("2026-09-17T14:05:00.000Z");
     expect(stop.on_the_way_at).toBe("2026-09-17T13:50:00.000Z");
@@ -294,12 +304,18 @@ describe("the delivery bodies, as documented", () => {
       data: Record<string, unknown[]>;
     };
 
-    for (const nested of ["items", "events", "occurrences", "chatMessages", "timeline"]) {
+    for (const nested of [
+      "items",
+      "events",
+      "occurrences",
+      "chatMessages",
+      "timeline",
+    ]) {
       expect(body.data[nested]?.length, nested).toBeGreaterThan(0);
     }
 
-    expect(strictIssues(documented(deliveryResponses.deliveryDetail), body)).toEqual(
-      [],
-    );
+    expect(
+      strictIssues(documented(deliveryResponses.deliveryDetail), body),
+    ).toEqual([]);
   });
 });

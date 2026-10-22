@@ -242,11 +242,7 @@ class AuthenticateUserUseCase {
       });
     }
 
-    const session = await createUserSession(
-      findUser,
-      this.usersTokens,
-      client,
-    );
+    const session = await createUserSession(findUser, this.usersTokens, client);
 
     return { ...session, role: findUser.role };
   }

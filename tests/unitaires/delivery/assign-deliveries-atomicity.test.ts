@@ -265,7 +265,10 @@ describe("a refused reassignment changes nothing", () => {
 
     // Before: 400 to the dispatcher, and the stop already gone from João's
     // route — the document back in the unassigned pool with no one told.
-    expect(stopsOn(first.routeId), "a rota anterior perdeu a parada").toHaveLength(1);
+    expect(
+      stopsOn(first.routeId),
+      "a rota anterior perdeu a parada",
+    ).toHaveLength(1);
     expect(routeFor(first.routeId).status).toBe("RELEASED");
     expect(deliveryFor(delivery).driverId).toBe(DRIVER_ID);
     expect(deliveryFor(delivery).vehicleId).toBe(VEHICLE_ID);
@@ -423,9 +426,10 @@ describe("the route a reassignment empties", () => {
     await assign([tomorrow], OTHER_DRIVER_ID, OTHER_VEHICLE_ID);
 
     expect(routeFor(released.routeId).status).toBe("CANCELLED");
-    expect(vehicleFor(VEHICLE_ID).status, "caminhão na rua marcado como livre").toBe(
-      "IN_ROUTE",
-    );
+    expect(
+      vehicleFor(VEHICLE_ID).status,
+      "caminhão na rua marcado como livre",
+    ).toBe("IN_ROUTE");
   });
 });
 

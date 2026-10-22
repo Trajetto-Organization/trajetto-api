@@ -3,11 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma } from "@prisma/client";
 
 const tx = vi.hoisted(() => ({
-  current: { $transaction: async (run: (client: unknown) => Promise<unknown>) => run({}) },
+  current: {
+    $transaction: async (run: (client: unknown) => Promise<unknown>) => run({}),
+  },
 }));
 
 vi.mock("@/../infra/database", () => ({
-  default: { $transaction: (run: (client: unknown) => Promise<unknown>) => tx.current.$transaction(run) },
+  default: {
+    $transaction: (run: (client: unknown) => Promise<unknown>) =>
+      tx.current.$transaction(run),
+  },
 }));
 
 import type { User } from "@/modules/user/dtos/user-dto";
@@ -59,21 +64,34 @@ beforeEach(() => {
   branches = new InMemoryBranchRepository();
   notifications.createActivityIfEnabled.mockClear();
 
-  users.user.push({ id: MASTER, role: "MASTER", businessId: null } as unknown as User);
+  users.user.push({
+    id: MASTER,
+    role: "MASTER",
+    businessId: null,
+  } as unknown as User);
 
   tx.current = inMemoryTransaction([businesses, branches]);
 });
 
-const create = () => new CreateBusinessUseCase(users, businesses, branches, notifications as never);
+const create = () =>
+  new CreateBusinessUseCase(
+    users,
+    businesses,
+    branches,
+    notifications as never,
+  );
 
 describe("creating a company with its head office", () => {
   it("writes neither when the head office loses a uniqueness race, and answers the branch's 409", async () => {
     branches.createBranch = async () => {
-      throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed on the fields: (`cnpj`)", {
-        code: "P2002",
-        clientVersion: "in-memory",
-        meta: { target: ["cnpj"] },
-      });
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Unique constraint failed on the fields: (`cnpj`)",
+        {
+          code: "P2002",
+          clientVersion: "in-memory",
+          meta: { target: ["cnpj"] },
+        },
+      );
     };
 
     await expect(create().execute(company(), MASTER)).rejects.toMatchObject({
@@ -90,7 +108,9 @@ describe("creating a company with its head office", () => {
       throw new Error("connection reset");
     };
 
-    await expect(create().execute(company(), MASTER)).rejects.toMatchObject({ statusCode: 500 });
+    await expect(create().execute(company(), MASTER)).rejects.toMatchObject({
+      statusCode: 500,
+    });
     expect(businesses.business).toEqual([]);
   });
 
@@ -98,7 +118,9 @@ describe("creating a company with its head office", () => {
     const created = await create().execute(company(), MASTER);
 
     expect(businesses.business.map((row) => row.id)).toEqual([created.id]);
-    expect(branches.branches).toMatchObject([{ businessId: created.id, cnpj: "33333333000133" }]);
+    expect(branches.branches).toMatchObject([
+      { businessId: created.id, cnpj: "33333333000133" },
+    ]);
   });
 });
 
@@ -109,14 +131,22 @@ describe("updating a company and its head office", () => {
     const created = await create().execute(company(), MASTER);
 
     branches.updateBranch = async () => {
-      throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed on the fields: (`email`)", {
-        code: "P2002",
-        clientVersion: "in-memory",
-        meta: { target: ["email"] },
-      });
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Unique constraint failed on the fields: (`email`)",
+        {
+          code: "P2002",
+          clientVersion: "in-memory",
+          meta: { target: ["email"] },
+        },
+      );
     };
 
-    const update = new UpdateBusinessUseCase(users, businesses, branches, notifications as never);
+    const update = new UpdateBusinessUseCase(
+      users,
+      businesses,
+      branches,
+      notifications as never,
+    );
 
     await expect(
       update.execute({

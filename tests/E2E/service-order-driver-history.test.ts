@@ -31,8 +31,20 @@ const CARRIER = "018fe300-0000-7000-8000-0000000000c1";
 const OTHER = "018fe300-0000-7000-8000-0000000000c2";
 const MISSING = "018fe300-0000-7000-8000-0000000000cf";
 
-const vehicles = { own: "", released: "", running: "", planned: "", colleague: "", foreign: "" };
-const tokens = { responsible: "", substitute: "", admin: "", noMaintenance: "" };
+const vehicles = {
+  own: "",
+  released: "",
+  running: "",
+  planned: "",
+  colleague: "",
+  foreign: "",
+};
+const tokens = {
+  responsible: "",
+  substitute: "",
+  admin: "",
+  noMaintenance: "",
+};
 
 let routeCode = 0;
 
@@ -97,9 +109,18 @@ beforeAll(async () => {
     branchId,
     driverId: responsibleDriver,
   });
-  vehicles.released = await seedVehicle(prisma, CARRIER, { plate: "HIS2B22", branchId });
-  vehicles.planned = await seedVehicle(prisma, CARRIER, { plate: "HIS3C33", branchId });
-  vehicles.running = await seedVehicle(prisma, CARRIER, { plate: "HIS6F66", branchId });
+  vehicles.released = await seedVehicle(prisma, CARRIER, {
+    plate: "HIS2B22",
+    branchId,
+  });
+  vehicles.planned = await seedVehicle(prisma, CARRIER, {
+    plate: "HIS3C33",
+    branchId,
+  });
+  vehicles.running = await seedVehicle(prisma, CARRIER, {
+    plate: "HIS6F66",
+    branchId,
+  });
   vehicles.colleague = await seedVehicle(prisma, CARRIER, {
     plate: "HIS4D44",
     branchId,
@@ -143,10 +164,34 @@ beforeAll(async () => {
   await order(CARRIER, branchId, vehicles.own, admin.id, "Revisão do próprio");
   await order(CARRIER, branchId, vehicles.own, admin.id, "Pneus do próprio");
   await order(CARRIER, branchId, vehicles.released, admin.id, "Freios da rota");
-  await order(CARRIER, branchId, vehicles.running, admin.id, "Suspensão da rota em curso");
-  await order(CARRIER, branchId, vehicles.planned, admin.id, "Óleo do rascunho");
-  await order(CARRIER, branchId, vehicles.colleague, admin.id, "Embreagem do colega");
-  await order(OTHER, otherBranch, vehicles.foreign, otherAdmin.id, "Revisão da outra");
+  await order(
+    CARRIER,
+    branchId,
+    vehicles.running,
+    admin.id,
+    "Suspensão da rota em curso",
+  );
+  await order(
+    CARRIER,
+    branchId,
+    vehicles.planned,
+    admin.id,
+    "Óleo do rascunho",
+  );
+  await order(
+    CARRIER,
+    branchId,
+    vehicles.colleague,
+    admin.id,
+    "Embreagem do colega",
+  );
+  await order(
+    OTHER,
+    otherBranch,
+    vehicles.foreign,
+    otherAdmin.id,
+    "Revisão da outra",
+  );
 
   ({ app } = await import("@/http"));
   await app.ready();
@@ -172,14 +217,18 @@ describe("GET /service-order/search-service-order-by-vehicle — the driver's ve
     const result = await history(vehicles.released, tokens.substitute);
 
     expect(result.status, result.body).toBe(200);
-    expect(result.rows.map((row) => row.description)).toEqual(["Freios da rota"]);
+    expect(result.rows.map((row) => row.description)).toEqual([
+      "Freios da rota",
+    ]);
   });
 
   it("answers the substitute on a route in progress with that truck's orders", async () => {
     const result = await history(vehicles.running, tokens.substitute);
 
     expect(result.status, result.body).toBe(200);
-    expect(result.rows.map((row) => row.description)).toEqual(["Suspensão da rota em curso"]);
+    expect(result.rows.map((row) => row.description)).toEqual([
+      "Suspensão da rota em curso",
+    ]);
   });
 
   it("refuses with a code, not a 500, a truck only on a planned or finished route", async () => {
@@ -218,7 +267,9 @@ describe("GET /service-order/search-service-order-by-vehicle — the driver's ve
     const result = await history(vehicles.colleague, tokens.admin);
 
     expect(result.status, result.body).toBe(200);
-    expect(result.rows.map((row) => row.description)).toEqual(["Embreagem do colega"]);
+    expect(result.rows.map((row) => row.description)).toEqual([
+      "Embreagem do colega",
+    ]);
 
     const foreign = await history(vehicles.foreign, tokens.admin);
 

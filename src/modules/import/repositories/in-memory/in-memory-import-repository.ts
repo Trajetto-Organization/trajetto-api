@@ -159,7 +159,8 @@ class InMemoryImportRepository implements IImportRepository {
             outcome: "invalid",
             recipient_name: null,
             reference: null,
-            message: "Importação interrompida: o servidor parou antes de terminar o arquivo.",
+            message:
+              "Importação interrompida: o servidor parou antes de terminar o arquivo.",
           },
         ],
         routes: [],
@@ -190,7 +191,9 @@ class InMemoryImportRepository implements IImportRepository {
     statuses,
     sources,
   }: ListImportsProps): Promise<ListImportsPage> {
-    const base = this.imports.filter((entry) => entry.businessId === businessId);
+    const base = this.imports.filter(
+      (entry) => entry.businessId === businessId,
+    );
 
     const key = sort ?? IMPORT_SORT_FALLBACK.sort;
     const direction = order ?? (sort ? "asc" : IMPORT_SORT_FALLBACK.order);
@@ -328,7 +331,9 @@ class InMemoryImportRepository implements IImportRepository {
 
       if (!heldBy) return true;
 
-      const delivery = this.deliveries.find((entry) => entry.id === deliveryId)!;
+      const delivery = this.deliveries.find(
+        (entry) => entry.id === deliveryId,
+      )!;
 
       keptDeliveries.push({
         id: delivery.id,

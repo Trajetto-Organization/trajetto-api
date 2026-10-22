@@ -16,7 +16,11 @@ import {
  */
 
 /** Same ids as the web table's columns. */
-const FUEL_TYPE_SORT_KEYS = ["created_at", "description", "updated_at"] as const;
+const FUEL_TYPE_SORT_KEYS = [
+  "created_at",
+  "description",
+  "updated_at",
+] as const;
 
 type FuelTypeSortKey = (typeof FUEL_TYPE_SORT_KEYS)[number];
 
@@ -130,15 +134,24 @@ function summarizeMonth(
   const leader = [...rows].sort(
     (a, b) =>
       b.liters - a.liters ||
-      collator.compare(labels.get(a.fuelTypeId) ?? "", labels.get(b.fuelTypeId) ?? "") ||
+      collator.compare(
+        labels.get(a.fuelTypeId) ?? "",
+        labels.get(b.fuelTypeId) ?? "",
+      ) ||
       (a.fuelTypeId < b.fuelTypeId ? -1 : 1),
   )[0];
 
   return {
     month,
     refuelings: rows.reduce((sum, row) => sum + row.refuelings, 0),
-    liters: round(rows.reduce((sum, row) => sum + row.liters, 0), 3),
-    amount: round(rows.reduce((sum, row) => sum + row.amount, 0), 2),
+    liters: round(
+      rows.reduce((sum, row) => sum + row.liters, 0),
+      3,
+    ),
+    amount: round(
+      rows.reduce((sum, row) => sum + row.amount, 0),
+      2,
+    ),
     mostRefueled: leader
       ? {
           id: leader.fuelTypeId,
@@ -158,7 +171,10 @@ function summarizeMonth(
  */
 function summarizeFuelTypeList(
   usage: ReadonlyArray<CatalogUsage>,
-  refuelings: { month: string; rows: ReadonlyArray<FuelTypeRefuelingUsage> } | null,
+  refuelings: {
+    month: string;
+    rows: ReadonlyArray<FuelTypeRefuelingUsage>;
+  } | null,
 ): FuelTypeListSearchMeta {
   const { total, linked, unused, leader } = summarizeCatalogUsage(usage);
 
@@ -167,7 +183,9 @@ function summarizeFuelTypeList(
     vehicles: linked,
     withoutVehicles: unused,
     mostUsed: leader,
-    month: refuelings ? summarizeMonth(usage, refuelings.rows, refuelings.month) : null,
+    month: refuelings
+      ? summarizeMonth(usage, refuelings.rows, refuelings.month)
+      : null,
   };
 }
 

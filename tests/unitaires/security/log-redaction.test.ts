@@ -82,9 +82,7 @@ describe("the request line of a path no route matched", () => {
 
 describe("the rest of the line", () => {
   it("keeps the fields Fastify's own serializer wrote", () => {
-    const line = requestLogSerializer(
-      fakeRequest("/health", "/health"),
-    );
+    const line = requestLogSerializer(fakeRequest("/health", "/health"));
 
     expect(line).toMatchObject({
       method: "GET",

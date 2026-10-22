@@ -55,7 +55,10 @@ function source(): ProofDocumentSource {
       received_by: null,
       shipper: null,
     },
-    business: { corporate_reason: "Transportes Silva Ltda", cnpj: "11222333000166" },
+    business: {
+      corporate_reason: "Transportes Silva Ltda",
+      cnpj: "11222333000166",
+    },
     driver: null,
     route: null,
     proof: {
@@ -75,7 +78,11 @@ function makeContext(
   location: ProofLocationService = noLocationProviders(),
 ) {
   const users = new InMemoryUserRepository();
-  users.user.push({ id: USER, role: "BUSINESS_ADMIN", businessId: BUSINESS } as User);
+  users.user.push({
+    id: USER,
+    role: "BUSINESS_ADMIN",
+    businessId: BUSINESS,
+  } as User);
 
   const documents = new InMemoryProofDocumentRepository();
   documents.addSource(BUSINESS, source());
@@ -91,10 +98,21 @@ function makeContext(
   };
 
   const build = (useSigning = signing) =>
-    new GetProofDocumentUseCase(users, documents, uploads as never, useSigning, location);
+    new GetProofDocumentUseCase(
+      users,
+      documents,
+      uploads as never,
+      useSigning,
+      location,
+    );
 
   const open = (regenerate?: boolean, useSigning = signing) =>
-    build(useSigning).execute({ userId: USER, businessId: BUSINESS, deliveryId: DELIVERY, regenerate });
+    build(useSigning).execute({
+      userId: USER,
+      businessId: BUSINESS,
+      deliveryId: DELIVERY,
+      regenerate,
+    });
 
   return { documents, bucket, open };
 }
@@ -148,14 +166,21 @@ describe("with the platform certificate", () => {
     // The row's hash is of the final, signed file: what /verificar compares.
     expect(bytes.toString("latin1")).toMatch(/\/ByteRange \[0 \d+ \d+ \d+/);
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(row.sha256);
-    expect(row.storage_key).toBe(`deliveryProofs/${DELIVERY}/${row.sha256}.pdf`);
+    expect(row.storage_key).toBe(
+      `deliveryProofs/${DELIVERY}/${row.sha256}.pdf`,
+    );
   }, 60_000);
 
   it("answers 503 PROOF_SIGNING_FAILED and stores nothing when signing fails", async () => {
     // A placeholder too small for the CMS: a real failure of the signer.
-    const { documents, bucket, open } = makeContext(testCertificateSigning({ signatureLength: 64 }));
+    const { documents, bucket, open } = makeContext(
+      testCertificateSigning({ signatureLength: 64 }),
+    );
 
-    await expect(open()).rejects.toMatchObject({ statusCode: 503, code: "PROOF_SIGNING_FAILED" });
+    await expect(open()).rejects.toMatchObject({
+      statusCode: 503,
+      code: "PROOF_SIGNING_FAILED",
+    });
 
     expect(documents.documents).toHaveLength(0);
     expect(bucket.size).toBe(0);
@@ -190,12 +215,24 @@ describe("the GPS address", () => {
       calls.push(url);
       return {
         status: 200,
-        json: async () => ({ address: { road: "Praça da Sé", house_number: "1", city: "São Paulo" } }),
+        json: async () => ({
+          address: {
+            road: "Praça da Sé",
+            house_number: "1",
+            city: "São Paulo",
+          },
+        }),
       };
     };
 
     const location = new ProofLocationService({
-      geocoder: { url: "https://geo.example", key: undefined, keyParam: "key", userAgent: "t", timeoutMs: 1000 },
+      geocoder: {
+        url: "https://geo.example",
+        key: undefined,
+        keyParam: "key",
+        userAgent: "t",
+        timeoutMs: 1000,
+      },
       map: { template: undefined, attribution: undefined, timeoutMs: 100 },
       fetcher: fetcher as never,
     });
@@ -225,11 +262,19 @@ describe("the GPS address", () => {
     documents.addSource(BUSINESS, source());
 
     await documents.saveGpsAddress(EVENT, OTHER, {
-      gps_address: { line: "Outro lugar", district: null, city: null, state: null, cep: null },
+      gps_address: {
+        line: "Outro lugar",
+        district: null,
+        city: null,
+        state: null,
+        cep: null,
+      },
       gps_address_source: "PROVIDER",
       gps_geocoded_at: new Date(),
     });
 
-    expect(documents.sources.get(DELIVERY)!.source.proof!.gps_address).toBeUndefined();
+    expect(
+      documents.sources.get(DELIVERY)!.source.proof!.gps_address,
+    ).toBeUndefined();
   });
 });

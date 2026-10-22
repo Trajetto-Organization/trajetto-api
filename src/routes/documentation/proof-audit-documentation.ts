@@ -90,7 +90,14 @@ const proofAuditResponses = {
     signatureUrl: z.string().nullable(),
     reviewerName: z.string().nullable(),
     analysisStatus: z
-      .enum(["PENDING", "PROCESSING", "COMPLETED", "PARTIAL", "FAILED", "SKIPPED"])
+      .enum([
+        "PENDING",
+        "PROCESSING",
+        "COMPLETED",
+        "PARTIAL",
+        "FAILED",
+        "SKIPPED",
+      ])
       .nullable()
       .describe(
         "Situação do último pedido de leitura automática desta entrega; null quando nenhum foi aberto.",
@@ -116,7 +123,9 @@ const proofAuditResponses = {
     device_agreement: z
       .enum(["AGREE", "DISAGREE", "NOT_APPLICABLE"])
       .nullable()
-      .describe("Veredito gravado pelo servidor sobre a pré-checagem; null enquanto não gravado."),
+      .describe(
+        "Veredito gravado pelo servidor sobre a pré-checagem; null enquanto não gravado.",
+      ),
     deviceAgreement: z
       .enum(["AGREE", "DISAGREE", "NOT_APPLICABLE"])
       .nullable()

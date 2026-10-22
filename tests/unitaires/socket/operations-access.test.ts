@@ -108,7 +108,9 @@ describe("who counts as the dispatch side", () => {
   });
 
   it("keeps out a user with no permissions at all", () => {
-    expect(mayReadDeliveries(principal({ permissions: undefined }))).toBe(false);
+    expect(mayReadDeliveries(principal({ permissions: undefined }))).toBe(
+      false,
+    );
   });
 });
 
@@ -175,15 +177,21 @@ describe("the company an operations subscription names (RT-1)", () => {
 
   it("takes a uuid, trimmed and in the case the rooms are named in", () => {
     expect(readOperationsBusinessId({ businessId: BUSINESS })).toBe(BUSINESS);
-    expect(readOperationsBusinessId({ businessId: `  ${BUSINESS.toUpperCase()} ` })).toBe(BUSINESS);
+    expect(
+      readOperationsBusinessId({ businessId: `  ${BUSINESS.toUpperCase()} ` }),
+    ).toBe(BUSINESS);
   });
 
   it("refuses anything that is not a company id", () => {
     // The shared reader took any string up to the 16 KB frame: a MASTER
     // could join operations:<anything>, and every emit publishes the name.
     expect(readOperationsBusinessId({ businessId: "empresa-a" })).toBeNull();
-    expect(readOperationsBusinessId({ businessId: "x".repeat(16_000) })).toBeNull();
-    expect(readOperationsBusinessId({ businessId: `${BUSINESS}:chat` })).toBeNull();
+    expect(
+      readOperationsBusinessId({ businessId: "x".repeat(16_000) }),
+    ).toBeNull();
+    expect(
+      readOperationsBusinessId({ businessId: `${BUSINESS}:chat` }),
+    ).toBeNull();
     expect(readOperationsBusinessId({ businessId: 42 })).toBeNull();
     expect(readOperationsBusinessId({})).toBeNull();
     expect(readOperationsBusinessId(null)).toBeNull();

@@ -153,7 +153,9 @@ const serviceOrderPartResponses = {
     "VALIDATION_ERROR: um parâmetro do caminho foi recusado (issues diz qual).",
   ),
 
-  sessionUserNotFound: codedError("USER_NOT_FOUND: o usuário da sessão não existe mais."),
+  sessionUserNotFound: codedError(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
   serviceOrderPartNotFound: codedError(
     "SERVICE_ORDER_NOT_FOUND: a ordem do caminho não existe ou é de outra empresa. PART_NOT_FOUND: a peça informada não existe ou é de outra empresa. SERVICE_ORDER_PART_NOT_FOUND: o lançamento não é desta ordem. Uma ID de outra empresa recebe a mesma resposta de uma inexistente, que não confirma que ela existe. TENANT_NOT_FOUND ou BUSINESS_NOT_FOUND: a empresa do caminho não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",

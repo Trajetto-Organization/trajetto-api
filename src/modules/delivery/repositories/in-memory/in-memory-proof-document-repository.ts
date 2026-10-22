@@ -125,9 +125,7 @@ class InMemoryProofDocumentRepository implements IProofDocumentRepository {
     // The real one re-reads the winner with the businessId in the `where`
     // after the unique violation, and rethrows when it is not there.
     if (existing && existing.businessId !== data.businessId) {
-      throw new Error(
-        "Unique constraint failed on the fields: (`deliveryId`)",
-      );
+      throw new Error("Unique constraint failed on the fields: (`deliveryId`)");
     }
 
     // Insert-only, like the real one: the first creator's row stands.

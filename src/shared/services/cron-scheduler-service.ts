@@ -125,7 +125,10 @@ class CronSchedulerService {
 
   public registerJob(definition: CronJobDefinition): void {
     if (this.tasks.has(definition.name)) {
-      log.warn({ job: definition.name }, "job already registered; duplicate ignored");
+      log.warn(
+        { job: definition.name },
+        "job already registered; duplicate ignored",
+      );
 
       return;
     }
@@ -155,7 +158,10 @@ class CronSchedulerService {
 
   /** What this process schedules — /health/metrics lists a job that never ran too. */
   public registeredJobs(): Array<{ name: string; schedule: string }> {
-    return this.jobDefinitions.map(({ name, schedule }) => ({ name, schedule }));
+    return this.jobDefinitions.map(({ name, schedule }) => ({
+      name,
+      schedule,
+    }));
   }
 
   /**
@@ -187,7 +193,9 @@ class CronSchedulerService {
 
     const startedAt = Date.now();
 
-    const progress = definition.quiet ? log.debug.bind(log) : log.info.bind(log);
+    const progress = definition.quiet
+      ? log.debug.bind(log)
+      : log.info.bind(log);
 
     progress({ job: definition.name, scheduledFor }, "cron job started");
 
@@ -215,7 +223,11 @@ class CronSchedulerService {
       );
 
       log.error(
-        { job: definition.name, durationMs: Date.now() - startedAt, err: error },
+        {
+          job: definition.name,
+          durationMs: Date.now() - startedAt,
+          err: error,
+        },
         "cron job failed",
       );
     } finally {
@@ -272,7 +284,10 @@ class CronSchedulerService {
       .catch((error) => {
         // The row stays RUNNING until its lease expires; the catch-up sweep
         // then marks it FAILED and, lacking a success, runs the job again.
-        log.error({ job: jobName, err: error }, "cron job finish could not be recorded");
+        log.error(
+          { job: jobName, err: error },
+          "cron job finish could not be recorded",
+        );
       });
   }
 
@@ -300,7 +315,11 @@ class CronSchedulerService {
 
     const orphaned = await database.scheduledJobExecution.updateMany({
       where: { status: "RUNNING", leaseExpiresAt: { lt: now } },
-      data: { status: "FAILED", finishedAt: now, lastError: ORPHANED_RUN_ERROR },
+      data: {
+        status: "FAILED",
+        finishedAt: now,
+        lastError: ORPHANED_RUN_ERROR,
+      },
     });
 
     if (orphaned.count > 0) {
@@ -447,4 +466,9 @@ class CronSchedulerService {
   }
 }
 
-export { CRON_TIMEZONE, CronSchedulerService, CronJobDefinition, DAILY_CATCH_UP_MS };
+export {
+  CRON_TIMEZONE,
+  CronSchedulerService,
+  CronJobDefinition,
+  DAILY_CATCH_UP_MS,
+};

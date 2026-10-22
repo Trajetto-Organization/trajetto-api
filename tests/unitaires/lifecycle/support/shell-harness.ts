@@ -92,7 +92,9 @@ export function sandbox(): Sandbox {
       const lines = readFileSync(log, "utf8").split("\n").filter(Boolean);
 
       return command
-        ? lines.filter((line) => line.startsWith(`${command} `) || line === command)
+        ? lines.filter(
+            (line) => line.startsWith(`${command} `) || line === command,
+          )
         : lines;
     },
     dispose() {

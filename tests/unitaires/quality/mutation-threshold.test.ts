@@ -9,8 +9,13 @@ import { describe, expect, it } from "vitest";
  */
 describe("the mutation run's floor", () => {
   it("fails below a 90% mutation score", () => {
-    const config = readFileSync(resolve(process.cwd(), "stryker.config.mjs"), "utf8");
+    const config = readFileSync(
+      resolve(process.cwd(), "stryker.config.mjs"),
+      "utf8",
+    );
 
-    expect(config).toMatch(/thresholds:\s*\{\s*high:\s*90,\s*low:\s*75,\s*break:\s*90\s*\}/);
+    expect(config).toMatch(
+      /thresholds:\s*\{\s*high:\s*90,\s*low:\s*75,\s*break:\s*90\s*\}/,
+    );
   });
 });

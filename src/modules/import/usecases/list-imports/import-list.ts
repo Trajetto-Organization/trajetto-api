@@ -36,19 +36,21 @@ type ImportSortKey = (typeof IMPORT_SORT_KEYS)[number];
 
 const IMPORT_SORT_FALLBACK = { sort: "created_at", order: "desc" } as const;
 
-const IMPORT_SORT: SortSpec<ImportSortKey, Prisma.ImportOrderByWithRelationInput> =
-  {
-    keys: IMPORT_SORT_KEYS,
-    fallback: IMPORT_SORT_FALLBACK,
-    columns: {
-      created_at: (order: SortOrder) => ({ created_at: order }),
-      filename: (order: SortOrder) => ({ filename: order }),
-      imported: (order: SortOrder) => ({ imported: order }),
-      duplicated: (order: SortOrder) => ({ duplicated: order }),
-      invalid: (order: SortOrder) => ({ invalid: order }),
-    },
-    tiebreaker: [{ created_at: "desc" }, { id: "desc" }],
-  };
+const IMPORT_SORT: SortSpec<
+  ImportSortKey,
+  Prisma.ImportOrderByWithRelationInput
+> = {
+  keys: IMPORT_SORT_KEYS,
+  fallback: IMPORT_SORT_FALLBACK,
+  columns: {
+    created_at: (order: SortOrder) => ({ created_at: order }),
+    filename: (order: SortOrder) => ({ filename: order }),
+    imported: (order: SortOrder) => ({ imported: order }),
+    duplicated: (order: SortOrder) => ({ duplicated: order }),
+    invalid: (order: SortOrder) => ({ invalid: order }),
+  },
+  tiebreaker: [{ created_at: "desc" }, { id: "desc" }],
+};
 
 interface ImportListFilters {
   businessId: string;
@@ -72,7 +74,10 @@ function importListWhere(
   }
 
   // The tenant stays a top-level key: the (businessId, created_at) index.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Uploads per status and origin, over the company. */

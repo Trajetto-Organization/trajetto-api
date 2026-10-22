@@ -76,7 +76,13 @@ const envSchema = z
     // not need it. Not a secret. Empty counts as absent.
     META_WHATSAPP_BUSINESS_ACCOUNT_ID: z.preprocess(
       (value) => (value === "" ? undefined : value),
-      z.string().regex(/^\d{5,30}$/, "META_WHATSAPP_BUSINESS_ACCOUNT_ID é o id numérico da conta (WABA).").optional(),
+      z
+        .string()
+        .regex(
+          /^\d{5,30}$/,
+          "META_WHATSAPP_BUSINESS_ACCOUNT_ID é o id numérico da conta (WABA).",
+        )
+        .optional(),
     ),
 
     // Meta's status callbacks (POST /webhooks/whatsapp): the App Secret signs
@@ -204,7 +210,10 @@ const envSchema = z
       z.string().default("Trajetto Sistemas Ltda"),
     ),
     PROOF_ISSUER_CNPJ: z.preprocess(
-      (value) => (typeof value === "string" ? value.replace(/\D/g, "") || undefined : value),
+      (value) =>
+        typeof value === "string"
+          ? value.replace(/\D/g, "") || undefined
+          : value,
       z
         .string()
         .refine(isValidCnpj, "PROOF_ISSUER_CNPJ deve ser um CNPJ válido.")
@@ -289,7 +298,13 @@ const envSchema = z
      */
     AI_LOCAL_TOKEN: z.preprocess(
       (value) => (value === "" ? undefined : value),
-      z.string().min(32, "AI_LOCAL_TOKEN precisa de 32+ caracteres (openssl rand -hex 32)").optional(),
+      z
+        .string()
+        .min(
+          32,
+          "AI_LOCAL_TOKEN precisa de 32+ caracteres (openssl rand -hex 32)",
+        )
+        .optional(),
     ),
 
     /**
@@ -608,7 +623,10 @@ const envSchema = z
         parsed = null;
       }
 
-      if (parsed && (parsed.hostname === host || parsed.hostname.endsWith(`.${host}`))) {
+      if (
+        parsed &&
+        (parsed.hostname === host || parsed.hostname.endsWith(`.${host}`))
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: [field],

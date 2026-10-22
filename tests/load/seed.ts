@@ -10,7 +10,10 @@ import { sign } from "jsonwebtoken";
 import auth from "../../src/config/auth";
 import { ensureDefaultOccurrenceTypes } from "../../src/shared/delivery/default-occurrence-types";
 import { generateApiKey } from "../../src/shared/integration/api-key-rules";
-import { businessDateKey, dateOnlyFromKey } from "../../src/shared/time/business-day";
+import {
+  businessDateKey,
+  dateOnlyFromKey,
+} from "../../src/shared/time/business-day";
 import { assertDisposableDatabase } from "./lib/disposable-database";
 
 /**
@@ -42,7 +45,9 @@ const DRIVERS_PER_TENANT = Number(process.env.LOAD_DRIVERS ?? 10);
  * forty drivers is several calls a second each, so a run at that rate measured
  * the limiter. Raising LOAD_DRIVERS instead multiplied every tenant's fleet.
  */
-const PRIMARY_DRIVERS = Number(process.env.LOAD_PRIMARY_DRIVERS ?? DRIVERS_PER_TENANT);
+const PRIMARY_DRIVERS = Number(
+  process.env.LOAD_PRIMARY_DRIVERS ?? DRIVERS_PER_TENANT,
+);
 
 /**
  * How many people of the primary tenant the load pretends to be.
@@ -442,7 +447,12 @@ async function seedTenant(index: number, primary: boolean) {
       name: "Carga",
       prefix: key.prefix,
       token_hash: key.tokenHash,
-      scopes: ["deliveries:read", "deliveries:write", "routes:read", "events:read"],
+      scopes: [
+        "deliveries:read",
+        "deliveries:write",
+        "routes:read",
+        "events:read",
+      ],
       rate_limit_per_minute: 6000,
       businessId,
     },
@@ -468,7 +478,8 @@ async function seedTenant(index: number, primary: boolean) {
  * Same disposable container, a database of its own.
  */
 const MOBILE_E2E = process.env.LOAD_MOBILE_E2E === "1";
-const MOBILE_E2E_PASSWORD = process.env.MOBILE_E2E_PASSWORD ?? "Motorista@E2E2026";
+const MOBILE_E2E_PASSWORD =
+  process.env.MOBILE_E2E_PASSWORD ?? "Motorista@E2E2026";
 
 const MOBILE_E2E_OUT = process.env.LOAD_CONTEXT_OUT
   ? resolve(process.env.LOAD_CONTEXT_OUT)
@@ -510,7 +521,9 @@ async function seedMobileCompany(options: {
   await prisma.businessEntitlement.createMany({
     data: [
       { businessId, module: "DELIVERIES", enabled: true },
-      ...(options.fleet ? [{ businessId, module: "FLEET" as const, enabled: true }] : []),
+      ...(options.fleet
+        ? [{ businessId, module: "FLEET" as const, enabled: true }]
+        : []),
     ],
   });
 
@@ -534,8 +547,18 @@ async function seedMobileCompany(options: {
         description: "A mercadoria chegou danificada.",
         category: "NOT_DELIVERED",
         form_fields: [
-          { key: "volumes_avariados", label: "Volumes avariados", type: "text", required: true },
-          { key: "cliente_recusou", label: "Cliente recusou", type: "boolean", required: false },
+          {
+            key: "volumes_avariados",
+            label: "Volumes avariados",
+            type: "text",
+            required: true,
+          },
+          {
+            key: "cliente_recusou",
+            label: "Cliente recusou",
+            type: "boolean",
+            required: false,
+          },
         ],
         businessId,
       },
@@ -685,7 +708,9 @@ async function seedMobileE2E(): Promise<void> {
   const deliveriesOnly = await seedMobileCompany({
     label: "E2E Sem Frota",
     cnpj: "44555666000181",
-    email: process.env.MOBILE_E2E_NOFLEET_EMAIL ?? "motorista.semfrota@trajetto.test",
+    email:
+      process.env.MOBILE_E2E_NOFLEET_EMAIL ??
+      "motorista.semfrota@trajetto.test",
     fleet: false,
     deliveries: 1,
     plate: "E2E9Z99",

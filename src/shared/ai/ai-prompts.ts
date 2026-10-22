@@ -128,7 +128,12 @@ const CHECKLIST_FIELDS: Record<string, ChecklistFieldSpec> = {
   insurance_valid: { kind: "working", subject: "o comprovante de seguro" },
 };
 
-const CONDITION_CHOICES = ["good", "needs_attention", "bad", "nao_sei"] as const;
+const CONDITION_CHOICES = [
+  "good",
+  "needs_attention",
+  "bad",
+  "nao_sei",
+] as const;
 
 const FUEL_LEVELS = [
   "cheio",

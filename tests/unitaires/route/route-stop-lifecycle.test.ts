@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { legacyProofUseCase, businessWithoutAI as reportsWithoutAI } from "../../support/delivery-proof-usecases";
+import {
+  legacyProofUseCase,
+  businessWithoutAI as reportsWithoutAI,
+} from "../../support/delivery-proof-usecases";
 import { InMemoryProofAuditRepository } from "@/modules/delivery/repositories/in-memory/in-memory-proof-audit-repository";
 import type { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
@@ -84,7 +87,6 @@ const uploadService = {
   resolvePresignedUploads: async (photos: Array<{ key: string }>) =>
     photos.map(({ key }) => ({ path: key })),
 } as unknown as UploadService;
-
 
 /**
  * The audit queue and the company row the proof use case reaches for.
@@ -636,8 +638,8 @@ describe("the panel resolving an address the driver never reached", () => {
       businessId: A,
       deliveryId: cancelled,
       status: "CANCELLED",
-        reasonId: REASON,
-  });
+      reasonId: REASON,
+    });
 
     expect(deliveryFor(cancelled).status).toBe("CANCELLED");
     expect(stopFor(cancelled)[0].status).toBe("CANCELLED");
@@ -654,7 +656,7 @@ describe("the panel resolving an address the driver never reached", () => {
       deliveryId: delivery,
       status: "DELIVERED",
       received_by: "Recebido no balcão",
-          reasonId: REASON,
+      reasonId: REASON,
     });
 
     expect(stopFor(delivery)[0].status).toBe("COMPLETED");
@@ -687,8 +689,8 @@ describe("re-delivery keeps the record of the attempt", () => {
       businessId: A,
       deliveryId: delivery,
       status: "PENDING",
-        reasonId: REASON,
-  });
+      reasonId: REASON,
+    });
 
     expect(stopFor(delivery)).toHaveLength(1);
     expect(stopFor(delivery)[0].status).toBe("FAILED");
@@ -902,8 +904,8 @@ describe("the other carrier at the moment of settlement", () => {
         businessId: B,
         deliveryId: delivery,
         status: "CANCELLED",
-            reasonId: REASON,
-    }),
+        reasonId: REASON,
+      }),
     ).rejects.toThrow();
 
     expect(stopFor(delivery)[0].status).toBe("PENDING");
@@ -1263,8 +1265,7 @@ describe("what the driver's phone is told, and what it is spared", () => {
       reason: "Cliente cancelou o pedido",
     });
 
-    const cancellation =
-      context.published[context.published.length - 1];
+    const cancellation = context.published[context.published.length - 1];
 
     expect(cancellation.topic).toBe("route.cancelled");
     expect(cancellation.payload).toMatchObject({

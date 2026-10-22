@@ -12,8 +12,32 @@ import type { SortOrder, SortSpec } from "@/shared/pagination/list-query";
  */
 
 const BRAZILIAN_UFS = [
-  "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT",
-  "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP",
+  "AC",
+  "AL",
+  "AM",
+  "AP",
+  "BA",
+  "CE",
+  "DF",
+  "ES",
+  "GO",
+  "MA",
+  "MG",
+  "MS",
+  "MT",
+  "PA",
+  "PB",
+  "PE",
+  "PI",
+  "PR",
+  "RJ",
+  "RN",
+  "RO",
+  "RR",
+  "RS",
+  "SC",
+  "SE",
+  "SP",
   "TO",
 ] as const;
 
@@ -135,7 +159,10 @@ function branchListWhere(
 
   // The tenant stays a top-level key: the (businessId, created_at) index
   // serves every read of the list, and no filter can widen it.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Branches per (is_active, uf) over the base: search applied, facets not. */
@@ -176,7 +203,9 @@ function summarizeBranchList(
   const matchesUf = (group: BranchGroupCount) =>
     !ufFilter || ufFilter.has(group.uf);
 
-  const kept = groups.filter((group) => matchesStatus(group) && matchesUf(group));
+  const kept = groups.filter(
+    (group) => matchesStatus(group) && matchesUf(group),
+  );
   const total = sumCounts(kept);
 
   // Each facet counted with the OTHER one applied, never itself.

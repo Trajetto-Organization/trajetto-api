@@ -71,8 +71,18 @@ function assertRefuelingNotInTheFuture(
  * fueling of a truck sold this week is a correction, not a new fueling.
  */
 function changedLinks(
-  current: { vehicleId: string; driverId: string; branchId: string; fuelTypeId: string },
-  next: { vehicleId?: string; driverId?: string; branchId?: string; fuelTypeId?: string },
+  current: {
+    vehicleId: string;
+    driverId: string;
+    branchId: string;
+    fuelTypeId: string;
+  },
+  next: {
+    vehicleId?: string;
+    driverId?: string;
+    branchId?: string;
+    fuelTypeId?: string;
+  },
 ): { vehicle: boolean; driver: boolean; branch: boolean; fuelType: boolean } {
   const differs = (value: string | undefined, original: string) =>
     value !== undefined && value !== original;
@@ -195,7 +205,10 @@ function placeReading({
 
     const next = releasedOdometer([mileage, highest], maintenanceFloor);
 
-    return { fits: true, odometer: next === null || next === odometer ? null : next };
+    return {
+      fits: true,
+      odometer: next === null || next === odometer ? null : next,
+    };
   };
 
   if (after !== null && aboveBefore && mileage < after) return settle();

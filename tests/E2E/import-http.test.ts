@@ -210,7 +210,9 @@ describe("the model the endpoint serves", () => {
     expect(response.statusCode).toBe(200);
 
     expect(response.headers["content-type"]).toContain("spreadsheetml");
-    expect(response.headers["content-disposition"]).toContain("modelo-importacao");
+    expect(response.headers["content-disposition"]).toContain(
+      "modelo-importacao",
+    );
 
     // The round trip, over the wire: the bytes the endpoint sent, read back by
     // the parser that has to accept them.
@@ -250,9 +252,9 @@ describe("uploading a day's work", () => {
     const body = response.json();
 
     expect(body.data.imported).toBe(2);
-    expect(body.data.report.rows.map((entry: { line: number }) => entry.line)).toEqual(
-      [2, 3],
-    );
+    expect(
+      body.data.report.rows.map((entry: { line: number }) => entry.line),
+    ).toEqual([2, 3]);
 
     const created = await prisma.delivery.findMany({
       where: { importId: body.data.id },
@@ -291,13 +293,19 @@ describe("uploading a day's work", () => {
   });
 
   it("refuses a driver's token", async () => {
-    const response = await upload([row("Padaria Central", "PED-030")], driverToken);
+    const response = await upload(
+      [row("Padaria Central", "PED-030")],
+      driverToken,
+    );
 
     expect(response.statusCode).toBe(403);
   });
 
   it("refuses another carrier's token on this company's URL", async () => {
-    const response = await upload([row("Padaria Central", "PED-031")], otherToken);
+    const response = await upload(
+      [row("Padaria Central", "PED-031")],
+      otherToken,
+    );
 
     expect(response.statusCode).toBe(403);
   });
@@ -331,7 +339,8 @@ describe("the listing", () => {
 
   it("streams NDJSON, newest first", async () => {
     expect(
-      (await upload([row("Para a listagem", "PED-050")], listingToken)).statusCode,
+      (await upload([row("Para a listagem", "PED-050")], listingToken))
+        .statusCode,
     ).toBe(200);
 
     const response = await app.inject({
@@ -348,7 +357,9 @@ describe("the listing", () => {
     expect(meta.total).toBeGreaterThan(0);
     expect(rows.length).toBeGreaterThan(0);
 
-    const timestamps = rows.map((entry) => new Date(entry.created_at).getTime());
+    const timestamps = rows.map((entry) =>
+      new Date(entry.created_at).getTime(),
+    );
 
     expect([...timestamps].sort((a, b) => b - a)).toEqual(timestamps);
   });

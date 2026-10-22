@@ -153,7 +153,9 @@ class InMemoryFineRepository implements IFineRepository {
 
     for (const fine of base) {
       const status = fineStatus(fine, todayStart);
-      const key = [status, fine.branchId, fine.trafficViolationCodeId].join("|");
+      const key = [status, fine.branchId, fine.trafficViolationCodeId].join(
+        "|",
+      );
 
       const group = groups.get(key) ?? {
         status,
@@ -177,9 +179,10 @@ class InMemoryFineRepository implements IFineRepository {
     const skip = (page - 1) * pageSize;
 
     return {
-      data: rows
-        .slice(skip, skip + pageSize)
-        .map((fine) => ({ ...this.withRelations(fine), status: fineStatus(fine, todayStart) })),
+      data: rows.slice(skip, skip + pageSize).map((fine) => ({
+        ...this.withRelations(fine),
+        status: fineStatus(fine, todayStart),
+      })),
       groups: groupList,
       labels: {
         // Only the company's own branches are named, like the Prisma lookup.
@@ -259,7 +262,11 @@ class InMemoryFineRepository implements IFineRepository {
     }
   }
 
-  async updateFine({ fineData, fineId, businessId }: UpdateFine): Promise<Fine> {
+  async updateFine({
+    fineData,
+    fineId,
+    businessId,
+  }: UpdateFine): Promise<Fine> {
     const index = this.fines.findIndex(
       (fine) => fine.id === fineId && fine.businessId === businessId,
     );
@@ -324,7 +331,8 @@ class InMemoryFineRepository implements IFineRepository {
     return {
       ...fine,
       branch: {
-        corporate_reason: this.branches.get(fine.branchId)?.corporate_reason ?? "",
+        corporate_reason:
+          this.branches.get(fine.branchId)?.corporate_reason ?? "",
       },
       driver: { name: driver?.name ?? "", cpf: driver?.cpf ?? "" },
       vehicle: {
@@ -369,7 +377,8 @@ class InMemoryFineRepository implements IFineRepository {
       row.branch.corporate_reason,
     ];
 
-    if (texts.some((value) => value.toLowerCase().includes(needle))) return true;
+    if (texts.some((value) => value.toLowerCase().includes(needle)))
+      return true;
 
     const fullCode = FULL_CODE.exec(term);
 
@@ -400,7 +409,10 @@ class InMemoryFineRepository implements IFineRepository {
       return false;
     }
 
-    if (filters.branchIds?.length && !filters.branchIds.includes(fine.branchId)) {
+    if (
+      filters.branchIds?.length &&
+      !filters.branchIds.includes(fine.branchId)
+    ) {
       return false;
     }
 

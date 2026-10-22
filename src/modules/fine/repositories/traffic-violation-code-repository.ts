@@ -34,9 +34,7 @@ function trafficViolationCodeSearchWhere(
   const conditions: Prisma.TrafficViolationCodeWhereInput[] = [
     { code: contains },
     { description: contains },
-    ...(fullCode
-      ? [{ code: fullCode[1], sub_code: Number(fullCode[2]) }]
-      : []),
+    ...(fullCode ? [{ code: fullCode[1], sub_code: Number(fullCode[2]) }] : []),
   ];
 
   return buildSearchOr(conditions);

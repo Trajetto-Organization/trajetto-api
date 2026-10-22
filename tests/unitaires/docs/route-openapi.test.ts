@@ -34,7 +34,9 @@ let document: OpenApiDocument;
 let close: () => Promise<void>;
 
 /** Every documented operation under a prefix, flattened. */
-function operationsUnder(prefix: string): Array<[string, string, OpenApiOperation]> {
+function operationsUnder(
+  prefix: string,
+): Array<[string, string, OpenApiOperation]> {
   return Object.entries(document.paths)
     .filter(([path]) => path.startsWith(prefix))
     .flatMap(([path, methods]) =>
@@ -75,46 +77,47 @@ describe("the route module's published surface", () => {
     // Listed rather than counted: a route added without documentation, or one
     // documented and never registered, both show up here as a diff instead of
     // a number that happens to match.
-    expect(operations().map(([path, method]) => `${method.toUpperCase()} ${path}`))
-      .toEqual([
-        "POST /route/create-route/{businessId}",
-        "GET /route/list-routes",
-        "GET /route/get-route/{routeId}/business/{businessId}",
-        "PATCH /route/update-route/{routeId}/business/{businessId}",
-        "PATCH /route/release-route/{routeId}/business/{businessId}",
-        "POST /route/start-route/{routeId}/business/{businessId}",
+    expect(
+      operations().map(([path, method]) => `${method.toUpperCase()} ${path}`),
+    ).toEqual([
+      "POST /route/create-route/{businessId}",
+      "GET /route/list-routes",
+      "GET /route/get-route/{routeId}/business/{businessId}",
+      "PATCH /route/update-route/{routeId}/business/{businessId}",
+      "PATCH /route/release-route/{routeId}/business/{businessId}",
+      "POST /route/start-route/{routeId}/business/{businessId}",
 
-        // "Estou a caminho" (decision 6.4): the driver's statement about a
-        // stop, which moves no status.
-        "POST /route/on-the-way/{stopId}/route/{routeId}/business/{businessId}",
+      // "Estou a caminho" (decision 6.4): the driver's statement about a
+      // stop, which moves no status.
+      "POST /route/on-the-way/{stopId}/route/{routeId}/business/{businessId}",
 
-        "PATCH /route/cancel-route/{routeId}/business/{businessId}",
-        "POST /route/add-stops/{routeId}/business/{businessId}",
-        "DELETE /route/remove-stop/{stopId}/route/{routeId}/business/{businessId}",
-        "PATCH /route/reorder-stops/{routeId}/business/{businessId}",
+      "PATCH /route/cancel-route/{routeId}/business/{businessId}",
+      "POST /route/add-stops/{routeId}/business/{businessId}",
+      "DELETE /route/remove-stop/{stopId}/route/{routeId}/business/{businessId}",
+      "PATCH /route/reorder-stops/{routeId}/business/{businessId}",
 
-        // The route as the unit of assignment (decision 14.7): batch removal,
-        // the atomic move between routes, the picker of deliveries without a
-        // route, where a selection is now, and "Fixar no mapa".
-        "POST /route/remove-stops/{routeId}/business/{businessId}",
-        "POST /route/move-stops/{routeId}/business/{businessId}",
-        "GET /route/unrouted-deliveries/{businessId}",
-        "GET /route/open-stops/{businessId}",
-        "PATCH /route/set-delivery-location/{deliveryId}/business/{businessId}",
+      // The route as the unit of assignment (decision 14.7): batch removal,
+      // the atomic move between routes, the picker of deliveries without a
+      // route, where a selection is now, and "Fixar no mapa".
+      "POST /route/remove-stops/{routeId}/business/{businessId}",
+      "POST /route/move-stops/{routeId}/business/{businessId}",
+      "GET /route/unrouted-deliveries/{businessId}",
+      "GET /route/open-stops/{businessId}",
+      "PATCH /route/set-delivery-location/{deliveryId}/business/{businessId}",
 
-        // What the assignment dialogs warn about before a pair is chosen
-        // (FLEET-ASSIGN-2): a dispatcher's read.
-        "GET /route/assignment-preview/{businessId}",
+      // What the assignment dialogs warn about before a pair is chosen
+      // (FLEET-ASSIGN-2): a dispatcher's read.
+      "GET /route/assignment-preview/{businessId}",
 
-        // The control tower and the monitoring board. The ingest is a
-        // driver surface; the other four are the manager's, and a driver
-        // token is refused rather than shown the whole operation.
-        "POST /route/positions",
-        "GET /route/control-tower",
-        "GET /route/driver-trail/{driverId}",
-        "GET /route/monitoring",
-        "GET /route/monitoring/drivers",
-      ]);
+      // The control tower and the monitoring board. The ingest is a
+      // driver surface; the other four are the manager's, and a driver
+      // token is refused rather than shown the whole operation.
+      "POST /route/positions",
+      "GET /route/control-tower",
+      "GET /route/driver-trail/{driverId}",
+      "GET /route/monitoring",
+      "GET /route/monitoring/drivers",
+    ]);
   });
 
   it("declares a bearer token on every one of them", () => {
@@ -157,9 +160,7 @@ describe("the statuses each route claims to answer", () => {
     ];
 
     for (const path of withPreconditions) {
-      expect(Object.keys(operationFor(path).responses), path).toContain(
-        "409",
-      );
+      expect(Object.keys(operationFor(path).responses), path).toContain("409");
     }
   });
 
@@ -185,8 +186,12 @@ describe("the statuses each route claims to answer", () => {
     // driver or vehicle that is not this company's (404, like one that does
     // not exist).
     expect(
-      Object.keys(operationFor("/route/assignment-preview/{businessId}").responses),
-    ).toEqual(expect.arrayContaining(["200", "400", "401", "403", "404", "429"]));
+      Object.keys(
+        operationFor("/route/assignment-preview/{businessId}").responses,
+      ),
+    ).toEqual(
+      expect.arrayContaining(["200", "400", "401", "403", "404", "429"]),
+    );
   });
 
   it("documents 429 on every route, and the stricter limit where there is one", () => {
@@ -292,7 +297,9 @@ describe("the shapes it publishes", () => {
       for (const [status, response] of Object.entries(operation.responses)) {
         const schema = (
           response as {
-            content?: { "application/json"?: { schema?: Record<string, unknown> } };
+            content?: {
+              "application/json"?: { schema?: Record<string, unknown> };
+            };
           }
         ).content?.["application/json"]?.schema;
 
@@ -545,13 +552,19 @@ describe("the delivery exports, as published", () => {
   it("publishes both of them", () => {
     expect(
       exports().map(([path, method]) => `${method.toUpperCase()} ${path}`),
-    ).toEqual(["GET /delivery/export-delivery", "GET /delivery/export-occurrence"]);
+    ).toEqual([
+      "GET /delivery/export-delivery",
+      "GET /delivery/export-occurrence",
+    ]);
   });
 
   it("publishes the 200 as a file, never as a JSON body", () => {
     for (const [path, method, operation] of exports()) {
       const success = (
-        operation.responses as Record<string, { content?: Record<string, unknown> }>
+        operation.responses as Record<
+          string,
+          { content?: Record<string, unknown> }
+        >
       )["200"];
 
       expect(Object.keys(success?.content ?? {}), `${method} ${path}`).toEqual([
@@ -648,7 +661,11 @@ describe("the public integration API, as published", () => {
       // The lists only: POST /deliveries creates one document.
       if (method.toLowerCase() !== "get") continue;
 
-      if (!path.endsWith("/deliveries") && !path.endsWith("/routes") && !path.endsWith("/events")) {
+      if (
+        !path.endsWith("/deliveries") &&
+        !path.endsWith("/routes") &&
+        !path.endsWith("/events")
+      ) {
         continue;
       }
 
@@ -672,7 +689,8 @@ describe("the public integration API, as published", () => {
     const delivery = JSON.stringify(
       integration().find(
         ([path, method]) =>
-          path === "/integration/v1/deliveries" && method.toLowerCase() === "get",
+          path === "/integration/v1/deliveries" &&
+          method.toLowerCase() === "get",
       )![2].responses["200"] ?? {},
     );
 

@@ -234,7 +234,11 @@ describe("a proof resent while the first attempt is still being written", () => 
     const delivery = await seedDelivery();
     const routeId = await releasedRoute([delivery]);
 
-    await context.start.execute({ userId: DRIVER_USER, businessId: A, routeId });
+    await context.start.execute({
+      userId: DRIVER_USER,
+      businessId: A,
+      routeId,
+    });
 
     const repository = context.deliveryRepository;
     repository.findEventBySubmissionId = barrier(
@@ -280,9 +284,7 @@ describe("a proof resent while the first attempt is still being written", () => 
     ).toBe("DELIVERED");
 
     // One webhook per topic: the loser must not announce the proof again.
-    expect(
-      context.webhooks.forTopic("proof.registered"),
-    ).toHaveLength(1);
+    expect(context.webhooks.forTopic("proof.registered")).toHaveLength(1);
   });
 
   it("still refuses with 409 when the conflict was somebody else's write", async () => {
@@ -292,7 +294,11 @@ describe("a proof resent while the first attempt is still being written", () => 
     const delivery = await seedDelivery();
     const routeId = await releasedRoute([delivery]);
 
-    await context.start.execute({ userId: DRIVER_USER, businessId: A, routeId });
+    await context.start.execute({
+      userId: DRIVER_USER,
+      businessId: A,
+      routeId,
+    });
 
     const repository = context.deliveryRepository;
     const original = repository.registerDeliveryProof.bind(repository);
@@ -341,9 +347,7 @@ describe("a departure resent while the first attempt is still being written", ()
       (resend as PromiseFulfilledResult<{ id: string; status: string }>).value,
     ).toMatchObject({ id: routeId, status: "IN_PROGRESS" });
 
-    expect(
-      context.webhooks.forTopic("route.started"),
-    ).toHaveLength(1);
+    expect(context.webhooks.forTopic("route.started")).toHaveLength(1);
   });
 
   it("still refuses when the resend names a different truck", async () => {

@@ -1,7 +1,10 @@
 import type { Prisma } from "@prisma/client";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
-import { routeCodeFromSearch, type RouteStatus } from "@/shared/route/route-rules";
+import {
+  routeCodeFromSearch,
+  type RouteStatus,
+} from "@/shared/route/route-rules";
 
 import type { FacetCount } from "@/shared/pagination/list-meta";
 import type { SortOrder, SortSpec } from "@/shared/pagination/list-query";
@@ -39,35 +42,38 @@ type RouteSortKey = (typeof ROUTE_SORT_KEYS)[number];
 
 const ROUTE_SORT_FALLBACK = { sort: "created_at", order: "desc" } as const;
 
-const ROUTE_SORT: SortSpec<RouteSortKey, Prisma.RouteOrderByWithRelationInput> = {
-  keys: ROUTE_SORT_KEYS,
-  fallback: ROUTE_SORT_FALLBACK,
-  columns: {
-    created_at: (order: SortOrder) => ({ created_at: order }),
-    updated_at: (order: SortOrder) => ({ updated_at: order }),
-    code: (order: SortOrder) => ({ code: order }),
-    // The lifecycle order (planned → cancelled), the enum's declared one.
-    status: (order: SortOrder) => ({ status: order }),
-    driverName: (order: SortOrder) => ({ driver: { name: order } }),
-    // Optional relation: Prisma takes no `nulls` here, so "Sem veículo" is
-    // last on asc and first on desc (Postgres' default for NULL).
-    vehiclePlate: (order: SortOrder) => ({ vehicle: { license_plate: order } }),
-    scheduled_date: (order: SortOrder) => ({ scheduled_date: order }),
-    // A route with no destination or not yet departed/closed never opens the list.
-    destination: (order: SortOrder) => ({
-      destination: { sort: order, nulls: "last" },
-    }),
-    started_at: (order: SortOrder) => ({
-      started_at: { sort: order, nulls: "last" },
-    }),
-    completed_at: (order: SortOrder) => ({
-      completed_at: { sort: order, nulls: "last" },
-    }),
-  },
-  // Newest first inside a tie; the id breaks what created_at cannot (routes
-  // written in the same millisecond by a spreadsheet import).
-  tiebreaker: [{ created_at: "desc" }, { id: "desc" }],
-};
+const ROUTE_SORT: SortSpec<RouteSortKey, Prisma.RouteOrderByWithRelationInput> =
+  {
+    keys: ROUTE_SORT_KEYS,
+    fallback: ROUTE_SORT_FALLBACK,
+    columns: {
+      created_at: (order: SortOrder) => ({ created_at: order }),
+      updated_at: (order: SortOrder) => ({ updated_at: order }),
+      code: (order: SortOrder) => ({ code: order }),
+      // The lifecycle order (planned → cancelled), the enum's declared one.
+      status: (order: SortOrder) => ({ status: order }),
+      driverName: (order: SortOrder) => ({ driver: { name: order } }),
+      // Optional relation: Prisma takes no `nulls` here, so "Sem veículo" is
+      // last on asc and first on desc (Postgres' default for NULL).
+      vehiclePlate: (order: SortOrder) => ({
+        vehicle: { license_plate: order },
+      }),
+      scheduled_date: (order: SortOrder) => ({ scheduled_date: order }),
+      // A route with no destination or not yet departed/closed never opens the list.
+      destination: (order: SortOrder) => ({
+        destination: { sort: order, nulls: "last" },
+      }),
+      started_at: (order: SortOrder) => ({
+        started_at: { sort: order, nulls: "last" },
+      }),
+      completed_at: (order: SortOrder) => ({
+        completed_at: { sort: order, nulls: "last" },
+      }),
+    },
+    // Newest first inside a tie; the id breaks what created_at cannot (routes
+    // written in the same millisecond by a spreadsheet import).
+    tiebreaker: [{ created_at: "desc" }, { id: "desc" }],
+  };
 
 interface RouteListFilters {
   businessId: string;
@@ -132,7 +138,10 @@ function routeListWhere(
   }
 
   // The tenant stays a top-level key: route_businessId_* indexes serve it.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Count per value of one facet, as the repository groups it. */
@@ -201,10 +210,13 @@ function summarizeRouteList(
     ]),
   ) as Record<RouteStatus, number>;
 
-  const kept = filters.statuses?.length ? new Set<string>(filters.statuses) : null;
+  const kept = filters.statuses?.length
+    ? new Set<string>(filters.statuses)
+    : null;
 
-  const total = ROUTE_LIST_STATUSES.filter((status) => !kept || kept.has(status))
-    .reduce((sum, status) => sum + statusCounts[status], 0);
+  const total = ROUTE_LIST_STATUSES.filter(
+    (status) => !kept || kept.has(status),
+  ).reduce((sum, status) => sum + statusCounts[status], 0);
 
   return {
     total,

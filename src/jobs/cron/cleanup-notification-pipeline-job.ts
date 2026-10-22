@@ -114,7 +114,10 @@ interface PurgeResult {
  * index on processedAt, and their deliveries from the outboxEventId index.
  * Idempotent: the archive's key is the delivery id (ON CONFLICT DO NOTHING).
  */
-function publishedPurgeBatchSql(publishedBefore: Date, limit: number): Prisma.Sql {
+function publishedPurgeBatchSql(
+  publishedBefore: Date,
+  limit: number,
+): Prisma.Sql {
   return Prisma.sql`
     WITH batch AS (
       SELECT "id", "topic", "businessId"
@@ -283,12 +286,17 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
 
     const goneReplicas = await database.workerHeartbeat.deleteMany({
       where: {
-        updated_at: { lt: new Date(Date.now() - HEARTBEAT_RETENTION_DAYS * DAY_MS) },
+        updated_at: {
+          lt: new Date(Date.now() - HEARTBEAT_RETENTION_DAYS * DAY_MS),
+        },
       },
     });
 
     if (goneReplicas.count > 0) {
-      log.info({ workerHeartbeats: goneReplicas.count }, "heartbeats of gone replicas purged");
+      log.info(
+        { workerHeartbeats: goneReplicas.count },
+        "heartbeats of gone replicas purged",
+      );
     }
 
     if (untiedReceipts.deleted > 0) {

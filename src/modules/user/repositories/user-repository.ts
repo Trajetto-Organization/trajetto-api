@@ -1,9 +1,6 @@
 import database from "@/../infra/database";
 
-import {
-  forgetRequestCache,
-  remember,
-} from "@/shared/http/request-context";
+import { forgetRequestCache, remember } from "@/shared/http/request-context";
 import { Prisma } from "@prisma/client";
 
 import { IUserRepository } from "./IUser-repository";
@@ -150,7 +147,9 @@ class UserRepository implements IUserRepository {
         profileAccessId: group.profileAccessId,
         count: group._count._all,
       })),
-      profileNames: new Map(profiles.map((profile) => [profile.id, profile.name])),
+      profileNames: new Map(
+        profiles.map((profile) => [profile.id, profile.name]),
+      ),
       emailVerified,
     };
   }
@@ -812,12 +811,10 @@ class UserRepository implements IUserRepository {
     return updatedUser;
   }
 
-  async createMasterUser({
-    name,
-    email,
-    password,
-  }: CreateMasterUserProps,
-  tx?: Prisma.TransactionClient): Promise<User> {
+  async createMasterUser(
+    { name, email, password }: CreateMasterUserProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<User> {
     // Anything cached for this request describes the row before this
     // write. Kept, it would be read back by the next lookup in the
     // same request and reported as the current state.

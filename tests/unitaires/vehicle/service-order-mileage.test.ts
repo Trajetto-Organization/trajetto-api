@@ -60,9 +60,15 @@ function makeContext() {
   } as User);
 
   // With the column defaults (timezone), as the real row has them.
-  businessRepository.business.push({ ...BUSINESS_COLUMN_DEFAULTS, id: BUSINESS } as unknown as Business);
+  businessRepository.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
+    id: BUSINESS,
+  } as unknown as Business);
 
-  branchRepository.branches.push({ id: BRANCH, businessId: BUSINESS } as Branch);
+  branchRepository.branches.push({
+    id: BRANCH,
+    businessId: BUSINESS,
+  } as Branch);
 
   vehicleRepository.vehicles.push({
     id: VEHICLE,
@@ -147,7 +153,11 @@ describe("a completed service order moving the odometer", () => {
     const context = makeContext();
 
     const open = await context.createServiceOrder.execute(
-      { ...completedOrder(0), completion_date: null, new_mileage_after_service: null },
+      {
+        ...completedOrder(0),
+        completion_date: null,
+        new_mileage_after_service: null,
+      },
       USER,
     );
 

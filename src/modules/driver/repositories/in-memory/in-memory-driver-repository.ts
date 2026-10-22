@@ -59,7 +59,9 @@ interface PauseMirror {
   driverId: string;
 }
 
-function uniqueViolation(field: "cpf" | "cnh"): Prisma.PrismaClientKnownRequestError {
+function uniqueViolation(
+  field: "cpf" | "cnh",
+): Prisma.PrismaClientKnownRequestError {
   return new Prisma.PrismaClientKnownRequestError(
     `Unique constraint failed on the fields: (\`businessId\`,\`${field}\`)`,
     {
@@ -154,7 +156,8 @@ class InMemoryDriverRepository implements IDriverRepository {
       (!filters.cnhCategories?.length ||
         filters.cnhCategories.includes(category)) &&
       (!filters.branchIds?.length ||
-        (driver.branchId != null && filters.branchIds.includes(driver.branchId)))
+        (driver.branchId != null &&
+          filters.branchIds.includes(driver.branchId)))
     );
   }
 
@@ -291,10 +294,13 @@ class InMemoryDriverRepository implements IDriverRepository {
     const index = this.drivers.findIndex((driver) => driver.id === driverId);
 
     if (index === -1) {
-      throw new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
-        code: "P2025",
-        clientVersion: "in-memory",
-      });
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Record to update not found.",
+        {
+          code: "P2025",
+          clientVersion: "in-memory",
+        },
+      );
     }
 
     const current = this.drivers[index];
@@ -333,10 +339,13 @@ class InMemoryDriverRepository implements IDriverRepository {
     // As Prisma: a missing row is P2025. `splice(-1, 1)` used to delete the
     // LAST driver of the array instead.
     if (index === -1) {
-      throw new Prisma.PrismaClientKnownRequestError("Record to delete does not exist.", {
-        code: "P2025",
-        clientVersion: "in-memory",
-      });
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Record to delete does not exist.",
+        {
+          code: "P2025",
+          clientVersion: "in-memory",
+        },
+      );
     }
 
     // The real delete counts the history again under the driver row's lock;
@@ -359,7 +368,10 @@ class InMemoryDriverRepository implements IDriverRepository {
     return found || null;
   }
 
-  async findDriverByCpf(cpf: string, businessId: string): Promise<Driver | null> {
+  async findDriverByCpf(
+    cpf: string,
+    businessId: string,
+  ): Promise<Driver | null> {
     return (
       this.drivers.find(
         (driver) => driver.cpf === cpf && driver.businessId === businessId,
@@ -367,7 +379,10 @@ class InMemoryDriverRepository implements IDriverRepository {
     );
   }
 
-  async findDriverByCnh(cnh: string, businessId: string): Promise<Driver | null> {
+  async findDriverByCnh(
+    cnh: string,
+    businessId: string,
+  ): Promise<Driver | null> {
     return (
       this.drivers.find(
         (driver) => driver.cnh === cnh && driver.businessId === businessId,

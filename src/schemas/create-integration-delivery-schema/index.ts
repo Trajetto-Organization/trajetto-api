@@ -77,8 +77,8 @@ const createIntegrationDeliverySchema = z
     ),
 
     shipper_cnpj: shipperCnpjField.describe(
-        "CNPJ do embarcador (com ou sem máscara), como cadastrado no Trajetto. Informe este OU `shipper_id`.",
-      ),
+      "CNPJ do embarcador (com ou sem máscara), como cadastrado no Trajetto. Informe este OU `shipper_id`.",
+    ),
 
     ...manualFields,
 
@@ -100,7 +100,10 @@ const createIntegrationDeliverySchema = z
 
     // `null` reads as "no items" here: ERPs serialise absent lists as null.
     items: z
-      .preprocess((value) => (value === null ? undefined : value), itemList.optional())
+      .preprocess(
+        (value) => (value === null ? undefined : value),
+        itemList.optional(),
+      )
       .describe("Itens da carga, até 200. Opcional."),
   })
   .strict()
@@ -151,7 +154,8 @@ const integrationErrorMap: z.ZodErrorMap = (issue, ctx) => {
       return { message: "envie um objeto JSON com os campos da entrega." };
     }
 
-    if (issue.received === "undefined") return { message: "campo obrigatório." };
+    if (issue.received === "undefined")
+      return { message: "campo obrigatório." };
 
     return {
       message: `esperado ${TYPE_NAMES[issue.expected] ?? issue.expected}, recebido ${TYPE_NAMES[issue.received] ?? issue.received}.`,
@@ -179,7 +183,9 @@ function issuePath(path: Array<string | number>): string {
  * dígitos" is enough on a form, where the red field is right there, and not
  * enough in an ERP's log.
  */
-function parseIntegrationDeliveryBody(body: unknown): CreateIntegrationDeliveryBody {
+function parseIntegrationDeliveryBody(
+  body: unknown,
+): CreateIntegrationDeliveryBody {
   const parsed = createIntegrationDeliverySchema.safeParse(body, {
     errorMap: integrationErrorMap,
   });

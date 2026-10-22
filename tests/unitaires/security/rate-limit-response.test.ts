@@ -2,10 +2,7 @@ import fastify, { FastifyInstance } from "fastify";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  clientRateLimitKey,
-  rateLimitExceeded,
-} from "@/config/rate-limit";
+import { clientRateLimitKey, rateLimitExceeded } from "@/config/rate-limit";
 import { getRateLimiterConfig } from "@/modules/middlewares/rate-limiter";
 import { AppError } from "@/shared/errors/AppError";
 
@@ -101,7 +98,9 @@ describe("rate limit refusal", () => {
   it("answers 429 RATE_LIMITED on a per-route limiter, keeping its message", async () => {
     app = await buildApp({ max: 1 });
 
-    expect((await app.inject({ method: "GET", url: "/per-route" })).statusCode).toBe(200);
+    expect(
+      (await app.inject({ method: "GET", url: "/per-route" })).statusCode,
+    ).toBe(200);
 
     const refused = await app.inject({ method: "GET", url: "/per-route" });
 

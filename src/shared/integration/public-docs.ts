@@ -12,7 +12,10 @@ import {
   FAMILY_WILDCARDS,
   TOPIC_DESCRIPTIONS,
 } from "./webhook-catalogue";
-import { TOPIC_PAYLOAD, WEBHOOK_PAYLOAD_SCHEMAS } from "./webhook-payload-schemas";
+import {
+  TOPIC_PAYLOAD,
+  WEBHOOK_PAYLOAD_SCHEMAS,
+} from "./webhook-payload-schemas";
 
 import {
   MAX_CONSECUTIVE_FAILURES,
@@ -160,19 +163,19 @@ const PYTHON_VERIFICATION_SAMPLE = [
   `def verify_trajetto(secret: str, raw_body: bytes, header: Optional[str], tolerance: int = ${SIGNATURE_TOLERANCE_SECONDS}) -> bool:`,
   "    if not isinstance(header, str):",
   "        return False",
-  "    parts = [part.strip().split(\"=\", 1) for part in header.split(\",\") if \"=\" in part]",
-  "    timestamps = [value for key, value in parts if key == \"t\"]",
-  "    signatures = [value for key, value in parts if key == \"v1\"]",
+  '    parts = [part.strip().split("=", 1) for part in header.split(",") if "=" in part]',
+  '    timestamps = [value for key, value in parts if key == "t"]',
+  '    signatures = [value for key, value in parts if key == "v1"]',
   "    try:",
   "        timestamp = int(timestamps[0])",
   "    except (IndexError, ValueError):",
   "        return False",
   "    if abs(time.time() - timestamp) > tolerance:",
   "        return False",
-  "    message = timestamps[0].encode() + b\".\" + raw_body",
-  "    expected = hmac.new(secret.encode(\"utf-8\"), message, hashlib.sha256).hexdigest().encode()",
+  '    message = timestamps[0].encode() + b"." + raw_body',
+  '    expected = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest().encode()',
   "    # bytes dos dois lados: compare_digest recusa str com caracteres fora do ASCII.",
-  "    return any(hmac.compare_digest(expected, signature.encode(\"utf-8\")) for signature in signatures)",
+  '    return any(hmac.compare_digest(expected, signature.encode("utf-8")) for signature in signatures)',
 ].join("\n");
 
 /*
@@ -245,7 +248,7 @@ const PUBLIC_INFO = {
     "percorra todas as páginas com `updated_since` igual ao início da varredura",
     "anterior e, ao terminar, guarde o início desta como o próximo",
     "`updated_since`. Desconte alguns minutos de margem para a diferença entre",
-    "os relógios. O filtro é \"maior ou igual\" e um documento alterado durante a",
+    'os relógios. O filtro é "maior ou igual" e um documento alterado durante a',
     "varredura volta na próxima: deduplique pelo `id` e fique com o",
     "`updated_at` mais recente. Em `/events`, `updated_since` compara com a hora",
     "em que o evento chegou ao Trajetto, não com `occurred_at`.",
@@ -329,7 +332,7 @@ const PUBLIC_INFO = {
     "",
     "O cabeçalho `X-Trajetto-Signature` traz",
     "`t=<timestamp>,v1=<hex>`. Calcule o HMAC SHA-256 sobre",
-    "`timestamp + \".\" + corpo` com o segredo do endpoint e compare em tempo",
+    '`timestamp + "." + corpo` com o segredo do endpoint e compare em tempo',
     "constante. A assinatura cobre o timestamp de propósito: uma assinatura só",
     "sobre o corpo é replayável para sempre.",
     "",
@@ -377,7 +380,8 @@ const PUBLIC_INFO = {
     "",
     `Uma entrega que falha é repetida com intervalos de ${formatDelays(WEBHOOK_RETRY_DELAYS_MS)}:`,
     `até ${WEBHOOK_MAX_ATTEMPTS} tentativas ao longo de cerca de ${Math.round(
-      WEBHOOK_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0) / 3_600_000,
+      WEBHOOK_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0) /
+        3_600_000,
     )} horas. Depois disso o painel reenvia sob demanda, dentro de uma janela`,
     `de ${REPLAY_WINDOW_DAYS} dias.`,
     "",
@@ -439,14 +443,18 @@ function reachableComponents(
 
     seen.add(node);
 
-    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    for (const [key, value] of Object.entries(
+      node as Record<string, unknown>,
+    )) {
       if (key === "$ref" && typeof value === "string") {
         const match = COMPONENT_REF.exec(value);
 
         if (!match) continue;
 
         const [, section, name] = match;
-        const target = (components[section] as Record<string, unknown> | undefined)?.[name];
+        const target = (
+          components[section] as Record<string, unknown> | undefined
+        )?.[name];
 
         if (target === undefined || section === "securitySchemes") continue;
 
@@ -492,33 +500,36 @@ function buildPublicApiDocument(
     [paths, WEBHOOK_PAYLOAD_SCHEMAS],
   );
 
-  return finishPublicDocument({
-    openapi: source.openapi ?? "3.1.0",
-    info: PUBLIC_INFO,
+  return finishPublicDocument(
+    {
+      openapi: source.openapi ?? "3.1.0",
+      info: PUBLIC_INFO,
 
-    ...(source.servers ? { servers: source.servers } : {}),
+      ...(source.servers ? { servers: source.servers } : {}),
 
-    paths,
+      paths,
 
-    components: {
-      ...reachable,
+      components: {
+        ...reachable,
 
-      schemas: {
-        ...(reachable.schemas ?? {}),
-        ...WEBHOOK_PAYLOAD_SCHEMAS,
+        schemas: {
+          ...(reachable.schemas ?? {}),
+          ...WEBHOOK_PAYLOAD_SCHEMAS,
+        },
+
+        // The session scheme is dropped: a public reference that offers
+        // "bearerAuth (JWT)" invites an integrator to try logging in as a
+        // person, which is the one thing this surface does not do.
+        securitySchemes: Object.fromEntries(
+          Object.entries(securitySchemes).filter(([name]) => name === "apiKey"),
+        ),
       },
 
-      // The session scheme is dropped: a public reference that offers
-      // "bearerAuth (JWT)" invites an integrator to try logging in as a
-      // person, which is the one thing this surface does not do.
-      securitySchemes: Object.fromEntries(
-        Object.entries(securitySchemes).filter(([name]) => name === "apiKey"),
-      ),
+      // Replaced by one tag per resource in finishPublicDocument.
+      tags: [],
     },
-
-    // Replaced by one tag per resource in finishPublicDocument.
-    tags: [],
-  }, options) as OpenApiDocument;
+    options,
+  ) as OpenApiDocument;
 }
 
 // The renderer's pinned script and its configuration: public-docs-console.

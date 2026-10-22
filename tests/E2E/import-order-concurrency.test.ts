@@ -57,7 +57,10 @@ function csv(rows: string[][]): string {
 
 /** Holds each order's pre-check until the other upload asks for it too. */
 class RacingDeliveryRepository extends DeliveryRepository {
-  private arrivals = new Map<string, { count: number; release: () => void; gate: Promise<void> }>();
+  private arrivals = new Map<
+    string,
+    { count: number; release: () => void; gate: Promise<void> }
+  >();
 
   async findDeliveryByShipperAndCode(
     businessId: string,
@@ -166,7 +169,10 @@ function racingUseCase(repository: RacingDeliveryRepository) {
 
 describe("two uploads of the same order-only sheet at once", () => {
   it("creates each order once, and routes it once", async () => {
-    const orders = Array.from({ length: 12 }, (_, index) => `RACE-${index + 1}`);
+    const orders = Array.from(
+      { length: 12 },
+      (_, index) => `RACE-${index + 1}`,
+    );
 
     const content = csv(
       orders.map((code, index) => [

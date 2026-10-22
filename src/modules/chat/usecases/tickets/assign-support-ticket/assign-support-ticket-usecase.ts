@@ -11,9 +11,16 @@ import {
   SupportTicketClosedError,
   SupportTicketNotFoundError,
 } from "../../errors/support-ticket-errors";
-import { presentTicket, type TicketSummary } from "../../shared/ticket-presenter";
+import {
+  presentTicket,
+  type TicketSummary,
+} from "../../shared/ticket-presenter";
 import { announceTicket } from "../../shared/ticket-operations";
-import { assertOperator, loadScopedTicket, resolveTicketScope } from "../ticket-access";
+import {
+  assertOperator,
+  loadScopedTicket,
+  resolveTicketScope,
+} from "../ticket-access";
 
 interface AssignSupportTicketRequest {
   userId: string;
@@ -45,11 +52,19 @@ class AssignSupportTicketUseCase {
   async execute(
     request: AssignSupportTicketRequest,
   ): Promise<{ data: TicketSummary; replayed: boolean }> {
-    const scope = await resolveTicketScope(this.user, request.userId, request.businessId);
+    const scope = await resolveTicketScope(
+      this.user,
+      request.userId,
+      request.businessId,
+    );
 
     assertOperator(scope);
 
-    const ticket = await loadScopedTicket(this.tickets, scope, request.ticketId);
+    const ticket = await loadScopedTicket(
+      this.tickets,
+      scope,
+      request.ticketId,
+    );
 
     // A candidate is an operator of THIS company: another tenant's user, a
     // driver or a revoked account reads as "not found".
@@ -57,7 +72,9 @@ class AssignSupportTicketUseCase {
 
     if (request.assigneeId) {
       const operators = await this.user.findDeliveryOperators(scope.businessId);
-      const found = operators.find((operator) => operator.id === request.assigneeId);
+      const found = operators.find(
+        (operator) => operator.id === request.assigneeId,
+      );
 
       if (!found) throw new SupportTicketAssigneeNotFoundError();
 
@@ -73,7 +90,12 @@ class AssignSupportTicketUseCase {
     }
 
     if (ticket.assigneeId === request.assigneeId) {
-      return { data: presentTicket((await this.tickets.findRowById(ticket.id, scope.businessId))!), replayed: true };
+      return {
+        data: presentTicket(
+          (await this.tickets.findRowById(ticket.id, scope.businessId))!,
+        ),
+        replayed: true,
+      };
     }
 
     const at = new Date();
@@ -110,7 +132,10 @@ class AssignSupportTicketUseCase {
     } catch (error) {
       if (!(error instanceof AssignLostError)) throw error;
 
-      const current = await this.tickets.findRowById(ticket.id, scope.businessId);
+      const current = await this.tickets.findRowById(
+        ticket.id,
+        scope.businessId,
+      );
 
       if (!current) throw new SupportTicketNotFoundError();
 

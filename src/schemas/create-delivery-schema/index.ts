@@ -67,17 +67,14 @@ const optionalTextField = (label: string, max: number) =>
   );
 
 const optionalDigits = (label: string, pattern: RegExp, message: string) =>
-  z.preprocess(
-    (val) => {
-      if (typeof val === "string") {
-        const digits = val.replace(/\D/g, "");
-        return digits === "" ? null : digits;
-      }
+  z.preprocess((val) => {
+    if (typeof val === "string") {
+      const digits = val.replace(/\D/g, "");
+      return digits === "" ? null : digits;
+    }
 
-      return val;
-    },
-    z.string().regex(pattern, message).nullable().optional(),
-  );
+    return val;
+  }, z.string().regex(pattern, message).nullable().optional());
 
 /** The smallest quantity numeric(10, 3), rounding half up, keeps above 0. */
 const MIN_STORED_QUANTITY = 0.0005;
@@ -93,7 +90,8 @@ const deliveryItemSchema = z.object({
     // and rounds half up, so the smallest quantity it keeps above zero is
     // 0.0005. A non-positive value is already reported above.
     .refine(
-      (value) => value <= 0 || Number(value.toPrecision(15)) >= MIN_STORED_QUANTITY,
+      (value) =>
+        value <= 0 || Number(value.toPrecision(15)) >= MIN_STORED_QUANTITY,
       "A quantidade deve ser maior que zero.",
     )
     .default(1),

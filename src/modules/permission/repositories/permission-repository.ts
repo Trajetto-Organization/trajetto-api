@@ -101,7 +101,9 @@ class PermissionRepository implements IPermissionRepository {
         canWrite: group.canWrite,
         count: group._count._all,
       })),
-      profileNames: new Map(profiles.map((profile) => [profile.id, profile.name])),
+      profileNames: new Map(
+        profiles.map((profile) => [profile.id, profile.name]),
+      ),
     };
   }
 

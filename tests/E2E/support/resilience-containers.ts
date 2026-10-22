@@ -42,7 +42,9 @@ function dockerFailureInjectionEnabled(): boolean {
 
 function control(action: "stop" | "start" | "kill", name: string): void {
   if (!OWN_CONTAINERS.has(name)) {
-    throw new Error(`recusado: ${name} não é um container do pacote de resiliência`);
+    throw new Error(
+      `recusado: ${name} não é um container do pacote de resiliência`,
+    );
   }
 
   // `stop -t 2`: SIGINT (Postgres' fast shutdown, every session terminated),
@@ -52,11 +54,16 @@ function control(action: "stop" | "start" | "kill", name: string): void {
   execFileSync("docker", args, { stdio: "pipe", timeout: 60_000 });
 }
 
-async function waitFor(check: () => boolean, what: string, timeoutMs = 60_000): Promise<void> {
+async function waitFor(
+  check: () => boolean,
+  what: string,
+  timeoutMs = 60_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
 
   while (!check()) {
-    if (Date.now() > deadline) throw new Error(`tempo esgotado esperando ${what}`);
+    if (Date.now() > deadline)
+      throw new Error(`tempo esgotado esperando ${what}`);
 
     await new Promise((done) => setTimeout(done, 250));
   }
@@ -81,7 +88,16 @@ async function startPostgres(): Promise<void> {
   // pg_isready over TCP: the socket inside the container answers before the
   // published port does.
   await waitFor(
-    () => succeeds(["exec", RESILIENCE_PG, "pg_isready", "-h", "127.0.0.1", "-p", "5432"]),
+    () =>
+      succeeds([
+        "exec",
+        RESILIENCE_PG,
+        "pg_isready",
+        "-h",
+        "127.0.0.1",
+        "-p",
+        "5432",
+      ]),
     "o Postgres de resiliência voltar",
   );
 }
@@ -93,7 +109,10 @@ async function stopRedis(): Promise<void> {
 async function startRedis(): Promise<void> {
   control("start", RESILIENCE_REDIS);
 
-  await waitFor(() => succeeds(["exec", RESILIENCE_REDIS, "redis-cli", "ping"]), "o Redis de resiliência voltar");
+  await waitFor(
+    () => succeeds(["exec", RESILIENCE_REDIS, "redis-cli", "ping"]),
+    "o Redis de resiliência voltar",
+  );
 }
 
 export {

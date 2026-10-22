@@ -36,7 +36,9 @@ const facetCountDoc = z.object({
   count: z
     .number()
     .int()
-    .describe("Quantos registros o valor traria, com os demais filtros aplicados."),
+    .describe(
+      "Quantos registros o valor traria, com os demais filtros aplicados.",
+    ),
 });
 
 /**
@@ -66,9 +68,4 @@ function sumCounts(entries: ReadonlyArray<{ count: number }>): number {
   return entries.reduce((sum, entry) => sum + entry.count, 0);
 }
 
-export {
-  searchMetaDoc,
-  sumCounts,
-  type FacetCount,
-  type SearchMetaFacets,
-};
+export { searchMetaDoc, sumCounts, type FacetCount, type SearchMetaFacets };

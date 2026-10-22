@@ -37,22 +37,98 @@ const T1 = new Date("2026-01-05T12:00:00.000Z").getTime();
 const early = (minutes: number) => new Date(T1 + minutes * 60_000);
 
 const ROUTES = [
-  { id: id("r0", 1), businessId: COMPANY, driverId: D1, status: "COMPLETED", started_at: at(0), completed_at: at(120), updated_at: at(125), code: 1 },
-  { id: id("r0", 2), businessId: COMPANY, driverId: D1, status: "CANCELLED", started_at: at(180), completed_at: null, updated_at: at(240), code: 2 },
-  { id: id("r0", 3), businessId: COMPANY, driverId: D1, status: "IN_PROGRESS", started_at: at(300), completed_at: null, updated_at: at(300), code: 3 },
-  { id: id("r0", 4), businessId: COMPANY, driverId: D1, status: "PLANNED", started_at: null, completed_at: null, updated_at: at(0), code: 4 },
-  { id: id("rx", 1), businessId: OTHER, driverId: DX, status: "IN_PROGRESS", started_at: at(0), completed_at: null, updated_at: at(0), code: 1 },
+  {
+    id: id("r0", 1),
+    businessId: COMPANY,
+    driverId: D1,
+    status: "COMPLETED",
+    started_at: at(0),
+    completed_at: at(120),
+    updated_at: at(125),
+    code: 1,
+  },
+  {
+    id: id("r0", 2),
+    businessId: COMPANY,
+    driverId: D1,
+    status: "CANCELLED",
+    started_at: at(180),
+    completed_at: null,
+    updated_at: at(240),
+    code: 2,
+  },
+  {
+    id: id("r0", 3),
+    businessId: COMPANY,
+    driverId: D1,
+    status: "IN_PROGRESS",
+    started_at: at(300),
+    completed_at: null,
+    updated_at: at(300),
+    code: 3,
+  },
+  {
+    id: id("r0", 4),
+    businessId: COMPANY,
+    driverId: D1,
+    status: "PLANNED",
+    started_at: null,
+    completed_at: null,
+    updated_at: at(0),
+    code: 4,
+  },
+  {
+    id: id("rx", 1),
+    businessId: OTHER,
+    driverId: DX,
+    status: "IN_PROGRESS",
+    started_at: at(0),
+    completed_at: null,
+    updated_at: at(0),
+    code: 1,
+  },
 ] as const;
 
 /** Seeded pauses: a tie on started_at whose BIGGER id is inserted first. */
 const SEEDED = [
-  { id: id("p0", 2), driverId: D1, businessId: COMPANY, started_at: at(30), ended_at: at(60), key: id("k0", 2) },
-  { id: id("p0", 1), driverId: D1, businessId: COMPANY, started_at: at(30), ended_at: at(50), key: id("k0", 1) },
-  { id: id("p0", 3), driverId: D1, businessId: COMPANY, started_at: at(-5000), ended_at: at(-4990), key: id("k0", 3) },
-  { id: id("px", 1), driverId: DX, businessId: OTHER, started_at: at(30), ended_at: at(40), key: id("kx", 1) },
+  {
+    id: id("p0", 2),
+    driverId: D1,
+    businessId: COMPANY,
+    started_at: at(30),
+    ended_at: at(60),
+    key: id("k0", 2),
+  },
+  {
+    id: id("p0", 1),
+    driverId: D1,
+    businessId: COMPANY,
+    started_at: at(30),
+    ended_at: at(50),
+    key: id("k0", 1),
+  },
+  {
+    id: id("p0", 3),
+    driverId: D1,
+    businessId: COMPANY,
+    started_at: at(-5000),
+    ended_at: at(-4990),
+    key: id("k0", 3),
+  },
+  {
+    id: id("px", 1),
+    driverId: DX,
+    businessId: OTHER,
+    started_at: at(30),
+    ended_at: at(40),
+    key: id("kx", 1),
+  },
 ];
 
-function pauseRow(seed: (typeof SEEDED)[number], occurrenceTypeId: string): DriverPause {
+function pauseRow(
+  seed: (typeof SEEDED)[number],
+  occurrenceTypeId: string,
+): DriverPause {
   return {
     id: seed.id,
     kind: "MEAL",
@@ -188,7 +264,10 @@ beforeAll(async () => {
   }
 
   for (const seed of SEEDED) {
-    const row = pauseRow(seed, await pauseTypeId(prisma, seed.businessId, "MEAL"));
+    const row = pauseRow(
+      seed,
+      await pauseTypeId(prisma, seed.businessId, "MEAL"),
+    );
 
     await prisma.driverPause.create({
       data: {
@@ -225,7 +304,8 @@ beforeAll(async () => {
   twin.occurrenceTypes.push(...types);
 
   for (const type of types) {
-    if (type.system_key) TYPE_IDS.set(`${type.businessId}:${type.system_key}`, type.id);
+    if (type.system_key)
+      TYPE_IDS.set(`${type.businessId}:${type.system_key}`, type.id);
   }
 }, 120_000);
 
@@ -290,7 +370,9 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
       ).status,
     ).toBe("already-open");
 
-    expect((await repo.findOpenPause(COMPANY, D2))?.start_submission_id).toBe(id("a1", 1));
+    expect((await repo.findOpenPause(COMPANY, D2))?.start_submission_id).toBe(
+      id("a1", 1),
+    );
   });
 
   it("accepts a closed pause beside an open one, and refuses a taken end key", async () => {
@@ -341,12 +423,20 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
     });
 
     expect(result.status).toBe("created");
-    expect((await repo.findByStartSubmission(OTHER, id("kx", 1)))?.driverId).toBe(DX);
-    expect((await repo.findByStartSubmission(COMPANY, id("kx", 1)))?.driverId).toBe(D4);
+    expect(
+      (await repo.findByStartSubmission(OTHER, id("kx", 1)))?.driverId,
+    ).toBe(DX);
+    expect(
+      (await repo.findByStartSubmission(COMPANY, id("kx", 1)))?.driverId,
+    ).toBe(D4);
   });
 
   it("stores a chosen PAUSE type of the company, and refuses one of another tenant, category or nature", async () => {
-    const closed = (n: number, kind: "MEAL" | "REST" | "OTHER", occurrenceTypeId: string) =>
+    const closed = (
+      n: number,
+      kind: "MEAL" | "REST" | "OTHER",
+      occurrenceTypeId: string,
+    ) =>
       repo.createPause({
         kind,
         started_at: early(200 + n),
@@ -366,13 +456,17 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
     }
 
     // Another tenant's PAUSE type of the same nature: the FK alone takes it.
-    expect((await closed(2, "REST", typeId(OTHER, "pause_rest"))).status).toBe("invalid-type");
-    // The company's own type, but not a PAUSE one.
-    expect((await closed(3, "OTHER", typeId(COMPANY, "delivered_default"))).status).toBe(
+    expect((await closed(2, "REST", typeId(OTHER, "pause_rest"))).status).toBe(
       "invalid-type",
     );
+    // The company's own type, but not a PAUSE one.
+    expect(
+      (await closed(3, "OTHER", typeId(COMPANY, "delivered_default"))).status,
+    ).toBe("invalid-type");
     // A PAUSE type of another nature than the kind.
-    expect((await closed(4, "MEAL", typeId(COMPANY, "pause_rest"))).status).toBe("invalid-type");
+    expect(
+      (await closed(4, "MEAL", typeId(COMPANY, "pause_rest"))).status,
+    ).toBe("invalid-type");
     // An id that exists nowhere.
     expect((await closed(5, "MEAL", id("tz", 1))).status).toBe("invalid-type");
 
@@ -424,7 +518,9 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
       ).status,
     ).toBe("not-open");
 
-    expect((await repo.findByEndSubmission(COMPANY, id("c2", 1)))?.id).toBe(open.pause.id);
+    expect((await repo.findByEndSubmission(COMPANY, id("c2", 1)))?.id).toBe(
+      open.pause.id,
+    );
 
     const next = await repo.createPause({
       kind: "REST",
@@ -461,21 +557,34 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
   });
 
   it("finds the route that was on the street at an instant", async () => {
-    expect(await repo.findRouteRunningAt(COMPANY, D1, at(60))).toBe(id("r0", 1));
-    expect(await repo.findRouteRunningAt(COMPANY, D1, at(120))).toBe(id("r0", 1));
-    expect(await repo.findRouteRunningAt(COMPANY, D1, at(200))).toBe(id("r0", 2));
+    expect(await repo.findRouteRunningAt(COMPANY, D1, at(60))).toBe(
+      id("r0", 1),
+    );
+    expect(await repo.findRouteRunningAt(COMPANY, D1, at(120))).toBe(
+      id("r0", 1),
+    );
+    expect(await repo.findRouteRunningAt(COMPANY, D1, at(200))).toBe(
+      id("r0", 2),
+    );
     expect(await repo.findRouteRunningAt(COMPANY, D1, at(250))).toBeNull();
-    expect(await repo.findRouteRunningAt(COMPANY, D1, at(400))).toBe(id("r0", 3));
+    expect(await repo.findRouteRunningAt(COMPANY, D1, at(400))).toBe(
+      id("r0", 3),
+    );
     expect(await repo.findRouteRunningAt(COMPANY, D1, at(-10))).toBeNull();
     expect(await repo.findRouteRunningAt(COMPANY, DX, at(10))).toBeNull();
     expect(await repo.findRouteRunningAt(OTHER, DX, at(10))).toBe(id("rx", 1));
   });
 
   it("lists one driver's pauses in a range, oldest first with the id as tiebreaker", async () => {
-    const pauses = await repo.listDriverPauses(COMPANY, D1, { start: at(0), end: at(1000) });
+    const pauses = await repo.listDriverPauses(COMPANY, D1, {
+      start: at(0),
+      end: at(1000),
+    });
 
     expect(pauses.map((pause) => pause.id)).toEqual([id("p0", 1), id("p0", 2)]);
-    expect(await repo.listDriverPauses(OTHER, D1, { start: at(0), end: at(1000) })).toEqual([]);
+    expect(
+      await repo.listDriverPauses(OTHER, D1, { start: at(0), end: at(1000) }),
+    ).toEqual([]);
   });
 
   it("loads the report's source for the company only", async () => {
@@ -486,7 +595,10 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
       end: at(24 * 60),
     });
 
-    expect(source.pauses.map((pause) => pause.id)).toEqual([id("p0", 1), id("p0", 2)]);
+    expect(source.pauses.map((pause) => pause.id)).toEqual([
+      id("p0", 1),
+      id("p0", 2),
+    ]);
     expect(source.pauses[0]).toEqual({
       id: id("p0", 1),
       kind: "MEAL",
@@ -503,9 +615,27 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
 
     // Planned routes never left; a cancelled one ended when it was cancelled.
     expect(source.routes).toEqual([
-      { id: id("r0", 1), driverId: D1, status: "COMPLETED", started_at: at(0), ended_at: at(120) },
-      { id: id("r0", 2), driverId: D1, status: "CANCELLED", started_at: at(180), ended_at: at(240) },
-      { id: id("r0", 3), driverId: D1, status: "IN_PROGRESS", started_at: at(300), ended_at: null },
+      {
+        id: id("r0", 1),
+        driverId: D1,
+        status: "COMPLETED",
+        started_at: at(0),
+        ended_at: at(120),
+      },
+      {
+        id: id("r0", 2),
+        driverId: D1,
+        status: "CANCELLED",
+        started_at: at(180),
+        ended_at: at(240),
+      },
+      {
+        id: id("r0", 3),
+        driverId: D1,
+        status: "IN_PROGRESS",
+        started_at: at(300),
+        ended_at: null,
+      },
     ]);
 
     // Names of the company's own drivers only: DX is another company's.

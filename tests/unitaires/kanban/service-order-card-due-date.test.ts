@@ -14,21 +14,30 @@ import { serviceOrderCardDueDate } from "@/shared/services/kanban-service";
 describe("serviceOrderCardDueDate", () => {
   it("counts seven days from a date-only order", () => {
     expect(
-      serviceOrderCardDueDate("2026-09-17T00:00:00.000Z", "America/Sao_Paulo").toISOString(),
+      serviceOrderCardDueDate(
+        "2026-09-17T00:00:00.000Z",
+        "America/Sao_Paulo",
+      ).toISOString(),
     ).toBe("2026-09-24T03:00:00.000Z");
   });
 
   it("counts from the order's day in the company's zone", () => {
     // 01:30 UTC on the 18th is still the 17th in Manaus (UTC-4).
     expect(
-      serviceOrderCardDueDate(new Date("2026-09-18T01:30:00.000Z"), "America/Manaus").toISOString(),
+      serviceOrderCardDueDate(
+        new Date("2026-09-18T01:30:00.000Z"),
+        "America/Manaus",
+      ).toISOString(),
     ).toBe("2026-09-24T04:00:00.000Z");
   });
 
   it("starts the due day at the company's midnight, like a card picked on the web", () => {
     // The web's date picker sends the operator's local midnight.
     expect(
-      serviceOrderCardDueDate("2026-09-17T03:00:00.000Z", "America/Sao_Paulo").toISOString(),
+      serviceOrderCardDueDate(
+        "2026-09-17T03:00:00.000Z",
+        "America/Sao_Paulo",
+      ).toISOString(),
     ).toBe("2026-09-24T03:00:00.000Z");
   });
 });

@@ -43,7 +43,10 @@ function update(fields: Partial<MetaTemplateUpdate>): MetaTemplateUpdate {
   };
 }
 
-function stubFetch(status = 200, body: unknown = { messages: [{ id: "wamid.ok" }] }) {
+function stubFetch(
+  status = 200,
+  body: unknown = { messages: [{ id: "wamid.ok" }] },
+) {
   const fetchMock = vi.fn(
     async () =>
       new Response(JSON.stringify(body), {
@@ -79,13 +82,13 @@ afterEach(() => {
 
 describe("what a template status callback does to the lane", () => {
   it("pauses for as long as Meta says: 3 h the first time, 6 h the second", () => {
-    expect(templateLaneChanges([update({ pauseTitle: "FIRST_PAUSE" })])).toEqual([
-      { template: TEMPLATE, action: "pause", seconds: 3 * 3600 },
-    ]);
+    expect(
+      templateLaneChanges([update({ pauseTitle: "FIRST_PAUSE" })]),
+    ).toEqual([{ template: TEMPLATE, action: "pause", seconds: 3 * 3600 }]);
 
-    expect(templateLaneChanges([update({ pauseTitle: "SECOND_PAUSE" })])).toEqual([
-      { template: TEMPLATE, action: "pause", seconds: 6 * 3600 },
-    ]);
+    expect(
+      templateLaneChanges([update({ pauseTitle: "SECOND_PAUSE" })]),
+    ).toEqual([{ template: TEMPLATE, action: "pause", seconds: 6 * 3600 }]);
   });
 
   it("holds for the same hour a refused send would when Meta does not say how long", () => {
@@ -105,7 +108,8 @@ describe("what a template status callback does to the lane", () => {
     // database outage a PAUSED can land hours late — even after the
     // REINSTATED that ended it.
     const now = new Date("2026-09-24T12:00:00.000Z");
-    const hoursAgo = (hours: number) => new Date(now.getTime() - hours * 3600 * 1000);
+    const hoursAgo = (hours: number) =>
+      new Date(now.getTime() - hours * 3600 * 1000);
 
     expect(
       templateLaneChanges(
@@ -132,7 +136,10 @@ describe("what a template status callback does to the lane", () => {
 
   it("lifts the pause when Meta reinstates or approves the template", () => {
     expect(
-      templateLaneChanges([update({ event: "REINSTATED" }), update({ event: "APPROVED" })]),
+      templateLaneChanges([
+        update({ event: "REINSTATED" }),
+        update({ event: "APPROVED" }),
+      ]),
     ).toEqual([
       { template: TEMPLATE, action: "resume" },
       { template: TEMPLATE, action: "resume" },
@@ -167,7 +174,11 @@ describe("the provider's pause, fed from outside a send", () => {
     const result = await send(provider);
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ success: false, retryable: true, errorCode: 132015 });
+    expect(result).toMatchObject({
+      success: false,
+      retryable: true,
+      errorCode: 132015,
+    });
     expect(result.retryAfterSeconds).toBeGreaterThan(3 * 3600 - 5);
   });
 
@@ -178,7 +189,9 @@ describe("the provider's pause, fed from outside a send", () => {
     provider.pauseTemplate(TEMPLATE, 6 * 3600);
     provider.pauseTemplate(TEMPLATE, 3600);
 
-    expect((await send(provider)).retryAfterSeconds).toBeGreaterThan(6 * 3600 - 5);
+    expect((await send(provider)).retryAfterSeconds).toBeGreaterThan(
+      6 * 3600 - 5,
+    );
   });
 
   it("keeps Meta's longer pause when a send already in flight comes back refused", async () => {
@@ -204,12 +217,17 @@ describe("the provider's pause, fed from outside a send", () => {
 
     answer(
       new Response(
-        JSON.stringify({ error: { message: "Template is paused", code: 132015 } }),
+        JSON.stringify({
+          error: { message: "Template is paused", code: 132015 },
+        }),
         { status: 400, headers: { "Content-Type": "application/json" } },
       ),
     );
 
-    expect(await inFlight).toMatchObject({ retryable: true, errorCode: 132015 });
+    expect(await inFlight).toMatchObject({
+      retryable: true,
+      errorCode: 132015,
+    });
 
     const fetchMock = stubFetch();
     const result = await send(provider);
@@ -251,13 +269,19 @@ describe("a change another replica announced", () => {
     const fetchMock = stubFetch();
 
     expect(
-      applyWhatsAppTemplateLaneChange({ template: TEMPLATE, action: "pause", seconds: 3600 }),
+      applyWhatsAppTemplateLaneChange({
+        template: TEMPLATE,
+        action: "pause",
+        seconds: 3600,
+      }),
     ).toBe(true);
 
     await send(provider);
     expect(fetchMock).not.toHaveBeenCalled();
 
-    expect(applyWhatsAppTemplateLaneChange({ template: TEMPLATE, action: "resume" })).toBe(true);
+    expect(
+      applyWhatsAppTemplateLaneChange({ template: TEMPLATE, action: "resume" }),
+    ).toBe(true);
 
     await send(provider);
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -271,7 +295,11 @@ describe("a change another replica announced", () => {
       "pause",
       { template: TEMPLATE, action: "pause" },
       { template: TEMPLATE, action: "pause", seconds: -1 },
-      { template: TEMPLATE, action: "pause", seconds: Number.POSITIVE_INFINITY },
+      {
+        template: TEMPLATE,
+        action: "pause",
+        seconds: Number.POSITIVE_INFINITY,
+      },
       { template: TEMPLATE, action: "pause", seconds: 10 * 24 * 3600 },
       { template: "", action: "resume" },
       { template: TEMPLATE, action: "explode" },
@@ -286,9 +314,15 @@ describe("a change another replica announced", () => {
   it("is a no-op for a provider that keeps no pause", () => {
     container.registerInstance("WhatsAppProvider", {
       isConfigured: () => true,
-      sendMessage: async () => ({ success: true, retryable: false, message: "ok" }),
+      sendMessage: async () => ({
+        success: true,
+        retryable: false,
+        message: "ok",
+      }),
     });
 
-    expect(applyWhatsAppTemplateLaneChange({ template: TEMPLATE, action: "resume" })).toBe(false);
+    expect(
+      applyWhatsAppTemplateLaneChange({ template: TEMPLATE, action: "resume" }),
+    ).toBe(false);
   });
 });

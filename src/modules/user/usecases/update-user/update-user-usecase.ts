@@ -115,7 +115,11 @@ class UpdateUserUseCase {
     }
 
     // Against the target's CURRENT tenant, before any of the checks below.
-    assertTenantAccessToRecord(actor, target.businessId, () => new ResourceNotFoundError());
+    assertTenantAccessToRecord(
+      actor,
+      target.businessId,
+      () => new ResourceNotFoundError(),
+    );
 
     // A master is not a company user: this route would give them a company
     // and skip the master notices. update-master-user is their route.
@@ -265,12 +269,23 @@ class UpdateUserUseCase {
     }
 
     if (plan.changed) {
-      void this.mailAccountUpdated(target, next.email, next.name, changes.email);
+      void this.mailAccountUpdated(
+        target,
+        next.email,
+        next.name,
+        changes.email,
+      );
     }
 
     // The e-mail itself leaves after the answer, never inside the commit.
     if (resetUrl) {
-      void this.mailPasswordSetupLink(resetUrl, next.email, next.name, actor.name, userId);
+      void this.mailPasswordSetupLink(
+        resetUrl,
+        next.email,
+        next.name,
+        actor.name,
+        userId,
+      );
     }
 
     return updated;
@@ -284,7 +299,10 @@ class UpdateUserUseCase {
         ADMIN_RESET_LINK_TTL_MS,
       );
     } catch (error) {
-      log.error({ err: error, userId }, "password setup link could not be stored");
+      log.error(
+        { err: error, userId },
+        "password setup link could not be stored",
+      );
 
       throw new PasswordLinkUnavailableError();
     }
@@ -316,7 +334,10 @@ class UpdateUserUseCase {
 
     if (plan.changes.profile && businessId) {
       void refreshDeliveryRooms(businessId).catch((error) =>
-        log.error({ err: error, businessId }, "delivery rooms could not be re-evaluated"),
+        log.error(
+          { err: error, businessId },
+          "delivery rooms could not be re-evaluated",
+        ),
       );
     }
   }
@@ -377,7 +398,10 @@ class UpdateUserUseCase {
         },
       });
     } catch (error) {
-      log.error({ err: error, userId }, "password setup link could not be sent");
+      log.error(
+        { err: error, userId },
+        "password setup link could not be sent",
+      );
     }
   }
 }

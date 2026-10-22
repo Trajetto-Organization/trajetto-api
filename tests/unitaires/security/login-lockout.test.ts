@@ -178,15 +178,24 @@ describe("the way out", () => {
     // An administrator no longer types a password: the person gets a
     // single-use link and sets it, and that clears the lock too.
     const tokens = new InMemoryUserTokensRepository();
-    const url = await issuePasswordSetupLink(tokens, EMAIL, ADMIN_RESET_LINK_TTL_MS);
+    const url = await issuePasswordSetupLink(
+      tokens,
+      EMAIL,
+      ADMIN_RESET_LINK_TTL_MS,
+    );
     const token = url.split("token=")[1];
 
-    await new ResetUserPasswordUseCase(users as never, tokens as never).execute({
-      token,
-      password: "senha-do-link-789",
-    });
+    await new ResetUserPasswordUseCase(users as never, tokens as never).execute(
+      {
+        token,
+        password: "senha-do-link-789",
+      },
+    );
 
-    expect(row()).toMatchObject({ failed_login_attempts: 0, login_locked_until: null });
+    expect(row()).toMatchObject({
+      failed_login_attempts: 0,
+      login_locked_until: null,
+    });
 
     await expect(
       useCase.execute({ email: EMAIL, password: "senha-do-link-789" }),

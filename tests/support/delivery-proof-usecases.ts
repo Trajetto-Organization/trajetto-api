@@ -35,7 +35,8 @@ function legacyProofUseCase(
     authorizations?: InMemoryOccurrenceAuthorizationRepository;
   } = {},
 ): RegisterDeliveryProofUseCase {
-  const types = extras.occurrenceTypes ?? new InMemoryOccurrenceTypeRepository();
+  const types =
+    extras.occurrenceTypes ?? new InMemoryOccurrenceTypeRepository();
   const authorizations =
     extras.authorizations ??
     new InMemoryOccurrenceAuthorizationRepository(deliveries, types, users);
@@ -59,7 +60,11 @@ function legacyProofUseCase(
 
 /** A business repository for tests that only need "no AI contracted". */
 const businessWithoutAI = {
-  findBusinessById: async (id: string) => ({ id, ai_analysis_limit: 0, timezone: "America/Sao_Paulo" }),
+  findBusinessById: async (id: string) => ({
+    id,
+    ai_analysis_limit: 0,
+    timezone: "America/Sao_Paulo",
+  }),
 } as unknown as IBusinessRepository;
 
 export { businessWithoutAI, legacyProofUseCase };

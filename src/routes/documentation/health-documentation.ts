@@ -44,7 +44,9 @@ const channelDeliveryMetrics = z.object({
     .describe("Deliveries created in the window that are still waiting (24h)."),
   processing: z
     .number()
-    .describe("Deliveries created in the window that are leased right now (24h)."),
+    .describe(
+      "Deliveries created in the window that are leased right now (24h).",
+    ),
   delivered: z
     .number()
     .describe(
@@ -52,7 +54,9 @@ const channelDeliveryMetrics = z.object({
     ),
   failed: z
     .number()
-    .describe("Deliveries created in the window that exhausted their retries (24h)."),
+    .describe(
+      "Deliveries created in the window that exhausted their retries (24h).",
+    ),
   failed_total: z
     .number()
     .describe(
@@ -116,7 +120,9 @@ const providerChannelMetrics = z.object({
   error_rate: z
     .number()
     .nullable()
-    .describe("errors / calls, 0..1. Null without a call in the window: unknown, not zero."),
+    .describe(
+      "errors / calls, 0..1. Null without a call in the window: unknown, not zero.",
+    ),
   latency_p50_ms: z.number().nullable(),
   latency_p95_ms: z.number().nullable(),
   latency_max_ms: z.number().nullable(),
@@ -126,27 +132,52 @@ const providerChannelMetrics = z.object({
   last_error_kind: z
     .string()
     .nullable()
-    .describe("Short kind of the last failure (http_401, timeout, smtp_535, busy…), never a message."),
+    .describe(
+      "Short kind of the last failure (http_401, timeout, smtp_535, busy…), never a message.",
+    ),
 });
 
-const readinessStatus = z.enum(["ok", "warning", "error", "not_configured", "disabled"]);
+const readinessStatus = z.enum([
+  "ok",
+  "warning",
+  "error",
+  "not_configured",
+  "disabled",
+]);
 
 /** One provider on /health/providers (provider-readiness.ts). */
 const providerReadiness = z.object({
-  key: z.enum(["email", "whatsapp", "push", "storage", "ai_ocr", "proof_certificate", "heartbeat"]),
+  key: z.enum([
+    "email",
+    "whatsapp",
+    "push",
+    "storage",
+    "ai_ocr",
+    "proof_certificate",
+    "heartbeat",
+  ]),
   label: z.string().describe("Nome do provedor em pt-BR."),
   status: readinessStatus.describe(
     "ok; warning (funciona, com ressalva); error (configurado e quebrado); not_configured (faltam variáveis); disabled (desligado de propósito ou fora de produção).",
   ),
-  configured: z.boolean().describe("Todas as variáveis de que o provedor precisa estão definidas."),
-  reachable: z.boolean().nullable().describe("A sonda teve resposta; null quando nada foi sondado."),
+  configured: z
+    .boolean()
+    .describe("Todas as variáveis de que o provedor precisa estão definidas."),
+  reachable: z
+    .boolean()
+    .nullable()
+    .describe("A sonda teve resposta; null quando nada foi sondado."),
   latency_ms: z.number().nullable(),
-  missing_env: z.array(z.string()).describe("Nomes das variáveis que faltam — nunca valores."),
+  missing_env: z
+    .array(z.string())
+    .describe("Nomes das variáveis que faltam — nunca valores."),
   message: z.string().describe("O que está errado e o que fazer, em pt-BR."),
   warnings: z.array(z.string()),
   details: z
     .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
-    .describe("Estado sem segredo: domínio do remetente, status de cada template (template:<nome>), validade do certificado…"),
+    .describe(
+      "Estado sem segredo: domínio do remetente, status de cada template (template:<nome>), validade do certificado…",
+    ),
 });
 
 const healthResponses = {
@@ -214,7 +245,9 @@ const healthResponses = {
       running: z.number(),
       failed_24h: z
         .number()
-        .describe("Analyses that exhausted their retries in the last 24 hours."),
+        .describe(
+          "Analyses that exhausted their retries in the last 24 hours.",
+        ),
     }),
     notifications: z
       .object({
@@ -252,7 +285,9 @@ const healthResponses = {
       ),
     webhooks: z
       .object({
-        pending_due: z.number().describe("Webhook rows due now and not yet sent."),
+        pending_due: z
+          .number()
+          .describe("Webhook rows due now and not yet sent."),
         held: z
           .number()
           .describe(
@@ -261,10 +296,14 @@ const healthResponses = {
         oldest_due_seconds: z
           .number()
           .nullable()
-          .describe("How long the oldest due row has waited; null when nothing is due."),
+          .describe(
+            "How long the oldest due row has waited; null when nothing is due.",
+          ),
         disabled_endpoints: z
           .number()
-          .describe("Endpoints switched off by the breaker, a 410 or a refused destination, across every tenant."),
+          .describe(
+            "Endpoints switched off by the breaker, a 410 or a refused destination, across every tenant.",
+          ),
         failed_24h: z
           .number()
           .describe(
@@ -286,7 +325,9 @@ const healthResponses = {
             .string()
             .nullable()
             .describe("Start of the cycle in progress; null between cycles."),
-          last_seen_at: z.string().describe("When the replica last wrote this row."),
+          last_seen_at: z
+            .string()
+            .describe("When the replica last wrote this row."),
           stuck: z
             .boolean()
             .describe(
@@ -304,16 +345,24 @@ const healthResponses = {
           schedule: z
             .string()
             .nullable()
-            .describe("Cron expression, when the answering replica schedules the job."),
+            .describe(
+              "Cron expression, when the answering replica schedules the job.",
+            ),
           last_status: z.enum(["RUNNING", "SUCCEEDED", "FAILED"]).nullable(),
-          last_scheduled_for: z.string().nullable().describe("Slot of the latest run."),
+          last_scheduled_for: z
+            .string()
+            .nullable()
+            .describe("Slot of the latest run."),
           last_finished_at: z.string().nullable(),
           last_succeeded_at: z
             .string()
             .nullable()
             .describe("Null when the job has no success in the 30 days kept."),
           attempts: z.number().nullable(),
-          last_error: z.string().nullable().describe("Truncated to 500 characters."),
+          last_error: z
+            .string()
+            .nullable()
+            .describe("Truncated to 500 characters."),
           stale_running: z
             .number()
             .describe(
@@ -333,7 +382,9 @@ const healthResponses = {
         last_partition_ends_at: z.string().nullable(),
         runway_ok: z
           .boolean()
-          .describe("At least 3 days of runway. The nightly job keeps about 7."),
+          .describe(
+            "At least 3 days of runway. The nightly job keeps about 7.",
+          ),
       })
       .describe("Partitions of the GPS trail table ahead of today."),
     runtime: z
@@ -345,24 +396,36 @@ const healthResponses = {
           ),
         window_seconds: z
           .number()
-          .describe("Seconds the event-loop and canary numbers cover (up to a minute)."),
+          .describe(
+            "Seconds the event-loop and canary numbers cover (up to a minute).",
+          ),
         event_loop: z.object({
           lag_p50_ms: z.number().nullable(),
           lag_p99_ms: z
             .number()
             .nullable()
-            .describe("Above ~200 ms the replica is stalling requests. Null until measured."),
+            .describe(
+              "Above ~200 ms the replica is stalling requests. Null until measured.",
+            ),
           lag_max_ms: z.number().nullable(),
           utilization: z
             .number()
-            .describe("0..1 share of the window the loop was busy. Sustained above 0.8 = CPU-bound."),
+            .describe(
+              "0..1 share of the window the loop was busy. Sustained above 0.8 = CPU-bound.",
+            ),
         }),
         threadpool: z.object({
-          size: z.number().describe("libuv threads (UV_THREADPOOL_SIZE) shared by bcrypt, zlib, DNS and fs."),
+          size: z
+            .number()
+            .describe(
+              "libuv threads (UV_THREADPOOL_SIZE) shared by bcrypt, zlib, DNS and fs.",
+            ),
           canary_last_ms: z
             .number()
             .nullable()
-            .describe("Last timed fs.stat. Hundreds of ms = requests queueing for a thread."),
+            .describe(
+              "Last timed fs.stat. Hundreds of ms = requests queueing for a thread.",
+            ),
           canary_max_ms: z.number().nullable(),
         }),
         memory: z.object({
@@ -374,7 +437,9 @@ const healthResponses = {
             limit: z
               .number()
               .nullable()
-              .describe("connection_limit of this replica's pool; null when left to Prisma's default."),
+              .describe(
+                "connection_limit of this replica's pool; null when left to Prisma's default.",
+              ),
             open: z.number(),
             busy: z.number(),
             idle: z.number(),
@@ -395,7 +460,9 @@ const healthResponses = {
           })
           .describe("The password-hashing gate of this replica (GAP3-6)."),
       })
-      .describe("Saturation of the replica that answered: event loop, threadpool, memory, DB pool."),
+      .describe(
+        "Saturation of the replica that answered: event loop, threadpool, memory, DB pool.",
+      ),
     legacy_contracts: z
       .object({
         legacy_proof_adapter: legacyContractUse.describe(
@@ -435,11 +502,16 @@ const healthResponses = {
           .string()
           .nullable()
           .describe("The certificate's name (the platform's own company)."),
-        not_after: z.string().nullable().describe("End of the certificate's validity (ISO 8601)."),
+        not_after: z
+          .string()
+          .nullable()
+          .describe("End of the certificate's validity (ISO 8601)."),
         days_left: z
           .number()
           .nullable()
-          .describe("Whole days until not_after; the ops alert warns at 30 and is critical at 7."),
+          .describe(
+            "Whole days until not_after; the ops alert warns at 30 and is critical at 7.",
+          ),
       })
       .describe(
         "The ICP-Brasil A1 certificate that signs proof documents (decision 14.8). Never the serial, the CNPJ, the password or the key.",
@@ -455,17 +527,25 @@ const healthResponses = {
       ),
     realtime: z
       .object({
-        local_connections: z.number().describe("Sockets held by the replica that answered."),
+        local_connections: z
+          .number()
+          .describe("Sockets held by the replica that answered."),
         adapter: z
           .enum(["redis", "local", "off"])
-          .describe("redis: events cross replicas; off: Socket.IO not started on this process."),
+          .describe(
+            "redis: events cross replicas; off: Socket.IO not started on this process.",
+          ),
         adapter_status: z
           .string()
           .nullable()
-          .describe("ioredis status of the adapter's publisher (ready, reconnecting…)."),
+          .describe(
+            "ioredis status of the adapter's publisher (ready, reconnecting…).",
+          ),
         dropped_frames_unreported: z
           .number()
-          .describe("Cross-replica frames dropped while Redis was away, not yet logged."),
+          .describe(
+            "Cross-replica frames dropped while Redis was away, not yet logged.",
+          ),
       })
       .describe("WebSocket (Socket.IO) of the replica that answered."),
     redis: z
@@ -473,23 +553,32 @@ const healthResponses = {
         status: z.enum(["up", "down"]),
         latency_ms: z.number().nullable(),
         used_memory_mb: z.number().nullable(),
-        maxmemory_mb: z.number().nullable().describe("Null: no ceiling configured."),
+        maxmemory_mb: z
+          .number()
+          .nullable()
+          .describe("Null: no ceiling configured."),
         connected_clients: z.number().nullable(),
         blocked_clients: z.number().nullable(),
         rejected_connections: z.number().nullable(),
         evicted_keys: z
           .number()
           .nullable()
-          .describe("Keys thrown away under memory pressure (rate-limit counters, socket state)."),
+          .describe(
+            "Keys thrown away under memory pressure (rate-limit counters, socket state).",
+          ),
         uptime_seconds: z.number().nullable(),
       })
-      .describe("Redis as the API sees it: PING latency and INFO numbers. Never the address."),
+      .describe(
+        "Redis as the API sees it: PING latency and INFO numbers. Never the address.",
+      ),
   }),
   providerReadiness: z.object({
     checked_at: z.string().describe("Quando as sondas rodaram (ISO 8601)."),
     cached: z
       .boolean()
-      .describe("A leitura veio do cache de 30 s desta réplica (use refresh=true para sondar de novo)."),
+      .describe(
+        "A leitura veio do cache de 30 s desta réplica (use refresh=true para sondar de novo).",
+      ),
     providers: z.array(providerReadiness),
   }),
   deadLetter: z.object({
@@ -509,11 +598,15 @@ const healthResponses = {
         userId: z
           .string()
           .nullable()
-          .describe("Recipient user, when the message was for somebody with an account."),
+          .describe(
+            "Recipient user, when the message was for somebody with an account.",
+          ),
         externalRecipientId: z
           .string()
           .nullable()
-          .describe("Recipient outside the product (the carrier's customer), when that is who it was for."),
+          .describe(
+            "Recipient outside the product (the carrier's customer), when that is who it was for.",
+          ),
         attempts: z.number().describe("Retries burned before giving up."),
         lastError: z
           .string()
@@ -543,7 +636,9 @@ const healthResponses = {
   deadLetterReplay: z.object({
     requeued: z
       .number()
-      .describe("How many of the given deliveries were FAILED and went back to the queue."),
+      .describe(
+        "How many of the given deliveries were FAILED and went back to the queue.",
+      ),
   }),
   deadLetterEvents: z.object({
     data: z.array(
@@ -554,13 +649,17 @@ const healthResponses = {
           .string()
           .nullable()
           .describe("Tenant of the event, null for global events."),
-        attempts: z.number().describe("Expansion attempts burned before giving up."),
+        attempts: z
+          .number()
+          .describe("Expansion attempts burned before giving up."),
         lastError: z
           .string()
           .nullable()
           .describe("Last error, truncated to 500 characters."),
         created_at: z.string().describe("When the event was published."),
-        failedAt: z.string().describe("Last transition — in practice, when it gave up."),
+        failedAt: z
+          .string()
+          .describe("Last transition — in practice, when it gave up."),
       }),
     ),
     total: z.number().describe("Total FAILED outbox events."),
@@ -577,7 +676,9 @@ const healthSchemas = {
       .array(z.string().uuid("ID de entrega inválido."))
       .min(1, "Informe ao menos uma entrega.")
       .max(500, "No máximo 500 entregas por vez.")
-      .describe("FAILED notification_delivery ids to send again. Ids of deliveries in any other state are ignored."),
+      .describe(
+        "FAILED notification_delivery ids to send again. Ids of deliveries in any other state are ignored.",
+      ),
   }),
   /**
    * Parsed here and used straight in the handler (no controller re-parses it),

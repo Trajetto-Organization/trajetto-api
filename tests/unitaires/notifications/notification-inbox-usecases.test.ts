@@ -30,7 +30,12 @@ const ADMIN = "018f0000-0000-7000-8000-0000000000a3";
 const MASTER = "018f0000-0000-7000-8000-0000000000a4";
 const GHOST = "018f0000-0000-7000-8000-0000000000ff";
 
-function notification(id: string, userId: string, minute: number, read = false): Notification {
+function notification(
+  id: string,
+  userId: string,
+  minute: number,
+  read = false,
+): Notification {
   const at = new Date(Date.UTC(2026, 9, 6, 12, minute));
 
   return {
@@ -79,7 +84,10 @@ function makeContext() {
     remove: new DeleteNotificationUseCase(notifications, users),
     list: new ListUserNotificationsCursorUseCase(users, notifications),
     getPreferences: new GetNotificationPreferencesUseCase(notifications, users),
-    updatePreferences: new UpdateNotificationPreferencesUseCase(notifications, users),
+    updatePreferences: new UpdateNotificationPreferencesUseCase(
+      notifications,
+      users,
+    ),
   };
 }
 
@@ -102,7 +110,10 @@ describe("counting unread notifications", () => {
 
   it("turns a repository failure into a pt-BR 500", async () => {
     const context = makeContext();
-    vi.spyOn(context.notifications, "countUnreadNotifications").mockRejectedValueOnce(new Error("down"));
+    vi.spyOn(
+      context.notifications,
+      "countUnreadNotifications",
+    ).mockRejectedValueOnce(new Error("down"));
 
     await expect(context.count.execute(ME)).rejects.toMatchObject({
       statusCode: 500,
@@ -118,9 +129,18 @@ describe("listing the inbox with a cursor", () => {
     const first = await context.list.execute({ userId: ME, limit: 2 });
 
     expect(first.data.map((row) => row.id)).toEqual(["n-3", "n-2"]);
-    expect(first).toMatchObject({ total: 3, unread: 2, hasMore: true, nextCursor: "n-2" });
+    expect(first).toMatchObject({
+      total: 3,
+      unread: 2,
+      hasMore: true,
+      nextCursor: "n-2",
+    });
 
-    const second = await context.list.execute({ userId: ME, limit: 2, cursor: first.nextCursor ?? undefined });
+    const second = await context.list.execute({
+      userId: ME,
+      limit: 2,
+      cursor: first.nextCursor ?? undefined,
+    });
 
     expect(second.data.map((row) => row.id)).toEqual(["n-1"]);
     expect(second).toMatchObject({ hasMore: false, nextCursor: null });
@@ -129,7 +149,10 @@ describe("listing the inbox with a cursor", () => {
   it("hides read ones when asked, and never shows another user's", async () => {
     const context = makeContext();
 
-    const unreadOnly = await context.list.execute({ userId: ME, includeRead: false });
+    const unreadOnly = await context.list.execute({
+      userId: ME,
+      includeRead: false,
+    });
 
     expect(unreadOnly.data.map((row) => row.id)).toEqual(["n-3", "n-1"]);
     expect(unreadOnly.total).toBe(2);
@@ -139,14 +162,21 @@ describe("listing the inbox with a cursor", () => {
   it("refuses an unknown user with 404", async () => {
     const context = makeContext();
 
-    await expect(context.list.execute({ userId: GHOST })).rejects.toMatchObject({ statusCode: 404 });
+    await expect(context.list.execute({ userId: GHOST })).rejects.toMatchObject(
+      { statusCode: 404 },
+    );
   });
 
   it("turns a repository failure into a pt-BR 500", async () => {
     const context = makeContext();
-    vi.spyOn(context.notifications, "listUserNotificationsWithCursor").mockRejectedValueOnce(new Error("down"));
+    vi.spyOn(
+      context.notifications,
+      "listUserNotificationsWithCursor",
+    ).mockRejectedValueOnce(new Error("down"));
 
-    await expect(context.list.execute({ userId: ME })).rejects.toMatchObject({ statusCode: 500 });
+    await expect(context.list.execute({ userId: ME })).rejects.toMatchObject({
+      statusCode: 500,
+    });
   });
 });
 
@@ -156,7 +186,9 @@ describe("deleting a notification", () => {
 
     await context.remove.execute({ notificationId: "n-1", userId: ME });
 
-    expect(context.notifications.notifications.map((row) => row.id)).not.toContain("n-1");
+    expect(
+      context.notifications.notifications.map((row) => row.id),
+    ).not.toContain("n-1");
   });
 
   it("answers another user's notification exactly like a missing one and keeps it", async () => {
@@ -169,16 +201,26 @@ describe("deleting a notification", () => {
       .execute({ notificationId: "nope", userId: ME })
       .catch((error) => error);
 
-    expect(foreign).toMatchObject({ statusCode: 404, code: "NOTIFICATION_NOT_FOUND" });
-    expect(missing).toMatchObject({ statusCode: 404, code: "NOTIFICATION_NOT_FOUND" });
+    expect(foreign).toMatchObject({
+      statusCode: 404,
+      code: "NOTIFICATION_NOT_FOUND",
+    });
+    expect(missing).toMatchObject({
+      statusCode: 404,
+      code: "NOTIFICATION_NOT_FOUND",
+    });
     expect(foreign.message).toBe(missing.message);
-    expect(context.notifications.notifications.map((row) => row.id)).toContain("n-4");
+    expect(context.notifications.notifications.map((row) => row.id)).toContain(
+      "n-4",
+    );
   });
 
   it("refuses an unknown user before looking at the notification", async () => {
     const context = makeContext();
 
-    await expect(context.remove.execute({ notificationId: "n-1", userId: GHOST })).rejects.toMatchObject({
+    await expect(
+      context.remove.execute({ notificationId: "n-1", userId: GHOST }),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "USER_NOT_FOUND",
     });
@@ -187,9 +229,13 @@ describe("deleting a notification", () => {
 
   it("turns a repository failure into a pt-BR 500", async () => {
     const context = makeContext();
-    vi.spyOn(context.notifications, "deleteNotification").mockRejectedValueOnce(new Error("down"));
+    vi.spyOn(context.notifications, "deleteNotification").mockRejectedValueOnce(
+      new Error("down"),
+    );
 
-    await expect(context.remove.execute({ notificationId: "n-1", userId: ME })).rejects.toMatchObject({
+    await expect(
+      context.remove.execute({ notificationId: "n-1", userId: ME }),
+    ).rejects.toMatchObject({
       statusCode: 500,
       message: expect.stringContaining("excluir a notificação"),
     });
@@ -204,15 +250,21 @@ describe("notification preferences", () => {
     const admin = await context.getPreferences.execute(ADMIN);
     const user = await context.getPreferences.execute(ME);
 
-    expect(master.map((row) => row.category)).toEqual([NotificationCategory.ACCOUNT]);
+    expect(master.map((row) => row.category)).toEqual([
+      NotificationCategory.ACCOUNT,
+    ]);
     expect(admin.map((row) => row.category)).toEqual([
       NotificationCategory.FINES,
       NotificationCategory.MAINTENANCE,
       NotificationCategory.FINANCE,
       NotificationCategory.TASKS,
     ]);
-    expect(user.map((row) => row.category)).not.toContain(NotificationCategory.FINES);
-    expect([...master, ...admin, ...user].map((row) => row.category)).not.toContain(NotificationCategory.SYSTEM);
+    expect(user.map((row) => row.category)).not.toContain(
+      NotificationCategory.FINES,
+    );
+    expect(
+      [...master, ...admin, ...user].map((row) => row.category),
+    ).not.toContain(NotificationCategory.SYSTEM);
   });
 
   it("falls back to the legacy global toggles until a category is saved", async () => {
@@ -221,15 +273,28 @@ describe("notification preferences", () => {
     const before = await context.getPreferences.execute(ME);
 
     expect(before.every((row) => row.isDefault)).toBe(true);
-    expect(before[0]).toMatchObject({ inApp: false, email: true, whatsapp: true });
+    expect(before[0]).toMatchObject({
+      inApp: false,
+      email: true,
+      whatsapp: true,
+    });
 
     await context.updatePreferences.execute(ME, [
-      { category: NotificationCategory.TASKS, inApp: true, email: false, whatsapp: false },
+      {
+        category: NotificationCategory.TASKS,
+        inApp: true,
+        email: false,
+        whatsapp: false,
+      },
     ]);
 
     const after = await context.getPreferences.execute(ME);
-    const tasks = after.find((row) => row.category === NotificationCategory.TASKS);
-    const finance = after.find((row) => row.category === NotificationCategory.FINANCE);
+    const tasks = after.find(
+      (row) => row.category === NotificationCategory.TASKS,
+    );
+    const finance = after.find(
+      (row) => row.category === NotificationCategory.FINANCE,
+    );
 
     expect(tasks).toEqual({
       category: NotificationCategory.TASKS,
@@ -245,30 +310,64 @@ describe("notification preferences", () => {
     const context = makeContext();
 
     await context.updatePreferences.execute(OTHER, [
-      { category: NotificationCategory.TASKS, inApp: false, email: false, whatsapp: false },
+      {
+        category: NotificationCategory.TASKS,
+        inApp: false,
+        email: false,
+        whatsapp: false,
+      },
     ]);
     await context.updatePreferences.execute(ME, [
-      { category: NotificationCategory.TASKS, inApp: true, email: true, whatsapp: false },
+      {
+        category: NotificationCategory.TASKS,
+        inApp: true,
+        email: true,
+        whatsapp: false,
+      },
     ]);
     await context.updatePreferences.execute(ME, [
-      { category: NotificationCategory.TASKS, inApp: false, email: true, whatsapp: true },
+      {
+        category: NotificationCategory.TASKS,
+        inApp: false,
+        email: true,
+        whatsapp: true,
+      },
     ]);
 
-    const mine = context.notifications.preferences.filter((row) => row.userId === ME);
-    const theirs = context.notifications.preferences.find((row) => row.userId === OTHER);
+    const mine = context.notifications.preferences.filter(
+      (row) => row.userId === ME,
+    );
+    const theirs = context.notifications.preferences.find(
+      (row) => row.userId === OTHER,
+    );
 
     expect(mine).toHaveLength(1);
-    expect(mine[0]).toMatchObject({ inApp: false, email: true, whatsapp: true });
-    expect(theirs).toMatchObject({ inApp: false, email: false, whatsapp: false });
+    expect(mine[0]).toMatchObject({
+      inApp: false,
+      email: true,
+      whatsapp: true,
+    });
+    expect(theirs).toMatchObject({
+      inApp: false,
+      email: false,
+      whatsapp: false,
+    });
   });
 
   it("refuses an unknown user with 404 on read and write", async () => {
     const context = makeContext();
 
-    await expect(context.getPreferences.execute(GHOST)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(context.getPreferences.execute(GHOST)).rejects.toMatchObject({
+      statusCode: 404,
+    });
     await expect(
       context.updatePreferences.execute(GHOST, [
-        { category: NotificationCategory.TASKS, inApp: true, email: true, whatsapp: true },
+        {
+          category: NotificationCategory.TASKS,
+          inApp: true,
+          email: true,
+          whatsapp: true,
+        },
       ]),
     ).rejects.toMatchObject({ statusCode: 404 });
     expect(context.notifications.preferences).toHaveLength(0);

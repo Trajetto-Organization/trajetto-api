@@ -40,8 +40,12 @@ const VEHICLE = "018f0000-0000-7000-8000-0000000000e1";
 const BRANCH = "018f0000-0000-7000-8000-0000000000b1";
 
 const outboxStub = { publish: async () => {} } as unknown as OutboxService;
-const kanbanStub = { createCardFromServiceOrder: () => {} } as unknown as KanbanService;
-const activities = { createActivityIfEnabled: vi.fn() } as unknown as NotificationService;
+const kanbanStub = {
+  createCardFromServiceOrder: () => {},
+} as unknown as KanbanService;
+const activities = {
+  createActivityIfEnabled: vi.fn(),
+} as unknown as NotificationService;
 
 function makeContext() {
   const users = new InMemoryUserRepository();
@@ -51,8 +55,15 @@ function makeContext() {
   const orders = new InMemoryServiceOrderRepository();
   const suppliers = new InMemorySupplierRepository();
 
-  users.user.push({ id: USER, role: "BUSINESS_ADMIN", businessId: BUSINESS } as User);
-  businesses.business.push({ ...BUSINESS_COLUMN_DEFAULTS, id: BUSINESS } as unknown as Business);
+  users.user.push({
+    id: USER,
+    role: "BUSINESS_ADMIN",
+    businessId: BUSINESS,
+  } as User);
+  businesses.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
+    id: BUSINESS,
+  } as unknown as Business);
   branches.branches.push({ id: BRANCH, businessId: BUSINESS } as Branch);
 
   vehicles.vehicles.push({
@@ -87,7 +98,12 @@ function makeContext() {
       orders,
       outboxStub,
     ),
-    remove: new DeleteServiceOrderUseCase(users, businesses, orders, activities),
+    remove: new DeleteServiceOrderUseCase(
+      users,
+      businesses,
+      orders,
+      activities,
+    ),
   };
 }
 
@@ -160,7 +176,10 @@ describe("finishing a service order at the odometer's reading", () => {
         }),
         USER,
       ),
-    ).rejects.toMatchObject({ statusCode: 400, code: "SERVICE_ORDER_MILEAGE_BEHIND" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "SERVICE_ORDER_MILEAGE_BEHIND",
+    });
 
     expect(context.orders.serviceOrders).toHaveLength(0);
     expect(context.vehicles.vehicles[0].last_maintenance_mileage).toBe(110_000);
@@ -188,7 +207,9 @@ describe("finishing a service order at the odometer's reading", () => {
       USER,
     );
 
-    expect(context.orders.serviceOrders[0].description).toBe("Revisão completa");
+    expect(context.orders.serviceOrders[0].description).toBe(
+      "Revisão completa",
+    );
     expect(context.vehicles.vehicles[0].current_mileage).toBe(125_000);
     expect(context.vehicles.vehicles[0].last_maintenance_mileage).toBe(121_000);
   });
@@ -198,7 +219,8 @@ describe("finishing a service order at the odometer's reading", () => {
 
     const open = await context.create.execute(order(), USER);
 
-    context.orders.serviceOrders[0].businessId = "018f0000-0000-7000-8000-0000000000ff";
+    context.orders.serviceOrders[0].businessId =
+      "018f0000-0000-7000-8000-0000000000ff";
 
     const notFound = { statusCode: 404, code: "SERVICE_ORDER_NOT_FOUND" };
 
@@ -208,7 +230,9 @@ describe("finishing a service order at the odometer's reading", () => {
     await expect(
       context.update.execute({ description: "x" }, "missing", BUSINESS, USER),
     ).rejects.toMatchObject(notFound);
-    await expect(context.remove.execute(open.id, BUSINESS, USER)).rejects.toMatchObject(notFound);
+    await expect(
+      context.remove.execute(open.id, BUSINESS, USER),
+    ).rejects.toMatchObject(notFound);
   });
 });
 
@@ -250,13 +274,15 @@ describe("correcting the reading of a finished order", () => {
 
     await correct(122_000);
 
-    expect(context.orders.serviceOrders[0].new_mileage_after_service).toBe(122_000);
+    expect(context.orders.serviceOrders[0].new_mileage_after_service).toBe(
+      122_000,
+    );
     expect(vehicle().current_mileage).toBe(125_000);
     expect(vehicle().last_maintenance_mileage).toBe(122_000);
     // A correction is not a new maintenance: the date stays.
-    expect(new Date(vehicle().last_maintenance_date as Date).toISOString()).toBe(
-      "2026-09-21T12:00:00.000Z",
-    );
+    expect(
+      new Date(vehicle().last_maintenance_date as Date).toISOString(),
+    ).toBe("2026-09-21T12:00:00.000Z");
   });
 
   it("refuses a correction behind the opening reading", async () => {
@@ -268,7 +294,9 @@ describe("correcting the reading of a finished order", () => {
       message: expect.stringContaining("abertura da ordem (120000 km)"),
     });
 
-    expect(context.orders.serviceOrders[0].new_mileage_after_service).toBe(121_000);
+    expect(context.orders.serviceOrders[0].new_mileage_after_service).toBe(
+      121_000,
+    );
     expect(vehicle().last_maintenance_mileage).toBe(121_000);
   });
 
@@ -289,7 +317,9 @@ describe("correcting the reading of a finished order", () => {
 
     await correct(123_000);
 
-    expect(context.orders.serviceOrders[0].new_mileage_after_service).toBe(123_000);
+    expect(context.orders.serviceOrders[0].new_mileage_after_service).toBe(
+      123_000,
+    );
     expect(vehicle().current_mileage).toBe(125_000);
     expect(vehicle().last_maintenance_mileage).toBe(125_000);
 
@@ -310,12 +340,18 @@ describe("correcting the reading of a finished order", () => {
 
     await expect(
       context.update.execute(
-        { completion_date: new Date("2026-09-22T12:00:00Z"), new_mileage_after_service: 122_000 },
+        {
+          completion_date: new Date("2026-09-22T12:00:00Z"),
+          new_mileage_after_service: 122_000,
+        },
         open.id,
         BUSINESS,
         USER,
       ),
-    ).rejects.toMatchObject({ statusCode: 400, code: "SERVICE_ORDER_MILEAGE_BEHIND" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "SERVICE_ORDER_MILEAGE_BEHIND",
+    });
   });
 });
 
@@ -331,7 +367,9 @@ describe("deleting a service order on the twin (FLEET-SO-1)", () => {
       USER,
     );
 
-    await expect(context.remove.execute(finished.id, BUSINESS, USER)).rejects.toMatchObject({
+    await expect(
+      context.remove.execute(finished.id, BUSINESS, USER),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "SERVICE_ORDER_COMPLETED",
     });
@@ -339,7 +377,9 @@ describe("deleting a service order on the twin (FLEET-SO-1)", () => {
     const billed = await context.create.execute(order(), USER);
     context.orders.accountsPayable.push({ serviceOrderId: billed.id });
 
-    await expect(context.remove.execute(billed.id, BUSINESS, USER)).rejects.toMatchObject({
+    await expect(
+      context.remove.execute(billed.id, BUSINESS, USER),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "SERVICE_ORDER_HAS_ACCOUNTS_PAYABLE",
     });
@@ -380,7 +420,9 @@ describe("a pin moved by hand in the app (decision 11.3: a code on every refusal
   it("refuses a pin more than 500 m from the GPS reading with LOCATION_ADJUSTMENT_TOO_FAR", async () => {
     const context = makeContext();
 
-    await expect(context.create.execute(order(moved), USER)).rejects.toMatchObject({
+    await expect(
+      context.create.execute(order(moved), USER),
+    ).rejects.toMatchObject({
       statusCode: 400,
       code: "LOCATION_ADJUSTMENT_TOO_FAR",
     });

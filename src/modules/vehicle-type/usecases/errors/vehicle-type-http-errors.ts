@@ -26,7 +26,9 @@ const VEHICLE_TYPE_HTTP_ERRORS: ReadonlyArray<
 ];
 
 function replyVehicleTypeError(reply: FastifyReply, error: unknown): boolean {
-  const entry = VEHICLE_TYPE_HTTP_ERRORS.find(([type]) => error instanceof type);
+  const entry = VEHICLE_TYPE_HTTP_ERRORS.find(
+    ([type]) => error instanceof type,
+  );
 
   if (!entry) return false;
 

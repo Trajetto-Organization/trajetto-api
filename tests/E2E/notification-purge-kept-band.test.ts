@@ -53,7 +53,10 @@ interface PlanNode {
 function nodesOn(node: PlanNode, index: string): PlanNode[] {
   const own = node["Index Name"] === index ? [node] : [];
 
-  return [...own, ...(node.Plans ?? []).flatMap((child) => nodesOn(child, index))];
+  return [
+    ...own,
+    ...(node.Plans ?? []).flatMap((child) => nodesOn(child, index)),
+  ];
 }
 
 /** Timestamps travel as text in the log; the plan needs them typed. */

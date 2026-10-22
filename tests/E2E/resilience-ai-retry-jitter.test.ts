@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -8,8 +16,15 @@ import { quotaPeriodFor } from "@/shared/ai/ai-period";
 import { ODOMETER_UNIT_KEY } from "@/shared/ai/ai-rules";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
-import { seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
-import { FakeProviderError, fakeAnalyzer, resetCircuit } from "./support/fake-vision";
+import {
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
+import {
+  FakeProviderError,
+  fakeAnalyzer,
+  resetCircuit,
+} from "./support/fake-vision";
 
 /**
  * Contract §11 (provider outage): retries spread with jitter.
@@ -68,19 +83,30 @@ async function queueFuel(): Promise<string> {
     },
   });
 
-  await prisma.aIAnalysisUnit.create({ data: { requestId: request.id, unitKey: ODOMETER_UNIT_KEY } });
+  await prisma.aIAnalysisUnit.create({
+    data: { requestId: request.id, unitKey: ODOMETER_UNIT_KEY },
+  });
 
   return request.id;
 }
 
 beforeAll(async () => {
-  vi.spyOn(OutboxService.prototype as never, "wakePipeline").mockImplementation((() => undefined) as never);
+  vi.spyOn(OutboxService.prototype as never, "wakePipeline").mockImplementation(
+    (() => undefined) as never,
+  );
 
-  fleet = await seedFleetDriver(prisma, { businessId: FLEET, cnpj: "62777555000108" });
+  fleet = await seedFleetDriver(prisma, {
+    businessId: FLEET,
+    cnpj: "62777555000108",
+  });
 
   periodId = (
     await prisma.aIUsagePeriod.create({
-      data: { businessId: FLEET, periodStart: quotaPeriodFor(new Date(), null).periodStart, reservedUnits: 100 },
+      data: {
+        businessId: FLEET,
+        periodStart: quotaPeriodFor(new Date(), null).periodStart,
+        reservedUnits: 100,
+      },
     })
   ).id;
 }, 60_000);
@@ -112,15 +138,21 @@ describe("an OCR outage failing a claim pool at once", () => {
     for (let round = 0; round < 3; round += 1) {
       resetCircuit(pipeline);
 
-      const ids = await Promise.all(Array.from({ length: 4 }, () => queueFuel()));
+      const ids = await Promise.all(
+        Array.from({ length: 4 }, () => queueFuel()),
+      );
       const failedAt = Date.now();
 
       await pipeline.runCycle();
 
       const cycleMs = Date.now() - failedAt;
-      const rows = await prisma.aIAnalysisRequest.findMany({ where: { id: { in: ids } } });
+      const rows = await prisma.aIAnalysisRequest.findMany({
+        where: { id: { in: ids } },
+      });
 
-      expect(rows.map((row) => `${row.status}:${row.attempts}`)).toEqual(Array(4).fill("PENDING:1"));
+      expect(rows.map((row) => `${row.status}:${row.attempts}`)).toEqual(
+        Array(4).fill("PENDING:1"),
+      );
 
       for (const row of rows) {
         const offset = row.availableAt.getTime() - failedAt;
@@ -144,6 +176,8 @@ describe("an OCR outage failing a claim pool at once", () => {
     // round's start. Without jitter they were due within the same ~second;
     // spread uniformly over 12 s, twelve of them landing inside 3 s has a
     // probability around 1e-6.
-    expect(Math.max(...offsets) - Math.min(...offsets)).toBeGreaterThanOrEqual(3_000);
+    expect(Math.max(...offsets) - Math.min(...offsets)).toBeGreaterThanOrEqual(
+      3_000,
+    );
   });
 });

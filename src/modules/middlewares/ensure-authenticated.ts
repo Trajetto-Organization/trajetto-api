@@ -60,7 +60,10 @@ async function ensureAuthenticated(
   let payload: AccessTokenPayload;
 
   try {
-    payload = verify(token, hmacVerifyKey(auth.secret_token)) as AccessTokenPayload;
+    payload = verify(
+      token,
+      hmacVerifyKey(auth.secret_token),
+    ) as AccessTokenPayload;
   } catch (error) {
     throw new AppError(
       "Token de autenticação inválido ou expirado.",
@@ -83,7 +86,6 @@ async function ensureAuthenticated(
   }
 
   try {
-
     const userRepository = new UserRepository();
     const tokenRepository = new UserTokensRepository();
 
@@ -160,7 +162,10 @@ async function ensureAuthenticated(
      * come back, and both of ours already treat it as transient. A 401 makes
      * them throw the session away.
      */
-    request.log.warn({ err: error }, "Session check failed: database unavailable");
+    request.log.warn(
+      { err: error },
+      "Session check failed: database unavailable",
+    );
 
     throw new AppError(
       "Não foi possível verificar sua sessão agora. Tente novamente.",

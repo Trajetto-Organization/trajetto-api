@@ -13,8 +13,16 @@ class ListVehicleController {
     // The route already validated AND transformed the querystring (page is a
     // number, each facet a list); re-parsing the transformed value against
     // the wire schema would reject it.
-    const { businessId, page, pageSize, search, sort, order, status, branchId } =
-      request.query as z.infer<typeof listVehicleSchema>;
+    const {
+      businessId,
+      page,
+      pageSize,
+      search,
+      sort,
+      order,
+      status,
+      branchId,
+    } = request.query as z.infer<typeof listVehicleSchema>;
 
     const listVehicleUseCase = container.resolve(ListVehicleUseCase);
 

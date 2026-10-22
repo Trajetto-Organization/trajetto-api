@@ -8,7 +8,10 @@ import { UserRepository } from "@/modules/user/repositories/user-repository";
 import { DriverRepository } from "@/modules/driver/repositories/driver-repository";
 import { RepairUnticketedMessagesUseCase } from "@/modules/chat/usecases/tickets/repair-unticketed-messages/repair-unticketed-messages-usecase";
 
-const log = logger.child({ component: "cron", job: "repair-unticketed-messages" });
+const log = logger.child({
+  component: "cron",
+  job: "repair-unticketed-messages",
+});
 
 /**
  * Decision 14.5, rolling deploy: the previous image writes messages without
@@ -31,7 +34,10 @@ const repairUnticketedMessagesJob: CronJobDefinition = {
     ).execute();
 
     if (repaired > 0) {
-      log.info({ repaired }, "chat messages written without a ticket were filed");
+      log.info(
+        { repaired },
+        "chat messages written without a ticket were filed",
+      );
     }
   },
 };

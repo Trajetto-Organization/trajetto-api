@@ -211,7 +211,9 @@ describe("a provider outage shows on the delivery lanes (OBS-04)", () => {
 
     expect(body.webhooks.failed_24h).toBe(1);
 
-    const tables = body.queue_tables.map((entry: { table: string }) => entry.table);
+    const tables = body.queue_tables.map(
+      (entry: { table: string }) => entry.table,
+    );
     expect(tables).toContain("webhook_delivery");
   });
 
@@ -263,34 +265,98 @@ describe("what Meta said after it accepted a WhatsApp (OUTBOX-07)", () => {
   }
 
   it("counts the messages Meta failed and the deliveries it received twice, today only", async () => {
-    const twice = await delivery("WHATSAPP", { status: "DELIVERED", attempts: 2 });
-    const once = await delivery("WHATSAPP", { status: "DELIVERED", attempts: 1 });
-    const lost = await delivery("WHATSAPP", { status: "DELIVERED", attempts: 1 });
-    const lastWeek = await delivery("WHATSAPP", { status: "DELIVERED", attempts: 2 });
+    const twice = await delivery("WHATSAPP", {
+      status: "DELIVERED",
+      attempts: 2,
+    });
+    const once = await delivery("WHATSAPP", {
+      status: "DELIVERED",
+      attempts: 1,
+    });
+    const lost = await delivery("WHATSAPP", {
+      status: "DELIVERED",
+      attempts: 1,
+    });
+    const lastWeek = await delivery("WHATSAPP", {
+      status: "DELIVERED",
+      attempts: 2,
+    });
 
     const twoDaysAgo = new Date(Date.now() - 2 * DAY_MS);
 
     // Sent twice today: two wamids, each with its own callbacks.
-    await receipt({ deliveryId: twice.id, providerMessageId: "wamid.twice-1", status: "sent" });
-    await receipt({ deliveryId: twice.id, providerMessageId: "wamid.twice-1", status: "delivered" });
-    await receipt({ deliveryId: twice.id, providerMessageId: "wamid.twice-2", status: "sent" });
+    await receipt({
+      deliveryId: twice.id,
+      providerMessageId: "wamid.twice-1",
+      status: "sent",
+    });
+    await receipt({
+      deliveryId: twice.id,
+      providerMessageId: "wamid.twice-1",
+      status: "delivered",
+    });
+    await receipt({
+      deliveryId: twice.id,
+      providerMessageId: "wamid.twice-2",
+      status: "sent",
+    });
 
     // Once, with every callback Meta sends: not a duplicate.
-    await receipt({ deliveryId: once.id, providerMessageId: "wamid.once", status: "sent" });
-    await receipt({ deliveryId: once.id, providerMessageId: "wamid.once", status: "delivered" });
-    await receipt({ deliveryId: once.id, providerMessageId: "wamid.once", status: "read" });
+    await receipt({
+      deliveryId: once.id,
+      providerMessageId: "wamid.once",
+      status: "sent",
+    });
+    await receipt({
+      deliveryId: once.id,
+      providerMessageId: "wamid.once",
+      status: "delivered",
+    });
+    await receipt({
+      deliveryId: once.id,
+      providerMessageId: "wamid.once",
+      status: "read",
+    });
 
     // Accepted, then failed by Meta.
-    await receipt({ deliveryId: lost.id, providerMessageId: "wamid.lost", status: "sent" });
-    await receipt({ deliveryId: lost.id, providerMessageId: "wamid.lost", status: "failed" });
+    await receipt({
+      deliveryId: lost.id,
+      providerMessageId: "wamid.lost",
+      status: "sent",
+    });
+    await receipt({
+      deliveryId: lost.id,
+      providerMessageId: "wamid.lost",
+      status: "failed",
+    });
 
     // Outside the window: a failure and a duplicate from two days ago.
-    await receipt({ deliveryId: lastWeek.id, providerMessageId: "wamid.old-1", status: "sent", created_at: twoDaysAgo });
-    await receipt({ deliveryId: lastWeek.id, providerMessageId: "wamid.old-2", status: "sent", created_at: twoDaysAgo });
-    await receipt({ deliveryId: null, providerMessageId: "wamid.old-3", status: "failed", created_at: twoDaysAgo });
+    await receipt({
+      deliveryId: lastWeek.id,
+      providerMessageId: "wamid.old-1",
+      status: "sent",
+      created_at: twoDaysAgo,
+    });
+    await receipt({
+      deliveryId: lastWeek.id,
+      providerMessageId: "wamid.old-2",
+      status: "sent",
+      created_at: twoDaysAgo,
+    });
+    await receipt({
+      deliveryId: null,
+      providerMessageId: "wamid.old-3",
+      status: "failed",
+      created_at: twoDaysAgo,
+    });
 
     // Another provider's error is not a WhatsApp failure.
-    await receipt({ deliveryId: null, provider: "expo", providerMessageId: "ticket-1", status: "error" });
+    await receipt({
+      deliveryId: null,
+      provider: "expo",
+      providerMessageId: "ticket-1",
+      status: "error",
+    });
 
     const response = await metrics(masterToken);
 
@@ -313,7 +379,9 @@ describe("the delivery backlog is the current one, not a 24 h window (OUTBOX-15)
 
     const email = (await metrics(masterToken))
       .json()
-      .notifications.channels.find((entry: Channel) => entry.channel === "EMAIL");
+      .notifications.channels.find(
+        (entry: Channel) => entry.channel === "EMAIL",
+      );
 
     expect(email.oldest_pending_seconds).toBeGreaterThanOrEqual(3600 - 5);
     expect(email.pending_total).toBeGreaterThanOrEqual(1);
@@ -332,7 +400,9 @@ describe("the delivery backlog is the current one, not a 24 h window (OUTBOX-15)
 
     const push = (await metrics(masterToken))
       .json()
-      .notifications.channels.find((entry: Channel) => entry.channel === "PUSH");
+      .notifications.channels.find(
+        (entry: Channel) => entry.channel === "PUSH",
+      );
 
     expect(push.processing_lease_expired).toBe(1);
   });
@@ -340,7 +410,9 @@ describe("the delivery backlog is the current one, not a 24 h window (OUTBOX-15)
   it("keeps a delivery stuck for two days in the backlog", async () => {
     const before = (await metrics(masterToken))
       .json()
-      .notifications.channels.find((entry: Channel) => entry.channel === "IN_APP");
+      .notifications.channels.find(
+        (entry: Channel) => entry.channel === "IN_APP",
+      );
 
     await delivery("IN_APP", {
       status: "PENDING",
@@ -350,10 +422,14 @@ describe("the delivery backlog is the current one, not a 24 h window (OUTBOX-15)
 
     const after = (await metrics(masterToken))
       .json()
-      .notifications.channels.find((entry: Channel) => entry.channel === "IN_APP");
+      .notifications.channels.find(
+        (entry: Channel) => entry.channel === "IN_APP",
+      );
 
     expect(after.pending_total).toBe((before?.pending_total ?? 0) + 1);
-    expect(after.oldest_pending_seconds).toBeGreaterThanOrEqual(2 * 24 * 3600 - 5);
+    expect(after.oldest_pending_seconds).toBeGreaterThanOrEqual(
+      2 * 24 * 3600 - 5,
+    );
   });
 });
 
@@ -386,11 +462,18 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
 
     expect(
       workers.find((entry) => entry.replica === "replica-a"),
-    ).toMatchObject({ worker: "notification-outbox", stuck: false, running_since: null });
+    ).toMatchObject({
+      worker: "notification-outbox",
+      stuck: false,
+      running_since: null,
+    });
 
     const stuck = workers.find((entry) => entry.replica === "replica-b");
 
-    expect(stuck).toMatchObject({ worker: "notification-delivery-external", stuck: true });
+    expect(stuck).toMatchObject({
+      worker: "notification-delivery-external",
+      stuck: true,
+    });
     expect(stuck?.running_since).not.toBeNull();
   });
 
@@ -417,7 +500,9 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
     await cleanupNotificationPipelineJob.handler();
 
     expect(
-      await prisma.workerHeartbeat.count({ where: { replica: "replica-gone" } }),
+      await prisma.workerHeartbeat.count({
+        where: { replica: "replica-gone" },
+      }),
     ).toBe(0);
   });
 
@@ -451,7 +536,9 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
       stale_running: number;
     }>;
 
-    const partitions = cron.find((entry) => entry.job === "driver-position-partitions");
+    const partitions = cron.find(
+      (entry) => entry.job === "driver-position-partitions",
+    );
 
     expect(partitions?.last_status).toBe("SUCCEEDED");
     expect(partitions?.last_succeeded_at).not.toBeNull();
@@ -475,7 +562,9 @@ describe("the driver_position partition runway (INV-07)", () => {
 
     // The job creates through today + 7; a week of runway, give or take the
     // hours already gone today.
-    expect(body.driver_position.partition_runway_days).toBeGreaterThanOrEqual(6);
+    expect(body.driver_position.partition_runway_days).toBeGreaterThanOrEqual(
+      6,
+    );
     expect(body.driver_position.runway_ok).toBe(true);
     expect(body.driver_position.last_partition_ends_at).not.toBeNull();
   });
@@ -520,7 +609,9 @@ describe("GET /health/dead-letter/events (OUTBOX-15)", () => {
     expect(response.statusCode).toBe(200);
 
     const body = response.json();
-    const row = body.data.find((entry: { id: string }) => entry.id === failed.id);
+    const row = body.data.find(
+      (entry: { id: string }) => entry.id === failed.id,
+    );
 
     expect(row).toMatchObject({
       topic: "metrics.operational",

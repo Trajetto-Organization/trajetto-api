@@ -13,8 +13,14 @@ class ExportVehicleChecklistController {
     const { id } = request.user;
 
     // Validated and transformed by the route (each facet is a list here).
-    const { search, format, businessId, overall_condition, branchId, vehicleId } =
-      request.query as z.infer<typeof exportVehicleChecklistSchema>;
+    const {
+      search,
+      format,
+      businessId,
+      overall_condition,
+      branchId,
+      vehicleId,
+    } = request.query as z.infer<typeof exportVehicleChecklistSchema>;
 
     const exportVehicleChecklistExcelUseCase = container.resolve(
       ExportVehicleChecklistExcelUseCase,

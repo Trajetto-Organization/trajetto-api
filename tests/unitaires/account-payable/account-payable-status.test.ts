@@ -190,7 +190,9 @@ describe("a day sent by the form", () => {
 describe("bills above their service order's total (FLEET-AP-5)", () => {
   it("warns without refusing, and stays quiet at or below the total", () => {
     // toLocaleString separates R$ with a no-break space.
-    expect(serviceOrderOverrunWarning(1500, "1200.00")?.replace(/\s/g, " ")).toBe(
+    expect(
+      serviceOrderOverrunWarning(1500, "1200.00")?.replace(/\s/g, " "),
+    ).toBe(
       "As contas desta ordem de serviço somam R$ 1.500,00, acima do total da ordem (R$ 1.200,00). Confira se não há conta em duplicidade.",
     );
     expect(serviceOrderOverrunWarning(1200, "1200.00")).toBeNull();

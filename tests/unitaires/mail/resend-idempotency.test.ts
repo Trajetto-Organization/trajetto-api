@@ -93,9 +93,11 @@ describe("the SMTP connection", () => {
     // the path can remove the offer and read the API key in AUTH.
     const provider = new ResendMailProvider();
 
-    const options = (provider as unknown as {
-      client: { options: { requireTLS?: boolean; secure?: boolean } };
-    }).client.options;
+    const options = (
+      provider as unknown as {
+        client: { options: { requireTLS?: boolean; secure?: boolean } };
+      }
+    ).client.options;
 
     expect(options.requireTLS || options.secure).toBe(true);
   });

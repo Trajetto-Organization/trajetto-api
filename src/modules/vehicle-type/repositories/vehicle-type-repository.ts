@@ -55,7 +55,11 @@ class VehicleTypeRepository implements IVehicleTypeRepository {
       // pager total without a separate COUNT.
       this.prisma.vehicleType.findMany({
         where,
-        select: { id: true, description: true, _count: { select: { vehicles: true } } },
+        select: {
+          id: true,
+          description: true,
+          _count: { select: { vehicles: true } },
+        },
       }),
     ]);
 
@@ -77,7 +81,9 @@ class VehicleTypeRepository implements IVehicleTypeRepository {
     // Only `undefined` means "not sent": the required licence can be cleared
     // with null, and dropping nulls here made that impossible.
     const filteredData = Object.fromEntries(
-      Object.entries(vehicleTypeData).filter(([_, value]) => value !== undefined),
+      Object.entries(vehicleTypeData).filter(
+        ([_, value]) => value !== undefined,
+      ),
     );
 
     return this.prisma.vehicleType.update({
@@ -145,7 +151,16 @@ class VehicleTypeRepository implements IVehicleTypeRepository {
         // The typed term, on the server: a type not in the loaded pages can
         // still be found (FLEET-SEARCH-1).
         ...buildSearchOr(
-          search ? [{ description: { contains: search, mode: "insensitive" as const } }] : [],
+          search
+            ? [
+                {
+                  description: {
+                    contains: search,
+                    mode: "insensitive" as const,
+                  },
+                },
+              ]
+            : [],
         ),
       },
       take: limit + 1,

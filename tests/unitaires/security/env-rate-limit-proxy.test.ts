@@ -52,16 +52,19 @@ describe("RATE_LIMIT_TRUSTED_PROXY in production", () => {
   });
 
   it("does not demand it outside production", () => {
-    expect(issuesFor({ NODE_ENV: "development", UPLOAD_STORAGE_TYPE: "local" })).toEqual(
-      [],
-    );
+    expect(
+      issuesFor({ NODE_ENV: "development", UPLOAD_STORAGE_TYPE: "local" }),
+    ).toEqual([]);
   });
 });
 
 describe("RATE_LIMIT_FORWARDER_SECRET", () => {
   it("is optional, and an empty value counts as absent", () => {
     expect(
-      issuesFor({ RATE_LIMIT_TRUSTED_PROXY: "xff", RATE_LIMIT_FORWARDER_SECRET: "" }),
+      issuesFor({
+        RATE_LIMIT_TRUSTED_PROXY: "xff",
+        RATE_LIMIT_FORWARDER_SECRET: "",
+      }),
     ).toEqual([]);
   });
 

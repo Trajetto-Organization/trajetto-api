@@ -5,10 +5,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
 import database from "@/../infra/database";
-import {
-  sendRouteEventToBusiness,
-  sendRouteEventToDriver,
-} from "@/websocket";
+import { sendRouteEventToBusiness, sendRouteEventToDriver } from "@/websocket";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
@@ -153,24 +150,30 @@ class ReleaseRouteUseCase {
       // rather than after it, because the event has to exist if and only if
       // the release committed — the alternative is a driver whose phone says
       // the route is theirs over a write that rolled back.
-      const { updated, afterCommit } = await database.$transaction(async (tx) => {
-        if (expectedPlanVersion !== undefined) {
-          // Locked, then read: an add-stops committing in between is waited
-          // for and then seen, never released unseen.
-          await this.route.lockRoutes([routeId], businessId, tx);
+      const { updated, afterCommit } = await database.$transaction(
+        async (tx) => {
+          if (expectedPlanVersion !== undefined) {
+            // Locked, then read: an add-stops committing in between is waited
+            // for and then seen, never released unseen.
+            await this.route.lockRoutes([routeId], businessId, tx);
 
-          const current = await this.route.findRouteById(routeId, businessId, tx);
+            const current = await this.route.findRouteById(
+              routeId,
+              businessId,
+              tx,
+            );
 
-          assertPlanVersion(current?.plan_version ?? 0, expectedPlanVersion);
-        }
+            assertPlanVersion(current?.plan_version ?? 0, expectedPlanVersion);
+          }
 
-        return this.transitionWithin(tx, {
-          userId,
-          businessId,
-          route: findRoute,
-          released,
-        });
-      });
+          return this.transitionWithin(tx, {
+            userId,
+            businessId,
+            route: findRoute,
+            released,
+          });
+        },
+      );
 
       await afterCommit();
 

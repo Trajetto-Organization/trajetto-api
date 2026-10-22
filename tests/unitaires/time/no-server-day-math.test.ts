@@ -68,31 +68,36 @@ const ALLOWED: Entry[] = [
     file: "src/jobs/cron/driver-position-partitions-job.ts",
     pattern: "utc-day-key",
     count: 1,
-    reason: "Partition names follow the partitions' own UTC day bounds, not a company's day.",
+    reason:
+      "Partition names follow the partitions' own UTC day bounds, not a company's day.",
   },
   {
     file: "src/jobs/cron/driver-position-partitions-job.ts",
     pattern: "utc-midnight",
     count: 1,
-    reason: "A partition covers one UTC day; its bounds are UTC midnights by design.",
+    reason:
+      "A partition covers one UTC day; its bounds are UTC midnights by design.",
   },
   {
     file: "src/shared/notifications/notification-pipeline-service.ts",
     pattern: "server-calendar",
     count: 2,
-    reason: "Copyright year in the e-mail footer: cosmetic, never a business day.",
+    reason:
+      "Copyright year in the e-mail footer: cosmetic, never a business day.",
   },
   {
     file: "src/shared/services/transactional-mail-service.ts",
     pattern: "server-calendar",
     count: 1,
-    reason: "Copyright year in the e-mail footer: cosmetic, never a business day.",
+    reason:
+      "Copyright year in the e-mail footer: cosmetic, never a business day.",
   },
   {
     file: "src/routes/documentation/response-examples.ts",
     pattern: "hardcoded-zone",
     count: 1,
-    reason: "Swagger example of my-deliveries' journey.time_zone: sample data, never read as a zone.",
+    reason:
+      "Swagger example of my-deliveries' journey.time_zone: sample data, never read as a zone.",
   },
 ];
 
@@ -164,7 +169,8 @@ function definesZones(file: string): boolean {
 
 function isPropertyName(node: ts.Node): boolean {
   return (
-    (ts.isPropertyAssignment(node.parent) || ts.isPropertySignature(node.parent)) &&
+    (ts.isPropertyAssignment(node.parent) ||
+      ts.isPropertySignature(node.parent)) &&
     node.parent.name === node
   );
 }
@@ -203,7 +209,10 @@ function formatOptions(
   for (const property of arg.properties) {
     if (ts.isSpreadAssignment(property)) return "unknown";
 
-    const name = property.name && ts.isIdentifier(property.name) ? property.name.text : null;
+    const name =
+      property.name && ts.isIdentifier(property.name)
+        ? property.name.text
+        : null;
 
     if (name) keys.add(name);
   }
@@ -225,7 +234,10 @@ function isDateTimeFormatConstructor(node: ts.Node): node is ts.NewExpression {
   );
 }
 
-function numberAt(args: ts.NodeArray<ts.Expression>, index: number): number | null {
+function numberAt(
+  args: ts.NodeArray<ts.Expression>,
+  index: number,
+): number | null {
   const arg = args[index];
 
   return arg && ts.isNumericLiteral(arg) ? Number(arg.text) : null;
@@ -267,7 +279,9 @@ function offenders(
     }
 
     if (name === "toLocaleDateString" || name === "toLocaleTimeString") {
-      if (formatOptions((node as ts.CallExpression).arguments, 1) instanceof Set) {
+      if (
+        formatOptions((node as ts.CallExpression).arguments, 1) instanceof Set
+      ) {
         report(node, "server-zone-format");
       }
     }
@@ -275,7 +289,10 @@ function offenders(
     if (name === "toLocaleString") {
       const options = formatOptions((node as ts.CallExpression).arguments, 1);
 
-      if (options instanceof Set && [...options].some((key) => DATE_OPTIONS.has(key))) {
+      if (
+        options instanceof Set &&
+        [...options].some((key) => DATE_OPTIONS.has(key))
+      ) {
         report(node, "server-zone-format");
       }
     }
@@ -354,7 +371,9 @@ describe("server-day math in the API", () => {
 
   it("finds none outside the allowed UTC contexts and the known debts", () => {
     const unexpected = [...counts.entries()].filter(([key, count]) => {
-      const entry = listed.find((item) => `${item.file}::${item.pattern}` === key);
+      const entry = listed.find(
+        (item) => `${item.file}::${item.pattern}` === key,
+      );
 
       return !entry || count > entry.count;
     });
@@ -373,7 +392,10 @@ describe("server-day math in the API", () => {
 
   it("keeps the lists honest: every entry still matches as many times as listed", () => {
     const stale = listed
-      .filter((entry) => (counts.get(`${entry.file}::${entry.pattern}`) ?? 0) < entry.count)
+      .filter(
+        (entry) =>
+          (counts.get(`${entry.file}::${entry.pattern}`) ?? 0) < entry.count,
+      )
       .map((entry) => `${entry.file} [${entry.pattern}] ×${entry.count}`);
 
     expect(stale, "corrigido? apague ou reduza a entrada").toEqual([]);
@@ -430,7 +452,10 @@ describe("server-day math in the API", () => {
 
   it("lets shared/time name the zones it defines", () => {
     expect(
-      offenders("src/shared/time/probe.ts", 'const zone = "America/Sao_Paulo";'),
+      offenders(
+        "src/shared/time/probe.ts",
+        'const zone = "America/Sao_Paulo";',
+      ),
     ).toEqual([]);
   });
 });

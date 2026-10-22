@@ -4,7 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
 
-import { introspectRoutes, type IntrospectedRoute } from "./support/introspect-routes";
+import {
+  introspectRoutes,
+  type IntrospectedRoute,
+} from "./support/introspect-routes";
 
 /**
  * An endpoint this release removed answers 410, not 404.
@@ -32,7 +35,10 @@ const API_ROOT = process.cwd();
 const REMOVED_SINCE_MAIN = [
   { method: "PATCH", url: "/user/email-notifications" },
   { method: "PATCH", url: "/user/activity-notifications" },
-  { method: "DELETE", url: "/fines/delete-fine/018f0000-0000-7000-8000-000000000001" },
+  {
+    method: "DELETE",
+    url: "/fines/delete-fine/018f0000-0000-7000-8000-000000000001",
+  },
   { method: "GET", url: "/whatsapp/status" },
   { method: "GET", url: "/whatsapp/connect/qrcode" },
   { method: "POST", url: "/whatsapp/webhook/instancia-antiga" },
@@ -106,10 +112,11 @@ describe("an endpoint removed since the last release", () => {
         ["PATCH", "/user/email-notifications"],
         ["DELETE", "/fines/delete-fine/018f0000-0000-7000-8000-000000000001"],
         ["POST", "/whatsapp/webhook/instancia-antiga"],
-      ].map(async ([method, url]) =>
-        (
-          await app.inject({ method: method as "PATCH", url, payload: {} })
-        ).json().replacement,
+      ].map(
+        async ([method, url]) =>
+          (
+            await app.inject({ method: method as "PATCH", url, payload: {} })
+          ).json().replacement,
       ),
     );
 
@@ -163,7 +170,9 @@ describe("the retired-routes table", () => {
     // live answers there, so nothing live is being retired.
     for (const { method, url } of RETIRED_ROUTES) {
       expect(
-        routes.filter((route) => shape(route.method, route.url) === shape(method, url)),
+        routes.filter(
+          (route) => shape(route.method, route.url) === shape(method, url),
+        ),
         `${method} ${url}`,
       ).toHaveLength(1);
     }
@@ -251,15 +260,23 @@ function mainRoutes(): string[] | null {
 
 const onMain = mainRoutes();
 
-describe.skipIf(onMain === null)("every route main served where this branch left it", () => {
-  it("is still served here, or retired with a tombstone", () => {
-    const shape = (id: string) => id.replace(/:[A-Za-z0-9_]+/g, ":p");
+describe.skipIf(onMain === null)(
+  "every route main served where this branch left it",
+  () => {
+    it("is still served here, or retired with a tombstone", () => {
+      const shape = (id: string) => id.replace(/:[A-Za-z0-9_]+/g, ":p");
 
-    const served = new Set(routes.map(({ method, url }) => shape(`${method} ${url}`)));
+      const served = new Set(
+        routes.map(({ method, url }) => shape(`${method} ${url}`)),
+      );
 
-    const dropped = (onMain ?? []).filter((id) => !served.has(shape(id)));
+      const dropped = (onMain ?? []).filter((id) => !served.has(shape(id)));
 
-    expect(onMain?.length ?? 0).toBeGreaterThan(100);
-    expect(dropped, "removidas sem tombstone em src/routes/retired-routes.ts").toEqual([]);
-  });
-});
+      expect(onMain?.length ?? 0).toBeGreaterThan(100);
+      expect(
+        dropped,
+        "removidas sem tombstone em src/routes/retired-routes.ts",
+      ).toEqual([]);
+    });
+  },
+);

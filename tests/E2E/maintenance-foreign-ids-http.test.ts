@@ -32,8 +32,23 @@ const MISSING = "018fe500-0000-7000-8000-0000000000ff";
 /** A deactivated company that still has FLEET: read-only for everyone. */
 const DORMANT = "018fe500-0000-7000-8000-00000000000c";
 
-const own = { branch: "", vehicle: "", order: "", line: "", part: "", adminId: "" };
-const foreign = { branch: "", vehicle: "", supplier: "", userId: "", order: "", line: "", part: "" };
+const own = {
+  branch: "",
+  vehicle: "",
+  order: "",
+  line: "",
+  part: "",
+  adminId: "",
+};
+const foreign = {
+  branch: "",
+  vehicle: "",
+  supplier: "",
+  userId: "",
+  order: "",
+  line: "",
+  part: "",
+};
 const dormant = { order: "", lineOrder: "", line: "", part: "" };
 const tokens = { admin: "", master: "", readOnly: "" };
 
@@ -87,7 +102,10 @@ beforeAll(async () => {
   await seedCarrier(prisma, OTHER);
 
   own.branch = await seedBranch(prisma, CARRIER, "Filial Própria");
-  own.vehicle = await seedVehicle(prisma, CARRIER, { plate: "FRN1A11", branchId: own.branch });
+  own.vehicle = await seedVehicle(prisma, CARRIER, {
+    plate: "FRN1A11",
+    branchId: own.branch,
+  });
 
   const admin = await seedUser(prisma, "Gestora", "BUSINESS_ADMIN", CARRIER);
   own.adminId = admin.id;
@@ -104,15 +122,28 @@ beforeAll(async () => {
   ).token;
 
   foreign.branch = await seedBranch(prisma, OTHER, "Filial Alheia");
-  foreign.vehicle = await seedVehicle(prisma, OTHER, { plate: "FRN2B22", branchId: foreign.branch });
+  foreign.vehicle = await seedVehicle(prisma, OTHER, {
+    plate: "FRN2B22",
+    branchId: foreign.branch,
+  });
   foreign.supplier = await seedSupplier(prisma, OTHER, "Oficina Alheia");
-  foreign.userId = (await seedUser(prisma, "Outro", "BUSINESS_ADMIN", OTHER)).id;
+  foreign.userId = (
+    await seedUser(prisma, "Outro", "BUSINESS_ADMIN", OTHER)
+  ).id;
 
   own.part = (
-    await prisma.part.create({ data: { description: "Filtro próprio", unit_price: 10, businessId: CARRIER } })
+    await prisma.part.create({
+      data: {
+        description: "Filtro próprio",
+        unit_price: 10,
+        businessId: CARRIER,
+      },
+    })
   ).id;
   foreign.part = (
-    await prisma.part.create({ data: { description: "Filtro alheio", unit_price: 99, businessId: OTHER } })
+    await prisma.part.create({
+      data: { description: "Filtro alheio", unit_price: 99, businessId: OTHER },
+    })
   ).id;
 
   own.order = (
@@ -143,20 +174,37 @@ beforeAll(async () => {
 
   own.line = (
     await prisma.serviceOrderPart.create({
-      data: { serviceOrderId: own.order, partId: own.part, unit_price: 10, quantity: 1, businessId: CARRIER },
+      data: {
+        serviceOrderId: own.order,
+        partId: own.part,
+        unit_price: 10,
+        quantity: 1,
+        businessId: CARRIER,
+      },
     })
   ).id;
   foreign.line = (
     await prisma.serviceOrderPart.create({
-      data: { serviceOrderId: foreign.order, partId: foreign.part, unit_price: 99, quantity: 1, businessId: OTHER },
+      data: {
+        serviceOrderId: foreign.order,
+        partId: foreign.part,
+        unit_price: 99,
+        quantity: 1,
+        businessId: OTHER,
+      },
     })
   ).id;
 
   await seedCarrier(prisma, DORMANT, ["FLEET"]);
 
   const dormantBranch = await seedBranch(prisma, DORMANT, "Filial Desativada");
-  const dormantVehicle = await seedVehicle(prisma, DORMANT, { plate: "DRM3C33", branchId: dormantBranch });
-  const dormantUserId = (await seedUser(prisma, "Gestor Inativo", "BUSINESS_ADMIN", DORMANT)).id;
+  const dormantVehicle = await seedVehicle(prisma, DORMANT, {
+    plate: "DRM3C33",
+    branchId: dormantBranch,
+  });
+  const dormantUserId = (
+    await seedUser(prisma, "Gestor Inativo", "BUSINESS_ADMIN", DORMANT)
+  ).id;
   const dormantOrder = () =>
     prisma.serviceOrder.create({
       data: {
@@ -174,7 +222,9 @@ beforeAll(async () => {
   dormant.order = (await dormantOrder()).id;
   dormant.lineOrder = (await dormantOrder()).id;
   dormant.part = (
-    await prisma.part.create({ data: { description: "Peça sem uso", unit_price: 5, businessId: DORMANT } })
+    await prisma.part.create({
+      data: { description: "Peça sem uso", unit_price: 5, businessId: DORMANT },
+    })
   ).id;
 
   const linePart = await prisma.part.create({
@@ -183,11 +233,20 @@ beforeAll(async () => {
 
   dormant.line = (
     await prisma.serviceOrderPart.create({
-      data: { serviceOrderId: dormant.lineOrder, partId: linePart.id, unit_price: 7, quantity: 2, businessId: DORMANT },
+      data: {
+        serviceOrderId: dormant.lineOrder,
+        partId: linePart.id,
+        unit_price: 7,
+        quantity: 2,
+        businessId: DORMANT,
+      },
     })
   ).id;
 
-  await prisma.business.update({ where: { id: DORMANT }, data: { is_active: false } });
+  await prisma.business.update({
+    where: { id: DORMANT },
+    data: { is_active: false },
+  });
 
   ({ app } = await import("@/http"));
   await app.ready();
@@ -200,7 +259,12 @@ afterAll(async () => {
 
 describe("service orders: another company's ids answer like missing ones", () => {
   const create = (extra: Record<string, unknown>, token = tokens.admin) =>
-    send("POST", `/service-order/create-service-order/${CARRIER}`, orderBody(extra), token);
+    send(
+      "POST",
+      `/service-order/create-service-order/${CARRIER}`,
+      orderBody(extra),
+      token,
+    );
 
   it("a vehicle named in the body: 400 VEHICLE_NOT_FOUND", async () => {
     expectSameAnswer(
@@ -248,61 +312,111 @@ describe("service orders: another company's ids answer like missing ones", () =>
   });
 
   it("created none of them", async () => {
-    expect(await prisma.serviceOrder.count({ where: { businessId: CARRIER } })).toBe(1);
+    expect(
+      await prisma.serviceOrder.count({ where: { businessId: CARRIER } }),
+    ).toBe(1);
   });
 
   it("the order in the update path: 404 SERVICE_ORDER_NOT_FOUND, not 403 beside a 400", async () => {
     const update = (id: string) =>
-      send("PATCH", `/service-order/update-service-order/${id}/business/${CARRIER}`, {
-        description: "Tentativa",
-      });
+      send(
+        "PATCH",
+        `/service-order/update-service-order/${id}/business/${CARRIER}`,
+        {
+          description: "Tentativa",
+        },
+      );
 
-    expectSameAnswer(await update(foreign.order), await update(MISSING), 404, "SERVICE_ORDER_NOT_FOUND");
+    expectSameAnswer(
+      await update(foreign.order),
+      await update(MISSING),
+      404,
+      "SERVICE_ORDER_NOT_FOUND",
+    );
 
-    const kept = await prisma.serviceOrder.findUniqueOrThrow({ where: { id: foreign.order } });
+    const kept = await prisma.serviceOrder.findUniqueOrThrow({
+      where: { id: foreign.order },
+    });
 
     expect(kept.description).toBe("Ordem alheia");
   });
 
   it("a vehicle named in an update: 400 VEHICLE_NOT_FOUND", async () => {
     const update = (vehicleId: string) =>
-      send("PATCH", `/service-order/update-service-order/${own.order}/business/${CARRIER}`, {
-        vehicleId,
-      });
+      send(
+        "PATCH",
+        `/service-order/update-service-order/${own.order}/business/${CARRIER}`,
+        {
+          vehicleId,
+        },
+      );
 
-    expectSameAnswer(await update(foreign.vehicle), await update(MISSING), 400, "VEHICLE_NOT_FOUND");
+    expectSameAnswer(
+      await update(foreign.vehicle),
+      await update(MISSING),
+      400,
+      "VEHICLE_NOT_FOUND",
+    );
   });
 
   it("the order in the delete path: 404 SERVICE_ORDER_NOT_FOUND, and it stays", async () => {
     const remove = (id: string) =>
-      send("DELETE", `/service-order/delete-service-order/${id}/business/${CARRIER}`);
+      send(
+        "DELETE",
+        `/service-order/delete-service-order/${id}/business/${CARRIER}`,
+      );
 
-    expectSameAnswer(await remove(foreign.order), await remove(MISSING), 404, "SERVICE_ORDER_NOT_FOUND");
-    expect(await prisma.serviceOrder.findUnique({ where: { id: foreign.order } })).not.toBeNull();
+    expectSameAnswer(
+      await remove(foreign.order),
+      await remove(MISSING),
+      404,
+      "SERVICE_ORDER_NOT_FOUND",
+    );
+    expect(
+      await prisma.serviceOrder.findUnique({ where: { id: foreign.order } }),
+    ).not.toBeNull();
   });
 });
 
 describe("order parts: another company's ids answer like missing ones", () => {
   it("the order in the create path: 404 SERVICE_ORDER_NOT_FOUND", async () => {
     const add = (orderId: string) =>
-      send("POST", `/service-order-part/create-service-order-part/${orderId}/business/${CARRIER}`, {
-        partId: own.part,
-        quantity: 1,
-        unit_price: 1,
-      });
+      send(
+        "POST",
+        `/service-order-part/create-service-order-part/${orderId}/business/${CARRIER}`,
+        {
+          partId: own.part,
+          quantity: 1,
+          unit_price: 1,
+        },
+      );
 
-    expectSameAnswer(await add(foreign.order), await add(MISSING), 404, "SERVICE_ORDER_NOT_FOUND");
+    expectSameAnswer(
+      await add(foreign.order),
+      await add(MISSING),
+      404,
+      "SERVICE_ORDER_NOT_FOUND",
+    );
   });
 
   it("a part named in the body: 404 PART_NOT_FOUND, not 403", async () => {
     const add = (partId: string) =>
-      send("POST", `/service-order-part/create-service-order-part/${own.order}/business/${CARRIER}`, {
-        partId,
-        quantity: 1,
-        unit_price: 1,
-      });
+      send(
+        "POST",
+        `/service-order-part/create-service-order-part/${own.order}/business/${CARRIER}`,
+        {
+          partId,
+          quantity: 1,
+          unit_price: 1,
+        },
+      );
 
-    expectSameAnswer(await add(foreign.part), await add(MISSING), 404, "PART_NOT_FOUND");
+    expectSameAnswer(
+      await add(foreign.part),
+      await add(MISSING),
+      404,
+      "PART_NOT_FOUND",
+    );
   });
 
   it("the order in the update and delete paths: 404 SERVICE_ORDER_NOT_FOUND", async () => {
@@ -333,7 +447,9 @@ describe("order parts: another company's ids answer like missing ones", () => {
       "SERVICE_ORDER_NOT_FOUND",
     );
 
-    const kept = await prisma.serviceOrderPart.findUniqueOrThrow({ where: { id: foreign.line } });
+    const kept = await prisma.serviceOrderPart.findUniqueOrThrow({
+      where: { id: foreign.line },
+    });
 
     expect(kept.quantity).toBe(1);
   });
@@ -349,7 +465,12 @@ describe("order parts: another company's ids answer like missing ones", () => {
         { quantity: 9 },
       );
 
-    expectSameAnswer(await update(foreign.line), await update(MISSING), 404, "SERVICE_ORDER_PART_NOT_FOUND");
+    expectSameAnswer(
+      await update(foreign.line),
+      await update(MISSING),
+      404,
+      "SERVICE_ORDER_PART_NOT_FOUND",
+    );
 
     const remove = (lineId: string) =>
       send(
@@ -357,9 +478,16 @@ describe("order parts: another company's ids answer like missing ones", () => {
         `/service-order-part/delete-service-order-part/${lineId}/serviceOrder/${own.order}/business/${CARRIER}`,
       );
 
-    expectSameAnswer(await remove(foreign.line), await remove(MISSING), 404, "SERVICE_ORDER_PART_NOT_FOUND");
+    expectSameAnswer(
+      await remove(foreign.line),
+      await remove(MISSING),
+      404,
+      "SERVICE_ORDER_PART_NOT_FOUND",
+    );
 
-    const kept = await prisma.serviceOrderPart.findUniqueOrThrow({ where: { id: foreign.line } });
+    const kept = await prisma.serviceOrderPart.findUniqueOrThrow({
+      where: { id: foreign.line },
+    });
 
     expect(kept.serviceOrderId).toBe(foreign.order);
     expect(kept.quantity).toBe(1);
@@ -373,27 +501,49 @@ describe("order parts: another company's ids answer like missing ones", () => {
         { partId },
       );
 
-    expectSameAnswer(await update(foreign.part), await update(MISSING), 404, "PART_NOT_FOUND");
+    expectSameAnswer(
+      await update(foreign.part),
+      await update(MISSING),
+      404,
+      "PART_NOT_FOUND",
+    );
   });
 });
 
 describe("parts catalog: another company's ids answer like missing ones", () => {
   it("the part in the update path: 404 PART_NOT_FOUND, and it is not touched", async () => {
     const update = (id: string) =>
-      send("PATCH", `/part/update-part/${id}/business/${CARRIER}`, { unit_price: 1 });
+      send("PATCH", `/part/update-part/${id}/business/${CARRIER}`, {
+        unit_price: 1,
+      });
 
-    expectSameAnswer(await update(foreign.part), await update(MISSING), 404, "PART_NOT_FOUND");
+    expectSameAnswer(
+      await update(foreign.part),
+      await update(MISSING),
+      404,
+      "PART_NOT_FOUND",
+    );
 
-    const kept = await prisma.part.findUniqueOrThrow({ where: { id: foreign.part } });
+    const kept = await prisma.part.findUniqueOrThrow({
+      where: { id: foreign.part },
+    });
 
     expect(Number(kept.unit_price)).toBe(99);
   });
 
   it("the part in the delete path: 404 PART_NOT_FOUND, and it stays", async () => {
-    const remove = (id: string) => send("DELETE", `/part/delete-part/${id}/business/${CARRIER}`);
+    const remove = (id: string) =>
+      send("DELETE", `/part/delete-part/${id}/business/${CARRIER}`);
 
-    expectSameAnswer(await remove(foreign.part), await remove(MISSING), 404, "PART_NOT_FOUND");
-    expect(await prisma.part.findUnique({ where: { id: foreign.part } })).not.toBeNull();
+    expectSameAnswer(
+      await remove(foreign.part),
+      await remove(MISSING),
+      404,
+      "PART_NOT_FOUND",
+    );
+    expect(
+      await prisma.part.findUnique({ where: { id: foreign.part } }),
+    ).not.toBeNull();
   });
 
   it("a supplier named in the body: 400 SUPPLIER_NOT_FOUND on create and update", async () => {
@@ -404,17 +554,34 @@ describe("parts catalog: another company's ids answer like missing ones", () => 
         supplierId,
       });
 
-    expectSameAnswer(await create(foreign.supplier), await create(MISSING), 400, "SUPPLIER_NOT_FOUND");
+    expectSameAnswer(
+      await create(foreign.supplier),
+      await create(MISSING),
+      400,
+      "SUPPLIER_NOT_FOUND",
+    );
 
     const update = (supplierId: string) =>
-      send("PATCH", `/part/update-part/${own.part}/business/${CARRIER}`, { supplierId });
+      send("PATCH", `/part/update-part/${own.part}/business/${CARRIER}`, {
+        supplierId,
+      });
 
-    expectSameAnswer(await update(foreign.supplier), await update(MISSING), 400, "SUPPLIER_NOT_FOUND");
+    expectSameAnswer(
+      await update(foreign.supplier),
+      await update(MISSING),
+      400,
+      "SUPPLIER_NOT_FOUND",
+    );
   });
 
   it("refuses moving a part to another company, for the manager and the master alike", async () => {
     const move = (token: string) =>
-      send("PATCH", `/part/update-part/${own.part}/business/${CARRIER}`, { businessId: OTHER }, token);
+      send(
+        "PATCH",
+        `/part/update-part/${own.part}/business/${CARRIER}`,
+        { businessId: OTHER },
+        token,
+      );
 
     // Decision 16.100: the edit body refuses a businessId before any gate, so
     // both get the same 400 (it used to be 403 for the manager and
@@ -426,7 +593,9 @@ describe("parts catalog: another company's ids answer like missing ones", () => 
       expect(response.json()).toMatchObject({ code: "VALIDATION_ERROR" });
     }
 
-    const kept = await prisma.part.findUniqueOrThrow({ where: { id: own.part } });
+    const kept = await prisma.part.findUniqueOrThrow({
+      where: { id: own.part },
+    });
 
     expect(kept.businessId).toBe(CARRIER);
   });
@@ -435,22 +604,42 @@ describe("parts catalog: another company's ids answer like missing ones", () => 
 describe("the writes stay closed to a read-only profile", () => {
   it("answers 403 PERMISSION_DENIED on each route this sweep touches", async () => {
     const answers = await Promise.all([
-      send("POST", `/service-order/create-service-order/${CARRIER}`, orderBody(), tokens.readOnly),
+      send(
+        "POST",
+        `/service-order/create-service-order/${CARRIER}`,
+        orderBody(),
+        tokens.readOnly,
+      ),
       send(
         "PATCH",
         `/service-order/update-service-order/${own.order}/business/${CARRIER}`,
         { description: "x" },
         tokens.readOnly,
       ),
-      send("DELETE", `/service-order/delete-service-order/${own.order}/business/${CARRIER}`, undefined, tokens.readOnly),
+      send(
+        "DELETE",
+        `/service-order/delete-service-order/${own.order}/business/${CARRIER}`,
+        undefined,
+        tokens.readOnly,
+      ),
       send(
         "POST",
         `/service-order-part/create-service-order-part/${own.order}/business/${CARRIER}`,
         { partId: own.part, quantity: 1, unit_price: 1 },
         tokens.readOnly,
       ),
-      send("PATCH", `/part/update-part/${own.part}/business/${CARRIER}`, { unit_price: 2 }, tokens.readOnly),
-      send("DELETE", `/part/delete-part/${own.part}/business/${CARRIER}`, undefined, tokens.readOnly),
+      send(
+        "PATCH",
+        `/part/update-part/${own.part}/business/${CARRIER}`,
+        { unit_price: 2 },
+        tokens.readOnly,
+      ),
+      send(
+        "DELETE",
+        `/part/delete-part/${own.part}/business/${CARRIER}`,
+        undefined,
+        tokens.readOnly,
+      ),
     ]);
 
     for (const answer of answers) {
@@ -481,15 +670,24 @@ describe("a deactivated company is read-only, even for the MASTER (decision 4.1)
       ),
     );
 
-    expect(await prisma.serviceOrder.findUnique({ where: { id: dormant.order } })).not.toBeNull();
+    expect(
+      await prisma.serviceOrder.findUnique({ where: { id: dormant.order } }),
+    ).not.toBeNull();
   });
 
   it("refuses deleting a catalog part, and the part stays", async () => {
     expectInactive(
-      await send("DELETE", `/part/delete-part/${dormant.part}/business/${DORMANT}`, undefined, tokens.master),
+      await send(
+        "DELETE",
+        `/part/delete-part/${dormant.part}/business/${DORMANT}`,
+        undefined,
+        tokens.master,
+      ),
     );
 
-    expect(await prisma.part.findUnique({ where: { id: dormant.part } })).not.toBeNull();
+    expect(
+      await prisma.part.findUnique({ where: { id: dormant.part } }),
+    ).not.toBeNull();
   });
 
   it("refuses removing a part from an order, and the line stays", async () => {
@@ -502,15 +700,27 @@ describe("a deactivated company is read-only, even for the MASTER (decision 4.1)
       ),
     );
 
-    expect(await prisma.serviceOrderPart.findUnique({ where: { id: dormant.line } })).not.toBeNull();
+    expect(
+      await prisma.serviceOrderPart.findUnique({ where: { id: dormant.line } }),
+    ).not.toBeNull();
   });
 
   it("answers the create and update siblings the same way", async () => {
     expectInactive(
-      await send("POST", `/part/create-part/${DORMANT}`, { description: "Nova", unit_price: 1 }, tokens.master),
+      await send(
+        "POST",
+        `/part/create-part/${DORMANT}`,
+        { description: "Nova", unit_price: 1 },
+        tokens.master,
+      ),
     );
     expectInactive(
-      await send("PATCH", `/part/update-part/${dormant.part}/business/${DORMANT}`, { unit_price: 2 }, tokens.master),
+      await send(
+        "PATCH",
+        `/part/update-part/${dormant.part}/business/${DORMANT}`,
+        { unit_price: 2 },
+        tokens.master,
+      ),
     );
   });
 });

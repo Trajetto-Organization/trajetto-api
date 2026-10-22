@@ -5,7 +5,10 @@ import {
   ensureDefaultOccurrenceTypes,
 } from "@/shared/delivery/default-occurrence-types";
 
-type Client = Pick<Prisma.TransactionClient, "$executeRaw" | "$queryRaw" | "occurrenceType">;
+type Client = Pick<
+  Prisma.TransactionClient,
+  "$executeRaw" | "$queryRaw" | "occurrenceType"
+>;
 
 /**
  * The company's seeded PAUSE type for a nature (decision 14.4), seeding the
@@ -21,7 +24,10 @@ async function pauseTypeId(
 
   const type = await client.occurrenceType.findUniqueOrThrow({
     where: {
-      businessId_system_key: { businessId, system_key: DEFAULT_PAUSE_TYPE_KEY[kind] },
+      businessId_system_key: {
+        businessId,
+        system_key: DEFAULT_PAUSE_TYPE_KEY[kind],
+      },
     },
     select: { id: true },
   });

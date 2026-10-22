@@ -135,9 +135,7 @@ describe("the dashboard's recent activity", () => {
   it("shows the five newest rows of the company without counting the trail", async () => {
     const overview = await overviewFor(ADMIN);
 
-    expect(
-      overview.recentActivity.map((row: any) => row.description),
-    ).toEqual([
+    expect(overview.recentActivity.map((row: any) => row.description)).toEqual([
       "Atividade 6",
       "Atividade 5",
       "Atividade 4",

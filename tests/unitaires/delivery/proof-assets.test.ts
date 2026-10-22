@@ -21,12 +21,16 @@ const ROOT = resolve(__dirname, "../../..");
 
 describe("the embedded Trajetto watermark", () => {
   it("is exactly assets/proof/trajetto-logo.png", () => {
-    const versioned = readFileSync(resolve(ROOT, "assets/proof/trajetto-logo.png"));
+    const versioned = readFileSync(
+      resolve(ROOT, "assets/proof/trajetto-logo.png"),
+    );
 
-    expect(createHash("sha256").update(TRAJETTO_WATERMARK_PNG).digest("hex")).toBe(
+    expect(
+      createHash("sha256").update(TRAJETTO_WATERMARK_PNG).digest("hex"),
+    ).toBe(createHash("sha256").update(versioned).digest("hex"));
+    expect(TRAJETTO_WATERMARK_SHA256).toBe(
       createHash("sha256").update(versioned).digest("hex"),
     );
-    expect(TRAJETTO_WATERMARK_SHA256).toBe(createHash("sha256").update(versioned).digest("hex"));
   });
 
   it("is a decodable PNG whose symbol box sits inside its frame", () => {
@@ -35,7 +39,11 @@ describe("the embedded Trajetto watermark", () => {
 
     expect(TRAJETTO_WATERMARK_SYMBOL.x0).toBeGreaterThanOrEqual(0);
     expect(TRAJETTO_WATERMARK_SYMBOL.y0).toBeGreaterThanOrEqual(0);
-    expect(TRAJETTO_WATERMARK_SYMBOL.x1).toBeLessThanOrEqual(TRAJETTO_WATERMARK_FRAME.width);
-    expect(TRAJETTO_WATERMARK_SYMBOL.y1).toBeLessThanOrEqual(TRAJETTO_WATERMARK_FRAME.height);
+    expect(TRAJETTO_WATERMARK_SYMBOL.x1).toBeLessThanOrEqual(
+      TRAJETTO_WATERMARK_FRAME.width,
+    );
+    expect(TRAJETTO_WATERMARK_SYMBOL.y1).toBeLessThanOrEqual(
+      TRAJETTO_WATERMARK_FRAME.height,
+    );
   });
 });

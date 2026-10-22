@@ -167,7 +167,10 @@ beforeAll(async () => {
   });
 
   const fuelType = await prisma.fuelType.create({
-    data: { description: `Diesel ${randomUUID().slice(0, 6)}`, businessId: CARRIER },
+    data: {
+      description: `Diesel ${randomUUID().slice(0, 6)}`,
+      businessId: CARRIER,
+    },
   });
 
   for (const [index, [id, plate]] of (

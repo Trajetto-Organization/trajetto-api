@@ -45,7 +45,10 @@ describe("the quota period", () => {
 
   it("falls back to the default zone for an empty or unknown one", () => {
     expect(
-      quotaPeriodFor(new Date("2026-10-01T01:30:00Z"), null).periodStart.toISOString(),
+      quotaPeriodFor(
+        new Date("2026-10-01T01:30:00Z"),
+        null,
+      ).periodStart.toISOString(),
     ).toBe("2026-09-01T00:00:00.000Z");
   });
 });

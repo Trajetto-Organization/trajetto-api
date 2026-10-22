@@ -13,7 +13,9 @@ class ListProfileAccessController {
     const { businessId, page, pageSize, search, sort, order } =
       request.query as z.infer<typeof listProfileAccessSchema>;
 
-    const listProfileAccessUseCase = container.resolve(ListProfileAccessUseCase);
+    const listProfileAccessUseCase = container.resolve(
+      ListProfileAccessUseCase,
+    );
 
     await sendAsNDJSON({
       reply,

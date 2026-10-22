@@ -16,7 +16,8 @@ const hired =
   (module: DashboardModule) =>
     modules.includes(module);
 
-const keys = (entities: Array<{ key: string }>) => entities.map((entity) => entity.key);
+const keys = (entities: Array<{ key: string }>) =>
+  entities.map((entity) => entity.key);
 
 describe("the series of the dashboard", () => {
   it("drops the Frotas entities for a company without Frotas, admin or not", () => {
@@ -24,11 +25,20 @@ describe("the series of the dashboard", () => {
       visibleDashboardEntities({ role: "BUSINESS_ADMIN" }, hired("DELIVERIES")),
     );
 
-    expect(visible).toEqual(["vehicle", "driver", "branch", "user", "delivery", "route"]);
+    expect(visible).toEqual([
+      "vehicle",
+      "driver",
+      "branch",
+      "user",
+      "delivery",
+      "route",
+    ]);
   });
 
   it("drops deliveries and routes for a company without Entregas", () => {
-    const visible = keys(visibleDashboardEntities({ role: "BUSINESS_ADMIN" }, hired("FLEET")));
+    const visible = keys(
+      visibleDashboardEntities({ role: "BUSINESS_ADMIN" }, hired("FLEET")),
+    );
 
     expect(visible).not.toContain("delivery");
     expect(visible).not.toContain("route");
@@ -43,7 +53,11 @@ describe("the series of the dashboard", () => {
           role: "BUSINESS_USER",
           profileAccess: {
             permissions: [
-              { permissionKey: "delivery_manage", canRead: true, canWrite: false },
+              {
+                permissionKey: "delivery_manage",
+                canRead: true,
+                canWrite: false,
+              },
               { permissionKey: "fine_manage", canRead: false, canWrite: false },
             ],
           },
@@ -68,11 +82,15 @@ describe("the series of the dashboard", () => {
 
     expect(canReadKey(writeOnly, "delivery_manage")).toBe(false);
     expect(canReadKey(writeOnly, "vehicle_manage")).toBe(false);
-    expect(keys(visibleDashboardEntities(writeOnly, hired("DELIVERIES", "FLEET")))).toEqual([]);
+    expect(
+      keys(visibleDashboardEntities(writeOnly, hired("DELIVERIES", "FLEET"))),
+    ).toEqual([]);
   });
 
   it("gives a MASTER every entity, with no company to ask about modules", () => {
-    expect(keys(visibleDashboardEntities({ role: "MASTER" }, null))).toHaveLength(11);
+    expect(
+      keys(visibleDashboardEntities({ role: "MASTER" }, null)),
+    ).toHaveLength(11);
   });
 
   it("names months in Portuguese from the key", () => {

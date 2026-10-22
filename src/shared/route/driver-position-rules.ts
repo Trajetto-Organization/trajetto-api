@@ -295,7 +295,9 @@ function parseBoundEdge(edge: string): number | null {
  * been stored, never fails a flush that could have succeeded.
  */
 function parsePartitionBound(bound: string): PartitionRange | null {
-  const match = /FROM \((MINVALUE|'[^']+')\) TO \((MAXVALUE|'[^']+')\)/i.exec(bound);
+  const match = /FROM \((MINVALUE|'[^']+')\) TO \((MAXVALUE|'[^']+')\)/i.exec(
+    bound,
+  );
 
   if (!match) return null;
 
@@ -344,7 +346,10 @@ function splitByPartition<T extends { recorded_at: Date }>(
  * phone keeps the points until the partition exists, instead of a 200 that
  * throws away a day of every driver's trail in silence.
  */
-function partitionMayStillBeCreated(recordedAt: Date, now = new Date()): boolean {
+function partitionMayStillBeCreated(
+  recordedAt: Date,
+  now = new Date(),
+): boolean {
   const todayUtc = Date.UTC(
     now.getUTCFullYear(),
     now.getUTCMonth(),

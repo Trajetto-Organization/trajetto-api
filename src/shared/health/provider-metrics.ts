@@ -18,7 +18,13 @@ import os from "node:os";
  * worst case, the request that carried a credential.
  */
 
-const PROVIDER_CHANNELS = ["EMAIL", "WHATSAPP", "PUSH", "AI_OCR", "WEBHOOK"] as const;
+const PROVIDER_CHANNELS = [
+  "EMAIL",
+  "WHATSAPP",
+  "PUSH",
+  "AI_OCR",
+  "WEBHOOK",
+] as const;
 
 type ProviderChannel = (typeof PROVIDER_CHANNELS)[number];
 
@@ -83,7 +89,10 @@ function createProviderMetrics({
 }: ProviderMetricsOptions = {}) {
   const samples = new Map<ProviderChannel, ProviderSample[]>();
   const totals = new Map<ProviderChannel, { calls: number; errors: number }>();
-  const lastError = new Map<ProviderChannel, { at: number; kind: string | null }>();
+  const lastError = new Map<
+    ProviderChannel,
+    { at: number; kind: string | null }
+  >();
 
   function record(
     channel: ProviderChannel,
@@ -94,7 +103,12 @@ function createProviderMetrics({
     const at = now();
     const list = samples.get(channel) ?? [];
 
-    list.push({ at, ms: Math.max(0, Math.round(ms)), ok, kind: ok ? null : kind });
+    list.push({
+      at,
+      ms: Math.max(0, Math.round(ms)),
+      ok,
+      kind: ok ? null : kind,
+    });
 
     // A ring by trimming: a burst never grows memory past `capacity`.
     if (list.length > capacity) list.splice(0, list.length - capacity);
@@ -117,7 +131,9 @@ function createProviderMetrics({
       window_minutes: Math.round(windowMs / 60_000),
       // Every channel, zero-filled: a dashboard never handles a missing key.
       channels: PROVIDER_CHANNELS.map((channel) => {
-        const inWindow = (samples.get(channel) ?? []).filter((s) => s.at >= since);
+        const inWindow = (samples.get(channel) ?? []).filter(
+          (s) => s.at >= since,
+        );
         const latencies = inWindow.map((s) => s.ms).sort((a, b) => a - b);
         const errors = inWindow.filter((s) => !s.ok).length;
         const total = totals.get(channel) ?? { calls: 0, errors: 0 };
@@ -127,10 +143,13 @@ function createProviderMetrics({
           channel,
           calls: inWindow.length,
           errors,
-          error_rate: inWindow.length === 0 ? null : round(errors / inWindow.length),
+          error_rate:
+            inWindow.length === 0 ? null : round(errors / inWindow.length),
           latency_p50_ms: percentile(latencies, 50),
           latency_p95_ms: percentile(latencies, 95),
-          latency_max_ms: latencies.length ? latencies[latencies.length - 1] : null,
+          latency_max_ms: latencies.length
+            ? latencies[latencies.length - 1]
+            : null,
           total_calls: total.calls,
           total_errors: total.errors,
           last_error_at: last ? new Date(last.at).toISOString() : null,
@@ -167,9 +186,11 @@ function providerErrorKind(error: unknown): string {
     cause?: { code?: unknown };
   };
 
-  if (value.name === "TimeoutError" || value.name === "AbortError") return "timeout";
+  if (value.name === "TimeoutError" || value.name === "AbortError")
+    return "timeout";
   if (typeof value.httpStatus === "number") return `http_${value.httpStatus}`;
-  if (typeof value.responseCode === "number") return `smtp_${value.responseCode}`;
+  if (typeof value.responseCode === "number")
+    return `smtp_${value.responseCode}`;
 
   const code =
     typeof value.code === "string"
@@ -204,11 +225,21 @@ async function observeProviderCall<T>(
     const value = await run();
     const verdict = outcome ? outcome(value) : { ok: true };
 
-    metrics.record(channel, performance.now() - startedAt, verdict.ok, verdict.kind ?? null);
+    metrics.record(
+      channel,
+      performance.now() - startedAt,
+      verdict.ok,
+      verdict.kind ?? null,
+    );
 
     return value;
   } catch (error) {
-    metrics.record(channel, performance.now() - startedAt, false, providerErrorKind(error));
+    metrics.record(
+      channel,
+      performance.now() - startedAt,
+      false,
+      providerErrorKind(error),
+    );
 
     throw error;
   }
@@ -216,7 +247,10 @@ async function observeProviderCall<T>(
 
 /** For a fetch Response: ok, or the status as the kind. */
 function httpOutcome(response: { ok: boolean; status: number }) {
-  return { ok: response.ok, kind: response.ok ? null : `http_${response.status}` };
+  return {
+    ok: response.ok,
+    kind: response.ok ? null : `http_${response.status}`,
+  };
 }
 
 export {

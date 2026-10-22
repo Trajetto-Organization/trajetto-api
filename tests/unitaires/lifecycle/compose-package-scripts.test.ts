@@ -19,8 +19,14 @@ const scripts: Record<string, string> = JSON.parse(
 
 /** Files a script names: `-f <compose>` and `tsx|node <source>`. */
 function referenced(command: string): string[] {
-  const composes = [...command.matchAll(/(?:^|\s)-f\s+(\S+\.ya?ml)/g)].map((m) => m[1]);
-  const sources = [...command.matchAll(/(?:^|\s)(?:tsx|node)\s+(?:watch\s+)?(\S+\.[cm]?[jt]s)/g)]
+  const composes = [...command.matchAll(/(?:^|\s)-f\s+(\S+\.ya?ml)/g)].map(
+    (m) => m[1],
+  );
+  const sources = [
+    ...command.matchAll(
+      /(?:^|\s)(?:tsx|node)\s+(?:watch\s+)?(\S+\.[cm]?[jt]s)/g,
+    ),
+  ]
     .map((m) => m[1])
     .filter((path) => !path.startsWith("build/"));
 
@@ -29,28 +35,43 @@ function referenced(command: string): string[] {
 
 describe("package.json scripts", () => {
   it("reads the files a script names", () => {
-    expect(referenced("docker compose -f compose.x.yaml up -d db")).toEqual(["compose.x.yaml"]);
-    expect(referenced("tsx infra/scripts/seed.ts")).toEqual(["infra/scripts/seed.ts"]);
+    expect(referenced("docker compose -f compose.x.yaml up -d db")).toEqual([
+      "compose.x.yaml",
+    ]);
+    expect(referenced("tsx infra/scripts/seed.ts")).toEqual([
+      "infra/scripts/seed.ts",
+    ]);
     expect(referenced("tsx watch src/server.ts")).toEqual(["src/server.ts"]);
     expect(referenced("node build/server.js")).toEqual([]);
   });
 
-  it.each(Object.entries(scripts))("%s points at files that exist", (_name, command) => {
-    const missing = referenced(command).filter((path) => !existsSync(resolve(ROOT, path)));
+  it.each(Object.entries(scripts))(
+    "%s points at files that exist",
+    (_name, command) => {
+      const missing = referenced(command).filter(
+        (path) => !existsSync(resolve(ROOT, path)),
+      );
 
-    expect(missing).toEqual([]);
-  });
+      expect(missing).toEqual([]);
+    },
+  );
 
   it("has one name per command: an alias is a second name to document and keep in sync", () => {
     // test:integration was test:e2e under its old name (README-META-1).
-    const normalised = (command: string) => command.replace(/\.\//g, "").replace(/\s+/g, " ").trim();
+    const normalised = (command: string) =>
+      command.replace(/\.\//g, "").replace(/\s+/g, " ").trim();
     const byCommand = new Map<string, string[]>();
 
     for (const [name, command] of Object.entries(scripts)) {
-      byCommand.set(normalised(command), [...(byCommand.get(normalised(command)) ?? []), name]);
+      byCommand.set(normalised(command), [
+        ...(byCommand.get(normalised(command)) ?? []),
+        name,
+      ]);
     }
 
-    expect([...byCommand.values()].filter((names) => names.length > 1)).toEqual([]);
+    expect([...byCommand.values()].filter((names) => names.length > 1)).toEqual(
+      [],
+    );
   });
 
   it("gates the unit coverage at the measured baseline minus one point", () => {
@@ -58,11 +79,18 @@ describe("package.json scripts", () => {
     // statements/lines 71.80%, branches 83.57%, functions 58.62%. One point
     // below, so a new test file never fails CI, a deleted one does.
     const thresholds = Object.fromEntries(
-      [...scripts["test:coverage"].matchAll(/--coverage\.thresholds\.(\w+)=([\d.]+)/g)].map(
-        ([, metric, value]) => [metric, Number(value)],
-      ),
+      [
+        ...scripts["test:coverage"].matchAll(
+          /--coverage\.thresholds\.(\w+)=([\d.]+)/g,
+        ),
+      ].map(([, metric, value]) => [metric, Number(value)]),
     );
 
-    expect(thresholds).toEqual({ statements: 70.8, lines: 70.8, branches: 82.57, functions: 57.62 });
+    expect(thresholds).toEqual({
+      statements: 70.8,
+      lines: 70.8,
+      branches: 82.57,
+      functions: 57.62,
+    });
   });
 });

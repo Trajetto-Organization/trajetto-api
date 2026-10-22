@@ -87,7 +87,10 @@ class UpdateUserPasswordUseCase {
         },
       });
     } catch (error) {
-      log.error({ err: error, userId }, "password change notice could not be sent");
+      log.error(
+        { err: error, userId },
+        "password change notice could not be sent",
+      );
     }
   }
 }

@@ -48,7 +48,9 @@ class ServiceOrderPartStore implements IServiceOrderPartRepository {
       unit_price: String(data.unit_price),
       quantity: data.quantity,
       discount_percentage:
-        data.discount_percentage == null ? null : String(data.discount_percentage),
+        data.discount_percentage == null
+          ? null
+          : String(data.discount_percentage),
       businessId: data.businessId,
       serviceOrderId: data.serviceOrderId,
       partId: data.partId,
@@ -63,14 +65,17 @@ class ServiceOrderPartStore implements IServiceOrderPartRepository {
   async listServiceOrderParts(props: ListServiceOrderPartByBusinessIdProps) {
     this.lastList = props;
 
-    const data = this.lines.filter((line) => line.businessId === props.businessId);
+    const data = this.lines.filter(
+      (line) => line.businessId === props.businessId,
+    );
 
     return {
       data,
       aggregate: {
         count: data.length,
-        withDiscount: data.filter((line) => Number(line.discount_percentage ?? 0) > 0)
-          .length,
+        withDiscount: data.filter(
+          (line) => Number(line.discount_percentage ?? 0) > 0,
+        ).length,
         // price × quantity × (1 − discount), like the repository's SQL.
         totalValue: partsTotalOf(data),
       },
@@ -78,7 +83,10 @@ class ServiceOrderPartStore implements IServiceOrderPartRepository {
     };
   }
 
-  async updateServiceOrderPart({ serviceOrderPartData, serviceOrderPartId }: UpdateServiceOrderPart) {
+  async updateServiceOrderPart({
+    serviceOrderPartData,
+    serviceOrderPartId,
+  }: UpdateServiceOrderPart) {
     if (this.failWrites) throw new Error("connection reset");
 
     const line = this.lines.find((entry) => entry.id === serviceOrderPartId);
@@ -98,7 +106,9 @@ class ServiceOrderPartStore implements IServiceOrderPartRepository {
             ? null
             : String(serviceOrderPartData.discount_percentage),
       }),
-      ...(serviceOrderPartData.partId && { partId: serviceOrderPartData.partId }),
+      ...(serviceOrderPartData.partId && {
+        partId: serviceOrderPartData.partId,
+      }),
       ...(serviceOrderPartData.serviceOrderId && {
         serviceOrderId: serviceOrderPartData.serviceOrderId,
       }),
@@ -113,7 +123,9 @@ class ServiceOrderPartStore implements IServiceOrderPartRepository {
   async deleteServiceOrderPart(serviceOrderPartId: string) {
     if (this.failWrites) throw new Error("connection reset");
 
-    const index = this.lines.findIndex((entry) => entry.id === serviceOrderPartId);
+    const index = this.lines.findIndex(
+      (entry) => entry.id === serviceOrderPartId,
+    );
     if (index < 0) throw new Error("P2025");
 
     return this.lines.splice(index, 1)[0];
@@ -126,14 +138,17 @@ class ServiceOrderPartStore implements IServiceOrderPartRepository {
   async findServiceOrderPartByPartId(partId: string, serviceOrderId: string) {
     return (
       this.lines.find(
-        (entry) => entry.partId === partId && entry.serviceOrderId === serviceOrderId,
+        (entry) =>
+          entry.partId === partId && entry.serviceOrderId === serviceOrderId,
       ) ?? null
     );
   }
 
   async calculateServiceOrderTotal(serviceOrderId: string) {
     // The discount counts, as in ServiceOrderPartRepository.
-    return partsTotalOf(this.lines.filter((entry) => entry.serviceOrderId === serviceOrderId));
+    return partsTotalOf(
+      this.lines.filter((entry) => entry.serviceOrderId === serviceOrderId),
+    );
   }
 
   async serviceOrderTotals(serviceOrderId: string) {
@@ -186,12 +201,27 @@ beforeEach(async () => {
     { id: OTHER_ADMIN, role: "BUSINESS_ADMIN", businessId: OTHER } as User,
     { id: MASTER, role: "MASTER", businessId: null } as unknown as User,
   );
-  businesses.business.push({ id: CARRIER } as Business, { id: OTHER } as Business);
+  businesses.business.push(
+    { id: CARRIER } as Business,
+    { id: OTHER } as Business,
+  );
 
   orders.serviceOrders.push(
-    { id: ORDER, businessId: CARRIER, total_amount: "500" } as unknown as ServiceOrder,
-    { id: SECOND_ORDER, businessId: CARRIER, total_amount: "100" } as unknown as ServiceOrder,
-    { id: FOREIGN_ORDER, businessId: OTHER, total_amount: "300" } as unknown as ServiceOrder,
+    {
+      id: ORDER,
+      businessId: CARRIER,
+      total_amount: "500",
+    } as unknown as ServiceOrder,
+    {
+      id: SECOND_ORDER,
+      businessId: CARRIER,
+      total_amount: "100",
+    } as unknown as ServiceOrder,
+    {
+      id: FOREIGN_ORDER,
+      businessId: OTHER,
+      total_amount: "300",
+    } as unknown as ServiceOrder,
   );
 
   filter = (
@@ -218,11 +248,31 @@ beforeEach(async () => {
 });
 
 const create = () =>
-  new CreateServiceOrderPartUseCase(users, businesses, orders, parts, lines, notifications);
+  new CreateServiceOrderPartUseCase(
+    users,
+    businesses,
+    orders,
+    parts,
+    lines,
+    notifications,
+  );
 const update = () =>
-  new UpdateServiceOrderPartUseCase(users, businesses, orders, parts, lines, notifications);
+  new UpdateServiceOrderPartUseCase(
+    users,
+    businesses,
+    orders,
+    parts,
+    lines,
+    notifications,
+  );
 const remove = () =>
-  new DeleteServiceOrderPartUseCase(users, businesses, orders, lines, notifications);
+  new DeleteServiceOrderPartUseCase(
+    users,
+    businesses,
+    orders,
+    lines,
+    notifications,
+  );
 const list = () => new ListServiceOrderPartUseCase(users, lines);
 
 const lineOf = (overrides: Partial<CreateServiceOrderPartProps> = {}) => ({
@@ -238,17 +288,28 @@ describe("adding a part to a service order", () => {
   it("stores the line and answers the order's typed total beside the parts total", async () => {
     const { line, totals } = await create().execute(lineOf(), ADMIN);
 
-    expect(line).toMatchObject({ serviceOrderId: ORDER, partId: filter, quantity: 2 });
+    expect(line).toMatchObject({
+      serviceOrderId: ORDER,
+      partId: filter,
+      quantity: 2,
+    });
     expect(totals).toEqual({ totalAmount: 500, partsTotal: 100 });
     expect(notifications.createActivityIfEnabled).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "create", businessId: CARRIER, performedBy: ADMIN }),
+      expect.objectContaining({
+        action: "create",
+        businessId: CARRIER,
+        performedBy: ADMIN,
+      }),
     );
   });
 
   it("counts the line's discount in the parts total, and keeps an edited one", async () => {
     // The fake summed price × quantity only, where the repository applies
     // (1 − discount): a total the screen never shows.
-    const { line, totals } = await create().execute(lineOf({ discount_percentage: 10 }), ADMIN);
+    const { line, totals } = await create().execute(
+      lineOf({ discount_percentage: 10 }),
+      ADMIN,
+    );
 
     expect(totals).toEqual({ totalAmount: 500, partsTotal: 90 });
 
@@ -275,7 +336,9 @@ describe("adding a part to a service order", () => {
   it("refuses the same part twice on one order with a 409, and keeps one line", async () => {
     await create().execute(lineOf(), ADMIN);
 
-    await expect(create().execute(lineOf({ quantity: 5 }), ADMIN)).rejects.toMatchObject({
+    await expect(
+      create().execute(lineOf({ quantity: 5 }), ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "SERVICE_ORDER_PART_ALREADY_EXISTS",
     });
@@ -292,7 +355,10 @@ describe("adding a part to a service order", () => {
   it("answers another company's order as absent (404), never as 'not yours'", async () => {
     await expect(
       create().execute(lineOf({ serviceOrderId: FOREIGN_ORDER }), ADMIN),
-    ).rejects.toMatchObject({ statusCode: 404, code: "SERVICE_ORDER_NOT_FOUND" });
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "SERVICE_ORDER_NOT_FOUND",
+    });
     expect(lines.lines).toHaveLength(0);
   });
 
@@ -341,7 +407,13 @@ describe("editing a service order line", () => {
     const { line } = await create().execute(lineOf(), ADMIN);
 
     await expect(
-      update().execute({ partId: filter, quantity: 1 }, line.id, ORDER, CARRIER, ADMIN),
+      update().execute(
+        { partId: filter, quantity: 1 },
+        line.id,
+        ORDER,
+        CARRIER,
+        ADMIN,
+      ),
     ).resolves.toMatchObject({ line: { quantity: 1 } });
   });
 
@@ -351,33 +423,61 @@ describe("editing a service order line", () => {
 
     await expect(
       update().execute({ partId: brakePad }, line.id, ORDER, CARRIER, ADMIN),
-    ).rejects.toMatchObject({ statusCode: 409, code: "SERVICE_ORDER_PART_ALREADY_EXISTS" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "SERVICE_ORDER_PART_ALREADY_EXISTS",
+    });
   });
 
   it("refuses a line of another order: it is not found from this order's path", async () => {
-    const { line } = await create().execute(lineOf({ serviceOrderId: SECOND_ORDER }), ADMIN);
+    const { line } = await create().execute(
+      lineOf({ serviceOrderId: SECOND_ORDER }),
+      ADMIN,
+    );
 
     await expect(
       update().execute({ quantity: 9 }, line.id, ORDER, CARRIER, ADMIN),
-    ).rejects.toMatchObject({ statusCode: 404, code: "SERVICE_ORDER_PART_NOT_FOUND" });
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "SERVICE_ORDER_PART_NOT_FOUND",
+    });
 
     // Nothing moved: the line is still on its own order with its quantity.
-    expect(lines.lines[0]).toMatchObject({ serviceOrderId: SECOND_ORDER, quantity: 2 });
+    expect(lines.lines[0]).toMatchObject({
+      serviceOrderId: SECOND_ORDER,
+      quantity: 2,
+    });
   });
 
   it("refuses another company's line reached through its own order (cross-tenant)", async () => {
     const foreign = await create().execute(
-      lineOf({ businessId: OTHER, serviceOrderId: FOREIGN_ORDER, partId: foreignFilter }),
+      lineOf({
+        businessId: OTHER,
+        serviceOrderId: FOREIGN_ORDER,
+        partId: foreignFilter,
+      }),
       OTHER_ADMIN,
     );
 
     await expect(
-      update().execute({ quantity: 9 }, foreign.line.id, FOREIGN_ORDER, CARRIER, ADMIN),
-    ).rejects.toMatchObject({ statusCode: 404, code: "SERVICE_ORDER_NOT_FOUND" });
+      update().execute(
+        { quantity: 9 },
+        foreign.line.id,
+        FOREIGN_ORDER,
+        CARRIER,
+        ADMIN,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "SERVICE_ORDER_NOT_FOUND",
+    });
 
     await expect(
       update().execute({ quantity: 9 }, foreign.line.id, ORDER, CARRIER, ADMIN),
-    ).rejects.toMatchObject({ statusCode: 404, code: "SERVICE_ORDER_PART_NOT_FOUND" });
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "SERVICE_ORDER_PART_NOT_FOUND",
+    });
 
     expect(lines.lines[0]).toMatchObject({ businessId: OTHER, quantity: 2 });
   });
@@ -386,7 +486,13 @@ describe("editing a service order line", () => {
     const { line } = await create().execute(lineOf(), ADMIN);
 
     await expect(
-      update().execute({ partId: foreignFilter }, line.id, ORDER, CARRIER, ADMIN),
+      update().execute(
+        { partId: foreignFilter },
+        line.id,
+        ORDER,
+        CARRIER,
+        ADMIN,
+      ),
     ).rejects.toMatchObject({ statusCode: 404, code: "PART_NOT_FOUND" });
   });
 
@@ -413,9 +519,14 @@ describe("removing a service order line", () => {
   });
 
   it("refuses a line of another order, and keeps it", async () => {
-    const { line } = await create().execute(lineOf({ serviceOrderId: SECOND_ORDER }), ADMIN);
+    const { line } = await create().execute(
+      lineOf({ serviceOrderId: SECOND_ORDER }),
+      ADMIN,
+    );
 
-    await expect(remove().execute(line.id, ORDER, CARRIER, ADMIN)).rejects.toMatchObject({
+    await expect(
+      remove().execute(line.id, ORDER, CARRIER, ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "SERVICE_ORDER_PART_NOT_FOUND",
     });
@@ -424,13 +535,20 @@ describe("removing a service order line", () => {
 
   it("refuses another company's order (cross-tenant), and keeps its line", async () => {
     const foreign = await create().execute(
-      lineOf({ businessId: OTHER, serviceOrderId: FOREIGN_ORDER, partId: foreignFilter }),
+      lineOf({
+        businessId: OTHER,
+        serviceOrderId: FOREIGN_ORDER,
+        partId: foreignFilter,
+      }),
       OTHER_ADMIN,
     );
 
     await expect(
       remove().execute(foreign.line.id, FOREIGN_ORDER, CARRIER, ADMIN),
-    ).rejects.toMatchObject({ statusCode: 404, code: "SERVICE_ORDER_NOT_FOUND" });
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "SERVICE_ORDER_NOT_FOUND",
+    });
     expect(lines.lines).toHaveLength(1);
   });
 
@@ -438,7 +556,9 @@ describe("removing a service order line", () => {
     const { line } = await create().execute(lineOf(), ADMIN);
     lines.failWrites = true;
 
-    await expect(remove().execute(line.id, ORDER, CARRIER, ADMIN)).rejects.toMatchObject({
+    await expect(
+      remove().execute(line.id, ORDER, CARRIER, ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 500,
     });
   });
@@ -447,18 +567,34 @@ describe("removing a service order line", () => {
 describe("listing service order lines", () => {
   it("pins a company user to their own company and summarizes the cards", async () => {
     await create().execute(lineOf(), ADMIN);
-    await create().execute(lineOf({ partId: brakePad, unit_price: 100, quantity: 1 }), ADMIN);
+    await create().execute(
+      lineOf({ partId: brakePad, unit_price: 100, quantity: 1 }),
+      ADMIN,
+    );
 
-    const result = await list().execute({ userId: ADMIN, page: 1, pageSize: 10 });
+    const result = await list().execute({
+      userId: ADMIN,
+      page: 1,
+      pageSize: 10,
+    });
 
     expect(lines.lastList?.businessId).toBe(CARRIER);
     expect(result.total).toBe(2);
-    expect(result.searchMeta).toMatchObject({ total: 2, totalValue: 200, averageValue: 100 });
+    expect(result.searchMeta).toMatchObject({
+      total: 2,
+      totalValue: 200,
+      averageValue: 100,
+    });
   });
 
   it("refuses a company user naming another company (403 TENANT_ACCESS_DENIED)", async () => {
     await expect(
-      list().execute({ userId: ADMIN, businessId: OTHER, page: 1, pageSize: 10 }),
+      list().execute({
+        userId: ADMIN,
+        businessId: OTHER,
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
     expect(lines.lastList).toBeNull();
   });
@@ -466,9 +602,17 @@ describe("listing service order lines", () => {
   it("asks the MASTER to pick a company (400) and serves the one picked", async () => {
     await expect(
       list().execute({ userId: MASTER, page: 1, pageSize: 10 }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "BUSINESS_NOT_IDENTIFIED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BUSINESS_NOT_IDENTIFIED",
+    });
 
-    await list().execute({ userId: MASTER, businessId: OTHER, page: 1, pageSize: 10 });
+    await list().execute({
+      userId: MASTER,
+      businessId: OTHER,
+      page: 1,
+      pageSize: 10,
+    });
     expect(lines.lastList?.businessId).toBe(OTHER);
   });
 

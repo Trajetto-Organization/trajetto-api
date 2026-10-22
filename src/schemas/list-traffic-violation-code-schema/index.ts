@@ -12,10 +12,7 @@ const listTrafficViolationCodeSchema = z.object({
     .max(100, "Tamanho máximo da página é 100")
     .default(10)
     .describe("Itens por página, de 1 a 100."),
-  search: z
-    .string()
-    .optional()
-    .describe("Texto livre de busca."),
+  search: z.string().optional().describe("Texto livre de busca."),
   gravity: z
     .enum(["LIGHT", "MEDIUM", "SERIOUS", "VERY_SERIOUS", "NO_POINTS"])
     .optional()

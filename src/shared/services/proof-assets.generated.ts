@@ -326,11 +326,17 @@ const TRAJETTO_WATERMARK_PNG = Buffer.from(
   "base64",
 );
 
-const TRAJETTO_WATERMARK_SHA256 = "3dac0e80dd0fe68120ed1e81998c83e0ec2d8dd1f5ad189ffaf846a9888e5152";
+const TRAJETTO_WATERMARK_SHA256 =
+  "3dac0e80dd0fe68120ed1e81998c83e0ec2d8dd1f5ad189ffaf846a9888e5152";
 
 /** Frame size and the symbol's box inside it, in pixels. */
 const TRAJETTO_WATERMARK_FRAME = { width: 1024, height: 1024 } as const;
-const TRAJETTO_WATERMARK_SYMBOL = { x0: 194, y0: 381, x1: 810, y1: 696 } as const;
+const TRAJETTO_WATERMARK_SYMBOL = {
+  x0: 194,
+  y0: 381,
+  x1: 810,
+  y1: 696,
+} as const;
 
 export {
   TRAJETTO_WATERMARK_FRAME,

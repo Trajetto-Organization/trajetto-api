@@ -53,7 +53,9 @@ async function codeOf(promise: Promise<unknown>): Promise<string | null> {
 
     return null;
   } catch (error) {
-    return error instanceof AppError ? (error.code ?? null) : "not-an-app-error";
+    return error instanceof AppError
+      ? (error.code ?? null)
+      : "not-an-app-error";
   }
 }
 

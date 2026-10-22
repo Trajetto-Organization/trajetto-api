@@ -10,7 +10,10 @@ import type { ProofDocumentSource } from "@/shared/delivery/proof-document";
 import type { ProofDocumentModel } from "@/shared/delivery/proof-document";
 import type { User } from "@/modules/user/dtos/user-dto";
 
-import { noLocationProviders, unsignedSigning } from "../../support/proof-services";
+import {
+  noLocationProviders,
+  unsignedSigning,
+} from "../../support/proof-services";
 
 /**
  * Two people opening the same receipt at once (IDEMP-12).
@@ -92,7 +95,11 @@ function deferred() {
 
 function makeContext() {
   const users = new InMemoryUserRepository();
-  users.user.push({ id: USER, role: "BUSINESS_ADMIN", businessId: BUSINESS } as User);
+  users.user.push({
+    id: USER,
+    role: "BUSINESS_ADMIN",
+    businessId: BUSINESS,
+  } as User);
 
   const documents = new InMemoryProofDocumentRepository();
   documents.addSource(BUSINESS, source());
@@ -134,7 +141,9 @@ function makeContext() {
   return { documents, uploads, bucket, open, published };
 }
 
-function expectConsistent(published: ReturnType<ReturnType<typeof makeContext>["published"]>) {
+function expectConsistent(
+  published: ReturnType<ReturnType<typeof makeContext>["published"]>,
+) {
   const { row, bytes } = published;
 
   expect(bytes, "the row points at an object that exists").toBeDefined();

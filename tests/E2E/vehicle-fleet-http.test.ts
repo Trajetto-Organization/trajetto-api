@@ -185,14 +185,22 @@ async function seedUser(
 
   return {
     id,
-    token: sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-      subject: id,
-      expiresIn: "15m",
-    }),
+    token: sign(
+      { tokenType: "access", sessionVersion: 0, familyId },
+      auth.secret_token,
+      {
+        subject: id,
+        expiresIn: "15m",
+      },
+    ),
   };
 }
 
-function vehicleRow(index: number, businessId: string, overrides: Record<string, unknown> = {}) {
+function vehicleRow(
+  index: number,
+  businessId: string,
+  overrides: Record<string, unknown> = {},
+) {
   const suffix = String(index).padStart(2, "0");
 
   return {
@@ -224,10 +232,11 @@ function vehicleRow(index: number, businessId: string, overrides: Record<string,
  */
 const SEED = Array.from({ length: 12 }, (_, index) => ({
   index,
-  status: (index % 4 === 0 ? "BLOCKED" : index % 4 === 1 ? "INACTIVE" : "ACTIVE") as
-    | "BLOCKED"
-    | "INACTIVE"
-    | "ACTIVE",
+  status: (index % 4 === 0
+    ? "BLOCKED"
+    : index % 4 === 1
+      ? "INACTIVE"
+      : "ACTIVE") as "BLOCKED" | "INACTIVE" | "ACTIVE",
   branchId: index % 2 === 0 ? NORTH : SOUTH,
 }));
 
@@ -297,8 +306,18 @@ beforeAll(async () => {
 
   await prisma.vehicleType.createMany({
     data: [
-      { id: TRUCK_TYPE, description: "Truck", number_of_axles: 3, businessId: CARRIER },
-      { id: FOREIGN_TYPE, description: "Carreta alheia", number_of_axles: 5, businessId: OTHER },
+      {
+        id: TRUCK_TYPE,
+        description: "Truck",
+        number_of_axles: 3,
+        businessId: CARRIER,
+      },
+      {
+        id: FOREIGN_TYPE,
+        description: "Carreta alheia",
+        number_of_axles: 5,
+        businessId: OTHER,
+      },
     ],
   });
 
@@ -311,23 +330,31 @@ beforeAll(async () => {
 
   tokens.readOnly = (
     await seedUser("BUSINESS_USER", CARRIER, {
-      profileAccessId: await seedProfile(CARRIER, [{ key: "vehicle_manage", write: false }]),
+      profileAccessId: await seedProfile(CARRIER, [
+        { key: "vehicle_manage", write: false },
+      ]),
     })
   ).token;
 
   tokens.dispatcher = (
     await seedUser("BUSINESS_USER", CARRIER, {
-      profileAccessId: await seedProfile(CARRIER, [{ key: "delivery_manage", write: true }]),
+      profileAccessId: await seedProfile(CARRIER, [
+        { key: "delivery_manage", write: true },
+      ]),
     })
   ).token;
 
   tokens.nobody = (
     await seedUser("BUSINESS_USER", CARRIER, {
-      profileAccessId: await seedProfile(CARRIER, [{ key: "delivery_manage", write: false }]),
+      profileAccessId: await seedProfile(CARRIER, [
+        { key: "delivery_manage", write: false },
+      ]),
     })
   ).token;
 
-  tokens.driver = (await seedUser("BUSINESS_USER", CARRIER, { driverId: ANA })).token;
+  tokens.driver = (
+    await seedUser("BUSINESS_USER", CARRIER, { driverId: ANA })
+  ).token;
   tokens.otherAdmin = (await seedUser("BUSINESS_ADMIN", OTHER)).token;
   tokens.master = (await seedUser("MASTER", null)).token;
   tokens.limitedAdmin = (await seedUser("BUSINESS_ADMIN", LIMITED)).token;
@@ -378,7 +405,9 @@ describe("GET /vehicle/list-vehicle — order", () => {
     expect(status).toBe(200);
     expect(meta.total).toBe(12);
     expect(descriptions(rows)).toEqual(
-      [11, 10, 9, 8, 7, 6, 5, 4, 3, 2].map((i) => `Veículo ${String(i).padStart(2, "0")}`),
+      [11, 10, 9, 8, 7, 6, 5, 4, 3, 2].map(
+        (i) => `Veículo ${String(i).padStart(2, "0")}`,
+      ),
     );
   });
 
@@ -403,7 +432,11 @@ describe("GET /vehicle/list-vehicle — order", () => {
     const { rows } = await list("sort=branchName&order=desc");
 
     // "Filial Sul" > "Filial Norte": the odd ones first, newest first.
-    expect(descriptions(rows).slice(0, 3)).toEqual(["Veículo 11", "Veículo 09", "Veículo 07"]);
+    expect(descriptions(rows).slice(0, 3)).toEqual([
+      "Veículo 11",
+      "Veículo 09",
+      "Veículo 07",
+    ]);
   });
 
   it("refuses a column the server does not order by", async () => {
@@ -443,7 +476,9 @@ describe("GET /vehicle/list-vehicle — filters and cards", () => {
     const { meta, rows } = await list(`branchId=${NORTH}`);
 
     expect(meta.total).toBe(6);
-    expect(rows.every((row) => (row as { branchId: string }).branchId === NORTH)).toBe(true);
+    expect(
+      rows.every((row) => (row as { branchId: string }).branchId === NORTH),
+    ).toBe(true);
 
     expect(meta.searchMeta.facets.branchId).toEqual([
       { value: NORTH, label: "Filial Norte", count: 6 },
@@ -541,7 +576,11 @@ function createBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function post(businessId: string, body: Record<string, unknown>, token = tokens.admin) {
+function post(
+  businessId: string,
+  body: Record<string, unknown>,
+  token = tokens.admin,
+) {
   return app.inject({
     method: "POST",
     url: `/vehicle/create-vehicle/${businessId}`,
@@ -550,7 +589,12 @@ function post(businessId: string, body: Record<string, unknown>, token = tokens.
   });
 }
 
-function patch(vehicleId: string, body: Record<string, unknown>, token = tokens.admin, businessId = CARRIER) {
+function patch(
+  vehicleId: string,
+  body: Record<string, unknown>,
+  token = tokens.admin,
+  businessId = CARRIER,
+) {
   return app.inject({
     method: "PATCH",
     url: `/vehicle/update-vehicle/${vehicleId}/business/${businessId}`,
@@ -561,7 +605,11 @@ function patch(vehicleId: string, body: Record<string, unknown>, token = tokens.
 
 describe("POST /vehicle/create-vehicle — per-company uniques (decision 8.1)", () => {
   it("lets two carriers register the same aggregated truck", async () => {
-    const foreign = await post(OTHER, createBody({ fuelTypeId: FOREIGN_FUEL }), tokens.otherAdmin);
+    const foreign = await post(
+      OTHER,
+      createBody({ fuelTypeId: FOREIGN_FUEL }),
+      tokens.otherAdmin,
+    );
     expect(foreign.statusCode, foreign.body).toBe(201);
 
     // Red before: the global unique refused it and said the plate existed.
@@ -577,7 +625,10 @@ describe("POST /vehicle/create-vehicle — per-company uniques (decision 8.1)", 
   });
 
   it("refuses the plate again in the same company, naming no one", async () => {
-    const response = await post(CARRIER, createBody({ renavam: "55555555599" }));
+    const response = await post(
+      CARRIER,
+      createBody({ renavam: "55555555599" }),
+    );
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({ code: "VEHICLE_PLATE_TAKEN" });
@@ -585,7 +636,10 @@ describe("POST /vehicle/create-vehicle — per-company uniques (decision 8.1)", 
   });
 
   it("answers a race on the unique index with one 201 and one 409, never a 500", async () => {
-    const body = createBody({ license_plate: "RAC3E44", renavam: "77777777701" });
+    const body = createBody({
+      license_plate: "RAC3E44",
+      renavam: "77777777701",
+    });
 
     const [first, second] = await Promise.all([
       post(CARRIER, body),
@@ -614,7 +668,11 @@ describe("the contracted fleet (FLEET-VEH-1, FLEET-VEH-7)", () => {
     // Red before: a 500 "Houve um erro ao tentar criar o veículo".
     const refused = await post(
       LIMITED,
-      createBody({ license_plate: "LIM3A11", renavam: "88888888803", fuelTypeId: LIMITED_FUEL }),
+      createBody({
+        license_plate: "LIM3A11",
+        renavam: "88888888803",
+        fuelTypeId: LIMITED_FUEL,
+      }),
       tokens.limitedAdmin,
     );
 
@@ -625,8 +683,13 @@ describe("the contracted fleet (FLEET-VEH-1, FLEET-VEH-7)", () => {
 
   it("lets only as many simultaneous reactivations as the contract has room for", async () => {
     // Free one slot, then race three reactivations for it.
-    const limited = await prisma.vehicle.findMany({ where: { businessId: LIMITED } });
-    await prisma.vehicle.update({ where: { id: limited[0].id }, data: { status: "INACTIVE" } });
+    const limited = await prisma.vehicle.findMany({
+      where: { businessId: LIMITED },
+    });
+    await prisma.vehicle.update({
+      where: { id: limited[0].id },
+      data: { status: "INACTIVE" },
+    });
 
     const inactive = await Promise.all(
       [4, 5].map((n) =>
@@ -650,7 +713,9 @@ describe("the contracted fleet (FLEET-VEH-1, FLEET-VEH-7)", () => {
     expect(responses.filter((r) => r.statusCode === 200)).toHaveLength(1);
     expect(responses.filter((r) => r.statusCode === 409)).toHaveLength(2);
     expect(
-      await prisma.vehicle.count({ where: { businessId: LIMITED, status: { not: "INACTIVE" } } }),
+      await prisma.vehicle.count({
+        where: { businessId: LIMITED, status: { not: "INACTIVE" } },
+      }),
     ).toBe(2);
   });
 });
@@ -689,7 +754,10 @@ describe("PATCH /vehicle/update-vehicle", () => {
         },
       ],
     });
-    await prisma.vehicle.update({ where: { id: running }, data: { status: "IN_ROUTE" } });
+    await prisma.vehicle.update({
+      where: { id: running },
+      data: { status: "IN_ROUTE" },
+    });
 
     // Red before: ACTIVE was accepted with the truck on the road.
     const active = await patch(running, { status: "ACTIVE" });
@@ -700,16 +768,24 @@ describe("PATCH /vehicle/update-vehicle", () => {
 
     const inactivate = await patch(planned, { status: "INACTIVE" });
     expect(inactivate.statusCode).toBe(409);
-    expect(inactivate.json()).toMatchObject({ code: "VEHICLE_HAS_OPEN_ROUTES" });
+    expect(inactivate.json()).toMatchObject({
+      code: "VEHICLE_HAS_OPEN_ROUTES",
+    });
     expect(inactivate.json().message).toContain("1 rota planejada");
   });
 
   it("answers a vehicle of another company as not found", async () => {
-    const response = await patch(FOREIGN_VEHICLE, { description: "Sequestrado" });
+    const response = await patch(FOREIGN_VEHICLE, {
+      description: "Sequestrado",
+    });
 
     expect(response.statusCode).toBe(404);
     expect(
-      (await prisma.vehicle.findUniqueOrThrow({ where: { id: FOREIGN_VEHICLE } })).description,
+      (
+        await prisma.vehicle.findUniqueOrThrow({
+          where: { id: FOREIGN_VEHICLE },
+        })
+      ).description,
     ).toBe("Estrangeiro");
   });
 });
@@ -845,7 +921,9 @@ describe("vehicle types", () => {
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({ code: "VEHICLE_TYPE_IN_USE" });
     expect(response.json().message).toContain("3 veículo(s)");
-    expect(await prisma.vehicle.count({ where: { vehicleTypeId: TRUCK_TYPE } })).toBe(3);
+    expect(
+      await prisma.vehicle.count({ where: { vehicleTypeId: TRUCK_TYPE } }),
+    ).toBe(3);
   });
 
   it("answers another company's type as not found and leaves it where it is", async () => {
@@ -867,7 +945,9 @@ describe("vehicle types", () => {
     // Red before: found by id alone and rewritten with the path's company.
     expect(crossed.statusCode).toBe(404);
 
-    const stored = await prisma.vehicleType.findUniqueOrThrow({ where: { id: FOREIGN_TYPE } });
+    const stored = await prisma.vehicleType.findUniqueOrThrow({
+      where: { id: FOREIGN_TYPE },
+    });
     expect(stored.businessId).toBe(OTHER);
     expect(stored.description).toBe("Carreta alheia");
     expect(stored.required_cnh_category).toBe("E");
@@ -890,10 +970,9 @@ describe("vehicle types", () => {
       .map((line) => JSON.parse(line));
 
     expect(meta.meta.total).toBe(2);
-    expect(rows.map((row: { description: string }) => row.description)).toEqual([
-      "Truck",
-      "Van",
-    ]);
+    expect(rows.map((row: { description: string }) => row.description)).toEqual(
+      ["Truck", "Van"],
+    );
     expect(rows[0]._count.vehicles).toBe(3);
   });
 });
@@ -919,7 +998,11 @@ describe("GET /vehicle-checklist/list-vehicle-checklist", () => {
       data: Array.from({ length: 12 }, (_, index) => ({
         ...checklistBase,
         overall_condition:
-          index % 3 === 0 ? "rejected" : index % 3 === 1 ? "approved_with_restrictions" : "approved",
+          index % 3 === 0
+            ? "rejected"
+            : index % 3 === 1
+              ? "approved_with_restrictions"
+              : "approved",
         driverId: index % 2 === 0 ? ANA : BRUNO,
         branchId: index % 2 === 0 ? NORTH : SOUTH,
         vehicleId: vehicleIds[index],
@@ -957,7 +1040,9 @@ describe("GET /vehicle-checklist/list-vehicle-checklist", () => {
   });
 
   it("filters by condition and branch on the server", async () => {
-    const { meta } = await checklists(`&overall_condition=rejected&branchId=${NORTH}`);
+    const { meta } = await checklists(
+      `&overall_condition=rejected&branchId=${NORTH}`,
+    );
 
     // Rejected are 0,3,6,9; North are the even ones → 0 and 6.
     expect(meta.total).toBe(2);
@@ -971,7 +1056,9 @@ describe("GET /vehicle-checklist/list-vehicle-checklist", () => {
 
     expect(status).toBe(200);
     expect(meta.total).toBe(6);
-    expect(rows.every((row: { driverId: string }) => row.driverId === ANA)).toBe(true);
+    expect(
+      rows.every((row: { driverId: string }) => row.driverId === ANA),
+    ).toBe(true);
   });
 
   it("makes the MASTER name the company", async () => {

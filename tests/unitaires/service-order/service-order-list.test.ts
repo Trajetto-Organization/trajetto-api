@@ -36,11 +36,15 @@ describe("serviceOrderListWhere", () => {
     ).toEqual([{ completion_date: null }]);
 
     expect(
-      serviceOrderListWhere({ businessId: COMPANY, statuses: ["completed"] }).AND,
+      serviceOrderListWhere({ businessId: COMPANY, statuses: ["completed"] })
+        .AND,
     ).toEqual([{ completion_date: { not: null } }]);
 
     expect(
-      serviceOrderListWhere({ businessId: COMPANY, statuses: ["open", "completed"] }),
+      serviceOrderListWhere({
+        businessId: COMPANY,
+        statuses: ["open", "completed"],
+      }),
     ).toEqual({ businessId: COMPANY });
   });
 
@@ -67,10 +71,30 @@ describe("serviceOrderListWhere", () => {
 
 describe("summarizeServiceOrderList", () => {
   const cells: ServiceOrderTypeCount[] = [
-    { status: "open", maintenance_type: "INTERNAL", count: 4, totalAmount: 640 },
-    { status: "open", maintenance_type: "EXTERNAL", count: 4, totalAmount: 680 },
-    { status: "completed", maintenance_type: "INTERNAL", count: 2, totalAmount: 260 },
-    { status: "completed", maintenance_type: "EXTERNAL", count: 2, totalAmount: 320 },
+    {
+      status: "open",
+      maintenance_type: "INTERNAL",
+      count: 4,
+      totalAmount: 640,
+    },
+    {
+      status: "open",
+      maintenance_type: "EXTERNAL",
+      count: 4,
+      totalAmount: 680,
+    },
+    {
+      status: "completed",
+      maintenance_type: "INTERNAL",
+      count: 2,
+      totalAmount: 260,
+    },
+    {
+      status: "completed",
+      maintenance_type: "EXTERNAL",
+      count: 2,
+      totalAmount: 320,
+    },
   ];
 
   it("counts each facet with the others applied and never itself", () => {
@@ -80,7 +104,12 @@ describe("summarizeServiceOrderList", () => {
     });
 
     expect(total).toBe(4);
-    expect(searchMeta).toMatchObject({ total: 6, open: 4, completed: 2, totalAmount: 640 });
+    expect(searchMeta).toMatchObject({
+      total: 6,
+      open: 4,
+      completed: 2,
+      totalAmount: 640,
+    });
     expect(searchMeta.facets.status).toEqual([
       { value: "open", count: 4 },
       { value: "completed", count: 2 },
@@ -117,8 +146,14 @@ describe("InMemoryServiceOrderRepository.listServiceOrders", () => {
     const repository = new InMemoryServiceOrderRepository();
     const base = Date.UTC(2026, 8, 20, 12);
 
-    repository.vehicles.set("v1", { license_plate: "PQR1S11", description: "Caminhão 1" });
-    repository.vehicles.set("v2", { license_plate: "TUV2W22", description: "Caminhão 2" });
+    repository.vehicles.set("v1", {
+      license_plate: "PQR1S11",
+      description: "Caminhão 1",
+    });
+    repository.vehicles.set("v2", {
+      license_plate: "TUV2W22",
+      description: "Caminhão 2",
+    });
     repository.branchNames.set("centro", "Filial Centro");
     repository.branchNames.set("norte", "Filial Norte");
 
@@ -159,7 +194,11 @@ describe("InMemoryServiceOrderRepository.listServiceOrders", () => {
   it("answers the E2E scenario like Postgres: order, NULLs, paging", async () => {
     const repository = scenario();
 
-    const page = await repository.listServiceOrders({ businessId: COMPANY, page: 1, pageSize: 10 });
+    const page = await repository.listServiceOrders({
+      businessId: COMPANY,
+      page: 1,
+      pageSize: 10,
+    });
 
     expect(descriptions(page.data).slice(0, 2)).toEqual(["OS-11", "OS-10"]);
 
@@ -171,7 +210,11 @@ describe("InMemoryServiceOrderRepository.listServiceOrders", () => {
       order: "asc",
     });
 
-    expect(descriptions(byPlate.data).slice(0, 3)).toEqual(["OS-10", "OS-08", "OS-06"]);
+    expect(descriptions(byPlate.data).slice(0, 3)).toEqual([
+      "OS-10",
+      "OS-08",
+      "OS-06",
+    ]);
 
     const byCompletion = await repository.listServiceOrders({
       businessId: COMPANY,
@@ -182,7 +225,10 @@ describe("InMemoryServiceOrderRepository.listServiceOrders", () => {
     });
 
     expect(descriptions(byCompletion.data).slice(0, 4)).toEqual([
-      "OS-00", "OS-03", "OS-06", "OS-09",
+      "OS-00",
+      "OS-03",
+      "OS-06",
+      "OS-09",
     ]);
     expect(byCompletion.data[4].completion_date).toBeNull();
 
@@ -208,14 +254,23 @@ describe("InMemoryServiceOrderRepository.listServiceOrders", () => {
       maintenanceTypes: ["INTERNAL"],
     });
 
-    const { total, searchMeta } = summarizeServiceOrderList(result.cells, result.branchCounts, {
-      statuses: ["open"],
-      maintenanceTypes: ["INTERNAL"],
-    });
+    const { total, searchMeta } = summarizeServiceOrderList(
+      result.cells,
+      result.branchCounts,
+      {
+        statuses: ["open"],
+        maintenanceTypes: ["INTERNAL"],
+      },
+    );
 
     expect(total).toBe(4);
     expect(result.data).toHaveLength(4);
-    expect(searchMeta).toMatchObject({ total: 6, open: 4, completed: 2, totalAmount: 640 });
+    expect(searchMeta).toMatchObject({
+      total: 6,
+      open: 4,
+      completed: 2,
+      totalAmount: 640,
+    });
 
     const byBranch = await repository.listServiceOrders({
       businessId: COMPANY,

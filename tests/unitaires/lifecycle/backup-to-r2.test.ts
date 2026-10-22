@@ -81,7 +81,8 @@ const config = {
   BACKUP_R2_BUCKET: "trajetto-prod-backups",
   BACKUP_R2_ACCESS_KEY_ID: "key",
   BACKUP_R2_SECRET_ACCESS_KEY: "secret-key",
-  BACKUP_AGE_RECIPIENT: "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+  BACKUP_AGE_RECIPIENT:
+    "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
   BACKUP_HEARTBEAT_URL: "https://hc-ping.com/uuid",
 };
 
@@ -147,7 +148,9 @@ describe.skipIf(!sh)("the nightly backup", () => {
   it("keeps a weekly copy on Sundays and a monthly one on the 1st", () => {
     const sunday = backup({ STUB_DATE: SUNDAY }).uploads.map(([, to]) => to);
 
-    expect(sunday.filter((to) => to.includes("/pg/weekly/2026/10/04/"))).toHaveLength(2);
+    expect(
+      sunday.filter((to) => to.includes("/pg/weekly/2026/10/04/")),
+    ).toHaveLength(2);
     expect(sunday.filter((to) => to.includes("/pg/monthly/"))).toHaveLength(0);
 
     box.dispose();
@@ -168,8 +171,12 @@ describe.skipIf(!sh)("the nightly backup", () => {
 
     const first = backup().uploads.map(([, to]) => to);
 
-    expect(first.filter((to) => to.includes("/pg/monthly/2026/11/01/"))).toHaveLength(2);
-    expect(first.filter((to) => to.includes("/pg/weekly/2026/11/01/"))).toHaveLength(2);
+    expect(
+      first.filter((to) => to.includes("/pg/monthly/2026/11/01/")),
+    ).toHaveLength(2);
+    expect(
+      first.filter((to) => to.includes("/pg/weekly/2026/11/01/")),
+    ).toHaveLength(2);
   });
 
   it.each([
@@ -181,7 +188,9 @@ describe.skipIf(!sh)("the nightly backup", () => {
 
     expect(status).not.toBe(0);
     expect(uploads).toEqual([]);
-    expect(pings.some((call) => call.includes("https://hc-ping.com/uuid/fail"))).toBe(true);
+    expect(
+      pings.some((call) => call.includes("https://hc-ping.com/uuid/fail")),
+    ).toBe(true);
     expect(readdirSync(tmp)).toEqual([]);
   });
 
@@ -213,8 +222,11 @@ describe.skipIf(!sh)("the nightly backup", () => {
 
 describe.skipIf(!sh)("when the nightly backup runs", () => {
   const wait = (at: string, now: number) =>
-    run("sh", repoFile("infra/backup/backup-loop.sh"), ["--seconds-until", at, String(now)])
-      .stdout.trim();
+    run("sh", repoFile("infra/backup/backup-loop.sh"), [
+      "--seconds-until",
+      at,
+      String(now),
+    ]).stdout.trim();
 
   const utc = (hh: number, mm: number, ss = 0) =>
     Date.UTC(2026, 8, 24, hh, mm, ss) / 1000;
@@ -233,44 +245,44 @@ describe.skipIf(!sh)("when the nightly backup runs", () => {
   });
 });
 
-describe("the backup service in the production stack", () => {
-  const compose = readFileSync(resolve(process.cwd(), "compose.production.yaml"), "utf8")
-    .replace(/\r\n/g, "\n");
-  const start = compose.indexOf("\n  trajetto-backup:\n");
-  const rest = compose.slice(start + 1);
-  const block = start < 0 ? "" : rest.slice(0, rest.slice(1).search(/\n(  [\w-]+:\n|\S)/) + 1);
+describe("the backup service", () => {
+  const read = (path: string) =>
+    readFileSync(resolve(process.cwd(), path), "utf8").replace(/\r\n/g, "\n");
+  /** A shell file without its comment lines. */
+  const code = (path: string) =>
+    read(path)
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
 
-  it("exists, built from this repository", () => {
-    expect(block, "serviço trajetto-backup").toMatch(
-      /image: ghcr\.io\/trajetto-organization\/trajetto-backup:\$\{BACKUP_IMAGE_TAG:-stable\}/,
+  it("runs before the first nightly job that deletes data (03:17 UTC) by default", () => {
+    // The backup Application may set BACKUP_AT_UTC; unset, the loop's own
+    // default decides.
+    const at = read("infra/backup/backup-loop.sh").match(
+      /AT="\$\{BACKUP_AT_UTC:-(\d{2}):(\d{2})\}"/,
     );
-  });
 
-  it("runs before the first nightly job that deletes data (03:17 UTC)", () => {
-    const at = block.match(/BACKUP_AT_UTC: "\$\{BACKUP_AT_UTC:-(\d{2}):(\d{2})\}"/);
-
-    expect(at, "BACKUP_AT_UTC").not.toBeNull();
+    expect(at, "BACKUP_AT_UTC default").not.toBeNull();
     expect(Number(at![1]) * 60 + Number(at![2])).toBeLessThan(3 * 60 + 17);
   });
 
-  it("cannot be deployed without somewhere to send the backup", () => {
-    for (const name of [
-      "BACKUP_R2_ACCOUNT_ID",
-      "BACKUP_R2_BUCKET",
-      "BACKUP_R2_ACCESS_KEY_ID",
-      "BACKUP_R2_SECRET_ACCESS_KEY",
-      "BACKUP_AGE_RECIPIENT",
-      "BACKUP_HEARTBEAT_URL",
-    ]) {
-      expect(block, name).toMatch(new RegExp(`${name}: \\$\\{${name}:\\?[^}]+\\}`));
-    }
-  });
-
   it("dumps over the network, with no access to the Docker daemon", () => {
-    // The manual script needs `docker exec`; a sidecar with the socket
-    // mounted would be root on the host for whoever compromised it.
-    expect(compose).not.toContain("docker.sock");
-    expect(block).toMatch(/PGHOST: /);
+    // The manual script needs `docker exec`; a sidecar holding the socket
+    // would be root on the host for whoever compromised it. The image ships
+    // no Docker client and its scripts never call one.
+    const image = code("infra/backup/Dockerfile");
+
+    expect(image).not.toMatch(/apk add[^\n]*\bdocker/);
+    expect(image).not.toContain("docker.sock");
+
+    for (const script of [
+      "infra/backup/backup-to-r2.sh",
+      "infra/backup/backup-loop.sh",
+    ]) {
+      expect(code(script), script).not.toMatch(/(^|[\s;(|&])docker\s/m);
+    }
+
+    expect(code("infra/backup/backup-to-r2.sh")).toContain("PGHOST");
   });
 
   it("is built and promoted with the API", () => {

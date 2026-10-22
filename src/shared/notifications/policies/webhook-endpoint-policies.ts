@@ -27,7 +27,9 @@ const webhookEndpointDisabledPolicy: NotificationPolicyEntry<WebhookEndpointDisa
 
     // The admins manage integrations; they are the ones who can act on it.
     async resolveRecipients(payload, deps) {
-      return deps.userRepository.findBusinessAdminsByBusinessId(payload.businessId);
+      return deps.userRepository.findBusinessAdminsByBusinessId(
+        payload.businessId,
+      );
     },
 
     renderInApp(payload, ctx: RenderContext) {

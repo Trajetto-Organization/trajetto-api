@@ -58,7 +58,10 @@ const notificationStub = {
   createActivityIfEnabled: () => undefined,
 } as unknown as NotificationService;
 
-function driverData(businessId: string, overrides: Partial<CreateDriverProps> = {}) {
+function driverData(
+  businessId: string,
+  overrides: Partial<CreateDriverProps> = {},
+) {
   return {
     name: "João da Silva",
     birth_date: "1990-01-01",
@@ -95,7 +98,11 @@ function makeContext() {
   );
 
   businesses.business.push(
-    { ...BUSINESS_COLUMN_DEFAULTS, id: A, corporate_reason: "Transportadora A" } as unknown as Business,
+    {
+      ...BUSINESS_COLUMN_DEFAULTS,
+      id: A,
+      corporate_reason: "Transportadora A",
+    } as unknown as Business,
     // Manaus: its business day ends an hour after São Paulo's.
     {
       ...BUSINESS_COLUMN_DEFAULTS,
@@ -110,8 +117,20 @@ function makeContext() {
     drivers,
     pauses,
     routes: routeRepository.routes,
-    create: new CreateDriverUseCase(users, businesses, branches, drivers, notificationStub),
-    update: new UpdateDriverUseCase(users, businesses, branches, drivers, notificationStub),
+    create: new CreateDriverUseCase(
+      users,
+      businesses,
+      branches,
+      drivers,
+      notificationStub,
+    ),
+    update: new UpdateDriverUseCase(
+      users,
+      businesses,
+      branches,
+      drivers,
+      notificationStub,
+    ),
     remove: new DeleteDriverUseCase(
       users,
       businesses,
@@ -151,15 +170,24 @@ describe("deactivating a driver with work pending (decision 8.3)", () => {
     const driver = await context.create.execute(driverData(A), ADMIN_A);
     seedRoute(driver.id, "IN_PROGRESS");
 
-    const attempt = context.update.execute({ status: "INACTIVE" }, driver.id, ADMIN_A, A);
+    const attempt = context.update.execute(
+      { status: "INACTIVE" },
+      driver.id,
+      ADMIN_A,
+      A,
+    );
 
     await expect(attempt).rejects.toBeInstanceOf(DriverHasOpenRoutesError);
     await expect(attempt).rejects.toThrow(/1 rota em andamento/);
 
-    expect((await context.drivers.findDriverById(driver.id))?.status).toBe("ACTIVE");
+    expect((await context.drivers.findDriverById(driver.id))?.status).toBe(
+      "ACTIVE",
+    );
     // Nobody was logged out, and no screen was told the catalogue changed.
     expect(socket.securityEvents).toEqual([]);
-    expect(socket.catalogChanged.filter((event) => event.entity === "driver")).toHaveLength(1);
+    expect(
+      socket.catalogChanged.filter((event) => event.entity === "driver"),
+    ).toHaveLength(1);
   });
 
   it("is refused with planned and released routes, counted together", async () => {
@@ -184,7 +212,12 @@ describe("deactivating a driver with work pending (decision 8.3)", () => {
       driverId: driver.id,
     } as User);
 
-    const updated = await context.update.execute({ status: "INACTIVE" }, driver.id, ADMIN_A, A);
+    const updated = await context.update.execute(
+      { status: "INACTIVE" },
+      driver.id,
+      ADMIN_A,
+      A,
+    );
 
     expect(updated.status).toBe("INACTIVE");
     expect(socket.securityEvents).toEqual([
@@ -224,7 +257,9 @@ describe("CPF and CNH unique per company (decision 8.1)", () => {
   it("lets another company register the same person", async () => {
     await context.create.execute(driverData(A), ADMIN_A);
 
-    await expect(context.create.execute(driverData(B), ADMIN_B)).resolves.toMatchObject({
+    await expect(
+      context.create.execute(driverData(B), ADMIN_B),
+    ).resolves.toMatchObject({
       businessId: B,
     });
   });
@@ -298,7 +333,9 @@ describe("the catalogue announces its changes (decision 2.3)", () => {
     await context.create.execute(driverData(A), ADMIN_A);
     socket.catalogChanged.length = 0;
 
-    await expect(context.create.execute(driverData(A), ADMIN_A)).rejects.toThrow();
+    await expect(
+      context.create.execute(driverData(A), ADMIN_A),
+    ).rejects.toThrow();
 
     expect(socket.catalogChanged).toEqual([]);
   });
@@ -309,9 +346,9 @@ describe("deleting a driver with pauses on record", () => {
     const driver = await context.create.execute(driverData(A), ADMIN_A);
     context.pauses.push({ driverId: driver.id }, { driverId: driver.id });
 
-    await expect(context.remove.execute(driver.id, ADMIN_A, A)).rejects.toBeInstanceOf(
-      DriverHasAssociatedPausesError,
-    );
+    await expect(
+      context.remove.execute(driver.id, ADMIN_A, A),
+    ).rejects.toBeInstanceOf(DriverHasAssociatedPausesError);
     await expect(context.remove.execute(driver.id, ADMIN_A, A)).rejects.toThrow(
       /2 pausa\(s\)/,
     );
@@ -334,7 +371,10 @@ describe("listing drivers", () => {
   it("asks the master which company", async () => {
     await expect(
       context.list.execute({ userId: MASTER, page: 1, pageSize: 10 }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "BUSINESS_NOT_IDENTIFIED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BUSINESS_NOT_IDENTIFIED",
+    });
   });
 
   it("shows the master only the company chosen", async () => {
@@ -354,7 +394,12 @@ describe("listing drivers", () => {
 
   it("refuses a manager another company's list", async () => {
     await expect(
-      context.list.execute({ userId: ADMIN_A, businessId: B, page: 1, pageSize: 10 }),
+      context.list.execute({
+        userId: ADMIN_A,
+        businessId: B,
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
   });
 
@@ -374,8 +419,16 @@ describe("listing drivers", () => {
         ADMIN_B,
       );
 
-      const inSaoPaulo = await context.list.execute({ userId: ADMIN_A, page: 1, pageSize: 10 });
-      const inManaus = await context.list.execute({ userId: ADMIN_B, page: 1, pageSize: 10 });
+      const inSaoPaulo = await context.list.execute({
+        userId: ADMIN_A,
+        page: 1,
+        pageSize: 10,
+      });
+      const inManaus = await context.list.execute({
+        userId: ADMIN_B,
+        page: 1,
+        pageSize: 10,
+      });
 
       expect(inSaoPaulo.data[0].cnh_status).toBe("EXPIRED");
       expect(inManaus.data[0].cnh_status).toBe("EXPIRING");

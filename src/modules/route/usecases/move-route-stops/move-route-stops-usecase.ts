@@ -45,7 +45,11 @@ interface MoveRouteStopsResult {
   stops: RouteStop[];
 
   /** The deliveries that left another route for this one. */
-  moved: Array<{ deliveryId: string; fromRouteId: string; fromRouteCode: number }>;
+  moved: Array<{
+    deliveryId: string;
+    fromRouteId: string;
+    fromRouteCode: number;
+  }>;
 
   /** Ids already open on this route: a retry, not an error. */
   alreadyOnRoute: string[];
@@ -130,10 +134,12 @@ class MoveRouteStopsUseCase {
 
     // A load already on the street is the driver's record, not a plan.
     const started = elsewhere.filter(
-      (entry) => entry.routeStatus !== "PLANNED" && entry.routeStatus !== "RELEASED",
+      (entry) =>
+        entry.routeStatus !== "PLANNED" && entry.routeStatus !== "RELEASED",
     );
 
-    if (started.length > 0) throw onStartedRoute(started.map((entry) => labelOf(entry.deliveryId)));
+    if (started.length > 0)
+      throw onStartedRoute(started.map((entry) => labelOf(entry.deliveryId)));
 
     const toAdd = uniqueIds.filter((id) => !alreadyOnRoute.includes(id));
 
@@ -170,22 +176,22 @@ class MoveRouteStopsUseCase {
         for (const emptied of detached.emptiedRoutes) {
           if (emptied.status !== "RELEASED") continue;
 
-          const { afterCommit: cancelled } = await this.cancelRoute.cancelWithin(
-            tx,
-            {
+          const { afterCommit: cancelled } =
+            await this.cancelRoute.cancelWithin(tx, {
               userId,
               businessId,
               route: emptied,
               reason: `Todas as paradas foram movidas para a Rota ${target.code}.`,
-            },
-          );
+            });
 
           cancelledRoutes.push(emptied.code);
           afterCommit.push(cancelled);
         }
 
         for (const sourceId of sourceIds) {
-          const leaving = elsewhere.filter((entry) => entry.routeId === sourceId);
+          const leaving = elsewhere.filter(
+            (entry) => entry.routeId === sourceId,
+          );
 
           await this.route.recordPlanEvents(
             tx,
@@ -193,17 +199,28 @@ class MoveRouteStopsUseCase {
               deliveryId: entry.deliveryId,
               note: `Movida da Rota ${entry.routeCode} para a Rota ${target.code}.`,
             })),
-            { type: "ROUTE_REMOVED", routeId: sourceId, businessId, actorId: userId },
+            {
+              type: "ROUTE_REMOVED",
+              routeId: sourceId,
+              businessId,
+              actorId: userId,
+            },
           );
         }
 
         // The detach already moved each source's version (D5), once.
         const sources: PlanBump[] = detached.bumped;
 
-        const added = await this.route.addStops(routeId, businessId, toAdd, tx, {
-          expectedPlanVersion,
-          actorId: userId,
-        });
+        const added = await this.route.addStops(
+          routeId,
+          businessId,
+          toAdd,
+          tx,
+          {
+            expectedPlanVersion,
+            actorId: userId,
+          },
+        );
 
         // Each document has a new holder: the ERP hears it per delivery, as
         // add-stops and create-route announce it.

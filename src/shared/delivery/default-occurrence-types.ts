@@ -102,8 +102,13 @@ async function ensureDefaultOccurrenceTypes(
 }
 
 /** Defaults still missing for a company that exists (0 for an unknown one). */
-async function missingDefaultCount(client: RawClient, businessId: string): Promise<number> {
-  const keys = Prisma.join(DEFAULT_OCCURRENCE_TYPES.map((type) => type.system_key));
+async function missingDefaultCount(
+  client: RawClient,
+  businessId: string,
+): Promise<number> {
+  const keys = Prisma.join(
+    DEFAULT_OCCURRENCE_TYPES.map((type) => type.system_key),
+  );
 
   const [{ missing }] = await client.$queryRaw<Array<{ missing: number }>>`
     SELECT count(*)::int AS missing
@@ -117,7 +122,10 @@ async function missingDefaultCount(client: RawClient, businessId: string): Promi
   return missing;
 }
 
-async function insertMissingDefaults(client: RawClient, businessId: string): Promise<number> {
+async function insertMissingDefaults(
+  client: RawClient,
+  businessId: string,
+): Promise<number> {
   const defaults = Prisma.join(
     DEFAULT_OCCURRENCE_TYPES.map(
       (type) =>

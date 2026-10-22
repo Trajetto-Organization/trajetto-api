@@ -21,8 +21,10 @@ describe("an occurrence description", () => {
     "Portão fechado.\r\n\r\nSem campainha.",
   ])("accepts paragraphs: %j", (description) => {
     expect(
-      reportDeliveryOccurrenceSchema.safeParse({ occurrenceTypeId: TYPE, description })
-        .success,
+      reportDeliveryOccurrenceSchema.safeParse({
+        occurrenceTypeId: TYPE,
+        description,
+      }).success,
     ).toBe(true);
   });
 
@@ -39,7 +41,8 @@ describe("an occurrence description", () => {
 
     expect(parsed.success).toBe(false);
 
-    if (!parsed.success) expect(parsed.error.issues[0].message).toContain(message);
+    if (!parsed.success)
+      expect(parsed.error.issues[0].message).toContain(message);
   });
 });
 

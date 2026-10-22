@@ -53,7 +53,10 @@ afterAll(async () => {
 });
 
 /** Every schema named `name`, anywhere under `schema`. */
-function propertiesNamed(schema: JsonSchema | undefined, name: string): JsonSchema[] {
+function propertiesNamed(
+  schema: JsonSchema | undefined,
+  name: string,
+): JsonSchema[] {
   if (!schema) return [];
 
   const own = schema.properties?.[name] ? [schema.properties[name]] : [];
@@ -75,7 +78,10 @@ describe("the event feed's occurred_at, as published", () => {
 
     const [field] = propertiesNamed(schema, "occurred_at");
 
-    expect(field, "occurred_at is not in the published event shape").toBeDefined();
+    expect(
+      field,
+      "occurred_at is not in the published event shape",
+    ).toBeDefined();
 
     const description = field.description ?? "";
 

@@ -24,7 +24,12 @@ const CARRIER = "018fe700-0000-7000-8000-00000000000a";
 const OTHER = "018fe700-0000-7000-8000-00000000000b";
 
 const tokens: Record<
-  "catalog" | "dispatcher" | "readOnlyDeliveries" | "driver" | "otherAdmin" | "master",
+  | "catalog"
+  | "dispatcher"
+  | "readOnlyDeliveries"
+  | "driver"
+  | "otherAdmin"
+  | "master",
   string
 > = {} as never;
 
@@ -58,7 +63,13 @@ async function profileWith(permissionKey: string, canWrite: boolean) {
       businessId: CARRIER,
       permissions: {
         create: [
-          { permissionKey, action: permissionKey, canRead: true, canWrite, businessId: CARRIER },
+          {
+            permissionKey,
+            action: permissionKey,
+            canRead: true,
+            canWrite,
+            businessId: CARRIER,
+          },
         ],
       },
     },
@@ -98,10 +109,14 @@ async function seedUser(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "15m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "15m",
+    },
+  );
 }
 
 async function seedDriver(
@@ -139,7 +154,12 @@ async function picker(query: string, token: string) {
   });
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, body: response.body, rows: [] as Record<string, unknown>[], meta: null };
+    return {
+      status: response.statusCode,
+      body: response.body,
+      rows: [] as Record<string, unknown>[],
+      meta: null,
+    };
   }
 
   const [first, ...rows] = response.body
@@ -147,7 +167,12 @@ async function picker(query: string, token: string) {
     .split("\n")
     .map((line) => JSON.parse(line));
 
-  return { status: 200, body: response.body, rows: rows as Record<string, unknown>[], meta: first.meta };
+  return {
+    status: 200,
+    body: response.body,
+    rows: rows as Record<string, unknown>[],
+    meta: first.meta,
+  };
 }
 
 beforeAll(async () => {
@@ -170,7 +195,9 @@ beforeAll(async () => {
   tokens.readOnlyDeliveries = await seedUser("BUSINESS_USER", CARRIER, {
     profileAccessId: await profileWith("delivery_manage", false),
   });
-  tokens.driver = await seedUser("BUSINESS_USER", CARRIER, { driverId: ana.id });
+  tokens.driver = await seedUser("BUSINESS_USER", CARRIER, {
+    driverId: ana.id,
+  });
   tokens.otherAdmin = await seedUser("BUSINESS_ADMIN", OTHER);
   tokens.master = await seedUser("MASTER", null);
 
@@ -185,10 +212,17 @@ afterAll(async () => {
 
 describe("who may open the driver picker", () => {
   it("the driver catalogue, with the full picker row", async () => {
-    const { status, rows } = await picker(`businessId=${CARRIER}`, tokens.catalog);
+    const { status, rows } = await picker(
+      `businessId=${CARRIER}`,
+      tokens.catalog,
+    );
 
     expect(status).toBe(200);
-    expect(rows.map((row) => row.name)).toEqual(["Ana Lima", "Bruno Alves", "Carla Souza"]);
+    expect(rows.map((row) => row.name)).toEqual([
+      "Ana Lima",
+      "Bruno Alves",
+      "Carla Souza",
+    ]);
     expect(rows[0]).toMatchObject({
       cnh: "11111111111",
       cnh_category: "D",
@@ -198,10 +232,17 @@ describe("who may open the driver picker", () => {
   });
 
   it("a dispatcher without the catalogue, with the choice fields only", async () => {
-    const { status, rows } = await picker(`businessId=${CARRIER}`, tokens.dispatcher);
+    const { status, rows } = await picker(
+      `businessId=${CARRIER}`,
+      tokens.dispatcher,
+    );
 
     expect(status).toBe(200);
-    expect(rows.map((row) => row.name)).toEqual(["Ana Lima", "Bruno Alves", "Carla Souza"]);
+    expect(rows.map((row) => row.name)).toEqual([
+      "Ana Lima",
+      "Bruno Alves",
+      "Carla Souza",
+    ]);
 
     for (const row of rows) {
       expect(Object.keys(row).sort()).toEqual(
@@ -211,21 +252,30 @@ describe("who may open the driver picker", () => {
   });
 
   it("not a profile that only reads deliveries", async () => {
-    const { status, body } = await picker(`businessId=${CARRIER}`, tokens.readOnlyDeliveries);
+    const { status, body } = await picker(
+      `businessId=${CARRIER}`,
+      tokens.readOnlyDeliveries,
+    );
 
     expect(status).toBe(403);
     expect(body).toContain("PERMISSION_DENIED");
   });
 
   it("not a driver, although the app grants drivers delivery_manage:write", async () => {
-    const { status, body } = await picker(`businessId=${CARRIER}`, tokens.driver);
+    const { status, body } = await picker(
+      `businessId=${CARRIER}`,
+      tokens.driver,
+    );
 
     expect(status).toBe(403);
     expect(body).toContain("PERMISSION_DENIED");
   });
 
   it("not another company's manager", async () => {
-    const { status, body } = await picker(`businessId=${CARRIER}`, tokens.otherAdmin);
+    const { status, body } = await picker(
+      `businessId=${CARRIER}`,
+      tokens.otherAdmin,
+    );
 
     expect(status).toBe(403);
     expect(body).toContain("TENANT_ACCESS_DENIED");
@@ -234,14 +284,23 @@ describe("who may open the driver picker", () => {
 
 describe("searching in the picker", () => {
   it("filters on the server by the typed term, case-insensitive", async () => {
-    const { rows } = await picker(`businessId=${CARRIER}&search=bruno`, tokens.dispatcher);
+    const { rows } = await picker(
+      `businessId=${CARRIER}&search=bruno`,
+      tokens.dispatcher,
+    );
 
     expect(rows.map((row) => row.name)).toEqual(["Bruno Alves"]);
   });
 
   it("searches the CNH for the catalogue, but not for a dispatcher who cannot see it", async () => {
-    const catalog = await picker(`businessId=${CARRIER}&search=33333`, tokens.catalog);
-    const dispatcher = await picker(`businessId=${CARRIER}&search=33333`, tokens.dispatcher);
+    const catalog = await picker(
+      `businessId=${CARRIER}&search=33333`,
+      tokens.catalog,
+    );
+    const dispatcher = await picker(
+      `businessId=${CARRIER}&search=33333`,
+      tokens.dispatcher,
+    );
 
     expect(catalog.rows.map((row) => row.name)).toEqual(["Carla Souza"]);
     expect(dispatcher.rows).toEqual([]);
@@ -255,9 +314,15 @@ describe("searching in the picker", () => {
   });
 
   it("pages by cursor in the same alphabetical order", async () => {
-    const first = await picker(`businessId=${CARRIER}&limit=2`, tokens.dispatcher);
+    const first = await picker(
+      `businessId=${CARRIER}&limit=2`,
+      tokens.dispatcher,
+    );
 
-    expect(first.rows.map((row) => row.name)).toEqual(["Ana Lima", "Bruno Alves"]);
+    expect(first.rows.map((row) => row.name)).toEqual([
+      "Ana Lima",
+      "Bruno Alves",
+    ]);
     expect(first.meta.searchMeta.hasMore).toBe(true);
 
     const second = await picker(
@@ -270,12 +335,20 @@ describe("searching in the picker", () => {
   });
 
   it("refuses a malformed cursor or limit", async () => {
-    expect((await picker(`businessId=${CARRIER}&cursor=abc`, tokens.dispatcher)).status).toBe(400);
-    expect((await picker(`businessId=${CARRIER}&limit=0`, tokens.dispatcher)).status).toBe(400);
+    expect(
+      (await picker(`businessId=${CARRIER}&cursor=abc`, tokens.dispatcher))
+        .status,
+    ).toBe(400);
+    expect(
+      (await picker(`businessId=${CARRIER}&limit=0`, tokens.dispatcher)).status,
+    ).toBe(400);
   });
 
   it("answers the master a company that does not exist as 404 BUSINESS_NOT_FOUND", async () => {
-    const { status, body } = await picker(`businessId=${randomUUID()}`, tokens.master);
+    const { status, body } = await picker(
+      `businessId=${randomUUID()}`,
+      tokens.master,
+    );
 
     // It was a 400 without a code, against the route's own documentation.
     expect(status).toBe(404);
@@ -283,10 +356,17 @@ describe("searching in the picker", () => {
   });
 
   it("lets the master pick in the company it names, with the full row", async () => {
-    const { status, rows } = await picker(`businessId=${CARRIER}`, tokens.master);
+    const { status, rows } = await picker(
+      `businessId=${CARRIER}`,
+      tokens.master,
+    );
 
     expect(status).toBe(200);
-    expect(rows.map((row) => row.name)).toEqual(["Ana Lima", "Bruno Alves", "Carla Souza"]);
+    expect(rows.map((row) => row.name)).toEqual([
+      "Ana Lima",
+      "Bruno Alves",
+      "Carla Souza",
+    ]);
     expect(rows[0]).toHaveProperty("cnh");
   });
 });

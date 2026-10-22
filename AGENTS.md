@@ -12,11 +12,11 @@ dois módulos contratados por empresa: **Frotas** (`FLEET`) e **Entregas**
 (`DELIVERIES`). Aqui vivem a API HTTP (Fastify), o tempo real (Socket.IO com
 adapter Redis), os workers e crons (filas no Postgres), o serviço de IA local
 (`infra/ai-ocr`, Python, OCR em CPU), o serviço de backup (`infra/backup`) e a
-infraestrutura de deploy (`compose.production.yaml`, `.github/workflows/`,
-`infra/scripts/`). Atende o painel web (`trajetto-ui`, GitHub
-`trajetto-fleet-manager-ui`), o app Android do motorista (`trajetto-mobile`,
-GitHub `trajetto-fleet-manager-mobile`) e os ERPs dos clientes pela API
-pública (`/integration/v1`). Organização no GitHub: `Trajetto-Organization`.
+infraestrutura de deploy (`.github/workflows/`, `.github/scripts/`,
+`infra/scripts/`). Atende o painel web (pasta `trajetto-ui`, GitHub
+`Trajetto-Organization/trajetto-ui`), o app Android do motorista (pasta
+`trajetto-mobile`, GitHub `Trajetto-Organization/trajetto-mobile`) e os ERPs
+dos clientes pela API pública (`/integration/v1`). Organização no GitHub: `Trajetto-Organization`.
 Idioma do produto: pt-BR.
 
 ## Leia primeiro
@@ -67,8 +67,8 @@ tests/ai-local/               contrato opt-in com o contêiner de IA real
 tests/load/                   harness de carga (k6 + Traefik) e seed das suítes de navegador da web/app
 .github/workflows/ci.yml      portão das branches de trabalho
 .github/workflows/deploy.yml  pipeline: staging (validação + build + deploy) → PR → main (promoção) → release
-compose.production.yaml       a stack do Dokploy (Docker Stack): api, database, redis, trajetto-ai, trajetto-backup
-compose.development.yaml      Postgres, Redis e (perfil ai) o serviço de IA para desenvolvimento
+.github/scripts/dokploy-deploy.mjs  deploy de uma Application do Dokploy pela API (application.deploy) e acompanhamento
+compose.development.yaml      Postgres, Redis e (perfil ai) o serviço de IA para desenvolvimento (só dev)
 ```
 
 Aliases: `@/*` → `src/*`, `infra/*` → `infra/*`.
@@ -148,10 +148,12 @@ Windows).
 - **Logs** pelo logger único (`src/shared/logging/logger.ts`); nunca logue
   segredo, token, URL assinada ou corpo com senha.
 - **Variável de ambiente nova**: no env-schema (com o porquê), no
-  `.env.example`, no `environment:` do serviço `api` do
-  `compose.production.yaml` (ele não usa `env_file`), em
-  `docs/variaveis-de-ambiente.md` e, se for segredo, na censura do logger
-  (`provider-secret-redaction.test.ts` cobra). Vazio conta como ausente.
+  `.env.example`, em `docs/variaveis-de-ambiente.md` (com onde ela é
+  definida) e, se for segredo, na censura do logger
+  (`provider-secret-redaction.test.ts` cobra). Em staging e produção ela é
+  digitada à mão no _Environment_ da Application `trajetto-api` no Dokploy
+  (nenhum arquivo do repositório leva variáveis ao servidor): diga isso na
+  entrega. Vazio conta como ausente.
 - Formatação: Prettier (`.prettierrc`); o CI confere.
 
 ## Migrations
@@ -200,20 +202,26 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   o `semantic-release`. _Run workflow_ com `image_tag=sha-<sha>` = rollback.
 - Sem os secrets do Dokploy, os jobs movem as tags e pulam o deploy com
   aviso.
-- Produção roda no Dokploy como **um app Compose (Docker Stack)** com o
-  `compose.production.yaml`; a IA, o banco, o Redis e o backup são serviços da
-  mesma stack, na rede interna `backend`.
+- Staging e produção rodam no Dokploy (Docker Swarm), sem Compose nem
+  template: em cada environment, o projeto `trajetto-api` tem as Applications
+  `trajetto-api` (2 réplicas, com domínio), `trajetto-ai` e `trajetto-backup`
+  (provider Docker, imagem do GHCR, sem domínio) e os Databases PostgreSQL e
+  Redis do Dokploy, todos na rede `dokploy-network` (um serviço acha o outro
+  pelo App Name). Imagem, variáveis, domínio, réplicas, limites e healthcheck
+  são configurados no painel; o passo a passo e as lacunas em relação ao
+  antigo compose estão em `docs/deploy.md`.
 - As garantias do pipeline são guardadas por testes em
   `tests/unitaires/lifecycle/` (`promote-workflow`, `release-migrations`,
   `compose-rollout-verify`, `supply-chain`, `secrets-hygiene`,
-  `compose-production`, `compose-stack-render`). Se um deles falhar depois de
-  uma mudança em workflow/compose/script, a mudança provavelmente quebrou uma
-  garantia: entenda antes de ajustar o teste.
+  `dokploy-deploy`). Se um deles falhar depois de uma mudança em
+  workflow/script, a mudança provavelmente quebrou uma garantia: entenda antes
+  de ajustar o teste.
 - O deploy chama a API do Dokploy por `.github/scripts/dokploy-deploy.mjs`
-  (chave de API + id do app Compose); a web usa o webhook da Application
-  dela, num script próprio.
-- Entre repositórios: a ordem do primeiro deploy (banco, Redis e IA → API →
-  web → app), a ordem de cada release (**API → web → app**) e os valores que
+  (`application.deploy` com a chave de API e o id de cada Application, na
+  ordem IA → API → backup); a web usa o webhook da Application dela, num
+  script próprio.
+- Entre repositórios: a ordem do primeiro deploy (bancos → IA → API → backup
+  → web → app), a ordem de cada release (**API → web → app**) e os valores que
   precisam casar com a web e o app (`HTTP_REQUEST` = origem da web,
   `RATE_LIMIT_FORWARDER_SECRET`, `TURNSTILE_SECRET_KEY`, R2) estão em
   `docs/deploy.md`, seção "Os três repositórios juntos", igual nos três
@@ -246,7 +254,9 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   decisões registradas (ADRs 0001, 0002, 0010).
 - Não exija Turnstile na API (quebraria o login do app); não ponha `TZ` no
   contêiner.
-- Não use `docker compose up` para a produção nem a aba _Domains_ do Dokploy.
+- Não crie Compose nem template no Dokploy para staging ou produção (decisão
+  do dono, 22/10/2026): cada serviço é uma Application (provider Docker) ou um
+  Database. O `compose.development.yaml` é só para desenvolvimento.
 
 ## Onde procurar quando…
 

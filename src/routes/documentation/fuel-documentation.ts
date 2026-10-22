@@ -70,12 +70,18 @@ const fuelSchemas = {
 /** One refueling as the list and a vehicle's history stream it. */
 const fuelRow = z.object({
   id: z.string().describe("ID do abastecimento."),
-  current_mileage: z.number().describe("Quilometragem do veículo no abastecimento."),
+  current_mileage: z
+    .number()
+    .describe("Quilometragem do veículo no abastecimento."),
   liters_amount: z.number().describe("Litros abastecidos (até 3 casas)."),
-  price_per_liter: z.number().describe("Preço por litro, em reais (até 3 casas)."),
+  price_per_liter: z
+    .number()
+    .describe("Preço por litro, em reais (até 3 casas)."),
   total_amount: z
     .number()
-    .describe("Valor total, em reais: litros × preço, calculado pelo servidor."),
+    .describe(
+      "Valor total, em reais: litros × preço, calculado pelo servidor.",
+    ),
   odometer_photo: z
     .string()
     .nullable()
@@ -101,7 +107,9 @@ const fuelRow = z.object({
   driverId: z.string().describe("Motorista."),
   fuelTypeId: z.string().describe("Tipo de combustível."),
   branch: z
-    .object({ corporate_reason: z.string().describe("Razão social da filial.") })
+    .object({
+      corporate_reason: z.string().describe("Razão social da filial."),
+    })
     .optional(),
   vehicle: z
     .object({

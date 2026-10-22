@@ -10,7 +10,10 @@ import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import type { SortOrder } from "@/shared/pagination/list-query";
 
 import { ListVehicleTypeResult } from "../../dtos/vehicle-type-dto";
-import { summarizeVehicleTypeList, type VehicleTypeSortKey } from "./vehicle-type-list";
+import {
+  summarizeVehicleTypeList,
+  type VehicleTypeSortKey,
+} from "./vehicle-type-list";
 
 interface ListVehicleTypeRequest {
   userId: string;

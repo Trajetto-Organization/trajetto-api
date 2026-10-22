@@ -11,7 +11,10 @@ import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 import { decidePermission } from "@/modules/middlewares/verify-permission";
 import { hasModule } from "@/shared/entitlements/entitlement-service";
 import { isModuleEnabled } from "@/shared/entitlements/entitlement-rules";
-import { businessMonthKey, businessMonthRange } from "@/shared/time/business-day";
+import {
+  businessMonthKey,
+  businessMonthRange,
+} from "@/shared/time/business-day";
 import { loadBusinessTimeZone } from "@/shared/time/business-time-zone";
 import type { SortOrder } from "@/shared/pagination/list-query";
 
@@ -54,14 +57,18 @@ class ListFuelTypeUseCase {
    * refuelings are a FLEET record behind `fuel_manage`: a card must not show
    * what the Abastecimentos screen would refuse.
    */
-  private async seesRefuelings(user: User, businessId: string): Promise<boolean> {
+  private async seesRefuelings(
+    user: User,
+    businessId: string,
+  ): Promise<boolean> {
     if (decidePermission(user, "fuel_manage", "read", { allowDriver: false })) {
       return false;
     }
 
     // The session lookup carries the user's own company's modules; the
     // MASTER (no company) or a lookup without them asks the database.
-    const snapshot = user.role === "MASTER" ? undefined : user.business?.entitlements;
+    const snapshot =
+      user.role === "MASTER" ? undefined : user.business?.entitlements;
 
     return Array.isArray(snapshot)
       ? isModuleEnabled(snapshot, "FLEET")
@@ -102,15 +109,16 @@ class ListFuelTypeUseCase {
         ? await loadBusinessTimeZone(this.business, resolvedBusinessId)
         : null;
 
-      const { data, total, usage, refuelings } = await this.fuelType.listFuelTypes({
-        page,
-        pageSize,
-        sort,
-        order,
-        businessId: resolvedBusinessId,
-        search,
-        ...(timeZone && { refuelWindow: businessMonthRange(now, timeZone) }),
-      });
+      const { data, total, usage, refuelings } =
+        await this.fuelType.listFuelTypes({
+          page,
+          pageSize,
+          sort,
+          order,
+          businessId: resolvedBusinessId,
+          search,
+          ...(timeZone && { refuelWindow: businessMonthRange(now, timeZone) }),
+        });
 
       return {
         data,

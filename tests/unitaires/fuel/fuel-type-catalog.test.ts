@@ -23,22 +23,50 @@ import { FuelTypeAlreadyExistsError } from "@/modules/fuel-type/usecases/errors/
 const A = "018fe700-0000-7000-8000-00000000000a";
 const B = "018fe700-0000-7000-8000-00000000000b";
 
-const admin = { id: "admin", role: "BUSINESS_ADMIN", businessId: A, driverId: null };
-const master = { id: "master", role: "MASTER", businessId: null, driverId: null };
+const admin = {
+  id: "admin",
+  role: "BUSINESS_ADMIN",
+  businessId: A,
+  driverId: null,
+};
+const master = {
+  id: "master",
+  role: "MASTER",
+  businessId: null,
+  driverId: null,
+};
 
 function setup(user = admin) {
   const fuelTypes = new InMemoryFuelTypeRepository();
   const users = { findUserById: async () => user } as never;
   const business = {
-    findBusinessById: async (id: string) => ({ id, corporate_reason: "Empresa" }),
+    findBusinessById: async (id: string) => ({
+      id,
+      corporate_reason: "Empresa",
+    }),
   } as never;
   const notifications = { createActivityIfEnabled: vi.fn() } as never;
 
   return {
     fuelTypes,
-    create: new CreateFuelTypeUseCase(users, business, fuelTypes, notifications),
-    update: new UpdateFuelTypeUseCase(users, business, fuelTypes, notifications),
-    remove: new DeleteFuelTypeUseCase(users, business, fuelTypes, notifications),
+    create: new CreateFuelTypeUseCase(
+      users,
+      business,
+      fuelTypes,
+      notifications,
+    ),
+    update: new UpdateFuelTypeUseCase(
+      users,
+      business,
+      fuelTypes,
+      notifications,
+    ),
+    remove: new DeleteFuelTypeUseCase(
+      users,
+      business,
+      fuelTypes,
+      notifications,
+    ),
     list: new ListFuelTypeUseCase(users, fuelTypes, business),
   };
 }
@@ -51,7 +79,10 @@ describe("catalogChanged fuel_type", () => {
   it("is emitted after create, update and delete, for the company written", async () => {
     const { create, update, remove } = setup();
 
-    const created = await create.execute({ description: "Diesel", businessId: A }, "admin");
+    const created = await create.execute(
+      { description: "Diesel", businessId: A },
+      "admin",
+    );
     await update.execute({ description: "Gasolina" }, created.id, "admin", A);
     await remove.execute(created.id, "admin", A);
 
@@ -86,17 +117,23 @@ describe("tenant walls in the use cases", () => {
   it("treats another company's fuel type as missing, even for the MASTER naming his own path", async () => {
     const { fuelTypes, update, remove } = setup(master as never);
 
-    const foreign = await fuelTypes.createFuelType({ description: "GNV", businessId: B });
+    const foreign = await fuelTypes.createFuelType({
+      description: "GNV",
+      businessId: B,
+    });
 
     await expect(
       update.execute({ description: "GLP" }, foreign.id, "master", A),
     ).rejects.toBeInstanceOf(FuelTypeNotFoundError);
 
-    await expect(remove.execute(foreign.id, "master", A)).rejects.toBeInstanceOf(
-      FuelTypeNotFoundError,
-    );
+    await expect(
+      remove.execute(foreign.id, "master", A),
+    ).rejects.toBeInstanceOf(FuelTypeNotFoundError);
 
-    expect(fuelTypes.fuelTypes[0]).toMatchObject({ businessId: B, description: "GNV" });
+    expect(fuelTypes.fuelTypes[0]).toMatchObject({
+      businessId: B,
+      description: "GNV",
+    });
   });
 
   it("refuses a manager writing into another company", async () => {
@@ -110,7 +147,9 @@ describe("tenant walls in the use cases", () => {
   it("makes the MASTER name the company to list", async () => {
     const { list } = setup(master as never);
 
-    await expect(list.execute({ userId: "master", page: 1, pageSize: 10 })).rejects.toMatchObject({
+    await expect(
+      list.execute({ userId: "master", page: 1, pageSize: 10 }),
+    ).rejects.toMatchObject({
       statusCode: 400,
       code: "BUSINESS_NOT_IDENTIFIED",
     });
@@ -123,14 +162,22 @@ describe("InMemoryFuelTypeRepository answers like the repository", () => {
 
     const base = Date.parse("2026-09-01T00:00:00Z");
 
-    for (const [index, description] of ["Diesel", "Etanol", "Gasolina"].entries()) {
+    for (const [index, description] of [
+      "Diesel",
+      "Etanol",
+      "Gasolina",
+    ].entries()) {
       const row = await repo.createFuelType({ description, businessId: A });
       row.created_at = new Date(base + index * 1000);
     }
 
     await repo.createFuelType({ description: "GNV", businessId: B });
 
-    const newest = await repo.listFuelTypes({ page: 1, pageSize: 10, businessId: A });
+    const newest = await repo.listFuelTypes({
+      page: 1,
+      pageSize: 10,
+      businessId: A,
+    });
 
     expect(newest.data.map((row) => row.description)).toEqual([
       "Gasolina",
@@ -147,7 +194,10 @@ describe("InMemoryFuelTypeRepository answers like the repository", () => {
       order: "asc",
     });
 
-    expect(byName.data.map((row) => row.description)).toEqual(["Diesel", "Etanol"]);
+    expect(byName.data.map((row) => row.description)).toEqual([
+      "Diesel",
+      "Etanol",
+    ]);
 
     const searched = await repo.listFuelTypes({
       page: 1,
@@ -171,7 +221,10 @@ describe("InMemoryFuelTypeRepository answers like the repository", () => {
   it("never moves a fuel type to another company on update", async () => {
     const repo = new InMemoryFuelTypeRepository();
 
-    const row = await repo.createFuelType({ description: "Diesel", businessId: A });
+    const row = await repo.createFuelType({
+      description: "Diesel",
+      businessId: A,
+    });
     const updated = await repo.updateFuelType({
       fuelTypeId: row.id,
       fuelTypeData: { description: "Etanol", businessId: B } as never,

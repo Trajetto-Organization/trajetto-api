@@ -73,7 +73,6 @@ async function seedCarrier(): Promise<void> {
   await prisma.fuelType.create({
     data: { id: "ft-lifecycle", description: "Diesel", businessId: CARRIER },
   });
-
 }
 
 /**
@@ -301,7 +300,9 @@ describe("working the route", () => {
     expect(failed?.closedRoute?.status).toBe("COMPLETED");
     expect(failed?.closedRoute?.completed_at).not.toBeNull();
 
-    const row = await prisma.route.findUniqueOrThrow({ where: { id: routeId } });
+    const row = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
 
     expect(row.status).toBe("COMPLETED");
   });
@@ -570,7 +571,9 @@ describe("the batch departure and the route, side by side", () => {
     expect(await deliveries.startDriverRoute(CARRIER, DRIVER)).toBe(0);
 
     // Still planned, still in the yard.
-    const row = await prisma.route.findUniqueOrThrow({ where: { id: route.id } });
+    const row = await prisma.route.findUniqueOrThrow({
+      where: { id: route.id },
+    });
 
     expect(row.status).toBe("PLANNED");
     expect((await deliveryRow(planned)).status).toBe("PENDING");
@@ -635,7 +638,9 @@ describe("“Em rota” written by the route and nothing else", () => {
 
     // The route closed on its own last stop, inside the same transaction, and
     // the truck came back with it.
-    const closed = await prisma.route.findUniqueOrThrow({ where: { id: routeId } });
+    const closed = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
 
     expect(closed.status).toBe("COMPLETED");
     expect(await statusOf(vehicle)).toBe("ACTIVE");
@@ -820,7 +825,10 @@ describe("what the driver's phone receives", () => {
  */
 describe("what the driver's phone receives from a route being planned (D8)", () => {
   async function listed(deliveryId: string) {
-    const rows = (await deliveries.listDriverDeliveries(CARRIER, DRIVER)) as Array<{
+    const rows = (await deliveries.listDriverDeliveries(
+      CARRIER,
+      DRIVER,
+    )) as Array<{
       id: string;
       stops: Array<{ route: { id: string; plan_version: number } }>;
     }>;
@@ -852,13 +860,19 @@ describe("what the driver's phone receives from a route being planned (D8)", () 
     expect(row).toBeDefined();
     // The app keeps the plan's version in its cache to notice a change
     // made while it was offline (design §6).
-    expect(row!.stops[0].route).toMatchObject({ id: route.id, plan_version: expect.any(Number) });
+    expect(row!.stops[0].route).toMatchObject({
+      id: route.id,
+      plan_version: expect.any(Number),
+    });
   });
 
   it("leaves out a PENDING delivery designated with no route", async () => {
     const loose = await seedDelivery();
 
-    await prisma.delivery.update({ where: { id: loose }, data: { driverId: DRIVER } });
+    await prisma.delivery.update({
+      where: { id: loose },
+      data: { driverId: DRIVER },
+    });
 
     expect(await listed(loose)).toBeUndefined();
   });
@@ -919,12 +933,21 @@ describe("the last two stops settled at the same instant", () => {
 
     await Promise.all([one, two]);
 
-    const route = await prisma.route.findUniqueOrThrow({ where: { id: routeId } });
+    const route = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
     const stops = await prisma.routeStop.findMany({ where: { routeId } });
-    const truck = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicle } });
+    const truck = await prisma.vehicle.findUniqueOrThrow({
+      where: { id: vehicle },
+    });
 
-    expect(stops.map((stop) => stop.status)).toEqual(["COMPLETED", "COMPLETED"]);
-    expect(route.status, "rota zumbi: nada aberto e ainda IN_PROGRESS").toBe("COMPLETED");
+    expect(stops.map((stop) => stop.status)).toEqual([
+      "COMPLETED",
+      "COMPLETED",
+    ]);
+    expect(route.status, "rota zumbi: nada aberto e ainda IN_PROGRESS").toBe(
+      "COMPLETED",
+    );
     expect(truck.status).toBe("ACTIVE");
   }, 30_000);
 });

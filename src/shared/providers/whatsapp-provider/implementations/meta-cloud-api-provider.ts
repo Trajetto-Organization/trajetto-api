@@ -1,6 +1,9 @@
 import { env } from "@/env";
 import { logger } from "@/shared/logging/logger";
-import { httpOutcome, observeProviderCall } from "@/shared/health/provider-metrics";
+import {
+  httpOutcome,
+  observeProviderCall,
+} from "@/shared/health/provider-metrics";
 import { IWhatsAppProvider } from "../IWhatsApp-provider";
 
 import { SendMessageProps, WhatsAppResponse } from "../dtos";
@@ -192,7 +195,10 @@ function classifyMetaError({
   }
 
   if (httpStatus !== undefined && httpStatus >= 500) {
-    return { retryable: true, reason: `Meta server error (HTTP ${httpStatus})` };
+    return {
+      retryable: true,
+      reason: `Meta server error (HTTP ${httpStatus})`,
+    };
   }
 
   /**
@@ -339,40 +345,45 @@ class MetaCloudApiProvider implements IWhatsAppProvider {
 
     try {
       // Timed per call for /health/metrics (latency and error rate per channel).
-      const response = await observeProviderCall("WHATSAPP", () => fetch(endpoint, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.META_WHATSAPP_ACCESS_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: normalizePhoneNumber(phoneNumber),
-          type: "template",
-          template: {
-            name: templateName,
-            language: { code: TEMPLATE_LANGUAGE },
-            components: [
-              {
-                type: "body",
-                parameters: [
+      const response = await observeProviderCall(
+        "WHATSAPP",
+        () =>
+          fetch(endpoint, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${env.META_WHATSAPP_ACCESS_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              messaging_product: "whatsapp",
+              to: normalizePhoneNumber(phoneNumber),
+              type: "template",
+              template: {
+                name: templateName,
+                language: { code: TEMPLATE_LANGUAGE },
+                components: [
                   {
-                    type: "text",
-                    text: this.sanitizeTemplateParameter(message),
+                    type: "body",
+                    parameters: [
+                      {
+                        type: "text",
+                        text: this.sanitizeTemplateParameter(message),
+                      },
+                    ],
                   },
                 ],
               },
-            ],
-          },
-          // Echoed back on every status callback for this message (see
-          // SendMessageProps.referenceId). Meta caps it at 512 characters; a
-          // delivery id is 36.
-          ...(referenceId
-            ? { biz_opaque_callback_data: referenceId.slice(0, 512) }
-            : {}),
-        }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      }), httpOutcome);
+              // Echoed back on every status callback for this message (see
+              // SendMessageProps.referenceId). Meta caps it at 512 characters; a
+              // delivery id is 36.
+              ...(referenceId
+                ? { biz_opaque_callback_data: referenceId.slice(0, 512) }
+                : {}),
+            }),
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          }),
+        httpOutcome,
+      );
 
       const payload = (await response
         .json()

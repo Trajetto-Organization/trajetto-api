@@ -143,7 +143,8 @@ const vehicleFieldsSchema = z.object({
       min: "O identificador da frota não pode ser vazio.",
       max: "O identificador da frota deve ter no máximo 50 caracteres.",
       empty: "O identificador da frota não pode conter apenas espaços.",
-      consecutive: "O identificador da frota não deve conter espaços consecutivos.",
+      consecutive:
+        "O identificador da frota não deve conter espaços consecutivos.",
       edges:
         "O identificador da frota não pode começar ou terminar com espaço em branco.",
     })
@@ -269,4 +270,9 @@ function checkCrossFields(
 
 const createVehicleSchema = vehicleFieldsSchema.superRefine(checkCrossFields);
 
-export { createVehicleSchema, vehicleFieldsSchema, checkCrossFields, PLATE_PATTERN };
+export {
+  createVehicleSchema,
+  vehicleFieldsSchema,
+  checkCrossFields,
+  PLATE_PATTERN,
+};

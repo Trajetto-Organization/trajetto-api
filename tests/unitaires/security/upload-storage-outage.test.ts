@@ -129,10 +129,22 @@ describe("headUploadedObject: missing object vs. storage outage", () => {
       ["a 503 from R2", awsError("ServiceUnavailable", 503)],
       ["a 502 from a proxy in front of it", awsError("BadGateway", 502)],
       ["a request that timed out", awsError("TimeoutError")],
-      ["a socket hang-up", Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })],
-      ["DNS that did not resolve", Object.assign(new Error("getaddrinfo"), { code: "ENOTFOUND" })],
-      ["a refused connection", Object.assign(new Error("connect"), { code: "ECONNREFUSED" })],
-      ["credentials the SDK could not load", awsError("CredentialsProviderError")],
+      [
+        "a socket hang-up",
+        Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      ],
+      [
+        "DNS that did not resolve",
+        Object.assign(new Error("getaddrinfo"), { code: "ENOTFOUND" }),
+      ],
+      [
+        "a refused connection",
+        Object.assign(new Error("connect"), { code: "ECONNREFUSED" }),
+      ],
+      [
+        "credentials the SDK could not load",
+        awsError("CredentialsProviderError"),
+      ],
       ["something nobody recognises", "a string, thrown"],
     ];
 

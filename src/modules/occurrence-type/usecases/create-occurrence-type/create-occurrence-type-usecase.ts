@@ -74,7 +74,9 @@ class CreateOccurrenceTypeUseCase {
 
     // Decision 14.3: what each category may ask. Checked here so a bad
     // combination is a 400 with sentences, not the CHECK's 500.
-    const issues = categoryIssues(categoryShapeOf({}, occurrenceTypeData, formFields));
+    const issues = categoryIssues(
+      categoryShapeOf({}, occurrenceTypeData, formFields),
+    );
 
     if (issues.length > 0) throw categoryValidationError(issues);
 

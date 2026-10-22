@@ -50,7 +50,11 @@ class DeletePermissionUseCase {
       throw new PermissionNotFoundError();
     }
 
-    assertTenantAccessToRecord(findUser, existingPermission.businessId, () => new PermissionNotFoundError());
+    assertTenantAccessToRecord(
+      findUser,
+      existingPermission.businessId,
+      () => new PermissionNotFoundError(),
+    );
 
     try {
       // The revocation and its audit entry commit together (OUTBOX-10).

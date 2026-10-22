@@ -9,17 +9,28 @@ import { OCCURRENCE_FORM_FIELD_TYPES } from "./occurrence-form-rules";
  * delivery detail.
  */
 const occurrenceFormFieldDoc = z.object({
-  key: z.string().describe("Chave estável da resposta (minúsculas, números e _)."),
+  key: z
+    .string()
+    .describe("Chave estável da resposta (minúsculas, números e _)."),
   label: z.string().describe("A pergunta, como o motorista lê."),
   type: z.enum(OCCURRENCE_FORM_FIELD_TYPES),
   required: z.boolean(),
   help: z.string().optional().describe("Orientação ao motorista, sob o campo."),
   options: z.array(z.string()).optional().describe("Só `select`: as opções."),
-  max_length: z.number().optional().describe("Só `text`: limite de caracteres."),
-  multiline: z.boolean().optional().describe("Só `text`: aceita quebras de linha."),
+  max_length: z
+    .number()
+    .optional()
+    .describe("Só `text`: limite de caracteres."),
+  multiline: z
+    .boolean()
+    .optional()
+    .describe("Só `text`: aceita quebras de linha."),
   min: z.number().optional().describe("Só `number`."),
   max: z.number().optional().describe("Só `number`."),
-  integer: z.boolean().optional().describe("Só `number`: aceita apenas inteiros."),
+  integer: z
+    .boolean()
+    .optional()
+    .describe("Só `number`: aceita apenas inteiros."),
 });
 
 const occurrenceFormFieldsDoc = z
@@ -31,6 +42,12 @@ const occurrenceFormFieldsDoc = z
 const occurrenceFormAnswersDoc = z
   .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
   .nullable()
-  .describe("Respostas do formulário do tipo de ocorrência, por chave do campo.");
+  .describe(
+    "Respostas do formulário do tipo de ocorrência, por chave do campo.",
+  );
 
-export { occurrenceFormAnswersDoc, occurrenceFormFieldDoc, occurrenceFormFieldsDoc };
+export {
+  occurrenceFormAnswersDoc,
+  occurrenceFormFieldDoc,
+  occurrenceFormFieldsDoc,
+};

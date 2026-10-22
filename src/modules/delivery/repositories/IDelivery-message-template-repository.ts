@@ -1,5 +1,9 @@
 // ON_THE_WAY: the driver is heading to the address now (decision 6.4).
-type DeliveryMessageTopic = "DISPATCHED" | "ON_THE_WAY" | "DELIVERED" | "FAILED";
+type DeliveryMessageTopic =
+  | "DISPATCHED"
+  | "ON_THE_WAY"
+  | "DELIVERED"
+  | "FAILED";
 
 interface DeliveryMessageTemplateRecord {
   id: string;

@@ -41,7 +41,10 @@ import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled
 
 import { clientSentAtHeaders } from "@/shared/delivery/occurred-at";
 
-import { routeSchemas, routeResponses } from "./documentation/route-documentation";
+import {
+  routeSchemas,
+  routeResponses,
+} from "./documentation/route-documentation";
 import { ndjsonList } from "./documentation/ndjson";
 import { errorResponse } from "./documentation/common-responses";
 import { panelIdempotencyHeaders } from "./documentation/idempotency-documentation";
@@ -129,13 +132,16 @@ async function routeRoutes(app: FastifyInstance) {
     "/list-routes",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["route"],
         summary: "Listar rotas",
         description:
-          "Responde em application/x-ndjson, NÃO em JSON: uma linha por valor. A PRIMEIRA linha é o envelope `{meta:{total,page,pageSize,searchMeta:{statusCounts,facets}}}` e cada linha seguinte é uma rota completa, com suas paradas. Chamar response.json() nisso dá erro de parse — leia linha a linha (o front usa parseNDJSON). Quadro paginado; sem `sort`, mais recente primeiro. Ordenação no servidor por `sort` (created_at, updated_at, code, status, driverName, vehiclePlate, scheduled_date, destination, started_at, completed_at) e `order` (asc|desc), com desempate estável; filtros no servidor por status, motorista (`driverId`) e veículo (`vehicleId`), um ou mais valores separados por vírgula, e pelo dia (AAAA-MM-DD); busca livre sobre o nome da rota, o destino, o nome do motorista e o código (\"12\", \"Rota 12\" ou \"#12\"; um número de mais de nove dígitos, como uma chave de NF-e, não é lido como código). Os cartões (`statusCounts`) e as opções de cada filtro (`facets`) contam o conjunto inteiro da empresa com a busca e os DEMAIS filtros — nunca a página. Ordenação ou filtro fora da lista: 400. Usuário motorista só enxerga as próprias rotas — um driverId enviado por ele é substituído, não somado.",
+          'Responde em application/x-ndjson, NÃO em JSON: uma linha por valor. A PRIMEIRA linha é o envelope `{meta:{total,page,pageSize,searchMeta:{statusCounts,facets}}}` e cada linha seguinte é uma rota completa, com suas paradas. Chamar response.json() nisso dá erro de parse — leia linha a linha (o front usa parseNDJSON). Quadro paginado; sem `sort`, mais recente primeiro. Ordenação no servidor por `sort` (created_at, updated_at, code, status, driverName, vehiclePlate, scheduled_date, destination, started_at, completed_at) e `order` (asc|desc), com desempate estável; filtros no servidor por status, motorista (`driverId`) e veículo (`vehicleId`), um ou mais valores separados por vírgula, e pelo dia (AAAA-MM-DD); busca livre sobre o nome da rota, o destino, o nome do motorista e o código ("12", "Rota 12" ou "#12"; um número de mais de nove dígitos, como uma chave de NF-e, não é lido como código). Os cartões (`statusCounts`) e as opções de cada filtro (`facets`) contam o conjunto inteiro da empresa com a busca e os DEMAIS filtros — nunca a página. Ordenação ou filtro fora da lista: 400. Usuário motorista só enxerga as próprias rotas — um driverId enviado por ele é substituído, não somado.',
         querystring: routeSchemas.listRoutes,
         response: {
           200: ndjsonList(
@@ -144,7 +150,9 @@ async function routeRoutes(app: FastifyInstance) {
           ),
           400: errorResponse,
           403: routeResponses.genericError,
-          404: routeResponses.notFound("USER_NOT_FOUND (o usuário da sessão não existe mais)."),
+          404: routeResponses.notFound(
+            "USER_NOT_FOUND (o usuário da sessão não existe mais).",
+          ),
           500: routeResponses.internalServerError,
         },
       },
@@ -156,13 +164,16 @@ async function routeRoutes(app: FastifyInstance) {
     "/get-route/:routeId/business/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["route"],
         summary: "Consultar uma rota com as paradas",
         description:
-          "A tela de detalhe e o que o aplicativo do motorista abre: a rota (com destino, saída/retorno previstos e `plan_version`), as paradas na ordem do despachante, a entrega de cada uma (com o ponto do endereço, quando fixado) e quantas já foram resolvidas. Para o painel (decisão 14.7) vêm também `driverPosition` — o último ponto do motorista, só em rota liberada ou em andamento e só se gravado nesta rota — e `visitedPoints`, o GPS capturado na chegada e no comprovante; para o aplicativo do motorista os dois vêm vazios. Rota de outra empresa — ou de outro motorista, para um usuário motorista — responde 404, não 403: um \"existe mas não é sua\" diria a qualquer um quais ids são reais.",
+          'A tela de detalhe e o que o aplicativo do motorista abre: a rota (com destino, saída/retorno previstos e `plan_version`), as paradas na ordem do despachante, a entrega de cada uma (com o ponto do endereço, quando fixado) e quantas já foram resolvidas. Para o painel (decisão 14.7) vêm também `driverPosition` — o último ponto do motorista, só em rota liberada ou em andamento e só se gravado nesta rota — e `visitedPoints`, o GPS capturado na chegada e no comprovante; para o aplicativo do motorista os dois vêm vazios. Rota de outra empresa — ou de outro motorista, para um usuário motorista — responde 404, não 403: um "existe mas não é sua" diria a qualquer um quais ids são reais.',
         params: routeSchemas.routeBusinessParams,
         response: {
           200: routeResponses.routeDetail,
@@ -305,7 +316,7 @@ async function routeRoutes(app: FastifyInstance) {
         tags: ["route"],
         summary: "O motorista avisa que está a caminho de uma parada",
         description:
-          "Só o motorista da rota (outro usuário recebe 403 PERMISSION_DENIED), com a rota em andamento (IN_PROGRESS) e a parada ainda pendente (PENDING). Grava o instante na parada (`on_the_way_at`) e um evento ON_THE_WAY no histórico da entrega (com a rota e, quando vier, a localização), na mesma transação; depois do commit, a torre, o monitoramento e a tela de Rotas recebem `routeEvent` do tipo `route-stop.on_the_way`. O motorista vai a um endereço por vez: marcar outra parada não apaga o instante da anterior, mas só a marcação mais recente da rota vale como \"a caminho\" (enquanto a parada dela estiver pendente). Mensagem ao destinatário (tópico ON_THE_WAY) só na PRIMEIRA marcação da parada, só se o toque tiver no máximo 60 minutos e só se a empresa tiver modelo ativo de \"a caminho\" para o canal, a entrega tiver e-mail ou telefone e o destinatário não tiver pedido para parar; ela deixa de sair se a entrega sair de Em rota antes do envio. Sem webhook próprio: o catálogo público não tem tópico de \"a caminho\". Idempotente por `client_submission_id`: o reenvio da mesma chave responde 200 com o mesmo resultado, mesmo depois de a parada seguir adiante; a mesma chave usada em outro registro responde 409 SUBMISSION_ID_REUSED. Parada inexistente, de outra rota, de outra empresa ou de rota de outro motorista: 404 ROUTE_STOP_NOT_FOUND, a mesma resposta nos quatro casos. `occurred_at` (opcional) é o instante do toque, corrigido pelo header `X-Client-Sent-At`, nunca anterior à saída da rota.",
+          'Só o motorista da rota (outro usuário recebe 403 PERMISSION_DENIED), com a rota em andamento (IN_PROGRESS) e a parada ainda pendente (PENDING). Grava o instante na parada (`on_the_way_at`) e um evento ON_THE_WAY no histórico da entrega (com a rota e, quando vier, a localização), na mesma transação; depois do commit, a torre, o monitoramento e a tela de Rotas recebem `routeEvent` do tipo `route-stop.on_the_way`. O motorista vai a um endereço por vez: marcar outra parada não apaga o instante da anterior, mas só a marcação mais recente da rota vale como "a caminho" (enquanto a parada dela estiver pendente). Mensagem ao destinatário (tópico ON_THE_WAY) só na PRIMEIRA marcação da parada, só se o toque tiver no máximo 60 minutos e só se a empresa tiver modelo ativo de "a caminho" para o canal, a entrega tiver e-mail ou telefone e o destinatário não tiver pedido para parar; ela deixa de sair se a entrega sair de Em rota antes do envio. Sem webhook próprio: o catálogo público não tem tópico de "a caminho". Idempotente por `client_submission_id`: o reenvio da mesma chave responde 200 com o mesmo resultado, mesmo depois de a parada seguir adiante; a mesma chave usada em outro registro responde 409 SUBMISSION_ID_REUSED. Parada inexistente, de outra rota, de outra empresa ou de rota de outro motorista: 404 ROUTE_STOP_NOT_FOUND, a mesma resposta nos quatro casos. `occurred_at` (opcional) é o instante do toque, corrigido pelo header `X-Client-Sent-At`, nunca anterior à saída da rota.',
         params: markStopOnTheWayParams,
         body: markStopOnTheWaySchema,
         response: {
@@ -379,7 +390,7 @@ async function routeRoutes(app: FastifyInstance) {
         tags: ["route"],
         summary: "Adicionar entregas à rota como paradas",
         description:
-          "Entram no fim da ordem atual — onde uma parada fica é decisão do despachante, tomada arrastando. Só rota PLANNED ou RELEASED aceita paradas: depois da saída, 409 ROUTE_STATUS_CONFLICT. Em rota liberada o motorista é avisado em tempo real (`routeEvent` `route.stops_changed`). Idempotente: uma entrega que já é parada aberta DESTA rota não é erro — volta em `alreadyOnRoute` (o reenvio depois de resposta perdida responde 201 com `added: 0`). Uma entrega em OUTRA rota é 409 DELIVERY_ALREADY_ON_ROUTE, nomeando a rota; para trazê-la use move-stops. No máximo 200 paradas abertas por rota (400 ROUTE_STOPS_LIMIT), contadas sob trava. `expectedPlanVersion` diferente da atual: 409 ROUTE_PLAN_STALE. Cada entrega ganha a linha \"Adicionada à Rota N\" no histórico e o anúncio `delivery.assigned`, no mesmo commit. Tudo ou nada.",
+          'Entram no fim da ordem atual — onde uma parada fica é decisão do despachante, tomada arrastando. Só rota PLANNED ou RELEASED aceita paradas: depois da saída, 409 ROUTE_STATUS_CONFLICT. Em rota liberada o motorista é avisado em tempo real (`routeEvent` `route.stops_changed`). Idempotente: uma entrega que já é parada aberta DESTA rota não é erro — volta em `alreadyOnRoute` (o reenvio depois de resposta perdida responde 201 com `added: 0`). Uma entrega em OUTRA rota é 409 DELIVERY_ALREADY_ON_ROUTE, nomeando a rota; para trazê-la use move-stops. No máximo 200 paradas abertas por rota (400 ROUTE_STOPS_LIMIT), contadas sob trava. `expectedPlanVersion` diferente da atual: 409 ROUTE_PLAN_STALE. Cada entrega ganha a linha "Adicionada à Rota N" no histórico e o anúncio `delivery.assigned`, no mesmo commit. Tudo ou nada.',
         params: routeSchemas.routeBusinessParams,
         body: routeSchemas.addStops,
         response: {
@@ -473,7 +484,7 @@ async function routeRoutes(app: FastifyInstance) {
         tags: ["route"],
         summary: "Tirar várias entregas da rota",
         description:
-          "Retira paradas PENDING de uma rota PLANNED ou RELEASED, numa transação (decisão 14.7). As paradas são excluídas — uma parada retirada no planejamento nunca aconteceu — e as entregas voltam ao conjunto sem rota mantendo o próprio status, cada uma com a linha \"Retirada da Rota N\" no histórico. Idempotente: um id que não é (ou já não é) parada pendente desta rota volta em `alreadyGone`, não é erro. Uma rota liberada que fica vazia NÃO é cancelada: `routeEmptied: true` e a tela oferece voltar ao planejamento ou cancelar. Rota que já saiu: 409 ROUTE_STATUS_CONFLICT. `expectedPlanVersion` diferente da atual: 409 ROUTE_PLAN_STALE. Rota inexistente ou de outra empresa: 404 DELIVERY_ROUTE_NOT_FOUND. Token de motorista: 403 DRIVER_CANNOT_MANAGE_DELIVERIES.",
+          'Retira paradas PENDING de uma rota PLANNED ou RELEASED, numa transação (decisão 14.7). As paradas são excluídas — uma parada retirada no planejamento nunca aconteceu — e as entregas voltam ao conjunto sem rota mantendo o próprio status, cada uma com a linha "Retirada da Rota N" no histórico. Idempotente: um id que não é (ou já não é) parada pendente desta rota volta em `alreadyGone`, não é erro. Uma rota liberada que fica vazia NÃO é cancelada: `routeEmptied: true` e a tela oferece voltar ao planejamento ou cancelar. Rota que já saiu: 409 ROUTE_STATUS_CONFLICT. `expectedPlanVersion` diferente da atual: 409 ROUTE_PLAN_STALE. Rota inexistente ou de outra empresa: 404 DELIVERY_ROUTE_NOT_FOUND. Token de motorista: 403 DRIVER_CANNOT_MANAGE_DELIVERIES.',
         params: routeSchemas.routeBusinessParams,
         body: routeSchemas.removeStops,
         response: {
@@ -506,7 +517,7 @@ async function routeRoutes(app: FastifyInstance) {
         tags: ["route"],
         summary: "Trazer entregas de outras rotas (ou sem rota) para esta",
         description:
-          "O \"Adicionar à rota\" da tabela de Entregas (decisão 14.7): numa transação só, tira as entregas das rotas PLANNED/RELEASED em que estão e as acrescenta no fim desta. Entregas sem rota simplesmente entram; as que já são paradas desta rota voltam em `alreadyOnRoute`. As rotas envolvidas são travadas em ordem de id, então mover de A para B e de B para A ao mesmo tempo não trava o banco. Uma rota de origem LIBERADA que fica vazia é cancelada com o motivo \"Todas as paradas foram movidas para a Rota N.\" e o motorista dela é avisado; uma planejada fica. Entrega numa rota que já saiu: 409 DELIVERY_ON_STARTED_ROUTE, nomeando-a, sem gravar nada. As mesmas regras do add-stops: só PENDING, teto de 200 paradas, `expectedPlanVersion` (da rota destino), `delivery.assigned` por entrega e o histórico nas duas rotas.",
+          'O "Adicionar à rota" da tabela de Entregas (decisão 14.7): numa transação só, tira as entregas das rotas PLANNED/RELEASED em que estão e as acrescenta no fim desta. Entregas sem rota simplesmente entram; as que já são paradas desta rota voltam em `alreadyOnRoute`. As rotas envolvidas são travadas em ordem de id, então mover de A para B e de B para A ao mesmo tempo não trava o banco. Uma rota de origem LIBERADA que fica vazia é cancelada com o motivo "Todas as paradas foram movidas para a Rota N." e o motorista dela é avisado; uma planejada fica. Entrega numa rota que já saiu: 409 DELIVERY_ON_STARTED_ROUTE, nomeando-a, sem gravar nada. As mesmas regras do add-stops: só PENDING, teto de 200 paradas, `expectedPlanVersion` (da rota destino), `delivery.assigned` por entrega e o histórico nas duas rotas.',
         params: routeSchemas.routeBusinessParams,
         body: routeSchemas.moveStops,
         response: {
@@ -529,13 +540,16 @@ async function routeRoutes(app: FastifyInstance) {
     "/unrouted-deliveries/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["route"],
         summary: "Entregas sem rota, para montar uma rota",
         description:
-          "O seletor \"Adicionar entregas\" da página da rota (decisão 14.7): entregas PENDING da empresa sem nenhuma parada aberta (PENDING ou ARRIVED) em rota alguma — o mesmo predicado do índice único parcial que impede uma entrega em duas rotas. Paginado (até 100 por página), mais antigas primeiro pela data prevista (sem data por último). Busca por código, número da NF, chave, destinatário, cidade ou rua; filtros por embarcador, cidade, UF, tipo e intervalo de data prevista (com ou sem as sem data). `meta.facets` conta cada filtro com os DEMAIS aplicados. Superfície do despachante: token de motorista recebe 403 DRIVER_CANNOT_MANAGE_DELIVERIES.",
+          'O seletor "Adicionar entregas" da página da rota (decisão 14.7): entregas PENDING da empresa sem nenhuma parada aberta (PENDING ou ARRIVED) em rota alguma — o mesmo predicado do índice único parcial que impede uma entrega em duas rotas. Paginado (até 100 por página), mais antigas primeiro pela data prevista (sem data por último). Busca por código, número da NF, chave, destinatário, cidade ou rua; filtros por embarcador, cidade, UF, tipo e intervalo de data prevista (com ou sem as sem data). `meta.facets` conta cada filtro com os DEMAIS aplicados. Superfície do despachante: token de motorista recebe 403 DRIVER_CANNOT_MANAGE_DELIVERIES.',
         params: routeSchemas.businessIdParam,
         querystring: routeSchemas.listUnroutedDeliveries,
         response: {
@@ -554,13 +568,16 @@ async function routeRoutes(app: FastifyInstance) {
     "/open-stops/:businessId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["route"],
         summary: "Em que rota está cada entrega de uma seleção",
         description:
-          "Para o diálogo \"Adicionar à rota\" (decisão 14.7): para cada entrega com parada aberta, a rota que a segura (código e status). Entrega sem rota não aparece. Lido pela empresa da rota: um id de outra empresa simplesmente não tem resposta. Até 100 ids. Token de motorista: 403 DRIVER_CANNOT_MANAGE_DELIVERIES.",
+          'Para o diálogo "Adicionar à rota" (decisão 14.7): para cada entrega com parada aberta, a rota que a segura (código e status). Entrega sem rota não aparece. Lido pela empresa da rota: um id de outra empresa simplesmente não tem resposta. Até 100 ids. Token de motorista: 403 DRIVER_CANNOT_MANAGE_DELIVERIES.',
         params: routeSchemas.businessIdParam,
         querystring: routeSchemas.openStops,
         response: {
@@ -589,7 +606,7 @@ async function routeRoutes(app: FastifyInstance) {
         tags: ["route"],
         summary: "Fixar no mapa onde fica o endereço da entrega",
         description:
-          "\"Fixar no mapa\" da página da rota (decisão 14.7): grava o ponto do ENDEREÇO (`geo_source: MANUAL`), que é plano e não prova — o GPS do comprovante não muda. `{ clear: true }` apaga o ponto. Ponto fora do Brasil: 400 DELIVERY_LOCATION_INVALID (um clique fora do país é quase sempre engano). Entrega DELIVERED ou CANCELLED: 400 DELIVERY_LOCATION_LOCKED. Entrega de outra empresa: 404 DELIVERY_NOT_FOUND, igual a uma que não existe. Se a entrega é parada de uma rota PLANNED/RELEASED, a versão do plano dessa rota sobe e, se liberada, o motorista é avisado. Gravar o mesmo ponto de novo é inofensivo.",
+          '"Fixar no mapa" da página da rota (decisão 14.7): grava o ponto do ENDEREÇO (`geo_source: MANUAL`), que é plano e não prova — o GPS do comprovante não muda. `{ clear: true }` apaga o ponto. Ponto fora do Brasil: 400 DELIVERY_LOCATION_INVALID (um clique fora do país é quase sempre engano). Entrega DELIVERED ou CANCELLED: 400 DELIVERY_LOCATION_LOCKED. Entrega de outra empresa: 404 DELIVERY_NOT_FOUND, igual a uma que não existe. Se a entrega é parada de uma rota PLANNED/RELEASED, a versão do plano dessa rota sobe e, se liberada, o motorista é avisado. Gravar o mesmo ponto de novo é inofensivo.',
         params: routeSchemas.deliveryLocationParams,
         body: routeSchemas.setDeliveryLocation,
         response: {
@@ -621,7 +638,7 @@ async function routeRoutes(app: FastifyInstance) {
         tags: ["route"],
         summary: "Avisos sobre um par motorista e veículo antes de atribuir",
         description:
-          "O que os diálogos \"Atribuir Motorista e Veículo\" e \"Planejar rota\" mostram antes de confirmar: os veículos em operação pelos quais o motorista é responsável (e o único deles, para pré-selecionar), o responsável e o status do veículo escolhido, o fuso da empresa e os avisos — motorista ou veículo com rota em andamento, com outra rota no mesmo dia, veículo de outro responsável ou fora de operação e, pela decisão 8.5, CNH vencida no dia da rota, categoria da CNH que não cobre a exigida pelo tipo do veículo (ou não cadastrada), ordem de serviço aberta e último checklist reprovado. Nada bloqueia: o que o banco recusa continua recusado na saída. Só leitura, do despachante: token de motorista recebe 403 DRIVER_CANNOT_MANAGE_DELIVERIES. Motorista ou veículo de outra empresa responde 404, igual a um que não existe. O dia é AAAA-MM-DD; ausente, hoje no fuso da empresa.",
+          'O que os diálogos "Atribuir Motorista e Veículo" e "Planejar rota" mostram antes de confirmar: os veículos em operação pelos quais o motorista é responsável (e o único deles, para pré-selecionar), o responsável e o status do veículo escolhido, o fuso da empresa e os avisos — motorista ou veículo com rota em andamento, com outra rota no mesmo dia, veículo de outro responsável ou fora de operação e, pela decisão 8.5, CNH vencida no dia da rota, categoria da CNH que não cobre a exigida pelo tipo do veículo (ou não cadastrada), ordem de serviço aberta e último checklist reprovado. Nada bloqueia: o que o banco recusa continua recusado na saída. Só leitura, do despachante: token de motorista recebe 403 DRIVER_CANNOT_MANAGE_DELIVERIES. Motorista ou veículo de outra empresa responde 404, igual a um que não existe. O dia é AAAA-MM-DD; ausente, hoje no fuso da empresa.',
         params: routeSchemas.businessIdParam,
         querystring: routeSchemas.assignmentPreview,
         response: {
@@ -672,7 +689,9 @@ async function routeRoutes(app: FastifyInstance) {
           400: errorResponse,
           401: controlTowerResponses.error,
           403: controlTowerResponses.error,
-          404: controlTowerResponses.notFound("USER_NOT_FOUND (o usuário da sessão não existe mais)."),
+          404: controlTowerResponses.notFound(
+            "USER_NOT_FOUND (o usuário da sessão não existe mais).",
+          ),
           429: controlTowerResponses.error,
           500: controlTowerResponses.internalServerError,
         },
@@ -685,20 +704,25 @@ async function routeRoutes(app: FastifyInstance) {
     "/control-tower",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["route"],
         summary: "Tudo o que a torre de controle desenha, numa requisição",
         description:
-          "Um endpoint e não cinco: o painel atualiza tudo junto a cada 30 s. \"Hoje\" é o dia da EMPRESA, no fuso dela (`Business.timezone`), nunca o do servidor. O funil conta os documentos ATIVOS no dia — com parada numa rota do dia (ou em andamento), na rua agora, ou resolvidos no dia (entregue por `delivered_at`, insucesso pelo fato que o causou, cancelado pela mudança de status) —, a mesma definição do Monitoramento. \"Finalizadas\" = entregues + insucessos + canceladas resolvidos no dia. A pontualidade julga só as rotas do dia, com a hora atual: antes do horário planejado + 15 min a rota está \"aguardando\" (fora da taxa); depois disso, sem sair, conta como atraso. O mapa olha 12 h para trás; o ponto de rota concluída fica 2 h com estado `ended` e depois sai, e \"sem reportar\" (`silent`) só vale para rota em andamento. `activeRoutes` lista toda rota em andamento, inclusive a que não tem posição. Os eventos juntam o histórico das entregas, as ocorrências e a saída, conclusão e cancelamento de rotas do dia. Superfície do gestor: token de motorista recebe 403.",
+          'Um endpoint e não cinco: o painel atualiza tudo junto a cada 30 s. "Hoje" é o dia da EMPRESA, no fuso dela (`Business.timezone`), nunca o do servidor. O funil conta os documentos ATIVOS no dia — com parada numa rota do dia (ou em andamento), na rua agora, ou resolvidos no dia (entregue por `delivered_at`, insucesso pelo fato que o causou, cancelado pela mudança de status) —, a mesma definição do Monitoramento. "Finalizadas" = entregues + insucessos + canceladas resolvidos no dia. A pontualidade julga só as rotas do dia, com a hora atual: antes do horário planejado + 15 min a rota está "aguardando" (fora da taxa); depois disso, sem sair, conta como atraso. O mapa olha 12 h para trás; o ponto de rota concluída fica 2 h com estado `ended` e depois sai, e "sem reportar" (`silent`) só vale para rota em andamento. `activeRoutes` lista toda rota em andamento, inclusive a que não tem posição. Os eventos juntam o histórico das entregas, as ocorrências e a saída, conclusão e cancelamento de rotas do dia. Superfície do gestor: token de motorista recebe 403.',
         querystring: controlTowerSchemas.controlTower,
         response: {
           200: controlTowerResponses.controlTower,
           400: controlTowerResponses.error,
           401: controlTowerResponses.error,
           403: controlTowerResponses.error,
-          404: controlTowerResponses.notFound("USER_NOT_FOUND (o usuário da sessão não existe mais)."),
+          404: controlTowerResponses.notFound(
+            "USER_NOT_FOUND (o usuário da sessão não existe mais).",
+          ),
           429: controlTowerResponses.error,
           500: controlTowerResponses.internalServerError,
         },
@@ -711,7 +735,10 @@ async function routeRoutes(app: FastifyInstance) {
     "/driver-trail/:driverId",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["route"],
@@ -740,7 +767,10 @@ async function routeRoutes(app: FastifyInstance) {
     "/monitoring",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["route"],
@@ -753,7 +783,9 @@ async function routeRoutes(app: FastifyInstance) {
           400: controlTowerResponses.error,
           401: controlTowerResponses.error,
           403: controlTowerResponses.error,
-          404: controlTowerResponses.notFound("USER_NOT_FOUND (o usuário da sessão não existe mais)."),
+          404: controlTowerResponses.notFound(
+            "USER_NOT_FOUND (o usuário da sessão não existe mais).",
+          ),
           429: controlTowerResponses.error,
           500: controlTowerResponses.internalServerError,
         },
@@ -766,7 +798,10 @@ async function routeRoutes(app: FastifyInstance) {
     "/monitoring/drivers",
     {
       onRequest: [ensureAuthenticated],
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read")],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read"),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["route"],
@@ -779,7 +814,9 @@ async function routeRoutes(app: FastifyInstance) {
           400: controlTowerResponses.error,
           401: controlTowerResponses.error,
           403: controlTowerResponses.error,
-          404: controlTowerResponses.notFound("USER_NOT_FOUND (o usuário da sessão não existe mais)."),
+          404: controlTowerResponses.notFound(
+            "USER_NOT_FOUND (o usuário da sessão não existe mais).",
+          ),
           429: controlTowerResponses.error,
           500: controlTowerResponses.internalServerError,
         },

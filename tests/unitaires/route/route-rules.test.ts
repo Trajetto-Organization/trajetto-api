@@ -190,9 +190,9 @@ describe("when a route is finished", () => {
 
 describe("progress shown to the driver and the panel", () => {
   it("counts resolved stops against the ones that remain work", () => {
-    expect(routeProgress(["COMPLETED", "FAILED", "PENDING", "ARRIVED"])).toEqual(
-      { done: 2, total: 4 },
-    );
+    expect(
+      routeProgress(["COMPLETED", "FAILED", "PENDING", "ARRIVED"]),
+    ).toEqual({ done: 2, total: 4 });
   });
 
   it("leaves cancelled stops out of the denominator", () => {

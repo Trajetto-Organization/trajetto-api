@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { fitsOdometerTimeline, recordDate } from "@/shared/vehicle/odometer-timeline";
+import {
+  fitsOdometerTimeline,
+  recordDate,
+} from "@/shared/vehicle/odometer-timeline";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 import {
   VehicleMileageOutOfOrderError,
@@ -15,33 +18,49 @@ import {
  */
 describe("fitsOdometerTimeline", () => {
   it("accepts a reading strictly between the records around its date", () => {
-    expect(fitsOdometerTimeline(10_000, { before: 9_800, after: 10_300 })).toBe(true);
+    expect(fitsOdometerTimeline(10_000, { before: 9_800, after: 10_300 })).toBe(
+      true,
+    );
   });
 
   it("refuses a reading with no record before it: nothing bounds it from below", () => {
     // The floor there is the mileage the vehicle was registered with, which
     // no fueling or checklist carries — 9 000 on a vehicle registered at
     // 50 000 would be accepted, a typo or a fake the old rule refused.
-    expect(fitsOdometerTimeline(9_000, { before: null, after: 10_300 })).toBe(false);
+    expect(fitsOdometerTimeline(9_000, { before: null, after: 10_300 })).toBe(
+      false,
+    );
   });
 
   it("refuses a reading with nothing after it: that record is the newest", () => {
-    expect(fitsOdometerTimeline(10_000, { before: 9_800, after: null })).toBe(false);
-    expect(fitsOdometerTimeline(10_000, { before: null, after: null })).toBe(false);
+    expect(fitsOdometerTimeline(10_000, { before: 9_800, after: null })).toBe(
+      false,
+    );
+    expect(fitsOdometerTimeline(10_000, { before: null, after: null })).toBe(
+      false,
+    );
   });
 
   it("keeps the rule strict on both sides, as it is along arrival", () => {
     // Equal to the record before it: the odometer did not move.
-    expect(fitsOdometerTimeline(9_800, { before: 9_800, after: 10_300 })).toBe(false);
+    expect(fitsOdometerTimeline(9_800, { before: 9_800, after: 10_300 })).toBe(
+      false,
+    );
 
     // Equal to the record after it: in arrival order, that record would have
     // been the one refused.
-    expect(fitsOdometerTimeline(10_300, { before: 9_800, after: 10_300 })).toBe(false);
+    expect(fitsOdometerTimeline(10_300, { before: 9_800, after: 10_300 })).toBe(
+      false,
+    );
   });
 
   it("refuses a reading outside its neighbours", () => {
-    expect(fitsOdometerTimeline(9_700, { before: 9_800, after: 10_300 })).toBe(false);
-    expect(fitsOdometerTimeline(10_400, { before: 9_800, after: 10_300 })).toBe(false);
+    expect(fitsOdometerTimeline(9_700, { before: 9_800, after: 10_300 })).toBe(
+      false,
+    );
+    expect(fitsOdometerTimeline(10_400, { before: 9_800, after: 10_300 })).toBe(
+      false,
+    );
   });
 });
 

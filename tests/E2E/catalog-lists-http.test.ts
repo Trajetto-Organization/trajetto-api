@@ -304,7 +304,9 @@ beforeAll(async () => {
   });
   tokens.otherAdmin = await seedUser(OTHER, "BUSINESS_ADMIN");
   tokens.master = await seedUser(null, "MASTER");
-  tokens.driver = await seedUser(CARRIER, "BUSINESS_USER", { driverId: DRIVER });
+  tokens.driver = await seedUser(CARRIER, "BUSINESS_USER", {
+    driverId: DRIVER,
+  });
 
   ({ app } = await import("@/http"));
   await app.ready();
@@ -340,7 +342,9 @@ describe("the shippers table", () => {
   });
 
   it("breaks created_at ties by id desc in both directions", async () => {
-    const ascending = await list(`${SHIPPERS_URL}&page=1&sort=created_at&order=asc`);
+    const ascending = await list(
+      `${SHIPPERS_URL}&page=1&sort=created_at&order=asc`,
+    );
 
     expect(ascending.rows.slice(0, 4).map((row) => row.name)).toEqual([
       "Tie Two Big",
@@ -362,7 +366,8 @@ describe("the shippers table", () => {
 
     expect(asc).toEqual(expected);
 
-    const desc = (await list(`${SHIPPERS_URL}&page=1&sort=name&order=desc`)).rows;
+    const desc = (await list(`${SHIPPERS_URL}&page=1&sort=name&order=desc`))
+      .rows;
 
     expect(desc[0].name).toBe(expected[expected.length - 1]);
   });
@@ -370,7 +375,9 @@ describe("the shippers table", () => {
   it("filters by status on the server and counts the cards over the company", async () => {
     const inactive = await list(`${SHIPPERS_URL}&page=1&status=inactive`);
 
-    const inactiveSeeded = SHIPPERS.filter((shipper) => !shipper.is_active).length;
+    const inactiveSeeded = SHIPPERS.filter(
+      (shipper) => !shipper.is_active,
+    ).length;
 
     expect(inactive.meta.total).toBe(inactiveSeeded);
     expect(inactive.rows.every((row) => row.is_active === false)).toBe(true);
@@ -389,7 +396,9 @@ describe("the shippers table", () => {
       },
     });
 
-    const both = await list(`${SHIPPERS_URL}&page=1&status=active&status=inactive`);
+    const both = await list(
+      `${SHIPPERS_URL}&page=1&status=active&status=inactive`,
+    );
 
     expect(both.meta.total).toBe(16);
   });
@@ -404,11 +413,12 @@ describe("the shippers table", () => {
   });
 
   it("refuses a sort or a status the list does not know", async () => {
-    expect((await call(`${SHIPPERS_URL}&page=1&sort=cnpj`, tokens.admin)).statusCode).toBe(
-      400,
-    );
     expect(
-      (await call(`${SHIPPERS_URL}&page=1&status=archived`, tokens.admin)).statusCode,
+      (await call(`${SHIPPERS_URL}&page=1&sort=cnpj`, tokens.admin)).statusCode,
+    ).toBe(400);
+    expect(
+      (await call(`${SHIPPERS_URL}&page=1&status=archived`, tokens.admin))
+        .statusCode,
     ).toBe(400);
   });
 });
@@ -459,17 +469,23 @@ describe("the occurrence types table", () => {
   });
 
   it("refuses an unknown yes-or-no value", async () => {
-    expect((await call(`${URL}&photo=maybe`, tokens.admin)).statusCode).toBe(400);
+    expect((await call(`${URL}&photo=maybe`, tokens.admin)).statusCode).toBe(
+      400,
+    );
   });
 });
 
 describe("the status reasons table", () => {
-  const URL = "/status-change-reason/list-status-change-reason?page=1&pageSize=10";
+  const URL =
+    "/status-change-reason/list-status-change-reason?page=1&pageSize=10";
 
   it("filters by status and counts the reasons already in use", async () => {
     const result = await list(`${URL}&status=active&sort=name&order=asc`);
 
-    expect(result.rows.map((row) => row.name)).toEqual(["Reason Livre", "Reason Usado"]);
+    expect(result.rows.map((row) => row.name)).toEqual([
+      "Reason Livre",
+      "Reason Usado",
+    ]);
     expect(result.meta.total).toBe(2);
     expect(result.meta.searchMeta).toMatchObject({
       total: 3,
@@ -533,11 +549,17 @@ describe("who reads the catalog tables", () => {
     expect(JSON.parse(response.body).code).toBe("PERMISSION_DENIED");
   });
 
-  it.each(URLS)("refuses another company's manager naming this one: %s", async (url) => {
-    const response = await call(`${url}&businessId=${CARRIER}`, tokens.otherAdmin);
+  it.each(URLS)(
+    "refuses another company's manager naming this one: %s",
+    async (url) => {
+      const response = await call(
+        `${url}&businessId=${CARRIER}`,
+        tokens.otherAdmin,
+      );
 
-    expect(response.statusCode).toBe(403);
-  });
+      expect(response.statusCode).toBe(403);
+    },
+  );
 
   describe("the shipper picker (search-shipper-business)", () => {
     const PICKER = `/shipper/search-shipper-business?businessId=${CARRIER}`;
@@ -550,7 +572,9 @@ describe("who reads the catalog tables", () => {
       const [, ...rows] = response.body.split("\n").filter(Boolean);
 
       expect(rows.length).toBeGreaterThan(0);
-      expect(rows.every((row) => JSON.parse(row).businessId === CARRIER)).toBe(true);
+      expect(rows.every((row) => JSON.parse(row).businessId === CARRIER)).toBe(
+        true,
+      );
     });
 
     it("refuses a driver token with PERMISSION_DENIED", async () => {

@@ -11,7 +11,6 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import database from "@/../infra/database";
 
-
 interface UpdateAILimitRequest {
   userId: string;
   businessId: string;
@@ -52,7 +51,9 @@ class UpdateAILimitUseCase {
     // Same reasoning as the fleet limit: the movement is the record, and the
     // limit and its notice commit together (OUTBOX-10).
     return database.$transaction(async (tx) => {
-      const [locked] = await tx.$queryRaw<Array<{ ai_analysis_limit: number | null }>>`
+      const [locked] = await tx.$queryRaw<
+        Array<{ ai_analysis_limit: number | null }>
+      >`
         SELECT "ai_analysis_limit" FROM "business" WHERE "id" = ${businessId} FOR NO KEY UPDATE
       `;
 

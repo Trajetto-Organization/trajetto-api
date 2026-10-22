@@ -158,7 +158,9 @@ function proofSigningReason(
 
   if (signing.state !== "READY" || !signing.notAfter) return null;
 
-  const daysLeft = Math.floor((signing.notAfter.getTime() - snapshot.now.getTime()) / DAY_MS);
+  const daysLeft = Math.floor(
+    (signing.notAfter.getTime() - snapshot.now.getTime()) / DAY_MS,
+  );
   // The instant, not a day: the certificate ends at a UTC moment.
   const endDate = signing.notAfter.toISOString();
 
@@ -180,7 +182,11 @@ function evaluateAlerts(
   const reasons: Array<string | null> = [];
 
   reasons.push(
-    lagReason("Outbox (expansão de eventos)", snapshot.outboxEligibleLagSec, thresholds.outboxLagSec),
+    lagReason(
+      "Outbox (expansão de eventos)",
+      snapshot.outboxEligibleLagSec,
+      thresholds.outboxLagSec,
+    ),
     lagReason(
       "Entregas internas (in-app, push, atividade)",
       snapshot.deliveryEligibleLagSec.internal,
@@ -191,7 +197,11 @@ function evaluateAlerts(
       snapshot.deliveryEligibleLagSec.external,
       thresholds.deliveryExternalLagSec,
     ),
-    lagReason("Webhooks de integração", snapshot.webhookDueLagSec, thresholds.webhookLagSec),
+    lagReason(
+      "Webhooks de integração",
+      snapshot.webhookDueLagSec,
+      thresholds.webhookLagSec,
+    ),
     lagReason("Análises de IA", snapshot.aiEligibleLagSec, thresholds.aiLagSec),
   );
 

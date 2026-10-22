@@ -124,7 +124,9 @@ async function retiredRoutes(app: FastifyInstance) {
             error: "Gone",
             code: "ENDPOINT_RETIRED",
             message: retired.message,
-            ...(retired.replacement ? { replacement: retired.replacement } : {}),
+            ...(retired.replacement
+              ? { replacement: retired.replacement }
+              : {}),
           });
       },
     });

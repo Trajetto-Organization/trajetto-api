@@ -36,7 +36,9 @@ const deployed = {
 function issuesFor(overrides: Record<string, string | undefined>): string[] {
   const result = envSchema.safeParse({ ...deployed, ...overrides });
 
-  return result.success ? [] : result.error.issues.map((issue) => issue.path.join("."));
+  return result.success
+    ? []
+    : result.error.issues.map((issue) => issue.path.join("."));
 }
 
 describe("JWT signing keys in a deployment", () => {
@@ -70,20 +72,35 @@ describe("JWT signing keys in a deployment", () => {
   });
 
   it("holds on staging too, which runs the production image", () => {
-    expect(issuesFor({ APP_ENV: "staging", JWT_SECRET: "curto" })).toEqual(["JWT_SECRET"]);
+    expect(issuesFor({ APP_ENV: "staging", JWT_SECRET: "curto" })).toEqual([
+      "JWT_SECRET",
+    ]);
   });
 
   it("does not bind development or the load harness (APP_ENV=development)", () => {
     expect(
-      issuesFor({ NODE_ENV: "development", UPLOAD_STORAGE_TYPE: "local", JWT_SECRET: "a", JWT_SECRET_REFRESH_TOKEN: "b" }),
+      issuesFor({
+        NODE_ENV: "development",
+        UPLOAD_STORAGE_TYPE: "local",
+        JWT_SECRET: "a",
+        JWT_SECRET_REFRESH_TOKEN: "b",
+      }),
     ).toEqual([]);
-    expect(issuesFor({ APP_ENV: "development", JWT_SECRET: "a", JWT_SECRET_REFRESH_TOKEN: "b" })).toEqual([]);
+    expect(
+      issuesFor({
+        APP_ENV: "development",
+        JWT_SECRET: "a",
+        JWT_SECRET_REFRESH_TOKEN: "b",
+      }),
+    ).toEqual([]);
   });
 
   it("is why one key for both was dangerous: a refresh token verified as access", () => {
     // The ensure-authenticated check on tokenType is the only other barrier;
     // with distinct keys the signature itself already refuses.
-    const refresh = sign({ tokenType: "refresh" }, STRONG_REFRESH, { subject: "u" });
+    const refresh = sign({ tokenType: "refresh" }, STRONG_REFRESH, {
+      subject: "u",
+    });
 
     expect(() => verify(refresh, STRONG_ACCESS)).toThrow();
     expect(() => verify(refresh, STRONG_REFRESH)).not.toThrow();

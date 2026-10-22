@@ -46,7 +46,9 @@ async function genericPlan(query: Prisma.Sql): Promise<PlanNode> {
 
   return prisma.$transaction(async (tx) => {
     await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
-    await tx.$executeRawUnsafe("SET LOCAL plan_cache_mode = force_generic_plan");
+    await tx.$executeRawUnsafe(
+      "SET LOCAL plan_cache_mode = force_generic_plan",
+    );
     await tx.$executeRawUnsafe(`PREPARE ${name} AS ${query.text}`);
 
     const args = query.values.length

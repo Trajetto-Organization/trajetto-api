@@ -60,7 +60,9 @@ interface DeliveryProofEffectDeps {
   tickets?: Pick<OccurrenceTicketService, "recordSuperseded">;
 }
 
-type SettledStop = Awaited<ReturnType<IRouteRepository["settleStopForDelivery"]>>;
+type SettledStop = Awaited<
+  ReturnType<IRouteRepository["settleStopForDelivery"]>
+>;
 
 interface ApplyDeliveryProofInput {
   tx: Prisma.TransactionClient;
@@ -142,7 +144,11 @@ async function applyDeliveryProof(
   // The running route's row before the delivery's: the order a route
   // cancellation takes them in. Delivery first and route second (in the
   // settle below) deadlocked against it.
-  const lockedRouteId = await deps.route.lockRouteOfOpenStop(deliveryId, businessId, tx);
+  const lockedRouteId = await deps.route.lockRouteOfOpenStop(
+    deliveryId,
+    businessId,
+    tx,
+  );
 
   // DELIVERED (guarded by the status read before), the PROOF event, and
   // every PENDING request of the delivery superseded (decision 6.3: the
@@ -176,7 +182,10 @@ async function applyDeliveryProof(
   // The ticket of each superseded request says so in its trail and stays
   // OPEN, in this same commit (tickets design §5.2).
   for (const occurrenceId of superseded ?? []) {
-    const ticket = await deps.tickets?.recordSuperseded({ occurrenceId, businessId }, tx);
+    const ticket = await deps.tickets?.recordSuperseded(
+      { occurrenceId, businessId },
+      tx,
+    );
 
     if (ticket) input.onTicketSuperseded?.(ticket.id);
   }
@@ -264,7 +273,11 @@ async function requestProofAnalysis(
     requestedById: string;
     photoPath: string;
     signaturePath: string | null;
-    delivery: { invoice_number?: string | null; code?: string | null; recipient_name: string };
+    delivery: {
+      invoice_number?: string | null;
+      code?: string | null;
+      recipient_name: string;
+    };
     provenAt: Date;
   },
 ): Promise<void> {
@@ -294,7 +307,11 @@ async function requestProofAnalysis(
     // Not lost for good: reconcile-proof-analysis-job asks again for a
     // PENDING card that has no request (IDEMP-08).
     log.error(
-      { err: error, deliveryId: input.deliveryId, businessId: input.businessId },
+      {
+        err: error,
+        deliveryId: input.deliveryId,
+        businessId: input.businessId,
+      },
       "AI proof verification could not be requested",
     );
   }

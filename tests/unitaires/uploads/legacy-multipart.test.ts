@@ -15,7 +15,9 @@ import {
 const BOUNDARY = "----RNFormDataBoundaryabc123";
 const CONTENT_TYPE = `multipart/form-data; boundary=${BOUNDARY}`;
 
-const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x0d, 0x0a, 0x2d, 0x2d, 0x00]);
+const JPEG = Buffer.from([
+  0xff, 0xd8, 0xff, 0xe0, 0x0d, 0x0a, 0x2d, 0x2d, 0x00,
+]);
 
 function body(...parts: Array<Buffer | string>): Buffer {
   return Buffer.concat(
@@ -87,7 +89,10 @@ describe("parseMultipartFormData", () => {
     for (const broken of [
       body(field("a", "1")), // never closed
       body("no boundary at all"),
-      body(`--${BOUNDARY}\r\nContent-Disposition: form-data\r\n\r\nx\r\n`, CLOSE), // no name
+      body(
+        `--${BOUNDARY}\r\nContent-Disposition: form-data\r\n\r\nx\r\n`,
+        CLOSE,
+      ), // no name
     ]) {
       expect(() =>
         parseMultipartFormData(broken, CONTENT_TYPE, { maxFiles: 1 }),
@@ -95,7 +100,9 @@ describe("parseMultipartFormData", () => {
     }
 
     expect(() =>
-      parseMultipartFormData(body(CLOSE), "multipart/form-data", { maxFiles: 1 }),
+      parseMultipartFormData(body(CLOSE), "multipart/form-data", {
+        maxFiles: 1,
+      }),
     ).toThrow(expect.objectContaining({ code: "MALFORMED_MULTIPART" }));
   });
 
@@ -123,13 +130,20 @@ describe("parseMultipartFormData", () => {
 
 describe("sniffImage", () => {
   it("names the image by its signature, never by what the part declared", () => {
-    expect(sniffImage(JPEG)).toEqual({ contentType: "image/jpeg", extension: "jpg" });
+    expect(sniffImage(JPEG)).toEqual({
+      contentType: "image/jpeg",
+      extension: "jpg",
+    });
 
     expect(
-      sniffImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0])),
+      sniffImage(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]),
+      ),
     ).toEqual({ contentType: "image/png", extension: "png" });
 
-    expect(sniffImage(Buffer.from("RIFF\x10\x00\x00\x00WEBPVP8 ", "latin1"))).toEqual({
+    expect(
+      sniffImage(Buffer.from("RIFF\x10\x00\x00\x00WEBPVP8 ", "latin1")),
+    ).toEqual({
       contentType: "image/webp",
       extension: "webp",
     });

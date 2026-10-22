@@ -49,7 +49,9 @@ class InMemoryWebhookDeliveryRepository implements IWebhookDeliveryRepository {
   ) {}
 
   private live(): WebhookDelivery[] {
-    const ids = new Set(this.endpoints.endpoints.map((endpoint) => endpoint.id));
+    const ids = new Set(
+      this.endpoints.endpoints.map((endpoint) => endpoint.id),
+    );
 
     return this.deliveries.filter((delivery) => ids.has(delivery.endpointId));
   }
@@ -133,8 +135,9 @@ class InMemoryWebhookDeliveryRepository implements IWebhookDeliveryRepository {
       delivered: settled.filter(
         (row) => row.status === WebhookDeliveryStatus.DELIVERED,
       ).length,
-      failed: settled.filter((row) => row.status === WebhookDeliveryStatus.FAILED)
-        .length,
+      failed: settled.filter(
+        (row) => row.status === WebhookDeliveryStatus.FAILED,
+      ).length,
       queued: scoped.filter((row) => IN_FLIGHT.includes(row.status)).length,
       p95LatencyMs: percentileDisc(latencies, 0.95),
     };
@@ -156,7 +159,10 @@ class InMemoryWebhookDeliveryRepository implements IWebhookDeliveryRepository {
 
     return {
       ...row,
-      endpoint: { is_active: endpoint.is_active, disabled_at: endpoint.disabled_at },
+      endpoint: {
+        is_active: endpoint.is_active,
+        disabled_at: endpoint.disabled_at,
+      },
     };
   }
 

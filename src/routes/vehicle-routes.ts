@@ -17,7 +17,11 @@ import {
   vehicleResponses,
   vehicleListSearchMetaDoc,
 } from "./documentation/vehicle-documentation";
-import { ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
 import { exportFileResponse } from "./documentation/doc-only-responses";
 
 import { GetVehicleController } from "@/modules/vehicle/usecases/get-vehicle/get-vehicle-controller";

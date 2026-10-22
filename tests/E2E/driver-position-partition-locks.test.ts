@@ -74,63 +74,55 @@ afterAll(async () => {
 });
 
 describe("partition maintenance while something reads the trail", () => {
-  it(
-    "gives up on the partition it cannot lock, quickly, and gets it the next run",
-    async () => {
-      const farthest = nameFor(lookahead);
+  it("gives up on the partition it cannot lock, quickly, and gets it the next run", async () => {
+    const farthest = nameFor(lookahead);
 
-      await holder.$executeRawUnsafe(`DROP TABLE IF EXISTS "${farthest}"`);
-      expect(await attached()).not.toContain(farthest);
+    await holder.$executeRawUnsafe(`DROP TABLE IF EXISTS "${farthest}"`);
+    expect(await attached()).not.toContain(farthest);
 
-      const lockHeld = holdParentLock(12_000);
+    const lockHeld = holdParentLock(12_000);
 
-      // Give the holder time to take its lock.
-      await sleep(500);
+    // Give the holder time to take its lock.
+    await sleep(500);
 
-      const startedAt = Date.now();
-      const outcome = await job.handler().then(
-        () => "resolved",
-        (error: unknown) => `rejected: ${String(error)}`,
-      );
-      const elapsed = Date.now() - startedAt;
+    const startedAt = Date.now();
+    const outcome = await job.handler().then(
+      () => "resolved",
+      (error: unknown) => `rejected: ${String(error)}`,
+    );
+    const elapsed = Date.now() - startedAt;
 
-      // Before: the CREATE waited for the whole 12 s, and in production for
-      // as long as the holder lived, with every ping queued behind it.
-      expect(elapsed, `levou ${elapsed} ms (${outcome})`).toBeLessThan(8_000);
+    // Before: the CREATE waited for the whole 12 s, and in production for
+    // as long as the holder lived, with every ping queued behind it.
+    expect(elapsed, `levou ${elapsed} ms (${outcome})`).toBeLessThan(8_000);
 
-      // A partition a week ahead is not worth failing the run over.
-      expect(outcome).toBe("resolved");
-      expect(await attached()).not.toContain(farthest);
+    // A partition a week ahead is not worth failing the run over.
+    expect(outcome).toBe("resolved");
+    expect(await attached()).not.toContain(farthest);
 
-      await lockHeld;
+    await lockHeld;
 
-      await job.handler();
-      expect(await attached()).toContain(farthest);
-    },
-    40_000,
-  );
+    await job.handler();
+    expect(await attached()).toContain(farthest);
+  }, 40_000);
 
-  it(
-    "fails the run when it cannot secure the partitions pings land in now",
-    async () => {
-      const tomorrow = nameFor(1);
+  it("fails the run when it cannot secure the partitions pings land in now", async () => {
+    const tomorrow = nameFor(1);
 
-      // Only an empty partition may go: tomorrow's has no rows yet.
-      await holder.$executeRawUnsafe(`DROP TABLE IF EXISTS "${tomorrow}"`);
+    // Only an empty partition may go: tomorrow's has no rows yet.
+    await holder.$executeRawUnsafe(`DROP TABLE IF EXISTS "${tomorrow}"`);
 
-      const lockHeld = holdParentLock(8_000);
+    const lockHeld = holdParentLock(8_000);
 
-      await sleep(500);
+    await sleep(500);
 
-      // Missing tomorrow is not a warning for next week: the first ping after
-      // midnight is REFUSED. The run is recorded as failed so it is seen.
-      await expect(job.handler()).rejects.toThrow(/driver_position_\d{8}/);
+    // Missing tomorrow is not a warning for next week: the first ping after
+    // midnight is REFUSED. The run is recorded as failed so it is seen.
+    await expect(job.handler()).rejects.toThrow(/driver_position_\d{8}/);
 
-      await lockHeld;
+    await lockHeld;
 
-      await job.handler();
-      expect(await attached()).toContain(tomorrow);
-    },
-    40_000,
-  );
+    await job.handler();
+    expect(await attached()).toContain(tomorrow);
+  }, 40_000);
 });

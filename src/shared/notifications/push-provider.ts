@@ -1,4 +1,7 @@
-import { httpOutcome, observeProviderCall } from "@/shared/health/provider-metrics";
+import {
+  httpOutcome,
+  observeProviderCall,
+} from "@/shared/health/provider-metrics";
 
 /**
  * Expo Push API client (plain HTTP — the endpoint is a single POST, an SDK
@@ -88,9 +91,12 @@ async function sendExpoPushMessages(
   if (!response.ok) {
     // The status rides on the error: the pipeline writes it into lastError
     // as `[push http=401]`, which the ops alerting reads (OBS-08).
-    throw Object.assign(new Error(`Expo push respondeu HTTP ${response.status}`), {
-      httpStatus: response.status,
-    });
+    throw Object.assign(
+      new Error(`Expo push respondeu HTTP ${response.status}`),
+      {
+        httpStatus: response.status,
+      },
+    );
   }
 
   const result = (await response.json()) as { data?: ExpoPushTicket[] };

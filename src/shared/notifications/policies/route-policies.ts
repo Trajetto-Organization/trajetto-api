@@ -81,12 +81,18 @@ function renderRouteCancelledPush(
  * socket refreshes an open app; this reaches the phone in the driver's pocket
  * before they drive to an address that left the plan.
  */
-function renderRoutePlanChangedPush(payload: RoutePlanChangedPayload): RenderedPush {
+function renderRoutePlanChangedPush(
+  payload: RoutePlanChangedPayload,
+): RenderedPush {
   return {
     title: "Sua rota foi alterada",
     body: `O despachante alterou as paradas da rota ${payload.code}. Confira a lista antes de seguir.`,
     // "/route" opens the day's list in the app, like a release.
-    data: { url: "/route", routeId: payload.routeId, planVersion: payload.planVersion },
+    data: {
+      url: "/route",
+      routeId: payload.routeId,
+      planVersion: payload.planVersion,
+    },
   };
 }
 
@@ -112,16 +118,17 @@ const routeCancelledPolicy: NotificationPolicyEntry<RouteCancelledPayload> = {
   renderPush: renderRouteCancelledPush,
 };
 
-const routePlanChangedPolicy: NotificationPolicyEntry<RoutePlanChangedPayload> = {
-  category: NotificationCategory.TASKS,
-  mandatory: true,
+const routePlanChangedPolicy: NotificationPolicyEntry<RoutePlanChangedPayload> =
+  {
+    category: NotificationCategory.TASKS,
+    mandatory: true,
 
-  async resolveRecipients(payload, deps) {
-    return recipientDriver(payload.driverUserId, deps.userRepository);
-  },
+    async resolveRecipients(payload, deps) {
+      return recipientDriver(payload.driverUserId, deps.userRepository);
+    },
 
-  renderPush: renderRoutePlanChangedPush,
-};
+    renderPush: renderRoutePlanChangedPush,
+  };
 
 export {
   renderRouteCancelledPush,

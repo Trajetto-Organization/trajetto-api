@@ -47,7 +47,15 @@ async function seedProfile(
       name: `Perfil ${randomUUID().slice(0, 8)}`,
       businessId,
       permissions: {
-        create: [{ permissionKey, action: permissionKey, canRead: true, canWrite, businessId }],
+        create: [
+          {
+            permissionKey,
+            action: permissionKey,
+            canRead: true,
+            canWrite,
+            businessId,
+          },
+        ],
       },
     },
   });
@@ -55,7 +63,10 @@ async function seedProfile(
   return profile.id;
 }
 
-async function officeUser(businessId: string, profileAccessId: string): Promise<string> {
+async function officeUser(
+  businessId: string,
+  profileAccessId: string,
+): Promise<string> {
   const id = randomUUID();
   const familyId = randomUUID();
 
@@ -81,10 +92,14 @@ async function officeUser(businessId: string, profileAccessId: string): Promise<
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "30m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "30m",
+    },
+  );
 }
 
 async function masterToken(): Promise<string> {
@@ -111,13 +126,20 @@ async function masterToken(): Promise<string> {
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "30m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "30m",
+    },
+  );
 }
 
-async function newDriver(businessId: string, name: string): Promise<{ id: string; token: string }> {
+async function newDriver(
+  businessId: string,
+  name: string,
+): Promise<{ id: string; token: string }> {
   const driver = await prisma.driver.create({
     data: {
       name,
@@ -168,17 +190,29 @@ function get(path: string, token: string) {
 
 const startPath = (businessId = CARRIER) => `/driver-pause/start/${businessId}`;
 const endPath = (businessId = CARRIER) => `/driver-pause/end/${businessId}`;
-const currentPath = (businessId = CARRIER) => `/driver-pause/current/${businessId}`;
+const currentPath = (businessId = CARRIER) =>
+  `/driver-pause/current/${businessId}`;
 const reportPath = (businessId = CARRIER, query = "") =>
   `/driver-pause/report/${businessId}${query ? `?${query}` : ""}`;
 
-const refusal = (response: { statusCode: number; json: () => { code?: string } }) =>
-  `${response.statusCode} ${response.json().code}`;
+const refusal = (response: {
+  statusCode: number;
+  json: () => { code?: string };
+}) => `${response.statusCode} ${response.json().code}`;
 
 beforeAll(async () => {
-  const carrier = await seedFleetDriver(prisma, { businessId: CARRIER, cnpj: "11222777000101" });
-  const other = await seedFleetDriver(prisma, { businessId: OTHER, cnpj: "11222777000202" });
-  const bare = await seedFleetDriver(prisma, { businessId: BARE, cnpj: "11222777000303" });
+  const carrier = await seedFleetDriver(prisma, {
+    businessId: CARRIER,
+    cnpj: "11222777000101",
+  });
+  const other = await seedFleetDriver(prisma, {
+    businessId: OTHER,
+    cnpj: "11222777000202",
+  });
+  const bare = await seedFleetDriver(prisma, {
+    businessId: BARE,
+    cnpj: "11222777000303",
+  });
 
   // A company that never hired Entregas.
   await prisma.businessEntitlement.deleteMany({
@@ -198,10 +232,22 @@ beforeAll(async () => {
   ids.colleague = colleague.id;
   tokens.colleague = colleague.token;
 
-  tokens.dispatcher = await officeUser(CARRIER, await seedProfile(CARRIER, "delivery_manage", true));
-  tokens.reader = await officeUser(CARRIER, await seedProfile(CARRIER, "delivery_manage", false));
-  tokens.driverReader = await officeUser(CARRIER, await seedProfile(CARRIER, "driver_manage", false));
-  tokens.mechanic = await officeUser(CARRIER, await seedProfile(CARRIER, "fuel_manage", true));
+  tokens.dispatcher = await officeUser(
+    CARRIER,
+    await seedProfile(CARRIER, "delivery_manage", true),
+  );
+  tokens.reader = await officeUser(
+    CARRIER,
+    await seedProfile(CARRIER, "delivery_manage", false),
+  );
+  tokens.driverReader = await officeUser(
+    CARRIER,
+    await seedProfile(CARRIER, "driver_manage", false),
+  );
+  tokens.mechanic = await officeUser(
+    CARRIER,
+    await seedProfile(CARRIER, "fuel_manage", true),
+  );
   tokens.master = await masterToken();
 
   // Decision 14.4: pauses start only inside a journey. These drivers are on
@@ -275,8 +321,13 @@ describe("the driver starts and ends a pause", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ replayed: true, pause: { id: ids.pause } });
-    expect(await prisma.driverPause.count({ where: { driverId: ids.driver } })).toBe(1);
+    expect(response.json()).toMatchObject({
+      replayed: true,
+      pause: { id: ids.pause },
+    });
+    expect(
+      await prisma.driverPause.count({ where: { driverId: ids.driver } }),
+    ).toBe(1);
   });
 
   it("refuses a second open pause with a friendly 409", async () => {
@@ -298,7 +349,10 @@ describe("the driver starts and ends a pause", () => {
 
     expect(body.timeZone).toBe(ZONE);
     expect(body.day).toBe(businessDateKey(new Date(), ZONE));
-    expect(body.open).toMatchObject({ id: ids.pause, start_submission_id: startKey });
+    expect(body.open).toMatchObject({
+      id: ids.pause,
+      start_submission_id: startKey,
+    });
   });
 
   it("ends it, answers the resend, and refuses a second end with another key", async () => {
@@ -319,7 +373,10 @@ describe("the driver starts and ends a pause", () => {
     });
 
     expect(resend.statusCode).toBe(200);
-    expect(resend.json()).toMatchObject({ replayed: true, pause: first.json().pause });
+    expect(resend.json()).toMatchObject({
+      replayed: true,
+      pause: first.json().pause,
+    });
 
     const other = await post(endPath(), tokens.driver, {
       start_submission_id: startKey,
@@ -334,11 +391,15 @@ describe("the driver starts and ends a pause", () => {
 
     // "Today" is the company's: a pause begun before its midnight is not in it.
     const startedToday =
-      businessDateKey(new Date(first.json().pause.started_at), ZONE) === current.json().day;
+      businessDateKey(new Date(first.json().pause.started_at), ZONE) ===
+      current.json().day;
 
-    expect(current.json().today.map((pause: { id: string }) => pause.id).includes(ids.pause)).toBe(
-      startedToday,
-    );
+    expect(
+      current
+        .json()
+        .today.map((pause: { id: string }) => pause.id)
+        .includes(ids.pause),
+    ).toBe(startedToday);
   });
 
   it("takes an end that arrives before its start, and the late start finds the closed pause", async () => {
@@ -353,7 +414,10 @@ describe("the driver starts and ends a pause", () => {
     });
 
     expect(ended.statusCode).toBe(200);
-    expect(ended.json().pause).toMatchObject({ kind: "REST", duration_minutes: 20 });
+    expect(ended.json().pause).toMatchObject({
+      kind: "REST",
+      duration_minutes: 20,
+    });
 
     const started = await post(startPath(), tokens.driver, {
       kind: "REST",
@@ -362,7 +426,10 @@ describe("the driver starts and ends a pause", () => {
     });
 
     expect(started.statusCode).toBe(200);
-    expect(started.json()).toMatchObject({ replayed: true, pause: { id: ended.json().pause.id } });
+    expect(started.json()).toMatchObject({
+      replayed: true,
+      pause: { id: ended.json().pause.id },
+    });
   });
 
   it("answers an end with no start anywhere with 404", async () => {
@@ -376,7 +443,9 @@ describe("the driver starts and ends a pause", () => {
 
   it("refuses a start tapped beyond the offline horizon, and the end that would create it", async () => {
     // Dated by its arrival, it opened NOW a pause the driver never began.
-    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60_000).toISOString();
+    const tenDaysAgo = new Date(
+      Date.now() - 10 * 24 * 60 * 60_000,
+    ).toISOString();
     const startKey = randomUUID();
 
     const started = await post(
@@ -396,7 +465,9 @@ describe("the driver starts and ends a pause", () => {
     });
 
     expect(refusal(ended)).toBe("409 PAUSE_TOO_OLD");
-    expect(await prisma.driverPause.count({ where: { driverId: ids.colleague } })).toBe(0);
+    expect(
+      await prisma.driverPause.count({ where: { driverId: ids.colleague } }),
+    ).toBe(0);
 
     // The slot stays free for the driver's real pause.
     const real = await post(startPath(), tokens.colleague, {
@@ -416,7 +487,10 @@ describe("the driver starts and ends a pause", () => {
     const closer = await newDriver(CARRIER, "Fim Atrasado");
     const key = randomUUID();
 
-    await post(startPath(), closer.token, { kind: "MEAL", start_submission_id: key });
+    await post(startPath(), closer.token, {
+      kind: "MEAL",
+      start_submission_id: key,
+    });
 
     const ended = await post(endPath(), closer.token, {
       start_submission_id: key,
@@ -425,17 +499,26 @@ describe("the driver starts and ends a pause", () => {
     });
 
     expect(ended.statusCode).toBe(200);
-    expect(Date.now() - new Date(ended.json().pause.ended_at).getTime()).toBeLessThan(60_000);
     expect(
-      (await post(startPath(), closer.token, { kind: "REST", start_submission_id: randomUUID() }))
-        .statusCode,
+      Date.now() - new Date(ended.json().pause.ended_at).getTime(),
+    ).toBeLessThan(60_000);
+    expect(
+      (
+        await post(startPath(), closer.token, {
+          kind: "REST",
+          start_submission_id: randomUUID(),
+        })
+      ).statusCode,
     ).toBe(201);
   });
 
   it("refuses a malformed body as a contract error", async () => {
     expect(
       refusal(
-        await post(startPath(), tokens.driver, { kind: "LUNCH", start_submission_id: randomUUID() }),
+        await post(startPath(), tokens.driver, {
+          kind: "LUNCH",
+          start_submission_id: randomUUID(),
+        }),
       ),
     ).toBe("400 VALIDATION_ERROR");
 
@@ -457,16 +540,25 @@ describe("races", () => {
 
     const responses = await Promise.all(
       [randomUUID(), randomUUID()].map((key) =>
-        post(startPath(), racer.token, { kind: "MEAL", start_submission_id: key }),
+        post(startPath(), racer.token, {
+          kind: "MEAL",
+          start_submission_id: key,
+        }),
       ),
     );
 
-    expect(responses.map(refusal).map((line) => line.split(" ")[0]).sort()).toEqual([
-      "201",
-      "409",
-    ]);
+    expect(
+      responses
+        .map(refusal)
+        .map((line) => line.split(" ")[0])
+        .sort(),
+    ).toEqual(["201", "409"]);
     expect(responses.map(refusal)).toContain("409 PAUSE_ALREADY_OPEN");
-    expect(await prisma.driverPause.count({ where: { driverId: racer.id, ended_at: null } })).toBe(1);
+    expect(
+      await prisma.driverPause.count({
+        where: { driverId: racer.id, ended_at: null },
+      }),
+    ).toBe(1);
   });
 
   it("writes one pause for the same start sent twice at once", async () => {
@@ -474,27 +566,47 @@ describe("races", () => {
     const key = randomUUID();
 
     const responses = await Promise.all(
-      [1, 2].map(() => post(startPath(), racer.token, { kind: "REST", start_submission_id: key })),
+      [1, 2].map(() =>
+        post(startPath(), racer.token, {
+          kind: "REST",
+          start_submission_id: key,
+        }),
+      ),
     );
 
-    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 201]);
-    expect(new Set(responses.map((response) => response.json().pause.id)).size).toBe(1);
-    expect(await prisma.driverPause.count({ where: { driverId: racer.id } })).toBe(1);
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([
+      200, 201,
+    ]);
+    expect(
+      new Set(responses.map((response) => response.json().pause.id)).size,
+    ).toBe(1);
+    expect(
+      await prisma.driverPause.count({ where: { driverId: racer.id } }),
+    ).toBe(1);
   });
 
   it("closes a pause once when two ends with different keys race", async () => {
     const racer = await newDriver(CARRIER, "Corrida Três");
     const key = randomUUID();
 
-    await post(startPath(), racer.token, { kind: "MEAL", start_submission_id: key });
+    await post(startPath(), racer.token, {
+      kind: "MEAL",
+      start_submission_id: key,
+    });
 
     const responses = await Promise.all(
       [randomUUID(), randomUUID()].map((endKey) =>
-        post(endPath(), racer.token, { start_submission_id: key, end_submission_id: endKey }),
+        post(endPath(), racer.token, {
+          start_submission_id: key,
+          end_submission_id: endKey,
+        }),
       ),
     );
 
-    expect(responses.map(refusal).sort()).toEqual(["200 undefined", "409 PAUSE_ALREADY_ENDED"]);
+    expect(responses.map(refusal).sort()).toEqual([
+      "200 undefined",
+      "409 PAUSE_ALREADY_ENDED",
+    ]);
   });
 });
 
@@ -502,11 +614,18 @@ describe("who may write and read pauses", () => {
   it("writes only as the driver", async () => {
     for (const token of [tokens.admin, tokens.dispatcher, tokens.master]) {
       expect(
-        refusal(await post(startPath(), token, { kind: "MEAL", start_submission_id: randomUUID() })),
+        refusal(
+          await post(startPath(), token, {
+            kind: "MEAL",
+            start_submission_id: randomUUID(),
+          }),
+        ),
       ).toBe("403 PERMISSION_DENIED");
     }
 
-    expect(refusal(await get(currentPath(), tokens.admin))).toBe("403 PERMISSION_DENIED");
+    expect(refusal(await get(currentPath(), tokens.admin))).toBe(
+      "403 PERMISSION_DENIED",
+    );
   });
 
   it("refuses another company's driver and a company without Entregas", async () => {
@@ -536,10 +655,18 @@ describe("who may write and read pauses", () => {
   it("never hands a driver another driver's pause on a guessed key", async () => {
     const key = randomUUID();
 
-    await post(startPath(), tokens.colleague, { kind: "REST", start_submission_id: key });
+    await post(startPath(), tokens.colleague, {
+      kind: "REST",
+      start_submission_id: key,
+    });
 
     expect(
-      refusal(await post(startPath(), tokens.driver, { kind: "REST", start_submission_id: key })),
+      refusal(
+        await post(startPath(), tokens.driver, {
+          kind: "REST",
+          start_submission_id: key,
+        }),
+      ),
     ).toBe("409 SUBMISSION_OWNER_MISMATCH");
 
     expect(
@@ -563,18 +690,28 @@ describe("who may write and read pauses", () => {
 
     // The one screen that shows it asks for delivery_manage (decision 4.2):
     // a drivers-only profile reaching the API but never the page was a gap.
-    expect(refusal(await get(reportPath(), tokens.driverReader))).toBe("403 PERMISSION_DENIED");
+    expect(refusal(await get(reportPath(), tokens.driverReader))).toBe(
+      "403 PERMISSION_DENIED",
+    );
 
-    expect(refusal(await get(reportPath(), tokens.driver))).toBe("403 PERMISSION_DENIED");
-    expect(refusal(await get(reportPath(), tokens.mechanic))).toBe("403 PERMISSION_DENIED");
+    expect(refusal(await get(reportPath(), tokens.driver))).toBe(
+      "403 PERMISSION_DENIED",
+    );
+    expect(refusal(await get(reportPath(), tokens.mechanic))).toBe(
+      "403 PERMISSION_DENIED",
+    );
     expect(refusal(await get(reportPath(CARRIER), tokens.otherAdmin))).toBe(
       "403 TENANT_ACCESS_DENIED",
     );
   });
 
   it("lets the MASTER read a company's report, behind the module gate", async () => {
-    expect((await get(reportPath(CARRIER), tokens.master)).statusCode).toBe(200);
-    expect(refusal(await get(reportPath(BARE), tokens.master))).toBe("403 MODULE_NOT_ENABLED");
+    expect((await get(reportPath(CARRIER), tokens.master)).statusCode).toBe(
+      200,
+    );
+    expect(refusal(await get(reportPath(BARE), tokens.master))).toBe(
+      "403 MODULE_NOT_ENABLED",
+    );
     expect(refusal(await get(reportPath(randomUUID()), tokens.master))).toBe(
       "404 TENANT_NOT_FOUND",
     );
@@ -640,7 +777,10 @@ describe("the office report", () => {
 
   it("gives the driver's day with the Lei 13.103 alerts, in the company's zone", async () => {
     const response = await get(
-      reportPath(CARRIER, `from=${yesterday}&to=${yesterday}&driverId=${reportDriver}`),
+      reportPath(
+        CARRIER,
+        `from=${yesterday}&to=${yesterday}&driverId=${reportDriver}`,
+      ),
       tokens.reader,
     );
 
@@ -648,7 +788,12 @@ describe("the office report", () => {
 
     const body = response.json();
 
-    expect(body).toMatchObject({ timeZone: ZONE, from: yesterday, to: yesterday, total: 1 });
+    expect(body).toMatchObject({
+      timeZone: ZONE,
+      from: yesterday,
+      to: yesterday,
+      total: 1,
+    });
     expect(body.rules.interjornadaMinutes).toBe(660);
 
     const [row] = body.data;
@@ -667,24 +812,34 @@ describe("the office report", () => {
         longestDrivingWithoutRestMinutes: 240,
       },
     });
-    expect(row.flags.map((flag: { code: string }) => flag.code)).toEqual(["MEAL_SHORT"]);
+    expect(row.flags.map((flag: { code: string }) => flag.code)).toEqual([
+      "MEAL_SHORT",
+    ]);
     expect(row.flags[0].message).toContain("40 min");
   });
 
   it("counts drivers and alerts across the company, never another company's", async () => {
-    const response = await get(reportPath(CARRIER, `from=${yesterday}&to=${today}`), tokens.admin);
+    const response = await get(
+      reportPath(CARRIER, `from=${yesterday}&to=${today}`),
+      tokens.admin,
+    );
     const body = response.json();
 
-    const driverIds = body.data.map((row: { driverId: string }) => row.driverId);
+    const driverIds = body.data.map(
+      (row: { driverId: string }) => row.driverId,
+    );
 
     expect(driverIds).toContain(reportDriver);
     expect(driverIds).not.toContain(ids.otherDriver);
-    expect(body.searchMeta.facets.driverId.map((facet: { value: string }) => facet.value)).not.toContain(
-      ids.otherDriver,
-    );
     expect(
-      body.searchMeta.facets.flag.find((facet: { value: string }) => facet.value === "MEAL_SHORT")
-        .count,
+      body.searchMeta.facets.driverId.map(
+        (facet: { value: string }) => facet.value,
+      ),
+    ).not.toContain(ids.otherDriver);
+    expect(
+      body.searchMeta.facets.flag.find(
+        (facet: { value: string }) => facet.value === "MEAL_SHORT",
+      ).count,
     ).toBeGreaterThanOrEqual(1);
 
     const onlyAlerts = await get(
@@ -692,28 +847,43 @@ describe("the office report", () => {
       tokens.admin,
     );
 
-    expect(onlyAlerts.json().data.map((row: { driverId: string }) => row.driverId)).toEqual([
-      reportDriver,
-    ]);
+    expect(
+      onlyAlerts.json().data.map((row: { driverId: string }) => row.driverId),
+    ).toEqual([reportDriver]);
   });
 
   it("refuses an inverted or too long range, and an unknown alert", async () => {
-    expect(refusal(await get(reportPath(CARRIER, `from=${today}&to=${yesterday}`), tokens.admin))).toBe(
-      "400 PAUSE_REPORT_RANGE_INVALID",
-    );
     expect(
-      refusal(await get(reportPath(CARRIER, `from=2026-01-01&to=2026-03-01`), tokens.admin)),
+      refusal(
+        await get(
+          reportPath(CARRIER, `from=${today}&to=${yesterday}`),
+          tokens.admin,
+        ),
+      ),
     ).toBe("400 PAUSE_REPORT_RANGE_INVALID");
-    expect(refusal(await get(reportPath(CARRIER, "flag=TIRED"), tokens.admin))).toBe(
-      "400 VALIDATION_ERROR",
-    );
+    expect(
+      refusal(
+        await get(
+          reportPath(CARRIER, `from=2026-01-01&to=2026-03-01`),
+          tokens.admin,
+        ),
+      ),
+    ).toBe("400 PAUSE_REPORT_RANGE_INVALID");
+    expect(
+      refusal(await get(reportPath(CARRIER, "flag=TIRED"), tokens.admin)),
+    ).toBe("400 VALIDATION_ERROR");
 
     // Shifting year 9999 threw a bare RangeError: a 500.
-    expect(refusal(await get(reportPath(CARRIER, "to=9999-12-31"), tokens.admin))).toBe(
-      "400 PAUSE_REPORT_RANGE_INVALID",
-    );
     expect(
-      refusal(await get(reportPath(CARRIER, "from=0001-01-01&to=0001-01-02"), tokens.admin)),
+      refusal(await get(reportPath(CARRIER, "to=9999-12-31"), tokens.admin)),
+    ).toBe("400 PAUSE_REPORT_RANGE_INVALID");
+    expect(
+      refusal(
+        await get(
+          reportPath(CARRIER, "from=0001-01-01&to=0001-01-02"),
+          tokens.admin,
+        ),
+      ),
     ).toBe("400 PAUSE_REPORT_RANGE_INVALID");
   });
 
@@ -750,7 +920,10 @@ describe("the office report", () => {
     });
 
     const response = await get(
-      reportPath(CARRIER, `from=${dayBefore}&to=${dayBefore}&driverId=${driver.id}`),
+      reportPath(
+        CARRIER,
+        `from=${dayBefore}&to=${dayBefore}&driverId=${driver.id}`,
+      ),
       tokens.reader,
     );
 
@@ -760,7 +933,12 @@ describe("the office report", () => {
 
     expect(row.workday.minutes).toBe(600);
     expect(row.totals.mealMinutes).toBe(0);
-    expect(row.pauses[0]).toMatchObject({ status: "TOO_LONG", duration_minutes: 1190 });
-    expect(row.flags.map((flag: { code: string }) => flag.code)).toContain("PAUSE_TOO_LONG");
+    expect(row.pauses[0]).toMatchObject({
+      status: "TOO_LONG",
+      duration_minutes: 1190,
+    });
+    expect(row.flags.map((flag: { code: string }) => flag.code)).toContain(
+      "PAUSE_TOO_LONG",
+    );
   });
 });

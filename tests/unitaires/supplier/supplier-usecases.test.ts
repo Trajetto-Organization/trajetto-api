@@ -142,7 +142,12 @@ describe("a supplier never changes company", () => {
     // The old update skipped the check for the MASTER and wrote businessId:
     // the supplier left for OTHER while its parts and orders stayed here.
     await expect(
-      update().execute({ name: "Oficina Movida Ltda" }, created.id, OTHER, MASTER),
+      update().execute(
+        { name: "Oficina Movida Ltda" },
+        created.id,
+        OTHER,
+        MASTER,
+      ),
     ).rejects.toMatchObject({
       statusCode: 403,
       code: "SUPPLIER_TENANT_MISMATCH",
@@ -189,7 +194,12 @@ describe("a supplier with history is not deleted (FLEET-SUP-1)", () => {
 describe("other screens hear about the change (decision 2.3)", () => {
   it("emits catalogChanged supplier after create, update and delete", async () => {
     const created = await create().execute(supplierOf(), ADMIN);
-    await update().execute({ ...supplierOf(), city: "Campinas" }, created.id, CARRIER, ADMIN);
+    await update().execute(
+      { ...supplierOf(), city: "Campinas" },
+      created.id,
+      CARRIER,
+      ADMIN,
+    );
     await remove().execute(created.id, CARRIER, ADMIN);
 
     expect(realtime.catalogChanged).toEqual([
@@ -203,8 +213,14 @@ describe("other screens hear about the change (decision 2.3)", () => {
     const created = await create().execute(supplierOf(), ADMIN);
     realtime.catalogChanged.length = 0;
 
-    suppliers.references.set(created.id, { serviceOrders: 1, parts: 0, accountsPayable: 0 });
-    await expect(remove().execute(created.id, CARRIER, ADMIN)).rejects.toThrow();
+    suppliers.references.set(created.id, {
+      serviceOrders: 1,
+      parts: 0,
+      accountsPayable: 0,
+    });
+    await expect(
+      remove().execute(created.id, CARRIER, ADMIN),
+    ).rejects.toThrow();
 
     expect(realtime.catalogChanged).toEqual([]);
   });
@@ -218,7 +234,10 @@ describe("the list is one company's", () => {
         page: 1,
         pageSize: 10,
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "BUSINESS_NOT_IDENTIFIED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BUSINESS_NOT_IDENTIFIED",
+    });
   });
 
   it("refuses a manager naming another company", async () => {

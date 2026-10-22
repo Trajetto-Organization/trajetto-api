@@ -57,14 +57,23 @@ async function sessionToken(
   });
 
   return sign(
-    { tokenType: "access", role, businessId, driverId: null, sessionVersion: 0, familyId },
+    {
+      tokenType: "access",
+      role,
+      businessId,
+      driverId: null,
+      sessionVersion: 0,
+      familyId,
+    },
     auth.secret_token,
     { subject: userId, expiresIn: "1h" },
   );
 }
 
 async function connect(token: string): Promise<Client> {
-  const { io: connectTo } = await import(/* @vite-ignore */ socketClientEntry());
+  const { io: connectTo } = await import(
+    /* @vite-ignore */ socketClientEntry()
+  );
 
   const socket: Client = await new Promise((resolve, reject) => {
     const client = connectTo(`http://127.0.0.1:${port}`, {
@@ -126,7 +135,10 @@ let otherClient: Client;
 
 beforeAll(async () => {
   await prisma.business.createMany({
-    data: [company(CARRIER, "77222888000101"), company(OTHER, "77222888000202")],
+    data: [
+      company(CARRIER, "77222888000101"),
+      company(OTHER, "77222888000202"),
+    ],
   });
 
   await prisma.user.createMany({
@@ -159,7 +171,9 @@ beforeAll(async () => {
   await io.initializeSocketIO(server);
 
   masterClient = await connect(await sessionToken(MASTER, "MASTER", null));
-  otherClient = await connect(await sessionToken(OTHER_ADMIN, "BUSINESS_ADMIN", OTHER));
+  otherClient = await connect(
+    await sessionToken(OTHER_ADMIN, "BUSINESS_ADMIN", OTHER),
+  );
 
   // The connection handler joins its rooms after the handshake resolves.
   await new Promise((resolve) => setTimeout(resolve, 1000));

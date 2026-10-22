@@ -12,11 +12,17 @@ class ListMyDeliveriesController {
 
     const listMyDeliveriesUseCase = container.resolve(ListMyDeliveriesUseCase);
 
-    const { deliveries, routes, occurrenceTypes, deliveredTypes, pauseTypes, journey } =
-      await listMyDeliveriesUseCase.execute({
-        userId: id,
-        businessId,
-      });
+    const {
+      deliveries,
+      routes,
+      occurrenceTypes,
+      deliveredTypes,
+      pauseTypes,
+      journey,
+    } = await listMyDeliveriesUseCase.execute({
+      userId: id,
+      businessId,
+    });
 
     return reply.status(200).send({
       data: deliveries,

@@ -131,7 +131,11 @@ async function seedUser(
   );
 }
 
-async function seedDriver(businessId: string, id: string, name: string): Promise<void> {
+async function seedDriver(
+  businessId: string,
+  id: string,
+  name: string,
+): Promise<void> {
   await prisma.driver.create({
     data: {
       id,
@@ -152,7 +156,11 @@ async function seedDriver(businessId: string, id: string, name: string): Promise
   });
 }
 
-async function seedVehicle(businessId: string, id: string, plate: string): Promise<void> {
+async function seedVehicle(
+  businessId: string,
+  id: string,
+  plate: string,
+): Promise<void> {
   await prisma.vehicle.create({
     data: {
       id,
@@ -177,7 +185,12 @@ async function seedVehicle(businessId: string, id: string, plate: string): Promi
   });
 }
 
-type Status = "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+type Status =
+  | "PLANNED"
+  | "RELEASED"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "CANCELLED";
 
 /**
  * Thirteen routes, more than one page of ten, so a sort or a filter that only
@@ -207,19 +220,118 @@ interface Seed {
 }
 
 const SEED: Seed[] = [
-  { code: 1, status: "COMPLETED", driverId: ANA, vehicleId: TRUCK_A, destination: "CD Norte", startedMinutes: 10 },
-  { code: 2, status: "CANCELLED", driverId: BRUNO, vehicleId: null, destination: null, startedMinutes: null },
-  { code: 3, status: "PLANNED", driverId: CARLA, vehicleId: TRUCK_B, destination: "CD Sul", startedMinutes: null },
-  { code: 4, status: "PLANNED", driverId: ANA, vehicleId: null, destination: "Zona Leste", startedMinutes: null, id: TIE_4, at: 4 },
-  { code: 5, status: "RELEASED", driverId: BRUNO, vehicleId: TRUCK_A, destination: null, startedMinutes: null, id: TIE_5, at: 4 },
-  { code: 6, status: "IN_PROGRESS", driverId: CARLA, vehicleId: TRUCK_B, destination: "CD Oeste", startedMinutes: 30 },
-  { code: 7, status: "RELEASED", driverId: ANA, vehicleId: TRUCK_B, destination: null, startedMinutes: null, id: TIE_7, at: 7 },
-  { code: 8, status: "PLANNED", driverId: BRUNO, vehicleId: null, destination: "CD Norte", startedMinutes: null, id: TIE_8, at: 7 },
-  { code: 9, status: "COMPLETED", driverId: CARLA, vehicleId: TRUCK_A, destination: "Zona Oeste", startedMinutes: 5 },
-  { code: 10, status: "CANCELLED", driverId: ANA, vehicleId: TRUCK_A, destination: null, startedMinutes: 20 },
-  { code: 11, status: "PLANNED", driverId: BRUNO, vehicleId: TRUCK_B, destination: "Centro", startedMinutes: null },
-  { code: 12, status: "COMPLETED", driverId: CARLA, vehicleId: null, destination: "CD Sul", startedMinutes: 15 },
-  { code: 13, status: "IN_PROGRESS", driverId: ANA, vehicleId: TRUCK_A, destination: null, startedMinutes: 40 },
+  {
+    code: 1,
+    status: "COMPLETED",
+    driverId: ANA,
+    vehicleId: TRUCK_A,
+    destination: "CD Norte",
+    startedMinutes: 10,
+  },
+  {
+    code: 2,
+    status: "CANCELLED",
+    driverId: BRUNO,
+    vehicleId: null,
+    destination: null,
+    startedMinutes: null,
+  },
+  {
+    code: 3,
+    status: "PLANNED",
+    driverId: CARLA,
+    vehicleId: TRUCK_B,
+    destination: "CD Sul",
+    startedMinutes: null,
+  },
+  {
+    code: 4,
+    status: "PLANNED",
+    driverId: ANA,
+    vehicleId: null,
+    destination: "Zona Leste",
+    startedMinutes: null,
+    id: TIE_4,
+    at: 4,
+  },
+  {
+    code: 5,
+    status: "RELEASED",
+    driverId: BRUNO,
+    vehicleId: TRUCK_A,
+    destination: null,
+    startedMinutes: null,
+    id: TIE_5,
+    at: 4,
+  },
+  {
+    code: 6,
+    status: "IN_PROGRESS",
+    driverId: CARLA,
+    vehicleId: TRUCK_B,
+    destination: "CD Oeste",
+    startedMinutes: 30,
+  },
+  {
+    code: 7,
+    status: "RELEASED",
+    driverId: ANA,
+    vehicleId: TRUCK_B,
+    destination: null,
+    startedMinutes: null,
+    id: TIE_7,
+    at: 7,
+  },
+  {
+    code: 8,
+    status: "PLANNED",
+    driverId: BRUNO,
+    vehicleId: null,
+    destination: "CD Norte",
+    startedMinutes: null,
+    id: TIE_8,
+    at: 7,
+  },
+  {
+    code: 9,
+    status: "COMPLETED",
+    driverId: CARLA,
+    vehicleId: TRUCK_A,
+    destination: "Zona Oeste",
+    startedMinutes: 5,
+  },
+  {
+    code: 10,
+    status: "CANCELLED",
+    driverId: ANA,
+    vehicleId: TRUCK_A,
+    destination: null,
+    startedMinutes: 20,
+  },
+  {
+    code: 11,
+    status: "PLANNED",
+    driverId: BRUNO,
+    vehicleId: TRUCK_B,
+    destination: "Centro",
+    startedMinutes: null,
+  },
+  {
+    code: 12,
+    status: "COMPLETED",
+    driverId: CARLA,
+    vehicleId: null,
+    destination: "CD Sul",
+    startedMinutes: 15,
+  },
+  {
+    code: 13,
+    status: "IN_PROGRESS",
+    driverId: ANA,
+    vehicleId: TRUCK_A,
+    destination: null,
+    startedMinutes: 40,
+  },
 ];
 
 const BASE = new Date("2026-09-10T12:00:00.000Z").getTime();
@@ -264,7 +376,12 @@ async function board(
   });
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, meta: {} as Meta, rows: [], body: response.body };
+    return {
+      status: response.statusCode,
+      meta: {} as Meta,
+      rows: [],
+      body: response.body,
+    };
   }
 
   const [first, ...rest] = response.body
@@ -307,7 +424,9 @@ beforeAll(async () => {
         code: entry.code,
         name: `Rota do dia ${entry.code}`,
         status: entry.status,
-        scheduled_date: new Date(`2026-09-${String(10 + (entry.code % 3)).padStart(2, "0")}`),
+        scheduled_date: new Date(
+          `2026-09-${String(10 + (entry.code % 3)).padStart(2, "0")}`,
+        ),
         destination: entry.destination,
         started_at:
           entry.startedMinutes === null
@@ -343,7 +462,9 @@ beforeAll(async () => {
   tokens.noDeliveries = await seedUser("BUSINESS_USER", CARRIER, {
     profileAccessId: await seedProfile(CARRIER, "vehicle_manage", true),
   });
-  tokens.driverAna = await seedUser("BUSINESS_USER", CARRIER, { driverId: ANA });
+  tokens.driverAna = await seedUser("BUSINESS_USER", CARRIER, {
+    driverId: ANA,
+  });
   tokens.otherAdmin = await seedUser("BUSINESS_ADMIN", OTHER);
   tokens.master = await seedUser("MASTER", null);
 
@@ -360,7 +481,9 @@ describe("the order, answered by the server across pages", () => {
   it("defaults to newest first, with the id breaking both ties the same way", async () => {
     // created_at desc; the pairs 4/5 and 7/8 tie on it and come id desc:
     // TIE_4 (…9a4) before TIE_5 (…1a5), TIE_8 (…908) before TIE_7 (…107).
-    expect(await codes("")).toEqual([13, 12, 11, 10, 9, 8, 7, 6, 4, 5, 3, 2, 1]);
+    expect(await codes("")).toEqual([
+      13, 12, 11, 10, 9, 8, 7, 6, 4, 5, 3, 2, 1,
+    ]);
   });
 
   it("keeps id desc inside a tie when the date is sorted ascending", async () => {
@@ -414,11 +537,19 @@ describe("the order, answered by the server across pages", () => {
     ];
 
     expect(rows.map((row) => row.status)).toEqual([
-      "PLANNED", "PLANNED", "PLANNED", "PLANNED",
-      "RELEASED", "RELEASED",
-      "IN_PROGRESS", "IN_PROGRESS",
-      "COMPLETED", "COMPLETED", "COMPLETED",
-      "CANCELLED", "CANCELLED",
+      "PLANNED",
+      "PLANNED",
+      "PLANNED",
+      "PLANNED",
+      "RELEASED",
+      "RELEASED",
+      "IN_PROGRESS",
+      "IN_PROGRESS",
+      "COMPLETED",
+      "COMPLETED",
+      "COMPLETED",
+      "CANCELLED",
+      "CANCELLED",
     ]);
   });
 
@@ -462,7 +593,9 @@ describe("the filters, answered by the server with disjunctive counts", () => {
 
   it("filters by several drivers and counts drivers without their own filter", async () => {
     // Red before: driverId took a single uuid; a list answered 400.
-    const { rows, meta } = await board(`driverId=${ANA},${CARLA}&status=COMPLETED`);
+    const { rows, meta } = await board(
+      `driverId=${ANA},${CARLA}&status=COMPLETED`,
+    );
 
     expect(rows.map((row) => row.code)).toEqual([12, 9, 1]);
     expect(meta.total).toBe(3);
@@ -494,7 +627,9 @@ describe("the filters, answered by the server with disjunctive counts", () => {
 
   it("filters by vehicle, names the plates and leaves 'sem veículo' out of the options", async () => {
     // Red before: vehicleId was not a filter at all.
-    const { rows, meta } = await board(`vehicleId=${TRUCK_B}&sort=code&order=asc`);
+    const { rows, meta } = await board(
+      `vehicleId=${TRUCK_B}&sort=code&order=asc`,
+    );
 
     expect(rows.map((row) => row.code)).toEqual([3, 6, 7, 11]);
     expect(meta.searchMeta.facets.vehicleId).toEqual([
@@ -504,7 +639,9 @@ describe("the filters, answered by the server with disjunctive counts", () => {
   });
 
   it("combines search, filter and sort; the search reads the destination too", async () => {
-    const { rows, meta } = await board("search=CD&status=PLANNED&sort=code&order=desc");
+    const { rows, meta } = await board(
+      "search=CD&status=PLANNED&sort=code&order=desc",
+    );
 
     // CD Sul (3), CD Norte (8) — PLANNED only; 1, 6, 12 are other statuses.
     expect(rows.map((row) => row.code)).toEqual([8, 3]);
@@ -513,7 +650,9 @@ describe("the filters, answered by the server with disjunctive counts", () => {
   });
 
   it("keeps a selected option with zero rows so its chip keeps a name", async () => {
-    const { rows, meta } = await board(`driverId=${ANA}&status=CANCELLED&search=Centro`);
+    const { rows, meta } = await board(
+      `driverId=${ANA}&status=CANCELLED&search=Centro`,
+    );
 
     expect(rows).toEqual([]);
     expect(meta.searchMeta.facets.driverId).toEqual([
@@ -529,7 +668,9 @@ describe("the filters, answered by the server with disjunctive counts", () => {
 
 describe("the walls around the board", () => {
   it("never counts, lists or names another company's routes or records", async () => {
-    const { rows, meta } = await board(`driverId=${FOREIGN_DRIVER}&vehicleId=${FOREIGN_TRUCK}`);
+    const { rows, meta } = await board(
+      `driverId=${FOREIGN_DRIVER}&vehicleId=${FOREIGN_TRUCK}`,
+    );
 
     expect(rows).toEqual([]);
     expect(meta.total).toBe(0);
@@ -543,7 +684,9 @@ describe("the walls around the board", () => {
   });
 
   it("answers another company's manager with 403 and a master only with a company", async () => {
-    expect((await board(`businessId=${CARRIER}`, tokens.otherAdmin)).status).toBe(403);
+    expect(
+      (await board(`businessId=${CARRIER}`, tokens.otherAdmin)).status,
+    ).toBe(403);
 
     const master = await board(`businessId=${CARRIER}`, tokens.master);
 

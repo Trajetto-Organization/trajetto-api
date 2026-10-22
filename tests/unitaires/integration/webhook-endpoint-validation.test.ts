@@ -153,7 +153,11 @@ describe("an IPv6 literal on the way out", () => {
   });
 
   it("and a private one is refused for good", async () => {
-    for (const url of ["https://[::1]/", "https://[fd00::5]:8443/", "https://[::ffff:10.0.0.5]/"]) {
+    for (const url of [
+      "https://[::1]/",
+      "https://[fd00::5]:8443/",
+      "https://[::ffff:10.0.0.5]/",
+    ]) {
       const verdict = await verifyWebhookDestination(url);
 
       expect(verdict.allowed, url).toBe(false);

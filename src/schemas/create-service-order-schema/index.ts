@@ -341,7 +341,9 @@ const createServiceOrderSchema = z
       // Equal is valid: a vehicle that stood in the workshop did not move
       // (FLEET-SO-4). Only a reading behind the snapshot is refused.
       if (data.new_mileage_after_service && data.current_mileage_at_service) {
-        return data.new_mileage_after_service >= data.current_mileage_at_service;
+        return (
+          data.new_mileage_after_service >= data.current_mileage_at_service
+        );
       }
 
       return true;

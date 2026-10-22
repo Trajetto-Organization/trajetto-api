@@ -100,12 +100,18 @@ function seed(
 describe("the ON_THE_WAY topic", () => {
   it("is the policy of the delivery.on_the_way outbox topic", () => {
     expect(TOPIC_BY_EVENT["delivery.on_the_way"]).toBe("ON_THE_WAY");
-    expect(notificationPolicies["delivery.on_the_way"]).toBe(deliveryOnTheWayPolicy);
-    expect(getNotificationPolicy("delivery.on_the_way")).toBe(deliveryOnTheWayPolicy);
+    expect(notificationPolicies["delivery.on_the_way"]).toBe(
+      deliveryOnTheWayPolicy,
+    );
+    expect(getNotificationPolicy("delivery.on_the_way")).toBe(
+      deliveryOnTheWayPolicy,
+    );
   });
 
   it("notifies nobody inside the company", async () => {
-    expect(await deliveryOnTheWayPolicy.resolveRecipients(payload(), deps())).toEqual([]);
+    expect(
+      await deliveryOnTheWayPolicy.resolveRecipients(payload(), deps()),
+    ).toEqual([]);
   });
 });
 
@@ -116,7 +122,10 @@ describe("whether anybody is told", () => {
     await seed("ON_THE_WAY", "WHATSAPP", false);
 
     expect(
-      await deliveryOnTheWayPolicy.resolveExternalRecipients!(payload(), deps()),
+      await deliveryOnTheWayPolicy.resolveExternalRecipients!(
+        payload(),
+        deps(),
+      ),
     ).toEqual([]);
 
     // Decided before any row exists: nothing to count as a failure later.
@@ -152,7 +161,9 @@ describe("what it says", () => {
       "WHATSAPP",
     );
 
-    expect(rendered!.body).toContain("Padaria Central Ltda, o motorista da Silva Log está a caminho.");
+    expect(rendered!.body).toContain(
+      "Padaria Central Ltda, o motorista da Silva Log está a caminho.",
+    );
     expect(rendered!.body).toContain(recipient.access_token);
   });
 });
@@ -162,7 +173,9 @@ describe("when it stops being true", () => {
     expect(customerMessageStillTrue("ON_THE_WAY", "IN_TRANSIT")).toBe(true);
 
     for (const status of ["PENDING", "DELIVERED", "FAILED", "CANCELLED"]) {
-      expect(customerMessageStillTrue("ON_THE_WAY", status), status).toBe(false);
+      expect(customerMessageStillTrue("ON_THE_WAY", status), status).toBe(
+        false,
+      );
     }
   });
 
@@ -174,8 +187,8 @@ describe("when it stops being true", () => {
       telephone: "65999999999",
     });
 
-    expect(await deliveryOnTheWayPolicy.supersededReason!(payload(), deps())).toMatch(
-      /ON_THE_WAY superada: a entrega está DELIVERED/,
-    );
+    expect(
+      await deliveryOnTheWayPolicy.supersededReason!(payload(), deps()),
+    ).toMatch(/ON_THE_WAY superada: a entrega está DELIVERED/);
   });
 });

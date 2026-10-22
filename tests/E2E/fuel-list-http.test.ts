@@ -500,7 +500,9 @@ describe("GET /fuel/list-fuel — filters and cards", () => {
   });
 
   it("combines facets, in the comma and the repeated form", async () => {
-    const comma = await list(`fuelTypeId=${FT_DIESEL},${FT_GASOLINA}&vehicleId=${V2}`);
+    const comma = await list(
+      `fuelTypeId=${FT_DIESEL},${FT_GASOLINA}&vehicleId=${V2}`,
+    );
     const repeated = await list(
       `fuelTypeId=${FT_DIESEL}&fuelTypeId=${FT_GASOLINA}&vehicleId=${V2}`,
     );
@@ -599,7 +601,11 @@ describe("GET /fuel/search-fuel-by-vehicle — the vehicle's history picker", ()
     expect(all.statusCode).toBe(200);
     expect(rowsOf(all.body)).toHaveLength(4);
     // V1 is refueled at i = 0, 3, 6, 9; Bruno drives the odd ones.
-    expect(rowsOf(searched.body).map(indexOf).sort((a, b) => a - b)).toEqual([3, 9]);
+    expect(
+      rowsOf(searched.body)
+        .map(indexOf)
+        .sort((a, b) => a - b),
+    ).toEqual([3, 9]);
   });
 
   it("does not open another company's vehicle", async () => {
@@ -648,7 +654,8 @@ describe("GET /fuel/export-fuel — the screen's filters (decision 5.8)", () => 
   it("refuses a driver and a manager of another company", async () => {
     expect((await exportFuels("", tokens.driver)).statusCode).toBe(403);
     expect(
-      (await exportFuels(`businessId=${CARRIER}`, tokens.otherAdmin)).statusCode,
+      (await exportFuels(`businessId=${CARRIER}`, tokens.otherAdmin))
+        .statusCode,
     ).toBe(403);
   });
 });

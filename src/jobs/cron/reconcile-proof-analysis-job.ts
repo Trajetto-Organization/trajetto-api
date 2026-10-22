@@ -7,7 +7,10 @@ import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
 import { aiProviderConfigured } from "@/shared/ai/ai-provider";
 import { buildProofAnalysisInput } from "@/shared/delivery/proof-analysis-input";
 
-const log = logger.child({ component: "cron", job: "reconcile-proof-analysis" });
+const log = logger.child({
+  component: "cron",
+  job: "reconcile-proof-analysis",
+});
 
 /**
  * How long a card waits before the sweep considers its request lost.
@@ -114,7 +117,11 @@ const reconcileProofAnalysisJob: CronJobDefinition = {
             occurred_at: true,
             created_at: true,
             delivery: {
-              select: { invoice_number: true, code: true, recipient_name: true },
+              select: {
+                invoice_number: true,
+                code: true,
+                recipient_name: true,
+              },
             },
           },
         });

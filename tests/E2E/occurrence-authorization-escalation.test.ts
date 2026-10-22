@@ -71,7 +71,12 @@ async function seedUser(
   key: string,
   role: "BUSINESS_ADMIN" | "BUSINESS_USER",
   businessId: string,
-  extra: { profileAccessId?: string; driverId?: string; revoked?: boolean; minutes?: number } = {},
+  extra: {
+    profileAccessId?: string;
+    driverId?: string;
+    revoked?: boolean;
+    minutes?: number;
+  } = {},
 ): Promise<void> {
   const user = await prisma.user.create({
     data: {
@@ -90,13 +95,24 @@ async function seedUser(
   ids[key] = user.id;
 }
 
-async function profileWith(permissionKey: string, canWrite: boolean): Promise<string> {
+async function profileWith(
+  permissionKey: string,
+  canWrite: boolean,
+): Promise<string> {
   const profile = await prisma.profileAccess.create({
     data: {
       name: `Perfil ${randomUUID().slice(0, 8)}`,
       businessId: CARRIER,
       permissions: {
-        create: [{ permissionKey, action: permissionKey, canRead: true, canWrite, businessId: CARRIER }],
+        create: [
+          {
+            permissionKey,
+            action: permissionKey,
+            canRead: true,
+            canWrite,
+            businessId: CARRIER,
+          },
+        ],
       },
     },
   });
@@ -152,7 +168,9 @@ beforeAll(async () => {
   await seedBusiness(CARRIER);
   await seedBusiness(OTHER);
 
-  await prisma.shipper.create({ data: { id: SHIPPER, name: "Embarcador", businessId: CARRIER } });
+  await prisma.shipper.create({
+    data: { id: SHIPPER, name: "Embarcador", businessId: CARRIER },
+  });
 
   await prisma.driver.create({
     data: {
@@ -178,9 +196,18 @@ beforeAll(async () => {
   const fleet = await profileWith("vehicle_manage", true);
 
   await seedUser("admin", "BUSINESS_ADMIN", CARRIER, { minutes: 1 });
-  await seedUser("operator", "BUSINESS_USER", CARRIER, { profileAccessId: writes, minutes: 2 });
-  await seedUser("reader", "BUSINESS_USER", CARRIER, { profileAccessId: reads, minutes: 3 });
-  await seedUser("fleet", "BUSINESS_USER", CARRIER, { profileAccessId: fleet, minutes: 4 });
+  await seedUser("operator", "BUSINESS_USER", CARRIER, {
+    profileAccessId: writes,
+    minutes: 2,
+  });
+  await seedUser("reader", "BUSINESS_USER", CARRIER, {
+    profileAccessId: reads,
+    minutes: 3,
+  });
+  await seedUser("fleet", "BUSINESS_USER", CARRIER, {
+    profileAccessId: fleet,
+    minutes: 4,
+  });
   await seedUser("revoked", "BUSINESS_USER", CARRIER, {
     profileAccessId: writes,
     revoked: true,
@@ -202,7 +229,14 @@ beforeAll(async () => {
       blocks_delivery: true,
       requires_authorization: true,
       form_fields: [
-        { key: "quem_atendeu", label: "Quem atendeu", type: "text", required: true, max_length: 60, multiline: false },
+        {
+          key: "quem_atendeu",
+          label: "Quem atendeu",
+          type: "text",
+          required: true,
+          max_length: 60,
+          multiline: false,
+        },
       ],
       businessId: CARRIER,
     },
@@ -210,7 +244,11 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await Promise.all([prisma.$disconnect(), replicaA.$disconnect(), replicaB.$disconnect()]);
+  await Promise.all([
+    prisma.$disconnect(),
+    replicaA.$disconnect(),
+    replicaB.$disconnect(),
+  ]);
 });
 
 describe("two replicas sweeping at the same instant", () => {
@@ -218,7 +256,11 @@ describe("two replicas sweeping at the same instant", () => {
     const due = [await request(11), await request(25)];
     const young = await request(5);
     const decided = await request(30, "DENIED");
-    const already = await request(40, "PENDING", new Date(Date.now() - 20 * MINUTE));
+    const already = await request(
+      40,
+      "PENDING",
+      new Date(Date.now() - 20 * MINUTE),
+    );
 
     const now = new Date();
     const cutoff = new Date(now.getTime() - 10 * MINUTE);
@@ -227,19 +269,19 @@ describe("two replicas sweeping at the same instant", () => {
     // runs while the first one's row locks are still held.
     const sweep = (client: PrismaClient) =>
       client.$transaction(async (tx) => {
-        const rows = await new OccurrenceAuthorizationRepository(client).claimDueEscalations(
-          cutoff,
-          100,
-          now,
-          tx,
-        );
+        const rows = await new OccurrenceAuthorizationRepository(
+          client,
+        ).claimDueEscalations(cutoff, 100, now, tx);
 
         await tx.$executeRaw`SELECT pg_sleep(0.3)`;
 
         return rows.map((row) => row.id);
       });
 
-    const [claimedByA, claimedByB] = await Promise.all([sweep(replicaA), sweep(replicaB)]);
+    const [claimedByA, claimedByB] = await Promise.all([
+      sweep(replicaA),
+      sweep(replicaB),
+    ]);
 
     const claimed = [...claimedByA, ...claimedByB];
 
@@ -256,11 +298,18 @@ describe("two replicas sweeping at the same instant", () => {
     for (const id of due) expect(escalatedAt.get(id)).toBeInstanceOf(Date);
     expect(escalatedAt.get(young)).toBeNull();
     expect(escalatedAt.get(decided)).toBeNull();
-    expect(escalatedAt.get(already)?.getTime()).toBeLessThan(now.getTime() - 10 * MINUTE);
+    expect(escalatedAt.get(already)?.getTime()).toBeLessThan(
+      now.getTime() - 10 * MINUTE,
+    );
 
     // A sweep repeated later finds nothing left.
     const again = await replicaA.$transaction((tx) =>
-      new OccurrenceAuthorizationRepository(replicaA).claimDueEscalations(cutoff, 100, now, tx),
+      new OccurrenceAuthorizationRepository(replicaA).claimDueEscalations(
+        cutoff,
+        100,
+        now,
+        tx,
+      ),
     );
 
     expect(again).toEqual([]);
@@ -281,7 +330,8 @@ describe("the escalation job", () => {
 
     expect(events).toHaveLength(1);
 
-    const payload = events[0].payload as unknown as DeliveryOccurrenceAuthorizationEscalatedPayload;
+    const payload = events[0]
+      .payload as unknown as DeliveryOccurrenceAuthorizationEscalatedPayload;
 
     expect(payload).toMatchObject({
       occurrenceId: due,
@@ -292,14 +342,17 @@ describe("the escalation job", () => {
     });
     expect(payload.waitingMinutes).toBeGreaterThanOrEqual(12);
 
-    const recipients = await deliveryOccurrenceAuthorizationEscalatedPolicy.resolveRecipients(
-      payload,
-      { userRepository: new UserRepository() } as PolicyDeps,
-    );
+    const recipients =
+      await deliveryOccurrenceAuthorizationEscalatedPolicy.resolveRecipients(
+        payload,
+        { userRepository: new UserRepository() } as PolicyDeps,
+      );
 
     expect(recipients.map((user) => user.id)).toEqual([ids.admin, ids.admin2]);
 
-    const queued = await prisma.deliveryOccurrence.findUniqueOrThrow({ where: { id: due } });
+    const queued = await prisma.deliveryOccurrence.findUniqueOrThrow({
+      where: { id: due },
+    });
 
     expect(queued.escalated_at).toBeInstanceOf(Date);
     expect(queued.authorization_status).toBe("PENDING");
@@ -310,10 +363,11 @@ describe("who the occurrence notices reach (DLVP-NOTIF-1)", () => {
   it("the tower's operators hear the requests and the insucessos, beside the administrators", async () => {
     const deps = { userRepository: new UserRepository() } as PolicyDeps;
 
-    const requested = await deliveryOccurrenceAuthorizationRequestedPolicy.resolveRecipients(
-      { businessId: CARRIER } as never,
-      deps,
-    );
+    const requested =
+      await deliveryOccurrenceAuthorizationRequestedPolicy.resolveRecipients(
+        { businessId: CARRIER } as never,
+        deps,
+      );
     const failed = await deliveryOccurrenceReportedPolicy.resolveRecipients(
       { businessId: CARRIER } as never,
       deps,
@@ -339,7 +393,10 @@ describe("a request whose delivery was resolved from the panel (review r1)", () 
     });
 
     const reason = await prisma.statusChangeReason.create({
-      data: { name: `Cancelada ${randomUUID().slice(0, 8)}`, businessId: CARRIER },
+      data: {
+        name: `Cancelada ${randomUUID().slice(0, 8)}`,
+        businessId: CARRIER,
+      },
     });
 
     // The panel's own path: nothing in it knows about the request.
@@ -351,7 +408,9 @@ describe("a request whose delivery was resolved from the panel (review r1)", () 
       reasonId: reason.id,
     });
 
-    const queue = await new OccurrenceAuthorizationRepository(prisma).listPending(CARRIER, 100);
+    const queue = await new OccurrenceAuthorizationRepository(
+      prisma,
+    ).listPending(CARRIER, 100);
 
     expect(queue.rows.map((row) => row.id)).not.toContain(cancelledId);
     expect(queue.rows.map((row) => row.id)).toContain(waitingId);
@@ -361,9 +420,14 @@ describe("a request whose delivery was resolved from the panel (review r1)", () 
     expect(await escalationsOf(cancelledId)).toHaveLength(0);
     expect(await escalationsOf(waitingId)).toHaveLength(1);
 
-    const closed = await prisma.deliveryOccurrence.findUniqueOrThrow({ where: { id: cancelledId } });
+    const closed = await prisma.deliveryOccurrence.findUniqueOrThrow({
+      where: { id: cancelledId },
+    });
 
-    expect(closed).toMatchObject({ authorization_status: "SUPERSEDED", escalated_at: null });
+    expect(closed).toMatchObject({
+      authorization_status: "SUPERSEDED",
+      escalated_at: null,
+    });
 
     // Repeated, the sweep finds nothing more to close or escalate.
     await escalateOccurrenceAuthorizationsJob.handler();
@@ -407,20 +471,29 @@ describe("the ticket of a request the sweep superseded", () => {
     });
 
     // The attempt ends from the panel, by a path that knows nothing of tickets.
-    await prisma.delivery.update({ where: { id: deliveryId }, data: { status: "DELIVERED" } });
+    await prisma.delivery.update({
+      where: { id: deliveryId },
+      data: { status: "DELIVERED" },
+    });
 
     await escalateOccurrenceAuthorizationsJob.handler();
 
     expect(
-      await prisma.deliveryOccurrence.findUniqueOrThrow({ where: { id: occurrenceId } }),
+      await prisma.deliveryOccurrence.findUniqueOrThrow({
+        where: { id: occurrenceId },
+      }),
     ).toMatchObject({ authorization_status: "SUPERSEDED" });
 
-    const after = await prisma.supportTicket.findUniqueOrThrow({ where: { id: ticket.id } });
+    const after = await prisma.supportTicket.findUniqueOrThrow({
+      where: { id: ticket.id },
+    });
 
     expect(after.status).toBe("OPEN");
     expect(after.version).toBe(ticket.version + 1);
 
-    const events = await prisma.supportTicketEvent.findMany({ where: { ticketId: ticket.id } });
+    const events = await prisma.supportTicketEvent.findMany({
+      where: { ticketId: ticket.id },
+    });
 
     expect(events.map((event) => [event.type, event.actor_kind])).toEqual([
       ["AUTHORIZATION_SUPERSEDED", "SYSTEM"],
@@ -429,6 +502,8 @@ describe("the ticket of a request the sweep superseded", () => {
     // Run again: nothing more is superseded, nothing more is written.
     await escalateOccurrenceAuthorizationsJob.handler();
 
-    expect(await prisma.supportTicketEvent.count({ where: { ticketId: ticket.id } })).toBe(1);
+    expect(
+      await prisma.supportTicketEvent.count({ where: { ticketId: ticket.id } }),
+    ).toBe(1);
   });
 });

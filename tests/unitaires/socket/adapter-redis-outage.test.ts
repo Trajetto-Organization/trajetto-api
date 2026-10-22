@@ -77,13 +77,17 @@ async function startFakeRedis(): Promise<FakeRedis> {
         const command = args[0].toUpperCase();
 
         if (command === "INFO") {
-          socket.write(bulk("# Server\r\nredis_version:7.2.0\r\nloading:0\r\n"));
-        } else if (command === "SUBSCRIBE" || command === "PSUBSCRIBE") {
-          args.slice(1).forEach((channel, position) =>
-            socket.write(
-              `*3\r\n${bulk(command.toLowerCase())}${bulk(channel)}:${position + 1}\r\n`,
-            ),
+          socket.write(
+            bulk("# Server\r\nredis_version:7.2.0\r\nloading:0\r\n"),
           );
+        } else if (command === "SUBSCRIBE" || command === "PSUBSCRIBE") {
+          args
+            .slice(1)
+            .forEach((channel, position) =>
+              socket.write(
+                `*3\r\n${bulk(command.toLowerCase())}${bulk(channel)}:${position + 1}\r\n`,
+              ),
+            );
         } else if (command === "PUBLISH" || command === "INCR") {
           socket.write(":1\r\n");
         } else if (command === "PUBSUB") {

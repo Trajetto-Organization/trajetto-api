@@ -256,11 +256,9 @@ function truncateResponseBody(body: string): string {
  * losing them: the row waits, out of the claim's way, until somebody saves
  * the endpoint again or the replay window runs out.
  */
-const ENDPOINT_PAUSED_REASON =
-  `Endpoint pausado ou desligado: o evento aguarda a reativação (até ${REPLAY_WINDOW_DAYS} dias).`;
+const ENDPOINT_PAUSED_REASON = `Endpoint pausado ou desligado: o evento aguarda a reativação (até ${REPLAY_WINDOW_DAYS} dias).`;
 
-const REPLAY_WINDOW_EXPIRED_REASON =
-  `O evento passou ${REPLAY_WINDOW_DAYS} dias sem poder ser entregue e foi encerrado.`;
+const REPLAY_WINDOW_EXPIRED_REASON = `O evento passou ${REPLAY_WINDOW_DAYS} dias sem poder ser entregue e foi encerrado.`;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -269,7 +267,10 @@ function parkedUntil(createdAt: Date): Date {
   return new Date(createdAt.getTime() + REPLAY_WINDOW_DAYS * DAY_MS);
 }
 
-function isOutsideReplayWindow(createdAt: Date, now: Date = new Date()): boolean {
+function isOutsideReplayWindow(
+  createdAt: Date,
+  now: Date = new Date(),
+): boolean {
   return now.getTime() - createdAt.getTime() >= REPLAY_WINDOW_DAYS * DAY_MS;
 }
 

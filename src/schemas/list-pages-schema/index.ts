@@ -8,7 +8,9 @@ const listPagesSchema = z.object({
   search: z
     .string()
     .optional()
-    .describe("Texto livre, sem diferenciar maiúsculas, nos campos de busca da listagem."),
+    .describe(
+      "Texto livre, sem diferenciar maiúsculas, nos campos de busca da listagem.",
+    ),
 });
 
 export { listPagesSchema };

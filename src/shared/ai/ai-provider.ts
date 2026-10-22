@@ -19,8 +19,14 @@ import type {
   StoredImage,
 } from "./image-reader";
 import { LocalOcrReader } from "./local/local-ocr-reader";
-import { providerErrorKind, providerMetrics } from "@/shared/health/provider-metrics";
-import { ImageUnavailableError, PaidInvalidResponseError } from "./reader-errors";
+import {
+  providerErrorKind,
+  providerMetrics,
+} from "@/shared/health/provider-metrics";
+import {
+  ImageUnavailableError,
+  PaidInvalidResponseError,
+} from "./reader-errors";
 import type { ImageMediaType, ProviderFailureKind } from "./vision-provider";
 
 /** The photo read from storage before the call; a stuck GET must not hang either. */
@@ -51,7 +57,8 @@ function createConfiguredImageReader(
     url: config.AI_LOCAL_URL!,
     token: config.AI_LOCAL_TOKEN!,
     timeoutMs: config.AI_LOCAL_TIMEOUT_MS ?? LOCAL_AI_DEFAULT_TIMEOUT_MS,
-    maxConcurrency: config.AI_LOCAL_MAX_CONCURRENCY ?? LOCAL_AI_DEFAULT_MAX_CONCURRENCY,
+    maxConcurrency:
+      config.AI_LOCAL_MAX_CONCURRENCY ?? LOCAL_AI_DEFAULT_MAX_CONCURRENCY,
   });
 }
 
@@ -116,13 +123,19 @@ const loadStoredImage: ImageLoader = async (storagePath) => {
     const abortSignal = AbortSignal.timeout(AI_IMAGE_FETCH_TIMEOUT_MS);
 
     const result = await s3.send(
-      new GetObjectCommand({ Bucket: env.R2_BUCKET_NAME || "", Key: storagePath }),
+      new GetObjectCommand({
+        Bucket: env.R2_BUCKET_NAME || "",
+        Key: storagePath,
+      }),
       { abortSignal },
     );
 
     buffer = Buffer.from(await result.Body!.transformToByteArray());
   } else {
-    const fullPath = path.join(path.resolve(env.UPLOAD_LOCAL_PATH), storagePath);
+    const fullPath = path.join(
+      path.resolve(env.UPLOAD_LOCAL_PATH),
+      storagePath,
+    );
     buffer = await fs.promises.readFile(fullPath);
   }
 
@@ -243,7 +256,12 @@ class AIAnalysisProvider {
         kind = providerErrorKind(error);
       }
 
-      providerMetrics.record("AI_OCR", performance.now() - startedAt, false, kind);
+      providerMetrics.record(
+        "AI_OCR",
+        performance.now() - startedAt,
+        false,
+        kind,
+      );
 
       throw error;
     }

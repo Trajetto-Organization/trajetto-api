@@ -74,13 +74,14 @@ interface IProofAuditRepository {
    *
    * Returns null when the precondition did not hold.
    */
-  review: (props: {
-    auditId: string;
-    businessId: string;
-    reviewedById: string;
-    status: "APPROVED" | "REJECTED";
-    rejection_reason: string | null;
-  },
+  review: (
+    props: {
+      auditId: string;
+      businessId: string;
+      reviewedById: string;
+      status: "APPROVED" | "REJECTED";
+      rejection_reason: string | null;
+    },
     tx?: Prisma.TransactionClient,
   ) => Promise<ProofAuditRecord | null>;
 }

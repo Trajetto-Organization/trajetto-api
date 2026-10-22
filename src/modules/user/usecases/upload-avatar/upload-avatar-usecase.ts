@@ -67,14 +67,21 @@ class UploadAvatarUseCase {
       // Step 3: Only delete old avatar after successful database update.
       // A leftover old file is the orphan sweep's (UPLOAD_ORPHAN_GC).
       if (oldAvatarPath) {
-        await this.uploadService.deleteFile(oldAvatarPath).catch((err: unknown) => {
-          log.error({ err, key: oldAvatarPath, userId }, "previous avatar could not be deleted");
-        });
+        await this.uploadService
+          .deleteFile(oldAvatarPath)
+          .catch((err: unknown) => {
+            log.error(
+              { err, key: oldAvatarPath, userId },
+              "previous avatar could not be deleted",
+            );
+          });
       }
 
       return {
         ...updatedUser,
-        avatar: updatedUser.avatar ? await this.signedAvatarUrl(updatedUser.avatar, userId) : null,
+        avatar: updatedUser.avatar
+          ? await this.signedAvatarUrl(updatedUser.avatar, userId)
+          : null,
       };
     } catch (error) {
       // If upload succeeded but something failed after, clean up the new file
@@ -104,11 +111,17 @@ class UploadAvatarUseCase {
   }
 
   /** The URL to show now, or null: the next /user/me signs it again. */
-  private async signedAvatarUrl(path: string, userId: string): Promise<string | null> {
+  private async signedAvatarUrl(
+    path: string,
+    userId: string,
+  ): Promise<string | null> {
     try {
       return await this.uploadService.getFileUrl(path);
     } catch (err) {
-      log.error({ err, key: path, userId }, "new avatar URL could not be signed");
+      log.error(
+        { err, key: path, userId },
+        "new avatar URL could not be signed",
+      );
 
       return null;
     }

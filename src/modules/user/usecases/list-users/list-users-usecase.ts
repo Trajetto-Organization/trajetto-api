@@ -93,7 +93,8 @@ class ListUsersUseCase {
     // silently swapped for their own.
     if (businessId) assertTenantAccess(findUser, businessId);
 
-    const findBusiness = await this.business.findBusinessById(resolvedBusinessId);
+    const findBusiness =
+      await this.business.findBusinessById(resolvedBusinessId);
 
     if (!findBusiness) {
       throw new BusinessNotFoundError();
@@ -125,7 +126,10 @@ class ListUsersUseCase {
     } catch (error) {
       if (error instanceof AppError) throw error;
 
-      throw new AppError("Não foi possível recuperar a lista de usuários!", 500);
+      throw new AppError(
+        "Não foi possível recuperar a lista de usuários!",
+        500,
+      );
     }
   }
 }

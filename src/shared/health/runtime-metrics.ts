@@ -123,10 +123,16 @@ function createRuntimeMetrics({
       replica: os.hostname(),
       window_seconds: round((Date.now() - windowStartedAt) / 1000),
       event_loop: {
-        lag_p50_ms: sampled ? round(histogram!.percentile(50) / NS_PER_MS, 2) : null,
-        lag_p99_ms: sampled ? round(histogram!.percentile(99) / NS_PER_MS, 2) : null,
+        lag_p50_ms: sampled
+          ? round(histogram!.percentile(50) / NS_PER_MS, 2)
+          : null,
+        lag_p99_ms: sampled
+          ? round(histogram!.percentile(99) / NS_PER_MS, 2)
+          : null,
         lag_max_ms: sampled ? round(histogram!.max / NS_PER_MS, 2) : null,
-        utilization: Number.isFinite(loop.utilization) ? round(loop.utilization, 3) : 0,
+        utilization: Number.isFinite(loop.utilization)
+          ? round(loop.utilization, 3)
+          : 0,
       },
       threadpool: {
         size: Number(process.env.UV_THREADPOOL_SIZE) || 4,
@@ -203,7 +209,8 @@ function startRuntimeMetrics(
   log: LineLogger,
   metrics: RuntimeMetrics = runtimeMetrics,
   readPool?: () => Promise<unknown>,
-  readProviders: () => ProviderMetricsSnapshot = () => providerMetrics.snapshot(),
+  readProviders: () => ProviderMetricsSnapshot = () =>
+    providerMetrics.snapshot(),
 ): () => void {
   metrics.start();
 
@@ -213,7 +220,9 @@ function startRuntimeMetrics(
     // Provider latency and error rate (contract §32) ride on the same line,
     // only for the channels this replica called in the window: the endpoint
     // answers for one replica, the collector sums all of them.
-    const providers = readProviders().channels.filter((channel) => channel.calls > 0);
+    const providers = readProviders().channels.filter(
+      (channel) => channel.calls > 0,
+    );
     const extra = providers.length > 0 ? { providers } : {};
 
     if (!readPool) {
@@ -227,7 +236,10 @@ function startRuntimeMetrics(
       .then(readPool)
       .catch(() => null)
       .then((pool) => {
-        log.info({ runtime: { ...runtime, prisma_pool: pool }, ...extra }, "runtime metrics");
+        log.info(
+          { runtime: { ...runtime, prisma_pool: pool }, ...extra },
+          "runtime metrics",
+        );
       });
   }, metrics.windowMs);
 

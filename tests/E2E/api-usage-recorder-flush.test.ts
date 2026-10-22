@@ -84,8 +84,10 @@ describe("flushing the usage counter", () => {
     const first = new ApiUsageRecorder();
     const second = new ApiUsageRecorder();
 
-    for (let index = 0; index < 3; index += 1) first.record({ ...CALL, apiKeyId });
-    for (let index = 0; index < 4; index += 1) second.record({ ...CALL, apiKeyId });
+    for (let index = 0; index < 3; index += 1)
+      first.record({ ...CALL, apiKeyId });
+    for (let index = 0; index < 4; index += 1)
+      second.record({ ...CALL, apiKeyId });
 
     // The same bucket, written by two processes in the same instant: the
     // unique index decides, and the second adds to the first.
@@ -109,7 +111,12 @@ describe("flushing the usage counter", () => {
     const counter = new ApiUsageRecorder();
 
     for (let index = 0; index < 30; index += 1) {
-      counter.record({ ...CALL, apiKeyId, route: `/integration/v1/r${index}`, status: 422 });
+      counter.record({
+        ...CALL,
+        apiKeyId,
+        route: `/integration/v1/r${index}`,
+        status: 422,
+      });
     }
 
     expect(await counter.flush()).toBe(30);

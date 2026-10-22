@@ -44,7 +44,10 @@ function directives(header: string): Record<string, string[]> {
 }
 
 async function portal() {
-  const response = await app.inject({ method: "GET", url: "/integration/docs" });
+  const response = await app.inject({
+    method: "GET",
+    url: "/integration/docs",
+  });
 
   return {
     html: response.body,
@@ -103,13 +106,20 @@ describe("the public documentation portal", () => {
     const { html } = await portal();
 
     expect(html.indexOf("<script>")).toBeGreaterThan(-1);
-    expect(html.indexOf("<script>")).toBeLessThan(html.indexOf('id="api-reference"'));
+    expect(html.indexOf("<script>")).toBeLessThan(
+      html.indexOf('id="api-reference"'),
+    );
   });
 
   it("keeps the strict policy on every other route", async () => {
-    const response = await app.inject({ method: "GET", url: "/integration/v1/catalogue" });
+    const response = await app.inject({
+      method: "GET",
+      url: "/integration/v1/catalogue",
+    });
 
-    const csp = directives(String(response.headers["content-security-policy"] ?? ""));
+    const csp = directives(
+      String(response.headers["content-security-policy"] ?? ""),
+    );
 
     expect(csp["script-src"]).toEqual(["'self'"]);
   });
@@ -165,27 +175,37 @@ describe("the console's configuration", () => {
     const configuration = configurationOf((await portal()).html) ?? {};
 
     expect(configuration.localization).toEqual({ locale: "pt-BR" });
-    expect(configuration.authentication).toEqual({ preferredSecurityScheme: "apiKey" });
+    expect(configuration.authentication).toEqual({
+      preferredSecurityScheme: "apiKey",
+    });
   });
 
   it("points at the guides when the renderer cannot load", async () => {
-    const { renderPublicDocsPage } = await import("@/shared/integration/public-docs");
+    const { renderPublicDocsPage } = await import(
+      "@/shared/integration/public-docs"
+    );
 
     const html = renderPublicDocsPage("/integration/docs/openapi.json", {
       portalUrl: "https://www.exemplo.com.br/docs",
     });
 
-    expect(html.match(/https:\/\/www\.exemplo\.com\.br\/docs/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(
+      html.match(/https:\/\/www\.exemplo\.com\.br\/docs/g)?.length,
+    ).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps a staging console out of search results, and production's in", async () => {
-    const { renderPublicDocsPage } = await import("@/shared/integration/public-docs");
+    const { renderPublicDocsPage } = await import(
+      "@/shared/integration/public-docs"
+    );
 
     const url = "/integration/docs/openapi.json";
 
     expect(renderPublicDocsPage(url, { environment: "staging" })).toContain(
       '<meta name="robots" content="noindex, nofollow" />',
     );
-    expect(renderPublicDocsPage(url, { environment: "production" })).not.toContain("noindex");
+    expect(
+      renderPublicDocsPage(url, { environment: "production" }),
+    ).not.toContain("noindex");
   });
 });

@@ -25,7 +25,10 @@ import { AIAnalysisPipelineService } from "@/shared/ai/ai-analysis-pipeline-serv
 import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
 
 import { fakeVision } from "./support/fake-vision";
-import { seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
+import {
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
 
 /**
  * The AI routes over real HTTP (AI-1, AI-2, decisions 4.1 and 4.3).
@@ -85,10 +88,14 @@ async function sessionFor(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "15m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "15m",
+    },
+  );
 }
 
 async function profile(businessId: string, canWrite: boolean): Promise<string> {
@@ -135,7 +142,11 @@ async function fuelOf(
 }
 
 function call(method: "GET" | "POST", url: string, token: string) {
-  return app.inject({ method, url, headers: { authorization: `Bearer ${token}` } });
+  return app.inject({
+    method,
+    url,
+    headers: { authorization: `Bearer ${token}` },
+  });
 }
 
 beforeAll(async () => {
@@ -253,13 +264,19 @@ describe("asking for a reading (POST /ai-analysis/request)", () => {
 
     expect(response.statusCode, response.body).toBe(403);
     expect(response.json().code).toBe("PERMISSION_DENIED");
-    expect(await prisma.aIAnalysisRequest.count({ where: { recordId: fuelId } })).toBe(0);
+    expect(
+      await prisma.aIAnalysisRequest.count({ where: { recordId: fuelId } }),
+    ).toBe(0);
   });
 
   it("is refused to a read-only profile", async () => {
     const fuelId = await fuelOf(carrier);
 
-    const response = await call("POST", `/ai-analysis/request/fuel/${fuelId}`, tokens.reader);
+    const response = await call(
+      "POST",
+      `/ai-analysis/request/fuel/${fuelId}`,
+      tokens.reader,
+    );
 
     expect(response.statusCode, response.body).toBe(403);
     expect(response.json().code).toBe("PERMISSION_DENIED");
@@ -298,27 +315,43 @@ describe("asking for a reading (POST /ai-analysis/request)", () => {
 
     expect(response.statusCode, response.body).toBe(404);
     expect(response.json().code).toBe("AI_RECORD_NOT_FOUND");
-    expect(await prisma.aIAnalysisRequest.count({ where: { recordId: foreign } })).toBe(0);
+    expect(
+      await prisma.aIAnalysisRequest.count({ where: { recordId: foreign } }),
+    ).toBe(0);
   });
 
   it("queues it for a profile that writes the record, once", async () => {
     const fuelId = await fuelOf(carrier);
 
-    const first = await call("POST", `/ai-analysis/request/fuel/${fuelId}`, tokens.writer);
+    const first = await call(
+      "POST",
+      `/ai-analysis/request/fuel/${fuelId}`,
+      tokens.writer,
+    );
 
     expect(first.statusCode, first.body).toBe(200);
     expect(first.json().outcome).toBe("queued");
 
-    const again = await call("POST", `/ai-analysis/request/fuel/${fuelId}`, tokens.writer);
+    const again = await call(
+      "POST",
+      `/ai-analysis/request/fuel/${fuelId}`,
+      tokens.writer,
+    );
 
     expect(again.json().outcome).toBe("already_running");
-    expect(await prisma.aIAnalysisRequest.count({ where: { recordId: fuelId } })).toBe(1);
+    expect(
+      await prisma.aIAnalysisRequest.count({ where: { recordId: fuelId } }),
+    ).toBe(1);
   });
 
   it("lets the MASTER ask on a company that has the fleet module", async () => {
     const fuelId = await fuelOf(carrier);
 
-    const response = await call("POST", `/ai-analysis/request/fuel/${fuelId}`, tokens.master);
+    const response = await call(
+      "POST",
+      `/ai-analysis/request/fuel/${fuelId}`,
+      tokens.master,
+    );
 
     expect(response.statusCode, response.body).toBe(200);
   });
@@ -326,7 +359,10 @@ describe("asking for a reading (POST /ai-analysis/request)", () => {
   it("says so, with a code, when the company has the readings off", async () => {
     const fuelId = await fuelOf(other);
 
-    await prisma.business.update({ where: { id: OTHER }, data: { ai_analysis_limit: 0 } });
+    await prisma.business.update({
+      where: { id: OTHER },
+      data: { ai_analysis_limit: 0 },
+    });
 
     try {
       const response = await call(
@@ -338,14 +374,19 @@ describe("asking for a reading (POST /ai-analysis/request)", () => {
       expect(response.statusCode, response.body).toBe(409);
       expect(response.json().code).toBe("AI_NOT_ENABLED");
     } finally {
-      await prisma.business.update({ where: { id: OTHER }, data: { ai_analysis_limit: 10 } });
+      await prisma.business.update({
+        where: { id: OTHER },
+        data: { ai_analysis_limit: 10 },
+      });
     }
   });
 });
 
 /** The pipeline's analyzer, swapped for a describe and put back. */
 function pipelineAnalyzer() {
-  return AIAnalysisPipelineService.getInstance() as unknown as { provider: unknown };
+  return AIAnalysisPipelineService.getInstance() as unknown as {
+    provider: unknown;
+  };
 }
 
 describe("the checklist's manual reading (AI-2)", () => {
@@ -431,7 +472,9 @@ describe("the checklist's manual reading (AI-2)", () => {
 
     expect(first.json().outcome).toBe("queued");
     expect(
-      await prisma.aIAnalysisUnit.count({ where: { request: { recordId: checklist.id } } }),
+      await prisma.aIAnalysisUnit.count({
+        where: { request: { recordId: checklist.id } },
+      }),
     ).toBe(3);
 
     await finishEverything(checklist.id);
@@ -444,13 +487,21 @@ describe("the checklist's manual reading (AI-2)", () => {
 
     expect(again.statusCode, again.body).toBe(200);
     expect(again.json().outcome).toBe("already_completed");
-    expect(await prisma.aIAnalysisRequest.count({ where: { recordId: checklist.id } })).toBe(1);
+    expect(
+      await prisma.aIAnalysisRequest.count({
+        where: { recordId: checklist.id },
+      }),
+    ).toBe(1);
   });
 
   it("reads only the photo that changed since", async () => {
     const checklist = await checklistWithPhotos();
 
-    await call("POST", `/ai-analysis/request/checklist/${checklist.id}`, carrier.managerToken);
+    await call(
+      "POST",
+      `/ai-analysis/request/checklist/${checklist.id}`,
+      carrier.managerToken,
+    );
     await finishEverything(checklist.id);
 
     await prisma.vehicleChecklist.update({
@@ -477,7 +528,9 @@ describe("the checklist's manual reading (AI-2)", () => {
       include: { units: true },
     });
 
-    expect(newest.units.map((unit) => unit.unitKey)).toEqual(["tires_condition"]);
+    expect(newest.units.map((unit) => unit.unitKey)).toEqual([
+      "tires_condition",
+    ]);
     expect(newest.input).toEqual({
       photosByField: { tires_condition: ["pneu-novo.jpg"] },
       checklistData: { tires_condition: "good" },
@@ -489,11 +542,18 @@ describe("the checklist's manual reading (AI-2)", () => {
   // was reserved and paid for a second time by the button.
   it("does not buy again a photo another request is about to read", async () => {
     // Room in the quota: the earlier cases spent most of the 10.
-    await prisma.business.update({ where: { id: CARRIER }, data: { ai_analysis_limit: 100 } });
+    await prisma.business.update({
+      where: { id: CARRIER },
+      data: { ai_analysis_limit: 100 },
+    });
 
     const checklist = await checklistWithPhotos();
 
-    await call("POST", `/ai-analysis/request/checklist/${checklist.id}`, carrier.managerToken);
+    await call(
+      "POST",
+      `/ai-analysis/request/checklist/${checklist.id}`,
+      carrier.managerToken,
+    );
     await finishEverything(checklist.id);
 
     // The driver replaced two photos; the update queued only the tyres'.
@@ -536,10 +596,9 @@ describe("the checklist's manual reading (AI-2)", () => {
     });
 
     // The button asked only for the photo nobody was reading.
-    expect(inFlight.map((request) => request.units.map((unit) => unit.unitKey))).toEqual([
-      ["tires_condition"],
-      ["fuel_level_adequate"],
-    ]);
+    expect(
+      inFlight.map((request) => request.units.map((unit) => unit.unitKey)),
+    ).toEqual([["tires_condition"], ["fuel_level_adequate"]]);
 
     // Everything left is being read: nothing new, nothing reserved again.
     const again = await call(
@@ -552,10 +611,17 @@ describe("the checklist's manual reading (AI-2)", () => {
     expect(again.json().outcome).toBe("already_running");
     expect(
       await prisma.aIAnalysisUnit.count({
-        where: { unitKey: "tires_condition", request: { recordId: checklist.id, status: "PENDING" } },
+        where: {
+          unitKey: "tires_condition",
+          request: { recordId: checklist.id, status: "PENDING" },
+        },
       }),
     ).toBe(1);
-    expect(await prisma.aIAnalysisRequest.count({ where: { recordId: checklist.id } })).toBe(3);
+    expect(
+      await prisma.aIAnalysisRequest.count({
+        where: { recordId: checklist.id },
+      }),
+    ).toBe(3);
   });
 });
 
@@ -584,7 +650,9 @@ describe("a checklist under the local OCR reader (ADR 0010 §5)", () => {
   }
 
   async function ledger() {
-    const periods = await prisma.aIUsagePeriod.findMany({ where: { businessId: CARRIER } });
+    const periods = await prisma.aIUsagePeriod.findMany({
+      where: { businessId: CARRIER },
+    });
 
     return periods.reduce(
       (sum, period) => ({
@@ -596,7 +664,10 @@ describe("a checklist under the local OCR reader (ADR 0010 §5)", () => {
   }
 
   beforeAll(async () => {
-    await prisma.business.update({ where: { id: CARRIER }, data: { ai_analysis_limit: 1000 } });
+    await prisma.business.update({
+      where: { id: CARRIER },
+      data: { ai_analysis_limit: 1000 },
+    });
   });
 
   // Red before: every photo was a unit, so the tyre and the fuel gauge were
@@ -624,12 +695,17 @@ describe("a checklist under the local OCR reader (ADR 0010 §5)", () => {
       include: { units: true },
     });
 
-    expect(request.units.map((unit) => unit.unitKey)).toEqual(["current_mileage"]);
+    expect(request.units.map((unit) => unit.unitKey)).toEqual([
+      "current_mileage",
+    ]);
     expect(request.input).toEqual({
       photosByField: { current_mileage: ["km.jpg"] },
       checklistData: { current_mileage: 1000 },
     });
-    expect(await ledger()).toEqual({ reserved: before.reserved + 1, consumed: before.consumed });
+    expect(await ledger()).toEqual({
+      reserved: before.reserved + 1,
+      consumed: before.consumed,
+    });
   });
 
   // Red before: three units reserved for photos nothing would ever read.
@@ -650,7 +726,11 @@ describe("a checklist under the local OCR reader (ADR 0010 §5)", () => {
     expect(response.statusCode, response.body).toBe(409);
     expect(response.json().code).toBe("AI_NOT_COVERED");
     expect(response.headers["x-error-code"]).toBe("AI_NOT_COVERED");
-    expect(await prisma.aIAnalysisRequest.count({ where: { recordId: checklist.id } })).toBe(0);
+    expect(
+      await prisma.aIAnalysisRequest.count({
+        where: { recordId: checklist.id },
+      }),
+    ).toBe(0);
     expect(await ledger()).toEqual(before);
   });
 
@@ -674,9 +754,15 @@ describe("a checklist under the local OCR reader (ADR 0010 §5)", () => {
 
     expect(outcome).toBe("not_covered");
 
-    const row = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: checklist.id } });
+    const row = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: checklist.id },
+    });
     expect(row.ai_verification_status).toBe("skipped");
-    expect(await prisma.aIAnalysisRequest.count({ where: { recordId: checklist.id } })).toBe(0);
+    expect(
+      await prisma.aIAnalysisRequest.count({
+        where: { recordId: checklist.id },
+      }),
+    ).toBe(0);
   });
 
   it("after the odometer was read, the uncovered photos left do not make the button promise a reading", async () => {
@@ -685,7 +771,11 @@ describe("a checklist under the local OCR reader (ADR 0010 §5)", () => {
       tires_condition: ["pneu.jpg"],
     });
 
-    await call("POST", `/ai-analysis/request/checklist/${checklist.id}`, carrier.managerToken);
+    await call(
+      "POST",
+      `/ai-analysis/request/checklist/${checklist.id}`,
+      carrier.managerToken,
+    );
 
     const request = await prisma.aIAnalysisRequest.findFirstOrThrow({
       where: { recordId: checklist.id },
@@ -707,7 +797,11 @@ describe("a checklist under the local OCR reader (ADR 0010 §5)", () => {
 
     expect(again.statusCode, again.body).toBe(200);
     expect(again.json().outcome).toBe("already_completed");
-    expect(await prisma.aIAnalysisRequest.count({ where: { recordId: checklist.id } })).toBe(1);
+    expect(
+      await prisma.aIAnalysisRequest.count({
+        where: { recordId: checklist.id },
+      }),
+    ).toBe(1);
   });
 
   it("refuses the same request from another company's manager as a missing record", async () => {
@@ -794,7 +888,11 @@ describe("an informed value corrected after the reading (AI-2)", () => {
           observed: "bad",
           informed: "good",
           photosAnalyzed: 1,
-          rawResponse: { condicao_observada: "bad", confianca: 0.9, observacao: "amassado" },
+          rawResponse: {
+            condicao_observada: "bad",
+            confianca: 0.9,
+            observacao: "amassado",
+          },
         },
       },
     });
@@ -820,11 +918,19 @@ describe("an informed value corrected after the reading (AI-2)", () => {
 
     expect(after.ai_verification_status).toBe("verified");
     expect(after.ai_verification_details).toMatchObject({
-      bumpers_condition: { status: "confirmed", observed: "bad", informed: "bad" },
+      bumpers_condition: {
+        status: "confirmed",
+        observed: "bad",
+        informed: "bad",
+      },
     });
 
     // Nothing new was queued or reserved.
-    expect(await prisma.aIAnalysisRequest.count({ where: { recordId: checklist.id } })).toBe(1);
+    expect(
+      await prisma.aIAnalysisRequest.count({
+        where: { recordId: checklist.id },
+      }),
+    ).toBe(1);
   });
 });
 
@@ -832,7 +938,11 @@ describe("watching a reading (GET /ai-analysis/progress)", () => {
   it("tells the screen whether this user may ask for a reading", async () => {
     const fuelId = await fuelOf(carrier);
 
-    const admin = await call("GET", `/ai-analysis/progress/fuel/${fuelId}`, carrier.managerToken);
+    const admin = await call(
+      "GET",
+      `/ai-analysis/progress/fuel/${fuelId}`,
+      carrier.managerToken,
+    );
 
     expect(admin.statusCode, admin.body).toBe(200);
     expect(admin.json().data).toMatchObject({
@@ -841,12 +951,23 @@ describe("watching a reading (GET /ai-analysis/progress)", () => {
       canRequest: true,
     });
 
-    const reader = await call("GET", `/ai-analysis/progress/fuel/${fuelId}`, tokens.reader);
+    const reader = await call(
+      "GET",
+      `/ai-analysis/progress/fuel/${fuelId}`,
+      tokens.reader,
+    );
 
-    expect(reader.json().data).toMatchObject({ aiEnabled: true, canRequest: false });
+    expect(reader.json().data).toMatchObject({
+      aiEnabled: true,
+      canRequest: false,
+    });
 
     // The driver who registered it may watch it, never ask.
-    const driver = await call("GET", `/ai-analysis/progress/fuel/${fuelId}`, carrier.driverToken);
+    const driver = await call(
+      "GET",
+      `/ai-analysis/progress/fuel/${fuelId}`,
+      carrier.driverToken,
+    );
 
     expect(driver.statusCode, driver.body).toBe(200);
     expect(driver.json().data.canRequest).toBe(false);
@@ -870,7 +991,11 @@ describe("watching a reading (GET /ai-analysis/progress)", () => {
   it("answers another company's record as one that does not exist", async () => {
     const foreign = await fuelOf(other);
 
-    const response = await call("GET", `/ai-analysis/progress/fuel/${foreign}`, carrier.managerToken);
+    const response = await call(
+      "GET",
+      `/ai-analysis/progress/fuel/${foreign}`,
+      carrier.managerToken,
+    );
 
     expect(response.statusCode, response.body).toBe(404);
   });
@@ -900,7 +1025,11 @@ describe("watching a reading (GET /ai-analysis/progress)", () => {
 
     const fuelId = await fuelOf(carrier);
 
-    const response = await call("GET", `/ai-analysis/progress/fuel/${fuelId}`, noFleetProfile);
+    const response = await call(
+      "GET",
+      `/ai-analysis/progress/fuel/${fuelId}`,
+      noFleetProfile,
+    );
 
     expect(response.statusCode, response.body).toBe(403);
     expect(response.json().code).toBe("PERMISSION_DENIED");
@@ -954,7 +1083,11 @@ describe("a reading that waits on the provider (AI-8)", () => {
         [queuedFuel, carrier.managerToken],
         [refusedFuel, carrier.driverToken],
       ] as const) {
-        const response = await call("GET", `/ai-analysis/progress/fuel/${fuelId}`, token);
+        const response = await call(
+          "GET",
+          `/ai-analysis/progress/fuel/${fuelId}`,
+          token,
+        );
 
         expect(response.statusCode, response.body).toBe(200);
         expect(response.json().data).toMatchObject({
@@ -974,9 +1107,16 @@ describe("a reading that waits on the provider (AI-8)", () => {
     }
 
     // The provider is back: the one still queued is an ordinary wait.
-    const after = await call("GET", `/ai-analysis/progress/fuel/${queuedFuel}`, carrier.managerToken);
+    const after = await call(
+      "GET",
+      `/ai-analysis/progress/fuel/${queuedFuel}`,
+      carrier.managerToken,
+    );
 
-    expect(after.json().data).toMatchObject({ paused: false, lastErrorCode: null });
+    expect(after.json().data).toMatchObject({
+      paused: false,
+      lastErrorCode: null,
+    });
   });
 
   it("does not hand the provider's error text to the tenant when a reading failed", async () => {
@@ -988,7 +1128,11 @@ describe("a reading that waits on the provider (AI-8)", () => {
       '401 {"type":"authentication_error","message":"invalid x-api-key"}',
     );
 
-    const response = await call("GET", `/ai-analysis/progress/fuel/${fuelId}`, carrier.managerToken);
+    const response = await call(
+      "GET",
+      `/ai-analysis/progress/fuel/${fuelId}`,
+      carrier.managerToken,
+    );
 
     expect(response.json().data).toMatchObject({
       status: "FAILED",
@@ -1006,8 +1150,10 @@ describe("the published contract", () => {
       paths: Record<string, Record<string, Record<string, unknown>>>;
     };
 
-    const post = document.paths["/ai-analysis/request/{recordType}/{recordId}"].post;
-    const get = document.paths["/ai-analysis/progress/{recordType}/{recordId}"].get;
+    const post =
+      document.paths["/ai-analysis/request/{recordType}/{recordId}"].post;
+    const get =
+      document.paths["/ai-analysis/progress/{recordType}/{recordId}"].get;
 
     expect(post["x-module"]).toBe("FLEET");
     expect(get["x-module"]).toBe("FLEET");
@@ -1019,12 +1165,19 @@ describe("the published contract", () => {
     // The pause and the reason are fields of the contract, not a prefix of
     // free text the client had to parse.
     const progress = (
-      get.responses as Record<string, { content: Record<string, { schema: any }> }>
+      get.responses as Record<
+        string,
+        { content: Record<string, { schema: any }> }
+      >
     )["200"].content["application/json"].schema.properties.data.properties;
 
     expect(progress.paused.type).toBe("boolean");
     expect(progress.lastErrorCode.enum).toEqual(
-      expect.arrayContaining(["AI_PROVIDER_PAUSED", "AI_INPUT_SUPERSEDED", "AI_QUOTA_EXCEEDED"]),
+      expect.arrayContaining([
+        "AI_PROVIDER_PAUSED",
+        "AI_INPUT_SUPERSEDED",
+        "AI_QUOTA_EXCEEDED",
+      ]),
     );
   });
 });

@@ -209,7 +209,9 @@ class DriverRepository implements IDriverRepository {
 
       // A missing row is left to the delete below: Prisma's P2025, as before.
       if (locked) {
-        const refusal = driverHistoryRefusal(await driverHistoryOf(tx, driverId));
+        const refusal = driverHistoryRefusal(
+          await driverHistoryOf(tx, driverId),
+        );
 
         if (refusal) throw refusal;
       }
@@ -242,13 +244,19 @@ class DriverRepository implements IDriverRepository {
     return findDriverById;
   }
 
-  async findDriverByCpf(cpf: string, businessId: string): Promise<Driver | null> {
+  async findDriverByCpf(
+    cpf: string,
+    businessId: string,
+  ): Promise<Driver | null> {
     return this.prisma.driver.findUnique({
       where: { businessId_cpf: { businessId, cpf } },
     });
   }
 
-  async findDriverByCnh(cnh: string, businessId: string): Promise<Driver | null> {
+  async findDriverByCnh(
+    cnh: string,
+    businessId: string,
+  ): Promise<Driver | null> {
     return this.prisma.driver.findUnique({
       where: { businessId_cnh: { businessId, cnh } },
     });

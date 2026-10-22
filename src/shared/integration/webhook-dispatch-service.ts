@@ -101,7 +101,6 @@ const BATCH_SIZE = 20;
 
 assertWebhookLeaseInvariant(BATCH_SIZE);
 
-
 interface ClaimedWebhook {
   id: string;
   endpointId: string;
@@ -229,7 +228,9 @@ async function fanOutWebhookEvent(
   // commit and then releases the row, or this read waits for the save and
   // sees the endpoint back on. Only switched-off endpoints are locked, and
   // only with a transaction to hold the lock.
-  const switchedOff = subscribed.filter((endpoint) => endpoint.disabled_at !== null);
+  const switchedOff = subscribed.filter(
+    (endpoint) => endpoint.disabled_at !== null,
+  );
 
   if (switchedOff.length > 0 && !tx) {
     return database.$transaction((inner) => fanOutWebhookEvent(event, inner));
@@ -507,9 +508,7 @@ class WebhookDispatchService {
    * instance saying so, in the test file, where it can be read.
    */
   constructor(
-    private verifyDestination: (
-      url: string,
-    ) => Promise<{
+    private verifyDestination: (url: string) => Promise<{
       allowed: boolean;
       reason?: string;
       transient?: boolean;
@@ -611,7 +610,11 @@ class WebhookDispatchService {
               (error) => {
                 // The row keeps its lease and is reclaimed when it expires.
                 log.error(
-                  { err: error, deliveryId: row.id, endpointId: row.endpointId },
+                  {
+                    err: error,
+                    deliveryId: row.id,
+                    endpointId: row.endpointId,
+                  },
                   "webhook delivery failed; the lease will recover it",
                 );
               },
@@ -757,7 +760,8 @@ class WebhookDispatchService {
     // wrong in the way that column was added to fix: JSONB reorders keys, so
     // the bytes will not match the signature. Losing the event entirely would
     // be worse.
-    const body = stored?.signed_body ?? JSON.stringify(stored?.payload ?? row.payload);
+    const body =
+      stored?.signed_body ?? JSON.stringify(stored?.payload ?? row.payload);
 
     /**
      * Where this may go, decided on EVERY send.
@@ -957,7 +961,9 @@ class WebhookDispatchService {
       // The name now points somewhere private: rebinding, or a record the
       // customer changed. Refused for good, exactly like the check above.
       if (code === "EWEBHOOK_FORBIDDEN") {
-        await this.markFailed(row, null, UNREACHABLE_REASON, { permanent: true });
+        await this.markFailed(row, null, UNREACHABLE_REASON, {
+          permanent: true,
+        });
         return;
       }
 
@@ -1232,7 +1238,10 @@ class WebhookDispatchService {
    * concurrent failures (several rows of one endpoint failing at once, on
    * several replicas) publish a single notice.
    */
-  private async disableEndpoint(endpointId: string, reason: string): Promise<void> {
+  private async disableEndpoint(
+    endpointId: string,
+    reason: string,
+  ): Promise<void> {
     const disabledAt = new Date();
 
     await database.$transaction(async (tx) => {

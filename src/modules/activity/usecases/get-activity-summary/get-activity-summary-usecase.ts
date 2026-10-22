@@ -38,7 +38,9 @@ class GetActivitySummaryUseCase {
 
     // Non-master users are pinned to their own company, whatever they ask.
     const resolvedBusinessId =
-      findUser.role === "MASTER" ? businessId : (findUser.businessId ?? undefined);
+      findUser.role === "MASTER"
+        ? businessId
+        : (findUser.businessId ?? undefined);
 
     if (resolvedBusinessId && findUser.role !== "MASTER") {
       assertTenantAccess(findUser, resolvedBusinessId);

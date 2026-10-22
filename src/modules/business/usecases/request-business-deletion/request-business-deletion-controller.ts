@@ -17,10 +17,7 @@ class RequestBusinessDeletionController {
       RequestBusinessDeletionUseCase,
     );
 
-    const result = await requestBusinessDeletionUseCase.execute(
-      businessId,
-      id,
-    );
+    const result = await requestBusinessDeletionUseCase.execute(businessId, id);
 
     return reply.status(200).send(result);
   }

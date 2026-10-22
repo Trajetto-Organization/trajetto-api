@@ -77,12 +77,15 @@ describe("the final integration's published fixes", () => {
    * published schema said `{ message }` only.
    */
   it("publishes the proof document's refusals with their code", () => {
-    const proof = operation("/delivery/proof-document/{deliveryId}/business/{businessId}");
+    const proof = operation(
+      "/delivery/proof-document/{deliveryId}/business/{businessId}",
+    );
 
     for (const status of ["400", "403", "404", "409"]) {
-      expect(Object.keys(jsonSchema(proof, status).properties ?? {}), status).toContain(
-        "code",
-      );
+      expect(
+        Object.keys(jsonSchema(proof, status).properties ?? {}),
+        status,
+      ).toContain("code");
     }
   });
 
@@ -98,8 +101,8 @@ describe("the final integration's published fixes", () => {
    * say which.
    */
   it("describes every counter of the operation summary", () => {
-    const data = jsonSchema(operation("/delivery/operation-summary"), "200").properties!
-      .data;
+    const data = jsonSchema(operation("/delivery/operation-summary"), "200")
+      .properties!.data;
 
     const totals = data.properties!.totals.properties!;
     const driver = data.properties!.drivers.items!.properties!;
@@ -115,7 +118,12 @@ describe("the final integration's published fixes", () => {
       expect(totals[key]?.description, `totals.${key}`).toBeTruthy();
     }
 
-    for (const key of ["designated", "inRoute", "deliveredToday", "failedToday"]) {
+    for (const key of [
+      "designated",
+      "inRoute",
+      "deliveredToday",
+      "failedToday",
+    ]) {
       expect(driver[key]?.description, `drivers[].${key}`).toBeTruthy();
     }
   });

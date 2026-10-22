@@ -20,12 +20,15 @@ describe("the chat twin's recipient order", () => {
     const names = ["zeca", "Élio", "ana", "Ágata", "bia", "Ana", "ANA"];
 
     names.forEach((name, index) => {
-      chat.driverDirectory.set(`018fe7f0-0000-7000-8000-0000000000${10 + index}`, {
-        name,
-        cnh: `cnh-${index}`,
-        businessId: BUSINESS,
-        status: "ACTIVE",
-      });
+      chat.driverDirectory.set(
+        `018fe7f0-0000-7000-8000-0000000000${10 + index}`,
+        {
+          name,
+          cnh: `cnh-${index}`,
+          businessId: BUSINESS,
+          status: "ACTIVE",
+        },
+      );
     });
 
     const page = await chat.listRecipients({

@@ -51,10 +51,31 @@ beforeEach(() => {
   activities.businesses.set(A, { corporate_reason: "Transportadora A" });
   activities.businesses.set(B, { corporate_reason: "Transportadora B" });
 
-  activities.addActivity({ businessId: A, performedBy: ADMIN_A, type: "Veículo", action: "create" });
-  activities.addActivity({ businessId: A, performedBy: CLERK_A, type: "Veículo", action: "update" });
-  activities.addActivity({ businessId: A, performedBy: CLERK_A, type: "Motorista", action: "delete" });
-  activities.addActivity({ businessId: B, performedBy: ADMIN_B, type: "Filial", action: "create", description: "Segredo da B" });
+  activities.addActivity({
+    businessId: A,
+    performedBy: ADMIN_A,
+    type: "Veículo",
+    action: "create",
+  });
+  activities.addActivity({
+    businessId: A,
+    performedBy: CLERK_A,
+    type: "Veículo",
+    action: "update",
+  });
+  activities.addActivity({
+    businessId: A,
+    performedBy: CLERK_A,
+    type: "Motorista",
+    action: "delete",
+  });
+  activities.addActivity({
+    businessId: B,
+    performedBy: ADMIN_B,
+    type: "Filial",
+    action: "create",
+    description: "Segredo da B",
+  });
 });
 
 describe("CreateActivityUseCase", () => {
@@ -71,7 +92,9 @@ describe("CreateActivityUseCase", () => {
 
     expect(created.visibilityLevel).toBe("COMPANY");
     expect(created.tenantName).toBe("Transportadora A");
-    expect(activities.activities).toContainEqual(expect.objectContaining({ id: created.id }));
+    expect(activities.activities).toContainEqual(
+      expect.objectContaining({ id: created.id }),
+    );
   });
 
   it("collapses a replay of the same delivery's activity into the first one", async () => {
@@ -91,7 +114,9 @@ describe("CreateActivityUseCase", () => {
     const second = await use.execute(input);
 
     expect(second.id).toBe(first.id);
-    expect(activities.activities.filter((row) => row.deliveryId === "delivery-1")).toHaveLength(1);
+    expect(
+      activities.activities.filter((row) => row.deliveryId === "delivery-1"),
+    ).toHaveLength(1);
   });
 
   it("answers a repository failure with a 500 AppError, never the raw error", async () => {
@@ -103,7 +128,10 @@ describe("CreateActivityUseCase", () => {
 
     await expect(
       new CreateActivityUseCase(broken).execute({} as never),
-    ).rejects.toMatchObject({ statusCode: 500, message: "Erro ao registrar atividade" });
+    ).rejects.toMatchObject({
+      statusCode: 500,
+      message: "Erro ao registrar atividade",
+    });
   });
 });
 
@@ -111,7 +139,11 @@ describe("GetActivitySummaryUseCase", () => {
   const summary = () => new GetActivitySummaryUseCase(users, activities);
 
   it("counts the admin's company only, even when another company is asked", async () => {
-    const result = await summary().execute({ userId: ADMIN_A, businessId: B, periodDays: 7 });
+    const result = await summary().execute({
+      userId: ADMIN_A,
+      businessId: B,
+      periodDays: 7,
+    });
 
     expect(result).toMatchObject({
       total: 3,
@@ -126,7 +158,11 @@ describe("GetActivitySummaryUseCase", () => {
   });
 
   it("lets the MASTER scope the summary to one company", async () => {
-    const result = await summary().execute({ userId: MASTER, businessId: B, periodDays: 30 });
+    const result = await summary().execute({
+      userId: MASTER,
+      businessId: B,
+      periodDays: 30,
+    });
 
     expect(result).toMatchObject({ total: 1, topType: "Filial" });
   });
@@ -146,7 +182,9 @@ describe("GetActivitySummaryUseCase", () => {
   });
 
   it("answers 404 USER_NOT_FOUND for an unknown session user", async () => {
-    await expect(summary().execute({ userId: "nobody", periodDays: 7 })).rejects.toMatchObject({
+    await expect(
+      summary().execute({ userId: "nobody", periodDays: 7 }),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "USER_NOT_FOUND",
     });
@@ -157,7 +195,11 @@ describe("ListActivitiesCursorUseCase", () => {
   const feed = () => new ListActivitiesCursorUseCase(users, activities);
 
   it("walks the company's feed newest first, page by page, without repeating a row", async () => {
-    const first = await feed().execute({ userId: ADMIN_A, limit: 2, periodDays: 30 });
+    const first = await feed().execute({
+      userId: ADMIN_A,
+      limit: 2,
+      periodDays: 30,
+    });
 
     expect(first.data).toHaveLength(2);
     expect(first.hasMore).toBe(true);
@@ -179,21 +221,34 @@ describe("ListActivitiesCursorUseCase", () => {
   });
 
   it("ignores a foreign businessId sent by a company admin", async () => {
-    const result = await feed().execute({ userId: ADMIN_A, limit: 10, periodDays: 30, businessId: B });
+    const result = await feed().execute({
+      userId: ADMIN_A,
+      limit: 10,
+      periodDays: 30,
+      businessId: B,
+    });
 
     expect(result.data.every((row) => row.businessId === A)).toBe(true);
-    expect(result.data.map((row) => row.description)).not.toContain("Segredo da B");
+    expect(result.data.map((row) => row.description)).not.toContain(
+      "Segredo da B",
+    );
   });
 
   it("shows a plain user only what they did", async () => {
-    const result = await feed().execute({ userId: CLERK_A, limit: 10, periodDays: 30 });
+    const result = await feed().execute({
+      userId: CLERK_A,
+      limit: 10,
+      periodDays: 30,
+    });
 
     expect(result.data).toHaveLength(2);
     expect(result.data.every((row) => row.performedBy === CLERK_A)).toBe(true);
   });
 
   it("answers 404 USER_NOT_FOUND for an unknown session user", async () => {
-    await expect(feed().execute({ userId: "nobody", limit: 10, periodDays: 7 })).rejects.toMatchObject({
+    await expect(
+      feed().execute({ userId: "nobody", limit: 10, periodDays: 7 }),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "USER_NOT_FOUND",
     });
@@ -245,7 +300,12 @@ describe("ListAllActivitiesUseCase", () => {
 
   it("answers 404 USER_NOT_FOUND for an unknown session user", async () => {
     await expect(
-      table().execute({ userId: "nobody", userRole: "BUSINESS_ADMIN", page: 1, pageSize: 10 }),
+      table().execute({
+        userId: "nobody",
+        userRole: "BUSINESS_ADMIN",
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "USER_NOT_FOUND" });
   });
 
@@ -263,7 +323,9 @@ describe("ListAllActivitiesUseCase", () => {
         page: 1,
         pageSize: 10,
       }),
-    ).rejects.toMatchObject({ statusCode: 500, message: "Erro ao listar todas as atividades" });
+    ).rejects.toMatchObject({
+      statusCode: 500,
+      message: "Erro ao listar todas as atividades",
+    });
   });
 });
-

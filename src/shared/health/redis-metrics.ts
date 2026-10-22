@@ -75,7 +75,10 @@ async function readRedisMetrics(
     Promise.race([
       run,
       new Promise<never>((_resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("redis metrics timed out")), timeoutMs);
+        const timer = setTimeout(
+          () => reject(new Error("redis metrics timed out")),
+          timeoutMs,
+        );
         timer.unref();
       }),
     ]);

@@ -29,16 +29,30 @@ class ListSupportTicketEventsUseCase {
     businessId?: string;
     ticketId: string;
   }): Promise<{ data: SupportTicketEvent[] }> {
-    const scope = await resolveTicketScope(this.user, request.userId, request.businessId);
+    const scope = await resolveTicketScope(
+      this.user,
+      request.userId,
+      request.businessId,
+    );
 
     if (scope.driverId) {
-      throw permissionDenied("Motoristas não possuem permissão para acessar este recurso.");
+      throw permissionDenied(
+        "Motoristas não possuem permissão para acessar este recurso.",
+      );
     }
 
-    const ticket = await loadScopedTicket(this.tickets, scope, request.ticketId);
+    const ticket = await loadScopedTicket(
+      this.tickets,
+      scope,
+      request.ticketId,
+    );
 
     return {
-      data: await this.tickets.listEvents(ticket.id, scope.businessId, TICKET_EVENTS_LIMIT),
+      data: await this.tickets.listEvents(
+        ticket.id,
+        scope.businessId,
+        TICKET_EVENTS_LIMIT,
+      ),
     };
   }
 }

@@ -22,12 +22,22 @@ interface ISupportTicketRepository {
    * and inserts. A second OPEN DELIVERY/ROUTE ticket of the same delivery or
    * route, a second ticket of one occurrence or a reused key throw P2002.
    */
-  create: (props: CreateSupportTicketProps, tx?: unknown) => Promise<SupportTicket>;
+  create: (
+    props: CreateSupportTicketProps,
+    tx?: unknown,
+  ) => Promise<SupportTicket>;
 
-  findById: (id: string, businessId: string, tx?: unknown) => Promise<SupportTicket | null>;
+  findById: (
+    id: string,
+    businessId: string,
+    tx?: unknown,
+  ) => Promise<SupportTicket | null>;
 
   /** The row with its names, for the lists and the detail. */
-  findRowById: (id: string, businessId: string) => Promise<SupportTicketRow | null>;
+  findRowById: (
+    id: string,
+    businessId: string,
+  ) => Promise<SupportTicketRow | null>;
 
   findByOccurrence: (
     occurrenceId: string,
@@ -48,7 +58,10 @@ interface ISupportTicketRepository {
     tx?: unknown,
   ) => Promise<SupportTicket | null>;
 
-  findOpenForRoute: (routeId: string, businessId: string) => Promise<SupportTicket | null>;
+  findOpenForRoute: (
+    routeId: string,
+    businessId: string,
+  ) => Promise<SupportTicket | null>;
 
   /** The driver's most recent OPEN general (DRIVER) ticket. */
   findLatestOpenDriverTicket: (
@@ -69,10 +82,18 @@ interface ISupportTicketRepository {
   ) => Promise<{ ticket: SupportTicket; at: Date } | null>;
 
   /** SELECT … FOR UPDATE inside the caller's transaction. */
-  lockForUpdate: (id: string, businessId: string, tx: unknown) => Promise<SupportTicket | null>;
+  lockForUpdate: (
+    id: string,
+    businessId: string,
+    tx: unknown,
+  ) => Promise<SupportTicket | null>;
 
   /** An OPEN DELIVERY ticket becomes this occurrence's (kind OCCURRENCE). */
-  linkOccurrence: (id: string, occurrenceId: string, tx?: unknown) => Promise<SupportTicket>;
+  linkOccurrence: (
+    id: string,
+    occurrenceId: string,
+    tx?: unknown,
+  ) => Promise<SupportTicket>;
 
   /** Conditional on OPEN. False when nothing changed. */
   close: (props: CloseSupportTicketProps, tx?: unknown) => Promise<boolean>;
@@ -81,7 +102,12 @@ interface ISupportTicketRepository {
   assign: (props: AssignSupportTicketProps, tx?: unknown) => Promise<boolean>;
 
   /** First reply wins: only while nobody is assigned. */
-  autoAssign: (id: string, assigneeId: string, at: Date, tx?: unknown) => Promise<boolean>;
+  autoAssign: (
+    id: string,
+    assigneeId: string,
+    at: Date,
+    tx?: unknown,
+  ) => Promise<boolean>;
 
   /** CLOSED → OPEN, reopened_count + 1, closed_* cleared. */
   reopen: (id: string, businessId: string, tx?: unknown) => Promise<boolean>;
@@ -99,12 +125,21 @@ interface ISupportTicketRepository {
   /** version + 1: a trail-only change (a supersede) still orders events. */
   bumpVersion: (id: string, tx?: unknown) => Promise<SupportTicket>;
 
-  addEvent: (props: CreateSupportTicketEventProps, tx?: unknown) => Promise<SupportTicketEvent>;
+  addEvent: (
+    props: CreateSupportTicketEventProps,
+    tx?: unknown,
+  ) => Promise<SupportTicketEvent>;
 
   /** In order, at most `limit`. */
-  listEvents: (ticketId: string, businessId: string, limit: number) => Promise<SupportTicketEvent[]>;
+  listEvents: (
+    ticketId: string,
+    businessId: string,
+    limit: number,
+  ) => Promise<SupportTicketEvent[]>;
 
-  list: (props: ListSupportTicketsProps) => Promise<{ data: SupportTicketRow[]; total: number }>;
+  list: (
+    props: ListSupportTicketsProps,
+  ) => Promise<{ data: SupportTicketRow[]; total: number }>;
 
   counts: (props: {
     businessId: string;
@@ -148,7 +183,10 @@ interface ISupportTicketRepository {
   markRead: (ticketId: string, userId: string, at: Date) => Promise<void>;
 
   /** The tickets cited on a page of messages (separators of the feed). */
-  findManyRows: (ids: string[], businessId: string) => Promise<SupportTicketRow[]>;
+  findManyRows: (
+    ids: string[],
+    businessId: string,
+  ) => Promise<SupportTicketRow[]>;
 
   /**
    * Non-mass messages written without a ticket (by the previous image during
@@ -156,7 +194,10 @@ interface ISupportTicketRepository {
    * repair job. The bound keeps the scan off the ever-growing mass notices,
    * which stay ticketless forever.
    */
-  listUnticketedMessages: (limit: number, since: Date) => Promise<
+  listUnticketedMessages: (
+    limit: number,
+    since: Date,
+  ) => Promise<
     Array<{
       id: string;
       threadId: string;
@@ -176,7 +217,11 @@ interface ISupportTicketRepository {
   ticketsBackfilledAt: () => Promise<Date | null>;
 
   /** Puts a ticketless message in a ticket (repair job). */
-  attachMessage: (messageId: string, ticketId: string, tx?: unknown) => Promise<boolean>;
+  attachMessage: (
+    messageId: string,
+    ticketId: string,
+    tx?: unknown,
+  ) => Promise<boolean>;
 }
 
 export type { ISupportTicketRepository };

@@ -52,7 +52,8 @@ let shuttingDown = false;
 
 /**
  * Hard ceiling for the whole sequence — stays under the 40s stop grace
- * (compose.production.yaml), which is what SIGKILLs a process that overstays.
+ * period of the API Application's Swarm settings in Dokploy (docs/deploy.md),
+ * which is what SIGKILLs a process that overstays.
  */
 const SHUTDOWN_TIMEOUT_MS = 35_000;
 

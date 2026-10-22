@@ -110,7 +110,9 @@ function rolesNamedBy(term: string): ListedRole[] {
 
   return Array.from(
     new Set(
-      ROLE_WORDS.filter(([word]) => word.includes(lower)).map(([, role]) => role),
+      ROLE_WORDS.filter(([word]) => word.includes(lower)).map(
+        ([, role]) => role,
+      ),
     ),
   );
 }
@@ -132,7 +134,9 @@ function userSearchWhere(
     { id: { contains: term, mode: "insensitive" as const } },
     { name: { contains: term, mode: "insensitive" as const } },
     { email: { contains: term, mode: "insensitive" as const } },
-    { profileAccess: { name: { contains: term, mode: "insensitive" as const } } },
+    {
+      profileAccess: { name: { contains: term, mode: "insensitive" as const } },
+    },
     { driver: { name: { contains: term, mode: "insensitive" as const } } },
     ...(roles.length > 0 ? [{ role: { in: roles } }] : []),
   ]);
@@ -266,7 +270,10 @@ function valueOf(group: UserGroupCount, facet: UserFacet): string | null {
 }
 
 function selectedOf(
-  filters: Pick<UserListFilters, "roles" | "access" | "twoFactor" | "profileAccessIds">,
+  filters: Pick<
+    UserListFilters,
+    "roles" | "access" | "twoFactor" | "profileAccessIds"
+  >,
   facet: UserFacet,
 ): readonly string[] | undefined {
   const selected = {
@@ -287,7 +294,10 @@ function selectedOf(
  */
 function summarizeUserList(
   groups: UserGroupCount[],
-  filters: Pick<UserListFilters, "roles" | "access" | "twoFactor" | "profileAccessIds">,
+  filters: Pick<
+    UserListFilters,
+    "roles" | "access" | "twoFactor" | "profileAccessIds"
+  >,
   profileNames: ReadonlyMap<string, string> = new Map(),
   emailVerified = 0,
 ): { total: number; searchMeta: UserListSearchMeta } {
@@ -328,7 +338,9 @@ function summarizeUserList(
   // keeps a name. Only names of this company's profiles ever reach here.
   const profileCounts = countBy("profileAccessId");
   const baseProfiles = new Set(
-    groups.flatMap((group) => (group.profileAccessId ? [group.profileAccessId] : [])),
+    groups.flatMap((group) =>
+      group.profileAccessId ? [group.profileAccessId] : [],
+    ),
   );
   const profileOptions: FacetCount[] = [
     ...new Set([...baseProfiles, ...(filters.profileAccessIds ?? [])]),

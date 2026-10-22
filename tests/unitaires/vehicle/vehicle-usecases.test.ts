@@ -34,7 +34,10 @@ import { VehicleHasAssociatedPayablesError } from "@/modules/vehicle/usecases/er
 import { BUSINESS_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
 
 import type { NotificationService } from "@/shared/services/notification-service";
-import type { Vehicle, CreateVehicleProps } from "@/modules/vehicle/dtos/vehicle-dto";
+import type {
+  Vehicle,
+  CreateVehicleProps,
+} from "@/modules/vehicle/dtos/vehicle-dto";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { Business } from "@/modules/business/dtos/business-dto";
 import type { Driver } from "@/modules/driver/dtos/driver-dto";
@@ -105,7 +108,12 @@ function makeContext({ vehicleLimit = 0 } = {}) {
 
   drivers.drivers.push(
     { id: ANA, name: "Ana", businessId: BUSINESS, status: "ACTIVE" } as Driver,
-    { id: BRUNO, name: "Bruno", businessId: BUSINESS, status: "ACTIVE" } as Driver,
+    {
+      id: BRUNO,
+      name: "Bruno",
+      businessId: BUSINESS,
+      status: "ACTIVE",
+    } as Driver,
     {
       id: FOREIGN_DRIVER,
       name: "Alheio",
@@ -153,7 +161,12 @@ function makeContext({ vehicleLimit = 0 } = {}) {
       routeStub,
       notificationStub,
     ),
-    get: new GetVehicleUseCase(users, vehicles, businesses, new InMemoryFuelRepository()),
+    get: new GetVehicleUseCase(
+      users,
+      vehicles,
+      businesses,
+      new InMemoryFuelRepository(),
+    ),
     list: new ListVehicleUseCase(users, vehicles),
     search: new SearchVehicleCursorUseCase(users, vehicles, businesses),
   };
@@ -161,7 +174,9 @@ function makeContext({ vehicleLimit = 0 } = {}) {
 
 type Context = ReturnType<typeof makeContext>;
 
-function registration(overrides: Partial<CreateVehicleProps> = {}): CreateVehicleProps {
+function registration(
+  overrides: Partial<CreateVehicleProps> = {},
+): CreateVehicleProps {
   return {
     description: "Caminhão",
     license_plate: "ABC1D23",
@@ -184,7 +199,10 @@ function registration(overrides: Partial<CreateVehicleProps> = {}): CreateVehicl
   };
 }
 
-function seedVehicle(context: Context, overrides: Partial<Vehicle> = {}): Vehicle {
+function seedVehicle(
+  context: Context,
+  overrides: Partial<Vehicle> = {},
+): Vehicle {
   const vehicle = {
     ...registration(),
     id: TRUCK,
@@ -214,7 +232,9 @@ describe("registering a vehicle", () => {
     context = makeContext({ vehicleLimit: 1 });
     seedVehicle(context, { license_plate: "AAA1A11", renavam: "00000000001" });
 
-    await expect(context.create.execute(registration(), ADMIN)).rejects.toMatchObject({
+    await expect(
+      context.create.execute(registration(), ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "VEHICLE_LIMIT_REACHED",
       message: expect.stringContaining("1/1"),
@@ -223,7 +243,10 @@ describe("registering a vehicle", () => {
   });
 
   it("refuses a plate already in THIS company, and accepts it in another (CRIT-3)", async () => {
-    seedVehicle(context, { businessId: OTHER_BUSINESS, renavam: "99999999999" });
+    seedVehicle(context, {
+      businessId: OTHER_BUSINESS,
+      renavam: "99999999999",
+    });
 
     // Another carrier runs the same (aggregated) truck: not a conflict here.
     const created = await context.create.execute(registration(), ADMIN);
@@ -242,7 +265,9 @@ describe("registering a vehicle", () => {
       });
     };
 
-    await expect(context.create.execute(registration(), ADMIN)).rejects.toMatchObject({
+    await expect(
+      context.create.execute(registration(), ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "VEHICLE_RENAVAM_TAKEN",
     });
@@ -255,7 +280,9 @@ describe("registering a vehicle", () => {
     );
 
     expect(created.license_plate).toBe("ABC1D23");
-    expect(catalogEvents).toEqual([{ businessId: BUSINESS, entity: "vehicle" }]);
+    expect(catalogEvents).toEqual([
+      { businessId: BUSINESS, entity: "vehicle" },
+    ]);
   });
 });
 
@@ -263,10 +290,17 @@ describe("editing a vehicle", () => {
   it("saves an unrelated field of a one-axle vehicle (FLEET-VEH-2)", async () => {
     seedVehicle(context, { number_of_axles: 1 });
 
-    await context.update.execute({ description: "Baú refrigerado" }, TRUCK, BUSINESS, ADMIN);
+    await context.update.execute(
+      { description: "Baú refrigerado" },
+      TRUCK,
+      BUSINESS,
+      ADMIN,
+    );
 
     expect(context.vehicles.vehicles[0].description).toBe("Baú refrigerado");
-    expect(catalogEvents).toEqual([{ businessId: BUSINESS, entity: "vehicle" }]);
+    expect(catalogEvents).toEqual([
+      { businessId: BUSINESS, entity: "vehicle" },
+    ]);
   });
 
   it("names the DRIVER as the foreign record (FLEET-VEH-9)", async () => {
@@ -274,7 +308,12 @@ describe("editing a vehicle", () => {
 
     // Red before: VehicleNotBelongBusinessError ("Este veículo não pertence…").
     await expect(
-      context.update.execute({ driverId: FOREIGN_DRIVER }, TRUCK, BUSINESS, ADMIN),
+      context.update.execute(
+        { driverId: FOREIGN_DRIVER },
+        TRUCK,
+        BUSINESS,
+        ADMIN,
+      ),
     ).rejects.toBeInstanceOf(DriverNotBelongBusinessError);
   });
 
@@ -290,7 +329,10 @@ describe("editing a vehicle", () => {
     // Red before: ACTIVE was accepted with the truck on the road.
     await expect(
       context.update.execute({ status: "ACTIVE" }, TRUCK, BUSINESS, ADMIN),
-    ).rejects.toMatchObject({ statusCode: 409, code: "VEHICLE_IN_ACTIVE_ROUTE" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "VEHICLE_IN_ACTIVE_ROUTE",
+    });
 
     await context.update.execute({ status: "BLOCKED" }, TRUCK, BUSINESS, ADMIN);
     expect(context.vehicles.vehicles[0].status).toBe("BLOCKED");
@@ -324,14 +366,23 @@ describe("editing a vehicle", () => {
       businessId: OTHER_BUSINESS,
     });
 
-    await context.update.execute({ status: "INACTIVE" }, TRUCK, BUSINESS, ADMIN);
+    await context.update.execute(
+      { status: "INACTIVE" },
+      TRUCK,
+      BUSINESS,
+      ADMIN,
+    );
 
     expect(context.vehicles.vehicles[0].status).toBe("INACTIVE");
   });
 
   it("reactivates only inside the contracted fleet, counted in the locked write (FLEET-VEH-7)", async () => {
     context = makeContext({ vehicleLimit: 1 });
-    seedVehicle(context, { id: VAN, license_plate: "BBB2B22", renavam: "00000000002" });
+    seedVehicle(context, {
+      id: VAN,
+      license_plate: "BBB2B22",
+      renavam: "00000000002",
+    });
     seedVehicle(context, { status: "INACTIVE" });
 
     const plainUpdate = vi.spyOn(context.vehicles, "updateVehicle");
@@ -343,7 +394,9 @@ describe("editing a vehicle", () => {
     // The decision is the repository's (the same transaction as the write),
     // not a count read before it.
     expect(plainUpdate).not.toHaveBeenCalled();
-    expect(context.vehicles.vehicles.find((v) => v.id === TRUCK)?.status).toBe("INACTIVE");
+    expect(context.vehicles.vehicles.find((v) => v.id === TRUCK)?.status).toBe(
+      "INACTIVE",
+    );
   });
 
   it("answers another company's vehicle as not found", async () => {
@@ -362,9 +415,9 @@ describe("deleting a vehicle", () => {
     seedVehicle(context);
     context.vehicles.usage.set(TRUCK, { accountsPayable: 3 });
 
-    await expect(context.remove.execute(TRUCK, BUSINESS, ADMIN)).rejects.toBeInstanceOf(
-      VehicleHasAssociatedPayablesError,
-    );
+    await expect(
+      context.remove.execute(TRUCK, BUSINESS, ADMIN),
+    ).rejects.toBeInstanceOf(VehicleHasAssociatedPayablesError);
     expect(context.vehicles.vehicles).toHaveLength(1);
     expect(catalogEvents).toEqual([]);
   });
@@ -375,7 +428,9 @@ describe("deleting a vehicle", () => {
     await context.remove.execute(TRUCK, BUSINESS, ADMIN);
 
     expect(context.vehicles.vehicles).toHaveLength(0);
-    expect(catalogEvents).toEqual([{ businessId: BUSINESS, entity: "vehicle" }]);
+    expect(catalogEvents).toEqual([
+      { businessId: BUSINESS, entity: "vehicle" },
+    ]);
   });
 });
 
@@ -393,7 +448,10 @@ describe("the driver and the vehicles they may operate (FLEET-ASSIGN-1)", () => 
   });
 
   it("lists nothing for a driver with no truck and no released route", async () => {
-    const page = await context.search.execute({ userId: DRIVER_USER, businessId: BUSINESS });
+    const page = await context.search.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+    });
 
     expect(page.data).toEqual([]);
   });
@@ -407,7 +465,10 @@ describe("the driver and the vehicles they may operate (FLEET-ASSIGN-1)", () => 
       businessId: BUSINESS,
     });
 
-    const page = await context.search.execute({ userId: DRIVER_USER, businessId: BUSINESS });
+    const page = await context.search.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+    });
 
     expect(page.data.map((vehicle) => vehicle.id)).toEqual([TRUCK]);
 
@@ -416,9 +477,9 @@ describe("the driver and the vehicles they may operate (FLEET-ASSIGN-1)", () => 
   });
 
   it("still refuses a vehicle neither his nor on his route", async () => {
-    await expect(context.get.execute(DRIVER_USER, VAN, BUSINESS)).rejects.toBeInstanceOf(
-      VehicleNotAssignedToDriverError,
-    );
+    await expect(
+      context.get.execute(DRIVER_USER, VAN, BUSINESS),
+    ).rejects.toBeInstanceOf(VehicleNotAssignedToDriverError);
   });
 
   it("gives a dispatcher without fleet access only the fields of the choice", async () => {
@@ -467,7 +528,10 @@ describe("the fleet listing", () => {
 
     await expect(
       context.list.execute({ userId: MASTER, page: 1, pageSize: 10 }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "BUSINESS_NOT_IDENTIFIED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BUSINESS_NOT_IDENTIFIED",
+    });
 
     const listed = await context.list.execute({
       userId: MASTER,
@@ -520,9 +584,9 @@ describe("the fleet listing", () => {
 
 describe("a missing vehicle", () => {
   it("is not found for the driver either", async () => {
-    await expect(context.get.execute(DRIVER_USER, TRUCK, BUSINESS)).rejects.toBeInstanceOf(
-      VehicleNotFoundError,
-    );
+    await expect(
+      context.get.execute(DRIVER_USER, TRUCK, BUSINESS),
+    ).rejects.toBeInstanceOf(VehicleNotFoundError);
   });
 });
 
@@ -530,7 +594,11 @@ describe("the checklist every write passes (TEST-UC-1)", () => {
   const FOREIGN_ADMIN = "018f0000-0000-7000-8000-0000000000a9";
 
   beforeEach(() => {
-    context.users.user.push({ id: FOREIGN_ADMIN, role: "BUSINESS_ADMIN", businessId: OTHER_BUSINESS } as User);
+    context.users.user.push({
+      id: FOREIGN_ADMIN,
+      role: "BUSINESS_ADMIN",
+      businessId: OTHER_BUSINESS,
+    } as User);
   });
 
   it("refuses another company's admin naming this company on create, edit and delete", async () => {
@@ -540,9 +608,23 @@ describe("the checklist every write passes (TEST-UC-1)", () => {
 
     const denied = { statusCode: 403, code: "TENANT_ACCESS_DENIED" };
 
-    await expect(context.create.execute(registration({ license_plate: "XYZ9A88" }), FOREIGN_ADMIN)).rejects.toMatchObject(denied);
-    await expect(context.update.execute({ description: "Tomado" }, TRUCK, BUSINESS, FOREIGN_ADMIN)).rejects.toMatchObject(denied);
-    await expect(context.remove.execute(TRUCK, BUSINESS, FOREIGN_ADMIN)).rejects.toMatchObject(denied);
+    await expect(
+      context.create.execute(
+        registration({ license_plate: "XYZ9A88" }),
+        FOREIGN_ADMIN,
+      ),
+    ).rejects.toMatchObject(denied);
+    await expect(
+      context.update.execute(
+        { description: "Tomado" },
+        TRUCK,
+        BUSINESS,
+        FOREIGN_ADMIN,
+      ),
+    ).rejects.toMatchObject(denied);
+    await expect(
+      context.remove.execute(TRUCK, BUSINESS, FOREIGN_ADMIN),
+    ).rejects.toMatchObject(denied);
 
     expect(context.vehicles.vehicles).toHaveLength(1);
     expect(context.vehicles.vehicles[0].description).toBe("Caminhão");
@@ -555,16 +637,28 @@ describe("the checklist every write passes (TEST-UC-1)", () => {
     const gone = "018f0000-0000-7000-8000-0000000000ee";
     const missing = { statusCode: 404, code: "USER_NOT_FOUND" };
 
-    await expect(context.create.execute(registration({ license_plate: "XYZ9A88" }), gone)).rejects.toMatchObject(missing);
-    await expect(context.update.execute({ description: "x" }, TRUCK, BUSINESS, gone)).rejects.toMatchObject(missing);
-    await expect(context.remove.execute(TRUCK, BUSINESS, gone)).rejects.toMatchObject(missing);
+    await expect(
+      context.create.execute(registration({ license_plate: "XYZ9A88" }), gone),
+    ).rejects.toMatchObject(missing);
+    await expect(
+      context.update.execute({ description: "x" }, TRUCK, BUSINESS, gone),
+    ).rejects.toMatchObject(missing);
+    await expect(
+      context.remove.execute(TRUCK, BUSINESS, gone),
+    ).rejects.toMatchObject(missing);
   });
 
   it("lets the MASTER write in any company", async () => {
-    const created = await context.create.execute(
-      registration({ license_plate: "XYZ9A88", businessId: OTHER_BUSINESS, fuelTypeId: undefined as never }),
-      MASTER,
-    ).catch((error: unknown) => error);
+    const created = await context.create
+      .execute(
+        registration({
+          license_plate: "XYZ9A88",
+          businessId: OTHER_BUSINESS,
+          fuelTypeId: undefined as never,
+        }),
+        MASTER,
+      )
+      .catch((error: unknown) => error);
 
     // The MASTER passes the tenant gate; whatever refuses next is about the data.
     expect(created).not.toMatchObject({ code: "TENANT_ACCESS_DENIED" });
@@ -575,7 +669,9 @@ describe("the checklist every write passes (TEST-UC-1)", () => {
       throw new Error("connection reset");
     };
 
-    await expect(context.create.execute(registration({ license_plate: "XYZ9A88" }), ADMIN)).rejects.toMatchObject({
+    await expect(
+      context.create.execute(registration({ license_plate: "XYZ9A88" }), ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 500,
     });
     expect(catalogEvents).toEqual([]);

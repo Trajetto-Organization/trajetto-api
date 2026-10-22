@@ -76,9 +76,15 @@ const permissionResponses = {
     message: z.string().default("Internal server error"),
   }),
 
-  resourceNotFound: refusal("USER_NOT_FOUND: o usuário da sessão não existe mais."),
-  validationError: refusal("VALIDATION_ERROR: parâmetro, consulta ou corpo recusado (issues diz qual)."),
-  businessNotFound: refusal("USER_NOT_FOUND (o usuário da sessão não existe mais) ou BUSINESS_NOT_FOUND."),
+  resourceNotFound: refusal(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
+  validationError: refusal(
+    "VALIDATION_ERROR: parâmetro, consulta ou corpo recusado (issues diz qual).",
+  ),
+  businessNotFound: refusal(
+    "USER_NOT_FOUND (o usuário da sessão não existe mais) ou BUSINESS_NOT_FOUND.",
+  ),
   // Refusals shared by the write routes.
   permissionWriteNotFound: refusal(
     "USER_NOT_FOUND (o usuário da sessão não existe mais), BUSINESS_NOT_FOUND ou PERMISSION_NOT_FOUND (a permissão do caminho não existe ou é de outra empresa).",

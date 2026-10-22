@@ -67,7 +67,8 @@ const TOMORROW = new Date("2026-09-15T08:00:00.000Z");
  * a driver's phone or a customer's, so what it received IS the notification
  * behaviour under test.
  */
-const published: Array<{ topic: string; payload: Record<string, unknown> }> = [];
+const published: Array<{ topic: string; payload: Record<string, unknown> }> =
+  [];
 
 const outboxStub = {
   publish: async (

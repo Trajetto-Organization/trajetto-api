@@ -190,7 +190,10 @@ beforeAll(async () => {
   vehicleTypeId = vehicleType.id;
 
   const fuelType = await prisma.fuelType.create({
-    data: { description: `Diesel ${randomUUID().slice(0, 6)}`, businessId: CARRIER },
+    data: {
+      description: `Diesel ${randomUUID().slice(0, 6)}`,
+      businessId: CARRIER,
+    },
   });
 
   fuelTypeId = fuelType.id;
@@ -265,7 +268,9 @@ beforeAll(async () => {
 afterAll(async () => {
   await prisma.driverPosition.deleteMany({ where: { driverId: DRIVER } });
 
-  await prisma.routeStop.deleteMany({ where: { route: { businessId: CARRIER } } });
+  await prisma.routeStop.deleteMany({
+    where: { route: { businessId: CARRIER } },
+  });
   await prisma.route.deleteMany({ where: { businessId: CARRIER } });
 
   await prisma.delivery.deleteMany({ where: { businessId: CARRIER } });

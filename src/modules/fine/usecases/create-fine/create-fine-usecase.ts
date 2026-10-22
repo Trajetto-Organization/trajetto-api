@@ -116,11 +116,17 @@ class CreateFineUseCase {
     // company's zone, and the rules read them there.
     const timeZone = timeZoneOfBusiness(findBusiness);
 
-    fineData.violation_date = fineDateFromInput(fineData.violation_date, timeZone);
+    fineData.violation_date = fineDateFromInput(
+      fineData.violation_date,
+      timeZone,
+    );
     fineData.due_date = fineDateFromInput(fineData.due_date, timeZone);
 
     if (fineData.payment_date) {
-      fineData.payment_date = fineDateFromInput(fineData.payment_date, timeZone);
+      fineData.payment_date = fineDateFromInput(
+        fineData.payment_date,
+        timeZone,
+      );
     }
 
     assertFineDates(fineData, timeZone, now);

@@ -14,6 +14,8 @@ import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
  * A delivery with a wrong key cannot be fixed in place: cancel it and create
  * another with a different key (the unique index covers cancelled ones too).
  */
-const updateDeliverySchema = createDeliverySchema.partial().extend(tenantLockedShape);
+const updateDeliverySchema = createDeliverySchema
+  .partial()
+  .extend(tenantLockedShape);
 
 export { updateDeliverySchema };

@@ -62,7 +62,10 @@ async function getCompaniesModuleState(
     select: {
       id: true,
       is_active: true,
-      entitlements: { where: { module }, select: { module: true, enabled: true } },
+      entitlements: {
+        where: { module },
+        select: { module: true, enabled: true },
+      },
     },
   });
 
@@ -181,7 +184,9 @@ async function getFleetImpact(businessId: string): Promise<ModuleImpact> {
       { label: "Fornecedores", count: suppliers },
     ],
     affectedUsers,
-    inFlight: [{ label: "Ordens de serviço em aberto", count: openServiceOrders }],
+    inFlight: [
+      { label: "Ordens de serviço em aberto", count: openServiceOrders },
+    ],
   };
 }
 

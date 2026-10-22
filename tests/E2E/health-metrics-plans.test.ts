@@ -77,7 +77,9 @@ async function genericPlan(query: Prisma.Sql): Promise<PlanNode> {
 
   return prisma.$transaction(async (tx) => {
     await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
-    await tx.$executeRawUnsafe("SET LOCAL plan_cache_mode = force_generic_plan");
+    await tx.$executeRawUnsafe(
+      "SET LOCAL plan_cache_mode = force_generic_plan",
+    );
     // `.text` is the Postgres spelling ($1..$n); `.sql` is MySQL's (?).
     await tx.$executeRawUnsafe(`PREPARE ${name} AS ${query.text}`);
 
@@ -99,7 +101,8 @@ async function genericPlan(query: Prisma.Sql): Promise<PlanNode> {
 
 function seqScansOn(plan: PlanNode, table: string): PlanNode[] {
   return flatten(plan).filter(
-    (node) => node["Node Type"] === "Seq Scan" && node["Relation Name"] === table,
+    (node) =>
+      node["Node Type"] === "Seq Scan" && node["Relation Name"] === table,
   );
 }
 
@@ -206,7 +209,10 @@ describe("the detector itself", () => {
 
 describe("/health/metrics never scans notification_delivery", () => {
   it.each([
-    ["created in the last 24 h", () => deliveriesInWindowSql(new Date(Date.now() - DAY_MS))],
+    [
+      "created in the last 24 h",
+      () => deliveriesInWindowSql(new Date(Date.now() - DAY_MS)),
+    ],
     ["failed per channel", () => failedByChannelSql()],
     ["internal lane backlog", () => deliveryBacklogSql("internal")],
     ["external lane backlog", () => deliveryBacklogSql("external")],
@@ -222,10 +228,14 @@ describe("/health/metrics never scans notification_delivery", () => {
   it("and the 24 h window is a range of the primary key, not the BRIN", async () => {
     // The BRIN on created_at stops narrowing once the heap is reused; see
     // health-metrics-window-scan.test.ts.
-    const plan = await genericPlan(deliveriesInWindowSql(new Date(Date.now() - DAY_MS)));
+    const plan = await genericPlan(
+      deliveriesInWindowSql(new Date(Date.now() - DAY_MS)),
+    );
 
     expect(indexesUsed(plan)).toContain("notification_delivery_pkey");
-    expect(indexesUsed(plan)).not.toContain("notification_delivery_created_at_brin_idx");
+    expect(indexesUsed(plan)).not.toContain(
+      "notification_delivery_created_at_brin_idx",
+    );
   });
 
   it("and the failures per channel come from the failed index", async () => {
@@ -235,13 +245,13 @@ describe("/health/metrics never scans notification_delivery", () => {
   });
 
   it("and each lane's backlog from that lane's claim index", async () => {
-    expect(indexesUsed(await genericPlan(deliveryBacklogSql("internal")))).toContain(
-      "notification_delivery_claim_internal_idx",
-    );
+    expect(
+      indexesUsed(await genericPlan(deliveryBacklogSql("internal"))),
+    ).toContain("notification_delivery_claim_internal_idx");
 
-    expect(indexesUsed(await genericPlan(deliveryBacklogSql("external")))).toContain(
-      "notification_delivery_claim_external_idx",
-    );
+    expect(
+      indexesUsed(await genericPlan(deliveryBacklogSql("external"))),
+    ).toContain("notification_delivery_claim_external_idx");
   });
 
   it("nor webhook_delivery or ai_analysis_request for the failures of the day", async () => {
@@ -264,8 +274,14 @@ describe("/health/metrics reads Meta's word on WhatsApp from an index (OUTBOX-07
    * statuses as literals like every other query of the endpoint.
    */
   it.each([
-    ["failed after Meta accepted them", () => whatsappFailedSinceSql(new Date(Date.now() - DAY_MS))],
-    ["deliveries that reached Meta more than once", () => whatsappMultiSendSinceSql(new Date(Date.now() - DAY_MS))],
+    [
+      "failed after Meta accepted them",
+      () => whatsappFailedSinceSql(new Date(Date.now() - DAY_MS)),
+    ],
+    [
+      "deliveries that reached Meta more than once",
+      () => whatsappMultiSendSinceSql(new Date(Date.now() - DAY_MS)),
+    ],
   ])("%s", async (_label, build) => {
     const plan = await genericPlan(build());
 

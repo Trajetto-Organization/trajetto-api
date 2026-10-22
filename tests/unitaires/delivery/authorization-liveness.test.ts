@@ -36,30 +36,43 @@ describe("authorizationRequestIsLive", () => {
   it("is live on the same stop, same driver, still on the street", () => {
     expect(authorizationRequestIsLive(anchor, running)).toBe(true);
     // Filed before the departure: the route leaving keeps the attempt.
-    expect(authorizationRequestIsLive(anchor, { ...running, status: "PENDING" })).toBe(true);
+    expect(
+      authorizationRequestIsLive(anchor, { ...running, status: "PENDING" }),
+    ).toBe(true);
   });
 
   it.each(["DELIVERED", "CANCELLED", "FAILED"] as const)(
     "ends when the delivery is %s",
     (status) => {
-      expect(authorizationRequestIsLive(anchor, { ...running, status })).toBe(false);
+      expect(authorizationRequestIsLive(anchor, { ...running, status })).toBe(
+        false,
+      );
       expect(isActiveAttemptStatus(status)).toBe(false);
     },
   );
 
   it("ends with a panel status change, even when the status came back", () => {
     expect(
-      authorizationRequestIsLive(anchor, { ...running, statusChangedSince: true }),
+      authorizationRequestIsLive(anchor, {
+        ...running,
+        statusChangedSince: true,
+      }),
     ).toBe(false);
   });
 
   it("ends when the driver who asked no longer holds it", () => {
-    expect(authorizationRequestIsLive(anchor, { ...running, driverId: null })).toBe(false);
-    expect(authorizationRequestIsLive(anchor, { ...running, driverId: "driver-2" })).toBe(false);
+    expect(
+      authorizationRequestIsLive(anchor, { ...running, driverId: null }),
+    ).toBe(false);
+    expect(
+      authorizationRequestIsLive(anchor, { ...running, driverId: "driver-2" }),
+    ).toBe(false);
   });
 
   it("ends when its stop is gone, or replaced — even on the same route", () => {
-    expect(authorizationRequestIsLive(anchor, { ...running, openStop: null })).toBe(false);
+    expect(
+      authorizationRequestIsLive(anchor, { ...running, openStop: null }),
+    ).toBe(false);
     expect(
       authorizationRequestIsLive(anchor, {
         ...running,
@@ -77,14 +90,23 @@ describe("authorizationRequestIsLive", () => {
   it("filed off any route: live only while there is still no route", () => {
     const offRoute = { ...anchor, routeId: null };
 
-    expect(authorizationRequestIsLive(offRoute, { ...running, openStop: null })).toBe(true);
+    expect(
+      authorizationRequestIsLive(offRoute, { ...running, openStop: null }),
+    ).toBe(true);
     expect(authorizationRequestIsLive(offRoute, running)).toBe(false);
   });
 
   it("a panel request is not tied to a driver", () => {
     const fromPanel = { ...anchor, reporterDriverId: null };
 
-    expect(authorizationRequestIsLive(fromPanel, { ...running, driverId: "driver-2" })).toBe(true);
-    expect(authorizationRequestIsLive(fromPanel, { ...running, status: "FAILED" })).toBe(false);
+    expect(
+      authorizationRequestIsLive(fromPanel, {
+        ...running,
+        driverId: "driver-2",
+      }),
+    ).toBe(true);
+    expect(
+      authorizationRequestIsLive(fromPanel, { ...running, status: "FAILED" }),
+    ).toBe(false);
   });
 });

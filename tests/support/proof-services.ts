@@ -23,7 +23,9 @@ function unsignedSigning(): ProofSigningService {
   });
 }
 
-function testCertificateSigning(overrides: Partial<ProofSigningConfig> = {}): ProofSigningService {
+function testCertificateSigning(
+  overrides: Partial<ProofSigningConfig> = {},
+): ProofSigningService {
   const certificate = makeTestSigningCertificate();
 
   return new ProofSigningService({
@@ -39,7 +41,13 @@ function testCertificateSigning(overrides: Partial<ProofSigningConfig> = {}): Pr
 
 function noLocationProviders(): ProofLocationService {
   return new ProofLocationService({
-    geocoder: { url: undefined, key: undefined, keyParam: "key", userAgent: "Trajetto/test", timeoutMs: 100 },
+    geocoder: {
+      url: undefined,
+      key: undefined,
+      keyParam: "key",
+      userAgent: "Trajetto/test",
+      timeoutMs: 100,
+    },
     map: { template: undefined, attribution: undefined, timeoutMs: 100 },
   });
 }

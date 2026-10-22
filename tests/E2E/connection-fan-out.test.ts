@@ -74,7 +74,9 @@ const TYPE = "018fdb00-0000-7000-8000-0000000000c1";
 
 const BUDGET = 2;
 
-async function peakOf<T>(run: () => Promise<T>): Promise<{ peak: number; result: T }> {
+async function peakOf<T>(
+  run: () => Promise<T>,
+): Promise<{ peak: number; result: T }> {
   pool.inFlight = 0;
   pool.peak = 0;
 
@@ -191,8 +193,20 @@ beforeAll(async () => {
       { ...base, code: "P-1", status: "PENDING" },
       { ...base, code: "P-2", status: "PENDING", driverId: DRIVER },
       { ...base, code: "T-1", status: "IN_TRANSIT", driverId: DRIVER },
-      { ...base, code: "D-1", status: "DELIVERED", driverId: DRIVER, delivered_at: new Date() },
-      { ...base, code: "D-2", status: "DELIVERED", driverId: DRIVER, delivered_at: yesterday },
+      {
+        ...base,
+        code: "D-1",
+        status: "DELIVERED",
+        driverId: DRIVER,
+        delivered_at: new Date(),
+      },
+      {
+        ...base,
+        code: "D-2",
+        status: "DELIVERED",
+        driverId: DRIVER,
+        delivered_at: yesterday,
+      },
       { ...base, code: "F-1", status: "FAILED" },
       { ...base, code: "F-2", status: "FAILED", driverId: DRIVER },
     ],
@@ -237,7 +251,9 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await prisma.deliveryOccurrence.deleteMany({ where: { businessId: CARRIER } });
+  await prisma.deliveryOccurrence.deleteMany({
+    where: { businessId: CARRIER },
+  });
   await prisma.delivery.deleteMany({ where: { businessId: CARRIER } });
   await prisma.$disconnect();
   await (database as unknown as PrismaClient).$disconnect();
@@ -262,13 +278,19 @@ describe("one screen, at most two connections", () => {
   it("the operations summary", async () => {
     const { peak, result } = await peakOf(() =>
       readOperationSummary(
-        { operation: new OperationDayRepository(), delivery: new DeliveryRepository() },
+        {
+          operation: new OperationDayRepository(),
+          delivery: new DeliveryRepository(),
+        },
         CARRIER,
         operationDay(DEFAULT_BUSINESS_TIMEZONE, new Date()),
       ),
     );
 
-    expect(peak, `o resumo da operação ocupou ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(
+      peak,
+      `o resumo da operação ocupou ${peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
 
     // And it still says the same thing.
     // P-2 has a driver and no route of the day: not designated, as in the
@@ -299,7 +321,10 @@ describe("one screen, at most two connections", () => {
       new DashboardRepository().countVehiclesByStatus(CARRIER),
     );
 
-    expect(peak, `a contagem de veículos ocupou ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(
+      peak,
+      `a contagem de veículos ocupou ${peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
     expect(result).toEqual({ ACTIVE: 1, INACTIVE: 0, BLOCKED: 1, IN_ROUTE: 0 });
   });
 
@@ -317,7 +342,9 @@ describe("one screen, at most two connections", () => {
       useCase.execute({ userId: MANAGER }),
     );
 
-    expect(peak, `o dashboard ocupou ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(peak, `o dashboard ocupou ${peak} conexões`).toBeLessThanOrEqual(
+      BUDGET,
+    );
 
     expect(result.vehicleStatus).toEqual({
       ACTIVE: 1,
@@ -345,7 +372,9 @@ describe("one screen, at most two connections", () => {
       useCase.execute({ userId: MANAGER, page: 1, pageSize: 10 }),
     );
 
-    expect(peak, `a listagem ocupou ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(peak, `a listagem ocupou ${peak} conexões`).toBeLessThanOrEqual(
+      BUDGET,
+    );
     expect(result.total).toBe(7);
     expect(result.data).toHaveLength(7);
   });
@@ -361,8 +390,15 @@ describe("one screen, at most two connections", () => {
       useCase.execute({ userId: MANAGER, page: 1, pageSize: 10 }),
     );
 
-    expect(peak, `as ocorrências ocuparam ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
-    expect(result.searchMeta).toMatchObject({ total: 1, blocking: 0, informational: 1 });
+    expect(
+      peak,
+      `as ocorrências ocuparam ${peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
+    expect(result.searchMeta).toMatchObject({
+      total: 1,
+      blocking: 0,
+      informational: 1,
+    });
     expect(result.total).toBe(1);
   });
 

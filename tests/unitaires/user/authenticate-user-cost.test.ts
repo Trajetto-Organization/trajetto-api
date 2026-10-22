@@ -12,7 +12,8 @@ import { hash } from "bcrypt";
  * false), so nearly every login paid ~55 ms of threadpool for a hash that was
  * thrown away: half the bcrypt work of a login burst, for nothing.
  */
-const mails: Array<{ email: string; templateName: string; token?: string }> = [];
+const mails: Array<{ email: string; templateName: string; token?: string }> =
+  [];
 
 vi.mock("@/shared/services/transactional-mail-service", () => ({
   sendTransactionalMail: async ({
@@ -133,7 +134,9 @@ describe("a login with two-factor", () => {
     const code = mails[0].token!;
     expect(code).toMatch(/^\d{6}$/);
 
-    const stored = tokens.twoFactorTokens.find((entry) => entry.email === EMAIL);
+    const stored = tokens.twoFactorTokens.find(
+      (entry) => entry.email === EMAIL,
+    );
     expect(stored).toBeDefined();
     expect(stored!.token).not.toContain(code);
   });

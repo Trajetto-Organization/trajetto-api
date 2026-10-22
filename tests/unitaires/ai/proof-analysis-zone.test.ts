@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { legacyProofUseCase } from "../../support/delivery-proof-usecases";
 
-
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 import { InMemoryProofAuditRepository } from "@/modules/delivery/repositories/in-memory/in-memory-proof-audit-repository";
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
@@ -42,7 +41,9 @@ afterEach(() => {
 describe("a proof asking for its reading", () => {
   it("passes the company's zone, so a 23:30 receipt in Manaus is that day's", async () => {
     const deliveryRepository = new InMemoryDeliveryRepository();
-    const routeRepository = new InMemoryRouteRepository(deliveryRepository.deliveries);
+    const routeRepository = new InMemoryRouteRepository(
+      deliveryRepository.deliveries,
+    );
     deliveryRepository.routeStops = routeRepository.stops;
 
     const users = new InMemoryUserRepository();
@@ -86,7 +87,9 @@ describe("a proof asking for its reading", () => {
       users,
       deliveryRepository,
       routeRepository,
-      { createActivityIfEnabled: async () => undefined } as unknown as NotificationService,
+      {
+        createActivityIfEnabled: async () => undefined,
+      } as unknown as NotificationService,
       { publish: async () => undefined } as unknown as OutboxService,
       new InMemoryProofAuditRepository(),
       business,

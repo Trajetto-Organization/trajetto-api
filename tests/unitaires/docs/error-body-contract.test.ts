@@ -12,7 +12,10 @@ import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
 
 import { AppError } from "@/shared/errors/AppError";
 import { ServiceBusyError } from "@/shared/errors/service-busy-error";
-import { buildPublicApiDocument, type OpenApiDocument } from "@/shared/integration/public-docs";
+import {
+  buildPublicApiDocument,
+  type OpenApiDocument,
+} from "@/shared/integration/public-docs";
 
 /**
  * What an error response carries, whatever the route declared — and that the
@@ -66,13 +69,24 @@ beforeAll(async () => {
   // response schema lists only `message`: what every legacy route looked like.
   app.get(
     `${PROBE}/inline-without-code`,
-    { schema: { ...hidden, response: { 404: z.object({ message: z.string() }) } } },
-    async (_request, reply) => reply.status(404).send({ message: "Não achei." }),
+    {
+      schema: {
+        ...hidden,
+        response: { 404: z.object({ message: z.string() }) },
+      },
+    },
+    async (_request, reply) =>
+      reply.status(404).send({ message: "Não achei." }),
   );
 
   app.get(
     `${PROBE}/inline-with-details`,
-    { schema: { ...hidden, response: { 409: z.object({ message: z.string() }) } } },
+    {
+      schema: {
+        ...hidden,
+        response: { 409: z.object({ message: z.string() }) },
+      },
+    },
     async (_request, reply) =>
       reply.status(409).send({
         code: "ALREADY_DECIDED",
@@ -143,17 +157,26 @@ describe("an error body leaves the handler intact", () => {
   it("gives a code to a 4xx a controller sent without one", async () => {
     // Red before: `{ message }` went out alone, while the document promises
     // `code` on every refusal and the app's outbox classifies by it.
-    const response = await app.inject({ method: "GET", url: `${PROBE}/inline-without-code` });
+    const response = await app.inject({
+      method: "GET",
+      url: `${PROBE}/inline-without-code`,
+    });
 
     expect(response.statusCode).toBe(404);
-    expect(response.json()).toEqual({ code: "NOT_FOUND", message: "Não achei." });
+    expect(response.json()).toEqual({
+      code: "NOT_FOUND",
+      message: "Não achei.",
+    });
     expect(response.headers["x-error-code"]).toBe("NOT_FOUND");
   });
 
   it("does not let a route's schema strip the code and the details of a 4xx", async () => {
     // Red before: the route's `{ message }` schema dropped `code` and the
     // `decision` the losing operator is told about.
-    const response = await app.inject({ method: "GET", url: `${PROBE}/inline-with-details` });
+    const response = await app.inject({
+      method: "GET",
+      url: `${PROBE}/inline-with-details`,
+    });
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({
@@ -198,7 +221,11 @@ describe("the published error schemas (strict)", () => {
   };
 
   beforeAll(async () => {
-    await capture("validation", { method: "POST", url: "/user/session", payload: { email: "x" } });
+    await capture("validation", {
+      method: "POST",
+      url: "/user/session",
+      payload: { email: "x" },
+    });
     await capture("malformed", {
       method: "POST",
       url: "/quote/create-quote",
@@ -206,11 +233,20 @@ describe("the published error schemas (strict)", () => {
       payload: '{"name": "sem fechar"',
     });
     await capture("appError", { method: "GET", url: `${PROBE}/app-error` });
-    await capture("inline", { method: "GET", url: `${PROBE}/inline-without-code` });
+    await capture("inline", {
+      method: "GET",
+      url: `${PROBE}/inline-without-code`,
+    });
     await capture("internal", { method: "GET", url: `${PROBE}/crash` });
-    await capture("databaseDown", { method: "GET", url: `${PROBE}/database-down` });
+    await capture("databaseDown", {
+      method: "GET",
+      url: `${PROBE}/database-down`,
+    });
     await capture("busy", { method: "GET", url: `${PROBE}/busy` });
-    await capture("invalidKey", { method: "GET", url: "/integration/v1/deliveries" });
+    await capture("invalidKey", {
+      method: "GET",
+      url: "/integration/v1/deliveries",
+    });
   });
 
   it("captured each branch of the handler with the status it is meant to have", () => {
@@ -236,7 +272,12 @@ describe("the published error schemas (strict)", () => {
     const as4xx = (captured: Captured) => captured.body;
 
     if (status === 400) {
-      return [bodies.validation.body, bodies.malformed.body, as4xx(bodies.appError), as4xx(bodies.inline)];
+      return [
+        bodies.validation.body,
+        bodies.malformed.body,
+        as4xx(bodies.appError),
+        as4xx(bodies.inline),
+      ];
     }
 
     if (status === 500) return [bodies.internal.body];
@@ -246,11 +287,17 @@ describe("the published error schemas (strict)", () => {
       // session routes also by a dependency's own 503.
       const onlyOutage = schema.properties?.code?.enum?.length === 1;
 
-      return onlyOutage ? [bodies.databaseDown.body] : [bodies.databaseDown.body, bodies.busy.body];
+      return onlyOutage
+        ? [bodies.databaseDown.body]
+        : [bodies.databaseDown.body, bodies.busy.body];
     }
 
     if (status >= 400 && status < 500) {
-      return [as4xx(bodies.appError), as4xx(bodies.inline), bodies.invalidKey.body];
+      return [
+        as4xx(bodies.appError),
+        as4xx(bodies.inline),
+        bodies.invalidKey.body,
+      ];
     }
 
     return [];
@@ -281,13 +328,18 @@ describe("the published error schemas (strict)", () => {
     addFormats(ajv);
 
     // The components the document refers to, so a $ref resolves.
-    ajv.addSchema(asJsonSchema({ components: document.components ?? {} }) as Json, "doc");
+    ajv.addSchema(
+      asJsonSchema({ components: document.components ?? {} }) as Json,
+      "doc",
+    );
 
     const refused: string[] = [];
 
     for (const [path, methods] of Object.entries<Json>(document.paths ?? {})) {
       for (const [method, operation] of Object.entries<Json>(methods)) {
-        for (const [status, response] of Object.entries<Json>(operation.responses ?? {})) {
+        for (const [status, response] of Object.entries<Json>(
+          operation.responses ?? {},
+        )) {
           const code = Number(status);
 
           if (!(code >= 400)) continue;
@@ -295,7 +347,9 @@ describe("the published error schemas (strict)", () => {
           const schema = response.content?.["application/json"]?.schema;
 
           if (!schema) {
-            refused.push(`${method.toUpperCase()} ${path} → ${status}: sem corpo JSON publicado`);
+            refused.push(
+              `${method.toUpperCase()} ${path} → ${status}: sem corpo JSON publicado`,
+            );
             continue;
           }
 
@@ -304,7 +358,12 @@ describe("the published error schemas (strict)", () => {
 
           const validate = ajv.compile(
             asJsonSchema(
-              JSON.parse(JSON.stringify(schema).replace(/"#\/components\//g, '"doc#/components/')),
+              JSON.parse(
+                JSON.stringify(schema).replace(
+                  /"#\/components\//g,
+                  '"doc#/components/',
+                ),
+              ),
             ) as Json,
           );
 
@@ -329,7 +388,9 @@ describe("the published error schemas (strict)", () => {
   });
 
   it("accept every body the handler really sends, in the public reference", () => {
-    const document = buildPublicApiDocument(app.swagger() as OpenApiDocument) as Json;
+    const document = buildPublicApiDocument(
+      app.swagger() as OpenApiDocument,
+    ) as Json;
 
     expect(Object.keys(document.paths ?? {}).length).toBeGreaterThan(0);
     expect(refusalsOf(document)).toEqual([]);
@@ -343,10 +404,16 @@ describe("the published error schemas (strict)", () => {
     addFormats(ajv);
 
     const operation = document.paths["/fuel/create-fuel/{businessId}"].post;
-    const internal = ajv.compile(operation.responses["500"].content["application/json"].schema);
-    const notFound = ajv.compile(operation.responses["404"].content["application/json"].schema);
+    const internal = ajv.compile(
+      operation.responses["500"].content["application/json"].schema,
+    );
+    const notFound = ajv.compile(
+      operation.responses["404"].content["application/json"].schema,
+    );
 
-    expect(internal({ code: "INTERNAL_ERROR", status: "error", message: "x" })).toBe(false);
+    expect(
+      internal({ code: "INTERNAL_ERROR", status: "error", message: "x" }),
+    ).toBe(false);
     expect(notFound({ code: "X", message: "m", stack: "at ..." })).toBe(false);
     expect(notFound({ message: "sem código" })).toBe(false);
   });
@@ -357,10 +424,16 @@ describe("the published error schemas (strict)", () => {
 
     for (const [path, methods] of Object.entries<Json>(document.paths)) {
       for (const [method, operation] of Object.entries<Json>(methods)) {
-        for (const [status, response] of Object.entries<Json>(operation.responses ?? {})) {
+        for (const [status, response] of Object.entries<Json>(
+          operation.responses ?? {},
+        )) {
           const code = Number(status);
 
-          if (code >= 400 && code < 500 && !response.headers?.["x-error-code"]) {
+          if (
+            code >= 400 &&
+            code < 500 &&
+            !response.headers?.["x-error-code"]
+          ) {
             missing.push(`${method.toUpperCase()} ${path} → ${status}`);
           }
         }
@@ -398,7 +471,11 @@ describe("the success fields the controllers send", () => {
   it("publishes the id of a new fueling", () => {
     // The app's outbox records the id of what it created; a schema without
     // it strips the field on the way out.
-    const schema = successSchema("/fuel/create-fuel/{businessId}", "post", "201");
+    const schema = successSchema(
+      "/fuel/create-fuel/{businessId}",
+      "post",
+      "201",
+    );
 
     expect(Object.keys(schema?.properties ?? {})).toContain("id");
   });

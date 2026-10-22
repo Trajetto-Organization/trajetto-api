@@ -14,7 +14,9 @@ const shipperEntity = z.object({
   corporate_reason: z
     .string()
     .nullable()
-    .describe("Razão social, impressa no comprovante (decisão 14.8); nula = o nome."),
+    .describe(
+      "Razão social, impressa no comprovante (decisão 14.8); nula = o nome.",
+    ),
   cnpj: z.string().nullable(),
   email: z.string().nullable(),
   telephone: z.string().nullable(),
@@ -68,11 +70,29 @@ const shipperResponses = {
     totalPages: z.number(),
   }),
   lookupNotFound: z
-    .object({ code: z.string().describe("USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."), message: z.string() })
-    .describe("USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."),
+    .object({
+      code: z
+        .string()
+        .describe(
+          "USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
+        ),
+      message: z.string(),
+    })
+    .describe(
+      "USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
+    ),
   shipperNotFound: z
-    .object({ code: z.string().describe("SHIPPER_NOT_FOUND (o embarcador não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."), message: z.string() })
-    .describe("SHIPPER_NOT_FOUND (o embarcador não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe)."),
+    .object({
+      code: z
+        .string()
+        .describe(
+          "SHIPPER_NOT_FOUND (o embarcador não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
+        ),
+      message: z.string(),
+    })
+    .describe(
+      "SHIPPER_NOT_FOUND (o embarcador não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
+    ),
   codedError: z.object({ code: z.string(), message: z.string() }),
   internalServerError: z.object({
     message: z.string().default("Internal server error"),

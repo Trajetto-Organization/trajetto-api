@@ -103,7 +103,11 @@ function openImageSafely(
   try {
     const image = (
       doc as unknown as {
-        openImage(src: Buffer): { width: number; height: number; orientation?: number };
+        openImage(src: Buffer): {
+          width: number;
+          height: number;
+          orientation?: number;
+        };
       }
     ).openImage(bytes);
 
@@ -143,11 +147,14 @@ function drawImage(
 function drawWatermark(doc: PDFKit.PDFDocument): void {
   const { x, y } = doc;
 
-  const symbolWidth = TRAJETTO_WATERMARK_SYMBOL.x1 - TRAJETTO_WATERMARK_SYMBOL.x0;
+  const symbolWidth =
+    TRAJETTO_WATERMARK_SYMBOL.x1 - TRAJETTO_WATERMARK_SYMBOL.x0;
   const scale = 360 / symbolWidth;
 
-  const centreX = (TRAJETTO_WATERMARK_SYMBOL.x0 + TRAJETTO_WATERMARK_SYMBOL.x1) / 2;
-  const centreY = (TRAJETTO_WATERMARK_SYMBOL.y0 + TRAJETTO_WATERMARK_SYMBOL.y1) / 2;
+  const centreX =
+    (TRAJETTO_WATERMARK_SYMBOL.x0 + TRAJETTO_WATERMARK_SYMBOL.x1) / 2;
+  const centreY =
+    (TRAJETTO_WATERMARK_SYMBOL.y0 + TRAJETTO_WATERMARK_SYMBOL.y1) / 2;
 
   doc.save();
   doc.opacity(0.08);
@@ -245,7 +252,9 @@ async function renderProofPdf(
 
       const isLast = index === line.length - 1;
       const nextColumn =
-        FIELD_COLUMNS[index + 1] === undefined ? x0 + width : x0 + FIELD_COLUMNS[index + 1];
+        FIELD_COLUMNS[index + 1] === undefined
+          ? x0 + width
+          : x0 + FIELD_COLUMNS[index + 1];
       const valueX = x + labelWidth;
       const valueWidth = Math.max(
         20,
@@ -258,10 +267,15 @@ async function renderProofPdf(
       doc.font("Helvetica").fontSize(BODY_SIZE);
       doc.text(field.value, valueX, top, {
         width: valueWidth,
-        ...(isLast ? {} : { lineBreak: false, ellipsis: true, height: BODY_SIZE + 2 }),
+        ...(isLast
+          ? {}
+          : { lineBreak: false, ellipsis: true, height: BODY_SIZE + 2 }),
       });
 
-      bottom = Math.max(bottom, isLast ? doc.y : top + BODY_SIZE + LINE_GAP + 1);
+      bottom = Math.max(
+        bottom,
+        isLast ? doc.y : top + BODY_SIZE + LINE_GAP + 1,
+      );
 
       doc.font("Helvetica").fontSize(BODY_SIZE);
       x = valueX + Math.min(doc.widthOfString(field.value), valueWidth) + 14;
@@ -303,7 +317,11 @@ async function renderProofPdf(
   const headerTop = doc.y;
   const headerHeight = 40;
 
-  doc.strokeColor(INK).lineWidth(0.8).rect(left, headerTop, contentWidth, headerHeight).stroke();
+  doc
+    .strokeColor(INK)
+    .lineWidth(0.8)
+    .rect(left, headerTop, contentWidth, headerHeight)
+    .stroke();
 
   doc.fillColor(INK).font("Helvetica").fontSize(14);
   doc.text(model.header.title, left, headerTop + 5, {
@@ -346,14 +364,17 @@ async function renderProofPdf(
   let mapBottom = protocolTop;
 
   if (map) {
-    mapBottom = drawMap(doc, map, right - MAP_BOX.width, protocolTop) ?? protocolTop;
+    mapBottom =
+      drawMap(doc, map, right - MAP_BOX.width, protocolTop) ?? protocolTop;
   }
 
   doc.y = Math.max(doc.y, mapBottom) + BLOCK_GAP + 4;
 
   // The on-screen signature is not in the model (design §11 item 3): it
   // goes small, to the right of the driver, where the model leaves blank.
-  const signature = images.signature ? openImageSafely(doc, images.signature) : null;
+  const signature = images.signature
+    ? openImageSafely(doc, images.signature)
+    : null;
   const signatureColumn = signature ? 170 : 0;
 
   for (const [index, item] of afterGps.entries()) {
@@ -373,7 +394,10 @@ async function renderProofPdf(
       });
 
       const scale = Math.min(140 / signature.width, 44 / signature.height);
-      const size = { width: signature.width * scale, height: signature.height * scale };
+      const size = {
+        width: signature.width * scale,
+        height: signature.height * scale,
+      };
 
       drawImage(doc, signature.image, x, top + 10, size);
 
@@ -420,20 +444,30 @@ async function renderProofPdf(
 
   if (!drawnPhoto) {
     doc.fillColor("#ffffff").font("Helvetica").fontSize(BODY_SIZE);
-    doc.text(model.receipt.missingPhoto, left + BAND_PADDING, bandTop + BAND_PADDING + 4, {
-      width: innerWidth,
-      lineBreak: false,
-    });
+    doc.text(
+      model.receipt.missingPhoto,
+      left + BAND_PADDING,
+      bandTop + BAND_PADDING + 4,
+      {
+        width: innerWidth,
+        lineBreak: false,
+      },
+    );
   }
 
   // One line, cut with an ellipsis, never wrapped (design §3 #23).
   doc.fillColor(STAMP_YELLOW).font("Helvetica").fontSize(7.5);
-  doc.text(model.receipt.stamp, left + 6, bandTop + bandHeight - STAMP_HEIGHT + 3, {
-    width: contentWidth - 12,
-    lineBreak: false,
-    ellipsis: true,
-    height: 9,
-  });
+  doc.text(
+    model.receipt.stamp,
+    left + 6,
+    bandTop + bandHeight - STAMP_HEIGHT + 3,
+    {
+      width: contentWidth - 12,
+      lineBreak: false,
+      ellipsis: true,
+      height: 9,
+    },
+  );
 
   doc.x = left;
   doc.y = bandTop + bandHeight + 6;
@@ -450,7 +484,9 @@ async function renderProofPdf(
     let height = 0;
 
     for (const paragraph of auth.paragraphs) {
-      doc.font(paragraph.bold ? "Helvetica-Bold" : "Helvetica").fontSize(BODY_SIZE);
+      doc
+        .font(paragraph.bold ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(BODY_SIZE);
       height += doc.heightOfString(paragraph.text, { width: columnWidth });
     }
 
@@ -513,7 +549,13 @@ async function renderProofPdf(
     const secondaryTop = authTop + QR_SIZE - SECONDARY_QR_SIZE - 9;
     const secondaryX = qrX - 10 - SECONDARY_QR_SIZE;
 
-    await drawQr(doc, auth.verificationLine.url, secondaryX, secondaryTop, SECONDARY_QR_SIZE);
+    await drawQr(
+      doc,
+      auth.verificationLine.url,
+      secondaryX,
+      secondaryTop,
+      SECONDARY_QR_SIZE,
+    );
 
     doc.fillColor(MUTED).font("Helvetica").fontSize(5.5);
     doc.text("Original", secondaryX, secondaryTop + SECONDARY_QR_SIZE + 2, {
@@ -596,7 +638,10 @@ function drawMap(
 
   // The tiles are validated before they get here (map-tiles), but a bad one
   // must still not cost the whole receipt.
-  const opened = map.tiles.map((tile) => ({ tile, image: openImageSafely(doc, tile.bytes) }));
+  const opened = map.tiles.map((tile) => ({
+    tile,
+    image: openImageSafely(doc, tile.bytes),
+  }));
 
   if (opened.some((entry) => !entry.image)) return null;
 
@@ -634,10 +679,19 @@ function drawMap(
 
   doc.restore();
 
-  doc.strokeColor(INK).lineWidth(0.6).rect(x, y, MAP_BOX.width, height).stroke();
+  doc
+    .strokeColor(INK)
+    .lineWidth(0.6)
+    .rect(x, y, MAP_BOX.width, height)
+    .stroke();
 
   return y + height;
 }
 
 export { PAGE_MARGIN, renderProofPdf };
-export type { RenderOptions, RenderedImages, RenderedProof, SignaturePlaceholder };
+export type {
+  RenderOptions,
+  RenderedImages,
+  RenderedProof,
+  SignaturePlaceholder,
+};

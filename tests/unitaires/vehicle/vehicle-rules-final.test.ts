@@ -63,9 +63,9 @@ describe("canDriverOperateVehicle", () => {
   });
 
   it("never matches an empty driver id against a truck with no responsible", () => {
-    expect(canDriverOperateVehicle({ id: "truck", driverId: null }, "", [])).toBe(
-      false,
-    );
+    expect(
+      canDriverOperateVehicle({ id: "truck", driverId: null }, "", []),
+    ).toBe(false);
   });
 });
 
@@ -95,7 +95,11 @@ describe("decideVehicleStatusChange", () => {
 
     for (const requested of ["ACTIVE", "INACTIVE"] as const) {
       expect(
-        decideVehicleStatusChange({ current: "IN_ROUTE", requested, openRoutes: running }),
+        decideVehicleStatusChange({
+          current: "IN_ROUTE",
+          requested,
+          openRoutes: running,
+        }),
       ).toMatchObject({ kind: "refused", code: "VEHICLE_IN_ACTIVE_ROUTE" });
     }
 
@@ -125,7 +129,10 @@ describe("decideVehicleStatusChange", () => {
       openRoutes: { planned: 2, released: 1, inProgress: 0 },
     });
 
-    expect(verdict).toMatchObject({ kind: "refused", code: "VEHICLE_HAS_OPEN_ROUTES" });
+    expect(verdict).toMatchObject({
+      kind: "refused",
+      code: "VEHICLE_HAS_OPEN_ROUTES",
+    });
     expect(verdict.kind === "refused" && verdict.message).toContain(
       "1 rota liberada e 2 rotas planejadas",
     );
@@ -154,17 +161,25 @@ describe("decideVehicleStatusChange", () => {
 describe("vehicleUniqueFieldOf", () => {
   it("names the column of a per-company unique violation", () => {
     expect(
-      vehicleUniqueFieldOf({ code: "P2002", meta: { target: ["businessId", "license_plate"] } }),
+      vehicleUniqueFieldOf({
+        code: "P2002",
+        meta: { target: ["businessId", "license_plate"] },
+      }),
     ).toBe("license_plate");
     expect(
-      vehicleUniqueFieldOf({ code: "P2002", meta: { target: "vehicle_businessId_renavam_key" } }),
+      vehicleUniqueFieldOf({
+        code: "P2002",
+        meta: { target: "vehicle_businessId_renavam_key" },
+      }),
     ).toBe("renavam");
   });
 
   it("ignores anything that is not a P2002 on those columns", () => {
     expect(vehicleUniqueFieldOf(new Error("boom"))).toBeNull();
     expect(vehicleUniqueFieldOf({ code: "P2003" })).toBeNull();
-    expect(vehicleUniqueFieldOf({ code: "P2002", meta: { target: ["id"] } })).toBeNull();
+    expect(
+      vehicleUniqueFieldOf({ code: "P2002", meta: { target: ["id"] } }),
+    ).toBeNull();
   });
 });
 

@@ -95,9 +95,8 @@ class ExportFuelUseCase {
       throw new FuelNoFuelsToExportError();
     }
 
-    const business = await this.businessRepository.findBusinessById(
-      resolvedBusinessId,
-    );
+    const business =
+      await this.businessRepository.findBusinessById(resolvedBusinessId);
 
     // The company's zone (decision 1.1): the shared formatters printed in the
     // server's (UTC), a day ahead from 21:00 in São Paulo.

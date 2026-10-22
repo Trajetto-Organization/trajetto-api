@@ -18,7 +18,10 @@ const lastUseAt: Record<LegacyContractUse, Date | null> = {
   legacy_pause_kind: null,
 };
 
-function countLegacyContractUse(use: LegacyContractUse, at: Date = new Date()): void {
+function countLegacyContractUse(
+  use: LegacyContractUse,
+  at: Date = new Date(),
+): void {
   counts[use] += 1;
   lastUseAt[use] = at;
 }

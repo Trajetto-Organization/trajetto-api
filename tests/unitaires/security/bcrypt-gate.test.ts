@@ -113,7 +113,9 @@ describe("the process-wide gate", () => {
     await settleAll();
     const results = await Promise.all(outcomes);
 
-    const refused = results.filter((result) => result instanceof ServiceBusyError);
+    const refused = results.filter(
+      (result) => result instanceof ServiceBusyError,
+    );
     expect(refused).toHaveLength(8);
 
     // The ones refused are the LAST eight: the queue is FIFO, and a request
@@ -159,8 +161,8 @@ describe("the process-wide gate", () => {
   });
 
   it("frees the slot when bcrypt fails", async () => {
-    vi.mocked(compare).mockImplementationOnce(() =>
-      Promise.reject(new Error("invalid salt")) as never,
+    vi.mocked(compare).mockImplementationOnce(
+      () => Promise.reject(new Error("invalid salt")) as never,
     );
 
     await expect(compareSecret("x", "garbage")).rejects.toThrow("invalid salt");

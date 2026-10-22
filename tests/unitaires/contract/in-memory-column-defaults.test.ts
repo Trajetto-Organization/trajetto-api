@@ -94,7 +94,9 @@ describe("in-memory repositories apply the columns' defaults", () => {
       requires_photo: false,
     });
 
-    expect(asRecord(await types.findOccurrenceTypeById(system.id))).toMatchObject({
+    expect(
+      asRecord(await types.findOccurrenceTypeById(system.id)),
+    ).toMatchObject({
       form_version: 1,
       requires_authorization: false,
     });
@@ -211,7 +213,9 @@ describe("in-memory repositories return null for the new nullable columns", () =
     });
 
     expect(asRecord(delivery)).toMatchObject({ apiKeyId: null });
-    expect(asRecord(deliveries.events[0])).toMatchObject({ occurrenceId: null });
+    expect(asRecord(deliveries.events[0])).toMatchObject({
+      occurrenceId: null,
+    });
     expect(asRecord(deliveries.occurrences[0])).toMatchObject({
       form_answers: null,
       form_version: null,
@@ -324,6 +328,8 @@ describe("in-memory repositories return null for the new nullable columns", () =
       businessId: "business-nulls",
     });
 
-    expect(asRecord(vehicleType)).toMatchObject({ required_cnh_category: null });
+    expect(asRecord(vehicleType)).toMatchObject({
+      required_cnh_category: null,
+    });
   });
 });

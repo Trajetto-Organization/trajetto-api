@@ -258,7 +258,18 @@ class BranchRepository implements IBranchRepository {
     // (tests/E2E/query-plans-connections.test.ts); seven sequential ones paid
     // seven round trips. Each sub-select is an index probe on branchId.
     const [row] = await this.prisma.$queryRaw<
-      Array<Record<"vehicles" | "drivers" | "serviceOrders" | "accountsPayable" | "fines" | "fuels" | "vehicleChecklists", bigint>>
+      Array<
+        Record<
+          | "vehicles"
+          | "drivers"
+          | "serviceOrders"
+          | "accountsPayable"
+          | "fines"
+          | "fuels"
+          | "vehicleChecklists",
+          bigint
+        >
+      >
     >`
       SELECT
         (SELECT count(*) FROM "vehicle" WHERE "branchId" = ${branchId}) AS "vehicles",

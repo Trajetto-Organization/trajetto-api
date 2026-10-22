@@ -31,13 +31,17 @@ function parseArgs(argv) {
     else if (flag === "--date-fallback") args.dateFallback = argv[++i];
     else throw new Error(`unknown flag ${flag}`);
   }
-  if (!args.ocr || !args.vlm || !args.out) throw new Error("--ocr, --vlm and --out are required");
+  if (!args.ocr || !args.vlm || !args.out)
+    throw new Error("--ocr, --vlm and --out are required");
   return args;
 }
 
 function latest(file) {
   const map = new Map();
-  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean)) {
+  for (const line of fs
+    .readFileSync(file, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)) {
     const record = JSON.parse(line);
     if (record.variant === "prod") map.set(record.id, record);
   }
@@ -54,7 +58,10 @@ function mergeOdometer(ocr, vlm) {
     legivel: !notOdometer && ocr.legivel,
     sinais_fraude: Boolean(vlm.sinais_fraude),
     motivos_fraude: vlm.motivos_fraude ?? [],
-    observacao: `hibrido: ${ocr.observacao} / ${vlm.observacao ?? ""}`.slice(0, 400),
+    observacao: `hibrido: ${ocr.observacao} / ${vlm.observacao ?? ""}`.slice(
+      0,
+      400,
+    ),
   };
 }
 
@@ -63,13 +70,18 @@ function mergeProof(ocr, vlm, dateFallback) {
     e_canhoto: ocr.e_canhoto === "sim" ? "sim" : vlm.e_canhoto,
     numero_documento_lido: ocr.numero_documento_lido,
     data_recebimento_lida:
-      ocr.data_recebimento_lida ?? (dateFallback === "vlm" ? vlm.data_recebimento_lida ?? null : null),
+      ocr.data_recebimento_lida ??
+      (dateFallback === "vlm" ? (vlm.data_recebimento_lida ?? null) : null),
     tem_assinatura: vlm.tem_assinatura,
-    nome_recebedor_lido: ocr.nome_recebedor_lido ?? vlm.nome_recebedor_lido ?? null,
+    nome_recebedor_lido:
+      ocr.nome_recebedor_lido ?? vlm.nome_recebedor_lido ?? null,
     legivel: ocr.legivel === "sim" ? "sim" : vlm.legivel,
     qualidade_foto: vlm.qualidade_foto,
     confianca: vlm.confianca,
-    observacao: `hibrido: ${ocr.observacao} / ${vlm.observacao ?? ""}`.slice(0, 400),
+    observacao: `hibrido: ${ocr.observacao} / ${vlm.observacao ?? ""}`.slice(
+      0,
+      400,
+    ),
   };
 }
 
@@ -77,8 +89,12 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const ocrRun = latest(path.join(args.ocr, "results.jsonl"));
   const vlmRun = latest(path.join(args.vlm, "results.jsonl"));
-  const ocrInfo = JSON.parse(fs.readFileSync(path.join(args.ocr, "run.json"), "utf8"));
-  const vlmInfo = JSON.parse(fs.readFileSync(path.join(args.vlm, "run.json"), "utf8"));
+  const ocrInfo = JSON.parse(
+    fs.readFileSync(path.join(args.ocr, "run.json"), "utf8"),
+  );
+  const vlmInfo = JSON.parse(
+    fs.readFileSync(path.join(args.vlm, "run.json"), "utf8"),
+  );
 
   fs.mkdirSync(args.out, { recursive: true });
   const lines = [];
@@ -114,7 +130,10 @@ function main() {
     );
   }
 
-  fs.writeFileSync(path.join(args.out, "results.jsonl"), `${lines.join("\n")}\n`);
+  fs.writeFileSync(
+    path.join(args.out, "results.jsonl"),
+    `${lines.join("\n")}\n`,
+  );
   fs.writeFileSync(path.join(args.out, "samples.jsonl"), "");
   fs.writeFileSync(
     path.join(args.out, "run.json"),

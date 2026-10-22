@@ -24,7 +24,8 @@ function socketClientEntry({
   root = API_ROOT,
   exists = existsSync,
 } = {}) {
-  if (env.SOCKET_IO_CLIENT_ENTRY) return pathToFileURL(resolve(env.SOCKET_IO_CLIENT_ENTRY)).href;
+  if (env.SOCKET_IO_CLIENT_ENTRY)
+    return pathToFileURL(resolve(env.SOCKET_IO_CLIENT_ENTRY)).href;
 
   for (const repository of CANDIDATE_REPOSITORIES) {
     const entry = resolve(

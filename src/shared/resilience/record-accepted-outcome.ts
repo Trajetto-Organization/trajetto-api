@@ -31,7 +31,10 @@ function detachedRecordDelayMs(retry: number): number {
  * counted from BEFORE the claim statement was sent (the database's lease can
  * only end later than that), minus the margin.
  */
-function recordDeadline(claimStartedAtMs: number, leaseSeconds: number): number {
+function recordDeadline(
+  claimStartedAtMs: number,
+  leaseSeconds: number,
+): number {
   return claimStartedAtMs + leaseSeconds * 1000 - RECORD_LEASE_MARGIN_MS;
 }
 
@@ -59,7 +62,9 @@ const realSleep = (ms: number) =>
  * second case the detached loop goes on by itself (see `track`).
  * Never throws.
  */
-async function recordAcceptedOutcome(options: RecordAcceptedOptions): Promise<void> {
+async function recordAcceptedOutcome(
+  options: RecordAcceptedOptions,
+): Promise<void> {
   const sleep = options.sleep ?? realSleep;
   const now = options.now ?? Date.now;
 

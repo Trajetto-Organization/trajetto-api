@@ -15,15 +15,30 @@ import { describe, expect, it } from "vitest";
  * lies.
  */
 const ROOT = resolve(__dirname, "..", "..", "..");
-const read = (path: string) => readFileSync(join(ROOT, path), "utf8").replace(/\r\n/g, "\n");
+const read = (path: string) =>
+  readFileSync(join(ROOT, path), "utf8").replace(/\r\n/g, "\n");
 
-const DOCS = ["docs/arquitetura.md", "docs/deploy.md", "docs/testes.md", "docs/variaveis-de-ambiente.md"];
+const DOCS = [
+  "docs/arquitetura.md",
+  "docs/deploy.md",
+  "docs/testes.md",
+  "docs/variaveis-de-ambiente.md",
+];
 
 const RETIRED = /docs\/(?:runbook-[\w-]+|decisao-uniques-multi-tenant)\.md/;
 
 /** Text files under `dir`, skipping what is not ours to keep in sync. */
 function files(dir: string): string[] {
-  const skip = new Set(["node_modules", ".git", "tmp", "coverage", "reports", "build", "docs", "fixtures"]);
+  const skip = new Set([
+    "node_modules",
+    ".git",
+    "tmp",
+    "coverage",
+    "reports",
+    "build",
+    "docs",
+    "fixtures",
+  ]);
 
   return readdirSync(join(ROOT, dir)).flatMap((name) => {
     const path = join(ROOT, dir, name);
@@ -31,7 +46,9 @@ function files(dir: string): string[] {
     if (skip.has(name)) return [];
     if (statSync(path).isDirectory()) return files(relative(ROOT, path));
 
-    return /\.(ts|mts|mjs|js|sh|ya?ml|md|prisma|toml|json)$|^Dockerfile$|^\.env\.example$|^\.gitleaksignore$/.test(name)
+    return /\.(ts|mts|mjs|js|sh|ya?ml|md|prisma|toml|json)$|^Dockerfile$|^\.env\.example$|^\.gitleaksignore$/.test(
+      name,
+    )
       ? [relative(ROOT, path).replace(/\\/g, "/")]
       : [];
   });
@@ -39,7 +56,9 @@ function files(dir: string): string[] {
 
 describe("the repository documentation", () => {
   it("is the consolidated set", () => {
-    const present = readdirSync(join(ROOT, "docs")).filter((name) => name.endsWith(".md")).sort();
+    const present = readdirSync(join(ROOT, "docs"))
+      .filter((name) => name.endsWith(".md"))
+      .sort();
 
     expect(present.map((name) => `docs/${name}`)).toEqual([...DOCS].sort());
   });
@@ -47,11 +66,14 @@ describe("the repository documentation", () => {
   it("is what README, CLAUDE.md and AGENTS.md point at, and every path they cite exists", () => {
     for (const guide of ["README.md", "CLAUDE.md", "AGENTS.md"]) {
       const text = read(guide);
-      const cited = [...text.matchAll(/(?<![\w./-])(docs\/[\w-]+\.md)/g)].map((match) => match[1]);
+      const cited = [...text.matchAll(/(?<![\w./-])(docs\/[\w-]+\.md)/g)].map(
+        (match) => match[1],
+      );
 
       expect(cited.length, guide).toBeGreaterThan(0);
 
-      for (const path of cited) expect(existsSync(join(ROOT, path)), `${guide} → ${path}`).toBe(true);
+      for (const path of cited)
+        expect(existsSync(join(ROOT, path)), `${guide} → ${path}`).toBe(true);
     }
   });
 
@@ -59,7 +81,6 @@ describe("the repository documentation", () => {
     const stale = files(".")
       .filter((path) => !path.startsWith("prisma/migrations/"))
       .filter((path) => path !== "tests/unitaires/quality/agent-guides.test.ts")
-      .filter((path) => path !== "tests/unitaires/lifecycle/compose-stack-render.test.ts")
       .filter((path) => RETIRED.test(read(path)));
 
     expect(stale).toEqual([]);

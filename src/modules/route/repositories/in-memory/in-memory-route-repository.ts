@@ -369,17 +369,29 @@ class InMemoryRouteRepository implements IRouteRepository {
    *   count, DeliveryNoLongerRoutableError (unknown and foreign ids used to
    *   pass silently).
    */
-  private assertStopsInsertable(deliveryIds: string[], businessId: string): void {
+  private assertStopsInsertable(
+    deliveryIds: string[],
+    businessId: string,
+  ): void {
     this.assertDeliveriesFree(deliveryIds);
 
     if (new Set(deliveryIds).size !== deliveryIds.length) {
       throw new DeliveryAlreadyOnRouteError(deliveryIds.length);
     }
 
-    if (deliveryIds.some((deliveryId) => !this.deliveries.some((entry) => entry.id === deliveryId))) {
+    if (
+      deliveryIds.some(
+        (deliveryId) =>
+          !this.deliveries.some((entry) => entry.id === deliveryId),
+      )
+    ) {
       throw new Prisma.PrismaClientKnownRequestError(
         "Foreign key constraint violated on the constraint: `route_stop_deliveryId_fkey`",
-        { code: "P2003", clientVersion: "in-memory", meta: { field_name: "route_stop_deliveryId_fkey (index)" } },
+        {
+          code: "P2003",
+          clientVersion: "in-memory",
+          meta: { field_name: "route_stop_deliveryId_fkey (index)" },
+        },
       );
     }
 
@@ -594,7 +606,8 @@ class InMemoryRouteRepository implements IRouteRepository {
       // Scoped, like the real `updateMany`: the mirror never reaches a row of
       // another company even if a bad id slipped past the use case.
       const delivery = this.deliveries.find(
-        (entry) => entry.id === deliveryId && entry.businessId === data.businessId,
+        (entry) =>
+          entry.id === deliveryId && entry.businessId === data.businessId,
       );
 
       if (delivery) {
@@ -661,7 +674,8 @@ class InMemoryRouteRepository implements IRouteRepository {
       this.stops.splice(this.stops.indexOf(stop), 1);
 
       const delivery = this.deliveries.find(
-        (entry) => entry.id === stop.deliveryId && entry.businessId === businessId,
+        (entry) =>
+          entry.id === stop.deliveryId && entry.businessId === businessId,
       );
 
       if (delivery) {
@@ -680,7 +694,9 @@ class InMemoryRouteRepository implements IRouteRepository {
       blocked: [],
       bumped,
       emptiedRoutes: affected
-        .filter((routeId) => !this.stops.some((stop) => stop.routeId === routeId))
+        .filter(
+          (routeId) => !this.stops.some((stop) => stop.routeId === routeId),
+        )
         .map((routeId) => this.routeOf(routeId, businessId))
         .filter((route): route is Route => route !== undefined),
     };
@@ -704,7 +720,9 @@ class InMemoryRouteRepository implements IRouteRepository {
     const blocked = held
       .filter(
         (stop) =>
-          !EDITABLE_STATUSES.includes(this.routeOf(stop.routeId, businessId)!.status),
+          !EDITABLE_STATUSES.includes(
+            this.routeOf(stop.routeId, businessId)!.status,
+          ),
       )
       .map((stop) => {
         const delivery = this.deliveries.find(
@@ -872,7 +890,9 @@ class InMemoryRouteRepository implements IRouteRepository {
       driverName: nameOf(route.driverId),
     });
 
-    const ofTenant = this.routes.filter((route) => route.businessId === businessId);
+    const ofTenant = this.routes.filter(
+      (route) => route.businessId === businessId,
+    );
 
     const onDay = (route: Route): boolean =>
       asDateColumn(route.scheduled_date).getTime() === dayTime &&
@@ -927,7 +947,11 @@ class InMemoryRouteRepository implements IRouteRepository {
           .sort((a, b) => this.runningOrder(a, b))[0]
       : undefined;
 
-    const driverRunning = this.firstRunning(businessId, driverId, "IN_PROGRESS");
+    const driverRunning = this.firstRunning(
+      businessId,
+      driverId,
+      "IN_PROGRESS",
+    );
 
     // RELEASED routes whose open stops are all in the selection, as the real
     // query decides it.
@@ -968,7 +992,11 @@ class InMemoryRouteRepository implements IRouteRepository {
           (a, b) =>
             (b.created_at ? new Date(b.created_at).getTime() : 0) -
               (a.created_at ? new Date(a.created_at).getTime() : 0) ||
-            ((b.id ?? "") < (a.id ?? "") ? -1 : (b.id ?? "") > (a.id ?? "") ? 1 : 0),
+            ((b.id ?? "") < (a.id ?? "")
+              ? -1
+              : (b.id ?? "") > (a.id ?? "")
+                ? 1
+                : 0),
         )
         .slice(0, PREVIEW_LIMIT)
         .map((entry) => ({
@@ -1051,7 +1079,8 @@ class InMemoryRouteRepository implements IRouteRepository {
         filters.driverIds.includes(route.driverId)) &&
       (except === "vehicleId" ||
         !filters.vehicleIds?.length ||
-        (route.vehicleId !== null && filters.vehicleIds.includes(route.vehicleId))) &&
+        (route.vehicleId !== null &&
+          filters.vehicleIds.includes(route.vehicleId))) &&
       (!term || matchesSearch(route));
 
     // resolveOrderBy's choice, compared the way Postgres orders: NULL
@@ -1065,7 +1094,8 @@ class InMemoryRouteRepository implements IRouteRepository {
       code: (route) => route.code,
       status: (route) => ROUTE_LIST_STATUSES.indexOf(route.status),
       driverName: (route) => this.driverName(route.businessId, route.driverId),
-      vehiclePlate: (route) => this.vehiclePlate(route.businessId, route.vehicleId),
+      vehiclePlate: (route) =>
+        this.vehiclePlate(route.businessId, route.vehicleId),
       scheduled_date: (route) => route.scheduled_date,
       destination: (route) => route.destination,
       started_at: (route) => route.started_at,
@@ -1083,7 +1113,12 @@ class InMemoryRouteRepository implements IRouteRepository {
       .filter((route) => matches(route))
       .sort(
         (a, b) =>
-          compareForOrder(valueOf[key](a), valueOf[key](b), direction, nulls[key]) ||
+          compareForOrder(
+            valueOf[key](a),
+            valueOf[key](b),
+            direction,
+            nulls[key],
+          ) ||
           compareForOrder(a.created_at, b.created_at, "desc") ||
           compareForOrder(a.id, b.id, "desc"),
       );
@@ -1094,7 +1129,9 @@ class InMemoryRouteRepository implements IRouteRepository {
     ): GroupCount[] => {
       const tally = new Map<string | null, number>();
 
-      for (const route of this.routes.filter((entry) => matches(entry, except))) {
+      for (const route of this.routes.filter((entry) =>
+        matches(entry, except),
+      )) {
         tally.set(pick(route), (tally.get(pick(route)) ?? 0) + 1);
       }
 
@@ -1111,7 +1148,12 @@ class InMemoryRouteRepository implements IRouteRepository {
       nameOf: (id: string) => string | null | undefined,
     ): Map<string, string> =>
       new Map(
-        [...new Set([...groups.map((group) => group.value), ...(selected ?? [])])]
+        [
+          ...new Set([
+            ...groups.map((group) => group.value),
+            ...(selected ?? []),
+          ]),
+        ]
           .filter((id): id is string => typeof id === "string")
           .flatMap((id) => {
             const name = nameOf(id);
@@ -1646,7 +1688,8 @@ class InMemoryRouteRepository implements IRouteRepository {
       if (query.scheduledFrom || query.scheduledTo) {
         const inRange =
           scheduled !== null &&
-          (!query.scheduledFrom || scheduled >= query.scheduledFrom.getTime()) &&
+          (!query.scheduledFrom ||
+            scheduled >= query.scheduledFrom.getTime()) &&
           (!query.scheduledTo || scheduled <= query.scheduledTo.getTime());
 
         if (!inRange && !(query.includeUnscheduled && scheduled === null)) {
@@ -1666,7 +1709,9 @@ class InMemoryRouteRepository implements IRouteRepository {
         if (!matches(delivery, skip)) continue;
 
         const value =
-          key === "kind" ? (delivery.kind ?? "DELIVERY") : (delivery[key] ?? "");
+          key === "kind"
+            ? (delivery.kind ?? "DELIVERY")
+            : (delivery[key] ?? "");
 
         counts.set(value, (counts.get(value) ?? 0) + 1);
       }
@@ -1679,7 +1724,8 @@ class InMemoryRouteRepository implements IRouteRepository {
     // Same as the real one: tenant-scoped names, cut and ordered alike.
     const shipperName = (id: string | undefined) =>
       this.shippers.find(
-        (shipper) => shipper.id === id && shipper.businessId === query.businessId,
+        (shipper) =>
+          shipper.id === id && shipper.businessId === query.businessId,
       )?.name;
 
     const shipperCounts = new Map<string, number>();
@@ -1752,7 +1798,10 @@ class InMemoryRouteRepository implements IRouteRepository {
         uf: facet("uf", "uf"),
         kind: facet("kind", "kind"),
         shipper: orderShipperFacet(
-          [...shipperCounts.entries()].map(([value, count]) => ({ value, count })),
+          [...shipperCounts.entries()].map(([value, count]) => ({
+            value,
+            count,
+          })),
           (id) => shipperName(id),
         ),
       },
@@ -1770,7 +1819,8 @@ class InMemoryRouteRepository implements IRouteRepository {
     // Same match as the real query: open stops whose delivery is in transit.
     return this.hydrate(route)
       .stops.filter(
-        (stop) => isStopOpen(stop.status) && stop.delivery.status === "IN_TRANSIT",
+        (stop) =>
+          isStopOpen(stop.status) && stop.delivery.status === "IN_TRANSIT",
       )
       .map((stop) => stop.delivery);
   }
@@ -1866,12 +1916,20 @@ class InMemoryRouteRepository implements IRouteRepository {
 
           route.plan_version += 1;
           this.pushPlanEvents(
-            [{ deliveryId, note: `Retirada da Rota ${route.code}: a entrega foi encerrada.` }],
+            [
+              {
+                deliveryId,
+                note: `Retirada da Rota ${route.code}: a entrega foi encerrada.`,
+              },
+            ],
             "ROUTE_REMOVED",
             route,
             null,
           );
-          outcome.onPlanDropped?.({ routeId: route.id, ...this.planResult(route) });
+          outcome.onPlanDropped?.({
+            routeId: route.id,
+            ...this.planResult(route),
+          });
         }
       }
 

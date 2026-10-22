@@ -19,8 +19,18 @@ const PROFILE_NOT_FOUND_SENTENCE = new UserProfileAccessNotFoundError().message;
 
 const PERMISSION_BODY_LINK_RULES: readonly HttpErrorRule[] = [
   [UserProfileAccessNotFoundError, 400, "PROFILE_ACCESS_NOT_FOUND"],
-  [ProfileAccessNotFoundError, 400, "PROFILE_ACCESS_NOT_FOUND", PROFILE_NOT_FOUND_SENTENCE],
-  [PermissionBusinessError, 400, "PROFILE_ACCESS_NOT_FOUND", PROFILE_NOT_FOUND_SENTENCE],
+  [
+    ProfileAccessNotFoundError,
+    400,
+    "PROFILE_ACCESS_NOT_FOUND",
+    PROFILE_NOT_FOUND_SENTENCE,
+  ],
+  [
+    PermissionBusinessError,
+    400,
+    "PROFILE_ACCESS_NOT_FOUND",
+    PROFILE_NOT_FOUND_SENTENCE,
+  ],
 ];
 
 export { PERMISSION_BODY_LINK_RULES };

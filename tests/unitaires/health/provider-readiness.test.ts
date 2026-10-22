@@ -60,7 +60,10 @@ function json(status: number, body: unknown): Response {
   });
 }
 
-function deps(routes: Record<string, Route>, overrides: Partial<ReadinessDeps> = {}): ReadinessDeps {
+function deps(
+  routes: Record<string, Route>,
+  overrides: Partial<ReadinessDeps> = {},
+): ReadinessDeps {
   const calls: string[] = [];
 
   return {
@@ -71,12 +74,20 @@ function deps(routes: Record<string, Route>, overrides: Partial<ReadinessDeps> =
 
       const key = Object.keys(routes).find((prefix) => url.startsWith(prefix));
 
-      if (!key) throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } });
+      if (!key)
+        throw Object.assign(new TypeError("fetch failed"), {
+          cause: { code: "ENOTFOUND" },
+        });
 
       return routes[key](url, init);
     }) as typeof fetch,
     headBucket: async () => undefined,
-    proofHealth: () => ({ state: "READY", reason: null, not_after: "2027-06-01T00:00:00.000Z", days_left: 237 }),
+    proofHealth: () => ({
+      state: "READY",
+      reason: null,
+      not_after: "2027-06-01T00:00:00.000Z",
+      days_left: 237,
+    }),
     heartbeat: () => null,
     now: () => new Date("2026-10-07T12:00:00.000Z"),
     timeoutMs: 200,
@@ -88,21 +99,46 @@ const HEALTHY: Record<string, Route> = {
   "https://api.resend.com/domains": () =>
     json(200, { data: [{ name: "intrajetto.com", status: "verified" }] }),
   "https://graph.facebook.com/v23.0/1234567890": () =>
-    json(200, { display_phone_number: "+55 11 4000-0000", verified_name: "Trajetto", quality_rating: "GREEN" }),
-  "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_notification": () =>
-    json(200, { data: [{ name: "trajetto_notification", status: "APPROVED", language: "pt_BR" }] }),
-  "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente": () =>
-    json(200, { data: [{ name: "trajetto_cliente", status: "APPROVED", language: "pt_BR" }] }),
+    json(200, {
+      display_phone_number: "+55 11 4000-0000",
+      verified_name: "Trajetto",
+      quality_rating: "GREEN",
+    }),
+  "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_notification":
+    () =>
+      json(200, {
+        data: [
+          {
+            name: "trajetto_notification",
+            status: "APPROVED",
+            language: "pt_BR",
+          },
+        ],
+      }),
+  "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
+    () =>
+      json(200, {
+        data: [
+          { name: "trajetto_cliente", status: "APPROVED", language: "pt_BR" },
+        ],
+      }),
   "https://exp.host/--/api/v2/push/getReceipts": () => json(200, { data: {} }),
-  "http://trajetto-ai:8080/health": () => json(200, { ok: true, engine: "rapidocr", engineVersion: "3.9.2" }),
-  "http://trajetto-ai:8080/v1/read": () => json(400, { error: "unknown_profile" }),
+  "http://trajetto-ai:8080/health": () =>
+    json(200, { ok: true, engine: "rapidocr", engineVersion: "3.9.2" }),
+  "http://trajetto-ai:8080/v1/read": () =>
+    json(400, { error: "unknown_profile" }),
 };
 
 describe("a fully configured production", () => {
   it("reports every provider ready, and no credential anywhere in the report", async () => {
     const report = await checkProviders(
       deps(HEALTHY, {
-        heartbeat: () => ({ at: "2026-10-07T11:59:00.000Z", healthy: true, delivered: true, http_status: 200 }),
+        heartbeat: () => ({
+          at: "2026-10-07T11:59:00.000Z",
+          healthy: true,
+          delivered: true,
+          http_status: 200,
+        }),
       }),
     );
 
@@ -118,7 +154,8 @@ describe("a fully configured production", () => {
 
     const body = JSON.stringify(report);
 
-    for (const secret of Object.values(SECRETS)) expect(body).not.toContain(secret);
+    for (const secret of Object.values(SECRETS))
+      expect(body).not.toContain(secret);
     expect(body).not.toContain("hc-ping.com");
     expect(body).not.toContain("trajetto-ai:8080");
   });
@@ -126,7 +163,9 @@ describe("a fully configured production", () => {
 
 describe("e-mail (Resend)", () => {
   it("names the missing variables, never their values", async () => {
-    const result = await checkEmail(deps(HEALTHY, { env: fullEnv({ RESEND_SECRET_KEY: undefined }) }));
+    const result = await checkEmail(
+      deps(HEALTHY, { env: fullEnv({ RESEND_SECRET_KEY: undefined }) }),
+    );
 
     expect(result.status).toBe("not_configured");
     expect(result.missing_env).toEqual(["RESEND_SECRET_KEY"]);
@@ -134,7 +173,10 @@ describe("e-mail (Resend)", () => {
 
   it("is an error when the sender's domain is not verified", async () => {
     const result = await checkEmail(
-      deps({ "https://api.resend.com/domains": () => json(200, { data: [{ name: "intrajetto.com", status: "pending" }] }) }),
+      deps({
+        "https://api.resend.com/domains": () =>
+          json(200, { data: [{ name: "intrajetto.com", status: "pending" }] }),
+      }),
     );
 
     expect(result.status).toBe("error");
@@ -143,7 +185,10 @@ describe("e-mail (Resend)", () => {
 
   it("accepts a sending-only key, which cannot list domains", async () => {
     const result = await checkEmail(
-      deps({ "https://api.resend.com/domains": () => json(401, { name: "restricted_api_key" }) }),
+      deps({
+        "https://api.resend.com/domains": () =>
+          json(401, { name: "restricted_api_key" }),
+      }),
     );
 
     expect(result.status).toBe("ok");
@@ -152,7 +197,10 @@ describe("e-mail (Resend)", () => {
 
   it("is an error when Resend refuses the key", async () => {
     const result = await checkEmail(
-      deps({ "https://api.resend.com/domains": () => json(401, { name: "validation_error" }) }),
+      deps({
+        "https://api.resend.com/domains": () =>
+          json(401, { name: "validation_error" }),
+      }),
     );
 
     expect(result.status).toBe("error");
@@ -160,13 +208,17 @@ describe("e-mail (Resend)", () => {
   });
 
   it("warns when the receipts webhook secret is missing", async () => {
-    const result = await checkEmail(deps(HEALTHY, { env: fullEnv({ RESEND_WEBHOOK_SECRET: undefined }) }));
+    const result = await checkEmail(
+      deps(HEALTHY, { env: fullEnv({ RESEND_WEBHOOK_SECRET: undefined }) }),
+    );
 
     expect(result.status).toBe("warning");
   });
 
   it("is off outside production, where mail goes to Ethereal", async () => {
-    const result = await checkEmail(deps(HEALTHY, { env: fullEnv({ NODE_ENV: "development" }) }));
+    const result = await checkEmail(
+      deps(HEALTHY, { env: fullEnv({ NODE_ENV: "development" }) }),
+    );
 
     expect(result.status).toBe("disabled");
   });
@@ -177,7 +229,9 @@ describe("WhatsApp (Meta)", () => {
     const result = await checkWhatsApp(
       deps({
         "https://graph.facebook.com/v23.0/1234567890": () =>
-          json(401, { error: { code: 190, message: "Error validating access token" } }),
+          json(401, {
+            error: { code: 190, message: "Error validating access token" },
+          }),
       }),
     );
 
@@ -190,8 +244,17 @@ describe("WhatsApp (Meta)", () => {
     const result = await checkWhatsApp(
       deps({
         ...HEALTHY,
-        "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente": () =>
-          json(200, { data: [{ name: "trajetto_cliente", status: "PAUSED", language: "pt_BR" }] }),
+        "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
+          () =>
+            json(200, {
+              data: [
+                {
+                  name: "trajetto_cliente",
+                  status: "PAUSED",
+                  language: "pt_BR",
+                },
+              ],
+            }),
       }),
     );
 
@@ -204,8 +267,8 @@ describe("WhatsApp (Meta)", () => {
     const result = await checkWhatsApp(
       deps({
         ...HEALTHY,
-        "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente": () =>
-          json(200, { data: [] }),
+        "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
+          () => json(200, { data: [] }),
       }),
     );
 
@@ -215,12 +278,16 @@ describe("WhatsApp (Meta)", () => {
 
   it("cannot judge the templates without the business account id, and says which variable", async () => {
     const result = await checkWhatsApp(
-      deps(HEALTHY, { env: fullEnv({ META_WHATSAPP_BUSINESS_ACCOUNT_ID: undefined }) }),
+      deps(HEALTHY, {
+        env: fullEnv({ META_WHATSAPP_BUSINESS_ACCOUNT_ID: undefined }),
+      }),
     );
 
     expect(result.status).toBe("warning");
     expect(result.details["template:trajetto_notification"]).toBe("UNKNOWN");
-    expect(result.warnings.join(" ")).toContain("META_WHATSAPP_BUSINESS_ACCOUNT_ID");
+    expect(result.warnings.join(" ")).toContain(
+      "META_WHATSAPP_BUSINESS_ACCOUNT_ID",
+    );
   });
 
   it("is unreachable, not refused, when Meta does not answer", async () => {
@@ -233,7 +300,9 @@ describe("WhatsApp (Meta)", () => {
 
 describe("push, storage, OCR, certificate and heartbeat", () => {
   it("push is an error when Expo answers 5xx", async () => {
-    const result = await checkPush(deps({ "https://exp.host": () => json(503, {}) }));
+    const result = await checkPush(
+      deps({ "https://exp.host": () => json(503, {}) }),
+    );
 
     expect(result.status).toBe("error");
   });
@@ -242,7 +311,9 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
     const result = await checkStorage(
       deps(HEALTHY, {
         headBucket: async () => {
-          throw Object.assign(new Error("Forbidden"), { $metadata: { httpStatusCode: 403 } });
+          throw Object.assign(new Error("Forbidden"), {
+            $metadata: { httpStatusCode: 403 },
+          });
         },
       }),
     );
@@ -252,14 +323,20 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
   });
 
   it("local storage in production is an error", async () => {
-    const result = await checkStorage(deps(HEALTHY, { env: fullEnv({ UPLOAD_STORAGE_TYPE: "local" }) }));
+    const result = await checkStorage(
+      deps(HEALTHY, { env: fullEnv({ UPLOAD_STORAGE_TYPE: "local" }) }),
+    );
 
     expect(result.status).toBe("error");
   });
 
   it("the OCR service with a wrong token is an error", async () => {
     const result = await checkAiOcr(
-      deps({ ...HEALTHY, "http://trajetto-ai:8080/v1/read": () => json(401, { error: "unauthorized" }) }),
+      deps({
+        ...HEALTHY,
+        "http://trajetto-ai:8080/v1/read": () =>
+          json(401, { error: "unauthorized" }),
+      }),
     );
 
     expect(result.status).toBe("error");
@@ -268,14 +345,19 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
 
   it("the OCR service warming up is a warning", async () => {
     const result = await checkAiOcr(
-      deps({ "http://trajetto-ai:8080/health": () => json(503, { ok: false, error: "warming_up" }) }),
+      deps({
+        "http://trajetto-ai:8080/health": () =>
+          json(503, { ok: false, error: "warming_up" }),
+      }),
     );
 
     expect(result.status).toBe("warning");
   });
 
   it("AI_PROVIDER=none is off, not broken", async () => {
-    const result = await checkAiOcr(deps(HEALTHY, { env: fullEnv({ AI_PROVIDER: "none" }) }));
+    const result = await checkAiOcr(
+      deps(HEALTHY, { env: fullEnv({ AI_PROVIDER: "none" }) }),
+    );
 
     expect(result.status).toBe("disabled");
   });
@@ -283,19 +365,41 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
   it("a certificate 20 days from its end is a warning; an expired one an error", () => {
     expect(
       checkProofCertificate(
-        deps({}, { proofHealth: () => ({ state: "READY", reason: null, not_after: null, days_left: 20 }) }),
+        deps(
+          {},
+          {
+            proofHealth: () => ({
+              state: "READY",
+              reason: null,
+              not_after: null,
+              days_left: 20,
+            }),
+          },
+        ),
       ).status,
     ).toBe("warning");
 
     expect(
       checkProofCertificate(
-        deps({}, { proofHealth: () => ({ state: "EXPIRED", reason: null, not_after: null, days_left: -1 }) }),
+        deps(
+          {},
+          {
+            proofHealth: () => ({
+              state: "EXPIRED",
+              reason: null,
+              not_after: null,
+              days_left: -1,
+            }),
+          },
+        ),
       ).status,
     ).toBe("error");
   });
 
   it("the heartbeat without its URL is not configured", () => {
-    const result = checkHeartbeat(deps({}, { env: fullEnv({ HEALTHCHECK_PING_URL: undefined }) }));
+    const result = checkHeartbeat(
+      deps({}, { env: fullEnv({ HEALTHCHECK_PING_URL: undefined }) }),
+    );
 
     expect(result.status).toBe("not_configured");
     expect(result.missing_env).toEqual(["HEALTHCHECK_PING_URL"]);
@@ -303,9 +407,17 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
 
   it("a recent ping the check refused is an error", () => {
     const result = checkHeartbeat(
-      deps({}, {
-        heartbeat: () => ({ at: "2026-10-07T11:59:00.000Z", healthy: true, delivered: false, http_status: 404 }),
-      }),
+      deps(
+        {},
+        {
+          heartbeat: () => ({
+            at: "2026-10-07T11:59:00.000Z",
+            healthy: true,
+            delivered: false,
+            http_status: 404,
+          }),
+        },
+      ),
     );
 
     expect(result.status).toBe("error");

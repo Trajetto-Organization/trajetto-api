@@ -26,8 +26,10 @@ let app: Awaited<typeof import("@/http")>["app"];
 const CARRIER = "018fed00-0000-7000-8000-00000000000a";
 const OTHER = "018fed00-0000-7000-8000-00000000000b";
 
-const ids: Record<"master" | "admin" | "collaborator" | "driver" | "otherAdmin", string> =
-  {} as never;
+const ids: Record<
+  "master" | "admin" | "collaborator" | "driver" | "otherAdmin",
+  string
+> = {} as never;
 const tokens: typeof ids = {} as never;
 
 let cnpjSeq = 0;
@@ -101,7 +103,12 @@ async function list(query: string, token = tokens.admin) {
   });
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, rows: [] as any[], total: 0, body: response.body };
+    return {
+      status: response.statusCode,
+      rows: [] as any[],
+      total: 0,
+      body: response.body,
+    };
   }
 
   const [first, ...rows] = response.body
@@ -109,7 +116,12 @@ async function list(query: string, token = tokens.admin) {
     .split("\n")
     .map((line) => JSON.parse(line));
 
-  return { status: 200, rows, total: first.meta.total as number, body: response.body };
+  return {
+    status: 200,
+    rows,
+    total: first.meta.total as number,
+    body: response.body,
+  };
 }
 
 // The window boundary of "7 dias" in the carrier's zone (Manaus, UTC-4).
@@ -180,11 +192,24 @@ beforeAll(async () => {
       // Twelve by the admin: more than a page.
       ...Array.from({ length: 12 }, (_, index) => row(index, {})),
       row(20, { type: "Entrega", status: "Em rota", performedBy: ids.driver }),
-      row(21, { type: "Veículo", status: "Em Rota", performedBy: ids.collaborator }),
-      row(22, { type: "Rota", status: "PLANNED", performedBy: ids.collaborator, action: "create" }),
+      row(21, {
+        type: "Veículo",
+        status: "Em Rota",
+        performedBy: ids.collaborator,
+      }),
+      row(22, {
+        type: "Rota",
+        status: "PLANNED",
+        performedBy: ids.collaborator,
+        action: "create",
+      }),
       row(23, { type: "Entrega", status: "Entregue", performedBy: ids.driver }),
       // MASTER actions: hidden from the company, except its plan changing.
-      row(24, { type: "Empresa", status: "Atualizado", performedBy: ids.master }),
+      row(24, {
+        type: "Empresa",
+        status: "Atualizado",
+        performedBy: ids.master,
+      }),
       row(25, {
         type: "Plano",
         status: "Ativo",
@@ -193,10 +218,23 @@ beforeAll(async () => {
         visibilityLevel: "TENANT_VISIBLE",
       }),
       // Another company.
-      row(26, { businessId: OTHER, performedBy: ids.otherAdmin, status: "Em rota", type: "Entrega" }),
+      row(26, {
+        businessId: OTHER,
+        performedBy: ids.otherAdmin,
+        status: "Em rota",
+        type: "Entrega",
+      }),
       // The window's edge in Manaus: a minute before (out), a minute after (in).
-      row(27, { created_at: new Date(windowStart.getTime() - 60_000), type: "Multa", action: "delete" }),
-      row(28, { created_at: new Date(windowStart.getTime() + 60_000), type: "Multa", action: "delete" }),
+      row(27, {
+        created_at: new Date(windowStart.getTime() - 60_000),
+        type: "Multa",
+        action: "delete",
+      }),
+      row(28, {
+        created_at: new Date(windowStart.getTime() + 60_000),
+        type: "Multa",
+        action: "delete",
+      }),
     ],
   });
 
@@ -221,7 +259,9 @@ describe("GET /activity/list — filters on the server", () => {
     ]);
 
     const planned = await list("status=Planejada");
-    expect(planned.rows.map((row) => row.description)).toEqual(["Atividade 22"]);
+    expect(planned.rows.map((row) => row.description)).toEqual([
+      "Atividade 22",
+    ]);
   });
 
   it("filters the author role, presenting the app's driver as DRIVER", async () => {
@@ -241,7 +281,9 @@ describe("GET /activity/list — filters on the server", () => {
   it("combines facets with each other and with the search", async () => {
     const combined = await list("type=Entrega,Rota&action=create");
 
-    expect(combined.rows.map((row) => row.description)).toEqual(["Atividade 22"]);
+    expect(combined.rows.map((row) => row.description)).toEqual([
+      "Atividade 22",
+    ]);
 
     const searched = await list("type=Veículo&search=Atividade%201");
     // Atividade 1, 10 and 11: the Veículo rows whose text has the term.
@@ -263,7 +305,10 @@ describe("GET /activity/list — filters on the server", () => {
     expect(plan.rows[0].user).toMatchObject({ role: "PLATFORM", email: null });
 
     // The row's own copies of the operator's identity do not reach the company.
-    expect(plan.rows[0]).toMatchObject({ performedBy: null, performingUserRole: null });
+    expect(plan.rows[0]).toMatchObject({
+      performedBy: null,
+      performingUserRole: null,
+    });
     expect(plan.body).not.toContain(ids.master);
   });
 
@@ -280,7 +325,9 @@ describe("GET /activity/list — filters on the server", () => {
     );
 
     expect(audit.total).toBe(2);
-    expect(audit.rows.every((row) => row.performedBy === ids.master)).toBe(true);
+    expect(audit.rows.every((row) => row.performedBy === ids.master)).toBe(
+      true,
+    );
   });
 
   it("lets the MASTER narrow the table to one company", async () => {
@@ -372,8 +419,14 @@ describe("GET /activity/list — the DRIVER facet is the presented DRIVER", () =
       ],
     });
 
-    const drivers = await list(`businessId=${THIRD}&role=DRIVER`, tokens.master);
-    const admins = await list(`businessId=${THIRD}&role=BUSINESS_ADMIN`, tokens.master);
+    const drivers = await list(
+      `businessId=${THIRD}&role=DRIVER`,
+      tokens.master,
+    );
+    const admins = await list(
+      `businessId=${THIRD}&role=BUSINESS_ADMIN`,
+      tokens.master,
+    );
 
     expect(drivers.rows.map((row) => row.description)).toEqual(["Pelo app"]);
     expect(drivers.rows[0].user.role).toBe("DRIVER");

@@ -336,7 +336,8 @@ class UpdateServiceOrderUseCase {
         findServiceOrder.responsibleUserId !==
           serviceOrderData.responsibleUserId;
 
-      const vehicleId = serviceOrderData.vehicleId || findServiceOrder.vehicleId;
+      const vehicleId =
+        serviceOrderData.vehicleId || findServiceOrder.vehicleId;
 
       const updatedServiceOrder = await database.$transaction(async (tx) => {
         // A MASTER's deliberate override of the vehicle: unconditional, but

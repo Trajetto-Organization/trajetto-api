@@ -29,7 +29,10 @@ const tokens: Record<
 
 let cnpjSeq = 0;
 
-async function seedBusiness(id: string, modules: Array<"FLEET" | "DELIVERIES">) {
+async function seedBusiness(
+  id: string,
+  modules: Array<"FLEET" | "DELIVERIES">,
+) {
   cnpjSeq += 1;
 
   await prisma.business.create({
@@ -89,7 +92,11 @@ async function seedUser(
 }
 
 /** Plain users holding a profile (they never log in here). */
-async function seedMembers(businessId: string, profileAccessId: string, count: number) {
+async function seedMembers(
+  businessId: string,
+  profileAccessId: string,
+  count: number,
+) {
   await prisma.user.createMany({
     data: Array.from({ length: count }, () => {
       const id = randomUUID();
@@ -109,7 +116,11 @@ async function seedMembers(businessId: string, profileAccessId: string, count: n
 
 let plateSeq = 0;
 
-async function seedVehicle(businessId: string, fuelTypeId: string, vehicleTypeId: string | null) {
+async function seedVehicle(
+  businessId: string,
+  fuelTypeId: string,
+  vehicleTypeId: string | null,
+) {
   plateSeq += 1;
 
   return prisma.vehicle.create({
@@ -176,7 +187,13 @@ async function seedFleetSupport(businessId: string, suffix: string) {
 }
 
 async function seedRefuel(
-  ids: { businessId: string; branchId: string; driverId: string; vehicleId: string; fuelTypeId: string },
+  ids: {
+    businessId: string;
+    branchId: string;
+    driverId: string;
+    vehicleId: string;
+    fuelTypeId: string;
+  },
   refuelingDate: Date,
   liters: number,
   pricePerLiter: number,
@@ -219,7 +236,11 @@ beforeAll(async () => {
   await seedBusiness(NO_FLEET, ["DELIVERIES"]);
 
   // Access profiles: Operação (3 users), Financeiro (1), Auditoria (none).
-  const profile = (name: string, businessId: string, permissions: string[] = []) =>
+  const profile = (
+    name: string,
+    businessId: string,
+    permissions: string[] = [],
+  ) =>
     prisma.profileAccess.create({
       data: {
         name,
@@ -261,11 +282,21 @@ beforeAll(async () => {
     data: { description: "Carreta", number_of_axles: 5, businessId: OTHER },
   });
 
-  const diesel = await prisma.fuelType.create({ data: { description: "Diesel", businessId: CARRIER } });
-  const gasolina = await prisma.fuelType.create({ data: { description: "Gasolina", businessId: CARRIER } });
-  await prisma.fuelType.create({ data: { description: "GNV", businessId: CARRIER } });
-  const foreignDiesel = await prisma.fuelType.create({ data: { description: "Diesel", businessId: OTHER } });
-  await prisma.fuelType.create({ data: { description: "Diesel", businessId: NO_FLEET } });
+  const diesel = await prisma.fuelType.create({
+    data: { description: "Diesel", businessId: CARRIER },
+  });
+  const gasolina = await prisma.fuelType.create({
+    data: { description: "Gasolina", businessId: CARRIER },
+  });
+  await prisma.fuelType.create({
+    data: { description: "GNV", businessId: CARRIER },
+  });
+  const foreignDiesel = await prisma.fuelType.create({
+    data: { description: "Diesel", businessId: OTHER },
+  });
+  await prisma.fuelType.create({
+    data: { description: "Diesel", businessId: NO_FLEET },
+  });
 
   ids.diesel = diesel.id;
   ids.gasolina = gasolina.id;
@@ -282,7 +313,9 @@ beforeAll(async () => {
   const foreignVehicles = [];
 
   for (let index = 0; index < 5; index += 1) {
-    foreignVehicles.push(await seedVehicle(OTHER, foreignDiesel.id, foreignType.id));
+    foreignVehicles.push(
+      await seedVehicle(OTHER, foreignDiesel.id, foreignType.id),
+    );
   }
 
   const carrierSupport = await seedFleetSupport(CARRIER, "a");
@@ -306,7 +339,12 @@ beforeAll(async () => {
   await seedRefuel(carrierRefuel(v1.id, diesel.id), earlier, 900, 5);
 
   await seedRefuel(
-    { businessId: OTHER, ...otherSupport, vehicleId: foreignVehicles[0].id, fuelTypeId: foreignDiesel.id },
+    {
+      businessId: OTHER,
+      ...otherSupport,
+      vehicleId: foreignVehicles[0].id,
+      fuelTypeId: foreignDiesel.id,
+    },
     now,
     5_000,
     6,
@@ -329,7 +367,10 @@ afterAll(async () => {
 
 describe("GET /profile-access/list-profile-access — the cards", () => {
   it("count the company's whole search, not the page, and never another company", async () => {
-    const { meta, rows } = await listMeta("/profile-access/list-profile-access", "");
+    const { meta, rows } = await listMeta(
+      "/profile-access/list-profile-access",
+      "",
+    );
 
     expect(rows).toHaveLength(1);
     // Operação, Financeiro, Auditoria and Cadastros; the catalog-only user
@@ -359,11 +400,18 @@ describe("GET /profile-access/list-profile-access — the cards", () => {
       tokens.master,
     );
 
-    expect(other.meta.searchMeta).toMatchObject({ total: 1, linkedUsers: 7, withoutUsers: 0 });
+    expect(other.meta.searchMeta).toMatchObject({
+      total: 1,
+      linkedUsers: 7,
+      withoutUsers: 0,
+    });
   });
 
   it("follow the search", async () => {
-    const { meta } = await listMeta("/profile-access/list-profile-access", "search=audit");
+    const { meta } = await listMeta(
+      "/profile-access/list-profile-access",
+      "search=audit",
+    );
 
     expect(meta.searchMeta).toEqual({
       total: 1,
@@ -376,7 +424,10 @@ describe("GET /profile-access/list-profile-access — the cards", () => {
 
 describe("GET /vehicle-type/list-vehicle-type — the cards", () => {
   it("count the company's whole search, not the page, and never another company", async () => {
-    const { meta, rows } = await listMeta("/vehicle-type/list-vehicle-type", "");
+    const { meta, rows } = await listMeta(
+      "/vehicle-type/list-vehicle-type",
+      "",
+    );
 
     expect(rows).toHaveLength(1);
     expect(meta.total).toBe(3);
@@ -395,7 +446,11 @@ describe("GET /vehicle-type/list-vehicle-type — the cards", () => {
       tokens.master,
     );
 
-    expect(other.meta.searchMeta).toMatchObject({ total: 1, vehicles: 5, withoutVehicles: 0 });
+    expect(other.meta.searchMeta).toMatchObject({
+      total: 1,
+      vehicles: 5,
+      withoutVehicles: 0,
+    });
   });
 });
 
@@ -440,13 +495,24 @@ describe("GET /fuel-type/list-fuel-type — the cards", () => {
 
     expect(meta.searchMeta.month.liters).toBe(340);
 
-    const other = await listMeta("/fuel-type/list-fuel-type", "", tokens.otherAdmin);
+    const other = await listMeta(
+      "/fuel-type/list-fuel-type",
+      "",
+      tokens.otherAdmin,
+    );
 
-    expect(other.meta.searchMeta.month).toMatchObject({ refuelings: 1, liters: 5000 });
+    expect(other.meta.searchMeta.month).toMatchObject({
+      refuelings: 1,
+      liters: 5000,
+    });
   });
 
   it("leave the month out without Gestão de Frotas, for the company and for the MASTER", async () => {
-    const own = await listMeta("/fuel-type/list-fuel-type", "", tokens.noFleetAdmin);
+    const own = await listMeta(
+      "/fuel-type/list-fuel-type",
+      "",
+      tokens.noFleetAdmin,
+    );
 
     expect(own.meta.searchMeta).toEqual({
       total: 1,
@@ -466,7 +532,11 @@ describe("GET /fuel-type/list-fuel-type — the cards", () => {
   });
 
   it("leave the month out for a profile that does not read Abastecimentos", async () => {
-    const { meta } = await listMeta("/fuel-type/list-fuel-type", "", tokens.catalogOnly);
+    const { meta } = await listMeta(
+      "/fuel-type/list-fuel-type",
+      "",
+      tokens.catalogOnly,
+    );
 
     expect(meta.searchMeta.total).toBe(3);
     expect(meta.searchMeta.month).toBeNull();

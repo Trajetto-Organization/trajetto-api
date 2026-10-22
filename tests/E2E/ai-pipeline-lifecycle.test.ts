@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -10,8 +18,15 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
 import { sendAIVerificationEvent } from "@/websocket";
 
 import { seedProofCard } from "./support/proof-card-seed";
-import { seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
-import { FakeProviderError, fakeAnalyzer, resetCircuit } from "./support/fake-vision";
+import {
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
+import {
+  FakeProviderError,
+  fakeAnalyzer,
+  resetCircuit,
+} from "./support/fake-vision";
 
 /**
  * One AI analysis request from claim to settle, against the real service and
@@ -262,7 +277,11 @@ describe("a claimed fuel analysis", () => {
 
     expect(provider).toHaveBeenCalledTimes(1);
 
-    expect(row).toMatchObject({ status: "COMPLETED", attempts: 1, lastError: null });
+    expect(row).toMatchObject({
+      status: "COMPLETED",
+      attempts: 1,
+      lastError: null,
+    });
     expect(row.completedAt).not.toBeNull();
 
     expect(row.units[0].status).toBe("CONSUMED");
@@ -312,12 +331,18 @@ describe("a provider that times out", () => {
     expect(row.lastError).toContain("timed out");
 
     // First backoff step: 30 s +/-20% jitter (plus however long the cycle took).
-    expect(row.availableAt.getTime() - firstAt).toBeGreaterThanOrEqual(24 * SECOND);
-    expect(row.availableAt.getTime() - firstAt).toBeLessThanOrEqual(41 * SECOND);
+    expect(row.availableAt.getTime() - firstAt).toBeGreaterThanOrEqual(
+      24 * SECOND,
+    );
+    expect(row.availableAt.getTime() - firstAt).toBeLessThanOrEqual(
+      41 * SECOND,
+    );
 
     // Nothing charged, nothing given back: the unit waits for the retry.
     expect(row.units[0].status).toBe("RESERVED");
-    expect(row.units[0].attempts.map((attempt) => attempt.status)).toEqual(["FAILED"]);
+    expect(row.units[0].attempts.map((attempt) => attempt.status)).toEqual([
+      "FAILED",
+    ]);
     expect(await ledger(FLEET)).toEqual(before);
 
     // A sweep inside the backoff does not call the provider again.
@@ -334,12 +359,17 @@ describe("a provider that times out", () => {
 
     expect(provider).toHaveBeenCalledTimes(2);
     expect(row).toMatchObject({ status: "PENDING", attempts: 2 });
-    expect(row.availableAt.getTime() - secondAt).toBeGreaterThanOrEqual(96 * SECOND);
-    expect(row.availableAt.getTime() - secondAt).toBeLessThanOrEqual(144 * SECOND + 5 * SECOND);
+    expect(row.availableAt.getTime() - secondAt).toBeGreaterThanOrEqual(
+      96 * SECOND,
+    );
+    expect(row.availableAt.getTime() - secondAt).toBeLessThanOrEqual(
+      144 * SECOND + 5 * SECOND,
+    );
 
     // The record keeps saying "analyzing" while a retry is ahead.
     expect(
-      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } })).odometer_ai_status,
+      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } }))
+        .odometer_ai_status,
     ).toBe("analyzing");
   });
 
@@ -376,7 +406,8 @@ describe("a provider that times out", () => {
 
     // The person who registered the fueling is told, instead of a spinner.
     expect(
-      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } })).odometer_ai_status,
+      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } }))
+        .odometer_ai_status,
     ).toBe("error");
     expect(emittedSteps(fuelId).slice(-1)[0]).toMatchObject({
       step: "completed",
@@ -441,7 +472,8 @@ describe("the poison guard", () => {
     });
 
     expect(
-      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } })).odometer_ai_status,
+      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } }))
+        .odometer_ai_status,
     ).toBe("error");
   });
 
@@ -485,7 +517,9 @@ describe("the poison guard", () => {
         attempts: 4,
         leaseExpiresAt: new Date(Date.now() - MINUTE),
         input: {
-          photosByField: Object.fromEntries(fields.map((f) => [f, [`${f}.jpg`]])),
+          photosByField: Object.fromEntries(
+            fields.map((f) => [f, [`${f}.jpg`]]),
+          ),
           checklistData: Object.fromEntries(fields.map((f) => [f, "good"])),
         },
       },
@@ -559,7 +593,9 @@ describe("the poison guard", () => {
         attempts: 4,
         leaseExpiresAt: new Date(Date.now() - MINUTE),
         input: {
-          photosByField: Object.fromEntries(fields.map((f) => [f, [`${f}.jpg`]])),
+          photosByField: Object.fromEntries(
+            fields.map((f) => [f, [`${f}.jpg`]]),
+          ),
           checklistData: Object.fromEntries(fields.map((f) => [f, "good"])),
         },
       },
@@ -600,9 +636,14 @@ describe("the poison guard", () => {
     expect(provider).not.toHaveBeenCalled();
     expect(row.status).toBe("PARTIAL");
 
-    const byKey = Object.fromEntries(row.units.map((unit) => [unit.unitKey, unit.status]));
+    const byKey = Object.fromEntries(
+      row.units.map((unit) => [unit.unitKey, unit.status]),
+    );
 
-    expect(byKey).toEqual({ tires_condition: "CONSUMED", bumpers_condition: "RELEASED" });
+    expect(byKey).toEqual({
+      tires_condition: "CONSUMED",
+      bumpers_condition: "RELEASED",
+    });
 
     // Only the reservation nobody used goes back.
     expect(await ledger(FLEET)).toEqual({
@@ -732,7 +773,9 @@ describe("the fair claim, with two companies that both have a backlog", () => {
 
     // Every one of A's requests is older than every one of B's.
     for (let n = 0; n < 6; n += 1) {
-      await queueProof(CARRIER_A, `A-${n}`, { created_at: new Date(base + n * SECOND) });
+      await queueProof(CARRIER_A, `A-${n}`, {
+        created_at: new Date(base + n * SECOND),
+      });
     }
 
     for (let n = 0; n < 6; n += 1) {

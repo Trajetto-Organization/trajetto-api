@@ -138,10 +138,16 @@ describe("reading a status callback", () => {
       errorMessage: "Receiver is incapable",
     });
 
-    expect(read).toMatchObject({ providerMessageId: "wamid.B", deliveryId: null });
+    expect(read).toMatchObject({
+      providerMessageId: "wamid.B",
+      deliveryId: null,
+    });
 
     // Callback data that is not a delivery id ties nothing.
-    expect(sent).toMatchObject({ providerMessageId: "wamid.C", deliveryId: null });
+    expect(sent).toMatchObject({
+      providerMessageId: "wamid.C",
+      deliveryId: null,
+    });
   });
 
   it("skips an entry with no message id instead of refusing the batch", () => {
@@ -204,10 +210,12 @@ describe("an Expo receipt", () => {
       ),
     ).toMatchObject({ status: "error", pruneToken: false });
 
-    expect(classifyExpoReceipt({ status: "ok" }, created, later)).toMatchObject({
-      status: "ok",
-      pruneToken: false,
-    });
+    expect(classifyExpoReceipt({ status: "ok" }, created, later)).toMatchObject(
+      {
+        status: "ok",
+        pruneToken: false,
+      },
+    );
   });
 });
 
@@ -215,11 +223,12 @@ describe("the receipts job", () => {
   it("is scheduled", () => {
     const jobs: CronJobDefinition[] = [];
 
-    vi.spyOn(CronSchedulerService.getInstance(), "registerJob").mockImplementation(
-      (definition: CronJobDefinition) => {
-        jobs.push(definition);
-      },
-    );
+    vi.spyOn(
+      CronSchedulerService.getInstance(),
+      "registerJob",
+    ).mockImplementation((definition: CronJobDefinition) => {
+      jobs.push(definition);
+    });
 
     registerCronJobs();
 

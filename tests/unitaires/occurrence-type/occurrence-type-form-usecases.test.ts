@@ -90,7 +90,12 @@ describe("the form of an occurrence type", () => {
           max_length: 200,
           multiline: false,
         },
-        { key: "ligou", label: "Ligou para o cliente", type: "boolean", required: false },
+        {
+          key: "ligou",
+          label: "Ligou para o cliente",
+          type: "boolean",
+          required: false,
+        },
       ],
     });
   });
@@ -107,7 +112,10 @@ describe("the form of an occurrence type", () => {
     expect(types.occurrenceTypes[0].form_version).toBe(2);
 
     await update(created.id!, { form_fields: [] });
-    expect(types.occurrenceTypes[0]).toMatchObject({ form_version: 3, form_fields: null });
+    expect(types.occurrenceTypes[0]).toMatchObject({
+      form_version: 3,
+      form_fields: null,
+    });
 
     await update(created.id!, { description: "Portão fechado" });
     expect(types.occurrenceTypes[0].form_version).toBe(3);

@@ -128,7 +128,8 @@ async function findRecordInScope(
 ): Promise<ScopedRecord> {
   // A driver token is a BUSINESS_USER with a driver, as decidePermission
   // reads it; an admin linked to a driver still sees the whole company.
-  const isDriver = principal.role === "BUSINESS_USER" && Boolean(principal.driverId);
+  const isDriver =
+    principal.role === "BUSINESS_USER" && Boolean(principal.driverId);
 
   const scope = {
     id: recordId,

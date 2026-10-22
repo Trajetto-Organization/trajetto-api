@@ -16,7 +16,9 @@ import {
  */
 function canDecideAuthorizations(user: PermissionPrincipal): boolean {
   return (
-    decidePermission(user, "delivery_manage", "write", { allowDriver: false }) === null
+    decidePermission(user, "delivery_manage", "write", {
+      allowDriver: false,
+    }) === null
   );
 }
 

@@ -87,7 +87,6 @@ const log = logger.child({ component: "notification-pipeline" });
 // that are still being sent - a duplicate WhatsApp, not a slow one.
 assertDeliveryLeaseInvariant(DELIVERY_BATCH_SIZE);
 
-
 /**
  * A user's channels that leave the product: the ones a policy's
  * `supersededReason` stops once the fact went stale. The in-app row stays —
@@ -476,7 +475,11 @@ class NotificationPipelineService {
    * DELIVERED turned back into PENDING was a third copy of the message.
    */
   private fenced(row: { id: string; attempts: number }) {
-    return { id: row.id, status: "PROCESSING" as const, attempts: row.attempts };
+    return {
+      id: row.id,
+      status: "PROCESSING" as const,
+      attempts: row.attempts,
+    };
   }
 
   /**
@@ -507,8 +510,7 @@ class NotificationPipelineService {
 
     const payload = event.payload as AnyPayload;
 
-    const userRepository =
-      container.resolve<IUserRepository>("UserRepository");
+    const userRepository = container.resolve<IUserRepository>("UserRepository");
 
     const policyDeps = {
       userRepository,
@@ -1083,7 +1085,8 @@ class NotificationPipelineService {
       RETURNING "id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"
     `;
 
-    for (const delivery of claimed) delivery.claimStartedAtMs = claimStartedAtMs;
+    for (const delivery of claimed)
+      delivery.claimStartedAtMs = claimStartedAtMs;
 
     return claimed;
   }
@@ -1150,8 +1153,12 @@ class NotificationPipelineService {
   private supersedeDeps(): PolicyDeps {
     return {
       userRepository: container.resolve<IUserRepository>("UserRepository"),
-      externalRecipientRepository: container.resolve("ExternalRecipientRepository"),
-      messageTemplateRepository: container.resolve("DeliveryMessageTemplateRepository"),
+      externalRecipientRepository: container.resolve(
+        "ExternalRecipientRepository",
+      ),
+      messageTemplateRepository: container.resolve(
+        "DeliveryMessageTemplateRepository",
+      ),
       businessRepository: container.resolve("BusinessRepository"),
       occurrenceAuthorizationRepository: container.resolve(
         "OccurrenceAuthorizationRepository",
@@ -1803,18 +1810,17 @@ class NotificationPipelineService {
       // Not ours yet: back to the queue as it was, without spending one of
       // its attempts, for a replica that knows this topic.
       await this.settleDelivery(delivery, {
-          status: "PENDING",
-          attempts: { decrement: 1 },
-          availableAt: new Date(Date.now() + UNKNOWN_TOPIC_RECHECK_MS),
-          leaseExpiresAt: null,
-          lastError: `${message} (aguardando uma versão que conheça o tópico)`,
-        })
-        .catch((updateError) => {
-          log.error(
-            { ...this.deliveryLogFields(delivery), err: updateError },
-            "deferred notification delivery could not be put back",
-          );
-        });
+        status: "PENDING",
+        attempts: { decrement: 1 },
+        availableAt: new Date(Date.now() + UNKNOWN_TOPIC_RECHECK_MS),
+        leaseExpiresAt: null,
+        lastError: `${message} (aguardando uma versão que conheça o tópico)`,
+      }).catch((updateError) => {
+        log.error(
+          { ...this.deliveryLogFields(delivery), err: updateError },
+          "deferred notification delivery could not be put back",
+        );
+      });
 
       return;
     }
@@ -1870,13 +1876,12 @@ class NotificationPipelineService {
             leaseExpiresAt: null,
             lastError: stored,
           },
-    )
-      .catch((updateError) => {
-        log.error(
-          { ...this.deliveryLogFields(delivery), err: updateError },
-          "notification delivery failure could not be recorded",
-        );
-      });
+    ).catch((updateError) => {
+      log.error(
+        { ...this.deliveryLogFields(delivery), err: updateError },
+        "notification delivery failure could not be recorded",
+      );
+    });
   }
 
   /** The ids a delivery's log lines are found by (OBS-06). */

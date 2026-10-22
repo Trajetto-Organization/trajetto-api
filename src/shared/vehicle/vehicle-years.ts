@@ -26,7 +26,10 @@ function maxModelYear(now: Date = new Date()): number {
 }
 
 /** Model year equal to the manufacturing year or one after it. */
-function isModelYearCoherent(manufacturingYear: number, modelYear: number): boolean {
+function isModelYearCoherent(
+  manufacturingYear: number,
+  modelYear: number,
+): boolean {
   return modelYear >= manufacturingYear && modelYear <= manufacturingYear + 1;
 }
 
@@ -49,9 +52,9 @@ const VEHICLE_DATE_FIELDS = [
   "model_year",
 ] as const;
 
-function withVehicleDates<T extends Partial<Record<(typeof VEHICLE_DATE_FIELDS)[number], unknown>>>(
-  data: T,
-): T {
+function withVehicleDates<
+  T extends Partial<Record<(typeof VEHICLE_DATE_FIELDS)[number], unknown>>,
+>(data: T): T {
   const copy = { ...data } as Record<string, unknown>;
 
   for (const field of VEHICLE_DATE_FIELDS) {

@@ -12,7 +12,10 @@ import {
 
 import { buildPublicApiDocument } from "@/shared/integration/public-docs";
 import { reservedHeaderNames } from "@/shared/integration/webhook-destination";
-import { ALL_TOPICS, TOPIC_FAMILY } from "@/shared/integration/webhook-catalogue";
+import {
+  ALL_TOPICS,
+  TOPIC_FAMILY,
+} from "@/shared/integration/webhook-catalogue";
 
 import {
   REPLAY_WINDOW_DAYS,
@@ -82,7 +85,9 @@ describe("how long we keep trying", () => {
     // "Até seis horas" had an integrator size their reprocessing window one
     // attempt short.
     expect(description).not.toContain("seis horas");
-    expect(description).toContain(`cerca de ${Math.round(total / 3_600_000)} horas`);
+    expect(description).toContain(
+      `cerca de ${Math.round(total / 3_600_000)} horas`,
+    );
     expect(description).toContain(`${WEBHOOK_MAX_ATTEMPTS} tentativas`);
     expect(description).toContain(`${REPLAY_WINDOW_DAYS} dias`);
   });
@@ -100,9 +105,9 @@ describe("what a webhook carries", () => {
   });
 
   it("publishes the document fields the builder actually writes", () => {
-    expect(Object.keys(schemas().WebhookDocumentData?.properties ?? {})).toEqual(
-      Object.keys(deliveryEventPayload({ id: "x" })),
-    );
+    expect(
+      Object.keys(schemas().WebhookDocumentData?.properties ?? {}),
+    ).toEqual(Object.keys(deliveryEventPayload({ id: "x" })));
   });
 
   it("publishes the route fields the builder actually writes", () => {
@@ -159,10 +164,9 @@ describe("the scopes a key can be given", () => {
     const catalogue = buildCatalogue("v1", TOPIC_FAMILY);
 
     for (const entry of catalogue.scopes) {
-      expect(
-        (entry as { reserved?: boolean }).reserved,
-        entry.scope,
-      ).toBe(reserved.includes(entry.scope));
+      expect((entry as { reserved?: boolean }).reserved, entry.scope).toBe(
+        reserved.includes(entry.scope),
+      );
     }
   });
 });

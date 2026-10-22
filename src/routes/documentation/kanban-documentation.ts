@@ -41,12 +41,14 @@ const coded = (code: string, message: string, codeDescription?: string) =>
     message: z.string().default(message),
   });
 
-const plain = (message: string) => z.object({ message: z.string().default(message) });
+const plain = (message: string) =>
+  z.object({ message: z.string().default(message) });
 
 /** A refusal that can carry one of several codes, listed in the description. */
 const refusal = (description: string) => errorResponse.describe(description);
 
-const VALIDATION = "VALIDATION_ERROR (parâmetro, consulta ou corpo recusado; issues diz qual)";
+const VALIDATION =
+  "VALIDATION_ERROR (parâmetro, consulta ou corpo recusado; issues diz qual)";
 const SESSION_USER = "USER_NOT_FOUND (o usuário da sessão não existe mais)";
 const BUSINESS = "BUSINESS_NOT_FOUND (a empresa não existe)";
 const ASSIGNEE =
@@ -99,7 +101,9 @@ const kanbanResponses = {
     id: z.string().describe("ID da coluna"),
     title: z.string().describe("Título da coluna"),
     color: z.string().describe("Cor da coluna em hexadecimal"),
-    position: z.number().describe("Posição da coluna no quadro (0, 1, 2… sem buracos)"),
+    position: z
+      .number()
+      .describe("Posição da coluna no quadro (0, 1, 2… sem buracos)"),
     businessId: z.string().describe("ID da empresa dona do quadro"),
     cardsCount: z.number().describe("Quantos cards a coluna tem, sem filtro"),
     created_at: z.string().describe("Criação da coluna (ISO 8601)"),
@@ -119,13 +123,18 @@ const kanbanResponses = {
           columnId: z.string().describe("ID da coluna"),
           assignedUserId: z.string().nullable().describe("ID do responsável"),
           created_at: z.string().describe("Criação do card (ISO 8601)"),
-          updated_at: z.string().describe("Última alteração do card (ISO 8601)"),
+          updated_at: z
+            .string()
+            .describe("Última alteração do card (ISO 8601)"),
           assignedUser: z
             .object({
               id: z.string().describe("ID do usuário"),
               name: z.string().describe("Nome do usuário"),
               email: z.string().describe("E-mail do usuário"),
-              avatar: z.string().nullable().describe("URL assinada da foto, ou null"),
+              avatar: z
+                .string()
+                .nullable()
+                .describe("URL assinada da foto, ou null"),
             })
             .nullable()
             .describe("O responsável pelo card"),

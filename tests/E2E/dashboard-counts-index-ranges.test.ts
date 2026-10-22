@@ -4,7 +4,10 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { DashboardRepository } from "@/modules/dashboard/repositories/dashboard-repository";
-import { businessMonthStart, zonedWallTimeToUtc } from "@/shared/time/business-day";
+import {
+  businessMonthStart,
+  zonedWallTimeToUtc,
+} from "@/shared/time/business-day";
 
 /**
  * The dashboard's counts are index range counts, not a label per row.
@@ -72,7 +75,9 @@ async function perRowLabels(
   unit: "month" | "day" = "month",
 ): Promise<Record<string, number>> {
   const format = unit === "day" ? "YYYY-MM-DD" : "YYYY-MM";
-  const rows = await prisma.$queryRaw<Array<{ period: string; count: bigint }>>(Prisma.sql`
+  const rows = await prisma.$queryRaw<
+    Array<{ period: string; count: bigint }>
+  >(Prisma.sql`
     SELECT to_char(date_trunc(${unit}, ("created_at" AT TIME ZONE 'UTC') AT TIME ZONE ${SP}), ${format}) AS period,
            count(*)::bigint AS count
     FROM "public"."supplier"
@@ -121,7 +126,9 @@ beforeAll(async () => {
 }, 90_000);
 
 afterAll(async () => {
-  await prisma.supplier.deleteMany({ where: { businessId: { in: [CARRIER, OTHER] } } });
+  await prisma.supplier.deleteMany({
+    where: { businessId: { in: [CARRIER, OTHER] } },
+  });
   await prisma.business.deleteMany({ where: { id: { in: [CARRIER, OTHER] } } });
   await prisma.$disconnect();
   await counted.$disconnect();
@@ -132,11 +139,18 @@ describe("the dashboard's monthly counts", () => {
     statements.length = 0;
 
     await repository.countManyByMonth(
-      { entities: ["supplier"], from: businessMonthStart("2026-06", SP), to: businessMonthStart("2026-09", SP), timeZone: SP },
+      {
+        entities: ["supplier"],
+        from: businessMonthStart("2026-06", SP),
+        to: businessMonthStart("2026-09", SP),
+        timeZone: SP,
+      },
       CARRIER,
     );
 
-    const counting = statements.filter((statement) => statement.query.includes(`"public"."supplier"`));
+    const counting = statements.filter((statement) =>
+      statement.query.includes(`"public"."supplier"`),
+    );
 
     expect(counting).toHaveLength(1);
     expect(counting[0].query).not.toMatch(/date_trunc/i);
@@ -149,47 +163,74 @@ describe("the dashboard's monthly counts", () => {
   it.each([
     ["the tenant", CARRIER],
     ["a MASTER (every tenant)", undefined],
-  ])("read each table once for %s, not once per bucket", async (_label, businessId) => {
-    statements.length = 0;
+  ])(
+    "read each table once for %s, not once per bucket",
+    async (_label, businessId) => {
+      statements.length = 0;
 
-    await repository.countManyByPeriod(
-      {
-        entities: ["supplier", "delivery"],
-        from: zonedWallTimeToUtc(SP, 2026, 6, 1),
-        to: zonedWallTimeToUtc(SP, 2026, 7, 1),
-        granularity: "day",
-        timeZone: SP,
-      },
-      businessId,
-    );
+      await repository.countManyByPeriod(
+        {
+          entities: ["supplier", "delivery"],
+          from: zonedWallTimeToUtc(SP, 2026, 6, 1),
+          to: zonedWallTimeToUtc(SP, 2026, 7, 1),
+          granularity: "day",
+          timeZone: SP,
+        },
+        businessId,
+      );
 
-    const [statement] = statements.filter((sent) => sent.query.includes(`"public"."supplier"`));
-    const rows = await prisma.$queryRawUnsafe<Array<{ "QUERY PLAN": unknown }>>(
-      `EXPLAIN (FORMAT JSON) ${statement.query}`,
-      ...(JSON.parse(statement.params) as unknown[]),
-    );
-    const raw = rows[0]["QUERY PLAN"];
-    const plan = ((typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{ Plan: PlanNode }>)[0].Plan;
+      const [statement] = statements.filter((sent) =>
+        sent.query.includes(`"public"."supplier"`),
+      );
+      const rows = await prisma.$queryRawUnsafe<
+        Array<{ "QUERY PLAN": unknown }>
+      >(
+        `EXPLAIN (FORMAT JSON) ${statement.query}`,
+        ...(JSON.parse(statement.params) as unknown[]),
+      );
+      const raw = rows[0]["QUERY PLAN"];
+      const plan = (
+        (typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{
+          Plan: PlanNode;
+        }>
+      )[0].Plan;
 
-    const scans = (table: string) => flatten(plan).filter((node) => node["Relation Name"] === table);
+      const scans = (table: string) =>
+        flatten(plan).filter((node) => node["Relation Name"] === table);
 
-    expect(scans("supplier"), JSON.stringify(plan)).toHaveLength(1);
-    expect(scans("delivery"), JSON.stringify(plan)).toHaveLength(1);
-    expect(flatten(plan).some((node) => (node["Actual Loops"] ?? 1) > 1 || node["Node Type"] === "Nested Loop")).toBe(false);
-  });
+      expect(scans("supplier"), JSON.stringify(plan)).toHaveLength(1);
+      expect(scans("delivery"), JSON.stringify(plan)).toHaveLength(1);
+      expect(
+        flatten(plan).some(
+          (node) =>
+            (node["Actual Loops"] ?? 1) > 1 ||
+            node["Node Type"] === "Nested Loop",
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("give a MASTER the same days and months as the per-row labels, over every tenant", async () => {
     const from = businessMonthStart("2026-06", SP);
     const to = businessMonthStart("2026-09", SP);
 
-    const months = await repository.countManyByMonth({ entities: ["supplier"], from, to, timeZone: SP });
+    const months = await repository.countManyByMonth({
+      entities: ["supplier"],
+      from,
+      to,
+      timeZone: SP,
+    });
     const days = await repository.countManyByPeriod(
       { entities: ["supplier"], from, to, granularity: "day", timeZone: SP },
       undefined,
     );
 
-    const foundMonths = Object.fromEntries(months.supplier.map((bucket) => [bucket.month, bucket.count]));
-    const foundDays = Object.fromEntries(days.supplier.map((bucket) => [bucket.period, bucket.count]));
+    const foundMonths = Object.fromEntries(
+      months.supplier.map((bucket) => [bucket.month, bucket.count]),
+    );
+    const foundDays = Object.fromEntries(
+      days.supplier.map((bucket) => [bucket.period, bucket.count]),
+    );
 
     expect(foundMonths).toEqual(await perRowLabels(undefined, from, to));
     expect(foundDays).toEqual(await perRowLabels(undefined, from, to, "day"));
@@ -201,8 +242,13 @@ describe("the dashboard's monthly counts", () => {
     const from = businessMonthStart("2026-06", SP);
     const to = businessMonthStart("2026-09", SP);
 
-    const result = await repository.countManyByMonth({ entities: ["supplier"], from, to, timeZone: SP }, CARRIER);
-    const found = Object.fromEntries(result.supplier.map((bucket) => [bucket.month, bucket.count]));
+    const result = await repository.countManyByMonth(
+      { entities: ["supplier"], from, to, timeZone: SP },
+      CARRIER,
+    );
+    const found = Object.fromEntries(
+      result.supplier.map((bucket) => [bucket.month, bucket.count]),
+    );
 
     expect(found).toEqual(await perRowLabels(CARRIER, from, to));
     expect(found).toEqual({ "2026-06": 3, "2026-07": 2, "2026-08": 2 });
@@ -217,8 +263,10 @@ describe("the dashboard's monthly counts", () => {
       CARRIER,
     );
 
-    expect(Object.fromEntries(result.supplier.map((bucket) => [bucket.period, bucket.count]))).toEqual(
-      await perRowLabels(CARRIER, from, to),
-    );
+    expect(
+      Object.fromEntries(
+        result.supplier.map((bucket) => [bucket.period, bucket.count]),
+      ),
+    ).toEqual(await perRowLabels(CARRIER, from, to));
   });
 });

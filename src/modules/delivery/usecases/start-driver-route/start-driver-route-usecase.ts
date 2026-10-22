@@ -158,11 +158,13 @@ class StartDriverRouteUseCase {
     // cannot disagree — if the driver can see a vehicle there the route starts,
     // and if that screen is empty it does not. A second, hand-written criterion
     // here would drift from the screen the driver is actually looking at.
-    const { data: driverVehicles } = await this.vehicle.searchVehicleWithCursor({
-      limit: 1,
-      businessId,
-      driverId: findUser.driverId,
-    });
+    const { data: driverVehicles } = await this.vehicle.searchVehicleWithCursor(
+      {
+        limit: 1,
+        businessId,
+        driverId: findUser.driverId,
+      },
+    );
 
     if (driverVehicles.length === 0) {
       // Kept short deliberately: the app shows this in a toast, and a long

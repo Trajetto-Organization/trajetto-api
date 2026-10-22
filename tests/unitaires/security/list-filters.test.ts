@@ -63,7 +63,10 @@ describe("the OR of a list search", () => {
     ]);
 
     expect(built).toEqual({
-      OR: [{ name: { contains: search } }, { businessId: { contains: search } }],
+      OR: [
+        { name: { contains: search } },
+        { businessId: { contains: search } },
+      ],
     });
   });
 

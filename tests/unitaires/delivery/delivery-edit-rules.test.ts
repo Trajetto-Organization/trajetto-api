@@ -65,7 +65,12 @@ beforeEach(() => {
   businesses.business.push({ id: BUSINESS } as Business);
 
   shippers.shippers.push(
-    { id: SHIPPER, name: "Ativo", businessId: BUSINESS, is_active: true } as Shipper,
+    {
+      id: SHIPPER,
+      name: "Ativo",
+      businessId: BUSINESS,
+      is_active: true,
+    } as Shipper,
     {
       id: RETIRED_SHIPPER,
       name: "Desativado",
@@ -81,7 +86,9 @@ beforeEach(() => {
     businesses,
     shippers,
     deliveries,
-    { createActivityIfEnabled: async () => undefined } as unknown as NotificationService,
+    {
+      createActivityIfEnabled: async () => undefined,
+    } as unknown as NotificationService,
     new InMemoryWebhookFanOutService().asService(),
   );
 });
@@ -113,7 +120,9 @@ describe("the shipper on an edit", () => {
   it("refuses moving a delivery onto a deactivated shipper", async () => {
     const id = await seed();
 
-    await expect(edit(id, { shipperId: RETIRED_SHIPPER })).rejects.toMatchObject({
+    await expect(
+      edit(id, { shipperId: RETIRED_SHIPPER }),
+    ).rejects.toMatchObject({
       statusCode: 400,
       code: "SHIPPER_INACTIVE",
     });
@@ -137,7 +146,10 @@ describe("the NF-e key is set once", () => {
   it("accepts a key on a delivery typed without one", async () => {
     const id = await seed();
 
-    const updated = await edit(id, { invoice_key: KEY, invoice_number: "1234" });
+    const updated = await edit(id, {
+      invoice_key: KEY,
+      invoice_number: "1234",
+    });
 
     expect(updated.invoice_key).toBe(KEY);
     expect(updated.invoice_number).toBe("1234");
@@ -189,7 +201,9 @@ describe("the NF-e key is set once", () => {
 
     // The check sees nothing (the twin commits in between); the unique
     // index then refuses the write, as Postgres does.
-    vi.spyOn(deliveries, "findDeliveryByInvoiceKey").mockResolvedValueOnce(null);
+    vi.spyOn(deliveries, "findDeliveryByInvoiceKey").mockResolvedValueOnce(
+      null,
+    );
 
     await expect(edit(id, { invoice_key: KEY })).rejects.toMatchObject({
       statusCode: 409,
@@ -201,7 +215,14 @@ describe("the NF-e key is set once", () => {
 describe("the items of a delivery", () => {
   const items = [{ description: "Caixa de leite", quantity: 12 }];
   // As delivery_item stores them: no unit and no unit value are NULL.
-  const stored = [{ description: "Caixa de leite", quantity: 12, unit: null, unit_value: null }];
+  const stored = [
+    {
+      description: "Caixa de leite",
+      quantity: 12,
+      unit: null,
+      unit_value: null,
+    },
+  ];
 
   it("are replaced on a typed delivery", async () => {
     const id = await seed({ items: [{ description: "Antigo", quantity: 1 }] });
@@ -236,7 +257,9 @@ describe("the create, racing on the NF-e key", () => {
   it("answers 409 instead of a 500 when the unique index decides", async () => {
     await seed({ invoice_key: KEY });
 
-    vi.spyOn(deliveries, "findDeliveryByInvoiceKey").mockResolvedValueOnce(null);
+    vi.spyOn(deliveries, "findDeliveryByInvoiceKey").mockResolvedValueOnce(
+      null,
+    );
 
     await expect(
       create.execute(
@@ -371,7 +394,9 @@ describe("the address point when the address changes", () => {
       deliveryData: { street: "Avenida Nova" },
     });
 
-    expect(deliveries.deliveries.find((entry) => entry.id === row.id)).toMatchObject({
+    expect(
+      deliveries.deliveries.find((entry) => entry.id === row.id),
+    ).toMatchObject({
       street: "Avenida Nova",
       latitude: null,
       longitude: null,
@@ -387,10 +412,16 @@ describe("the address point when the address changes", () => {
       userId: OPERATOR,
       businessId: BUSINESS,
       deliveryId: row.id!,
-      deliveryData: { street: row.street, city: row.city, notes: "Portão azul" },
+      deliveryData: {
+        street: row.street,
+        city: row.city,
+        notes: "Portão azul",
+      },
     });
 
-    expect(deliveries.deliveries.find((entry) => entry.id === row.id)).toMatchObject({
+    expect(
+      deliveries.deliveries.find((entry) => entry.id === row.id),
+    ).toMatchObject({
       latitude: -23.55,
       longitude: -46.63,
       geo_source: "MANUAL",

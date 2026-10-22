@@ -61,7 +61,10 @@ interface PlanNode {
 function nodesOn(node: PlanNode, index: string): PlanNode[] {
   const own = node["Index Name"] === index ? [node] : [];
 
-  return [...own, ...(node.Plans ?? []).flatMap((child) => nodesOn(child, index))];
+  return [
+    ...own,
+    ...(node.Plans ?? []).flatMap((child) => nodesOn(child, index)),
+  ];
 }
 
 beforeAll(async () => {
@@ -179,8 +182,9 @@ describe("the notification purge", () => {
       );
     });
 
-    const root = (plan[0]["QUERY PLAN"] as unknown as Array<{ Plan: PlanNode }>)[0]
-      .Plan;
+    const root = (
+      plan[0]["QUERY PLAN"] as unknown as Array<{ Plan: PlanNode }>
+    )[0].Plan;
 
     const scans = nodesOn(root, "notification_created_at_idx");
 

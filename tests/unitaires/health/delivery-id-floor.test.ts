@@ -25,18 +25,27 @@ describe("deliveryIdFloor", () => {
 
   it("sorts below every uuid v7 minted at or after the instant", () => {
     expect(mintedAt(since.getTime()) >= floor).toBe(true);
-    expect(mintedAt(since.getTime(), "7000-8000-000000000000") >= floor).toBe(true);
+    expect(mintedAt(since.getTime(), "7000-8000-000000000000") >= floor).toBe(
+      true,
+    );
     expect(mintedAt(since.getTime() + 60_000) >= floor).toBe(true);
   });
 
   it("and above every one minted before it", () => {
-    expect(mintedAt(since.getTime() - 1, "7fff-bfff-ffffffffffff") >= floor).toBe(false);
-    expect(mintedAt(since.getTime() - 25 * 60 * 60 * 1000) >= floor).toBe(false);
+    expect(
+      mintedAt(since.getTime() - 1, "7fff-bfff-ffffffffffff") >= floor,
+    ).toBe(false);
+    expect(mintedAt(since.getTime() - 25 * 60 * 60 * 1000) >= floor).toBe(
+      false,
+    );
   });
 
   it("is only as right as the delivery ids being uuid v7", () => {
     // A different id default would make the window count silently wrong.
-    const schema = readFileSync(resolve(process.cwd(), "prisma/schema.prisma"), "utf8");
+    const schema = readFileSync(
+      resolve(process.cwd(), "prisma/schema.prisma"),
+      "utf8",
+    );
 
     const model = schema.slice(schema.indexOf("model NotificationDelivery {"));
 

@@ -23,10 +23,7 @@ class ListMessageTemplatesUseCase {
     private templates: IDeliveryMessageTemplateRepository,
   ) {}
 
-  async execute({
-    userId,
-    businessId,
-  }: ListMessageTemplatesRequest): Promise<{
+  async execute({ userId, businessId }: ListMessageTemplatesRequest): Promise<{
     data: DeliveryMessageTemplateRecord[];
     total: number;
   }> {

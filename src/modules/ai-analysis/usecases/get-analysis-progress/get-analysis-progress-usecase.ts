@@ -141,9 +141,8 @@ class GetAnalysisProgressUseCase {
     return {
       status: request.status,
       unitsTotal: request.units.length,
-      unitsCompleted: request.units.filter(
-        (unit) => unit.status === "CONSUMED",
-      ).length,
+      unitsCompleted: request.units.filter((unit) => unit.status === "CONSUMED")
+        .length,
       attempts: request.attempts,
       availableAt: request.availableAt?.toISOString() ?? null,
       lastErrorCode: error?.code ?? null,
@@ -162,7 +161,9 @@ class GetAnalysisProgressUseCase {
  * A yes/no about the provider, never about another company's requests.
  */
 async function providerPaused(): Promise<boolean> {
-  if (AIAnalysisPipelineService.getInstance().providerCircuit().state !== "closed") {
+  if (
+    AIAnalysisPipelineService.getInstance().providerCircuit().state !== "closed"
+  ) {
     return true;
   }
 

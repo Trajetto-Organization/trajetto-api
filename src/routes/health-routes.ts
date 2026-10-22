@@ -24,7 +24,10 @@ import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 import { isDraining } from "@/shared/lifecycle/draining";
 import { NotificationPipelineService } from "@/shared/notifications/notification-pipeline-service";
 import { readWebhookQueueMetrics } from "@/shared/integration/webhook-metrics";
-import { DELIVERY_LANES, type DeliveryLane } from "@/shared/notifications/pipeline-rules";
+import {
+  DELIVERY_LANES,
+  type DeliveryLane,
+} from "@/shared/notifications/pipeline-rules";
 import {
   QUEUE_TABLES,
   aiFailedSinceSql,
@@ -171,7 +174,8 @@ async function probeService(
 
       new Promise((_resolve, reject) =>
         setTimeout(
-          () => reject(new Error(`Probe timed out after ${PROBE_TIMEOUT_MS}ms`)),
+          () =>
+            reject(new Error(`Probe timed out after ${PROBE_TIMEOUT_MS}ms`)),
           PROBE_TIMEOUT_MS,
         ),
       ),
@@ -240,7 +244,10 @@ async function healthRoutes(app: FastifyInstance) {
         redis: redisHealth,
       })) {
         if (probe.error) {
-          request.log.warn({ service, err: probe.error }, "health probe failed");
+          request.log.warn(
+            { service, err: probe.error },
+            "health probe failed",
+          );
         }
       }
 
@@ -452,9 +459,8 @@ async function healthRoutes(app: FastifyInstance) {
         WHERE "status" = 'PENDING'
       `;
 
-      const queueTableStats = await database.$queryRaw<QueueTableStatsRow[]>(
-        queueTableStatsSql(),
-      );
+      const queueTableStats =
+        await database.$queryRaw<QueueTableStatsRow[]>(queueTableStatsSql());
 
       // One after the other, on purpose: each is an index read of a few
       // milliseconds (see metrics-queries.ts and its plan test), and running
@@ -480,9 +486,10 @@ async function healthRoutes(app: FastifyInstance) {
 
       // No time filter: every FAILED delivery still kept, which is what
       // /health/dead-letter lists.
-      const failedByChannel = await database.$queryRaw<
-        Array<CountRow & { channel: string }>
-      >(failedByChannelSql());
+      const failedByChannel =
+        await database.$queryRaw<Array<CountRow & { channel: string }>>(
+          failedByChannelSql(),
+        );
 
       // The current backlog, one query per lane so each reads its own partial
       // claim index — not the 24 h window above, which a delivery stuck for
@@ -541,7 +548,8 @@ async function healthRoutes(app: FastifyInstance) {
         pending_total: backlog.get(channel)?.pending_total ?? 0,
         processing_lease_expired:
           backlog.get(channel)?.processing_lease_expired ?? 0,
-        oldest_pending_seconds: backlog.get(channel)?.oldest_pending_seconds ?? null,
+        oldest_pending_seconds:
+          backlog.get(channel)?.oldest_pending_seconds ?? null,
         oldest_eligible_seconds:
           backlog.get(channel)?.oldest_eligible_seconds ?? null,
       }));
@@ -671,13 +679,19 @@ async function healthRoutes(app: FastifyInstance) {
         response: {
           200: healthResponses.providerReadiness,
           401: errorResponse.describe("Sem sessão válida."),
-          403: errorResponse.describe("AUTH_ROLE_FORBIDDEN: só o MASTER lê a infraestrutura."),
-          429: errorResponse.describe("RATE_LIMITED: muitas leituras seguidas."),
+          403: errorResponse.describe(
+            "AUTH_ROLE_FORBIDDEN: só o MASTER lê a infraestrutura.",
+          ),
+          429: errorResponse.describe(
+            "RATE_LIMITED: muitas leituras seguidas.",
+          ),
         },
       },
     },
     async (request, reply) => {
-      const { refresh } = request.query as z.infer<typeof healthSchemas.providersQuery>;
+      const { refresh } = request.query as z.infer<
+        typeof healthSchemas.providersQuery
+      >;
 
       return reply.status(200).send(await readProviderReadiness({ refresh }));
     },

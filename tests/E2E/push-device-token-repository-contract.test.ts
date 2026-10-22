@@ -23,7 +23,12 @@ const harnesses: Record<Kind, PushDeviceHarness> = {
     repo: new PushDeviceTokenRepository(prisma),
     rows: () =>
       prisma.pushDeviceToken.findMany({
-        select: { token: true, platform: true, userId: true, session_family_id: true },
+        select: {
+          token: true,
+          platform: true,
+          userId: true,
+          session_family_id: true,
+        },
         orderBy: { token: "asc" },
       }),
   },

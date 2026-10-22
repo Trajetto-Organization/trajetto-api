@@ -23,9 +23,7 @@ class ResetUserPasswordController {
       password,
     });
 
-    return reply
-      .status(200)
-      .send({ message: "Senha redefinida com sucesso!" });
+    return reply.status(200).send({ message: "Senha redefinida com sucesso!" });
   }
 }
 

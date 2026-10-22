@@ -156,7 +156,11 @@ function nearestBelow(
       continue;
     }
 
-    const dx = Math.max(0, label.minX - candidate.maxX, candidate.minX - label.maxX);
+    const dx = Math.max(
+      0,
+      label.minX - candidate.maxX,
+      candidate.minX - label.maxX,
+    );
     const dy = candidate.cy - label.cy;
     const distance = Math.hypot(dx, dy);
 
@@ -209,7 +213,10 @@ function proofFromLines(rawLines: OcrLine[]): OcrProofAnswer {
       match &&
       match.index !== undefined &&
       !/\d/.test(
-        text.slice(match.index + match[0].length, match.index + match[0].length + 1),
+        text.slice(
+          match.index + match[0].length,
+          match.index + match[0].length + 1,
+        ),
       )
     ) {
       number = `${match[1]}${match[2]}${match[3]}`;
@@ -317,7 +324,8 @@ function digitRuns(placed: PlacedLine[]): DigitRun[] {
 
   // "100 120": two dial labels the detector boxed together, not a reading.
   const numeric = lines.filter(
-    (line) => /^\s*\d[\d\s]*$/.test(line.text) && !/\d{2,}\s+\d{2,}/.test(line.text),
+    (line) =>
+      /^\s*\d[\d\s]*$/.test(line.text) && !/\d{2,}\s+\d{2,}/.test(line.text),
   );
 
   const runs: DigitRun[] = numeric.map((line) => ({
@@ -347,7 +355,8 @@ function digitRuns(placed: PlacedLine[]): DigitRun[] {
     for (const next of singles) {
       if (used.has(next)) continue;
 
-      const sameRow = Math.abs(next.cy - last.cy) < 0.4 * Math.max(next.h, last.h);
+      const sameRow =
+        Math.abs(next.cy - last.cy) < 0.4 * Math.max(next.h, last.h);
       const gap = next.minX - last.maxX;
 
       if (sameRow && gap > -0.3 * last.h && gap < 0.8 * last.h) {
@@ -386,7 +395,8 @@ function odometerFromLines(rawLines: OcrLine[]): OcrOdometerAnswer {
   let chosen: DigitRun | null = null;
 
   const odoLabel = lines.find(
-    (line) => compact(line.text) === "ODO" || compact(line.text).startsWith("ODO"),
+    (line) =>
+      compact(line.text) === "ODO" || compact(line.text).startsWith("ODO"),
   );
 
   if (odoLabel && runs.length > 0) {

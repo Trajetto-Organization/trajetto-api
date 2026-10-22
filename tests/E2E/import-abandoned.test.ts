@@ -111,12 +111,16 @@ describe("the abandoned-import sweep", () => {
     expect(closed.imported).toBe(2);
     expect(JSON.stringify(closed.report)).toContain("interrompida");
 
-    await expect(imports.reverseImport(dead.id, CARRIER)).resolves.toMatchObject({
+    await expect(
+      imports.reverseImport(dead.id, CARRIER),
+    ).resolves.toMatchObject({
       removedDeliveries: 2,
     });
 
     expect(
-      await prisma.delivery.count({ where: { businessId: CARRIER, importId: dead.id } }),
+      await prisma.delivery.count({
+        where: { businessId: CARRIER, importId: dead.id },
+      }),
     ).toBe(0);
   });
 

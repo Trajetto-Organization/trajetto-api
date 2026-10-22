@@ -44,7 +44,13 @@ function route(
 ): PauseReportRoute {
   sequence += 1;
 
-  return { id: `route-${sequence}`, driverId, status, started_at: start, ended_at: end };
+  return {
+    id: `route-${sequence}`,
+    driverId,
+    status,
+    started_at: start,
+    ended_at: end,
+  };
 }
 
 function pause(
@@ -279,9 +285,15 @@ describe("a driver's workday", () => {
     // Paulo and in UTC.
     const at = new Date("2026-09-29T03:30:00.000Z");
 
-    const [row] = report(source([], [pause(ANA, "OTHER", at, new Date(at.getTime() + 10 * 60_000))]), {
-      timeZone: RIO_BRANCO,
-    });
+    const [row] = report(
+      source(
+        [],
+        [pause(ANA, "OTHER", at, new Date(at.getTime() + 10 * 60_000))],
+      ),
+      {
+        timeZone: RIO_BRANCO,
+      },
+    );
 
     expect(row.day).toBe("2026-09-28");
     expect(row.totals.otherMinutes).toBe(10);
@@ -297,7 +309,10 @@ describe("a driver's workday", () => {
     );
 
     expect(row.inProgress).toBe(true);
-    expect(row.pauses[0]).toMatchObject({ status: "ONGOING", duration_minutes: 30 });
+    expect(row.pauses[0]).toMatchObject({
+      status: "ONGOING",
+      duration_minutes: 30,
+    });
     // 06:00 to 13:30 at the wheel already happened.
     expect(codes(row)).toEqual(["DRIVING_REST_SHORT"]);
   });
@@ -308,7 +323,10 @@ describe("a driver's workday", () => {
       { now: sp("2026-09-30T08:00") },
     );
 
-    expect(row.pauses[0]).toMatchObject({ status: "NOT_ENDED", duration_minutes: null });
+    expect(row.pauses[0]).toMatchObject({
+      status: "NOT_ENDED",
+      duration_minutes: null,
+    });
     expect(row.totals.pauseMinutes).toBe(0);
     expect(row.inProgress).toBe(false);
     expect(codes(row)).toEqual(["PAUSE_NOT_ENDED"]);
@@ -337,17 +355,32 @@ describe("a driver's workday", () => {
     expect(first.day).toBe("2026-09-20");
     // The workday is the route's; the forgotten meal takes no time from it.
     expect(first.workday.minutes).toBe(600);
-    expect(first.totals).toMatchObject({ pauseMinutes: 0, mealMinutes: 0, drivingMinutes: 600 });
-    expect(first.pauses[0]).toMatchObject({ status: "TOO_LONG", duration_minutes: 1190 });
-    expect(codes(first)).toEqual(["MEAL_MISSING", "DRIVING_REST_SHORT", "PAUSE_TOO_LONG"]);
-    expect(first.flags[0].message).toContain("sem pausa de refeição com duração válida");
+    expect(first.totals).toMatchObject({
+      pauseMinutes: 0,
+      mealMinutes: 0,
+      drivingMinutes: 600,
+    });
+    expect(first.pauses[0]).toMatchObject({
+      status: "TOO_LONG",
+      duration_minutes: 1190,
+    });
+    expect(codes(first)).toEqual([
+      "MEAL_MISSING",
+      "DRIVING_REST_SHORT",
+      "PAUSE_TOO_LONG",
+    ]);
+    expect(first.flags[0].message).toContain(
+      "sem pausa de refeição com duração válida",
+    );
     expect(first.flags[2].message).toContain("20/09 às 12:00");
     expect(first.flags[2].message).toContain("21/09 às 07:50");
     expect(first.flags[2].message).toContain("19 h 50 min");
 
     // The night was rest: 17:00 to 08:00, not "10 min" from 07:50.
     expect(second.day).toBe("2026-09-21");
-    expect(second.previousWorkdayEnd).toBe(sp("2026-09-20T17:00").toISOString());
+    expect(second.previousWorkdayEnd).toBe(
+      sp("2026-09-20T17:00").toISOString(),
+    );
     expect(second.restBeforeMinutes).toBe(900);
     expect(codes(second)).toEqual([]);
   });
@@ -432,7 +465,11 @@ describe("a driver's workday", () => {
       ),
     );
 
-    expect(row.totals).toMatchObject({ pauseMinutes: 60, mealMinutes: 60, longestMealMinutes: 60 });
+    expect(row.totals).toMatchObject({
+      pauseMinutes: 60,
+      mealMinutes: 60,
+      longestMealMinutes: 60,
+    });
     expect(codes(row)).toEqual([]);
   });
 
@@ -494,12 +531,19 @@ describe("the report's filters and counts", () => {
     const { rows: kept, searchMeta } = summarizePauseReport(rows, {}, names);
 
     expect(kept).toHaveLength(3);
-    expect(searchMeta).toMatchObject({ days: 3, drivers: 2, pauses: 2, daysWithAlerts: 2 });
+    expect(searchMeta).toMatchObject({
+      days: 3,
+      drivers: 2,
+      pauses: 2,
+      daysWithAlerts: 2,
+    });
     expect(searchMeta.facets.driverId).toEqual([
       { value: ANA, label: "Ana", count: 2 },
       { value: BIA, label: "Bia", count: 1 },
     ]);
-    expect(searchMeta.facets.flag.find((facet) => facet.value === "MEAL_MISSING")).toEqual({
+    expect(
+      searchMeta.facets.flag.find((facet) => facet.value === "MEAL_MISSING"),
+    ).toEqual({
       value: "MEAL_MISSING",
       count: 2,
     });
@@ -522,7 +566,10 @@ describe("the report's filters and counts", () => {
     ]);
 
     // The alert counts follow the driver filter only.
-    expect(searchMeta.facets.flag.find((facet) => facet.value === "MEAL_MISSING")?.count).toBe(1);
+    expect(
+      searchMeta.facets.flag.find((facet) => facet.value === "MEAL_MISSING")
+        ?.count,
+    ).toBe(1);
     expect(searchMeta.daysWithAlerts).toBe(1);
   });
 
@@ -536,8 +583,14 @@ describe("the report's filters and counts", () => {
       new Map([...names, [carla, "Carla"]]),
     );
 
-    expect(searchMeta.facets.driverId).toContainEqual({ value: carla, label: "Carla", count: 0 });
-    expect(searchMeta.facets.driverId.map((facet) => facet.value)).not.toContain(stranger);
+    expect(searchMeta.facets.driverId).toContainEqual({
+      value: carla,
+      label: "Carla",
+      count: 0,
+    });
+    expect(
+      searchMeta.facets.driverId.map((facet) => facet.value),
+    ).not.toContain(stranger);
     expect(searchMeta.days).toBe(0);
   });
 });
@@ -558,19 +611,20 @@ describe("the report's range", () => {
   });
 
   it(`accepts up to ${PAUSE_REPORT_MAX_DAYS} days and refuses more, inverted or impossible days`, () => {
-    expect(resolveReportRange({ from: "2026-09-01", to: "2026-10-01" }, SP, now).from).toBe(
-      "2026-09-01",
-    );
+    expect(
+      resolveReportRange({ from: "2026-09-01", to: "2026-10-01" }, SP, now)
+        .from,
+    ).toBe("2026-09-01");
 
-    expect(() => resolveReportRange({ from: "2026-09-01", to: "2026-10-02" }, SP, now)).toThrow(
-      ReportRangeInvalid,
-    );
-    expect(() => resolveReportRange({ from: "2026-09-10", to: "2026-09-09" }, SP, now)).toThrow(
-      ReportRangeInvalid,
-    );
-    expect(() => resolveReportRange({ from: "2026-02-30", to: "2026-03-01" }, SP, now)).toThrow(
-      ReportRangeInvalid,
-    );
+    expect(() =>
+      resolveReportRange({ from: "2026-09-01", to: "2026-10-02" }, SP, now),
+    ).toThrow(ReportRangeInvalid);
+    expect(() =>
+      resolveReportRange({ from: "2026-09-10", to: "2026-09-09" }, SP, now),
+    ).toThrow(ReportRangeInvalid);
+    expect(() =>
+      resolveReportRange({ from: "2026-02-30", to: "2026-03-01" }, SP, now),
+    ).toThrow(ReportRangeInvalid);
   });
 
   it("refuses days outside 2000 to 2099 as a range, never as a crash or another century", () => {
@@ -583,17 +637,19 @@ describe("the report's range", () => {
       { from: "1999-12-31", to: "2000-01-02" },
       { from: "2099-12-31", to: "2100-01-01" },
     ]) {
-      expect(() => resolveReportRange(range, SP, now), JSON.stringify(range)).toThrow(
-        ReportRangeInvalid,
-      );
+      expect(
+        () => resolveReportRange(range, SP, now),
+        JSON.stringify(range),
+      ).toThrow(ReportRangeInvalid);
     }
 
-    expect(resolveReportRange({ from: "2099-12-01", to: "2099-12-31" }, SP, now).to).toBe(
-      "2099-12-31",
-    );
-    expect(resolveReportRange({ from: "2000-01-01", to: "2000-01-31" }, SP, now).from).toBe(
-      "2000-01-01",
-    );
+    expect(
+      resolveReportRange({ from: "2099-12-01", to: "2099-12-31" }, SP, now).to,
+    ).toBe("2099-12-31");
+    expect(
+      resolveReportRange({ from: "2000-01-01", to: "2000-01-31" }, SP, now)
+        .from,
+    ).toBe("2000-01-01");
   });
 });
 
@@ -640,7 +696,11 @@ describe("the report's cost", () => {
       });
     }
 
-    report(input, { from: "2026-08-25", to: "2026-09-03", now: sp("2026-09-29T12:00") });
+    report(input, {
+      from: "2026-08-25",
+      to: "2026-09-03",
+      now: sp("2026-09-29T12:00"),
+    });
 
     // 400 routes and 800 pauses: the scan read 320,000 times.
     expect(reads).toBeLessThanOrEqual(4 * input.routes.length);
@@ -655,7 +715,11 @@ describe("the report's cost", () => {
       to: "2026-09-26",
       now: sp("2026-09-29T12:00"),
     });
-    summarizePauseReport(rows, {}, new Map(input.drivers.map((driver) => [driver.id, driver.name])));
+    summarizePauseReport(
+      rows,
+      {},
+      new Map(input.drivers.map((driver) => [driver.id, driver.name])),
+    );
     const elapsed = performance.now() - started;
 
     expect(rows).toHaveLength(300 * 31);

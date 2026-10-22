@@ -56,7 +56,11 @@ class UpdateProfileAccessUseCase {
     }
 
     // The profile's CURRENT tenant, not the one in the body.
-    assertTenantAccessToRecord(findUser, existingProfile.businessId, () => new ProfileAccessNotFoundError());
+    assertTenantAccessToRecord(
+      findUser,
+      existingProfile.businessId,
+      () => new ProfileAccessNotFoundError(),
+    );
 
     // A profile stays in its company. Moving it used to carry its users
     // along without ending their sessions or clearing their inbox

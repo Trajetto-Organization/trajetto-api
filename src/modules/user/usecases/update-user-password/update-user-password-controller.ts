@@ -26,9 +26,7 @@ class UpdateUserPasswordController {
       newPassword,
     });
 
-    return reply
-      .status(200)
-      .send({ message: "Senha atualizada com sucesso" });
+    return reply.status(200).send({ message: "Senha atualizada com sucesso" });
   }
 }
 

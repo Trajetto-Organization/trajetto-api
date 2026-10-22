@@ -78,7 +78,9 @@ beforeAll(async () => {
   });
 
   shipperId = (
-    await prisma.shipper.create({ data: { name: "Embarcador", businessId: BUSINESS } })
+    await prisma.shipper.create({
+      data: { name: "Embarcador", businessId: BUSINESS },
+    })
   ).id;
 
   ({ app } = await import("@/http"));
@@ -209,7 +211,9 @@ describe("a proof whose review card cannot be written", () => {
     expect((await prove(deliveryId, body)).statusCode).toBe(201);
     expect((await prove(deliveryId, body)).statusCode).toBe(201);
 
-    const cards = await prisma.deliveryProofAudit.findMany({ where: { deliveryId } });
+    const cards = await prisma.deliveryProofAudit.findMany({
+      where: { deliveryId },
+    });
 
     expect(cards).toHaveLength(1);
     expect(cards[0].status).toBe("PENDING");

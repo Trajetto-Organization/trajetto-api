@@ -20,7 +20,10 @@ const ROOT = process.cwd();
 function isIgnored(path: string): boolean {
   try {
     // --no-index: the pattern decides, whatever is or is not tracked.
-    execFileSync("git", ["check-ignore", "-q", "--no-index", path], { cwd: ROOT, stdio: "ignore" });
+    execFileSync("git", ["check-ignore", "-q", "--no-index", path], {
+      cwd: ROOT,
+      stdio: "ignore",
+    });
     return true;
   } catch (error) {
     if ((error as { status?: number }).status === 1) return false;
@@ -79,13 +82,21 @@ describe("the branch CI", () => {
     const allowlists = config.split(/^\[\[allowlists\]\]\s*$/m).slice(1);
 
     expect(allowlists).toHaveLength(1);
-    expect(allowlists[0]).toMatch(/^targetRules\s*=\s*\[\s*"generic-api-key"\s*\]\s*$/m);
+    expect(allowlists[0]).toMatch(
+      /^targetRules\s*=\s*\[\s*"generic-api-key"\s*\]\s*$/m,
+    );
     expect(allowlists[0]).not.toMatch(/^\s*(?:commits|regexes|stopwords)\s*=/m);
 
-    const paths = [...allowlists[0].matchAll(/'''([^']+)'''/g)].map((match) => match[1]);
+    const paths = [...allowlists[0].matchAll(/'''([^']+)'''/g)].map(
+      (match) => match[1],
+    );
 
     expect(paths.length).toBeGreaterThan(0);
-    expect(paths.filter((entry) => !/^\^tests\/$|^\^\\\.env\\\.example\$$/.test(entry))).toEqual([]);
+    expect(
+      paths.filter(
+        (entry) => !/^\^tests\/$|^\^\\\.env\\\.example\$$/.test(entry),
+      ),
+    ).toEqual([]);
   });
 
   it("baselines the findings the history already had, by fingerprint", () => {
@@ -113,7 +124,9 @@ function jobsOf(workflow: string): Map<string, string> {
   const section = workflow.slice(workflow.search(/^jobs:\s*$/m));
   const chunks = section.split(/\r?\n(?= {2}[\w-]+:\s*\r?\n)/).slice(1);
 
-  return new Map(chunks.map((chunk) => [/^ {2}([\w-]+):/.exec(chunk)![1], chunk]));
+  return new Map(
+    chunks.map((chunk) => [/^ {2}([\w-]+):/.exec(chunk)![1], chunk]),
+  );
 }
 
 /** `needs: a` or `needs: [a, b]`, the two forms these workflows use. */
@@ -129,7 +142,10 @@ function needsOf(job: string): string[] {
 
 /** The `docker run … gitleaks …` command of a job, whitespace-insensitive. */
 function gitleaksCommand(job: string): string {
-  const command = /docker run[^\n]*\\\s*\n[^\n]*zricethezav\/gitleaks[\s\S]*?--exit-code 1"/.exec(job)?.[0] ?? "";
+  const command =
+    /docker run[^\n]*\\\s*\n[^\n]*zricethezav\/gitleaks[\s\S]*?--exit-code 1"/.exec(
+      job,
+    )?.[0] ?? "";
 
   return command.replace(/\s+/g, " ");
 }
@@ -141,22 +157,31 @@ function gitleaksCommand(job: string): string {
  * same flags, same .gitleaksignore — and no image is built before it passes.
  */
 describe("the deploy pipeline", () => {
-  const ci = jobsOf(readFileSync(resolve(ROOT, ".github/workflows/ci.yml"), "utf8"));
-  const deploy = jobsOf(readFileSync(resolve(ROOT, ".github/workflows/deploy.yml"), "utf8"));
+  const ci = jobsOf(
+    readFileSync(resolve(ROOT, ".github/workflows/ci.yml"), "utf8"),
+  );
+  const deploy = jobsOf(
+    readFileSync(resolve(ROOT, ".github/workflows/deploy.yml"), "utf8"),
+  );
 
   it("scans the whole history exactly as the branch CI does", () => {
     const scan = deploy.get("secrets") ?? "";
 
     expect(scan, "secrets job in deploy.yml").toMatch(/fetch-depth: 0/);
     expect(gitleaksCommand(scan)).not.toBe("");
-    expect(gitleaksCommand(scan)).toBe(gitleaksCommand(ci.get("secrets") ?? ""));
+    expect(gitleaksCommand(scan)).toBe(
+      gitleaksCommand(ci.get("secrets") ?? ""),
+    );
   });
 
   it("builds no image before the scan passes", () => {
-    const builds = [...deploy].filter(([, job]) => /uses: docker\/build-push-action@/.test(job));
+    const builds = [...deploy].filter(([, job]) =>
+      /uses: docker\/build-push-action@/.test(job),
+    );
 
     expect(builds.length).toBeGreaterThan(0);
 
-    for (const [name, job] of builds) expect(needsOf(job), name).toContain("secrets");
+    for (const [name, job] of builds)
+      expect(needsOf(job), name).toContain("secrets");
   });
 });

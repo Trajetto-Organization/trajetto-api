@@ -61,7 +61,8 @@ const db = vi.hoisted(() => {
     $transaction: vi.fn(async (work: unknown) => {
       failOnce();
 
-      if (typeof work === "function") return (work as (tx: unknown) => unknown)(database);
+      if (typeof work === "function")
+        return (work as (tx: unknown) => unknown)(database);
 
       return Promise.all(work as Promise<unknown>[]);
     }),
@@ -90,9 +91,12 @@ describe("a send the receiver accepted", () => {
   it("is recorded as delivered even when the first write fails, and never retried", async () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
 
-    const service = new WebhookDispatchService(async () => ({ allowed: true }), {
-      fetchImpl: fetchImpl as never,
-    });
+    const service = new WebhookDispatchService(
+      async () => ({ allowed: true }),
+      {
+        fetchImpl: fetchImpl as never,
+      },
+    );
 
     db.failNextWrite();
 

@@ -28,23 +28,35 @@ describe("hmacVerifyKey", () => {
   });
 
   it("accepts exactly what the string secret accepted", () => {
-    const token = sign({ sub: "user-1", tokenType: "access" }, SECRET, { expiresIn: "5m" });
+    const token = sign({ sub: "user-1", tokenType: "access" }, SECRET, {
+      expiresIn: "5m",
+    });
 
-    expect(verify(token, hmacVerifyKey(SECRET))).toMatchObject({ sub: "user-1", tokenType: "access" });
+    expect(verify(token, hmacVerifyKey(SECRET))).toMatchObject({
+      sub: "user-1",
+      tokenType: "access",
+    });
 
     for (const algorithm of ["HS384", "HS512"] as const) {
       const other = sign({ sub: "user-2" }, SECRET, { algorithm });
 
-      expect(verify(other, hmacVerifyKey(SECRET))).toMatchObject({ sub: "user-2" });
+      expect(verify(other, hmacVerifyKey(SECRET))).toMatchObject({
+        sub: "user-2",
+      });
     }
   });
 
   it("refuses what the string secret refused", () => {
     const forged = sign({ sub: "user-1" }, "b".repeat(48));
-    const expired = sign({ sub: "user-1", exp: Math.floor(Date.now() / 1000) - 10 }, SECRET);
+    const expired = sign(
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) - 10 },
+      SECRET,
+    );
     const unsigned = sign({ sub: "user-1" }, "", { algorithm: "none" });
 
-    expect(() => verify(forged, hmacVerifyKey(SECRET))).toThrow(/invalid signature/);
+    expect(() => verify(forged, hmacVerifyKey(SECRET))).toThrow(
+      /invalid signature/,
+    );
     expect(() => verify(expired, hmacVerifyKey(SECRET))).toThrow(/jwt expired/);
     expect(() => verify(unsigned, hmacVerifyKey(SECRET))).toThrow();
   });
@@ -57,7 +69,11 @@ describe("no verify in src takes the raw secret", () => {
     readdirSync(dir).flatMap((name) => {
       const path = join(dir, name);
 
-      return statSync(path).isDirectory() ? files(path) : path.endsWith(".ts") ? [path] : [];
+      return statSync(path).isDirectory()
+        ? files(path)
+        : path.endsWith(".ts")
+          ? [path]
+          : [];
     });
 
   it("every verify(…) names hmacVerifyKey", () => {

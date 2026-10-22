@@ -102,7 +102,11 @@ beforeEach(() => {
     businessId: BUSINESS,
   } as User);
 
-  businesses.business.push({ ...BUSINESS_COLUMN_DEFAULTS, id: BUSINESS, is_active: true } as Business);
+  businesses.business.push({
+    ...BUSINESS_COLUMN_DEFAULTS,
+    id: BUSINESS,
+    is_active: true,
+  } as Business);
 
   shippers.shippers.push({
     id: SHIPPER,

@@ -19,7 +19,13 @@ const group = (
   cnh_category: DriverGroupCount["cnh_category"],
   branchId: string | null,
   count: number,
-): DriverGroupCount => ({ status, contract_type, cnh_category, branchId, count });
+): DriverGroupCount => ({
+  status,
+  contract_type,
+  cnh_category,
+  branchId,
+  count,
+});
 
 /**
  * 10 drivers: 7 active (4 owned), 3 inactive (1 owned); categories E, AB and
@@ -77,12 +83,18 @@ describe("summarizeDriverList", () => {
     // ...but Ativos does not drop to zero, and the option still says 7.
     expect(searchMeta.active).toBe(7);
     expect(searchMeta.inactive).toBe(3);
-    expect(counts(searchMeta.facets.status)).toEqual({ ACTIVE: 7, INACTIVE: 3 });
+    expect(counts(searchMeta.facets.status)).toEqual({
+      ACTIVE: 7,
+      INACTIVE: 3,
+    });
 
     // Every other breakdown is counted WITH the status filter.
     expect(searchMeta.owned).toBe(1);
     expect(searchMeta.thirdParty).toBe(2);
-    expect(counts(searchMeta.facets.cnh_category)).toMatchObject({ E: 1, NONE: 2 });
+    expect(counts(searchMeta.facets.cnh_category)).toMatchObject({
+      E: 1,
+      NONE: 2,
+    });
   });
 
   it("applies every other facet to a breakdown, never its own", () => {
@@ -185,7 +197,9 @@ describe("driverListWhere", () => {
 
     const or = (where.AND as Array<{ OR: object[] }>)[0].OR;
 
-    expect(or).toContainEqual({ cpf: { contains: "123456", mode: "insensitive" } });
+    expect(or).toContainEqual({
+      cpf: { contains: "123456", mode: "insensitive" },
+    });
 
     const wild = driverListWhere(
       { businessId: BUSINESS, search: "50%" },
@@ -207,7 +221,9 @@ describe("DRIVER_SORT", () => {
   });
 
   it("keeps drivers without a CNH expiry at the end in both directions", () => {
-    expect(resolveOrderBy(DRIVER_SORT, { sort: "cnh_expires_at", order: "desc" })[0]).toEqual({
+    expect(
+      resolveOrderBy(DRIVER_SORT, { sort: "cnh_expires_at", order: "desc" })[0],
+    ).toEqual({
       cnh_expires_at: { sort: "desc", nulls: "last" },
     });
   });

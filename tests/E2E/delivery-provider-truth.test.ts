@@ -40,7 +40,10 @@ const providers = {
 
 async function seedDelivery(
   channel: "WHATSAPP" | "EMAIL",
-  overrides: { status?: "PENDING" | "DELIVERED"; providerMessageId?: string } = {},
+  overrides: {
+    status?: "PENDING" | "DELIVERED";
+    providerMessageId?: string;
+  } = {},
 ): Promise<string> {
   const event = await prisma.domainOutboxEvent.create({
     data: {
@@ -100,7 +103,10 @@ function resendEvent(
   return JSON.stringify({ type, created_at: createdAt, data });
 }
 
-function postResend(body: string, headers: Record<string, string> = signed(body)) {
+function postResend(
+  body: string,
+  headers: Record<string, string> = signed(body),
+) {
   return app.inject({
     method: "POST",
     url: "/webhooks/resend",
@@ -110,7 +116,9 @@ function postResend(body: string, headers: Record<string, string> = signed(body)
 }
 
 async function cleanTables(): Promise<void> {
-  await prisma.domainOutboxEvent.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.domainOutboxEvent.deleteMany({
+    where: { businessId: BUSINESS },
+  });
   await prisma.notificationProviderReceipt.deleteMany({
     where: { provider: "resend", deliveryId: null },
   });
@@ -160,7 +168,11 @@ beforeAll(async () => {
   container.registerInstance("WhatsAppProvider", {
     isConfigured: () => true,
     sendMessage: async () =>
-      providers.whatsapp ?? { success: true, retryable: false, messageId: "wamid.ok" },
+      providers.whatsapp ?? {
+        success: true,
+        retryable: false,
+        messageId: "wamid.ok",
+      },
   });
 
   pipeline = (
@@ -188,68 +200,96 @@ afterAll(async () => {
 }, 60_000);
 
 describe("a refusal the provider explained", () => {
-  it("keeps Meta's HTTP status and error code in lastError", { timeout: 30_000 }, async () => {
-    providers.whatsapp = {
-      success: false,
-      retryable: false,
-      httpStatus: 401,
-      errorCode: 190,
-      message: "Error validating access token: Session has expired",
-    };
+  it(
+    "keeps Meta's HTTP status and error code in lastError",
+    { timeout: 30_000 },
+    async () => {
+      providers.whatsapp = {
+        success: false,
+        retryable: false,
+        httpStatus: 401,
+        errorCode: 190,
+        message: "Error validating access token: Session has expired",
+      };
 
-    const id = await seedDelivery("WHATSAPP");
+      const id = await seedDelivery("WHATSAPP");
 
-    await pipeline.runDeliveryCycle("external");
+      await pipeline.runDeliveryCycle("external");
 
-    const row = await prisma.notificationDelivery.findUniqueOrThrow({ where: { id } });
+      const row = await prisma.notificationDelivery.findUniqueOrThrow({
+        where: { id },
+      });
 
-    expect(row.status).toBe("FAILED");
-    expect(row.lastError).toBe(
-      "[whatsapp http=401 code=190] Error validating access token: Session has expired",
-    );
-  });
+      expect(row.status).toBe("FAILED");
+      expect(row.lastError).toBe(
+        "[whatsapp http=401 code=190] Error validating access token: Session has expired",
+      );
+    },
+  );
 
-  it("keeps the SMTP code and reply of an e-mail refusal", { timeout: 30_000 }, async () => {
-    providers.mail = new MailDeliveryError("Falha ao enviar e-mail: Invalid login", {
-      retryable: false,
-      code: "EAUTH",
-      responseCode: 535,
-    });
+  it(
+    "keeps the SMTP code and reply of an e-mail refusal",
+    { timeout: 30_000 },
+    async () => {
+      providers.mail = new MailDeliveryError(
+        "Falha ao enviar e-mail: Invalid login",
+        {
+          retryable: false,
+          code: "EAUTH",
+          responseCode: 535,
+        },
+      );
 
-    const id = await seedDelivery("EMAIL");
+      const id = await seedDelivery("EMAIL");
 
-    await pipeline.runDeliveryCycle("external");
+      await pipeline.runDeliveryCycle("external");
 
-    const row = await prisma.notificationDelivery.findUniqueOrThrow({ where: { id } });
+      const row = await prisma.notificationDelivery.findUniqueOrThrow({
+        where: { id },
+      });
 
-    expect(row.status).toBe("FAILED");
-    expect(row.lastError).toBe(
-      "[email smtp=EAUTH reply=535] Falha ao enviar e-mail: Invalid login",
-    );
-  });
+      expect(row.status).toBe("FAILED");
+      expect(row.lastError).toBe(
+        "[email smtp=EAUTH reply=535] Falha ao enviar e-mail: Invalid login",
+      );
+    },
+  );
 
-  it("keeps it on a retryable refusal too, and still retries", { timeout: 30_000 }, async () => {
-    providers.mail = new MailDeliveryError("Falha ao enviar e-mail: try later", {
-      retryable: true,
-      responseCode: 451,
-    });
+  it(
+    "keeps it on a retryable refusal too, and still retries",
+    { timeout: 30_000 },
+    async () => {
+      providers.mail = new MailDeliveryError(
+        "Falha ao enviar e-mail: try later",
+        {
+          retryable: true,
+          responseCode: 451,
+        },
+      );
 
-    const id = await seedDelivery("EMAIL");
+      const id = await seedDelivery("EMAIL");
 
-    await pipeline.runDeliveryCycle("external");
+      await pipeline.runDeliveryCycle("external");
 
-    const row = await prisma.notificationDelivery.findUniqueOrThrow({ where: { id } });
+      const row = await prisma.notificationDelivery.findUniqueOrThrow({
+        where: { id },
+      });
 
-    expect(row.status).toBe("PENDING");
-    expect(row.lastError).toBe("[email reply=451] Falha ao enviar e-mail: try later");
-  });
+      expect(row.status).toBe("PENDING");
+      expect(row.lastError).toBe(
+        "[email reply=451] Falha ao enviar e-mail: try later",
+      );
+    },
+  );
 });
 
 describe("Resend's word on an e-mail it accepted", () => {
   it("does not exist while the environment has no signing secret", async () => {
     env.RESEND_WEBHOOK_SECRET = undefined;
 
-    const response = await postResend(resendEvent("email.delivered", { email_id: "re_1" }));
+    const response = await postResend(
+      resendEvent("email.delivered", { email_id: "re_1" }),
+    );
 
     expect(response.statusCode).toBe(404);
   });
@@ -280,13 +320,19 @@ describe("Resend's word on an e-mail it accepted", () => {
         email_id: emailId,
         message_id: messageId,
         to: ["ana@exemplo.com"],
-        bounce: { type: "Permanent", subType: "General", message: "550 <ana@exemplo.com> unknown" },
+        bounce: {
+          type: "Permanent",
+          subType: "General",
+          message: "550 <ana@exemplo.com> unknown",
+        },
       }),
     );
 
     expect(response.statusCode).toBe(200);
 
-    const row = await prisma.notificationDelivery.findUniqueOrThrow({ where: { id } });
+    const row = await prisma.notificationDelivery.findUniqueOrThrow({
+      where: { id },
+    });
     expect(row.providerStatus).toBe("bounced");
 
     const receipts = await prisma.notificationProviderReceipt.findMany({
@@ -312,14 +358,28 @@ describe("Resend's word on an e-mail it accepted", () => {
 
     const emailId = randomUUID();
 
-    await postResend(resendEvent("email.complained", { email_id: emailId, message_id: recorded }));
-    await postResend(resendEvent("email.delivered", { email_id: emailId, message_id: recorded }));
+    await postResend(
+      resendEvent("email.complained", {
+        email_id: emailId,
+        message_id: recorded,
+      }),
+    );
+    await postResend(
+      resendEvent("email.delivered", {
+        email_id: emailId,
+        message_id: recorded,
+      }),
+    );
 
-    const row = await prisma.notificationDelivery.findUniqueOrThrow({ where: { id } });
+    const row = await prisma.notificationDelivery.findUniqueOrThrow({
+      where: { id },
+    });
     expect(row.providerStatus).toBe("complained");
 
     const statuses = (
-      await prisma.notificationProviderReceipt.findMany({ where: { deliveryId: id } })
+      await prisma.notificationProviderReceipt.findMany({
+        where: { deliveryId: id },
+      })
     ).map((receipt) => receipt.status);
 
     expect(statuses.sort()).toEqual(["complained", "delivered"]);
@@ -336,7 +396,9 @@ describe("Resend's word on an e-mail it accepted", () => {
     expect((await postResend(body)).statusCode).toBe(200);
 
     expect(
-      await prisma.notificationProviderReceipt.count({ where: { deliveryId: id } }),
+      await prisma.notificationProviderReceipt.count({
+        where: { deliveryId: id },
+      }),
     ).toBe(1);
   });
 
@@ -360,7 +422,9 @@ describe("Resend's word on an e-mail it accepted", () => {
   });
 
   it("answers 200 to an event it does not track", async () => {
-    const response = await postResend(resendEvent("email.opened", { email_id: "re_x" }));
+    const response = await postResend(
+      resendEvent("email.opened", { email_id: "re_x" }),
+    );
 
     expect(response.statusCode).toBe(200);
   });

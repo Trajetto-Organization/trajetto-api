@@ -107,14 +107,20 @@ afterAll(async () => {
   await prisma.refreshToken.deleteMany({ where: { userId: ADMIN } });
   await prisma.user.deleteMany({ where: { id: ADMIN } });
 
-  await prisma.businessEntitlement.deleteMany({ where: { businessId: CARRIER } });
+  await prisma.businessEntitlement.deleteMany({
+    where: { businessId: CARRIER },
+  });
   await prisma.business.deleteMany({ where: { id: CARRIER } });
 
   await app?.close();
   await prisma.$disconnect();
 });
 
-function call(method: "GET" | "POST" | "DELETE" | "PATCH", url: string, body?: unknown) {
+function call(
+  method: "GET" | "POST" | "DELETE" | "PATCH",
+  url: string,
+  body?: unknown,
+) {
   return app.inject({
     method,
     url,
@@ -280,10 +286,9 @@ describe("issuing a key", () => {
       headers: { authorization: `Bearer ${token}` },
     });
 
-    expect(
-      response.statusCode,
-      "a chave revogada continuou funcionando",
-    ).toBe(401);
+    expect(response.statusCode, "a chave revogada continuou funcionando").toBe(
+      401,
+    );
 
     // And the refusal says nothing about WHY. A distinct answer for "revoked"
     // and "never existed" is, together, an oracle for which keys are real.
@@ -303,12 +308,16 @@ describe("pointing a webhook somewhere", () => {
   let endpointId = "";
 
   it("is written to the trail, with the address and the topics", async () => {
-    const response = await call("POST", `/integrations/webhook-endpoint/${CARRIER}`, {
-      name: "ERP da Auditoria",
-      url: "https://exemplo.com.br/webhooks/trajetto",
-      topics: ["delivery.created", "route.released"],
-      is_active: true,
-    });
+    const response = await call(
+      "POST",
+      `/integrations/webhook-endpoint/${CARRIER}`,
+      {
+        name: "ERP da Auditoria",
+        url: "https://exemplo.com.br/webhooks/trajetto",
+        topics: ["delivery.created", "route.released"],
+        is_active: true,
+      },
+    );
 
     expect(response.statusCode, response.body).toBe(201);
 

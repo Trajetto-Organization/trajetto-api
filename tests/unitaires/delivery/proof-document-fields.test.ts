@@ -19,7 +19,9 @@ import {
 const ISSUER = "31358035000120";
 
 function key(model: string, cnpj = ISSUER): string {
-  return `32${"2609"}${cnpj}${model}002000045515100045515`.padEnd(44, "0").slice(0, 44);
+  return `32${"2609"}${cnpj}${model}002000045515100045515`
+    .padEnd(44, "0")
+    .slice(0, 44);
 }
 
 describe("the document kind", () => {
@@ -30,27 +32,47 @@ describe("the document kind", () => {
   ])("reads model %s from the access key as %s", (model, kind) => {
     expect(key(model)).toHaveLength(44);
     expect(
-      documentKind({ invoice_key: key(model), invoice_number: "45515", code: "PED-1" }),
+      documentKind({
+        invoice_key: key(model),
+        invoice_number: "45515",
+        code: "PED-1",
+      }),
     ).toEqual({ kind, number: "45515" });
   });
 
   it("is a generic NF with a number and no readable key", () => {
-    expect(documentKind({ invoice_key: "123", invoice_number: "77", code: null })).toEqual({
+    expect(
+      documentKind({ invoice_key: "123", invoice_number: "77", code: null }),
+    ).toEqual({
       kind: "NF",
       number: "77",
     });
-    expect(documentKind({ invoice_key: key("99"), invoice_number: "77", code: null })).toEqual({
+    expect(
+      documentKind({
+        invoice_key: key("99"),
+        invoice_number: "77",
+        code: null,
+      }),
+    ).toEqual({
       kind: "NF",
       number: "77",
     });
   });
 
   it("is the order, numbered by its code, without key or number", () => {
-    expect(documentKind({ invoice_key: null, invoice_number: null, code: " PED-9 " })).toEqual({
+    expect(
+      documentKind({
+        invoice_key: null,
+        invoice_number: null,
+        code: " PED-9 ",
+      }),
+    ).toEqual({
       kind: "Pedido",
       number: "PED-9",
     });
-    expect(documentKind({ invoice_key: null, invoice_number: "  ", code: null })).toEqual({
+    expect(
+      documentKind({ invoice_key: null, invoice_number: "  ", code: null }),
+    ).toEqual({
       kind: "Pedido",
       number: null,
     });
@@ -61,7 +83,9 @@ describe("the issuer's CNPJ inside the access key", () => {
   it("is digits 7 to 20 when their check digits hold", () => {
     expect(issuerCnpjFromKey(key("55"))).toBe(ISSUER);
     // Masked keys (with spaces) are read by their digits.
-    expect(issuerCnpjFromKey(key("55").replace(/(\d{4})/g, "$1 "))).toBe(ISSUER);
+    expect(issuerCnpjFromKey(key("55").replace(/(\d{4})/g, "$1 "))).toBe(
+      ISSUER,
+    );
   });
 
   it("is never invented: wrong check digits, short keys and nothing give null", () => {
@@ -111,7 +135,9 @@ describe("the stamp under the photo", () => {
         kind: "NFe",
         number: "45515",
       }),
-    ).toBe("Trajetto - 30/09/2026 13:30:08  -20,3501, -40,3037  ROGÉRIO VIANA BEZERRA  NFe 45515");
+    ).toBe(
+      "Trajetto - 30/09/2026 13:30:08  -20,3501, -40,3037  ROGÉRIO VIANA BEZERRA  NFe 45515",
+    );
   });
 
   it("says the GPS was unavailable instead of printing zeros, and drops a missing driver", () => {

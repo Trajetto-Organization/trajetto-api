@@ -96,9 +96,7 @@ const profileAccessResponses = {
         ),
     })
     .and(codedError)
-    .describe(
-      "PROFILE_ACCESS_ALREADY_EXISTS (nome repetido na empresa).",
-    ),
+    .describe("PROFILE_ACCESS_ALREADY_EXISTS (nome repetido na empresa)."),
 
   profileAccessInUse: z
     .object({
@@ -114,22 +112,30 @@ const profileAccessResponses = {
         .optional()
         .describe("Usuários ainda ligados ao perfil."),
     })
-    .describe("O perfil está em uso: excluir deixaria essas pessoas sem acesso."),
+    .describe(
+      "O perfil está em uso: excluir deixaria essas pessoas sem acesso.",
+    ),
 
   listProfileAccessErrors: z
     .object({
       message: z
         .string()
-        .default("Empresa não identificada. Selecione uma empresa para continuar."),
+        .default(
+          "Empresa não identificada. Selecione uma empresa para continuar.",
+        ),
     })
     .and(codedError)
     .describe(
       "Ordenação inválida, ou MASTER sem `businessId` (code BUSINESS_NOT_IDENTIFIED).",
     ),
 
-  listProfileBusinessErrors: refusal("VALIDATION_ERROR (busca, cursor ou empresa inválidos)."),
+  listProfileBusinessErrors: refusal(
+    "VALIDATION_ERROR (busca, cursor ou empresa inválidos).",
+  ),
 
-  updateProfileAccessErrors: refusal("VALIDATION_ERROR (corpo ou id inválido)."),
+  updateProfileAccessErrors: refusal(
+    "VALIDATION_ERROR (corpo ou id inválido).",
+  ),
 
   deleteProfileAccessErrors: refusal("VALIDATION_ERROR (id inválido)."),
 

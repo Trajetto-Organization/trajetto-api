@@ -39,7 +39,9 @@ function decideVehiclePickerAccess(
 
   if ("refusal" in verdict) return { refusal: verdict.refusal };
 
-  return { access: verdict.granted.key === "vehicle_manage" ? "fleet" : "choice" };
+  return {
+    access: verdict.granted.key === "vehicle_manage" ? "fleet" : "choice",
+  };
 }
 
 /** The route guard, with what it decided left on the request for the controller. */
@@ -48,15 +50,18 @@ function verifyVehiclePickerAccess(
   _reply: FastifyReply,
   done: (err?: Error) => void,
 ): void {
-  const verdict = decideVehiclePickerAccess(request.user as PermissionPrincipal);
+  const verdict = decideVehiclePickerAccess(
+    request.user as PermissionPrincipal,
+  );
 
   if ("refusal" in verdict) {
     done(verdict.refusal);
     return;
   }
 
-  (request as FastifyRequest & { vehiclePickerAccess?: VehiclePickerAccess })
-    .vehiclePickerAccess = verdict.access;
+  (
+    request as FastifyRequest & { vehiclePickerAccess?: VehiclePickerAccess }
+  ).vehiclePickerAccess = verdict.access;
 
   done();
 }
@@ -75,9 +80,5 @@ function vehiclePickerAccessOf(request: FastifyRequest): VehiclePickerAccess {
   );
 }
 
-export {
-  decideVehiclePickerAccess,
-  vehiclePickerAccessOf,
-  vehiclePickerGuard,
-};
+export { decideVehiclePickerAccess, vehiclePickerAccessOf, vehiclePickerGuard };
 export type { VehiclePickerAccess };

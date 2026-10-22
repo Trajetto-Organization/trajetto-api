@@ -70,7 +70,7 @@ const branchListSearchMetaDoc = searchMetaDoc(
       .number()
       .int()
       .describe(
-        "Ativas, com a busca e o filtro de UF aplicados e sem o de situação (o cartão não zera ao escolher \"Inativa\").",
+        'Ativas, com a busca e o filtro de UF aplicados e sem o de situação (o cartão não zera ao escolher "Inativa").',
       ),
     withErpCode: z
       .number()
@@ -123,7 +123,9 @@ const branchResponses = {
   ),
   updateBranchErrors: codedError("VALIDATION_ERROR (com `issues`)."),
   toggleBranchErrors: codedError("VALIDATION_ERROR: parâmetro inválido."),
-  requestBranchDeletionErrors: codedError("VALIDATION_ERROR: parâmetro inválido."),
+  requestBranchDeletionErrors: codedError(
+    "VALIDATION_ERROR: parâmetro inválido.",
+  ),
   confirmBranchDeletionErrors: codedError(
     "VALIDATION_ERROR: código ausente ou fora do formato. BRANCH_DELETION_CODE_INVALID: o código não confere. BRANCH_DELETION_CODE_EXPIRED: passaram os 5 minutos; peça a exclusão de novo para receber outro código.",
   ),

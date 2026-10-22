@@ -37,7 +37,8 @@ const ROUTE_LOOKBACK_DAYS = 7;
  * this `LEAST(COALESCE(occurred_at, created_at), created_at)`.
  */
 function factInstant(occurredAt: Date | null, createdAt: Date): Date {
-  if (!occurredAt || occurredAt.getTime() > createdAt.getTime()) return createdAt;
+  if (!occurredAt || occurredAt.getTime() > createdAt.getTime())
+    return createdAt;
 
   return occurredAt;
 }
@@ -49,7 +50,10 @@ function factInstant(occurredAt: Date | null, createdAt: Date): Date {
  * Not `updated_at` alone: FAILED deliveries stay editable, and editing an old
  * failure counted it again as "insucesso de hoje" (DLV-MON-2).
  */
-function failureInstant(updatedAt: Date, facts: ReadonlyArray<Date | null>): Date {
+function failureInstant(
+  updatedAt: Date,
+  facts: ReadonlyArray<Date | null>,
+): Date {
   const known = facts.filter((fact): fact is Date => fact !== null);
 
   if (known.length === 0) return updatedAt;
@@ -73,7 +77,10 @@ function isFailureOccurrence(
   blocksDelivery: boolean | null | undefined,
   authorizationStatus: string | null | undefined,
 ): boolean {
-  return Boolean(blocksDelivery) && FAILURE_AUTHORIZATIONS.includes(authorizationStatus ?? "");
+  return (
+    Boolean(blocksDelivery) &&
+    FAILURE_AUTHORIZATIONS.includes(authorizationStatus ?? "")
+  );
 }
 
 /**
@@ -81,10 +88,15 @@ function isFailureOccurrence(
  * the way Postgres does. A later edit of the row never moves the outcome.
  */
 function stopSettledAt(completedAt: Date | null, updatedAt: Date): Date {
-  return completedAt && completedAt.getTime() < updatedAt.getTime() ? completedAt : updatedAt;
+  return completedAt && completedAt.getTime() < updatedAt.getTime()
+    ? completedAt
+    : updatedAt;
 }
 
-function isWithinDay(instant: Date | null | undefined, day: OperationDay): boolean {
+function isWithinDay(
+  instant: Date | null | undefined,
+  day: OperationDay,
+): boolean {
   if (!instant) return false;
 
   const time = instant.getTime();

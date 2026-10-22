@@ -194,7 +194,9 @@ class SupplierRepository implements ISupplierRepository {
       if (locked.length === 0) return null;
 
       // One connection inside the transaction: sequential, not Promise.all.
-      const serviceOrders = await tx.serviceOrder.count({ where: { supplierId } });
+      const serviceOrders = await tx.serviceOrder.count({
+        where: { supplierId },
+      });
       const parts = await tx.part.count({ where: { supplierId } });
       const accountsPayable = await tx.accountPayable.count({
         where: { supplierId },

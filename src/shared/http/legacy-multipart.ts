@@ -150,7 +150,10 @@ function parseMultipartFormData(
     const contentEnd = body.indexOf(nextDelimiter, contentStart);
     if (contentEnd === -1) throw malformed();
 
-    const headers = body.subarray(cursor, headersEnd).toString("utf8").split("\r\n");
+    const headers = body
+      .subarray(cursor, headersEnd)
+      .toString("utf8")
+      .split("\r\n");
     const disposition =
       headers.find((line) => /^content-disposition:/i.test(line)) ?? "";
 
@@ -187,13 +190,20 @@ function parseMultipartFormData(
 function sniffImage(
   bytes: Buffer,
 ): { contentType: string; extension: string } | null {
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
     return { contentType: "image/jpeg", extension: "jpg" };
   }
 
   if (
     bytes.length >= 8 &&
-    bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    bytes
+      .subarray(0, 8)
+      .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
   ) {
     return { contentType: "image/png", extension: "png" };
   }
@@ -232,7 +242,11 @@ interface LegacyMultipartOptions {
 
 const SHAPES: Record<
   LegacyShape,
-  { uploadType: "odometerPhotos" | "checklistPhotos"; maxFiles: number; maxPhotoBytes: number }
+  {
+    uploadType: "odometerPhotos" | "checklistPhotos";
+    maxFiles: number;
+    maxPhotoBytes: number;
+  }
 > = {
   // One odometer photo; the old controller read the first file part only.
   fuel: {
@@ -249,7 +263,10 @@ const SHAPES: Record<
   },
 };
 
-function recordDeprecatedContract(request: FastifyRequest, shape: LegacyShape): void {
+function recordDeprecatedContract(
+  request: FastifyRequest,
+  shape: LegacyShape,
+): void {
   // The same message the refusal on every other route logs, so one search
   // over the logs answers "is that build still out there?".
   request.log.warn(
@@ -330,7 +347,10 @@ function acceptLegacyMultipart(
     const { businessId } = request.params as { businessId: string };
     const fields = (request.body ?? {}) as Record<string, unknown>;
 
-    const replayKey = submissionKeyOf(fields, request.headers["idempotency-key"]);
+    const replayKey = submissionKeyOf(
+      fields,
+      request.headers["idempotency-key"],
+    );
 
     if (
       replayKey &&
@@ -358,7 +378,10 @@ function acceptLegacyMultipart(
       return { ...photo, ...image };
     });
 
-    const totalBytes = checked.reduce((total, photo) => total + photo.bytes.length, 0);
+    const totalBytes = checked.reduce(
+      (total, photo) => total + photo.bytes.length,
+      0,
+    );
 
     if (totalBytes > shape.maxPhotoBytes) {
       throw new AppError(

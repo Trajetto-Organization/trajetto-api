@@ -60,9 +60,7 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
         ? fuelType.description
         : field === "id"
           ? fuelType.id
-          : new Date(
-              fuelType[field as "created_at" | "updated_at"],
-            ).getTime();
+          : new Date(fuelType[field as "created_at" | "updated_at"]).getTime();
 
     const sorted = [...filtered].sort((a, b) => {
       for (const entry of orderBy) {
@@ -89,10 +87,15 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
       usage: filtered.map((fuelType) => ({
         id: fuelType.id,
         label: fuelType.description,
-        count: this.vehicleFuelTypeIds.filter((id) => id === fuelType.id).length,
+        count: this.vehicleFuelTypeIds.filter((id) => id === fuelType.id)
+          .length,
       })),
       refuelings: refuelWindow
-        ? this.refuelingsIn(businessId, new Set(filtered.map((row) => row.id)), refuelWindow)
+        ? this.refuelingsIn(
+            businessId,
+            new Set(filtered.map((row) => row.id)),
+            refuelWindow,
+          )
         : null,
     };
   }
@@ -234,7 +237,10 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
     typeIds: ReadonlySet<string>,
     window: { start: Date; end: Date },
   ) {
-    const byType = new Map<string, { refuelings: number; liters: number; amount: number }>();
+    const byType = new Map<
+      string,
+      { refuelings: number; liters: number; amount: number }
+    >();
 
     for (const row of this.fuelRows) {
       const date = row.refueling_date?.getTime();
@@ -249,7 +255,11 @@ class InMemoryFuelTypeRepository implements IFuelTypeRepository {
         continue;
       }
 
-      const entry = byType.get(row.fuelTypeId) ?? { refuelings: 0, liters: 0, amount: 0 };
+      const entry = byType.get(row.fuelTypeId) ?? {
+        refuelings: 0,
+        liters: 0,
+        amount: 0,
+      };
 
       entry.refuelings += 1;
       entry.liters += row.liters_amount ?? 0;

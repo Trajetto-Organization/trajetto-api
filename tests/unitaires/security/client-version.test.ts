@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import Fastify, { type FastifyRequest } from "fastify";
@@ -42,13 +39,21 @@ describe("parseClientVersion", () => {
   });
 
   it("ignores a contract that is not a plain number", () => {
-    expect(parseClientVersion("platform=ios; contract=-3")?.contract).toBeUndefined();
-    expect(parseClientVersion("platform=ios; contract=4e2")?.contract).toBeUndefined();
-    expect(parseClientVersion("platform=ios; contract=")?.contract).toBeUndefined();
+    expect(
+      parseClientVersion("platform=ios; contract=-3")?.contract,
+    ).toBeUndefined();
+    expect(
+      parseClientVersion("platform=ios; contract=4e2")?.contract,
+    ).toBeUndefined();
+    expect(
+      parseClientVersion("platform=ios; contract=")?.contract,
+    ).toBeUndefined();
   });
 
   it("refuses a header too long to be one", () => {
-    expect(parseClientVersion(`build=1; runtime=${"x".repeat(600)}`)).toBeNull();
+    expect(
+      parseClientVersion(`build=1; runtime=${"x".repeat(600)}`),
+    ).toBeNull();
   });
 });
 
@@ -94,7 +99,8 @@ describe("the request line", () => {
  * app falls back to the store page it can work out for itself.
  */
 describe("the upgrade gate's answer", () => {
-  const STORE = "https://play.google.com/store/apps/details?id=com.trajetto.fleetmanager";
+  const STORE =
+    "https://play.google.com/store/apps/details?id=com.trajetto.fleetmanager";
 
   async function refusal(storeUrl?: string) {
     const app = Fastify();
@@ -161,7 +167,8 @@ describe("MOBILE_STORE_URL", () => {
   });
 
   it("takes an https page", () => {
-    const url = "https://play.google.com/store/apps/details?id=com.trajetto.fleetmanager";
+    const url =
+      "https://play.google.com/store/apps/details?id=com.trajetto.fleetmanager";
 
     expect(parse(url).data?.MOBILE_STORE_URL).toBe(url);
   });
@@ -172,16 +179,5 @@ describe("MOBILE_STORE_URL", () => {
     expect(parse("http://play.google.com/store").success).toBe(false);
     expect(parse("javascript:alert(1)").success).toBe(false);
     expect(parse("play store").success).toBe(false);
-  });
-
-  it("reaches the API container from the production compose, empty by default", () => {
-    const compose = readFileSync(
-      resolve(process.cwd(), "compose.production.yaml"),
-      "utf8",
-    );
-
-    expect(compose).toMatch(
-      /\n\s+MOBILE_STORE_URL: \$\{MOBILE_STORE_URL:-\}\r?\n/,
-    );
   });
 });

@@ -59,7 +59,9 @@ async function seedBusiness(id: string): Promise<void> {
   });
 }
 
-async function seedUser(businessId: string): Promise<{ id: string; token: string }> {
+async function seedUser(
+  businessId: string,
+): Promise<{ id: string; token: string }> {
   const id = randomUUID();
   const familyId = randomUUID();
 
@@ -166,7 +168,9 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await prisma.import.deleteMany({ where: { businessId: { in: [CARRIER, OTHER] } } });
+  await prisma.import.deleteMany({
+    where: { businessId: { in: [CARRIER, OTHER] } },
+  });
   await app.close();
   await prisma.$disconnect();
 });

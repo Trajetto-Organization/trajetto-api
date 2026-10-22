@@ -72,11 +72,7 @@ interface IChatRepository {
   findMessageById: (messageId: string) => Promise<ChatMessage | null>;
 
   /** Advances (never rewinds) the requester's read cursor. */
-  markThreadRead: (
-    threadId: string,
-    userId: string,
-    at: Date,
-  ) => Promise<void>;
+  markThreadRead: (threadId: string, userId: string, at: Date) => Promise<void>;
 
   /** Advances (never rewinds) one side's delivery cursor. */
   markThreadDelivered: (

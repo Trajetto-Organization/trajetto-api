@@ -33,7 +33,10 @@ describe("fineStatus", () => {
   it("is PAID when a payment date is recorded, whatever the due date", () => {
     expect(
       fineStatus(
-        { payment_date: localMidnight("2026-09-01"), due_date: localMidnight("2026-08-01") },
+        {
+          payment_date: localMidnight("2026-09-01"),
+          due_date: localMidnight("2026-08-01"),
+        },
         TODAY_START,
       ),
     ).toBe("PAID");
@@ -41,13 +44,19 @@ describe("fineStatus", () => {
 
   it("is PENDING on the due day itself: it can still be paid today", () => {
     expect(
-      fineStatus({ payment_date: null, due_date: localMidnight("2026-09-28") }, TODAY_START),
+      fineStatus(
+        { payment_date: null, due_date: localMidnight("2026-09-28") },
+        TODAY_START,
+      ),
     ).toBe("PENDING");
   });
 
   it("is OVERDUE from the day after the due day", () => {
     expect(
-      fineStatus({ payment_date: null, due_date: localMidnight("2026-09-27") }, TODAY_START),
+      fineStatus(
+        { payment_date: null, due_date: localMidnight("2026-09-27") },
+        TODAY_START,
+      ),
     ).toBe("OVERDUE");
   });
 
@@ -76,14 +85,20 @@ describe("fineListWhere", () => {
   };
 
   it("keeps the tenant as a top-level key, outside any OR", () => {
-    const where = fineListWhere(filters, { withFacets: true, todayStart: TODAY_START });
+    const where = fineListWhere(filters, {
+      withFacets: true,
+      todayStart: TODAY_START,
+    });
 
     expect(where.businessId).toBe("business-a");
     expect(where.OR).toBeUndefined();
   });
 
   it("the base (for the counts) carries the search but no facet", () => {
-    const where = fineListWhere(filters, { withFacets: false, todayStart: TODAY_START });
+    const where = fineListWhere(filters, {
+      withFacets: false,
+      todayStart: TODAY_START,
+    });
 
     expect(where.AND).toHaveLength(1);
     expect(JSON.stringify(where)).not.toContain("branch-1");
@@ -139,10 +154,34 @@ describe("fineSearchWhere", () => {
 
 describe("summarizeFineList", () => {
   const groups: FineListGroup[] = [
-    { status: "PAID", branchId: "b1", trafficViolationCodeId: "c1", count: 4, amount: "400.00" },
-    { status: "PENDING", branchId: "b1", trafficViolationCodeId: "c2", count: 2, amount: "150.50" },
-    { status: "OVERDUE", branchId: "b2", trafficViolationCodeId: "c1", count: 3, amount: "90.25" },
-    { status: "OVERDUE", branchId: "b1", trafficViolationCodeId: "c1", count: 1, amount: "10.00" },
+    {
+      status: "PAID",
+      branchId: "b1",
+      trafficViolationCodeId: "c1",
+      count: 4,
+      amount: "400.00",
+    },
+    {
+      status: "PENDING",
+      branchId: "b1",
+      trafficViolationCodeId: "c2",
+      count: 2,
+      amount: "150.50",
+    },
+    {
+      status: "OVERDUE",
+      branchId: "b2",
+      trafficViolationCodeId: "c1",
+      count: 3,
+      amount: "90.25",
+    },
+    {
+      status: "OVERDUE",
+      branchId: "b1",
+      trafficViolationCodeId: "c1",
+      count: 1,
+      amount: "10.00",
+    },
   ];
 
   const labels = {

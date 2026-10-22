@@ -77,7 +77,9 @@ describe("reading the WhatsApp settings", () => {
   });
 
   it("refuses an unknown caller (404)", async () => {
-    await expect(read().execute(UNKNOWN)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(read().execute(UNKNOWN)).rejects.toMatchObject({
+      statusCode: 404,
+    });
   });
 });
 
@@ -89,7 +91,11 @@ describe("saving the WhatsApp settings", () => {
       phoneNumber: "11912345678",
     });
 
-    expect(result).toEqual({ enabled: true, phoneNumber: "11912345678", serviceConfigured: true });
+    expect(result).toEqual({
+      enabled: true,
+      phoneNumber: "11912345678",
+      serviceConfigured: true,
+    });
     expect(users.user[0]).toMatchObject({
       whatsapp_notifications_enabled: true,
       whatsapp_phone: "11912345678",
@@ -99,12 +105,19 @@ describe("saving the WhatsApp settings", () => {
   it("refuses enabling without a number (400)", async () => {
     await expect(
       save().execute({ userId: ANA, enabled: true }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "WHATSAPP_NUMBER_REQUIRED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "WHATSAPP_NUMBER_REQUIRED",
+    });
   });
 
   it("refuses a number another enabled account holds (409), and saves nothing", async () => {
     await expect(
-      save().execute({ userId: ANA, enabled: true, phoneNumber: "11999998888" }),
+      save().execute({
+        userId: ANA,
+        enabled: true,
+        phoneNumber: "11999998888",
+      }),
     ).rejects.toMatchObject({ statusCode: 409, code: "WHATSAPP_PHONE_TAKEN" });
 
     expect(users.user[0].whatsapp_notifications_enabled).toBe(false);
@@ -112,24 +125,40 @@ describe("saving the WhatsApp settings", () => {
 
   it("lets a number kept by a revoked account be used", async () => {
     await expect(
-      save().execute({ userId: ANA, enabled: true, phoneNumber: "11977776666" }),
+      save().execute({
+        userId: ANA,
+        enabled: true,
+        phoneNumber: "11977776666",
+      }),
     ).resolves.toMatchObject({ enabled: true });
   });
 
   it("lets the holder save their own number again", async () => {
     await expect(
-      save().execute({ userId: BRUNO, enabled: true, phoneNumber: "11999998888" }),
+      save().execute({
+        userId: BRUNO,
+        enabled: true,
+        phoneNumber: "11999998888",
+      }),
     ).resolves.toMatchObject({ enabled: true, phoneNumber: "11999998888" });
   });
 
   it("keeps the number on disable, and a kept number blocks nobody", async () => {
     const result = await save().execute({ userId: BRUNO, enabled: false });
 
-    expect(result).toEqual({ enabled: false, phoneNumber: "11999998888", serviceConfigured: true });
+    expect(result).toEqual({
+      enabled: false,
+      phoneNumber: "11999998888",
+      serviceConfigured: true,
+    });
     expect(users.user[1].whatsapp_phone).toBe("11999998888");
 
     await expect(
-      save().execute({ userId: ANA, enabled: true, phoneNumber: "11999998888" }),
+      save().execute({
+        userId: ANA,
+        enabled: true,
+        phoneNumber: "11999998888",
+      }),
     ).resolves.toMatchObject({ enabled: true });
   });
 

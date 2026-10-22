@@ -110,7 +110,10 @@ function cursorPage<T extends { id: string }>(
 function publicEventTopic(event: {
   type: string;
   status_to: string | null;
-  occurrence?: { authorization_status: string | null; category?: string | null } | null;
+  occurrence?: {
+    authorization_status: string | null;
+    category?: string | null;
+  } | null;
 }): string | null {
   switch (event.type) {
     case "PROOF":

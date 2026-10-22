@@ -65,7 +65,9 @@ async function createBusiness(id: string) {
 }
 
 async function seedCompany(businessId: string) {
-  const shipper = await prisma.shipper.create({ data: { name: "Embarcador", businessId } });
+  const shipper = await prisma.shipper.create({
+    data: { name: "Embarcador", businessId },
+  });
 
   const user = await prisma.user.create({
     data: {
@@ -97,23 +99,51 @@ async function seedCompany(businessId: string) {
   });
   ids.driver[businessId] = driver.id;
 
-  const thread = await prisma.chatThread.create({ data: { businessId, driverId: driver.id } });
+  const thread = await prisma.chatThread.create({
+    data: { businessId, driverId: driver.id },
+  });
   ids.thread[businessId] = thread.id;
 
   const types: Record<string, string> = {};
 
-  for (const name of ["Avaria na carga", "Cliente ausente", "Endereço não localizado"]) {
+  for (const name of [
+    "Avaria na carga",
+    "Cliente ausente",
+    "Endereço não localizado",
+  ]) {
     types[name] = (
-      await prisma.occurrenceType.create({ data: { name, businessId, category: "NOT_DELIVERED" } })
+      await prisma.occurrenceType.create({
+        data: { name, businessId, category: "NOT_DELIVERED" },
+      })
     ).id;
   }
   ids.type[businessId] = types;
 
-  const crafted: Record<string, { recipient_name: string; city: string; code?: string; type: string }> = {
-    maria: { recipient_name: "Maria Aparecida", city: "Campinas", code: "PED-777", type: "Avaria na carga" },
-    percent: { recipient_name: "Desconto 50% Ltda", city: "Santos", type: "Endereço não localizado" },
-    underscore: { recipient_name: "Loja_Um", city: "Sorocaba", type: "Endereço não localizado" },
-    accent: { recipient_name: "José Ávila", city: "Jundiaí", type: "Endereço não localizado" },
+  const crafted: Record<
+    string,
+    { recipient_name: string; city: string; code?: string; type: string }
+  > = {
+    maria: {
+      recipient_name: "Maria Aparecida",
+      city: "Campinas",
+      code: "PED-777",
+      type: "Avaria na carga",
+    },
+    percent: {
+      recipient_name: "Desconto 50% Ltda",
+      city: "Santos",
+      type: "Endereço não localizado",
+    },
+    underscore: {
+      recipient_name: "Loja_Um",
+      city: "Sorocaba",
+      type: "Endereço não localizado",
+    },
+    accent: {
+      recipient_name: "José Ávila",
+      city: "Jundiaí",
+      type: "Endereço não localizado",
+    },
   };
 
   const deliveries: Record<string, string> = {};
@@ -179,7 +209,10 @@ async function seedCompany(businessId: string) {
     data: bulkIds.map((deliveryId, index) => ({
       deliveryId,
       businessId,
-      occurrenceTypeId: index % 2 === 0 ? types["Cliente ausente"] : types["Endereço não localizado"],
+      occurrenceTypeId:
+        index % 2 === 0
+          ? types["Cliente ausente"]
+          : types["Endereço não localizado"],
       reportedById: user.id,
     })),
   });
@@ -225,8 +258,14 @@ const TERMS: Array<[string, () => string]> = [
   ["an accent", () => "José Á"],
   ["a code (indexed text, not a searched column)", () => "PED-777"],
   ["a city (indexed text, not a searched column)", () => "Campinas"],
-  ["a piece of an occurrence id", () => ids.occurrence[CARRIER].maria.slice(9, 23)],
-  ["a piece of a delivery id", () => ids.delivery[CARRIER].percent.slice(14, 30)],
+  [
+    "a piece of an occurrence id",
+    () => ids.occurrence[CARRIER].maria.slice(9, 23),
+  ],
+  [
+    "a piece of a delivery id",
+    () => ids.delivery[CARRIER].percent.slice(14, 30),
+  ],
   ["a short term", () => "Ma"],
   ["a common recipient (past the cap)", () => "Cliente"],
   ["nothing", () => "Zzyzx"],
@@ -235,23 +274,31 @@ const TERMS: Array<[string, () => string]> = [
 async function occurrencesListed(search: string) {
   sent.length = 0;
 
-  const result = await new DeliveryRepository(capture as never).listOccurrences({
-    businessId: CARRIER,
-    search,
-    page: 1,
-    pageSize: VOLUME * 3,
-  } as never);
+  const result = await new DeliveryRepository(capture as never).listOccurrences(
+    {
+      businessId: CARRIER,
+      search,
+      page: 1,
+      pageSize: VOLUME * 3,
+    } as never,
+  );
 
   return {
     ids: (result.data as Array<{ id: string }>).map((row) => row.id).sort(),
-    total: result.typeCounts.reduce((sum: number, type: { count: number }) => sum + type.count, 0),
+    total: result.typeCounts.reduce(
+      (sum: number, type: { count: number }) => sum + type.count,
+      0,
+    ),
     statements: [...sent],
   };
 }
 
 async function occurrencesByJoinedSearch(search: string): Promise<string[]> {
   const rows = await prisma.deliveryOccurrence.findMany({
-    where: occurrenceFeedWhere({ businessId: CARRIER, search }, { withTypeFacets: true }),
+    where: occurrenceFeedWhere(
+      { businessId: CARRIER, search },
+      { withTypeFacets: true },
+    ),
     select: { id: true },
   });
 
@@ -271,7 +318,9 @@ const ticketProps = (search: string) => ({
 async function ticketsListed(search: string) {
   sent.length = 0;
 
-  const result = await new SupportTicketRepository(capture as never).list(ticketProps(search) as never);
+  const result = await new SupportTicketRepository(capture as never).list(
+    ticketProps(search) as never,
+  );
 
   return {
     ids: result.data.map((row) => row.id).sort(),
@@ -282,7 +331,9 @@ async function ticketsListed(search: string) {
 
 async function ticketsByJoinedSearch(search: string): Promise<string[]> {
   // The repository's own where with no resolved matches: the joined search.
-  const repository = new SupportTicketRepository(prisma as never) as unknown as {
+  const repository = new SupportTicketRepository(
+    prisma as never,
+  ) as unknown as {
     listWhere(props: unknown, matches: null): object;
   };
 
@@ -312,7 +363,9 @@ describe("the occurrence feed's search finds what the joined ILIKE search found"
     expect((await occurrencesListed("50%")).ids).toEqual([mine.percent]);
     expect((await occurrencesListed("Campinas")).ids).toEqual([]);
     expect((await occurrencesListed("PED-777")).ids).toEqual([]);
-    expect((await occurrencesListed(ids.occurrence[OTHER].maria)).ids).toEqual([]);
+    expect((await occurrencesListed(ids.occurrence[OTHER].maria)).ids).toEqual(
+      [],
+    );
   });
 });
 
@@ -352,14 +405,20 @@ describe("with a selective term", () => {
     expect(feed.length).toBeGreaterThanOrEqual(2);
 
     for (const statement of feed) {
-      expect(statement.query, statement.query.slice(0, 200)).not.toMatch(/recipient_name/);
-      expect(statement.query, statement.query.slice(0, 200)).not.toMatch(/"occurrence_type"\."name"/);
+      expect(statement.query, statement.query.slice(0, 200)).not.toMatch(
+        /recipient_name/,
+      );
+      expect(statement.query, statement.query.slice(0, 200)).not.toMatch(
+        /"occurrence_type"\."name"/,
+      );
     }
 
     // The recipient came from the trigram read, rechecked on the column.
     expect(
       result.statements.some(
-        (statement) => /chr\(31\)/.test(statement.query) && /"recipient_name" ILIKE/.test(statement.query),
+        (statement) =>
+          /chr\(31\)/.test(statement.query) &&
+          /"recipient_name" ILIKE/.test(statement.query),
       ),
     ).toBe(true);
   });
@@ -372,8 +431,12 @@ describe("with a selective term", () => {
     expect(inbox.length).toBeGreaterThanOrEqual(2);
 
     for (const statement of inbox) {
-      expect(statement.query, statement.query.slice(0, 200)).not.toMatch(/recipient_name/);
-      expect(statement.query, statement.query.slice(0, 200)).not.toMatch(/"driver"\."name"/);
+      expect(statement.query, statement.query.slice(0, 200)).not.toMatch(
+        /recipient_name/,
+      );
+      expect(statement.query, statement.query.slice(0, 200)).not.toMatch(
+        /"driver"\."name"/,
+      );
     }
   });
 
@@ -381,8 +444,10 @@ describe("with a selective term", () => {
     const result = await occurrencesListed("Cliente");
 
     expect(result.total).toBeGreaterThan(SEARCH_PREFILTER_CAP);
-    expect(result.statements.filter(onTable("delivery_occurrence")).some((s) => /recipient_name/.test(s.query))).toBe(
-      true,
-    );
+    expect(
+      result.statements
+        .filter(onTable("delivery_occurrence"))
+        .some((s) => /recipient_name/.test(s.query)),
+    ).toBe(true);
   });
 });

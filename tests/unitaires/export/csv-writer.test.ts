@@ -21,7 +21,10 @@ import {
  */
 describe("formula injection", () => {
   it.each([
-    ['=HYPERLINK("https://evil","Clique")', `'=HYPERLINK("https://evil","Clique")`],
+    [
+      '=HYPERLINK("https://evil","Clique")',
+      `'=HYPERLINK("https://evil","Clique")`,
+    ],
     ["@SUM(A1:A9)", "'@SUM(A1:A9)"],
     ["+cmd|' /C calc'!A0", "'+cmd|' /C calc'!A0"],
     ["\t=1+1", "'\t=1+1"],

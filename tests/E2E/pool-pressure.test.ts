@@ -44,7 +44,9 @@ afterAll(async () => {
 });
 
 /** Occupies every connection of `client` for HOLD_SECONDS. */
-async function holdTheWholePool(client: PrismaClient): Promise<Promise<unknown>[]> {
+async function holdTheWholePool(
+  client: PrismaClient,
+): Promise<Promise<unknown>[]> {
   // Opened first, so the sleeps below are the ones holding the connections
   // and not a connect still in progress.
   await Promise.all(
@@ -82,8 +84,8 @@ describe("a transaction on a busy pool", () => {
   it("waits for a connection instead of failing at two seconds", async () => {
     const held = await holdTheWholePool(database);
 
-    const result = await database.$transaction(async (tx) =>
-      tx.$queryRaw<{ ok: number }[]>`SELECT 1 AS ok`,
+    const result = await database.$transaction(
+      async (tx) => tx.$queryRaw<{ ok: number }[]>`SELECT 1 AS ok`,
     );
 
     expect(result[0].ok).toBe(1);
@@ -98,7 +100,9 @@ describe("a transaction on a busy pool", () => {
      * test says so, and the one above stops proving anything.
      */
     const url = new URL(process.env.DATABASE_URL as string);
-    const bare = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+    const bare = new PrismaClient({
+      datasources: { db: { url: url.toString() } },
+    });
 
     try {
       const held = await holdTheWholePool(bare);

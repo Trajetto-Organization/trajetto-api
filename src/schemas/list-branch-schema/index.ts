@@ -19,7 +19,10 @@ const listBranchSchema = listPagesSchema.extend({
       "Só o MASTER envia (e precisa enviar): escolhe a empresa. Ausente, a empresa do usuário autenticado é usada.",
     ),
   ...sortFields(BRANCH_SORT_KEYS, BRANCH_SORT_FALLBACK),
-  status: facetField(BRANCH_STATUSES, "Situação da filial (active = ativa, inactive = inativa)."),
+  status: facetField(
+    BRANCH_STATUSES,
+    "Situação da filial (active = ativa, inactive = inativa).",
+  ),
   uf: facetField(BRAZILIAN_UFS, "Estado (UF) do endereço da filial."),
 });
 

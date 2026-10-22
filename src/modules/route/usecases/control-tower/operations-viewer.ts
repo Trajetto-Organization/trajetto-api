@@ -48,6 +48,11 @@ async function resolveOperationsBusiness(
 }
 
 const TOWER_DRIVER_REFUSAL = "A torre de controle é superfície do gestor.";
-const PANEL_DRIVER_REFUSAL = "Painéis de monitoramento são superfície do gestor.";
+const PANEL_DRIVER_REFUSAL =
+  "Painéis de monitoramento são superfície do gestor.";
 
-export { PANEL_DRIVER_REFUSAL, TOWER_DRIVER_REFUSAL, resolveOperationsBusiness };
+export {
+  PANEL_DRIVER_REFUSAL,
+  TOWER_DRIVER_REFUSAL,
+  resolveOperationsBusiness,
+};

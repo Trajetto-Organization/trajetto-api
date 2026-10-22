@@ -1,28 +1,33 @@
 #!/usr/bin/env node
 /**
- * Deploys a Dokploy compose app (Stack mode) and waits for the outcome.
+ * Deploys one Dokploy Application (provider Docker, image from GHCR) and
+ * waits for the outcome.
  *
- * Used by trajetto-api only: the API is a Dokploy compose app (Docker Stack)
- * with several services, while the web deploys as a Dokploy Application
- * through its own webhook script (trajetto-ui/.github/scripts/).
+ * Every service runs as its own Dokploy Application pointed at a GHCR tag
+ * (`:staging` or `:stable`): the API, the AI OCR service and the backup.
+ * Dokploy runs each one as a Swarm service behind its Traefik, which is why
+ * the stack is not a Compose app (docs/deploy.md). deploy.yml calls this
+ * script once per Application: AI first, then the API, then the backup.
  *
- * What `done` means: Dokploy ran `docker stack deploy` and the manager
- * ACCEPTED the new service specs. Dokploy runs it detached, so the rollout
- * itself happens after this script returns, and an image that fails its
- * healthcheck is rolled back by Swarm with the old one still serving. A green
- * run of this script is therefore NOT a converged stack: deploy.yml follows
- * it with the convergence check (infra/scripts/verify-rollout.sh over SSH).
+ * What `done` means: Dokploy pulled the Application's tag again and updated
+ * the Swarm service, and the manager ACCEPTED the new spec. The rollout
+ * itself happens after that, and an image that fails its healthcheck is
+ * rolled back by Swarm with the old one still serving. A green run of this
+ * script is therefore NOT a converged service: deploy.yml follows the API
+ * deploy with the convergence check (infra/scripts/verify-rollout.sh over SSH).
  *
- * What it does catch, unlike the Portainer webhook it replaces (a 204 the
- * moment the redeploy was queued): a deploy Dokploy could not run at all — a
- * compose that does not render, a required variable missing, a registry it
- * cannot reach, a wrong key or app id. It follows the deployment Dokploy
+ * What it does catch, unlike a bare webhook (a 2xx the moment the redeploy
+ * was queued): a deploy Dokploy could not run at all — an image it cannot
+ * pull, a wrong key or application id. It follows the deployment Dokploy
  * created for THIS call and fails when that one fails.
  *
  * Environment:
  *   DOKPLOY_URL              https base URL of the Dokploy panel
  *   DOKPLOY_API_KEY          API key (Dokploy > Settings > Profile > API/CLI)
- *   DOKPLOY_COMPOSE_ID       the compose app (production or staging) to deploy
+ *   DOKPLOY_APPLICATION_ID   the Application to deploy (from its URL in the panel)
+ *   DOKPLOY_APP_LABEL        the service's name in messages (default "a Application")
+ *   DOKPLOY_OPTIONAL         `true`: no application id is a notice, not an error
+ *                            (the AI and backup Applications may not exist yet)
  *   DOKPLOY_WAIT             `false` only triggers, without following (default true)
  *   DOKPLOY_TIMEOUT_SECONDS  how long to follow the deployment (default 900)
  *   DOKPLOY_POLL_SECONDS     interval between checks (default 10)
@@ -40,7 +45,8 @@ function fail(message) {
 
 function summary(line) {
   console.log(line);
-  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n`);
+  if (env.GITHUB_STEP_SUMMARY)
+    appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n`);
 }
 
 function baseUrl(raw) {
@@ -63,18 +69,36 @@ function baseUrl(raw) {
   return url.origin + url.pathname.replace(/\/+$/, "");
 }
 
-const missing = ["DOKPLOY_URL", "DOKPLOY_API_KEY", "DOKPLOY_COMPOSE_ID"].filter(
-  (name) => !env[name],
-);
+const LABEL = env.DOKPLOY_APP_LABEL || "a Application";
 
-if (missing.length > 0) fail(`Defina ${missing.join(", ")} no environment do GitHub.`);
+// An optional Application not created yet: say so and leave the run green.
+if (!env.DOKPLOY_APPLICATION_ID && env.DOKPLOY_OPTIONAL === "true") {
+  summary(
+    `Dokploy: deploy de ${LABEL} pulado (o id da Application não está no environment).`,
+  );
+  console.log(
+    `::notice::Deploy de ${LABEL} pulado: o id da Application não está definido no environment do GitHub (docs/deploy.md).`,
+  );
+  process.exit(0);
+}
 
-if (!/^[A-Za-z0-9_-]{1,64}$/.test(env.DOKPLOY_COMPOSE_ID)) {
-  fail("DOKPLOY_COMPOSE_ID tem formato inesperado (copie o id da URL do app no Dokploy).");
+const missing = [
+  "DOKPLOY_URL",
+  "DOKPLOY_API_KEY",
+  "DOKPLOY_APPLICATION_ID",
+].filter((name) => !env[name]);
+
+if (missing.length > 0)
+  fail(`Defina ${missing.join(", ")} no environment do GitHub.`);
+
+if (!/^[A-Za-z0-9_-]{1,64}$/.test(env.DOKPLOY_APPLICATION_ID)) {
+  fail(
+    "DOKPLOY_APPLICATION_ID tem formato inesperado (copie o id da URL da Application no Dokploy).",
+  );
 }
 
 const BASE = baseUrl(env.DOKPLOY_URL);
-const COMPOSE_ID = env.DOKPLOY_COMPOSE_ID;
+const APPLICATION_ID = env.DOKPLOY_APPLICATION_ID;
 const WAIT = env.DOKPLOY_WAIT !== "false";
 const TIMEOUT_MS = Number(env.DOKPLOY_TIMEOUT_SECONDS || 900) * 1000;
 const POLL_MS = Number(env.DOKPLOY_POLL_SECONDS || 10) * 1000;
@@ -121,11 +145,11 @@ async function call(method, path, body) {
 async function deployments() {
   const list = await call(
     "GET",
-    `/api/deployment.allByCompose?composeId=${encodeURIComponent(COMPOSE_ID)}`,
+    `/api/deployment.all?applicationId=${encodeURIComponent(APPLICATION_ID)}`,
   );
 
   if (!Array.isArray(list)) {
-    throw new Error("resposta inesperada de deployment.allByCompose (não é uma lista)");
+    throw new Error("resposta inesperada de deployment.all (não é uma lista)");
   }
 
   return list;
@@ -141,14 +165,18 @@ async function main() {
     try {
       before = new Set((await deployments()).map((item) => item.deploymentId));
     } catch (error) {
-      fail(`Não foi possível ler os deployments do app no Dokploy: ${error.message}`);
+      fail(
+        `Não foi possível ler os deployments de ${LABEL} no Dokploy: ${error.message}`,
+      );
     }
   }
 
   try {
-    await call("POST", "/api/compose.deploy", { composeId: COMPOSE_ID });
+    await call("POST", "/api/application.deploy", {
+      applicationId: APPLICATION_ID,
+    });
   } catch (error) {
-    fail(`O Dokploy recusou o deploy: ${error.message}`);
+    fail(`O Dokploy recusou o deploy de ${LABEL}: ${error.message}`);
   }
 
   if (!WAIT) {
@@ -169,7 +197,9 @@ async function main() {
     try {
       list = await deployments();
     } catch (error) {
-      console.log(`::warning::Falha ao consultar o Dokploy (${error.message}); tentando de novo.`);
+      console.log(
+        `::warning::Falha ao consultar o Dokploy (${error.message}); tentando de novo.`,
+      );
       continue;
     }
 
@@ -179,14 +209,14 @@ async function main() {
 
     if (current.status === "done") {
       summary(
-        `Dokploy: deployment ${current.deploymentId} concluído (specs aceitas pelo Swarm; a convergência é conferida no passo seguinte).`,
+        `Dokploy: deployment ${current.deploymentId} de ${LABEL} concluído (spec aceita pelo Swarm; a convergência da API é conferida depois).`,
       );
       return;
     }
 
     if (current.status === "error" || current.status === "cancelled") {
       fail(
-        `O deployment ${current.deploymentId} terminou em '${current.status}' no Dokploy. O log está no painel, em Deployments do app.`,
+        `O deployment ${current.deploymentId} de ${LABEL} terminou em '${current.status}' no Dokploy. O log está no painel, em Deployments da Application.`,
       );
     }
   }

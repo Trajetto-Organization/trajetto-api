@@ -48,13 +48,19 @@ class EscalateOccurrenceAuthorizationsUseCase {
     private occurrenceTickets?: OccurrenceTicketService,
   ) {}
 
-  async execute({ now = new Date() }: EscalateRequest = {}): Promise<EscalationClaim[]> {
+  async execute({ now = new Date() }: EscalateRequest = {}): Promise<
+    EscalationClaim[]
+  > {
     const cutoff = new Date(now.getTime() - ESCALATION_AFTER_MS);
 
     const changedTickets: Array<{ ticketId: string; businessId: string }> = [];
 
     const closed = await database.$transaction(async (tx) => {
-      const rows = await this.authorizations.supersedeStale(ESCALATION_BATCH, now, tx);
+      const rows = await this.authorizations.supersedeStale(
+        ESCALATION_BATCH,
+        now,
+        tx,
+      );
 
       // The trail says the attempt ended, in the same commit; the ticket
       // stays OPEN for a person to close.
@@ -64,7 +70,11 @@ class EscalateOccurrenceAuthorizationsUseCase {
           tx,
         );
 
-        if (ticket) changedTickets.push({ ticketId: ticket.id, businessId: row.businessId });
+        if (ticket)
+          changedTickets.push({
+            ticketId: ticket.id,
+            businessId: row.businessId,
+          });
       }
 
       return rows;

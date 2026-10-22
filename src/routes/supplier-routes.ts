@@ -17,7 +17,11 @@ import {
   supplierResponses,
   supplierSchemas,
 } from "./documentation/supplier-documentation";
-import { ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
 
 const createSupplierController = new CreateSupplierController();
 const deleteSupplierController = new DeleteSupplierController();

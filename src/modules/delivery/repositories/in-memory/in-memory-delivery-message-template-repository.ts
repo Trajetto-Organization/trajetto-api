@@ -16,7 +16,13 @@ const TOPIC_ORDER: readonly DeliveryMessageTopic[] = [
 ];
 
 /** enum NotificationChannel, in declaration order. */
-const CHANNEL_ORDER = ["IN_APP", "EMAIL", "WHATSAPP", "ACTIVITY", "PUSH"] as const;
+const CHANNEL_ORDER = [
+  "IN_APP",
+  "EMAIL",
+  "WHATSAPP",
+  "ACTIVITY",
+  "PUSH",
+] as const;
 
 class InMemoryDeliveryMessageTemplateRepository
   implements IDeliveryMessageTemplateRepository

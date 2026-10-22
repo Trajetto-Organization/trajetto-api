@@ -178,10 +178,16 @@ const checklistUrl = () =>
 
 /** Every object this business has under one upload type, on local storage. */
 async function storedObjects(uploadType: string): Promise<string[]> {
-  const directory = path.join(uploadConfig.storage.localPath, uploadType, BUSINESS);
+  const directory = path.join(
+    uploadConfig.storage.localPath,
+    uploadType,
+    BUSINESS,
+  );
 
   try {
-    return (await fs.readdir(directory)).map((name) => `${uploadType}/${BUSINESS}/${name}`);
+    return (await fs.readdir(directory)).map(
+      (name) => `${uploadType}/${BUSINESS}/${name}`,
+    );
   } catch {
     return [];
   }
@@ -206,10 +212,13 @@ beforeAll(async () => {
 
 afterAll(async () => {
   for (const uploadType of ["odometerPhotos", "checklistPhotos"]) {
-    await fs.rm(path.join(uploadConfig.storage.localPath, uploadType, BUSINESS), {
-      recursive: true,
-      force: true,
-    });
+    await fs.rm(
+      path.join(uploadConfig.storage.localPath, uploadType, BUSINESS),
+      {
+        recursive: true,
+        force: true,
+      },
+    );
   }
 
   await app?.close();
@@ -220,7 +229,11 @@ describe("a fueling posted as multipart by the app build in drivers' hands", () 
   it("is recorded, with the photo in storage where the presigned flow puts it", async () => {
     const key = randomUUID();
 
-    const response = await postMultipart(fuelUrl(), legacyFuel(1_100, key), key);
+    const response = await postMultipart(
+      fuelUrl(),
+      legacyFuel(1_100, key),
+      key,
+    );
 
     expect(response.statusCode, response.body).toBe(201);
 
@@ -233,7 +246,9 @@ describe("a fueling posted as multipart by the app build in drivers' hands", () 
     expect(fuel.odometer_photo).toMatch(
       new RegExp(`^odometerPhotos/${BUSINESS}/.+\\.jpg$`),
     );
-    expect(await storedObjects("odometerPhotos")).toContain(fuel.odometer_photo);
+    expect(await storedObjects("odometerPhotos")).toContain(
+      fuel.odometer_photo,
+    );
     expect(await vehicleMileage()).toBe(1_100);
   });
 
@@ -246,7 +261,11 @@ describe("a fueling posted as multipart by the app build in drivers' hands", () 
 
     const before = await storedObjects("odometerPhotos");
 
-    const resend = await postMultipart(fuelUrl(), legacyFuel(mileage, key), key);
+    const resend = await postMultipart(
+      fuelUrl(),
+      legacyFuel(mileage, key),
+      key,
+    );
 
     expect(resend.statusCode, resend.body).toBe(201);
     expect(resend.json().id).toBe(first.json().id);
@@ -280,7 +299,9 @@ describe("a fueling posted as multipart by the app build in drivers' hands", () 
 
     const response = await postMultipart(
       fuelUrl(),
-      legacyFuel((await vehicleMileage()) + 100, key, { branchId: inactive.id }),
+      legacyFuel((await vehicleMileage()) + 100, key, {
+        branchId: inactive.id,
+      }),
       key,
     );
 
@@ -420,7 +441,8 @@ describe("the warn line that says the adapter is still in use", () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>)
       .filter(
         (line) =>
-          line.msg === "Deprecated contract: multipart upload from an outdated client",
+          line.msg ===
+          "Deprecated contract: multipart upload from an outdated client",
       );
 
     expect(deprecated).toHaveLength(1);

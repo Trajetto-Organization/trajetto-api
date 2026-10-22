@@ -62,8 +62,10 @@ describe("the scopes a key can be issued with", () => {
     expect(required.has("deliveries:write")).toBe(true);
 
     expect(
-      createApiKeySchema.safeParse({ name: "ERP", scopes: ["deliveries:write"] })
-        .success,
+      createApiKeySchema.safeParse({
+        name: "ERP",
+        scopes: ["deliveries:write"],
+      }).success,
     ).toBe(true);
   });
 
@@ -88,7 +90,10 @@ describe("the scopes a key can be issued with", () => {
     const migrations = resolve(process.cwd(), "prisma/migrations");
 
     const sql = readFileSync(
-      resolve(migrations, "20260924120900_api_key_drop_reserved_scopes/migration.sql"),
+      resolve(
+        migrations,
+        "20260924120900_api_key_drop_reserved_scopes/migration.sql",
+      ),
       "utf8",
     );
 

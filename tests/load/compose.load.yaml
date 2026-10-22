@@ -127,10 +127,10 @@ services:
     # rate limit and a socket event crossing replicas (multi-replica.sh).
     ports:
       - "127.0.0.1:3341-3350:3333"
-    # The production labels (compose.production.yaml), minus TLS and Host():
-    # same port, same readiness check, so an unready replica leaves rotation
-    # here exactly as it does there. compose-load-harness.test.ts keeps them
-    # in step.
+    # Port 3333 and the readiness check per replica, so an unready replica
+    # leaves rotation. Production runs as a Dokploy Application behind
+    # Dokploy's Traefik (docs/deploy.md says what its routing does and does
+    # not do per replica); compose-load-harness.test.ts pins these labels.
     labels:
       - traefik.enable=true
       - traefik.http.routers.load-api.rule=PathPrefix(`/`)

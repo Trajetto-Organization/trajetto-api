@@ -129,7 +129,10 @@ class ListProofAuditsUseCase {
         // the verdict once stored, else compared here from the reading.
         deviceAgreement:
           card.device_agreement ??
-          proofDeviceAgreement(card.device_precheck, card.ai_suggestion?.reading),
+          proofDeviceAgreement(
+            card.device_precheck,
+            card.ai_suggestion?.reading,
+          ),
 
         // Signed here rather than in the repository: the signing service is
         // an I/O concern and the repository's job is the rows.

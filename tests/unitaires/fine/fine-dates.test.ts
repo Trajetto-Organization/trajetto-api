@@ -143,15 +143,17 @@ describe("fineDateFromInput", () => {
   });
 
   it("keeps an instant from an older client as it is", () => {
-    expect(fineDateFromInput("2026-09-28T03:00:00.000Z", MANAUS).toISOString()).toBe(
-      "2026-09-28T03:00:00.000Z",
-    );
+    expect(
+      fineDateFromInput("2026-09-28T03:00:00.000Z", MANAUS).toISOString(),
+    ).toBe("2026-09-28T03:00:00.000Z");
   });
 
   it("reads back as the same day, in the rules and in the row", () => {
     const stored = fineDateFromInput("2026-09-28", MANAUS);
 
-    expect(fineDays({ violation_date: stored, due_date: stored }, MANAUS)).toEqual({
+    expect(
+      fineDays({ violation_date: stored, due_date: stored }, MANAUS),
+    ).toEqual({
       violation_day: "2026-09-28",
       due_day: "2026-09-28",
       payment_day: null,

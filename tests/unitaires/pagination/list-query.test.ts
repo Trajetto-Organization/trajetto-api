@@ -31,7 +31,9 @@ const ID_B = "018f0000-0000-7000-8000-00000000000b";
 function messages(input: Record<string, unknown>): string[] {
   const result = schema.safeParse(input);
 
-  return result.success ? [] : result.error.issues.map((issue) => issue.message);
+  return result.success
+    ? []
+    : result.error.issues.map((issue) => issue.message);
 }
 
 describe("sort fields", () => {
@@ -89,7 +91,10 @@ describe("facet fields", () => {
   });
 
   it("accepts ids and refuses anything that is not one", () => {
-    expect(schema.parse({ typeId: `${ID_A},${ID_B}` }).typeId).toEqual([ID_A, ID_B]);
+    expect(schema.parse({ typeId: `${ID_A},${ID_B}` }).typeId).toEqual([
+      ID_A,
+      ID_B,
+    ]);
     expect(messages({ typeId: `${ID_A},1 OR 1=1` })).toEqual([
       "Filtro com identificador inválido.",
     ]);
@@ -98,7 +103,8 @@ describe("facet fields", () => {
   it("caps how many values one facet carries", () => {
     const tooMany = Array.from(
       { length: MAX_FACET_VALUES + 1 },
-      (_, index) => `018f0000-0000-7000-8000-${String(index).padStart(12, "0")}`,
+      (_, index) =>
+        `018f0000-0000-7000-8000-${String(index).padStart(12, "0")}`,
     );
 
     expect(messages({ typeId: tooMany.join(",") })).toEqual([

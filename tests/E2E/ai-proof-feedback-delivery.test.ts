@@ -1,6 +1,14 @@
 import "@/shared";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -12,7 +20,10 @@ const expo = vi.hoisted(() => ({
 }));
 
 vi.mock("@/shared/notifications/push-provider", () => ({
-  sendExpoPushMessages: async (tokens: string[], content: Record<string, unknown>) => {
+  sendExpoPushMessages: async (
+    tokens: string[],
+    content: Record<string, unknown>,
+  ) => {
     expo.sent.push({ tokens, content });
 
     return { deliveredAny: true, invalidTokens: [], tickets: [] };
@@ -33,7 +44,10 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
 import { sendNotificationToUser } from "@/websocket";
 
 import { fakeVision, resetCircuit } from "./support/fake-vision";
-import { seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
+import {
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
 import { seedProofCard } from "./support/proof-card-seed";
 
 /**
@@ -96,7 +110,10 @@ async function queueProof(requestedById: string) {
       input: buildProofAnalysisInput({
         photoPath: photo,
         signaturePath: null,
-        delivery: { invoice_number: "45118", recipient_name: "Mercado Central" },
+        delivery: {
+          invoice_number: "45118",
+          recipient_name: "Mercado Central",
+        },
         provenAt: new Date(),
         timeZone: "America/Sao_Paulo",
       }) as unknown as Prisma.InputJsonValue,
@@ -148,8 +165,16 @@ beforeAll(async () => {
   // Both have the app: only one of them may hear about this receipt.
   await prisma.pushDeviceToken.createMany({
     data: [
-      { userId: fleet.driverUserId, token: "ExponentPushToken[driver]", platform: "android" },
-      { userId: managerId, token: "ExponentPushToken[manager]", platform: "android" },
+      {
+        userId: fleet.driverUserId,
+        token: "ExponentPushToken[driver]",
+        platform: "android",
+      },
+      {
+        userId: managerId,
+        token: "ExponentPushToken[manager]",
+        platform: "android",
+      },
     ],
   });
 
@@ -204,9 +229,9 @@ describe("a receipt reading that looks wrong", () => {
     expect(rows[0].message).not.toContain("é um canhoto de entrega");
 
     // The live toast went to the driver's room only.
-    expect(vi.mocked(sendNotificationToUser).mock.calls.map(([userId]) => userId)).toEqual([
-      fleet.driverUserId,
-    ]);
+    expect(
+      vi.mocked(sendNotificationToUser).mock.calls.map(([userId]) => userId),
+    ).toEqual([fleet.driverUserId]);
 
     // One push, to the driver's phone, opening the deliveries and naming
     // the delivery. Red before: it was sent as `deliveryId`, which the
@@ -225,11 +250,18 @@ describe("a receipt reading that looks wrong", () => {
 
     // Push and in-app, never e-mail.
     const deliveries = await prisma.notificationDelivery.findMany({
-      where: { event: { topic: "delivery-proof.ai-flagged", aggregateId: deliveryId } },
+      where: {
+        event: { topic: "delivery-proof.ai-flagged", aggregateId: deliveryId },
+      },
     });
 
     expect(
-      deliveries.map((row) => `${row.userId === fleet.driverUserId}:${row.channel}:${row.status}`).sort(),
+      deliveries
+        .map(
+          (row) =>
+            `${row.userId === fleet.driverUserId}:${row.channel}:${row.status}`,
+        )
+        .sort(),
     ).toEqual(["true:IN_APP:DELIVERED", "true:PUSH:DELIVERED"]);
 
     // A second pass finds nothing left to send.
@@ -237,7 +269,9 @@ describe("a receipt reading that looks wrong", () => {
 
     expect(expo.sent).toHaveLength(1);
     expect(
-      await prisma.notification.count({ where: { type: "delivery-proof-ai", entityId: deliveryId } }),
+      await prisma.notification.count({
+        where: { type: "delivery-proof-ai", entityId: deliveryId },
+      }),
     ).toBe(1);
   });
 
@@ -255,7 +289,11 @@ describe("a receipt reading that looks wrong", () => {
     });
 
     await prisma.pushDeviceToken.create({
-      data: { userId: moved.id, token: "ExponentPushToken[moved]", platform: "android" },
+      data: {
+        userId: moved.id,
+        token: "ExponentPushToken[moved]",
+        platform: "android",
+      },
     });
 
     const deliveryId = await queueProof(moved.id);
@@ -271,7 +309,9 @@ describe("a receipt reading that looks wrong", () => {
     await drainNotifications();
 
     expect(
-      await prisma.notification.count({ where: { type: "delivery-proof-ai", entityId: deliveryId } }),
+      await prisma.notification.count({
+        where: { type: "delivery-proof-ai", entityId: deliveryId },
+      }),
     ).toBe(0);
     expect(expo.sent).toHaveLength(0);
   });

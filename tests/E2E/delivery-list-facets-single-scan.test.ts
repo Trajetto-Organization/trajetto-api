@@ -27,12 +27,21 @@ const statements: string[] = [];
 const CARRIER = "018fe600-0000-7000-8000-00000000000a";
 const OTHER = "018fe600-0000-7000-8000-00000000000b";
 
-const STATUSES: DeliveryStatus[] = ["PENDING", "IN_TRANSIT", "DELIVERED", "FAILED"];
+const STATUSES: DeliveryStatus[] = [
+  "PENDING",
+  "IN_TRANSIT",
+  "DELIVERED",
+  "FAILED",
+];
 
 let shipperIds: string[] = [];
 let driverIds: string[] = [];
 
-async function seedTenant(businessId: string, label: string, perDriver: number[]) {
+async function seedTenant(
+  businessId: string,
+  label: string,
+  perDriver: number[],
+) {
   await prisma.business.create({
     data: {
       id: businessId,
@@ -96,35 +105,74 @@ async function seedTenant(businessId: string, label: string, perDriver: number[]
 
   await prisma.delivery.createMany({ data: rows });
 
-  return { shippers: shippers.map((s) => s.id), drivers: drivers.map((d) => d.id) };
+  return {
+    shippers: shippers.map((s) => s.id),
+    drivers: drivers.map((d) => d.id),
+  };
 }
 
 /** Grouped reads over delivery, as the logging client saw them. */
 function groupedReads(): string[] {
-  return statements.filter((sql) => /FROM "public"\."delivery"/.test(sql) && /GROUP BY/i.test(sql));
+  return statements.filter(
+    (sql) => /FROM "public"\."delivery"/.test(sql) && /GROUP BY/i.test(sql),
+  );
 }
 
-async function expectedCounts(where: { businessId: string; driverId?: string; status?: { in: DeliveryStatus[] } }) {
+async function expectedCounts(where: {
+  businessId: string;
+  driverId?: string;
+  status?: { in: DeliveryStatus[] };
+}) {
   const { status, ...withoutStatus } = where;
 
-  const byStatus = await prisma.delivery.groupBy({ by: ["status"], where: withoutStatus, _count: { _all: true } });
-  const byShipper = await prisma.delivery.groupBy({ by: ["shipperId"], where, _count: { _all: true } });
-  const byDriver = await prisma.delivery.groupBy({ by: ["driverId"], where, _count: { _all: true } });
+  const byStatus = await prisma.delivery.groupBy({
+    by: ["status"],
+    where: withoutStatus,
+    _count: { _all: true },
+  });
+  const byShipper = await prisma.delivery.groupBy({
+    by: ["shipperId"],
+    where,
+    _count: { _all: true },
+  });
+  const byDriver = await prisma.delivery.groupBy({
+    by: ["driverId"],
+    where,
+    _count: { _all: true },
+  });
 
   void status;
 
   return {
     status: Object.fromEntries(byStatus.map((g) => [g.status, g._count._all])),
-    shipper: Object.fromEntries(byShipper.map((g) => [g.shipperId, g._count._all])),
-    driver: Object.fromEntries(byDriver.map((g) => [g.driverId ?? "null", g._count._all])),
+    shipper: Object.fromEntries(
+      byShipper.map((g) => [g.shipperId, g._count._all]),
+    ),
+    driver: Object.fromEntries(
+      byDriver.map((g) => [g.driverId ?? "null", g._count._all]),
+    ),
   };
 }
 
-function actualCounts(page: Awaited<ReturnType<DeliveryRepository["listDeliveries"]>>) {
+function actualCounts(
+  page: Awaited<ReturnType<DeliveryRepository["listDeliveries"]>>,
+) {
   return {
-    status: Object.fromEntries(page.statusCounts.filter((g) => g.count > 0).map((g) => [g.value, g.count])),
-    shipper: Object.fromEntries(page.shipperOptions.filter((o) => o.count > 0).map((o) => [o.value, o.count])),
-    driver: Object.fromEntries(page.driverOptions.filter((o) => o.count > 0).map((o) => [o.value, o.count])),
+    status: Object.fromEntries(
+      page.statusCounts
+        .filter((g) => g.count > 0)
+        .map((g) => [g.value, g.count]),
+    ),
+    shipper: Object.fromEntries(
+      page.shipperOptions
+        .filter((o) => o.count > 0)
+        .map((o) => [o.value, o.count]),
+    ),
+    driver: Object.fromEntries(
+      page.driverOptions
+        .filter((o) => o.count > 0)
+        .map((o) => [o.value, o.count]),
+    ),
   };
 }
 
@@ -153,7 +201,11 @@ describe("the delivery board's counts", () => {
   it("default view: one grouped read, the same numbers as three", async () => {
     statements.length = 0;
 
-    const page = await repository.listDeliveries({ businessId: CARRIER, page: 1, pageSize: 5 });
+    const page = await repository.listDeliveries({
+      businessId: CARRIER,
+      page: 1,
+      pageSize: 5,
+    });
 
     expect(groupedReads()).toHaveLength(1);
     expect(groupedReads()[0]).toMatch(/GROUPING SETS/i);
@@ -169,8 +221,13 @@ describe("the delivery board's counts", () => {
     // The unassigned group (driverId NULL, 4 rows) is counted by the driver
     // set and, having no driver to name, offers no option — as before.
     expect(expected.driver.null).toBe(4);
-    expect(page.driverOptions.map((option) => [option.value, option.count]).sort()).toEqual(
-      driverIds.slice(0, 3).map((driverId) => [driverId, expected.driver[driverId]]).sort(),
+    expect(
+      page.driverOptions.map((option) => [option.value, option.count]).sort(),
+    ).toEqual(
+      driverIds
+        .slice(0, 3)
+        .map((driverId) => [driverId, expected.driver[driverId]])
+        .sort(),
     );
 
     // Labels come from the company's own catalog.
@@ -192,31 +249,48 @@ describe("the delivery board's counts", () => {
 
     expect(groupedReads()).toHaveLength(1);
 
-    const expected = await expectedCounts({ businessId: CARRIER, driverId: driverIds[0] });
+    const expected = await expectedCounts({
+      businessId: CARRIER,
+      driverId: driverIds[0],
+    });
     const actual = actualCounts(page);
 
     expect(page.data).toHaveLength(7);
     expect(actual.status).toEqual(expected.status);
     expect(actual.shipper).toEqual(expected.shipper);
-    expect(page.driverOptions.filter((o) => o.count > 0).map((o) => [o.value, o.count])).toEqual([[driverIds[0], 7]]);
+    expect(
+      page.driverOptions
+        .filter((o) => o.count > 0)
+        .map((o) => [o.value, o.count]),
+    ).toEqual([[driverIds[0], 7]]);
   });
 
   it("with a facet chosen, each count still ignores only its own facet", async () => {
     statements.length = 0;
 
     const statuses: DeliveryStatus[] = ["DELIVERED"];
-    const page = await repository.listDeliveries({ businessId: CARRIER, statuses, page: 1, pageSize: 50 });
+    const page = await repository.listDeliveries({
+      businessId: CARRIER,
+      statuses,
+      page: 1,
+      pageSize: 50,
+    });
 
     // Different wheres: the status counts ignore the status filter, the
     // others apply it.
     expect(groupedReads()).toHaveLength(3);
 
-    const expected = await expectedCounts({ businessId: CARRIER, status: { in: statuses } });
+    const expected = await expectedCounts({
+      businessId: CARRIER,
+      status: { in: statuses },
+    });
     const actual = actualCounts(page);
 
     expect(actual.status).toEqual(expected.status);
     expect(actual.shipper).toEqual(expected.shipper);
-    expect(page.data.every((delivery) => delivery.status === "DELIVERED")).toBe(true);
+    expect(page.data.every((delivery) => delivery.status === "DELIVERED")).toBe(
+      true,
+    );
   });
 
   it("a shipper filter keeps the shipper counts whole", async () => {
@@ -230,6 +304,8 @@ describe("the delivery board's counts", () => {
     const whole = await expectedCounts({ businessId: CARRIER });
 
     expect(actualCounts(page).shipper).toEqual(whole.shipper);
-    expect(page.data.every((delivery) => delivery.shipperId === shipperIds[0])).toBe(true);
+    expect(
+      page.data.every((delivery) => delivery.shipperId === shipperIds[0]),
+    ).toBe(true);
   });
 });

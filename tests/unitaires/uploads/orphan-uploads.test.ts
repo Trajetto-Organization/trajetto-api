@@ -34,7 +34,9 @@ describe("keyTimestamp", () => {
     const { keyTimestamp } = await load();
 
     expect(
-      keyTimestamp(`odometerPhotos/${BUSINESS}/1727136000000-foto-ab12cd34.jpg`),
+      keyTimestamp(
+        `odometerPhotos/${BUSINESS}/1727136000000-foto-ab12cd34.jpg`,
+      ),
     ).toBe(1727136000000);
   });
 
@@ -108,9 +110,9 @@ describe("how it is switched on", () => {
     const { envSchema } = await import("@/schemas/env-schema");
 
     expect(envSchema.parse(base).UPLOAD_ORPHAN_GC).toBe("dry-run");
-    expect(envSchema.parse({ ...base, UPLOAD_ORPHAN_GC: "" }).UPLOAD_ORPHAN_GC).toBe(
-      "dry-run",
-    );
+    expect(
+      envSchema.parse({ ...base, UPLOAD_ORPHAN_GC: "" }).UPLOAD_ORPHAN_GC,
+    ).toBe("dry-run");
     expect(
       envSchema.safeParse({ ...base, UPLOAD_ORPHAN_GC: "yes" }).success,
     ).toBe(false);

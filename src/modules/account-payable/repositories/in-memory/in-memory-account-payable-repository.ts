@@ -40,7 +40,10 @@ import type { SortOrder } from "@/shared/pagination/list-query";
 
 /** Each category's position in the Prisma enum, the order Postgres sorts by. */
 const CATEGORY_POSITION = Object.fromEntries(
-  Object.values(AccountPayableCategory).map((category, index) => [category, index]),
+  Object.values(AccountPayableCategory).map((category, index) => [
+    category,
+    index,
+  ]),
 ) as Record<AccountPayableCategory, number>;
 
 const time = (value: Date | string | null | undefined): number | null =>
@@ -198,7 +201,8 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
     order: SortOrder | undefined,
   ): AccountPayable[] {
     const key = sort ?? ACCOUNT_PAYABLE_SORT_FALLBACK.sort;
-    const direction = order ?? (sort ? "asc" : ACCOUNT_PAYABLE_SORT_FALLBACK.order);
+    const direction =
+      order ?? (sort ? "asc" : ACCOUNT_PAYABLE_SORT_FALLBACK.order);
 
     const byNumber = (a: number, b: number) => a - b;
     // Code point order, as Postgres sorts on the deployed image (in-memory-order).
@@ -209,15 +213,37 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
         case "created_at":
         case "issue_date":
         case "due_date":
-          return compareNullable(time(a[key]), time(b[key]), direction, false, byNumber);
+          return compareNullable(
+            time(a[key]),
+            time(b[key]),
+            direction,
+            false,
+            byNumber,
+          );
         case "payment_date":
-          return compareNullable(time(a.payment_date), time(b.payment_date), direction, true, byNumber);
+          return compareNullable(
+            time(a.payment_date),
+            time(b.payment_date),
+            direction,
+            true,
+            byNumber,
+          );
         case "amount":
-          return compareNullable(cents(a.amount), cents(b.amount), direction, false, byNumber);
+          return compareNullable(
+            cents(a.amount),
+            cents(b.amount),
+            direction,
+            false,
+            byNumber,
+          );
         case "amount_paid":
           return compareNullable(
-            a.amount_paid === null || a.amount_paid === undefined ? null : cents(a.amount_paid),
-            b.amount_paid === null || b.amount_paid === undefined ? null : cents(b.amount_paid),
+            a.amount_paid === null || a.amount_paid === undefined
+              ? null
+              : cents(a.amount_paid),
+            b.amount_paid === null || b.amount_paid === undefined
+              ? null
+              : cents(b.amount_paid),
             direction,
             true,
             byNumber,
@@ -234,8 +260,12 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
           );
         case "supplier":
           return compareNullable(
-            a.supplierId ? (this.supplierNames.get(a.supplierId) ?? null) : null,
-            b.supplierId ? (this.supplierNames.get(b.supplierId) ?? null) : null,
+            a.supplierId
+              ? (this.supplierNames.get(a.supplierId) ?? null)
+              : null,
+            b.supplierId
+              ? (this.supplierNames.get(b.supplierId) ?? null)
+              : null,
             direction,
             false,
             byText,
@@ -269,7 +299,9 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
     );
 
     const totals = (group: AccountPayableStatusGroup): StatusGroupTotals => {
-      const rows = base.filter((bill) => this.groupOf(bill, props.clock) === group);
+      const rows = base.filter(
+        (bill) => this.groupOf(bill, props.clock) === group,
+      );
 
       return {
         count: rows.length,
@@ -414,10 +446,15 @@ class InMemoryAccountPayableRepository implements IAccountPayableRepository {
               payable.document_number,
               payable.payee_name,
               payable.serviceOrderId,
-              payable.supplierId ? this.supplierNames.get(payable.supplierId) : null,
-              payable.vehicleId ? this.vehiclePlates.get(payable.vehicleId) : null,
+              payable.supplierId
+                ? this.supplierNames.get(payable.supplierId)
+                : null,
+              payable.vehicleId
+                ? this.vehiclePlates.get(payable.vehicleId)
+                : null,
             ].some((value) => lower(value).includes(needle)) ||
-            (amount !== null && cents(payable.amount) === Math.round(amount * 100))),
+            (amount !== null &&
+              cents(payable.amount) === Math.round(amount * 100))),
       )
       .sort(newestFirst);
 

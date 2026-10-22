@@ -186,7 +186,10 @@ describe("a route that does not exist", () => {
 
 describe("the fueling route's refusals", () => {
   it("names a missing photo", async () => {
-    const response = await post(`/fuel/create-fuel/${BUSINESS}`, fuelBody(1_100));
+    const response = await post(
+      `/fuel/create-fuel/${BUSINESS}`,
+      fuelBody(1_100),
+    );
 
     expect(response.statusCode).toBe(400);
     expect(response.headers["x-error-code"]).toBe("PHOTO_REQUIRED");

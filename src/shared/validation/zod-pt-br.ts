@@ -40,7 +40,8 @@ const ptBrErrorMap: ZodErrorMap = (issue, ctx) => {
 
   switch (issue.code) {
     case z.ZodIssueCode.invalid_type:
-      if (issue.received === "undefined") return { message: `${who} é obrigatório.` };
+      if (issue.received === "undefined")
+        return { message: `${who} é obrigatório.` };
 
       return {
         message: `${who} deve ser ${TYPE_NAMES[issue.expected] ?? issue.expected}.`,
@@ -63,11 +64,15 @@ const ptBrErrorMap: ZodErrorMap = (issue, ctx) => {
 
     case z.ZodIssueCode.too_small:
       if (issue.type === "string") {
-        return { message: `${who} deve ter ao menos ${issue.minimum} caractere(s).` };
+        return {
+          message: `${who} deve ter ao menos ${issue.minimum} caractere(s).`,
+        };
       }
 
       if (issue.type === "array" || issue.type === "set") {
-        return { message: `${who} deve ter ao menos ${issue.minimum} item(ns).` };
+        return {
+          message: `${who} deve ter ao menos ${issue.minimum} item(ns).`,
+        };
       }
 
       return {
@@ -76,11 +81,15 @@ const ptBrErrorMap: ZodErrorMap = (issue, ctx) => {
 
     case z.ZodIssueCode.too_big:
       if (issue.type === "string") {
-        return { message: `${who} deve ter no máximo ${issue.maximum} caractere(s).` };
+        return {
+          message: `${who} deve ter no máximo ${issue.maximum} caractere(s).`,
+        };
       }
 
       if (issue.type === "array" || issue.type === "set") {
-        return { message: `${who} deve ter no máximo ${issue.maximum} item(ns).` };
+        return {
+          message: `${who} deve ter no máximo ${issue.maximum} item(ns).`,
+        };
       }
 
       return {

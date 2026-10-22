@@ -58,14 +58,18 @@ describe("auth and tenant security", () => {
       user_id: "user-1",
       current_jti: "old-jti",
       current_token_hash: "old-hash",
-      replacement: { ...replacement, jti: "other-jti", token_hash: "other-hash" },
+      replacement: {
+        ...replacement,
+        jti: "other-jti",
+        token_hash: "other-hash",
+      },
       grace_ms: 0,
     });
 
     expect(firstRotation.outcome).toBe("rotated");
-    expect(
-      firstRotation.outcome === "rotated" && firstRotation.token.jti,
-    ).toBe("new-jti");
+    expect(firstRotation.outcome === "rotated" && firstRotation.token.jti).toBe(
+      "new-jti",
+    );
     expect(replay.outcome).toBe("reused");
 
     await expect(

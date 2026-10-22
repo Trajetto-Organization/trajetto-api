@@ -126,10 +126,10 @@ describe("a repository write joins the caller's transaction", () => {
     // repository that simply never assigns anything.
     await prisma.$transaction(async (tx) => {
       await repository.assignDeliveries(
-          pending,
-          { driverId: DRIVER, vehicleId: null },
-          tx,
-        );
+        pending,
+        { driverId: DRIVER, vehicleId: null },
+        tx,
+      );
     });
 
     const after = await prisma.delivery.findMany({

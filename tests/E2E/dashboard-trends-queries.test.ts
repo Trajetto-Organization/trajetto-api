@@ -72,7 +72,11 @@ function at(daysAgo: number, hour = 12, minute = 0): Date {
 function label(daysAgo: number): string {
   return dateOnlyFromKey(
     shiftDateKey(businessDateKey(new Date(), MANAUS), -daysAgo),
-  ).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", timeZone: "UTC" });
+  ).toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
 }
 
 async function runTrends(
@@ -276,7 +280,9 @@ describe("and whether it is right, in the company's calendar", () => {
 
     // 30 days back through today, inclusive.
     expect(points).toHaveLength(30);
-    expect(points.at(-1).date, "o último ponto não é o hoje da empresa").toBe(label(0));
+    expect(points.at(-1).date, "o último ponto não é o hoje da empresa").toBe(
+      label(0),
+    );
 
     const bucketFor = (daysAgo: number) =>
       points.find((point: any) => point.date === label(daysAgo));
@@ -289,7 +295,10 @@ describe("and whether it is right, in the company's calendar", () => {
     expect(bucketFor(0)?.deliveries, "o último dia sumiu da janela").toBe(1);
 
     // 23:30 in Manaus: in any other zone this row moves to day 2.
-    expect(bucketFor(3)?.deliveries, "o fim da noite caiu no dia seguinte").toBe(1);
+    expect(
+      bucketFor(3)?.deliveries,
+      "o fim da noite caiu no dia seguinte",
+    ).toBe(1);
 
     // A day with nothing is zero and present: the chart draws a point for it.
     expect(bucketFor(4)?.deliveries).toBe(0);
@@ -331,7 +340,13 @@ describe("the series a viewer receives", () => {
     const trends = await runTrends("7d", DELIVERIES_ADMIN);
 
     for (const point of trends.activityTrends) {
-      for (const key of ["parts", "suppliers", "serviceOrders", "fines", "businesses"]) {
+      for (const key of [
+        "parts",
+        "suppliers",
+        "serviceOrders",
+        "fines",
+        "businesses",
+      ]) {
         expect(point, key).not.toHaveProperty(key);
       }
 

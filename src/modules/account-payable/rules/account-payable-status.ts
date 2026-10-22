@@ -109,7 +109,11 @@ function accountPayableStatusOf(
   const paid = cents(bill.amount_paid);
   const due = asDate(bill.due_date);
 
-  if (bill.amount_paid !== null && bill.amount_paid !== undefined && paid >= amount) {
+  if (
+    bill.amount_paid !== null &&
+    bill.amount_paid !== undefined &&
+    paid >= amount
+  ) {
     // Paid after the due DAY, compared as days: paying at 15h on the due
     // date is on time.
     const paidLate =

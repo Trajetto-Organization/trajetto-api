@@ -178,8 +178,26 @@ describe("documents entering through an import", () => {
         filename: "entregas.csv",
         shipperId: SHIPPER,
         content: csv([
-          ["Padaria", "01001000", "São Paulo", "SP", "Rua A", "P-1", "Zona Sul", JOAO_CNH],
-          ["Mercado", "01001000", "São Paulo", "SP", "Rua B", "P-2", "Zona Sul", JOAO_CNH],
+          [
+            "Padaria",
+            "01001000",
+            "São Paulo",
+            "SP",
+            "Rua A",
+            "P-1",
+            "Zona Sul",
+            JOAO_CNH,
+          ],
+          [
+            "Mercado",
+            "01001000",
+            "São Paulo",
+            "SP",
+            "Rua B",
+            "P-2",
+            "Zona Sul",
+            JOAO_CNH,
+          ],
         ]),
       });
 
@@ -202,7 +220,11 @@ describe("documents entering through an import", () => {
   });
 
   it("the NF-e import announces the delivery with its key", async () => {
-    const key = `3524061234567800019955001${Date.now().toString().slice(-13)}000001`.slice(0, 44);
+    const key =
+      `3524061234567800019955001${Date.now().toString().slice(-13)}000001`.slice(
+        0,
+        44,
+      );
 
     const summary = await container.resolve(ImportDeliveryXmlUseCase).execute({
       userId: ADMIN,
@@ -254,9 +276,15 @@ describe("a route changing hands", () => {
 
     const assigned = await announced("delivery.assigned");
 
-    expect(assigned.filter((data) => data.delivery_id === delivery.id)).toEqual([
-      expect.objectContaining({ driver_id: JOAO, route_id: routeId, code: "P-3" }),
-    ]);
+    expect(assigned.filter((data) => data.delivery_id === delivery.id)).toEqual(
+      [
+        expect.objectContaining({
+          driver_id: JOAO,
+          route_id: routeId,
+          code: "P-3",
+        }),
+      ],
+    );
   });
 
   it("swapping the driver announces every open stop with the new one", async () => {
@@ -271,7 +299,11 @@ describe("a route changing hands", () => {
 
     const assigned = (await announced("delivery.assigned")).slice(before);
 
-    expect(assigned.map((data) => data.code).sort()).toEqual(["P-1", "P-2", "P-3"]);
+    expect(assigned.map((data) => data.code).sort()).toEqual([
+      "P-1",
+      "P-2",
+      "P-3",
+    ]);
 
     for (const data of assigned) {
       expect(data).toMatchObject({ driver_id: MARIA, route_id: routeId });

@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { createHmac, randomUUID } from "node:crypto";
@@ -123,7 +131,9 @@ async function seedDelivery(
  * are this file's own (delivery-provider-truth writes the Resend ones).
  */
 async function cleanTables(): Promise<void> {
-  await prisma.domainOutboxEvent.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.domainOutboxEvent.deleteMany({
+    where: { businessId: BUSINESS },
+  });
   await prisma.notificationProviderReceipt.deleteMany({
     where: { deliveryId: null, provider: { in: ["meta", "expo"] } },
   });
@@ -170,7 +180,10 @@ beforeAll(async () => {
 
   container.registerInstance("WhatsAppProvider", {
     isConfigured: () => true,
-    sendMessage: async (props: { phoneNumber: string; referenceId?: string }) => {
+    sendMessage: async (props: {
+      phoneNumber: string;
+      referenceId?: string;
+    }) => {
       whatsapp.sent.push(props);
       return { success: true, messageId: "wamid.pipeline" };
     },
@@ -280,7 +293,11 @@ describe("a status callback", () => {
     const deliveryId = await seedDelivery();
 
     const body = statusCallback([
-      { id: "wamid.first", status: "sent", biz_opaque_callback_data: deliveryId },
+      {
+        id: "wamid.first",
+        status: "sent",
+        biz_opaque_callback_data: deliveryId,
+      },
     ]);
 
     expect((await postCallback(body)).statusCode).toBe(200);
@@ -306,13 +323,21 @@ describe("a status callback", () => {
 
     await postCallback(
       statusCallback([
-        { id: "wamid.first", status: "read", biz_opaque_callback_data: deliveryId },
+        {
+          id: "wamid.first",
+          status: "read",
+          biz_opaque_callback_data: deliveryId,
+        },
       ]),
     );
 
     await postCallback(
       statusCallback([
-        { id: "wamid.first", status: "sent", biz_opaque_callback_data: deliveryId },
+        {
+          id: "wamid.first",
+          status: "sent",
+          biz_opaque_callback_data: deliveryId,
+        },
       ]),
     );
 
@@ -361,8 +386,16 @@ describe("a status callback", () => {
 
     await postCallback(
       statusCallback([
-        { id: "wamid.lost", status: "sent", biz_opaque_callback_data: deliveryId },
-        { id: "wamid.first", status: "sent", biz_opaque_callback_data: deliveryId },
+        {
+          id: "wamid.lost",
+          status: "sent",
+          biz_opaque_callback_data: deliveryId,
+        },
+        {
+          id: "wamid.first",
+          status: "sent",
+          biz_opaque_callback_data: deliveryId,
+        },
       ]),
     );
 
@@ -397,7 +430,11 @@ describe("a status callback", () => {
     const deliveryId = await seedDelivery();
 
     const body = statusCallback([
-      { id: "wamid.first", status: "read", biz_opaque_callback_data: deliveryId },
+      {
+        id: "wamid.first",
+        status: "read",
+        biz_opaque_callback_data: deliveryId,
+      },
     ]);
 
     const response = await postCallback(body, sign(body, "outro-segredo"));
@@ -453,7 +490,11 @@ describe("what the pipeline hands the providers", () => {
 
   it("records one Expo ticket per device and prunes a device the receipt says is gone", async () => {
     await prisma.pushDeviceToken.create({
-      data: { userId: USER, token: "ExponentPushToken[morto]", platform: "android" },
+      data: {
+        userId: USER,
+        token: "ExponentPushToken[morto]",
+        platform: "android",
+      },
     });
 
     const expoCalls: Array<{ url: string; body: unknown }> = [];
@@ -498,7 +539,9 @@ describe("what the pipeline hands the providers", () => {
     expect(push.status).toBe("DELIVERED");
 
     // The delivery id rides in the push data, for the app and for support.
-    const [sentMessage] = expoCalls[0].body as Array<{ data: { deliveryId?: string } }>;
+    const [sentMessage] = expoCalls[0].body as Array<{
+      data: { deliveryId?: string };
+    }>;
     expect(sentMessage.data.deliveryId).toBe(push.id);
 
     const [ticket] = await prisma.notificationProviderReceipt.findMany({});
@@ -519,19 +562,20 @@ describe("what the pipeline hands the providers", () => {
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            data: {
-              "ticket-1": {
-                status: "error",
-                message: "The recipient device is not registered with FCM.",
-                details: { error: "DeviceNotRegistered" },
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                "ticket-1": {
+                  status: "error",
+                  message: "The recipient device is not registered with FCM.",
+                  details: { error: "DeviceNotRegistered" },
+                },
               },
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
       ),
     );
 

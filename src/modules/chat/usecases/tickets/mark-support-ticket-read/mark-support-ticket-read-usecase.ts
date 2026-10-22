@@ -29,11 +29,20 @@ class MarkSupportTicketReadUseCase {
     ticketId: string;
     readAt?: Date;
   }): Promise<{ last_read_at: Date }> {
-    const scope = await resolveTicketScope(this.user, request.userId, request.businessId);
-    const ticket = await loadScopedTicket(this.tickets, scope, request.ticketId);
+    const scope = await resolveTicketScope(
+      this.user,
+      request.userId,
+      request.businessId,
+    );
+    const ticket = await loadScopedTicket(
+      this.tickets,
+      scope,
+      request.ticketId,
+    );
 
     const now = new Date();
-    const lastReadAt = request.readAt && request.readAt < now ? request.readAt : now;
+    const lastReadAt =
+      request.readAt && request.readAt < now ? request.readAt : now;
 
     if (!canWriteInChat(scope.user.role)) return { last_read_at: lastReadAt };
 

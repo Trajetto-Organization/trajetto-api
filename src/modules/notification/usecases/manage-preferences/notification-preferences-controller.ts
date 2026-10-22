@@ -16,7 +16,9 @@ class NotificationPreferencesController {
     const preferences = await getPreferencesUseCase.execute(userId);
 
     // Decision 14.6: the alert sound rides the same screen.
-    const opsAlert = await container.resolve(OpsAlertPreferenceUseCase).get(userId);
+    const opsAlert = await container
+      .resolve(OpsAlertPreferenceUseCase)
+      .get(userId);
 
     return reply.status(200).send({ preferences, opsAlert });
   }
@@ -38,7 +40,9 @@ class NotificationPreferencesController {
     }
 
     if (opsAlert) {
-      await container.resolve(OpsAlertPreferenceUseCase).update(userId, opsAlert);
+      await container
+        .resolve(OpsAlertPreferenceUseCase)
+        .update(userId, opsAlert);
     }
 
     return reply

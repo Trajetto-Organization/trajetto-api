@@ -173,7 +173,11 @@ function accountPayableListWhere(
 
   if (context.onlyGroup) {
     and.push(
-      statusGroupWhere(context.onlyGroup, context.todayStart, context.amountRef),
+      statusGroupWhere(
+        context.onlyGroup,
+        context.todayStart,
+        context.amountRef,
+      ),
     );
   }
 
@@ -210,7 +214,10 @@ function accountPayableListWhere(
 
   // The tenant stays a top-level key: the (businessId, created_at) index
   // serves every read of the list.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** One situation's rows and money, over the card base. */

@@ -179,7 +179,14 @@ async function tokenFor(
   });
 
   return sign(
-    { tokenType: "access", role, businessId, driverId, sessionVersion: 0, familyId },
+    {
+      tokenType: "access",
+      role,
+      businessId,
+      driverId,
+      sessionVersion: 0,
+      familyId,
+    },
     auth.secret_token,
     { subject: userId, expiresIn: "1h" },
   );
@@ -484,7 +491,10 @@ describe("a user who is not a MASTER cannot subscribe past their company", () =>
 describe("when the dispatcher loses the permission mid-connection", () => {
   it("stops receiving positions, without losing the connection", async () => {
     await prisma.permission.updateMany({
-      where: { profileAccessId: dispatcherProfile, permissionKey: "delivery_manage" },
+      where: {
+        profileAccessId: dispatcherProfile,
+        permissionKey: "delivery_manage",
+      },
       data: { canRead: false, canWrite: false },
     });
 
@@ -569,10 +579,9 @@ describe("when a MASTER is demoted mid-connection", () => {
 
     await new Promise((done) => setTimeout(done, 1500));
 
-    expect(
-      master.connected,
-      "o MASTER rebaixado continuou conectado",
-    ).toBe(false);
+    expect(master.connected, "o MASTER rebaixado continuou conectado").toBe(
+      false,
+    );
 
     const after = waitFor(master, "routeEvent");
 

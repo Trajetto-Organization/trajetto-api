@@ -16,7 +16,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("createRuntimeMetrics", () => {
   it("sees a blocked event loop, its utilisation and the threadpool", async () => {
-    const metrics = createRuntimeMetrics({ windowMs: 1_000, canaryIntervalMs: 20 });
+    const metrics = createRuntimeMetrics({
+      windowMs: 1_000,
+      canaryIntervalMs: 20,
+    });
 
     metrics.start();
 
@@ -49,7 +52,10 @@ describe("createRuntimeMetrics", () => {
   });
 
   it("starts a fresh window on rotate", async () => {
-    const metrics = createRuntimeMetrics({ windowMs: 1_000, canaryIntervalMs: 20 });
+    const metrics = createRuntimeMetrics({
+      windowMs: 1_000,
+      canaryIntervalMs: 20,
+    });
 
     metrics.start();
 

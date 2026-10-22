@@ -59,7 +59,7 @@ const routeStopEntity = z.object({
   on_the_way_at: isoDateTime
     .nullable()
     .describe(
-      "Última vez que o motorista avisou estar a caminho desta parada (decisão 6.4); nulo se nunca avisou. Só a marcação mais recente da rota, com a parada ainda PENDING, vale como \"a caminho\".",
+      'Última vez que o motorista avisou estar a caminho desta parada (decisão 6.4); nulo se nunca avisou. Só a marcação mais recente da rota, com a parada ainda PENDING, vale como "a caminho".',
     ),
   arrived_at: isoDateTime.nullable(),
   completed_at: isoDateTime.nullable(),
@@ -88,7 +88,9 @@ const routeStopEntity = z.object({
       .enum(["MANUAL", "GEOCODER"])
       .nullable()
       .optional()
-      .describe("MANUAL: fixado no mapa pelo despachante; GEOCODER: resolvido pelo endereço."),
+      .describe(
+        "MANUAL: fixado no mapa pelo despachante; GEOCODER: resolvido pelo endereço.",
+      ),
   }),
 });
 
@@ -112,9 +114,7 @@ const routeEntity = z.object({
   driverId: z.string(),
   vehicleId: z.string().nullable(),
   driver: z.object({ id: z.string(), name: z.string() }).nullable(),
-  vehicle: z
-    .object({ id: z.string(), license_plate: z.string() })
-    .nullable(),
+  vehicle: z.object({ id: z.string(), license_plate: z.string() }).nullable(),
   stops: z.array(routeStopEntity),
   plan_version: z
     .number()
@@ -123,7 +123,9 @@ const routeEntity = z.object({
     ),
   released_at: isoDateTime
     .nullable()
-    .describe("Quando a rota foi liberada ao motorista; nulo enquanto rascunho."),
+    .describe(
+      "Quando a rota foi liberada ao motorista; nulo enquanto rascunho.",
+    ),
   created_at: isoDateTime,
   updated_at: isoDateTime,
 });
@@ -179,7 +181,9 @@ const routeSchemas = {
   routeStopParams: updateDeleteBusinessSchema
     .merge(routeIdParamSchema)
     .merge(routeStopIdParamSchema),
-  deliveryLocationParams: updateDeleteBusinessSchema.merge(deliveryIdParamSchema),
+  deliveryLocationParams: updateDeleteBusinessSchema.merge(
+    deliveryIdParamSchema,
+  ),
 
   removeStops: removeRouteStopsSchema,
   moveStops: moveRouteStopsSchema,
@@ -245,7 +249,9 @@ const routeResponses = {
     meta: z.object({
       total: z
         .number()
-        .describe("Rotas da busca com TODOS os filtros aplicados: desenha o paginador."),
+        .describe(
+          "Rotas da busca com TODOS os filtros aplicados: desenha o paginador.",
+        ),
       page: z.number(),
       pageSize: z.number(),
       searchMeta: searchMetaDoc(
@@ -274,7 +280,9 @@ const routeResponses = {
     }),
     meta: z.object({
       progress: z.object({
-        done: z.number().describe("Paradas já resolvidas, de qualquer desfecho."),
+        done: z
+          .number()
+          .describe("Paradas já resolvidas, de qualquer desfecho."),
         total: z.number(),
       }),
     }),
@@ -305,7 +313,11 @@ const routeResponses = {
         .describe(
           "Fuso da empresa (IANA, `Business.timezone`). É nele que a saída prevista precisa cair no dia da rota.",
         ),
-      driver: z.object({ id: z.string(), name: z.string(), status: z.string() }),
+      driver: z.object({
+        id: z.string(),
+        name: z.string(),
+        status: z.string(),
+      }),
       responsibleVehicles: z
         .array(assignmentVehicle)
         .describe(
@@ -314,7 +326,9 @@ const routeResponses = {
       suggestedVehicleId: z
         .string()
         .nullable()
-        .describe("O único veículo sob responsabilidade do motorista, para pré-selecionar; null se nenhum ou mais de um."),
+        .describe(
+          "O único veículo sob responsabilidade do motorista, para pré-selecionar; null se nenhum ou mais de um.",
+        ),
       vehicle: assignmentVehicle
         .extend({
           responsible: z
@@ -405,17 +419,23 @@ const routeResponses = {
       routeId: z
         .string()
         .nullable()
-        .describe("A rota PLANNED/RELEASED que tem a entrega como parada; nulo quando nenhuma."),
+        .describe(
+          "A rota PLANNED/RELEASED que tem a entrega como parada; nulo quando nenhuma.",
+        ),
       planVersion: z
         .number()
         .nullable()
-        .describe("A nova versão do plano dessa rota (o ponto faz parte do plano); nulo sem rota."),
+        .describe(
+          "A nova versão do plano dessa rota (o ponto faz parte do plano); nulo sem rota.",
+        ),
     }),
   }),
   unroutedDeliveries: z.object({
     data: z.array(unroutedDeliveryRow),
     meta: z.object({
-      total: z.number().describe("Entregas sem rota com a busca e TODOS os filtros."),
+      total: z
+        .number()
+        .describe("Entregas sem rota com a busca e TODOS os filtros."),
       page: z.number(),
       pageSize: z.number(),
       facets: z
@@ -424,8 +444,14 @@ const routeResponses = {
           uf: z.array(facetCount),
           kind: z.array(facetCount),
           shipper: z
-            .array(facetCount.extend({ label: z.string().describe("Nome do embarcador.") }))
-            .describe("`value` é o id do embarcador (filtro `shipperIds`); no máximo 50, os com mais entregas."),
+            .array(
+              facetCount.extend({
+                label: z.string().describe("Nome do embarcador."),
+              }),
+            )
+            .describe(
+              "`value` é o id do embarcador (filtro `shipperIds`); no máximo 50, os com mais entregas.",
+            ),
         })
         .describe(
           "Opções de cada filtro com a busca e os DEMAIS filtros (regra disjuntiva). Cidades e embarcadores: no máximo 50.",

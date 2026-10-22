@@ -42,23 +42,23 @@ dois módulos vendidos separadamente por empresa:
 
 Três projetos formam o produto:
 
-| Repositório no GitHub (pasta local)                 | O que é                                                           | Tecnologia                                          | Onde roda                           |
-| --------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------- | ----------------------------------- |
-| `trajetto-api` (este)                               | API, tempo real, filas, crons, IA local, backup                   | Node.js 22, Fastify, Prisma, PostgreSQL 16, Redis 7 | Dokploy, app Compose (Docker Stack) |
-| `trajetto-fleet-manager-ui` (`trajetto-ui`)         | painel web (`/dashboard`, `/admin`), site público, portal `/docs` | Next.js 14 (App Router)                             | Dokploy, Application                |
-| `trajetto-fleet-manager-mobile` (`trajetto-mobile`) | aplicativo de campo do motorista, só Android                      | Expo / React Native                                 | EAS (APK interno e Play Store)      |
+| Repositório no GitHub (pasta local)                               | O que é                                                           | Tecnologia                                          | Onde roda                                                                                              |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `Trajetto-Organization/trajetto-api` (este, pasta `trajetto-api`) | API, tempo real, filas, crons, IA local, backup                   | Node.js 22, Fastify, Prisma, PostgreSQL 16, Redis 7 | Dokploy: Applications `trajetto-api`, `trajetto-ai` e `trajetto-backup` e Databases PostgreSQL e Redis |
+| `Trajetto-Organization/trajetto-ui` (pasta `trajetto-ui`)         | painel web (`/dashboard`, `/admin`), site público, portal `/docs` | Next.js 14 (App Router)                             | Dokploy, Application `trajetto-ui`                                                                     |
+| `Trajetto-Organization/trajetto-mobile` (pasta `trajetto-mobile`) | aplicativo de campo do motorista, só Android                      | Expo / React Native                                 | EAS (APK interno e Play Store)                                                                         |
 
 ## Documentação deste repositório
 
-| Documento                                                          | Para quê                                                                                                                                                                                                                            |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`docs/arquitetura.md`](./docs/arquitetura.md)                     | como a API é por dentro: estrutura do código, anatomia de um módulo e como criar uma feature, processos, filas, tempo real, IA, comprovante, regras de migration, compatibilidade com o app, unicidade por empresa, ADRs            |
-| [`docs/deploy.md`](./docs/deploy.md)                               | o caminho até a produção: branches, workflows, GHCR, Dokploy (staging e produção, passo a passo), IA, Postgres e Redis, borda, migrations, rollback, backup e restore, alertas, cadeia de suprimentos, checklist do primeiro deploy |
-| [`docs/variaveis-de-ambiente.md`](./docs/variaveis-de-ambiente.md) | cada variável: para que serve, obrigatoriedade, segredo, formato, valor em dev/staging/produção e onde mora                                                                                                                         |
-| [`docs/testes.md`](./docs/testes.md)                               | as suítes, como rodar, o que cada uma prova, cobertura, mutação e as regras para escrever testes                                                                                                                                    |
-| [`CLAUDE.md`](./CLAUDE.md) / [`AGENTS.md`](./AGENTS.md)            | o guia de trabalho para agentes de código (e um bom resumo para quem chega)                                                                                                                                                         |
-| [`infra/traefik/README.md`](./infra/traefik/README.md)             | a configuração estática do Traefik do Dokploy                                                                                                                                                                                       |
-| [`tests/load/README.md`](./tests/load/README.md)                   | o harness de carga e o que ele mediu                                                                                                                                                                                                |
+| Documento                                                          | Para quê                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`docs/arquitetura.md`](./docs/arquitetura.md)                     | como a API é por dentro: estrutura do código, anatomia de um módulo e como criar uma feature, processos, filas, tempo real, IA, comprovante, regras de migration, compatibilidade com o app, unicidade por empresa, ADRs                                                   |
+| [`docs/deploy.md`](./docs/deploy.md)                               | o caminho até a produção: branches, workflows, GHCR, Dokploy do zero (cada Application e Database, clique a clique, staging e produção), IA, Postgres e Redis, borda, migrations, rollback, backup e restore, alertas, cadeia de suprimentos, checklist do primeiro deploy |
+| [`docs/variaveis-de-ambiente.md`](./docs/variaveis-de-ambiente.md) | cada variável: para que serve, obrigatoriedade, segredo, formato, valor em dev/staging/produção e onde mora                                                                                                                                                                |
+| [`docs/testes.md`](./docs/testes.md)                               | as suítes, como rodar, o que cada uma prova, cobertura, mutação e as regras para escrever testes                                                                                                                                                                           |
+| [`CLAUDE.md`](./CLAUDE.md) / [`AGENTS.md`](./AGENTS.md)            | o guia de trabalho para agentes de código (e um bom resumo para quem chega)                                                                                                                                                                                                |
+| [`infra/traefik/README.md`](./infra/traefik/README.md)             | a configuração estática do Traefik do Dokploy                                                                                                                                                                                                                              |
+| [`tests/load/README.md`](./tests/load/README.md)                   | o harness de carga e o que ele mediu                                                                                                                                                                                                                                       |
 
 ## O que a API faz
 
@@ -94,7 +94,7 @@ Regras que valem para toda rota:
                      ▼               ▼                  ▼              ▼
                PostgreSQL 16     Redis 7         trajetto-ai      Cloudflare R2
            dados + filas + crons  rate limit +   (OCR local,       (fotos, PDFs;
-                                  pub/sub do     rede interna)     URLs assinadas)
+                                  pub/sub do     sem domínio)      URLs assinadas)
                                   Socket.IO
 ```
 
@@ -173,7 +173,8 @@ A validação acontece no boot (`src/schemas/env-schema/index.ts`): valor
 faltando ou inválido derruba o processo com a lista do que corrigir.
 
 - **desenvolvimento:** `.env` na raiz (o único arquivo lido);
-- **staging e produção:** o Environment do app Compose no Dokploy;
+- **staging e produção:** a aba _Environment_ de cada Application no Dokploy
+  (`trajetto-api`, `trajetto-ai`, `trajetto-backup`);
 - **CI:** os environments `staging` e `production` e as variáveis do
   repositório no GitHub.
 
@@ -250,22 +251,25 @@ requisição e de resposta, incluindo 400/401/403/404/409/429.
 ```
 branch de trabalho ─push─▶ ci.yml (lint, typecheck, unitários + cobertura, audit, gitleaks, IA)
 staging ─push─▶ deploy.yml: validação completa (+ E2E) ─▶ build ÚNICO das 3 imagens (GHCR sha-<sha>)
-                            ─▶ tag `staging` por digest ─▶ Dokploy (stack de staging) ─▶ convergência
+                            ─▶ tag `staging` por digest ─▶ Dokploy staging (IA → API → backup) ─▶ convergência
 PR staging → main ─▶ a mesma validação + "o head do PR tem imagem de staging?"
-merge em main ─▶ promoção (sem build): migrations ─▶ tag `stable` por digest ─▶ Dokploy (produção)
+merge em main ─▶ promoção (sem build): migrations ─▶ tag `stable` por digest ─▶ Dokploy produção (IA → API → backup)
                  ─▶ convergência ─▶ release        [aprovação do environment production]
 Run workflow ─▶ a mesma promoção com uma tag antiga (rollback)
 ```
 
 - **Uma imagem para os dois ambientes**, construída uma vez em `staging` e
-  promovida por digest; staging e produção mudam só o Environment do app no
-  Dokploy.
+  promovida por digest; staging e produção mudam só o Environment das
+  Applications no Dokploy.
 - Imagens: `trajetto-api`, `trajetto-ai` e `trajetto-backup` em
   `ghcr.io/trajetto-organization/`.
-- **Dokploy**: um app Compose do tipo Docker Stack por ambiente, com o
-  `compose.production.yaml` (`api` ×2, `trajetto-database`, `trajetto-redis`,
-  `trajetto-ai`, `trajetto-backup`), atrás do Traefik do Dokploy e da
-  Cloudflare.
+- **Dokploy**: em cada environment (`staging` e `production`), o projeto
+  `trajetto-api` tem três Applications com provider Docker, puxando as
+  imagens do GHCR — `trajetto-api` (2 réplicas, com domínio), `trajetto-ai` e
+  `trajetto-backup` (sem domínio) — e dois Databases do Dokploy, PostgreSQL e
+  Redis. Tudo atrás do Traefik do Dokploy e da Cloudflare. Sem Compose.
+- O pipeline chama a API do Dokploy (`application.deploy`) uma vez por
+  Application, com os ids nos secrets do environment do GitHub.
 - Enquanto o Dokploy não estiver configurado, os jobs movem as tags e pulam o
   deploy com um aviso.
 - **Merge em `main` sempre com merge commit** (nunca squash/rebase): a
@@ -275,8 +279,8 @@ Run workflow ─▶ a mesma promoção com uma tag antiga (rollback)
 O passo a passo completo (servidor, Dokploy, GitHub, IA, banco, migrations,
 rollback, backup, alertas e o checklist do primeiro deploy) está em
 [`docs/deploy.md`](./docs/deploy.md). A seção "Os três repositórios juntos"
-dele (igual nos três repositórios) traz a ordem do primeiro deploy (banco,
-Redis e IA → API → web → app), a ordem de cada release e os valores que
+dele (igual nos três repositórios) traz a ordem do primeiro deploy (banco e
+Redis → IA → API → backup → web → app), a ordem de cada release e os valores que
 precisam casar entre a API, a web e o app.
 
 ## Operação e saúde
@@ -284,7 +288,7 @@ precisam casar entre a API, a web e o app.
 | Rota                                                                                       | Para quê                                                                                        |
 | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
 | `GET /health/liveness`                                                                     | o processo está vivo (sonda do Swarm)                                                           |
-| `GET /health/readiness`                                                                    | pode receber tráfego (sonda do Traefik; vira 503 durante o desligamento)                        |
+| `GET /health/readiness`                                                                    | pode receber tráfego (sonda dos monitores; vira 503 durante o desligamento)                     |
 | `GET /health/metrics`                                                                      | filas, workers, crons, pool, provedores, sockets, Redis, certificado do comprovante (só MASTER) |
 | `GET /health/providers`                                                                    | prontidão de cada provedor, sem enviar nada (só MASTER)                                         |
 | `GET /health/dead-letter`, `/health/dead-letter/events`, `POST /health/dead-letter/replay` | o que esgotou as tentativas, e o reenvio                                                        |
@@ -296,21 +300,21 @@ JSON (pino), uma linha por requisição, sem segredo e sem URL crua.
 
 ## Solução de problemas
 
-| Sintoma                                           | Causa provável                                                        | O que fazer                                                                                                                                 |
-| ------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Invalid enviroment variables` no boot            | variável obrigatória faltando ou inválida                             | leia a lista impressa e compare com `docs/variaveis-de-ambiente.md`                                                                         |
-| `wait-for-postgres` desiste                       | Postgres não subiu ou a porta 5432 está ocupada                       | `yarn database:dev:up` e `docker ps`; pare outro Postgres local                                                                             |
-| `P1001` / conexão recusada                        | `DATABASE_URL` aponta para host ou porta errados                      | confira `POSTGRES_HOST`/`POSTGRES_PORT` e a URL expandida                                                                                   |
-| Pedidos de IA parados em `PENDING`                | `trajetto-ai` fora do ar ou `AI_PROVIDER=none`                        | suba o serviço com `--profile ai` ou aceite que fique sem leitura                                                                           |
-| Toda leitura de IA falha com `401`                | `AI_LOCAL_TOKEN` diferente na API e no serviço                        | use o mesmo valor nos dois                                                                                                                  |
-| Login respondendo 429 para todo mundo em produção | `RATE_LIMIT_TRUSTED_PROXY` errado atrás da Cloudflare                 | use `cloudflare` (`docs/deploy.md`, "Domínios, TLS e a borda")                                                                              |
-| Tempo real não chega entre réplicas               | Redis fora ou `SOCKET_ADAPTER_KEY` diferente entre réplicas           | confira o Redis; o resto da API segue funcionando                                                                                           |
-| `/docs` responde 404 em produção                  | sem `DOCS_USER`/`DOCS_PASSWORD` (ou senha com menos de 20 caracteres) | defina as duas                                                                                                                              |
-| PDF do comprovante sem assinatura                 | certificado ausente, vencido ou senha errada                          | veja o estado em `/health/metrics` e o log do boot                                                                                          |
-| E2E cai com _napi panic_ no Windows               | muitos arquivos E2E na mesma execução                                 | rode em lotes de até 8 arquivos                                                                                                             |
-| Boot de produção recusa banco vazio               | volume novo sem migrations                                            | instalação nova: `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` uma única vez; com dados, restaure o dump (`docs/deploy.md`, "Backup e restauração") |
-| Promoção falha com "não existe" no GHCR           | o commit não passou pelo staging, ou o merge foi squash/rebase        | leve o commit a `staging`, espere o verde e faça merge commit                                                                               |
-| Deploy "pulado" no resumo do run                  | o environment do GitHub ainda não tem os secrets do Dokploy           | `docs/deploy.md`, "Configurar o GitHub"                                                                                                     |
+| Sintoma                                           | Causa provável                                                                | O que fazer                                                                                                                                 |
+| ------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Invalid enviroment variables` no boot            | variável obrigatória faltando ou inválida                                     | leia a lista impressa e compare com `docs/variaveis-de-ambiente.md`                                                                         |
+| `wait-for-postgres` desiste                       | Postgres não subiu ou a porta 5432 está ocupada                               | `yarn database:dev:up` e `docker ps`; pare outro Postgres local                                                                             |
+| `P1001` / conexão recusada                        | `DATABASE_URL` aponta para host ou porta errados                              | em dev, confira `POSTGRES_HOST`/`POSTGRES_PORT`; no Dokploy, o host é o App Name do Database PostgreSQL                                     |
+| Pedidos de IA parados em `PENDING`                | `trajetto-ai` fora do ar, `AI_LOCAL_URL` ausente/errada ou `AI_PROVIDER=none` | em dev, suba o serviço com `--profile ai`; no Dokploy, `AI_LOCAL_URL=http://<App Name da IA>:8080`                                          |
+| Toda leitura de IA falha com `401`                | `AI_LOCAL_TOKEN` (API) diferente do `AI_TOKEN` (serviço)                      | use o mesmo valor nos dois e faça Deploy das duas Applications                                                                              |
+| Login respondendo 429 para todo mundo em produção | `RATE_LIMIT_TRUSTED_PROXY` errado atrás da Cloudflare                         | use `cloudflare` (`docs/deploy.md`, "Domínios, TLS e a borda")                                                                              |
+| Tempo real não chega entre réplicas               | Redis fora ou `SOCKET_ADAPTER_KEY` diferente entre réplicas                   | confira o Redis; o resto da API segue funcionando                                                                                           |
+| `/docs` responde 404 em produção                  | sem `DOCS_USER`/`DOCS_PASSWORD` (ou senha com menos de 20 caracteres)         | defina as duas                                                                                                                              |
+| PDF do comprovante sem assinatura                 | certificado ausente, vencido ou senha errada                                  | veja o estado em `/health/metrics` e o log do boot                                                                                          |
+| E2E cai com _napi panic_ no Windows               | muitos arquivos E2E na mesma execução                                         | rode em lotes de até 8 arquivos                                                                                                             |
+| Boot de produção recusa banco vazio               | Database novo sem migrations                                                  | instalação nova: `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` uma única vez; com dados, restaure o dump (`docs/deploy.md`, "Backup e restauração") |
+| Promoção falha com "não existe" no GHCR           | o commit não passou pelo staging, ou o merge foi squash/rebase                | leve o commit a `staging`, espere o verde e faça merge commit                                                                               |
+| Deploy "pulado" no resumo do run                  | o environment do GitHub ainda não tem os secrets do Dokploy                   | `docs/deploy.md`, "Configurar o GitHub"                                                                                                     |
 
 ## Onde está cada decisão
 

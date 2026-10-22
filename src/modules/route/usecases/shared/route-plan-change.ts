@@ -4,10 +4,7 @@ import type { IUserRepository } from "@/modules/user/repositories/IUser-reposito
 import type { OutboxService } from "@/shared/notifications/outbox-service";
 import { logger } from "@/shared/logging/logger";
 
-import {
-  sendRouteEventToBusiness,
-  sendRouteEventToDriver,
-} from "@/websocket";
+import { sendRouteEventToBusiness, sendRouteEventToDriver } from "@/websocket";
 
 import {
   PLANNING_EVENT_TYPES,
@@ -72,7 +69,12 @@ const log = logger.child({ component: "route" });
  * plan_version on its next sync and says so (design §6).
  */
 async function publishPlanChanged(
-  change: { businessId: string; routeId: string; routeCode: number; planVersion: number },
+  change: {
+    businessId: string;
+    routeId: string;
+    routeCode: number;
+    planVersion: number;
+  },
   driverUserId: string | null,
 ): Promise<void> {
   if (!driverUserId || !container.isRegistered("OutboxService")) return;

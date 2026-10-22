@@ -18,9 +18,7 @@ class DeleteBusinessController {
     const deleteBusinessUseCase = container.resolve(DeleteBusinessUseCase);
 
     await deleteBusinessUseCase.execute(businessId, id, code);
-    return reply
-      .status(200)
-      .send({ message: "Empresa deletada com sucesso!" });
+    return reply.status(200).send({ message: "Empresa deletada com sucesso!" });
   }
 }
 

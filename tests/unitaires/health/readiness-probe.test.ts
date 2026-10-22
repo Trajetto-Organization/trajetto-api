@@ -26,8 +26,12 @@ describe("probeUrl", () => {
 
     expect(url.searchParams.get("connection_limit")).toBe("1");
     expect(Number(url.searchParams.get("pool_timeout"))).toBeLessThanOrEqual(2);
-    expect(Number(url.searchParams.get("connect_timeout"))).toBeLessThanOrEqual(3);
-    expect(Number(url.searchParams.get("socket_timeout"))).toBeLessThanOrEqual(3);
+    expect(Number(url.searchParams.get("connect_timeout"))).toBeLessThanOrEqual(
+      3,
+    );
+    expect(Number(url.searchParams.get("socket_timeout"))).toBeLessThanOrEqual(
+      3,
+    );
 
     expect(url.searchParams.get("schema")).toBe("public");
     expect(url.searchParams.get("options")).toBe(

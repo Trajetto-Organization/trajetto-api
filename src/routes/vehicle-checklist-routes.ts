@@ -136,7 +136,9 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
       // one is the office's, refused as a permission (decision 4.1).
       preHandler: [
         verifyBusinessActive,
-        verifyPermission("vehicle_checklist_manage", "write", { allowDriver: false }),
+        verifyPermission("vehicle_checklist_manage", "write", {
+          allowDriver: false,
+        }),
       ],
       schema: {
         security: [{ bearerAuth: [] }],
@@ -166,7 +168,9 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
       onRequest: [ensureAuthenticated],
       // Same as the edit: the driver's grant is for sending, not deleting.
       preHandler: [
-        verifyPermission("vehicle_checklist_manage", "write", { allowDriver: false }),
+        verifyPermission("vehicle_checklist_manage", "write", {
+          allowDriver: false,
+        }),
       ],
       schema: {
         security: [{ bearerAuth: [] }],
@@ -198,7 +202,9 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
       // the back office reading the whole company. Refused by the guard with
       // PERMISSION_DENIED (decision 4.1), like the fuel export.
       preHandler: [
-        verifyPermission("vehicle_checklist_manage", "write", { allowDriver: false }),
+        verifyPermission("vehicle_checklist_manage", "write", {
+          allowDriver: false,
+        }),
       ],
       schema: {
         security: [{ bearerAuth: [] }],
@@ -208,7 +214,9 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
           "Exporta a mesma lista da tela: a mesma busca e os mesmos filtros de condição, filial e veículo, da empresa escolhida (`businessId`, só o MASTER) ou da própria. Motoristas não exportam (403 PERMISSION_DENIED). `format=csv|excel`.",
         querystring: vehicleChecklistSchemas.exportVehicleChecklistsQuery,
         response: {
-          200: exportFileResponse("relatorio-checklists-veiculares-<AAAA-MM-DD>"),
+          200: exportFileResponse(
+            "relatorio-checklists-veiculares-<AAAA-MM-DD>",
+          ),
           400: vehicleChecklistResponses.exportVehicleChecklistErrors,
           403: vehicleChecklistResponses.exportForbidden,
           404: vehicleChecklistResponses.exportBusinessNotFound,

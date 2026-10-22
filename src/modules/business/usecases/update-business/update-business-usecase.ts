@@ -204,7 +204,10 @@ class UpdateBusinessUseCase {
           const { timezone: _timezone, ...headOffice } = businessData;
 
           await this.branch
-            .updateBranch({ branchData: headOffice, branchId: matrixBranch.id }, tx)
+            .updateBranch(
+              { branchData: headOffice, branchId: matrixBranch.id },
+              tx,
+            )
             .catch((error: unknown) => {
               // A sibling branch took the value after the lookups: the
               // branch's own 409, not a company one.

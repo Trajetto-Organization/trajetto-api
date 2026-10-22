@@ -94,7 +94,9 @@ const driverListSearchMeta = searchMetaDoc(
     thirdParty: z
       .number()
       .int()
-      .describe("Terceirizados, com todos os filtros menos o de tipo de contrato."),
+      .describe(
+        "Terceirizados, com todos os filtros menos o de tipo de contrato.",
+      ),
   },
   ["status", "contract_type", "cnh_category", "branchId"],
 );
@@ -109,7 +111,10 @@ const driverPickerItem = z.object({
   name: z.string(),
   status: z.enum(["ACTIVE", "INACTIVE"]),
   ...cnhFields,
-  cnh: z.string().optional().describe("Só para quem lê o cadastro de motoristas."),
+  cnh: z
+    .string()
+    .optional()
+    .describe("Só para quem lê o cadastro de motoristas."),
   branchId: z.string().nullable().optional(),
   businessId: z.string().optional(),
   created_at: isoDate.optional(),

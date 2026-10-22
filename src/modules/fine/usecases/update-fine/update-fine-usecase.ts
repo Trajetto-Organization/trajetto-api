@@ -135,7 +135,10 @@ class UpdateFineUseCase {
 
     // A picked day is stored as the instant it starts in the company's zone.
     if (fineData.violation_date) {
-      fineData.violation_date = fineDateFromInput(fineData.violation_date, timeZone);
+      fineData.violation_date = fineDateFromInput(
+        fineData.violation_date,
+        timeZone,
+      );
     }
 
     if (fineData.due_date) {
@@ -143,7 +146,10 @@ class UpdateFineUseCase {
     }
 
     if (fineData.payment_date) {
-      fineData.payment_date = fineDateFromInput(fineData.payment_date, timeZone);
+      fineData.payment_date = fineDateFromInput(
+        fineData.payment_date,
+        timeZone,
+      );
     }
 
     // The dates as they will be saved, checked together: the edit used to

@@ -10,9 +10,7 @@ import { v7 as uuidv7 } from "uuid";
  */
 const WELL_FORMED_REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
-function inboundRequestId(
-  value: string | string[] | undefined,
-): string | null {
+function inboundRequestId(value: string | string[] | undefined): string | null {
   const candidate = Array.isArray(value) ? value[0] : value;
 
   return typeof candidate === "string" && WELL_FORMED_REQUEST_ID.test(candidate)

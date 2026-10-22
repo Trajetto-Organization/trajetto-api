@@ -10,12 +10,11 @@ class SearchUserCursorController {
     const { id } = request.user;
     // Validated AND transformed by the route (limit is a number now):
     // parsing it again against the wire schema would reject its output.
-    const { limit, cursor, businessId, search } =
-      request.query as z.infer<typeof cursorPaginationByBusinessSchema>;
+    const { limit, cursor, businessId, search } = request.query as z.infer<
+      typeof cursorPaginationByBusinessSchema
+    >;
 
-    const searchUserCursorUseCase = container.resolve(
-      SearchUserCursorUseCase,
-    );
+    const searchUserCursorUseCase = container.resolve(SearchUserCursorUseCase);
 
     const dataPromise = searchUserCursorUseCase.execute({
       userId: id,

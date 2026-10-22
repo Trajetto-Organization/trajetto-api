@@ -52,7 +52,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function seedBill(overrides: Partial<AccountPayable> = {}): Promise<AccountPayable> {
+async function seedBill(
+  overrides: Partial<AccountPayable> = {},
+): Promise<AccountPayable> {
   const created = await bills.createAccountPayable({
     businessId: CARRIER,
     branchId: BRANCH,
@@ -69,9 +71,15 @@ async function seedBill(overrides: Partial<AccountPayable> = {}): Promise<Accoun
 }
 
 const remove = () =>
-  new DeleteAccountPayableUseCase(users, businesses, bills, notifications as never);
+  new DeleteAccountPayableUseCase(
+    users,
+    businesses,
+    bills,
+    notifications as never,
+  );
 
-const exporter = () => new ExportAccountPayableUseCase(users, businesses, bills);
+const exporter = () =>
+  new ExportAccountPayableUseCase(users, businesses, bills);
 
 describe("DeleteAccountPayableUseCase", () => {
   it("deletes an unpaid bill of the company and records the activity", async () => {
@@ -82,14 +90,20 @@ describe("DeleteAccountPayableUseCase", () => {
     expect(deleted.id).toBe(bill.id);
     expect(bills.accountPayables).toHaveLength(0);
     expect(notifications.createActivityIfEnabled).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "delete", entityId: bill.id, businessId: CARRIER }),
+      expect.objectContaining({
+        action: "delete",
+        entityId: bill.id,
+        businessId: CARRIER,
+      }),
     );
   });
 
   it("answers 404 USER_NOT_FOUND for an unknown session user", async () => {
     const bill = await seedBill();
 
-    await expect(remove().execute(bill.id, CARRIER, "nobody")).rejects.toMatchObject({
+    await expect(
+      remove().execute(bill.id, CARRIER, "nobody"),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "USER_NOT_FOUND",
     });
@@ -107,13 +121,18 @@ describe("DeleteAccountPayableUseCase", () => {
   it("answers 404 ACCOUNT_PAYABLE_NOT_FOUND for an unknown bill", async () => {
     await expect(
       remove().execute("018f2100-0000-7000-8000-0000000000fe", CARRIER, ADMIN),
-    ).rejects.toMatchObject({ statusCode: 404, code: "ACCOUNT_PAYABLE_NOT_FOUND" });
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "ACCOUNT_PAYABLE_NOT_FOUND",
+    });
   });
 
   it("refuses a bill of another company named under this one (403), MASTER included", async () => {
     const bill = await seedBill();
 
-    await expect(remove().execute(bill.id, OTHER, MASTER)).rejects.toMatchObject({
+    await expect(
+      remove().execute(bill.id, OTHER, MASTER),
+    ).rejects.toMatchObject({
       statusCode: 403,
       code: "ACCOUNT_PAYABLE_TENANT_MISMATCH",
     });
@@ -125,7 +144,9 @@ describe("DeleteAccountPayableUseCase", () => {
 
     // The use case used to trust the route guard alone: a foreign admin
     // naming the bill's own company deleted it.
-    await expect(remove().execute(bill.id, CARRIER, FOREIGN_ADMIN)).rejects.toMatchObject({
+    await expect(
+      remove().execute(bill.id, CARRIER, FOREIGN_ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 403,
       code: "TENANT_ACCESS_DENIED",
     });
@@ -134,9 +155,13 @@ describe("DeleteAccountPayableUseCase", () => {
   });
 
   it("refuses a paid bill with 409 ACCOUNT_PAYABLE_ALREADY_PAID", async () => {
-    const bill = await seedBill({ payment_date: new Date("2026-10-01T15:00:00.000Z") });
+    const bill = await seedBill({
+      payment_date: new Date("2026-10-01T15:00:00.000Z"),
+    });
 
-    await expect(remove().execute(bill.id, CARRIER, ADMIN)).rejects.toMatchObject({
+    await expect(
+      remove().execute(bill.id, CARRIER, ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "ACCOUNT_PAYABLE_ALREADY_PAID",
     });
@@ -148,7 +173,9 @@ describe("DeleteAccountPayableUseCase", () => {
 
     await remove().execute(bill.id, CARRIER, ADMIN);
 
-    await expect(remove().execute(bill.id, CARRIER, ADMIN)).rejects.toMatchObject({
+    await expect(
+      remove().execute(bill.id, CARRIER, ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "ACCOUNT_PAYABLE_NOT_FOUND",
     });
@@ -224,16 +251,24 @@ describe("ExportAccountPayableUseCase", () => {
   it("lets the MASTER export the company it picked, and 404s an unknown one", async () => {
     await seedBill();
 
-    const result = await exporter().execute({ userId: MASTER, businessId: CARRIER });
+    const result = await exporter().execute({
+      userId: MASTER,
+      businessId: CARRIER,
+    });
     expect(await drain(result.iterator)).toHaveLength(1);
 
     await expect(
-      exporter().execute({ userId: MASTER, businessId: "018f2100-0000-7000-8000-0000000000ff" }),
+      exporter().execute({
+        userId: MASTER,
+        businessId: "018f2100-0000-7000-8000-0000000000ff",
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "TENANT_NOT_FOUND" });
   });
 
   it("answers 404 USER_NOT_FOUND for an unknown session user", async () => {
-    await expect(exporter().execute({ userId: "nobody" })).rejects.toMatchObject({
+    await expect(
+      exporter().execute({ userId: "nobody" }),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "USER_NOT_FOUND",
     });
@@ -246,7 +281,14 @@ describe("create and edit from another company", () => {
 
   it("refuses a create for a company the user does not belong to (403)", async () => {
     const create = new CreateAccountPayableUseCase(
-      users, businesses, unused, unused, bills, unused, unused, unused,
+      users,
+      businesses,
+      unused,
+      unused,
+      bills,
+      unused,
+      unused,
+      unused,
     );
 
     await expect(
@@ -268,7 +310,14 @@ describe("create and edit from another company", () => {
   it("refuses an edit of this company's bill by a foreign user (403)", async () => {
     const bill = await seedBill();
     const update = new UpdateAccountPayableUseCase(
-      users, businesses, unused, unused, bills, unused, unused, unused,
+      users,
+      businesses,
+      unused,
+      unused,
+      bills,
+      unused,
+      unused,
+      unused,
     );
 
     await expect(

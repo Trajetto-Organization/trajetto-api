@@ -9,7 +9,10 @@ import {
   PauseTypeWrongCategoryError,
 } from "../errors/driver-pause-errors";
 import { assertPauseDriver, replayFor } from "../pause-ownership";
-import { journeyRouteOrRefuse, resolvePauseType } from "../pause-type-and-journey";
+import {
+  journeyRouteOrRefuse,
+  resolvePauseType,
+} from "../pause-type-and-journey";
 
 interface StartDriverPauseRequest {
   businessId: string;
@@ -77,13 +80,21 @@ class StartDriverPauseUseCase {
     private pauses: IDriverPauseRepository,
   ) {}
 
-  async execute(request: StartDriverPauseRequest): Promise<StartDriverPauseResult> {
+  async execute(
+    request: StartDriverPauseRequest,
+  ): Promise<StartDriverPauseResult> {
     const result = await this.record(request);
 
-    return { ...result, typeNames: await this.namesOf(request.businessId, result.pause) };
+    return {
+      ...result,
+      typeNames: await this.namesOf(request.businessId, result.pause),
+    };
   }
 
-  private async namesOf(businessId: string, pause: DriverPause): Promise<Map<string, string>> {
+  private async namesOf(
+    businessId: string,
+    pause: DriverPause,
+  ): Promise<Map<string, string>> {
     return this.pauses.pauseTypeNames(businessId, [pause.occurrenceTypeId]);
   }
 
@@ -99,10 +110,15 @@ class StartDriverPauseUseCase {
     longitude,
     note,
     now = new Date(),
-  }: StartDriverPauseRequest): Promise<Omit<StartDriverPauseResult, "typeNames">> {
+  }: StartDriverPauseRequest): Promise<
+    Omit<StartDriverPauseResult, "typeNames">
+  > {
     const driver = assertPauseDriver(driverId);
 
-    const earlier = await this.pauses.findByStartSubmission(businessId, startSubmissionId);
+    const earlier = await this.pauses.findByStartSubmission(
+      businessId,
+      startSubmissionId,
+    );
 
     if (earlier) return replayFor(earlier, driver);
 
@@ -114,12 +130,22 @@ class StartDriverPauseUseCase {
 
     const at = startedAt ?? now;
 
-    const type = await resolvePauseType(this.pauses, businessId, occurrenceTypeId, kind);
+    const type = await resolvePauseType(
+      this.pauses,
+      businessId,
+      occurrenceTypeId,
+      kind,
+    );
 
     // The journey at the moment of the tap, not at arrival: a pause replayed
     // hours later belongs to the route it was taken in, and one tapped with
     // no route released or running is refused.
-    const routeId = await journeyRouteOrRefuse(this.pauses, businessId, driver, at);
+    const routeId = await journeyRouteOrRefuse(
+      this.pauses,
+      businessId,
+      driver,
+      at,
+    );
 
     const result = await this.pauses.createPause({
       kind: type.pause_kind,
@@ -141,14 +167,18 @@ class StartDriverPauseUseCase {
     // A racing resend of the same gesture won the insert. Checked for
     // already-open too: whichever index Postgres reports first, the pause
     // that holds this key is the answer when it exists.
-    const raced = await this.pauses.findByStartSubmission(businessId, startSubmissionId);
+    const raced = await this.pauses.findByStartSubmission(
+      businessId,
+      startSubmissionId,
+    );
 
     if (raced) return replayFor(raced, driver);
 
     if (result.status === "already-open") throw new PauseAlreadyOpenError();
 
     // The type was checked above; it vanished or changed in between.
-    if (result.status === "invalid-type") throw new PauseTypeWrongCategoryError();
+    if (result.status === "invalid-type")
+      throw new PauseTypeWrongCategoryError();
 
     throw new Error(`Unexpected pause conflict: ${result.status}`);
   }

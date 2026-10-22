@@ -60,10 +60,10 @@ fi
 
 echo "Starting disposable Postgres (${CONTAINER}) on port ${PORT}..."
 
-# The image PRODUCTION runs: POSTGRES_IMAGE, the same variable that pins it in
-# compose.production.yaml (export the digest you set there), falling back to
-# the same default. A drill on a different image or data layout does not
-# prove anything about the database being restored.
+# The image PRODUCTION runs: export POSTGRES_IMAGE with the exact image of the
+# Dokploy PostgreSQL database (its Docker Image field, ideally pinned by
+# digest), falling back to the same default. A drill on a different image or
+# data layout does not prove anything about the database being restored.
 IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true

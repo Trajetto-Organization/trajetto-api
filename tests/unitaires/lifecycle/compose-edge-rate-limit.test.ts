@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import { CLOUDFLARE_EDGE_CIDRS, isCloudflareEdge } from "@/config/trusted-edge";
@@ -9,40 +6,13 @@ import { envSchema } from "@/schemas/env-schema";
 /**
  * Which client address production counts, as deployed.
  *
- * Production is Cloudflare -> Traefik -> API. The compose defaulted to `xff`,
- * which behind Cloudflare keys every user by the edge that served them: one
- * login bucket for thousands of people, and a handful of attempts a minute
- * locking all of them out. `cloudflare` is now verified against the edge
- * ranges, so it is the safe default in every topology.
+ * Production is Cloudflare -> Traefik -> API. The old compose defaulted to
+ * `xff`, which behind Cloudflare keys every user by the edge that served
+ * them: one login bucket for thousands of people, and a handful of attempts a
+ * minute locking all of them out. `cloudflare` is now verified against the
+ * edge ranges, and production refuses to boot without an explicit mode (set
+ * in the API Application's environment in Dokploy).
  */
-const compose = readFileSync(
-  resolve(process.cwd(), "compose.production.yaml"),
-  "utf8",
-);
-
-function apiService(): string {
-  const start = compose.indexOf("\n  api:");
-  expect(start, "serviço api não encontrado").toBeGreaterThan(-1);
-
-  const rest = compose.slice(start + 1);
-  const next = rest.slice(1).search(/\n  [\w-]+:\r?\n/);
-
-  return next < 0 ? rest : rest.slice(0, next + 1);
-}
-
-describe("the API's client-address mode in production", () => {
-  it("defaults to the verified Cloudflare mode", () => {
-    expect(apiService()).toMatch(
-      /RATE_LIMIT_TRUSTED_PROXY: \$\{RATE_LIMIT_TRUSTED_PROXY:-cloudflare\}/,
-    );
-  });
-
-  it("passes the optional edge secret through, empty when unset", () => {
-    expect(apiService()).toMatch(
-      /RATE_LIMIT_EDGE_SECRET: \$\{RATE_LIMIT_EDGE_SECRET:-\}/,
-    );
-  });
-});
 
 const production = {
   NODE_ENV: "production",
@@ -67,6 +37,17 @@ function issuesFor(overrides: Record<string, string | undefined>): string[] {
     ? []
     : result.error.issues.map((issue) => issue.path.join("."));
 }
+
+describe("RATE_LIMIT_TRUSTED_PROXY in production", () => {
+  it("must be set: no deploy default picks the mode any more", () => {
+    // The compose used to supply `cloudflare`; an Application has only what
+    // its environment says, so the schema is what refuses the gap.
+    expect(issuesFor({ RATE_LIMIT_TRUSTED_PROXY: undefined })).toContain(
+      "RATE_LIMIT_TRUSTED_PROXY",
+    );
+    expect(issuesFor({})).toEqual([]);
+  });
+});
 
 describe("RATE_LIMIT_EDGE_SECRET", () => {
   it("is optional, and an empty value counts as absent", () => {

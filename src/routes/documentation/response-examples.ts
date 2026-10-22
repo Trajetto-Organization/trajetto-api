@@ -111,12 +111,20 @@ const publicRoute: PublicRoute = {
     {
       sequence: 1,
       status: "COMPLETED",
-      delivery: { id: NEXT_DELIVERY_ID, code: "PED-10453", invoice_key: NEXT_INVOICE_KEY },
+      delivery: {
+        id: NEXT_DELIVERY_ID,
+        code: "PED-10453",
+        invoice_key: NEXT_INVOICE_KEY,
+      },
     },
     {
       sequence: 2,
       status: "PENDING",
-      delivery: { id: DELIVERY_ID, code: "PED-10452", invoice_key: INVOICE_KEY },
+      delivery: {
+        id: DELIVERY_ID,
+        code: "PED-10452",
+        invoice_key: INVOICE_KEY,
+      },
     },
   ],
 
@@ -128,7 +136,11 @@ const publicEvents: PublicEvent[] = [
     id: "0192f7f2-7a8b-7c9d-8e0f-1a2b3c4d5e6f",
     topic: "delivery.delivered",
     occurred_at: "2026-09-24T09:41:07.000Z",
-    delivery: { id: NEXT_DELIVERY_ID, code: "PED-10453", invoice_key: NEXT_INVOICE_KEY },
+    delivery: {
+      id: NEXT_DELIVERY_ID,
+      code: "PED-10453",
+      invoice_key: NEXT_INVOICE_KEY,
+    },
     data: {
       status_from: "IN_TRANSIT",
       status_to: "DELIVERED",
@@ -140,7 +152,11 @@ const publicEvents: PublicEvent[] = [
     id: "0192f7f2-8b9c-7d0e-9f1a-2b3c4d5e6f7a",
     topic: "proof.registered",
     occurred_at: "2026-09-24T09:41:07.000Z",
-    delivery: { id: NEXT_DELIVERY_ID, code: "PED-10453", invoice_key: NEXT_INVOICE_KEY },
+    delivery: {
+      id: NEXT_DELIVERY_ID,
+      code: "PED-10453",
+      invoice_key: NEXT_INVOICE_KEY,
+    },
     data: {
       status_from: null,
       status_to: null,
@@ -388,7 +404,8 @@ const RESPONSE_EXAMPLES: ResponseExamples = {
         {
           id: "0192f7a0-1e2f-7a3b-8c4d-5e6f7a8b9c0f",
           name: "Entrega normal",
-          description: "Comprovação padrão: foto do canhoto e assinatura opcional.",
+          description:
+            "Comprovação padrão: foto do canhoto e assinatura opcional.",
           requires_photo: false,
           blocks_delivery: false,
           requires_authorization: false,
@@ -445,7 +462,10 @@ const RESPONSE_EXAMPLES: ResponseExamples = {
 };
 
 /** The examples for one route, by status; empty when it has none. */
-function responseExamplesFor(method: string, url: string): Record<string, unknown> {
+function responseExamplesFor(
+  method: string,
+  url: string,
+): Record<string, unknown> {
   return RESPONSE_EXAMPLES[`${method.toUpperCase()} ${url}`] ?? {};
 }
 

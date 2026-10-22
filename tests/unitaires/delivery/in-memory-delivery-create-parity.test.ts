@@ -13,7 +13,9 @@ import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-m
  * branches depend on the second insert failing. The twin enforced only the
  * NF-e key, so a second create with the same key succeeded in memory.
  */
-const base = (overrides: Partial<CreateDeliveryProps> = {}): CreateDeliveryProps => ({
+const base = (
+  overrides: Partial<CreateDeliveryProps> = {},
+): CreateDeliveryProps => ({
   recipient_name: "Destinatário",
   city: "São Paulo",
   uf: "SP",
@@ -29,9 +31,13 @@ describe("the in-memory createDelivery", () => {
 
     await repository.createDelivery(base({ client_submission_id: "key-1" }));
 
-    const second = repository.createDelivery(base({ client_submission_id: "key-1" }));
+    const second = repository.createDelivery(
+      base({ client_submission_id: "key-1" }),
+    );
 
-    await expect(second).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    await expect(second).rejects.toBeInstanceOf(
+      Prisma.PrismaClientKnownRequestError,
+    );
     await expect(second).rejects.toMatchObject({
       code: "P2002",
       meta: { target: ["businessId", "client_submission_id"] },
@@ -45,7 +51,9 @@ describe("the in-memory createDelivery", () => {
     const repository = new InMemoryDeliveryRepository();
 
     await repository.createDelivery(base({ client_submission_id: "key-1" }));
-    await repository.createDelivery(base({ businessId: "b2", client_submission_id: "key-1" }));
+    await repository.createDelivery(
+      base({ businessId: "b2", client_submission_id: "key-1" }),
+    );
     await repository.createDelivery(base());
     await repository.createDelivery(base());
 
@@ -55,7 +63,9 @@ describe("the in-memory createDelivery", () => {
   it("keeps the API key that created it (the origin INTEGRATION)", async () => {
     const repository = new InMemoryDeliveryRepository();
 
-    const byKey = await repository.createDelivery(base({ apiKeyId: "api-key-1" }));
+    const byKey = await repository.createDelivery(
+      base({ apiKeyId: "api-key-1" }),
+    );
     const byPanel = await repository.createDelivery(base());
 
     expect(byKey.apiKeyId).toBe("api-key-1");

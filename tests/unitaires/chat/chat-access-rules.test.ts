@@ -99,7 +99,9 @@ describe("readBusinessIdPayload", () => {
   // Redis with every emit, and any string up to the 16 KB frame was taken.
   it("takes only a company id shaped like one, lower-cased", () => {
     expect(readBusinessIdPayload({ businessId: "not-a-company" })).toBeNull();
-    expect(readBusinessIdPayload({ businessId: "x".repeat(16_000) })).toBeNull();
+    expect(
+      readBusinessIdPayload({ businessId: "x".repeat(16_000) }),
+    ).toBeNull();
     expect(
       readBusinessIdPayload({ businessId: `${BUSINESS}${" ".repeat(60)}` }),
     ).toBeNull();

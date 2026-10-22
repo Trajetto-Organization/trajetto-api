@@ -198,7 +198,11 @@ async function seedUser(
   );
 }
 
-function patch(body: Record<string, unknown>, token = managerToken, fuelId = historical) {
+function patch(
+  body: Record<string, unknown>,
+  token = managerToken,
+  fuelId = historical,
+) {
   return app.inject({
     method: "PATCH",
     url: `/fuel/update-fuel/${fuelId}/business/${CARRIER}`,
@@ -298,7 +302,9 @@ describe("PATCH /fuel/update-fuel — a historical record keeps its links", () =
 
     expect(response.statusCode).toBe(200);
 
-    const stored = await prisma.fuel.findUniqueOrThrow({ where: { id: historical } });
+    const stored = await prisma.fuel.findUniqueOrThrow({
+      where: { id: historical },
+    });
 
     expect(stored.price_per_liter.toNumber()).toBe(5.49);
     expect(stored.total_amount.toNumber()).toBe(549);
@@ -333,7 +339,11 @@ describe("PATCH /fuel/update-fuel — a historical record keeps its links", () =
       },
     });
 
-    const response = await patch({ vehicleId: SOLD_TRUCK }, managerToken, other.id);
+    const response = await patch(
+      { vehicleId: SOLD_TRUCK },
+      managerToken,
+      other.id,
+    );
 
     expect(response.statusCode).toBe(400);
     expect(response.body).toContain("ativo");
@@ -356,12 +366,20 @@ describe("PATCH /fuel/update-fuel — a historical record keeps its links", () =
       },
     });
 
-    const toFormerDriver = await patch({ driverId: FORMER_DRIVER }, managerToken, other.id);
+    const toFormerDriver = await patch(
+      { driverId: FORMER_DRIVER },
+      managerToken,
+      other.id,
+    );
 
     expect(toFormerDriver.statusCode).toBe(422);
     expect(toFormerDriver.body).toContain("DRIVER_INACTIVE");
 
-    const toClosedBranch = await patch({ branchId: CLOSED_BRANCH }, managerToken, other.id);
+    const toClosedBranch = await patch(
+      { branchId: CLOSED_BRANCH },
+      managerToken,
+      other.id,
+    );
 
     expect(toClosedBranch.statusCode).toBe(409);
     expect(toClosedBranch.body).toContain("BRANCH_INACTIVE");
@@ -378,7 +396,9 @@ describe("PATCH /fuel/update-fuel — a historical record keeps its links", () =
 
     expect(response.statusCode).toBe(200);
 
-    const stored = await prisma.fuel.findUniqueOrThrow({ where: { id: historical } });
+    const stored = await prisma.fuel.findUniqueOrThrow({
+      where: { id: historical },
+    });
 
     // The record still points at its own photo: the list signs whatever key
     // is stored, so a foreign key here was a read of another company's file.
@@ -394,7 +414,9 @@ describe("PATCH /fuel/update-fuel — a historical record keeps its links", () =
     expect(response.statusCode).toBe(400);
     expect(response.json().code).toBe("DRIVER_NOT_FOUND");
 
-    const stored = await prisma.fuel.findUniqueOrThrow({ where: { id: historical } });
+    const stored = await prisma.fuel.findUniqueOrThrow({
+      where: { id: historical },
+    });
 
     expect(stored.driverId).toBe(FORMER_DRIVER);
   });
@@ -410,11 +432,21 @@ describe("PATCH /fuel/update-fuel — a historical record keeps its links", () =
   });
 
   it("answers another company's manager with 403 and a missing id with 404", async () => {
-    expect((await patch({ price_per_liter: "4" }, otherManagerToken)).statusCode).toBe(403);
-    expect((await patch({ price_per_liter: "4" }, readOnlyToken)).statusCode).toBe(403);
-    expect((await patch({ price_per_liter: "4" }, driverToken)).statusCode).not.toBe(200);
+    expect(
+      (await patch({ price_per_liter: "4" }, otherManagerToken)).statusCode,
+    ).toBe(403);
+    expect(
+      (await patch({ price_per_liter: "4" }, readOnlyToken)).statusCode,
+    ).toBe(403);
+    expect(
+      (await patch({ price_per_liter: "4" }, driverToken)).statusCode,
+    ).not.toBe(200);
 
-    const missing = await patch({ price_per_liter: "4" }, managerToken, randomUUID());
+    const missing = await patch(
+      { price_per_liter: "4" },
+      managerToken,
+      randomUUID(),
+    );
 
     expect(missing.statusCode).toBe(404);
     expect(missing.body).toContain("FUEL_NOT_FOUND");
@@ -439,7 +471,11 @@ describe("the km of a refueling on its vehicle's timeline", () => {
 
   const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
 
-  const refuel = async (mileage: number, when: Date, vehicleId = TIMELINE_TRUCK) =>
+  const refuel = async (
+    mileage: number,
+    when: Date,
+    vehicleId = TIMELINE_TRUCK,
+  ) =>
     (
       await prisma.fuel.create({
         data: {
@@ -464,7 +500,10 @@ describe("the km of a refueling on its vehicle's timeline", () => {
       .current_mileage;
 
   const setOdometer = (current_mileage: number, vehicleId = TIMELINE_TRUCK) =>
-    prisma.vehicle.update({ where: { id: vehicleId }, data: { current_mileage } });
+    prisma.vehicle.update({
+      where: { id: vehicleId },
+      data: { current_mileage },
+    });
 
   const checklistAt = (mileage: number, when: Date) =>
     prisma.vehicleChecklist.create({
@@ -523,7 +562,9 @@ describe("the km of a refueling on its vehicle's timeline", () => {
     const trucks = [TIMELINE_TRUCK, TARGET_TRUCK];
 
     await prisma.fuel.deleteMany({ where: { vehicleId: { in: trucks } } });
-    await prisma.vehicleChecklist.deleteMany({ where: { vehicleId: { in: trucks } } });
+    await prisma.vehicleChecklist.deleteMany({
+      where: { vehicleId: { in: trucks } },
+    });
     await prisma.vehicle.updateMany({
       where: { id: { in: trucks } },
       data: { current_mileage: 50_000, last_maintenance_mileage: null },
@@ -545,64 +586,100 @@ describe("the km of a refueling on its vehicle's timeline", () => {
       // Red before: "must be above the vehicle's 50.000 km" refused any past km.
       // Downwards also proves the record is left out of its own neighbours:
       // counted, its stored 45.500 would be the reading "before" it.
-      const response = await patch({ current_mileage: "44500" }, managerToken, readings.typo);
+      const response = await patch(
+        { current_mileage: "44500" },
+        managerToken,
+        readings.typo,
+      );
 
       expect(response.statusCode, response.body).toBe(200);
 
-      const stored = await prisma.fuel.findUniqueOrThrow({ where: { id: readings.typo } });
+      const stored = await prisma.fuel.findUniqueOrThrow({
+        where: { id: readings.typo },
+      });
 
       expect(stored.current_mileage).toBe(44_500);
       expect(await odometer()).toBe(50_000);
     });
 
     it("refuses a reading past the next refueling or below the previous one", async () => {
-      const pastNext = await patch({ current_mileage: "48500" }, managerToken, readings.typo);
+      const pastNext = await patch(
+        { current_mileage: "48500" },
+        managerToken,
+        readings.typo,
+      );
 
       expect(pastNext.statusCode).toBe(400);
       expect(pastNext.json().code).toBe("VEHICLE_MILEAGE_INVALID");
       // Red before: "deve ser maior que a quilometragem atual do veículo",
       // which told the manager a correction was impossible.
-      expect(pastNext.json().message).toContain("entre a leitura anterior e a seguinte");
+      expect(pastNext.json().message).toContain(
+        "entre a leitura anterior e a seguinte",
+      );
       expect(pastNext.json().message).not.toContain("deve ser maior");
 
-      const belowPrevious = await patch({ current_mileage: "39000" }, managerToken, readings.typo);
+      const belowPrevious = await patch(
+        { current_mileage: "39000" },
+        managerToken,
+        readings.typo,
+      );
 
       expect(belowPrevious.statusCode).toBe(400);
       expect(belowPrevious.json().code).toBe("VEHICLE_MILEAGE_INVALID");
 
-      const stored = await prisma.fuel.findUniqueOrThrow({ where: { id: readings.typo } });
+      const stored = await prisma.fuel.findUniqueOrThrow({
+        where: { id: readings.typo },
+      });
 
       expect(stored.current_mileage).toBe(45_500);
     });
 
     it("refuses raising a past refueling above the odometer, past the later one", async () => {
-      const response = await patch({ current_mileage: "51000" }, managerToken, readings.typo);
+      const response = await patch(
+        { current_mileage: "51000" },
+        managerToken,
+        readings.typo,
+      );
 
       expect(response.statusCode).toBe(400);
       expect(response.json().code).toBe("VEHICLE_MILEAGE_INVALID");
       expect(await odometer()).toBe(50_000);
 
-      const stored = await prisma.fuel.findUniqueOrThrow({ where: { id: readings.typo } });
+      const stored = await prisma.fuel.findUniqueOrThrow({
+        where: { id: readings.typo },
+      });
 
       expect(stored.current_mileage).toBe(45_500);
     });
 
     it("corrects the newest refueling below an odometer it did not set, and leaves it", async () => {
       // The 50.000 came from the vehicle's registration, not this refueling.
-      const response = await patch({ current_mileage: "47000" }, managerToken, readings.last);
+      const response = await patch(
+        { current_mileage: "47000" },
+        managerToken,
+        readings.last,
+      );
 
       expect(response.statusCode, response.body).toBe(200);
       expect(await odometer()).toBe(50_000);
     });
 
     it("moves the odometer forward for a reading ahead of it, and back with its correction", async () => {
-      const ahead = await patch({ current_mileage: "51000" }, managerToken, readings.last);
+      const ahead = await patch(
+        { current_mileage: "51000" },
+        managerToken,
+        readings.last,
+      );
 
       expect(ahead.statusCode, ahead.body).toBe(200);
       expect(await odometer()).toBe(51_000);
 
       // A typo on the latest refueling used to freeze the odometer.
-      const back = await patch({ current_mileage: "49000" }, managerToken, readings.last);
+      const back = await patch(
+        { current_mileage: "49000" },
+        managerToken,
+        readings.last,
+      );
 
       expect(back.statusCode, back.body).toBe(200);
       expect(await odometer()).toBe(49_000);
@@ -615,13 +692,21 @@ describe("the km of a refueling on its vehicle's timeline", () => {
       // cannot read less, and neither can the odometer it drags along.
       await checklistAt(47_500, daysAgo(3));
 
-      const belowChecklist = await patch({ current_mileage: "47000" }, managerToken, readings.last);
+      const belowChecklist = await patch(
+        { current_mileage: "47000" },
+        managerToken,
+        readings.last,
+      );
 
       expect(belowChecklist.statusCode).toBe(400);
       expect(belowChecklist.json().code).toBe("VEHICLE_MILEAGE_INVALID");
       expect(await odometer()).toBe(51_000);
 
-      const aboveIt = await patch({ current_mileage: "48000" }, managerToken, readings.last);
+      const aboveIt = await patch(
+        { current_mileage: "48000" },
+        managerToken,
+        readings.last,
+      );
 
       expect(aboveIt.statusCode, aboveIt.body).toBe(200);
       expect(await odometer()).toBe(48_000);
@@ -639,9 +724,13 @@ describe("the km of a refueling on its vehicle's timeline", () => {
       expect(beforeFirst.statusCode).toBe(400);
       expect(beforeFirst.json().code).toBe("VEHICLE_MILEAGE_INVALID");
 
-      const unchanged = await prisma.fuel.findUniqueOrThrow({ where: { id: readings.typo } });
+      const unchanged = await prisma.fuel.findUniqueOrThrow({
+        where: { id: readings.typo },
+      });
 
-      expect(unchanged.refueling_date.getTime()).toBeGreaterThan(daysAgo(6).getTime());
+      expect(unchanged.refueling_date.getTime()).toBeGreaterThan(
+        daysAgo(6).getTime(),
+      );
 
       // A move that keeps the order is a plain correction.
       const inOrder = await patch(
@@ -660,7 +749,11 @@ describe("the km of a refueling on its vehicle's timeline", () => {
       const frozen = await refuel(510_000, daysAgo(4));
       await setOdometer(510_000);
 
-      const response = await patch({ current_mileage: "46000" }, managerToken, frozen);
+      const response = await patch(
+        { current_mileage: "46000" },
+        managerToken,
+        frozen,
+      );
 
       // Red before: the correction fit between 45.500 and 48.000 and left
       // the odometer at 510.000, so every later record was still refused.
@@ -674,7 +767,11 @@ describe("the km of a refueling on its vehicle's timeline", () => {
       const wrongTruck = await refuel(121_000, daysAgo(1));
       await setOdometer(121_000);
 
-      const response = await patch({ vehicleId: TARGET_TRUCK }, managerToken, wrongTruck);
+      const response = await patch(
+        { vehicleId: TARGET_TRUCK },
+        managerToken,
+        wrongTruck,
+      );
 
       expect(response.statusCode, response.body).toBe(200);
       expect(await odometer(TARGET_TRUCK)).toBe(121_000);
@@ -692,7 +789,9 @@ describe("the km of a refueling on its vehicle's timeline", () => {
       expect(typo.statusCode, typo.body).toBe(400);
       expect(typo.json().code).toBe("VEHICLE_MILEAGE_INVALID");
       expect(await odometer()).toBe(50_000);
-      expect(await prisma.fuel.count({ where: { vehicleId: TIMELINE_TRUCK } })).toBe(3);
+      expect(
+        await prisma.fuel.count({ where: { vehicleId: TIMELINE_TRUCK } }),
+      ).toBe(3);
 
       const between = await create(46_000, daysAgo(4));
 
@@ -782,7 +881,9 @@ describe("GET /fuel/get-previous-fuel — the details dialog's consumption", () 
   });
 
   it("shows a driver only the vehicle they operate (decision 4.4)", async () => {
-    expect((await previous(DRIVERS_TRUCK, CARRIER, driverToken)).statusCode).toBe(200);
+    expect(
+      (await previous(DRIVERS_TRUCK, CARRIER, driverToken)).statusCode,
+    ).toBe(200);
 
     // Another truck of the same company: its fuelings are not the driver's.
     // Refused with the code the vehicle routes give the same case.

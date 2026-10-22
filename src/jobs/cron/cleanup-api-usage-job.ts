@@ -51,7 +51,9 @@ const cleanupApiUsageJob: CronJobDefinition = {
     const deadline = Date.now() + PURGE_RUN_BUDGET_MS;
 
     // The last 400 civil days (UTC, like `day`), today included.
-    const cutoff = new Date(Date.now() - (API_USAGE_RETENTION_DAYS - 1) * DAY_MS);
+    const cutoff = new Date(
+      Date.now() - (API_USAGE_RETENTION_DAYS - 1) * DAY_MS,
+    );
 
     const result = await deleteInBatches({
       table: Prisma.sql`"api_key_usage_daily"`,

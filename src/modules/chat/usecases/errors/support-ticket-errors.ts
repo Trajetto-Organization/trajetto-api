@@ -42,7 +42,11 @@ class SupportTicketAssigneeNotFoundError extends AppError {
 }
 
 class SupportTicketClosedError extends SupportTicketDetailedError {
-  constructor(details: { ticketId: string; number: number; closed_at: Date | null }) {
+  constructor(details: {
+    ticketId: string;
+    number: number;
+    closed_at: Date | null;
+  }) {
     super(
       `O atendimento #${details.number} já foi encerrado.`,
       409,

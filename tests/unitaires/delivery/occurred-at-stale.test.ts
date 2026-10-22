@@ -76,7 +76,11 @@ describe("isOccurredAtStale", () => {
     // Every build before MOB-08 sends none, and must keep today's behaviour.
     expect(isOccurredAtStale({ now: NOW })).toBe(false);
     expect(
-      isOccurredAtStale({ occurredAt: "ontem", clientSentAt: "agora", now: NOW }),
+      isOccurredAtStale({
+        occurredAt: "ontem",
+        clientSentAt: "agora",
+        now: NOW,
+      }),
     ).toBe(false);
   });
 

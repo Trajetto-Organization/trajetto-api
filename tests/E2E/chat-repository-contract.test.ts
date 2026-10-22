@@ -67,7 +67,10 @@ async function seedPostgres(): Promise<void> {
 
   await prisma.chatThread.createMany({ data: [...CHAT_THREADS] });
   await prisma.chatMessage.createMany({
-    data: CHAT_MESSAGES.map((message) => ({ ...message, kind: "TEXT" as const })),
+    data: CHAT_MESSAGES.map((message) => ({
+      ...message,
+      kind: "TEXT" as const,
+    })),
   });
   await prisma.chatThreadRead.createMany({ data: [...CHAT_READS] });
 

@@ -51,7 +51,9 @@ async function genericPlan(query: Prisma.Sql): Promise<PlanNode> {
 
   return prisma.$transaction(async (tx) => {
     await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
-    await tx.$executeRawUnsafe("SET LOCAL plan_cache_mode = force_generic_plan");
+    await tx.$executeRawUnsafe(
+      "SET LOCAL plan_cache_mode = force_generic_plan",
+    );
     await tx.$executeRawUnsafe(`PREPARE ${name} AS ${query.text}`);
 
     const args = query.values.length
@@ -134,7 +136,10 @@ afterAll(async () => {
 
 describe("one batch of the nightly purge", () => {
   const statement = () =>
-    publishedPurgeBatchSql(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 5_000);
+    publishedPurgeBatchSql(
+      new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      5_000,
+    );
 
   it("takes the due events through the partial index, never a scan", async () => {
     const nodes = flatten(await genericPlan(statement()));

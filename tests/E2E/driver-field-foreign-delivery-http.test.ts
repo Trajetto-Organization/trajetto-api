@@ -53,7 +53,11 @@ async function seedBusiness(id: string, cnpj: string): Promise<void> {
   });
 }
 
-async function seedDriver(id: string, businessId: string, cpf: string): Promise<void> {
+async function seedDriver(
+  id: string,
+  businessId: string,
+  cpf: string,
+): Promise<void> {
   await prisma.driver.create({
     data: {
       id,
@@ -125,10 +129,14 @@ beforeAll(async () => {
     },
   });
 
-  driverToken = sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: userId,
-    expiresIn: "15m",
-  });
+  driverToken = sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: userId,
+      expiresIn: "15m",
+    },
+  );
 
   ({ app } = await import("@/http"));
   await app.ready();
@@ -142,7 +150,11 @@ afterAll(async () => {
 const routes = {
   arrival: (deliveryId: string) => ({
     url: `/delivery/arrival/${deliveryId}/business/${CARRIER}`,
-    payload: { client_submission_id: randomUUID(), latitude: -23.55, longitude: -46.63 },
+    payload: {
+      client_submission_id: randomUUID(),
+      latitude: -23.55,
+      longitude: -46.63,
+    },
   }),
   proof: (deliveryId: string) => ({
     url: `/delivery/proof/${deliveryId}/business/${CARRIER}`,
@@ -172,7 +184,10 @@ describe.each(Object.entries(routes))("the %s route", (_name, route) => {
       }),
     );
 
-    expect(answers[0]).toMatchObject({ status: 404, code: "DELIVERY_NOT_FOUND" });
+    expect(answers[0]).toMatchObject({
+      status: 404,
+      code: "DELIVERY_NOT_FOUND",
+    });
     expect(answers[1]).toEqual(answers[0]);
   });
 });
@@ -183,5 +198,9 @@ it("left the other company's delivery as it was", async () => {
   });
 
   expect(delivery.status).toBe("IN_TRANSIT");
-  expect(await prisma.deliveryEvent.count({ where: { deliveryId: FOREIGN_DELIVERY } })).toBe(0);
+  expect(
+    await prisma.deliveryEvent.count({
+      where: { deliveryId: FOREIGN_DELIVERY },
+    }),
+  ).toBe(0);
 });

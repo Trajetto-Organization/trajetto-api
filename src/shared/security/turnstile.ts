@@ -109,7 +109,10 @@ async function verifyTurnstileToken(
   if (outcome.success !== true) {
     // The error codes say why (expired, duplicate, forged) and carry nothing
     // secret; the token itself is never logged.
-    log.warn({ errorCodes: outcome["error-codes"] }, "Turnstile token rejected");
+    log.warn(
+      { errorCodes: outcome["error-codes"] },
+      "Turnstile token rejected",
+    );
 
     throw challengeFailed("TURNSTILE_FAILED");
   }

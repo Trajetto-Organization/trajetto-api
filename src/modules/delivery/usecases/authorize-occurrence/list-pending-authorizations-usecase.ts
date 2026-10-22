@@ -97,7 +97,10 @@ class ListPendingAuthorizationsUseCase {
         form_answers: row.form_answers,
         form_version: row.form_version,
         form_fields: readFormFields(row.occurrenceType.form_fields),
-        answers: labelledAnswers(row.occurrenceType.form_fields, row.form_answers),
+        answers: labelledAnswers(
+          row.occurrenceType.form_fields,
+          row.form_answers,
+        ),
         reportedBy: { id: row.reportedBy.id, name: row.reportedBy.name },
         occurred_at: row.occurred_at,
         created_at: row.created_at,
@@ -115,4 +118,8 @@ class ListPendingAuthorizationsUseCase {
   }
 }
 
-export { ESCALATION_AFTER_MS, ListPendingAuthorizationsUseCase, PENDING_QUEUE_LIMIT };
+export {
+  ESCALATION_AFTER_MS,
+  ListPendingAuthorizationsUseCase,
+  PENDING_QUEUE_LIMIT,
+};

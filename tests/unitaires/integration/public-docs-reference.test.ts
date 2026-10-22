@@ -80,14 +80,18 @@ function operations(): Array<{ id: string; path: string; operation: Json }> {
 
 function keyed() {
   return operations().filter(({ operation }) =>
-    (operation.security ?? []).some((requirement: Json) => "apiKey" in requirement),
+    (operation.security ?? []).some(
+      (requirement: Json) => "apiKey" in requirement,
+    ),
   );
 }
 
 /** Every `nullable` KEYWORD left anywhere (a property named so is an object). */
 function nullableKeywords(node: unknown, path = "$"): string[] {
   if (Array.isArray(node)) {
-    return node.flatMap((item, index) => nullableKeywords(item, `${path}[${index}]`));
+    return node.flatMap((item, index) =>
+      nullableKeywords(item, `${path}[${index}]`),
+    );
   }
 
   if (!node || typeof node !== "object") return [];
@@ -124,7 +128,9 @@ describe("the public reference's shape", () => {
       expect(operation.tags[0], id).not.toBe(OTHER_TAG.name);
     }
 
-    const used = new Set(operations().map(({ operation }) => operation.tags[0]));
+    const used = new Set(
+      operations().map(({ operation }) => operation.tags[0]),
+    );
 
     expect(document.tags.map((tag: Json) => tag.name)).toEqual(
       names.filter((name) => used.has(name)),
@@ -132,25 +138,34 @@ describe("the public reference's shape", () => {
   });
 
   it("names every operation once, for code generators", () => {
-    const ids = operations().map(({ id, operation }) => [id, operation.operationId]);
+    const ids = operations().map(({ id, operation }) => [
+      id,
+      operation.operationId,
+    ]);
 
     for (const [id, operationId] of ids) {
       expect(operationId, id).toMatch(/^[a-z][A-Za-z]+$/);
     }
 
-    expect(new Set(ids.map(([, operationId]) => operationId)).size).toBe(ids.length);
+    expect(new Set(ids.map(([, operationId]) => operationId)).size).toBe(
+      ids.length,
+    );
   });
 
   it("titles every endpoint in Portuguese", () => {
     for (const { id, operation } of operations()) {
       expect(operation.summary, id).toBeTruthy();
       // English function words that are not also Portuguese ones.
-      expect(operation.summary, id).not.toMatch(/\b(the|of|one|what|this|every|which)\b/i);
+      expect(operation.summary, id).not.toMatch(
+        /\b(the|of|one|what|this|every|which)\b/i,
+      );
     }
   });
 
   it("names the scope each keyed endpoint needs, next to the lock", () => {
-    const grantable = API_SCOPES.filter((scope) => !RESERVED_API_SCOPES.includes(scope));
+    const grantable = API_SCOPES.filter(
+      (scope) => !RESERVED_API_SCOPES.includes(scope),
+    );
 
     for (const { id, operation } of keyed()) {
       const [requirement] = operation.security;
@@ -165,10 +180,13 @@ describe("the public reference's shape", () => {
 describe("what every answer carries", () => {
   it("publishes x-request-id on every response, and retry-after on every 503", () => {
     for (const { id, operation } of operations()) {
-      for (const [status, response] of Object.entries(operation.responses as Json)) {
-        expect(Object.keys(response.headers ?? {}), `${id} ${status}`).toContain(
-          "x-request-id",
-        );
+      for (const [status, response] of Object.entries(
+        operation.responses as Json,
+      )) {
+        expect(
+          Object.keys(response.headers ?? {}),
+          `${id} ${status}`,
+        ).toContain("x-request-id");
 
         if (status === "503") {
           expect(Object.keys(response.headers ?? {}), `${id} 503`).toContain(
@@ -181,7 +199,9 @@ describe("what every answer carries", () => {
 
   it("publishes every refusal with the code the client decides on", () => {
     for (const { id, operation } of operations()) {
-      for (const [status, response] of Object.entries(operation.responses as Json)) {
+      for (const [status, response] of Object.entries(
+        operation.responses as Json,
+      )) {
         if (Number(status) < 400) continue;
 
         const schema = jsonSchema(response);
@@ -198,7 +218,9 @@ describe("what every answer carries", () => {
     for (const { id, operation } of keyed()) {
       const schema = jsonSchema(operation.responses["503"]);
 
-      expect(schema?.properties?.code?.enum, id).toEqual(["SERVICE_UNAVAILABLE"]);
+      expect(schema?.properties?.code?.enum, id).toEqual([
+        "SERVICE_UNAVAILABLE",
+      ]);
       expect(schema?.required, id).toContain("requestId");
       expect(operation.responses["503"].description, id).toContain(
         `${DATABASE_RETRY_AFTER_SECONDS} s`,
@@ -224,7 +246,10 @@ describe("the webhooks", () => {
     for (const topic of ALL_TOPICS) {
       const post = document.webhooks[topic].post;
 
-      expect(post.parameters.map((parameter: Json) => parameter.name), topic).toEqual([
+      expect(
+        post.parameters.map((parameter: Json) => parameter.name),
+        topic,
+      ).toEqual([
         "X-Trajetto-Event-Id",
         "X-Trajetto-Delivery",
         "X-Trajetto-Topic",
@@ -237,7 +262,10 @@ describe("the webhooks", () => {
       expect(body.properties.data.$ref, topic).toBe(
         `#/components/schemas/${TOPIC_PAYLOAD[topic]}`,
       );
-      expect(document.components.schemas[TOPIC_PAYLOAD[topic]], topic).toBeDefined();
+      expect(
+        document.components.schemas[TOPIC_PAYLOAD[topic]],
+        topic,
+      ).toBeDefined();
     }
   });
 });
@@ -254,7 +282,9 @@ describe("the numbers the guides print", () => {
 
     expect(document["x-trajetto-webhooks"]).toMatchObject({
       timeout_seconds: WEBHOOK_TIMEOUT_MS / 1000,
-      retry_delays_seconds: WEBHOOK_RETRY_DELAYS_MS.map((delay) => delay / 1000),
+      retry_delays_seconds: WEBHOOK_RETRY_DELAYS_MS.map(
+        (delay) => delay / 1000,
+      ),
       max_attempts: WEBHOOK_MAX_ATTEMPTS,
       max_consecutive_failures: MAX_CONSECUTIVE_FAILURES,
       replay_window_days: REPLAY_WINDOW_DAYS,
@@ -270,7 +300,9 @@ describe("the numbers the guides print", () => {
     ).toEqual(ALL_TOPICS);
 
     expect(
-      document["x-trajetto-authentication"].scopes.map((entry: Json) => entry.scope),
+      document["x-trajetto-authentication"].scopes.map(
+        (entry: Json) => entry.scope,
+      ),
     ).toEqual([...API_SCOPES]);
   });
 });
@@ -310,7 +342,9 @@ describe("the introduction", () => {
   });
 
   it("states both ceilings and the 503", () => {
-    expect(description()).toContain(`${BUSINESS_API_RATE_PER_MINUTE} por minuto`);
+    expect(description()).toContain(
+      `${BUSINESS_API_RATE_PER_MINUTE} por minuto`,
+    );
     expect(description()).toContain("429 `RATE_LIMITED`");
     expect(description()).toContain("`SERVICE_UNAVAILABLE`");
   });
@@ -330,7 +364,9 @@ describe("where to call and where to read", () => {
     expect(configured.servers).toEqual([
       { url: "https://api.exemplo.com.br", description: "Homologação" },
     ]);
-    expect((configured.externalDocs as Json).url).toBe("https://www.exemplo.com.br/docs");
+    expect((configured.externalDocs as Json).url).toBe(
+      "https://www.exemplo.com.br/docs",
+    );
 
     const bare = buildPublicApiDocument({}, {});
 
@@ -345,20 +381,31 @@ describe("toOpenApi31", () => {
       type: ["string", "null"],
     });
 
-    expect(toOpenApi31({ $ref: "#/components/schemas/X", nullable: true })).toEqual({
+    expect(
+      toOpenApi31({ $ref: "#/components/schemas/X", nullable: true }),
+    ).toEqual({
       anyOf: [{ $ref: "#/components/schemas/X" }, { type: "null" }],
     });
 
     expect(
-      toOpenApi31({ anyOf: [{ type: "string" }, { type: "number" }], nullable: true }),
-    ).toEqual({ anyOf: [{ type: "string" }, { type: "number" }, { type: "null" }] });
+      toOpenApi31({
+        anyOf: [{ type: "string" }, { type: "number" }],
+        nullable: true,
+      }),
+    ).toEqual({
+      anyOf: [{ type: "string" }, { type: "number" }, { type: "null" }],
+    });
 
-    expect(toOpenApi31({ type: "string", enum: ["A"], nullable: true })).toEqual({
+    expect(
+      toOpenApi31({ type: "string", enum: ["A"], nullable: true }),
+    ).toEqual({
       type: ["string", "null"],
       enum: ["A", null],
     });
 
-    expect(toOpenApi31({ type: "string", nullable: false })).toEqual({ type: "string" });
+    expect(toOpenApi31({ type: "string", nullable: false })).toEqual({
+      type: "string",
+    });
   });
 
   it("keeps a property named nullable and leaves examples alone", () => {
@@ -376,12 +423,16 @@ describe("toOpenApi31", () => {
   });
 
   it("turns a boolean exclusive bound into the numeric one", () => {
-    expect(toOpenApi31({ type: "number", minimum: 0, exclusiveMinimum: true })).toEqual({
+    expect(
+      toOpenApi31({ type: "number", minimum: 0, exclusiveMinimum: true }),
+    ).toEqual({
       type: "number",
       exclusiveMinimum: 0,
     });
 
-    expect(toOpenApi31({ type: "number", maximum: 5, exclusiveMaximum: false })).toEqual({
+    expect(
+      toOpenApi31({ type: "number", maximum: 5, exclusiveMaximum: false }),
+    ).toEqual({
       type: "number",
       maximum: 5,
     });

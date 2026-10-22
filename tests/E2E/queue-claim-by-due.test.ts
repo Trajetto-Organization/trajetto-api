@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -129,9 +137,11 @@ async function planOfClaim(statement: { query: string; params: string }) {
       );
 
       const raw = rows[0]["QUERY PLAN"];
-      plan = ((typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{
-        Plan: PlanNode;
-      }>)[0].Plan;
+      plan = (
+        (typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{
+          Plan: PlanNode;
+        }>
+      )[0].Plan;
 
       throw new Error("rollback");
     })
@@ -142,7 +152,10 @@ async function planOfClaim(statement: { query: string; params: string }) {
   return plan!;
 }
 
-async function until(condition: () => Promise<boolean> | boolean, timeoutMs = 10_000) {
+async function until(
+  condition: () => Promise<boolean> | boolean,
+  timeoutMs = 10_000,
+) {
   const deadline = Date.now() + timeoutMs;
 
   while (!(await condition())) {
@@ -364,7 +377,9 @@ describe("a delivery in flight", () => {
 
     await until(() => releaseMail !== null);
 
-    const row = await prisma.notificationDelivery.findUniqueOrThrow({ where: { id } });
+    const row = await prisma.notificationDelivery.findUniqueOrThrow({
+      where: { id },
+    });
 
     expect(row.status).toBe("PROCESSING");
     expect(row.leaseExpiresAt).not.toBeNull();
@@ -399,7 +414,9 @@ describe("a delivery in flight", () => {
 
     expect(mail.sent).toHaveLength(0);
 
-    const row = await prisma.notificationDelivery.findUniqueOrThrow({ where: { id } });
+    const row = await prisma.notificationDelivery.findUniqueOrThrow({
+      where: { id },
+    });
 
     expect(row.status).toBe("PROCESSING");
     expect(row.attempts).toBe(1);

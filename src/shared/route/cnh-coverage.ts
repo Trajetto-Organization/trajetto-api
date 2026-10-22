@@ -28,13 +28,17 @@ const RUNG: Record<string, number> = { B: 1, C: 2, D: 3, E: 4 };
 
 function parts(category: CnhCategory): { motorcycle: boolean; rung: number } {
   const motorcycle = category.startsWith("A");
-  const letter = category.length === 2 ? category[1] : motorcycle ? "" : category;
+  const letter =
+    category.length === 2 ? category[1] : motorcycle ? "" : category;
 
   return { motorcycle, rung: RUNG[letter] ?? 0 };
 }
 
 function isCnhCategory(value: unknown): value is CnhCategory {
-  return typeof value === "string" && (CNH_CATEGORIES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (CNH_CATEGORIES as readonly string[]).includes(value)
+  );
 }
 
 /**

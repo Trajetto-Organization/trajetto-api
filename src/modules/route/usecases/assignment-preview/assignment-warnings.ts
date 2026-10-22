@@ -81,7 +81,9 @@ function assignmentWarnings(
   const leaving = new Set(preview.routesEmptiedBySelection);
 
   const others = (routes: AssignmentRouteRef[]) =>
-    routes.filter((route) => route.id !== excludeRouteId && !leaving.has(route.id));
+    routes.filter(
+      (route) => route.id !== excludeRouteId && !leaving.has(route.id),
+    );
 
   const driverName = preview.driver?.name ?? "O motorista";
 

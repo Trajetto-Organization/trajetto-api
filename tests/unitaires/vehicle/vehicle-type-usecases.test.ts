@@ -62,9 +62,24 @@ function makeContext() {
   return {
     types,
     vehicles,
-    create: new CreateVehicleTypeUseCase(users, businesses, types, notificationStub),
-    update: new UpdateVehicleTypeUseCase(users, businesses, types, notificationStub),
-    remove: new DeleteVehicleTypeUseCase(users, businesses, types, notificationStub),
+    create: new CreateVehicleTypeUseCase(
+      users,
+      businesses,
+      types,
+      notificationStub,
+    ),
+    update: new UpdateVehicleTypeUseCase(
+      users,
+      businesses,
+      types,
+      notificationStub,
+    ),
+    remove: new DeleteVehicleTypeUseCase(
+      users,
+      businesses,
+      types,
+      notificationStub,
+    ),
     list: new ListVehicleTypeUseCase(users, types),
     search: new SearchVehicleTypeCursorUseCase(users, types, businesses),
   };
@@ -91,9 +106,14 @@ describe("deleting a vehicle type (FLEET-VTYPE-2)", () => {
     // Red before: the FK is SET NULL and the delete stripped the type from
     // every vehicle in silence.
     const truck = await createType("Truck");
-    context.vehicles.push({ vehicleTypeId: truck.id }, { vehicleTypeId: truck.id });
+    context.vehicles.push(
+      { vehicleTypeId: truck.id },
+      { vehicleTypeId: truck.id },
+    );
 
-    await expect(context.remove.execute(truck.id, ADMIN, BUSINESS)).rejects.toMatchObject({
+    await expect(
+      context.remove.execute(truck.id, ADMIN, BUSINESS),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "VEHICLE_TYPE_IN_USE",
       message: expect.stringContaining("2 veículo(s)"),
@@ -108,15 +128,17 @@ describe("deleting a vehicle type (FLEET-VTYPE-2)", () => {
     await context.remove.execute(truck.id, ADMIN, BUSINESS);
 
     expect(context.types.vehicleTypes).toHaveLength(0);
-    expect(catalogEvents).toEqual([{ businessId: BUSINESS, entity: "vehicle_type" }]);
+    expect(catalogEvents).toEqual([
+      { businessId: BUSINESS, entity: "vehicle_type" },
+    ]);
   });
 
   it("answers another company's type as not found", async () => {
     const foreign = await createType("Carreta", OTHER_BUSINESS);
 
-    await expect(context.remove.execute(foreign.id, ADMIN, BUSINESS)).rejects.toBeInstanceOf(
-      VehicleTypeNotFoundError,
-    );
+    await expect(
+      context.remove.execute(foreign.id, ADMIN, BUSINESS),
+    ).rejects.toBeInstanceOf(VehicleTypeNotFoundError);
   });
 });
 
@@ -127,7 +149,12 @@ describe("editing a vehicle type", () => {
     const foreign = await createType("Carreta", OTHER_BUSINESS);
 
     await expect(
-      context.update.execute({ description: "Movido" }, foreign.id, MASTER, BUSINESS),
+      context.update.execute(
+        { description: "Movido" },
+        foreign.id,
+        MASTER,
+        BUSINESS,
+      ),
     ).rejects.toBeInstanceOf(VehicleTypeNotFoundError);
 
     expect(context.types.vehicleTypes[0]).toMatchObject({
@@ -139,11 +166,21 @@ describe("editing a vehicle type", () => {
   it("stores and clears the required CNH category (decision 8.5)", async () => {
     const truck = await createType("Truck");
 
-    await context.update.execute({ required_cnh_category: "D" }, truck.id, ADMIN, BUSINESS);
+    await context.update.execute(
+      { required_cnh_category: "D" },
+      truck.id,
+      ADMIN,
+      BUSINESS,
+    );
     expect(context.types.vehicleTypes[0].required_cnh_category).toBe("D");
 
     // Red before: the repository dropped nulls, so it could not be cleared.
-    await context.update.execute({ required_cnh_category: null }, truck.id, ADMIN, BUSINESS);
+    await context.update.execute(
+      { required_cnh_category: null },
+      truck.id,
+      ADMIN,
+      BUSINESS,
+    );
     expect(context.types.vehicleTypes[0].required_cnh_category).toBeNull();
   });
 
@@ -153,7 +190,10 @@ describe("editing a vehicle type", () => {
 
     await expect(
       context.update.execute({ description: "TRUCK" }, van.id, ADMIN, BUSINESS),
-    ).rejects.toMatchObject({ statusCode: 409, code: "VEHICLE_TYPE_NAME_TAKEN" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "VEHICLE_TYPE_NAME_TAKEN",
+    });
   });
 });
 
@@ -167,7 +207,9 @@ describe("a name taken by a request racing this one (FLEET-DUP-1)", () => {
   });
 
   it("answers the create with the 409 of a taken name", async () => {
-    vi.spyOn(context.types, "createVehicleType").mockRejectedValueOnce(uniqueViolation);
+    vi.spyOn(context.types, "createVehicleType").mockRejectedValueOnce(
+      uniqueViolation,
+    );
 
     await expect(createType("Truck")).rejects.toMatchObject({
       statusCode: 409,
@@ -177,17 +219,26 @@ describe("a name taken by a request racing this one (FLEET-DUP-1)", () => {
 
   it("answers the rename with the same 409", async () => {
     const van = await createType("Van");
-    vi.spyOn(context.types, "updateVehicleType").mockRejectedValueOnce(uniqueViolation);
+    vi.spyOn(context.types, "updateVehicleType").mockRejectedValueOnce(
+      uniqueViolation,
+    );
 
     await expect(
       context.update.execute({ description: "Truck" }, van.id, ADMIN, BUSINESS),
-    ).rejects.toMatchObject({ statusCode: 409, code: "VEHICLE_TYPE_NAME_TAKEN" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "VEHICLE_TYPE_NAME_TAKEN",
+    });
   });
 
   it("still answers any other failure with the generic 500", async () => {
-    vi.spyOn(context.types, "createVehicleType").mockRejectedValueOnce(new Error("conexão caiu"));
+    vi.spyOn(context.types, "createVehicleType").mockRejectedValueOnce(
+      new Error("conexão caiu"),
+    );
 
-    await expect(createType("Truck")).rejects.toMatchObject({ statusCode: 500 });
+    await expect(createType("Truck")).rejects.toMatchObject({
+      statusCode: 500,
+    });
   });
 });
 
@@ -206,7 +257,9 @@ describe("registering a vehicle type", () => {
 
     expect(withCategory.required_cnh_category).toBe("E");
     expect(without.required_cnh_category).toBeNull();
-    expect(catalogEvents.every((event) => event.entity === "vehicle_type")).toBe(true);
+    expect(
+      catalogEvents.every((event) => event.entity === "vehicle_type"),
+    ).toBe(true);
   });
 
   it("validates the category against the licence classes", () => {
@@ -218,7 +271,8 @@ describe("registering a vehicle type", () => {
       }).success,
     ).toBe(false);
     expect(
-      updateVehicleTypeSchema.parse({ required_cnh_category: "" }).required_cnh_category,
+      updateVehicleTypeSchema.parse({ required_cnh_category: "" })
+        .required_cnh_category,
     ).toBeNull();
   });
 });
@@ -238,15 +292,23 @@ describe("listing and searching", () => {
       order: "desc",
     });
 
-    expect(listed.data.map((type) => type.description)).toEqual(["Van", "Truck"]);
-    expect(listed.data.find((type) => type.id === truck.id)?._count.vehicles).toBe(1);
+    expect(listed.data.map((type) => type.description)).toEqual([
+      "Van",
+      "Truck",
+    ]);
+    expect(
+      listed.data.find((type) => type.id === truck.id)?._count.vehicles,
+    ).toBe(1);
     expect(listed.total).toBe(2);
   });
 
   it("makes the MASTER name the company", async () => {
     await expect(
       context.list.execute({ userId: MASTER, page: 1, pageSize: 10 }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "BUSINESS_NOT_IDENTIFIED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BUSINESS_NOT_IDENTIFIED",
+    });
   });
 
   it("searches the picker by the typed term on the server (FLEET-SEARCH-1)", async () => {
@@ -269,23 +331,40 @@ describe("the checklist every write passes (TEST-UC-1)", () => {
 
   it("refuses another company's admin naming this company on create, edit and delete", async () => {
     // Red before: only the route guard stood between two tenants.
-    const users = (context.create as unknown as { user: { user: User[] } }).user;
+    const users = (context.create as unknown as { user: { user: User[] } })
+      .user;
 
-    users.user.push({ id: FOREIGN_ADMIN, role: "BUSINESS_ADMIN", businessId: OTHER_BUSINESS } as User);
+    users.user.push({
+      id: FOREIGN_ADMIN,
+      role: "BUSINESS_ADMIN",
+      businessId: OTHER_BUSINESS,
+    } as User);
 
     const type = await createType("Truck");
 
     catalogEvents.length = 0;
 
     await expect(
-      context.create.execute({ description: "Bitrem", number_of_axles: 7, businessId: BUSINESS }, FOREIGN_ADMIN),
+      context.create.execute(
+        { description: "Bitrem", number_of_axles: 7, businessId: BUSINESS },
+        FOREIGN_ADMIN,
+      ),
     ).rejects.toMatchObject(denied);
     await expect(
-      context.update.execute({ description: "Tomado" }, type.id, FOREIGN_ADMIN, BUSINESS),
+      context.update.execute(
+        { description: "Tomado" },
+        type.id,
+        FOREIGN_ADMIN,
+        BUSINESS,
+      ),
     ).rejects.toMatchObject(denied);
-    await expect(context.remove.execute(type.id, FOREIGN_ADMIN, BUSINESS)).rejects.toMatchObject(denied);
+    await expect(
+      context.remove.execute(type.id, FOREIGN_ADMIN, BUSINESS),
+    ).rejects.toMatchObject(denied);
 
-    expect(context.types.vehicleTypes.map((row) => row.description)).toEqual(["Truck"]);
+    expect(context.types.vehicleTypes.map((row) => row.description)).toEqual([
+      "Truck",
+    ]);
     expect(catalogEvents).toEqual([]);
   });
 
@@ -295,24 +374,40 @@ describe("the checklist every write passes (TEST-UC-1)", () => {
     const missing = { statusCode: 404, code: "USER_NOT_FOUND" };
 
     await expect(
-      context.create.execute({ description: "Bitrem", number_of_axles: 7, businessId: BUSINESS }, gone),
+      context.create.execute(
+        { description: "Bitrem", number_of_axles: 7, businessId: BUSINESS },
+        gone,
+      ),
     ).rejects.toMatchObject(missing);
-    await expect(context.update.execute({ description: "x" }, type.id, gone, BUSINESS)).rejects.toMatchObject(missing);
-    await expect(context.remove.execute(type.id, gone, BUSINESS)).rejects.toMatchObject(missing);
+    await expect(
+      context.update.execute({ description: "x" }, type.id, gone, BUSINESS),
+    ).rejects.toMatchObject(missing);
+    await expect(
+      context.remove.execute(type.id, gone, BUSINESS),
+    ).rejects.toMatchObject(missing);
   });
 
   it("answers a company that does not exist with 404 BUSINESS_NOT_FOUND for the MASTER", async () => {
     const nowhere = "018f0000-0000-7000-8000-00000000000f";
 
     await expect(
-      context.create.execute({ description: "Bitrem", number_of_axles: 7, businessId: nowhere }, MASTER),
+      context.create.execute(
+        { description: "Bitrem", number_of_axles: 7, businessId: nowhere },
+        MASTER,
+      ),
     ).rejects.toMatchObject({ statusCode: 404, code: "BUSINESS_NOT_FOUND" });
   });
 
   it("accepts the axle boundaries of the schema and refuses past them", () => {
     const base = { description: "Tipo", businessId: BUSINESS };
 
-    expect(createVehicleTypeSchema.safeParse({ ...base, number_of_axles: 0 }).success).toBe(false);
-    expect(createVehicleTypeSchema.safeParse({ ...base, number_of_axles: 1 }).success).toBe(true);
+    expect(
+      createVehicleTypeSchema.safeParse({ ...base, number_of_axles: 0 })
+        .success,
+    ).toBe(false);
+    expect(
+      createVehicleTypeSchema.safeParse({ ...base, number_of_axles: 1 })
+        .success,
+    ).toBe(true);
   });
 });

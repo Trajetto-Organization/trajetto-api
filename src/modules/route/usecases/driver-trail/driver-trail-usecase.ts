@@ -113,7 +113,13 @@ class DriverTrailUseCase {
     const timeZone = await this.operation.timeZoneOf(resolvedBusinessId);
 
     if (routeId) {
-      return this.routeTrail(resolvedBusinessId, driverId, routeId, timeZone, now);
+      return this.routeTrail(
+        resolvedBusinessId,
+        driverId,
+        routeId,
+        timeZone,
+        now,
+      );
     }
 
     let window;

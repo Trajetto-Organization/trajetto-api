@@ -169,7 +169,9 @@ describe("an e-mail verification link", () => {
 
     expect(row!.token).not.toBe(mailed);
     expect(row!.token).toBe(sha256(mailed));
-    expect(await tokens.findEmailVerificationTokenByToken(row!.token)).toBeNull();
+    expect(
+      await tokens.findEmailVerificationTokenByToken(row!.token),
+    ).toBeNull();
   });
 
   it("still verifies the address with the link from the e-mail", async () => {

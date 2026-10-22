@@ -2,7 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
-import { PrismaClient, WebhookDeliveryStatus, type WebhookDelivery } from "@prisma/client";
+import {
+  PrismaClient,
+  WebhookDeliveryStatus,
+  type WebhookDelivery,
+} from "@prisma/client";
 
 import { ApiKeyRepository } from "@/modules/integration/repositories/api-key-repository";
 import { WebhookEndpointRepository } from "@/modules/integration/repositories/webhook-endpoint-repository";
@@ -30,10 +34,28 @@ interface Harness {
   apiKeys: IApiKeyRepository;
   endpoints: IWebhookEndpointRepository;
   deliveries: IWebhookDeliveryRepository;
-  seedDelivery: (row: Partial<WebhookDelivery> & { endpointId: string; businessId: string; created_at: Date }) => Promise<string>;
-  seedUsage: (row: { apiKeyId: string; businessId: string; day: Date; route: string; count: bigint }) => Promise<void>;
+  seedDelivery: (
+    row: Partial<WebhookDelivery> & {
+      endpointId: string;
+      businessId: string;
+      created_at: Date;
+    },
+  ) => Promise<string>;
+  seedUsage: (row: {
+    apiKeyId: string;
+    businessId: string;
+    day: Date;
+    route: string;
+    count: bigint;
+  }) => Promise<void>;
   switchOff: (endpointId: string) => Promise<void>;
-  endpoint: (id: string) => Promise<{ disabled_at: Date | null; consecutive_failures: number; headers: unknown; secret: string; previous_secret: string | null } | null>;
+  endpoint: (id: string) => Promise<{
+    disabled_at: Date | null;
+    consecutive_failures: number;
+    headers: unknown;
+    secret: string;
+    previous_secret: string | null;
+  } | null>;
   delivery: (id: string) => Promise<WebhookDelivery | null>;
   deactivate: (businessId: string) => Promise<void>;
   lastUsedAt: (apiKeyId: string) => Promise<Date | null>;
@@ -53,7 +75,9 @@ async function seedBusiness(): Promise<string> {
       uf: "SP",
       street: "Rua",
       address_number: "1",
-      cnpj: String(Math.floor(10_000_000_000_000 + Math.random() * 89_999_999_999_999)),
+      cnpj: String(
+        Math.floor(10_000_000_000_000 + Math.random() * 89_999_999_999_999),
+      ),
       cnae: "4930202",
       responsible_name: "Responsável",
       telephone: "11999999999",
@@ -68,7 +92,11 @@ async function seedBusiness(): Promise<string> {
 }
 
 function deliveryRow(
-  row: Partial<WebhookDelivery> & { endpointId: string; businessId: string; created_at: Date },
+  row: Partial<WebhookDelivery> & {
+    endpointId: string;
+    businessId: string;
+    created_at: Date;
+  },
 ): WebhookDelivery {
   return {
     id: randomUUID(),
@@ -100,7 +128,9 @@ function prismaHarness(): Harness {
     async seedDelivery(row) {
       const data = deliveryRow(row);
 
-      await prisma.webhookDelivery.create({ data: { ...data, payload: data.payload as object } });
+      await prisma.webhookDelivery.create({
+        data: { ...data, payload: data.payload as object },
+      });
 
       return data.id;
     },
@@ -118,10 +148,16 @@ function prismaHarness(): Harness {
     endpoint: (id) => prisma.webhookEndpoint.findUnique({ where: { id } }),
     delivery: (id) => prisma.webhookDelivery.findUnique({ where: { id } }),
     async deactivate(businessId) {
-      await prisma.business.update({ where: { id: businessId }, data: { is_active: false } });
+      await prisma.business.update({
+        where: { id: businessId },
+        data: { is_active: false },
+      });
     },
     async lastUsedAt(apiKeyId) {
-      return (await prisma.apiKey.findUnique({ where: { id: apiKeyId } }))?.last_used_at ?? null;
+      return (
+        (await prisma.apiKey.findUnique({ where: { id: apiKeyId } }))
+          ?.last_used_at ?? null
+      );
     },
   };
 }
@@ -146,22 +182,31 @@ function memoryHarness(timeZones: Map<string, string>): Harness {
       apiKeys.usage.push({ ...row, method: "GET", status_class: 2 });
     },
     async switchOff(endpointId) {
-      const endpoint = endpoints.endpoints.find((candidate) => candidate.id === endpointId)!;
+      const endpoint = endpoints.endpoints.find(
+        (candidate) => candidate.id === endpointId,
+      )!;
 
       endpoint.disabled_at = new Date();
       endpoint.consecutive_failures = 9;
     },
     async endpoint(id) {
-      return endpoints.endpoints.find((candidate) => candidate.id === id) ?? null;
+      return (
+        endpoints.endpoints.find((candidate) => candidate.id === id) ?? null
+      );
     },
     async delivery(id) {
-      return deliveries.deliveries.find((candidate) => candidate.id === id) ?? null;
+      return (
+        deliveries.deliveries.find((candidate) => candidate.id === id) ?? null
+      );
     },
     async deactivate(businessId) {
       apiKeys.inactiveBusinesses.add(businessId);
     },
     async lastUsedAt(apiKeyId) {
-      return apiKeys.keys.find((candidate) => candidate.id === apiKeyId)?.last_used_at ?? null;
+      return (
+        apiKeys.keys.find((candidate) => candidate.id === apiKeyId)
+          ?.last_used_at ?? null
+      );
     },
   };
 }
@@ -200,7 +245,13 @@ describe.each([
   ["Postgres", () => prismaHarness()],
   [
     "in-memory twin",
-    () => memoryHarness(new Map([[companies.a, "America/Manaus"], [companies.b, "America/Manaus"]])),
+    () =>
+      memoryHarness(
+        new Map([
+          [companies.a, "America/Manaus"],
+          [companies.b, "America/Manaus"],
+        ]),
+      ),
   ],
 ] as const)("integration admin repositories — %s", (_label, build) => {
   // Each harness gets its own two companies' worth of rows: the Postgres one
@@ -227,7 +278,9 @@ describe.each([
 
     expect(await h.apiKeys.createWithinQuota(key(A, "Três"), 2)).toBeNull();
     // Another company's quota is its own.
-    expect(await h.apiKeys.createWithinQuota(key(B, "Alheia"), 2)).not.toBeNull();
+    expect(
+      await h.apiKeys.createWithinQuota(key(B, "Alheia"), 2),
+    ).not.toBeNull();
 
     expect(await h.apiKeys.revoke(first!.id, B, new Date())).toBe(false);
     expect(await h.apiKeys.revoke(first!.id, A, new Date())).toBe(true);
@@ -237,11 +290,22 @@ describe.each([
 
     const listed = await h.apiKeys.listByBusiness(A);
 
-    expect(listed.map((row) => row.name).sort()).toEqual(["Dois", "Três", "Um"]);
+    expect(listed.map((row) => row.name).sort()).toEqual([
+      "Dois",
+      "Três",
+      "Um",
+    ]);
     expect(listed.find((row) => row.name === "Um")?.revoked_at).not.toBeNull();
-    expect(Object.keys(listed[0]).sort()).toEqual(
-      ["created_at", "id", "last_used_at", "name", "prefix", "rate_limit_per_minute", "revoked_at", "scopes"],
-    );
+    expect(Object.keys(listed[0]).sort()).toEqual([
+      "created_at",
+      "id",
+      "last_used_at",
+      "name",
+      "prefix",
+      "rate_limit_per_minute",
+      "revoked_at",
+      "scopes",
+    ]);
   });
 
   it("API usage: scoped by company, from `since`, filtered by key, day desc then route asc", async () => {
@@ -249,13 +313,47 @@ describe.each([
     const other = await h.apiKeys.createWithinQuota(key(B, "Outra"), 50);
     const day = (key: string) => new Date(`${key}T00:00:00.000Z`);
 
-    await h.seedUsage({ apiKeyId: issued!.id, businessId: B, day: day("2026-10-04"), route: "/b", count: 2n });
-    await h.seedUsage({ apiKeyId: issued!.id, businessId: B, day: day("2026-10-05"), route: "/b", count: 3n });
-    await h.seedUsage({ apiKeyId: issued!.id, businessId: B, day: day("2026-10-05"), route: "/a", count: 4n });
-    await h.seedUsage({ apiKeyId: other!.id, businessId: B, day: day("2026-10-05"), route: "/c", count: 5n });
-    await h.seedUsage({ apiKeyId: issued!.id, businessId: B, day: day("2026-09-01"), route: "/old", count: 9n });
+    await h.seedUsage({
+      apiKeyId: issued!.id,
+      businessId: B,
+      day: day("2026-10-04"),
+      route: "/b",
+      count: 2n,
+    });
+    await h.seedUsage({
+      apiKeyId: issued!.id,
+      businessId: B,
+      day: day("2026-10-05"),
+      route: "/b",
+      count: 3n,
+    });
+    await h.seedUsage({
+      apiKeyId: issued!.id,
+      businessId: B,
+      day: day("2026-10-05"),
+      route: "/a",
+      count: 4n,
+    });
+    await h.seedUsage({
+      apiKeyId: other!.id,
+      businessId: B,
+      day: day("2026-10-05"),
+      route: "/c",
+      count: 5n,
+    });
+    await h.seedUsage({
+      apiKeyId: issued!.id,
+      businessId: B,
+      day: day("2026-09-01"),
+      route: "/old",
+      count: 9n,
+    });
 
-    const rows = await h.apiKeys.listUsage({ businessId: B, since: day("2026-10-04"), apiKeyId: issued!.id });
+    const rows = await h.apiKeys.listUsage({
+      businessId: B,
+      since: day("2026-10-04"),
+      apiKeyId: issued!.id,
+    });
 
     expect(rows.map((row) => [row.route, Number(row.count)])).toEqual([
       ["/a", 4],
@@ -263,26 +361,42 @@ describe.each([
       ["/b", 2],
     ]);
     expect(rows[0].apiKey?.name).toBe("Uso");
-    expect(await h.apiKeys.listUsage({ businessId: A, since: day("2026-01-01") })).toEqual([]);
+    expect(
+      await h.apiKeys.listUsage({ businessId: A, since: day("2026-01-01") }),
+    ).toEqual([]);
     expect(await h.apiKeys.businessTimeZone(B)).toBe("America/Manaus");
   });
 
   it("endpoints: quota with paused ones, scoped edit that clears the breaker, headers kept or cleared", async () => {
-    const first = await h.endpoints.createWithinQuota(A, endpoint("Um", false), 2);
+    const first = await h.endpoints.createWithinQuota(
+      A,
+      endpoint("Um", false),
+      2,
+    );
     await h.endpoints.createWithinQuota(A, endpoint("Dois"), 2);
 
-    expect(await h.endpoints.createWithinQuota(A, endpoint("Três"), 2)).toBeNull();
+    expect(
+      await h.endpoints.createWithinQuota(A, endpoint("Três"), 2),
+    ).toBeNull();
 
     await h.switchOff(first!.id);
 
-    const edit = { name: "Um editado", url: "https://erp.exemplo.com.br/novo", topics: ["route.*"], is_active: true };
+    const edit = {
+      name: "Um editado",
+      url: "https://erp.exemplo.com.br/novo",
+      topics: ["route.*"],
+      is_active: true,
+    };
 
     expect(await h.endpoints.update(first!.id, B, edit)).toBe(false);
     expect(await h.endpoints.update(first!.id, A, edit)).toBe(true);
 
     let stored = await h.endpoint(first!.id);
 
-    expect(stored).toMatchObject({ disabled_at: null, consecutive_failures: 0 });
+    expect(stored).toMatchObject({
+      disabled_at: null,
+      consecutive_failures: 0,
+    });
     expect(stored?.headers).toEqual({ Authorization: "sealed" });
 
     await h.endpoints.update(first!.id, A, { ...edit, headers: null });
@@ -291,7 +405,11 @@ describe.each([
 
     expect(stored?.headers).toBeNull();
     expect(await h.endpoints.find(first!.id, B)).toBeNull();
-    expect(await h.endpoints.find(first!.id, A)).toEqual({ id: first!.id, name: "Um editado", is_active: true });
+    expect(await h.endpoints.find(first!.id, A)).toEqual({
+      id: first!.id,
+      name: "Um editado",
+      is_active: true,
+    });
   });
 
   it("endpoints: the breaker resets only when off; rotation keeps the replaced secret; delete is scoped and cascades", async () => {
@@ -312,9 +430,16 @@ describe.each([
 
     expect(await h.endpoints.rotateSecret(one!.id, A, rotation)).toBe(false);
     expect(await h.endpoints.rotateSecret(one!.id, B, rotation)).toBe(true);
-    expect(await h.endpoint(one!.id)).toMatchObject({ secret: "novo", previous_secret: "kept:sealed-secret" });
+    expect(await h.endpoint(one!.id)).toMatchObject({
+      secret: "novo",
+      previous_secret: "kept:sealed-secret",
+    });
 
-    const row = await h.seedDelivery({ endpointId: one!.id, businessId: B, created_at: new Date() });
+    const row = await h.seedDelivery({
+      endpointId: one!.id,
+      businessId: B,
+      created_at: new Date(),
+    });
 
     expect(await h.endpoints.delete(one!.id, A)).toBe(false);
     expect(await h.endpoints.delete(one!.id, B)).toBe(true);
@@ -322,31 +447,94 @@ describe.each([
   });
 
   it("monitor: queue of any age, settled rows inside the window, order, cap and nearest-rank p95", async () => {
-    const hook = await h.endpoints.createWithinQuota(A, endpoint("Monitor"), 50);
+    const hook = await h.endpoints.createWithinQuota(
+      A,
+      endpoint("Monitor"),
+      50,
+    );
     const now = Date.now();
     const ago = (hours: number) => new Date(now - hours * 3_600_000);
     const id = hook!.id;
 
-    const queued = await h.seedDelivery({ endpointId: id, businessId: A, created_at: ago(72) });
-    const d1 = await h.seedDelivery({ endpointId: id, businessId: A, created_at: ago(1), status: "DELIVERED", latency_ms: 100 });
-    const d2 = await h.seedDelivery({ endpointId: id, businessId: A, created_at: ago(2), status: "DELIVERED", latency_ms: 300 });
-    await h.seedDelivery({ endpointId: id, businessId: A, created_at: ago(30), status: "DELIVERED", latency_ms: 900 });
-    const failed = await h.seedDelivery({ endpointId: id, businessId: A, created_at: ago(3), status: "FAILED" });
-    const processing = await h.seedDelivery({ endpointId: id, businessId: A, created_at: ago(4), status: "PROCESSING" });
+    const queued = await h.seedDelivery({
+      endpointId: id,
+      businessId: A,
+      created_at: ago(72),
+    });
+    const d1 = await h.seedDelivery({
+      endpointId: id,
+      businessId: A,
+      created_at: ago(1),
+      status: "DELIVERED",
+      latency_ms: 100,
+    });
+    const d2 = await h.seedDelivery({
+      endpointId: id,
+      businessId: A,
+      created_at: ago(2),
+      status: "DELIVERED",
+      latency_ms: 300,
+    });
+    await h.seedDelivery({
+      endpointId: id,
+      businessId: A,
+      created_at: ago(30),
+      status: "DELIVERED",
+      latency_ms: 900,
+    });
+    const failed = await h.seedDelivery({
+      endpointId: id,
+      businessId: A,
+      created_at: ago(3),
+      status: "FAILED",
+    });
+    const processing = await h.seedDelivery({
+      endpointId: id,
+      businessId: A,
+      created_at: ago(4),
+      status: "PROCESSING",
+    });
 
-    const query = { businessId: A, endpointId: id, since: ago(24), page: 1, pageSize: 10, cap: 100 };
+    const query = {
+      businessId: A,
+      endpointId: id,
+      since: ago(24),
+      page: 1,
+      pageSize: 10,
+      cap: 100,
+    };
 
     const all = await h.deliveries.monitor(query);
 
-    expect(all.rows.map((row) => row.id)).toEqual([d1, d2, failed, processing, queued]);
-    expect(all).toMatchObject({ counted: 5, delivered: 2, failed: 1, queued: 2, p95LatencyMs: 300 });
-    expect(all.rows[0].endpoint).toEqual({ id, name: "Monitor", url: "https://erp.exemplo.com.br/hook" });
+    expect(all.rows.map((row) => row.id)).toEqual([
+      d1,
+      d2,
+      failed,
+      processing,
+      queued,
+    ]);
+    expect(all).toMatchObject({
+      counted: 5,
+      delivered: 2,
+      failed: 1,
+      queued: 2,
+      p95LatencyMs: 300,
+    });
+    expect(all.rows[0].endpoint).toEqual({
+      id,
+      name: "Monitor",
+      url: "https://erp.exemplo.com.br/hook",
+    });
 
     const queue = await h.deliveries.monitor({ ...query, status: "QUEUED" });
 
     expect(queue.rows.map((row) => row.id)).toEqual([processing, queued]);
 
-    const capped = await h.deliveries.monitor({ ...query, pageSize: 2, cap: 3 });
+    const capped = await h.deliveries.monitor({
+      ...query,
+      pageSize: 2,
+      cap: 3,
+    });
 
     expect(capped.counted).toBe(4);
     expect(capped.rows).toHaveLength(2);
@@ -354,11 +542,21 @@ describe.each([
     // Another company sees none of it.
     const foreign = await h.deliveries.monitor({ ...query, businessId: B });
 
-    expect(foreign).toMatchObject({ counted: 0, delivered: 0, failed: 0, queued: 0, p95LatencyMs: null });
+    expect(foreign).toMatchObject({
+      counted: 0,
+      delivered: 0,
+      failed: 0,
+      queued: 0,
+      p95LatencyMs: null,
+    });
   });
 
   it("resend and release: a new row with the same bytes, parked while off, released when back", async () => {
-    const hook = await h.endpoints.createWithinQuota(A, endpoint("Reenvio", false), 50);
+    const hook = await h.endpoints.createWithinQuota(
+      A,
+      endpoint("Reenvio", false),
+      50,
+    );
     const id = hook!.id;
     const original = await h.seedDelivery({
       endpointId: id,
@@ -392,9 +590,16 @@ describe.each([
 
     // Still paused: nothing to release for that row.
     await h.deliveries.releaseHeldIfEndpointBack(resent.id, id);
-    expect((await h.delivery(resent.id))?.lastError).toBe(ENDPOINT_PAUSED_REASON);
+    expect((await h.delivery(resent.id))?.lastError).toBe(
+      ENDPOINT_PAUSED_REASON,
+    );
 
-    await h.endpoints.update(id, A, { name: "Reenvio", url: "https://erp.exemplo.com.br/hook", topics: ["delivery.*"], is_active: true });
+    await h.endpoints.update(id, A, {
+      name: "Reenvio",
+      url: "https://erp.exemplo.com.br/hook",
+      topics: ["delivery.*"],
+      is_active: true,
+    });
 
     expect(await h.deliveries.releaseParked(id)).toBe(1);
 
@@ -406,7 +611,10 @@ describe.each([
 
   // Last on purpose: it switches company B off.
   it("authentication lookup: by prefix, revoked included, with the company's gates; last use is recorded", async () => {
-    const issued = await h.apiKeys.createWithinQuota(key(B, "Autenticação"), 50);
+    const issued = await h.apiKeys.createWithinQuota(
+      key(B, "Autenticação"),
+      50,
+    );
     const credential = await h.apiKeys.findCredentialByPrefix(issued!.prefix);
 
     expect(credential).toMatchObject({
@@ -420,20 +628,29 @@ describe.each([
       business: { is_active: true, timezone: "America/Manaus" },
     });
     expect(typeof credential!.token_hash).toBe("string");
-    expect(await h.apiKeys.findCredentialByPrefix("trj_naoexiste000000")).toBeNull();
+    expect(
+      await h.apiKeys.findCredentialByPrefix("trj_naoexiste000000"),
+    ).toBeNull();
 
     // Revoked keys still come back: the middleware answers them with the
     // same 401 as an unknown one, and needs the row to know.
     await h.apiKeys.revoke(issued!.id, B, new Date());
-    expect((await h.apiKeys.findCredentialByPrefix(issued!.prefix))!.revoked_at).not.toBeNull();
+    expect(
+      (await h.apiKeys.findCredentialByPrefix(issued!.prefix))!.revoked_at,
+    ).not.toBeNull();
 
     const at = new Date("2026-10-06T12:00:00.000Z");
 
     await h.apiKeys.touchLastUsed(issued!.id, at);
-    expect((await h.lastUsedAt(issued!.id))?.toISOString()).toBe(at.toISOString());
+    expect((await h.lastUsedAt(issued!.id))?.toISOString()).toBe(
+      at.toISOString(),
+    );
     await expectPrismaCode(h.apiKeys.touchLastUsed(randomUUID(), at), "P2025");
 
     await h.deactivate(B);
-    expect((await h.apiKeys.findCredentialByPrefix(issued!.prefix))!.business.is_active).toBe(false);
+    expect(
+      (await h.apiKeys.findCredentialByPrefix(issued!.prefix))!.business
+        .is_active,
+    ).toBe(false);
   });
 });

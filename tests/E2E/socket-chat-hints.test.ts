@@ -317,15 +317,24 @@ describe("a staff typing hint", () => {
     }
   });
 
-  it("still relays recording to the right driver", { timeout: 20_000 }, async () => {
-    await new Promise((done) => setTimeout(done, 2_500));
+  it(
+    "still relays recording to the right driver",
+    { timeout: 20_000 },
+    async () => {
+      await new Promise((done) => setTimeout(done, 2_500));
 
-    const reached = count(driver, "chatRecording", 1_000);
+      const reached = count(driver, "chatRecording", 1_000);
 
-    staff.emit("chatRecording", { driverUserId: DRIVER_USER, recording: true });
+      staff.emit("chatRecording", {
+        driverUserId: DRIVER_USER,
+        recording: true,
+      });
 
-    expect(await reached).toEqual([{ userName: "Atendente", recording: true }]);
-  });
+      expect(await reached).toEqual([
+        { userName: "Atendente", recording: true },
+      ]);
+    },
+  );
 });
 
 describe("presence", () => {

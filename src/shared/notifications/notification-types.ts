@@ -718,7 +718,10 @@ interface NotificationPolicyEntry<TPayload> {
    * as non-retryable, with the reason as its lastError — the same way an
    * opt-out does.
    */
-  supersededReason?(payload: TPayload, deps: PolicyDeps): Promise<string | null>;
+  supersededReason?(
+    payload: TPayload,
+    deps: PolicyDeps,
+  ): Promise<string | null>;
 
   /**
    * Which preference row governs this topic. The recipient's per-category
@@ -765,7 +768,10 @@ interface NotificationPolicyEntry<TPayload> {
    * notification row. When present, PUSH deliveries exist even without
    * renderInApp and this render wins over the in-app fallback.
    */
-  renderPush?(payload: TPayload, recipient: RecipientRenderContext): RenderedPush;
+  renderPush?(
+    payload: TPayload,
+    recipient: RecipientRenderContext,
+  ): RenderedPush;
 }
 
 export type {

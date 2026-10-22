@@ -220,8 +220,7 @@ async function getQuotaUsageByType(
     GROUP BY r."type"
   `;
 
-  const count = (type: string) =>
-    rows.find((row) => row.type === type)?.n ?? 0;
+  const count = (type: string) => rows.find((row) => row.type === type)?.n ?? 0;
 
   return {
     fuel: count("FUEL_ODOMETER"),

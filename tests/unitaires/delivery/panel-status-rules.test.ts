@@ -86,7 +86,9 @@ beforeEach(() => {
     deliveries,
     routes,
     reasons,
-    { createActivityIfEnabled: async () => undefined } as unknown as NotificationService,
+    {
+      createActivityIfEnabled: async () => undefined,
+    } as unknown as NotificationService,
     { publish: async () => undefined } as unknown as OutboxService,
     new InMemoryWebhookFanOutService().asService(),
   );
@@ -224,7 +226,8 @@ describe("telling the tower and the boards (DLV-MON-4)", () => {
     const neighbour = await seed({ driverId: DRIVER });
 
     // On the road: the office learns by phone that nobody was home.
-    deliveries.deliveries.find((row) => row.id === carried)!.status = "IN_TRANSIT";
+    deliveries.deliveries.find((row) => row.id === carried)!.status =
+      "IN_TRANSIT";
 
     const now = new Date();
 

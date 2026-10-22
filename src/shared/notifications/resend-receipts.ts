@@ -31,7 +31,9 @@ const NOT_ARRIVED = new Set(["bounced", "complained", "failed", "suppressed"]);
  * never go through the pipeline, land here — and is purged with the other
  * untied receipts.
  */
-async function tieToDelivery(report: ResendEventReport): Promise<string | null> {
+async function tieToDelivery(
+  report: ResendEventReport,
+): Promise<string | null> {
   const named = deliveryIdFromMessageId(report.messageId);
 
   if (named) {

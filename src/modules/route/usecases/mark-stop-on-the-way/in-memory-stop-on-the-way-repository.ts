@@ -81,7 +81,10 @@ class InMemoryStopOnTheWayRepository implements IStopOnTheWayRepository {
     public events: EventMirror[],
   ) {}
 
-  private routeOf(routeId: string, businessId: string): RouteMirror | undefined {
+  private routeOf(
+    routeId: string,
+    businessId: string,
+  ): RouteMirror | undefined {
     return this.routes.find(
       (route) => route.id === routeId && route.businessId === businessId,
     );
@@ -103,7 +106,9 @@ class InMemoryStopOnTheWayRepository implements IStopOnTheWayRepository {
 
     if (!route || !stop) return null;
 
-    const delivery = this.deliveries.find((entry) => entry.id === stop.deliveryId);
+    const delivery = this.deliveries.find(
+      (entry) => entry.id === stop.deliveryId,
+    );
 
     // A stop always has its delivery (a foreign key); a fake seeded without
     // one reads as the stop being gone rather than as a half row.
@@ -145,7 +150,8 @@ class InMemoryStopOnTheWayRepository implements IStopOnTheWayRepository {
       // the delivery fake wrote without one fall back to their delivery's.
       const tenant =
         event.businessId ??
-        this.deliveries.find((entry) => entry.id === event.deliveryId)?.businessId;
+        this.deliveries.find((entry) => entry.id === event.deliveryId)
+          ?.businessId;
 
       return tenant === businessId;
     });

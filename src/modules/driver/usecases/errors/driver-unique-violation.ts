@@ -21,7 +21,9 @@ function driverUniqueViolation(
   }
 
   const target = error.meta?.target;
-  const fields = Array.isArray(target) ? target.join(",") : String(target ?? "");
+  const fields = Array.isArray(target)
+    ? target.join(",")
+    : String(target ?? "");
 
   if (fields.includes("cpf")) return new DriverCpfAlreadyExistsError();
   if (fields.includes("cnh")) return new DriverLicenseAlreadyExistsError();

@@ -43,7 +43,12 @@ beforeEach(async () => {
   businesses = new InMemoryBusinessRepository();
   types = new InMemoryOccurrenceTypeRepository();
 
-  users.user.push({ id: ADMIN, name: "Ana", role: "BUSINESS_ADMIN", businessId: BUSINESS } as User);
+  users.user.push({
+    id: ADMIN,
+    name: "Ana",
+    role: "BUSINESS_ADMIN",
+    businessId: BUSINESS,
+  } as User);
   businesses.business.push({ id: BUSINESS } as Business);
 
   await types.ensureDefaultTypes(BUSINESS);
@@ -71,14 +76,17 @@ const remove = (occurrenceTypeId: string) =>
   });
 
 const byKey = (key: string) =>
-  types.occurrenceTypes.find((type) => type.businessId === BUSINESS && type.system_key === key)!;
+  types.occurrenceTypes.find(
+    (type) => type.businessId === BUSINESS && type.system_key === key,
+  )!;
 
 async function refusal(promise: Promise<unknown>): Promise<string> {
   try {
     await promise;
   } catch (error) {
     if (error instanceof AppError) return `${error.statusCode} ${error.code}`;
-    if (error instanceof ZodError) return `400 VALIDATION_ERROR: ${error.errors.map((e) => e.message).join(" | ")}`;
+    if (error instanceof ZodError)
+      return `400 VALIDATION_ERROR: ${error.errors.map((e) => e.message).join(" | ")}`;
     throw error;
   }
 
@@ -92,7 +100,12 @@ describe("the seeded defaults", () => {
     expect(
       types.occurrenceTypes
         .filter((type) => type.businessId === BUSINESS)
-        .map((type) => [type.system_key, type.name, type.category, type.pause_kind ?? null]),
+        .map((type) => [
+          type.system_key,
+          type.name,
+          type.category,
+          type.pause_kind ?? null,
+        ]),
     ).toEqual([
       ["delivered_default", "Entrega normal", "DELIVERED", null],
       ["pause_meal", "Refeição", "PAUSE", "MEAL"],
@@ -116,7 +129,10 @@ describe("the seeded defaults", () => {
 
 describe("creating a type", () => {
   it("defaults to NOT_DELIVERED, the vocabulary the old web sends", async () => {
-    const created = await create({ name: "Cliente ausente", blocks_delivery: true });
+    const created = await create({
+      name: "Cliente ausente",
+      blocks_delivery: true,
+    });
 
     expect(created.category).toBe("NOT_DELIVERED");
     expect(created.pause_kind).toBeNull();
@@ -130,7 +146,11 @@ describe("creating a type", () => {
       requires_signature: true,
       requires_photo: true,
     });
-    const snack = await create({ name: "Lanche", category: "PAUSE", pause_kind: "REST" });
+    const snack = await create({
+      name: "Lanche",
+      category: "PAUSE",
+      pause_kind: "REST",
+    });
 
     expect(delivered).toMatchObject({
       category: "DELIVERED",
@@ -147,17 +167,32 @@ describe("creating a type", () => {
 
     expect(
       await refusal(create({ name: "Pausa sem natureza", category: "PAUSE" })),
-    ).toBe("400 VALIDATION_ERROR: Escolha a natureza legal da pausa (refeição, descanso ou outra).");
+    ).toBe(
+      "400 VALIDATION_ERROR: Escolha a natureza legal da pausa (refeição, descanso ou outra).",
+    );
     expect(
       await refusal(
-        create({ name: "Pausa com foto", category: "PAUSE", pause_kind: "MEAL", requires_photo: true }),
+        create({
+          name: "Pausa com foto",
+          category: "PAUSE",
+          pause_kind: "MEAL",
+          requires_photo: true,
+        }),
       ),
     ).toBe(
       "400 VALIDATION_ERROR: Tipos de pausa não exigem fotos, assinatura, formulário nem autorização.",
     );
     expect(
-      await refusal(create({ name: "Entrega que impede", category: "DELIVERED", blocks_delivery: true })),
-    ).toBe("400 VALIDATION_ERROR: Só tipos de não entrega podem ser impeditivos.");
+      await refusal(
+        create({
+          name: "Entrega que impede",
+          category: "DELIVERED",
+          blocks_delivery: true,
+        }),
+      ),
+    ).toBe(
+      "400 VALIDATION_ERROR: Só tipos de não entrega podem ser impeditivos.",
+    );
     expect(types.occurrenceTypes).toHaveLength(before);
   });
 
@@ -167,18 +202,22 @@ describe("creating a type", () => {
     expect(created.pause_kind).toBeNull();
     expect(
       await refusal(create({ name: "Recusa 2", pause_kind: "MEAL" })),
-    ).toBe("400 VALIDATION_ERROR: A natureza legal só existe em tipos de pausa.");
+    ).toBe(
+      "400 VALIDATION_ERROR: A natureza legal só existe em tipos de pausa.",
+    );
   });
 });
 
 describe("editing a type", () => {
   it("locks the category and the nature of a default type", async () => {
-    expect(await refusal(update(byKey("pause_meal").id!, { category: "NOT_DELIVERED" }))).toBe(
-      "409 OCCURRENCE_TYPE_CATEGORY_LOCKED",
-    );
-    expect(await refusal(update(byKey("pause_meal").id!, { pause_kind: "REST" }))).toBe(
-      "409 OCCURRENCE_TYPE_CATEGORY_LOCKED",
-    );
+    expect(
+      await refusal(
+        update(byKey("pause_meal").id!, { category: "NOT_DELIVERED" }),
+      ),
+    ).toBe("409 OCCURRENCE_TYPE_CATEGORY_LOCKED");
+    expect(
+      await refusal(update(byKey("pause_meal").id!, { pause_kind: "REST" })),
+    ).toBe("409 OCCURRENCE_TYPE_CATEGORY_LOCKED");
   });
 
   it("locks the category of a type already used, and lets an unused one move", async () => {
@@ -191,7 +230,10 @@ describe("editing a type", () => {
       "409 OCCURRENCE_TYPE_CATEGORY_LOCKED",
     );
 
-    const moved = await update(fresh.id!, { category: "PAUSE", pause_kind: "OTHER" });
+    const moved = await update(fresh.id!, {
+      category: "PAUSE",
+      pause_kind: "OTHER",
+    });
 
     expect(moved).toMatchObject({ category: "PAUSE", pause_kind: "OTHER" });
   });
@@ -202,12 +244,17 @@ describe("editing a type", () => {
       requires_signature: true,
     });
 
-    expect(edited).toMatchObject({ name: "Entrega padrão", requires_signature: true });
+    expect(edited).toMatchObject({
+      name: "Entrega padrão",
+      requires_signature: true,
+    });
   });
 
   it("refuses requirements a pause cannot have, against the type as it would be", async () => {
     expect(
-      await refusal(update(byKey("pause_rest").id!, { requires_signature: true })),
+      await refusal(
+        update(byKey("pause_rest").id!, { requires_signature: true }),
+      ),
     ).toBe(
       "400 VALIDATION_ERROR: Tipos de pausa não exigem fotos, assinatura, formulário nem autorização.",
     );
@@ -223,16 +270,18 @@ describe("editing a type", () => {
   });
 
   it("never leaves the company without an active delivery type or pause type", async () => {
-    expect(await refusal(update(byKey("delivered_default").id!, { is_active: false }))).toBe(
-      "409 OCCURRENCE_TYPE_LAST_OF_CATEGORY",
-    );
+    expect(
+      await refusal(
+        update(byKey("delivered_default").id!, { is_active: false }),
+      ),
+    ).toBe("409 OCCURRENCE_TYPE_LAST_OF_CATEGORY");
 
     await update(byKey("pause_meal").id!, { is_active: false });
     await update(byKey("pause_rest").id!, { is_active: false });
 
-    expect(await refusal(update(byKey("pause_other").id!, { is_active: false }))).toBe(
-      "409 OCCURRENCE_TYPE_LAST_OF_CATEGORY",
-    );
+    expect(
+      await refusal(update(byKey("pause_other").id!, { is_active: false })),
+    ).toBe("409 OCCURRENCE_TYPE_LAST_OF_CATEGORY");
 
     // With a second delivery type, the default may go.
     await create({ name: "Entrega com avaria", category: "DELIVERED" });
@@ -256,9 +305,15 @@ describe("editing a type", () => {
 
 describe("deleting a type", () => {
   it("never deletes a default, and counts pauses as use", async () => {
-    expect(await refusal(remove(byKey("pause_meal").id!))).toBe("409 OCCURRENCE_TYPE_DEFAULT");
+    expect(await refusal(remove(byKey("pause_meal").id!))).toBe(
+      "409 OCCURRENCE_TYPE_DEFAULT",
+    );
 
-    const snack = await create({ name: "Lanche", category: "PAUSE", pause_kind: "REST" });
+    const snack = await create({
+      name: "Lanche",
+      category: "PAUSE",
+      pause_kind: "REST",
+    });
 
     types.occurrenceCounts.set(snack.id!, 2);
 
@@ -266,14 +321,23 @@ describe("deleting a type", () => {
   });
 
   it("refuses deleting the last active delivery or pause type, as deactivating it", async () => {
-    const lone = await create({ name: "Entrega na portaria", category: "DELIVERED" });
+    const lone = await create({
+      name: "Entrega na portaria",
+      category: "DELIVERED",
+    });
 
     await update(byKey("delivered_default").id!, { is_active: false });
 
-    expect(await refusal(remove(lone.id!))).toBe("409 OCCURRENCE_TYPE_LAST_OF_CATEGORY");
+    expect(await refusal(remove(lone.id!))).toBe(
+      "409 OCCURRENCE_TYPE_LAST_OF_CATEGORY",
+    );
 
     // An inactive type never counted as the category's last: it goes.
-    const off = await create({ name: "Lanche", category: "PAUSE", pause_kind: "REST" });
+    const off = await create({
+      name: "Lanche",
+      category: "PAUSE",
+      pause_kind: "REST",
+    });
 
     await update(off.id!, { is_active: false });
     await remove(off.id!);
@@ -299,7 +363,11 @@ describe("the catalogue list", () => {
       categories: ["PAUSE"],
     });
 
-    expect(pauses.data.map((row) => row.name).sort()).toEqual(["Descanso", "Outra pausa", "Refeição"]);
+    expect(pauses.data.map((row) => row.name).sort()).toEqual([
+      "Descanso",
+      "Outra pausa",
+      "Refeição",
+    ]);
     expect(pauses.data.every((row) => row.is_default)).toBe(true);
     expect(pauses.data.some((row) => "system_key" in row)).toBe(false);
     expect(pauses.meta.facets.category).toEqual([
@@ -316,7 +384,11 @@ describe("the catalogue list", () => {
     });
 
     expect(problems.data).toEqual([
-      expect.objectContaining({ name: "Cliente ausente", is_default: false, in_use: true }),
+      expect.objectContaining({
+        name: "Cliente ausente",
+        is_default: false,
+        in_use: true,
+      }),
     ]);
   });
 });
@@ -324,7 +396,11 @@ describe("the catalogue list", () => {
 describe("the driver's lists", () => {
   it("split by category: problems, deliveries (default first) and pauses", async () => {
     await create({ name: "Cliente ausente" });
-    await create({ name: "Avaria", category: "DELIVERED", requires_photo: true });
+    await create({
+      name: "Avaria",
+      category: "DELIVERED",
+      requires_photo: true,
+    });
 
     const problems = await types.listActiveOccurrenceTypes(BUSINESS);
     const delivered = await types.listActiveDeliveredTypes(BUSINESS);

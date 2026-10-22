@@ -9,9 +9,16 @@ import { isUniqueViolation } from "@/shared/http/idempotency-key";
 import { AppError } from "@/shared/errors/AppError";
 
 import { SupportTicketLegacyReadOnlyError } from "../../errors/support-ticket-errors";
-import { presentTicket, type TicketSummary } from "../../shared/ticket-presenter";
+import {
+  presentTicket,
+  type TicketSummary,
+} from "../../shared/ticket-presenter";
 import { announceTicket } from "../../shared/ticket-operations";
-import { assertOperator, loadScopedTicket, resolveTicketScope } from "../ticket-access";
+import {
+  assertOperator,
+  loadScopedTicket,
+  resolveTicketScope,
+} from "../ticket-access";
 
 /**
  * CLOSED → OPEN (design §4.8). A decision is never undone: the occurrence
@@ -33,11 +40,19 @@ class ReopenSupportTicketUseCase {
     ticketId: string;
     note?: string | null;
   }): Promise<{ data: TicketSummary; replayed: boolean }> {
-    const scope = await resolveTicketScope(this.user, request.userId, request.businessId);
+    const scope = await resolveTicketScope(
+      this.user,
+      request.userId,
+      request.businessId,
+    );
 
     assertOperator(scope);
 
-    const ticket = await loadScopedTicket(this.tickets, scope, request.ticketId);
+    const ticket = await loadScopedTicket(
+      this.tickets,
+      scope,
+      request.ticketId,
+    );
 
     if (ticket.status === "OPEN") {
       const row = await this.tickets.findRowById(ticket.id, scope.businessId);

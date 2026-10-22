@@ -42,8 +42,11 @@ function canSpeak(scope: ChatScope): boolean {
   if (!canWriteInChat(scope.user.role)) return false;
 
   return (
-    decidePermission(scope.user as unknown as PermissionPrincipal, "delivery_manage", "write") ===
-    null
+    decidePermission(
+      scope.user as unknown as PermissionPrincipal,
+      "delivery_manage",
+      "write",
+    ) === null
   );
 }
 

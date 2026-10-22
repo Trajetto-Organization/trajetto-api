@@ -42,7 +42,11 @@ describe("summarizeOccurrenceFeed", () => {
     const { total, searchMeta } = summarizeOccurrenceFeed(COUNTS, {});
 
     expect(total).toBe(10);
-    expect(searchMeta).toMatchObject({ total: 10, blocking: 5, informational: 5 });
+    expect(searchMeta).toMatchObject({
+      total: 10,
+      blocking: 5,
+      informational: 5,
+    });
     expect(searchMeta.facets.severity).toEqual([
       { value: "blocking", count: 5 },
       { value: "informational", count: 5 },
@@ -52,11 +56,9 @@ describe("summarizeOccurrenceFeed", () => {
   it("lists the type options alphabetically, with names", () => {
     const { searchMeta } = summarizeOccurrenceFeed(COUNTS, {});
 
-    expect(searchMeta.facets.occurrenceTypeId.map((option) => option.label)).toEqual([
-      "Avaria",
-      "Destinatário ausente",
-      "Recusa",
-    ]);
+    expect(
+      searchMeta.facets.occurrenceTypeId.map((option) => option.label),
+    ).toEqual(["Avaria", "Destinatário ausente", "Recusa"]);
   });
 
   it("a severity filter narrows the pager and the type options, not the cards", () => {
@@ -68,13 +70,16 @@ describe("summarizeOccurrenceFeed", () => {
     expect(total).toBe(5);
 
     // The cards keep the whole breakdown; "Informativas" is not a zero.
-    expect(searchMeta).toMatchObject({ total: 10, blocking: 5, informational: 5 });
+    expect(searchMeta).toMatchObject({
+      total: 10,
+      blocking: 5,
+      informational: 5,
+    });
 
     // The Tipo options are the blocking types only.
-    expect(searchMeta.facets.occurrenceTypeId.map((option) => option.value)).toEqual([
-      AVARIA.id,
-      RECUSA.id,
-    ]);
+    expect(
+      searchMeta.facets.occurrenceTypeId.map((option) => option.value),
+    ).toEqual([AVARIA.id, RECUSA.id]);
   });
 
   it("a type filter narrows the pager and the cards, not the type options", () => {
@@ -83,7 +88,11 @@ describe("summarizeOccurrenceFeed", () => {
     });
 
     expect(total).toBe(3);
-    expect(searchMeta).toMatchObject({ total: 3, blocking: 3, informational: 0 });
+    expect(searchMeta).toMatchObject({
+      total: 3,
+      blocking: 3,
+      informational: 0,
+    });
     expect(searchMeta.facets.occurrenceTypeId).toHaveLength(3);
   });
 
@@ -103,7 +112,9 @@ describe("summarizeOccurrenceFeed", () => {
 
   it("both severities selected is the same as none", () => {
     expect(
-      summarizeOccurrenceFeed(COUNTS, { severity: ["blocking", "informational"] }).total,
+      summarizeOccurrenceFeed(COUNTS, {
+        severity: ["blocking", "informational"],
+      }).total,
     ).toBe(10);
     expect(severityAsBlocking(["blocking", "informational"])).toBeUndefined();
     expect(severityAsBlocking(["informational"])).toBe(false);
@@ -138,9 +149,9 @@ describe("summarizeOccurrenceFeed with delivered occurrences", () => {
       informational: 5,
       delivered: 7,
     });
-    expect(searchMeta.facets.occurrenceTypeId.map((option) => option.value)).toEqual([
-      AUSENTE.id,
-    ]);
+    expect(
+      searchMeta.facets.occurrenceTypeId.map((option) => option.value),
+    ).toEqual([AUSENTE.id]);
   });
 
   it("counts and filters by category", () => {
@@ -152,14 +163,20 @@ describe("summarizeOccurrenceFeed with delivered occurrences", () => {
       { value: "NOT_DELIVERED", count: 10 },
     ]);
 
-    const problems = summarizeOccurrenceFeed(WITH_PROOFS, { category: ["NOT_DELIVERED"] });
+    const problems = summarizeOccurrenceFeed(WITH_PROOFS, {
+      category: ["NOT_DELIVERED"],
+    });
 
     expect(problems.total).toBe(10);
     expect(problems.searchMeta).toMatchObject({ total: 10, delivered: 0 });
     // The category facet ignores its own selection.
-    expect(problems.searchMeta.facets.category).toEqual(all.searchMeta.facets.category);
+    expect(problems.searchMeta.facets.category).toEqual(
+      all.searchMeta.facets.category,
+    );
 
-    const proofs = summarizeOccurrenceFeed(WITH_PROOFS, { category: ["DELIVERED"] });
+    const proofs = summarizeOccurrenceFeed(WITH_PROOFS, {
+      category: ["DELIVERED"],
+    });
 
     expect(proofs.total).toBe(7);
     expect(proofs.searchMeta.facets.severity).toEqual([
@@ -169,7 +186,9 @@ describe("summarizeOccurrenceFeed with delivered occurrences", () => {
   });
 
   it("a severity selection leaves the DELIVERED category at zero", () => {
-    const { searchMeta } = summarizeOccurrenceFeed(WITH_PROOFS, { severity: ["blocking"] });
+    const { searchMeta } = summarizeOccurrenceFeed(WITH_PROOFS, {
+      severity: ["blocking"],
+    });
 
     expect(searchMeta.facets.category).toEqual([
       { value: "DELIVERED", count: 0 },

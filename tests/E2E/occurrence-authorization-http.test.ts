@@ -51,12 +51,34 @@ const FOREIGN_DELIVERY = "018fe900-0000-7000-8000-0000000000c9";
 let statusReasonId = "";
 
 const TOWER_FORM = [
-  { key: "quem_atendeu", label: "Quem atendeu", type: "text", required: true, max_length: 60, multiline: false },
-  { key: "ligou_cliente", label: "Ligou para o cliente", type: "boolean", required: true },
-  { key: "motivo", label: "Motivo", type: "select", required: true, options: ["Ausente", "Recusa"] },
+  {
+    key: "quem_atendeu",
+    label: "Quem atendeu",
+    type: "text",
+    required: true,
+    max_length: 60,
+    multiline: false,
+  },
+  {
+    key: "ligou_cliente",
+    label: "Ligou para o cliente",
+    type: "boolean",
+    required: true,
+  },
+  {
+    key: "motivo",
+    label: "Motivo",
+    type: "select",
+    required: true,
+    options: ["Ausente", "Recusa"],
+  },
 ];
 
-const VALID_ANSWERS = { quem_atendeu: "Porteiro", ligou_cliente: true, motivo: "Ausente" };
+const VALID_ANSWERS = {
+  quem_atendeu: "Porteiro",
+  ligou_cliente: true,
+  motivo: "Ausente",
+};
 
 const users: Record<
   | "admin"
@@ -158,10 +180,14 @@ async function seedUser(
 
   return {
     id,
-    token: sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-      subject: id,
-      expiresIn: "15m",
-    }),
+    token: sign(
+      { tokenType: "access", sessionVersion: 0, familyId },
+      auth.secret_token,
+      {
+        subject: id,
+        expiresIn: "15m",
+      },
+    ),
   };
 }
 
@@ -231,7 +257,9 @@ function decide(
   );
 }
 
-async function pendingOn(recipient: string): Promise<{ deliveryId: string; occurrenceId: string }> {
+async function pendingOn(
+  recipient: string,
+): Promise<{ deliveryId: string; occurrenceId: string }> {
   const deliveryId = await inTransit(recipient);
 
   const answer = await report(deliveryId, {
@@ -325,9 +353,14 @@ beforeAll(async () => {
   users.driver = await seedUser("João Motorista", "BUSINESS_USER", CARRIER, {
     driverId: DRIVER,
   });
-  users.otherDriver = await seedUser("Beatriz Motorista", "BUSINESS_USER", CARRIER, {
-    driverId: OTHER_DRIVER,
-  });
+  users.otherDriver = await seedUser(
+    "Beatriz Motorista",
+    "BUSINESS_USER",
+    CARRIER,
+    {
+      driverId: OTHER_DRIVER,
+    },
+  );
   users.otherAdmin = await seedUser("Beto Outra", "BUSINESS_ADMIN", OTHER);
   // Reports occurrences, only reads deliveries: the queue refuses its decision.
   users.clerk = await seedUser("Clara Escritório", "BUSINESS_USER", CARRIER, {
@@ -344,7 +377,11 @@ beforeAll(async () => {
   ).id;
 
   await seedBusiness(FLEET_ONLY, false);
-  users.fleetOnlyAdmin = await seedUser("Frida Frota", "BUSINESS_ADMIN", FLEET_ONLY);
+  users.fleetOnlyAdmin = await seedUser(
+    "Frida Frota",
+    "BUSINESS_ADMIN",
+    FLEET_ONLY,
+  );
 
   await prisma.occurrenceType.createMany({
     data: [
@@ -369,7 +406,13 @@ beforeAll(async () => {
         name: "Avaria",
         blocks_delivery: false,
         form_fields: [
-          { key: "volumes", label: "Volumes", type: "number", required: true, integer: true },
+          {
+            key: "volumes",
+            label: "Volumes",
+            type: "number",
+            required: true,
+            integer: true,
+          },
         ],
         form_version: 2,
         businessId: CARRIER,
@@ -440,7 +483,9 @@ describe("the driver's report of a type with a form", () => {
       },
     });
 
-    expect(await prisma.deliveryOccurrence.count({ where: { deliveryId } })).toBe(0);
+    expect(
+      await prisma.deliveryOccurrence.count({ where: { deliveryId } }),
+    ).toBe(0);
   });
 
   it("answers a stale form with 409 and the current form", async () => {
@@ -456,7 +501,9 @@ describe("the driver's report of a type with a form", () => {
     expect(answer.body).toMatchObject({
       code: "OCCURRENCE_FORM_OUTDATED",
       form_version: 2,
-      form_fields: [{ key: "volumes", label: "Volumes", type: "number", required: true }],
+      form_fields: [
+        { key: "volumes", label: "Volumes", type: "number", required: true },
+      ],
       field_errors: { volumes: 'Preencha o campo "Volumes".' },
     });
   });
@@ -498,17 +545,28 @@ describe("a report that waits for the tower", () => {
     });
 
     // No effect: still on the street, no insucesso, no webhook, no customer.
-    const delivery = await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } });
+    const delivery = await prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    });
 
     expect(delivery.status).toBe("IN_TRANSIT");
-    expect(await outboxOf(deliveryId, "delivery-occurrence.reported")).toHaveLength(0);
+    expect(
+      await outboxOf(deliveryId, "delivery-occurrence.reported"),
+    ).toHaveLength(0);
     expect(await outboxOf(deliveryId, "delivery.failed")).toHaveLength(0);
-    expect(await webhooksAbout(deliveryId, "occurrence.reported")).toHaveLength(0);
+    expect(await webhooksAbout(deliveryId, "occurrence.reported")).toHaveLength(
+      0,
+    );
     expect(await webhooksAbout(deliveryId, "delivery.failed")).toHaveLength(0);
 
-    const [request] = await outboxOf(deliveryId, "delivery-occurrence.authorization_requested");
+    const [request] = await outboxOf(
+      deliveryId,
+      "delivery-occurrence.authorization_requested",
+    );
 
-    expect(request.eventKey).toBe(`delivery-occurrence.authorization_requested:${occurrenceId}`);
+    expect(request.eventKey).toBe(
+      `delivery-occurrence.authorization_requested:${occurrenceId}`,
+    );
     expect(request.payload).toMatchObject({
       occurrenceId,
       reporterName: "João Motorista",
@@ -520,7 +578,9 @@ describe("a report that waits for the tower", () => {
     });
 
     // On the trail and the tower's feed (TWR-6), linked to the occurrence.
-    const events = await prisma.deliveryEvent.findMany({ where: { deliveryId } });
+    const events = await prisma.deliveryEvent.findMany({
+      where: { deliveryId },
+    });
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -550,7 +610,9 @@ describe("a report that waits for the tower", () => {
       // Decision 14.5: the resend names the ticket the first report opened.
       ticket: { id: expect.any(String), number: expect.any(Number) },
     });
-    expect(await prisma.deliveryOccurrence.count({ where: { deliveryId } })).toBe(1);
+    expect(
+      await prisma.deliveryOccurrence.count({ where: { deliveryId } }),
+    ).toBe(1);
   });
 
   it("shows once in the delivery's history (no double line from its event)", async () => {
@@ -562,7 +624,10 @@ describe("a report that waits for the tower", () => {
 
     expect(answer.status).toBe(200);
 
-    const timeline = answer.body.data.timeline as Array<{ id: string; kind: string }>;
+    const timeline = answer.body.data.timeline as Array<{
+      id: string;
+      kind: string;
+    }>;
 
     expect(timeline.filter((entry) => entry.kind === "OCCURRENCE")).toEqual([
       expect.objectContaining({ id: occurrenceId }),
@@ -576,7 +641,11 @@ describe("a report that waits for the tower", () => {
   });
 
   it("the driver's day carries the request and the forms", async () => {
-    const answer = await call("GET", `/delivery/my-deliveries/${CARRIER}`, users.driver.token);
+    const answer = await call(
+      "GET",
+      `/delivery/my-deliveries/${CARRIER}`,
+      users.driver.token,
+    );
 
     expect(answer.status).toBe(200);
 
@@ -607,7 +676,11 @@ describe("a report that waits for the tower", () => {
   });
 
   it("is in the tower's queue for those who read deliveries, and only theirs", async () => {
-    const operator = await call("GET", "/delivery/occurrence-authorizations", users.operator.token);
+    const operator = await call(
+      "GET",
+      "/delivery/occurrence-authorizations",
+      users.operator.token,
+    );
 
     expect(operator.status).toBe(200);
     expect(operator.body.total).toBeGreaterThanOrEqual(1);
@@ -627,15 +700,30 @@ describe("a report that waits for the tower", () => {
       ],
     });
 
-    const readOnly = await call("GET", "/delivery/occurrence-authorizations", users.readOnly.token);
+    const readOnly = await call(
+      "GET",
+      "/delivery/occurrence-authorizations",
+      users.readOnly.token,
+    );
 
     expect(readOnly.status).toBe(200);
 
-    const driver = await call("GET", "/delivery/occurrence-authorizations", users.driver.token);
+    const driver = await call(
+      "GET",
+      "/delivery/occurrence-authorizations",
+      users.driver.token,
+    );
 
-    expect(driver).toMatchObject({ status: 403, body: { code: "PERMISSION_DENIED" } });
+    expect(driver).toMatchObject({
+      status: 403,
+      body: { code: "PERMISSION_DENIED" },
+    });
 
-    const other = await call("GET", "/delivery/occurrence-authorizations", users.otherAdmin.token);
+    const other = await call(
+      "GET",
+      "/delivery/occurrence-authorizations",
+      users.otherAdmin.token,
+    );
 
     expect(other.status).toBe(200);
     expect(other.body.total).toBe(0);
@@ -647,7 +735,10 @@ describe("a report that waits for the tower", () => {
       users.fleetOnlyAdmin.token,
     );
 
-    expect(fleetOnly).toMatchObject({ status: 403, body: { code: "MODULE_NOT_ENABLED" } });
+    expect(fleetOnly).toMatchObject({
+      status: 403,
+      body: { code: "MODULE_NOT_ENABLED" },
+    });
 
     const peeking = await call(
       "GET",
@@ -659,11 +750,25 @@ describe("a report that waits for the tower", () => {
   });
 
   it("is decided only by the company's dispatchers", async () => {
-    const driver = await decide(occurrenceId, { decision: "APPROVED" }, users.driver.token);
-    const readOnly = await decide(occurrenceId, { decision: "APPROVED" }, users.readOnly.token);
+    const driver = await decide(
+      occurrenceId,
+      { decision: "APPROVED" },
+      users.driver.token,
+    );
+    const readOnly = await decide(
+      occurrenceId,
+      { decision: "APPROVED" },
+      users.readOnly.token,
+    );
 
-    expect(driver).toMatchObject({ status: 403, body: { code: "PERMISSION_DENIED" } });
-    expect(readOnly).toMatchObject({ status: 403, body: { code: "PERMISSION_DENIED" } });
+    expect(driver).toMatchObject({
+      status: 403,
+      body: { code: "PERMISSION_DENIED" },
+    });
+    expect(readOnly).toMatchObject({
+      status: 403,
+      body: { code: "PERMISSION_DENIED" },
+    });
 
     // Another company: under its own id the occurrence does not exist; under
     // the carrier's id the tenant guard refuses first.
@@ -673,16 +778,37 @@ describe("a report that waits for the tower", () => {
       users.otherAdmin.token,
       OTHER,
     );
-    const foreignPeek = await decide(occurrenceId, { decision: "APPROVED" }, users.otherAdmin.token);
+    const foreignPeek = await decide(
+      occurrenceId,
+      { decision: "APPROVED" },
+      users.otherAdmin.token,
+    );
 
-    expect(foreignOwn).toMatchObject({ status: 404, body: { code: "OCCURRENCE_NOT_FOUND" } });
+    expect(foreignOwn).toMatchObject({
+      status: 404,
+      body: { code: "OCCURRENCE_NOT_FOUND" },
+    });
     expect(foreignPeek.status).toBe(403);
 
-    const noReason = await decide(occurrenceId, { decision: "DENIED" }, users.operator.token);
-    const badDecision = await decide(occurrenceId, { decision: "MAYBE" }, users.operator.token);
+    const noReason = await decide(
+      occurrenceId,
+      { decision: "DENIED" },
+      users.operator.token,
+    );
+    const badDecision = await decide(
+      occurrenceId,
+      { decision: "MAYBE" },
+      users.operator.token,
+    );
 
-    expect(noReason).toMatchObject({ status: 400, body: { code: "AUTHORIZATION_NOTE_REQUIRED" } });
-    expect(badDecision).toMatchObject({ status: 400, body: { code: "VALIDATION_ERROR" } });
+    expect(noReason).toMatchObject({
+      status: 400,
+      body: { code: "AUTHORIZATION_NOTE_REQUIRED" },
+    });
+    expect(badDecision).toMatchObject({
+      status: 400,
+      body: { code: "VALIDATION_ERROR" },
+    });
 
     const occurrence = await prisma.deliveryOccurrence.findUniqueOrThrow({
       where: { id: occurrenceId },
@@ -693,7 +819,11 @@ describe("a report that waits for the tower", () => {
 
   it("two operators at once make ONE decision; the other hears who decided", async () => {
     const answers = await Promise.all([
-      decide(occurrenceId, { decision: "APPROVED", note: "Pode voltar com a carga." }, users.operator.token),
+      decide(
+        occurrenceId,
+        { decision: "APPROVED", note: "Pode voltar com a carga." },
+        users.operator.token,
+      ),
       decide(occurrenceId, { decision: "APPROVED" }, users.admin.token),
     ]);
 
@@ -717,7 +847,9 @@ describe("a report that waits for the tower", () => {
 
     // The effect, once: FAILED, one STATUS_CHANGE at the approval, one
     // insucesso notice, one answer to the driver.
-    const delivery = await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } });
+    const delivery = await prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    });
 
     expect(delivery.status).toBe("FAILED");
 
@@ -733,7 +865,9 @@ describe("a report that waits for the tower", () => {
       reportedById: winner.body.data.authorizedBy.id,
     });
 
-    expect(await outboxOf(deliveryId, "delivery-occurrence.reported")).toHaveLength(1);
+    expect(
+      await outboxOf(deliveryId, "delivery-occurrence.reported"),
+    ).toHaveLength(1);
 
     // The shipper hears it now, once, with the status after the approval.
     const reported = await webhooksAbout(deliveryId, "occurrence.reported");
@@ -742,7 +876,10 @@ describe("a report that waits for the tower", () => {
     expect(reported[0].status).toBe("FAILED");
     expect(await webhooksAbout(deliveryId, "delivery.failed")).toHaveLength(1);
 
-    const decided = await outboxOf(deliveryId, "delivery-occurrence.authorization_decided");
+    const decided = await outboxOf(
+      deliveryId,
+      "delivery-occurrence.authorization_decided",
+    );
 
     expect(decided).toHaveLength(1);
     expect(decided[0].payload).toMatchObject({
@@ -756,23 +893,34 @@ describe("a report that waits for the tower", () => {
 
   it("the winner repeating the same answer is a replay, with nothing written again", async () => {
     const winnerId = (
-      await prisma.deliveryOccurrence.findUniqueOrThrow({ where: { id: occurrenceId } })
+      await prisma.deliveryOccurrence.findUniqueOrThrow({
+        where: { id: occurrenceId },
+      })
     ).authorizedById;
 
-    const token = winnerId === users.operator.id ? users.operator.token : users.admin.token;
+    const token =
+      winnerId === users.operator.id ? users.operator.token : users.admin.token;
 
     const again = await decide(occurrenceId, { decision: "APPROVED" }, token);
 
     expect(again.status).toBe(200);
     expect(again.body.data.replayed).toBe(true);
-    expect(await outboxOf(deliveryId, "delivery-occurrence.authorization_decided")).toHaveLength(1);
+    expect(
+      await outboxOf(deliveryId, "delivery-occurrence.authorization_decided"),
+    ).toHaveLength(1);
   });
 
   it("left the queue", async () => {
-    const queue = await call("GET", "/delivery/occurrence-authorizations", users.operator.token);
+    const queue = await call(
+      "GET",
+      "/delivery/occurrence-authorizations",
+      users.operator.token,
+    );
 
     expect(
-      (queue.body.data as Array<{ id: string }>).some((row) => row.id === occurrenceId),
+      (queue.body.data as Array<{ id: string }>).some(
+        (row) => row.id === occurrenceId,
+      ),
     ).toBe(false);
   });
 });
@@ -783,7 +931,11 @@ describe("an approval racing a denial", () => {
 
     const answers = await Promise.all([
       decide(occurrenceId, { decision: "APPROVED" }, users.operator.token),
-      decide(occurrenceId, { decision: "DENIED", note: "Aguarde o cliente." }, users.admin.token),
+      decide(
+        occurrenceId,
+        { decision: "DENIED", note: "Aguarde o cliente." },
+        users.admin.token,
+      ),
     ]);
 
     expect(answers.map((answer) => answer.status).sort()).toEqual([200, 409]);
@@ -792,13 +944,21 @@ describe("an approval racing a denial", () => {
     const occurrence = await prisma.deliveryOccurrence.findUniqueOrThrow({
       where: { id: occurrenceId },
     });
-    const delivery = await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } });
+    const delivery = await prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    });
 
-    expect(occurrence.authorization_status).toBe(winner.body.data.authorization_status);
-    expect(delivery.status).toBe(
-      winner.body.data.authorization_status === "APPROVED" ? "FAILED" : "IN_TRANSIT",
+    expect(occurrence.authorization_status).toBe(
+      winner.body.data.authorization_status,
     );
-    expect(await outboxOf(deliveryId, "delivery-occurrence.authorization_decided")).toHaveLength(1);
+    expect(delivery.status).toBe(
+      winner.body.data.authorization_status === "APPROVED"
+        ? "FAILED"
+        : "IN_TRANSIT",
+    );
+    expect(
+      await outboxOf(deliveryId, "delivery-occurrence.authorization_decided"),
+    ).toHaveLength(1);
   });
 });
 
@@ -819,12 +979,20 @@ describe("a denial", () => {
       deliveryStatus: "IN_TRANSIT",
     });
 
-    const delivery = await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } });
+    const delivery = await prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    });
 
     expect(delivery.status).toBe("IN_TRANSIT");
-    expect(await outboxOf(deliveryId, "delivery-occurrence.reported")).toHaveLength(0);
+    expect(
+      await outboxOf(deliveryId, "delivery-occurrence.reported"),
+    ).toHaveLength(0);
 
-    const day = await call("GET", `/delivery/my-deliveries/${CARRIER}`, users.driver.token);
+    const day = await call(
+      "GET",
+      `/delivery/my-deliveries/${CARRIER}`,
+      users.driver.token,
+    );
     const row = (day.body.data as Array<Record<string, any>>).find(
       (entry) => entry.id === deliveryId,
     );
@@ -849,7 +1017,11 @@ describe("a proof while the request waits", () => {
       "POST",
       `/delivery/proof/${deliveryId}/business/${CARRIER}`,
       users.driver.token,
-      { client_submission_id: randomUUID(), photo: key, received_by: "Maria Recebedora" },
+      {
+        client_submission_id: randomUUID(),
+        photo: key,
+        received_by: "Maria Recebedora",
+      },
     );
 
     expect(proof.status).toBe(201);
@@ -860,14 +1032,23 @@ describe("a proof while the request waits", () => {
 
     expect(occurrence.authorization_status).toBe("SUPERSEDED");
 
-    const late = await decide(occurrenceId, { decision: "APPROVED" }, users.operator.token);
+    const late = await decide(
+      occurrenceId,
+      { decision: "APPROVED" },
+      users.operator.token,
+    );
 
     expect(late).toMatchObject({
       status: 409,
-      body: { code: "OCCURRENCE_ALREADY_DECIDED", decision: { status: "SUPERSEDED" } },
+      body: {
+        code: "OCCURRENCE_ALREADY_DECIDED",
+        decision: { status: "SUPERSEDED" },
+      },
     });
 
-    const delivery = await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } });
+    const delivery = await prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    });
 
     expect(delivery.status).toBe("DELIVERED");
   });
@@ -892,26 +1073,46 @@ describe("the other ways a report can go", () => {
 
     expect(occurrence.authorizedById).toBe(users.operator.id);
 
-    const delivery = await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } });
+    const delivery = await prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    });
 
     expect(delivery.status).toBe("FAILED");
-    expect(await outboxOf(deliveryId, "delivery-occurrence.authorization_requested")).toHaveLength(0);
+    expect(
+      await outboxOf(deliveryId, "delivery-occurrence.authorization_requested"),
+    ).toHaveLength(0);
 
-    const events = await prisma.deliveryEvent.findMany({ where: { deliveryId } });
+    const events = await prisma.deliveryEvent.findMany({
+      where: { deliveryId },
+    });
 
     expect(events).toEqual([
-      expect.objectContaining({ type: "OCCURRENCE", actor: "USER", occurrenceId: answer.body.data.id }),
+      expect.objectContaining({
+        type: "OCCURRENCE",
+        actor: "USER",
+        occurrenceId: answer.body.data.id,
+      }),
     ]);
   });
 
   it("another company's delivery or type reads exactly like a missing one", async () => {
     const deliveryId = await inTransit("Muros");
 
-    const foreignDelivery = await report(FOREIGN_DELIVERY, { occurrenceTypeId: TOWER_TYPE });
-    const foreignType = await report(deliveryId, { occurrenceTypeId: FOREIGN_TYPE });
+    const foreignDelivery = await report(FOREIGN_DELIVERY, {
+      occurrenceTypeId: TOWER_TYPE,
+    });
+    const foreignType = await report(deliveryId, {
+      occurrenceTypeId: FOREIGN_TYPE,
+    });
 
-    expect(foreignDelivery).toMatchObject({ status: 404, body: { code: "DELIVERY_NOT_FOUND" } });
-    expect(foreignType).toMatchObject({ status: 404, body: { code: "OCCURRENCE_TYPE_NOT_FOUND" } });
+    expect(foreignDelivery).toMatchObject({
+      status: 404,
+      body: { code: "DELIVERY_NOT_FOUND" },
+    });
+    expect(foreignType).toMatchObject({
+      status: 404,
+      body: { code: "OCCURRENCE_TYPE_NOT_FOUND" },
+    });
   });
 
   it("refuses the platform's own type", async () => {
@@ -919,38 +1120,54 @@ describe("the other ways a report can go", () => {
 
     const answer = await report(deliveryId, { occurrenceTypeId: SYSTEM_TYPE });
 
-    expect(answer).toMatchObject({ status: 400, body: { code: "OCCURRENCE_TYPE_NOT_REPORTABLE" } });
+    expect(answer).toMatchObject({
+      status: 400,
+      body: { code: "OCCURRENCE_TYPE_NOT_REPORTABLE" },
+    });
   });
 
   it("a type that asks the tower but does not block: approval changes no status", async () => {
     const deliveryId = await inTransit("Vizinho");
 
-    const reported = await report(deliveryId, { occurrenceTypeId: TOWER_INFO_TYPE });
+    const reported = await report(deliveryId, {
+      occurrenceTypeId: TOWER_INFO_TYPE,
+    });
 
     expect(reported.body.data.authorization_status).toBe("PENDING");
 
-    const approved = await decide(reported.body.data.id, { decision: "APPROVED" }, users.admin.token);
+    const approved = await decide(
+      reported.body.data.id,
+      { decision: "APPROVED" },
+      users.admin.token,
+    );
 
     expect(approved.body.data).toMatchObject({
       authorization_status: "APPROVED",
       deliveryStatus: "IN_TRANSIT",
     });
     expect(
-      await prisma.deliveryEvent.count({ where: { deliveryId, type: "STATUS_CHANGE" } }),
+      await prisma.deliveryEvent.count({
+        where: { deliveryId, type: "STATUS_CHANGE" },
+      }),
     ).toBe(0);
   });
 
   it("a report that never asked the tower cannot be decided", async () => {
     const deliveryId = await inTransit("Sem pedido");
 
-    const reported = await report(
-      deliveryId,
-      { occurrenceTypeId: EDITED_TYPE, form_answers: { volumes: 2 }, form_version: 2 },
-    );
+    const reported = await report(deliveryId, {
+      occurrenceTypeId: EDITED_TYPE,
+      form_answers: { volumes: 2 },
+      form_version: 2,
+    });
 
     expect(reported.body.data.authorization_status).toBe("NOT_REQUIRED");
 
-    const answer = await decide(reported.body.data.id, { decision: "APPROVED" }, users.admin.token);
+    const answer = await decide(
+      reported.body.data.id,
+      { decision: "APPROVED" },
+      users.admin.token,
+    );
 
     expect(answer).toMatchObject({
       status: 409,
@@ -985,33 +1202,49 @@ describe("on a running route", () => {
     expect(reported.body.data.authorization_status).toBe("PENDING");
 
     // Waiting: nothing on the route moved, and the event says which route.
-    const waiting = await prisma.routeStop.findUniqueOrThrow({ where: { id: route.stops[0].id } });
+    const waiting = await prisma.routeStop.findUniqueOrThrow({
+      where: { id: route.stops[0].id },
+    });
 
     expect(waiting.status).toBe("PENDING");
     expect(
-      (await prisma.route.findUniqueOrThrow({ where: { id: route.id } })).status,
+      (await prisma.route.findUniqueOrThrow({ where: { id: route.id } }))
+        .status,
     ).toBe("IN_PROGRESS");
     expect(
-      await prisma.deliveryEvent.findFirstOrThrow({ where: { deliveryId, type: "OCCURRENCE" } }),
+      await prisma.deliveryEvent.findFirstOrThrow({
+        where: { deliveryId, type: "OCCURRENCE" },
+      }),
     ).toMatchObject({ routeId: route.id, occurrenceId: reported.body.data.id });
 
     const approvedAt = Date.now();
-    const approved = await decide(reported.body.data.id, { decision: "APPROVED" }, users.operator.token);
+    const approved = await decide(
+      reported.body.data.id,
+      { decision: "APPROVED" },
+      users.operator.token,
+    );
 
     expect(approved.status).toBe(200);
 
-    const settled = await prisma.routeStop.findUniqueOrThrow({ where: { id: route.stops[0].id } });
+    const settled = await prisma.routeStop.findUniqueOrThrow({
+      where: { id: route.stops[0].id },
+    });
 
     expect(settled.status).toBe("FAILED");
     // Closed at the approval, the moment the insucesso happened.
-    expect(settled.completed_at!.getTime()).toBeGreaterThanOrEqual(approvedAt - 1000);
+    expect(settled.completed_at!.getTime()).toBeGreaterThanOrEqual(
+      approvedAt - 1000,
+    );
 
     // Its last open stop: the route ends by itself.
     expect(
-      (await prisma.route.findUniqueOrThrow({ where: { id: route.id } })).status,
+      (await prisma.route.findUniqueOrThrow({ where: { id: route.id } }))
+        .status,
     ).toBe("COMPLETED");
     expect(
-      await prisma.deliveryEvent.findFirstOrThrow({ where: { deliveryId, type: "STATUS_CHANGE" } }),
+      await prisma.deliveryEvent.findFirstOrThrow({
+        where: { deliveryId, type: "STATUS_CHANGE" },
+      }),
     ).toMatchObject({ routeId: route.id, status_to: "FAILED" });
   });
 });
@@ -1019,7 +1252,9 @@ describe("on a running route", () => {
 describe("who files a request, and when its attempt is over (review r1)", () => {
   let routeCode = 7100;
 
-  async function runningRoute(deliveryId: string): Promise<{ id: string; stopId: string }> {
+  async function runningRoute(
+    deliveryId: string,
+  ): Promise<{ id: string; stopId: string }> {
     routeCode += 1;
 
     const route = await prisma.route.create({
@@ -1039,15 +1274,23 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
   }
 
   const inQueue = async (occurrenceId: string): Promise<boolean> => {
-    const queue = await call("GET", "/delivery/occurrence-authorizations", users.operator.token);
+    const queue = await call(
+      "GET",
+      "/delivery/occurrence-authorizations",
+      users.operator.token,
+    );
 
     expect(queue.status).toBe(200);
 
-    return (queue.body.data as Array<{ id: string }>).some((row) => row.id === occurrenceId);
+    return (queue.body.data as Array<{ id: string }>).some(
+      (row) => row.id === occurrenceId,
+    );
   };
 
   it("the panel cancels the delivery: out of the queue, and a late approval closes it", async () => {
-    const { deliveryId, occurrenceId } = await pendingOn("Cancelada pelo painel");
+    const { deliveryId, occurrenceId } = await pendingOn(
+      "Cancelada pelo painel",
+    );
 
     expect(await inQueue(occurrenceId)).toBe(true);
 
@@ -1061,17 +1304,28 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     expect(cancelled.status).toBe(200);
     expect(await inQueue(occurrenceId)).toBe(false);
 
-    const late = await decide(occurrenceId, { decision: "APPROVED" }, users.admin.token);
+    const late = await decide(
+      occurrenceId,
+      { decision: "APPROVED" },
+      users.admin.token,
+    );
 
     expect(late).toMatchObject({
       status: 409,
-      body: { code: "OCCURRENCE_ALREADY_DECIDED", decision: { status: "SUPERSEDED" } },
+      body: {
+        code: "OCCURRENCE_ALREADY_DECIDED",
+        decision: { status: "SUPERSEDED" },
+      },
     });
 
-    const delivery = await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } });
+    const delivery = await prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    });
 
     expect(delivery.status).toBe("CANCELLED");
-    expect(await outboxOf(deliveryId, "delivery-occurrence.authorization_decided")).toHaveLength(0);
+    expect(
+      await outboxOf(deliveryId, "delivery-occurrence.authorization_decided"),
+    ).toHaveLength(0);
   });
 
   it("a route cancelled under the request: a late approval fails nothing", async () => {
@@ -1098,25 +1352,38 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     expect(cancelled.status).toBe(200);
 
     // The load is back in the pool, off the driver.
-    expect(await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } })).toMatchObject({
+    expect(
+      await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } }),
+    ).toMatchObject({
       status: "PENDING",
       driverId: null,
     });
     expect(await inQueue(occurrenceId)).toBe(false);
 
-    const late = await decide(occurrenceId, { decision: "APPROVED" }, users.operator.token);
+    const late = await decide(
+      occurrenceId,
+      { decision: "APPROVED" },
+      users.operator.token,
+    );
 
     expect(late).toMatchObject({
       status: 409,
-      body: { code: "OCCURRENCE_ALREADY_DECIDED", decision: { status: "SUPERSEDED" } },
+      body: {
+        code: "OCCURRENCE_ALREADY_DECIDED",
+        decision: { status: "SUPERSEDED" },
+      },
     });
 
-    const after = await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } });
+    const after = await prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    });
 
     expect(after.status).toBe("PENDING");
     expect(await webhooksAbout(deliveryId, "delivery.failed")).toHaveLength(0);
     expect(
-      await prisma.deliveryEvent.count({ where: { deliveryId, type: "STATUS_CHANGE" } }),
+      await prisma.deliveryEvent.count({
+        where: { deliveryId, type: "STATUS_CHANGE" },
+      }),
     ).toBe(0);
   });
 
@@ -1132,9 +1399,14 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
 
     const occurrenceId = reported.body.data.id as string;
 
-    await call("PATCH", `/route/cancel-route/${first.id}/business/${CARRIER}`, users.operator.token, {
-      reason: "Replanejada para a tarde",
-    });
+    await call(
+      "PATCH",
+      `/route/cancel-route/${first.id}/business/${CARRIER}`,
+      users.operator.token,
+      {
+        reason: "Replanejada para a tarde",
+      },
+    );
 
     // Out again, same driver, on a new route (the departure's own writes).
     const second = await runningRoute(deliveryId);
@@ -1146,17 +1418,30 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
 
     expect(await inQueue(occurrenceId)).toBe(false);
 
-    const late = await decide(occurrenceId, { decision: "APPROVED" }, users.operator.token);
-
-    expect(late).toMatchObject({ status: 409, body: { decision: { status: "SUPERSEDED" } } });
-    expect((await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } })).status).toBe(
-      "IN_TRANSIT",
+    const late = await decide(
+      occurrenceId,
+      { decision: "APPROVED" },
+      users.operator.token,
     );
+
+    expect(late).toMatchObject({
+      status: 409,
+      body: { decision: { status: "SUPERSEDED" } },
+    });
     expect(
-      (await prisma.routeStop.findUniqueOrThrow({ where: { id: second.stopId } })).status,
+      (await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } }))
+        .status,
+    ).toBe("IN_TRANSIT");
+    expect(
+      (
+        await prisma.routeStop.findUniqueOrThrow({
+          where: { id: second.stopId },
+        })
+      ).status,
     ).toBe("PENDING");
     expect(
-      (await prisma.route.findUniqueOrThrow({ where: { id: second.id } })).status,
+      (await prisma.route.findUniqueOrThrow({ where: { id: second.id } }))
+        .status,
     ).toBe("IN_PROGRESS");
   });
 
@@ -1176,29 +1461,47 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
 
     // Nothing applied, nobody authorized it.
     expect(
-      await prisma.deliveryOccurrence.findUniqueOrThrow({ where: { id: occurrenceId } }),
+      await prisma.deliveryOccurrence.findUniqueOrThrow({
+        where: { id: occurrenceId },
+      }),
     ).toMatchObject({ authorization_status: "PENDING", authorizedById: null });
-    expect((await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } })).status).toBe(
-      "IN_TRANSIT",
-    );
+    expect(
+      (await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } }))
+        .status,
+    ).toBe("IN_TRANSIT");
     expect(await webhooksAbout(deliveryId, "delivery.failed")).toHaveLength(0);
 
     // The queue asks the tower, and the clerk is not the tower there either.
     expect(await inQueue(occurrenceId)).toBe(true);
 
-    const byClerk = await decide(occurrenceId, { decision: "APPROVED" }, users.clerk.token);
+    const byClerk = await decide(
+      occurrenceId,
+      { decision: "APPROVED" },
+      users.clerk.token,
+    );
 
-    expect(byClerk).toMatchObject({ status: 403, body: { code: "PERMISSION_DENIED" } });
+    expect(byClerk).toMatchObject({
+      status: 403,
+      body: { code: "PERMISSION_DENIED" },
+    });
 
     // Not the driver's request: the driver's card does not carry it.
-    const day = await call("GET", `/delivery/my-deliveries/${CARRIER}`, users.driver.token);
+    const day = await call(
+      "GET",
+      `/delivery/my-deliveries/${CARRIER}`,
+      users.driver.token,
+    );
     const row = (day.body.data as Array<Record<string, any>>).find(
       (entry) => entry.id === deliveryId,
     );
 
     expect(row?.authorization_request).toBeNull();
 
-    const approved = await decide(occurrenceId, { decision: "APPROVED" }, users.operator.token);
+    const approved = await decide(
+      occurrenceId,
+      { decision: "APPROVED" },
+      users.operator.token,
+    );
 
     expect(approved.body.data).toMatchObject({
       authorization_status: "APPROVED",
@@ -1217,7 +1520,11 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
 
     expect(reported.body.data.authorization_status).toBe("APPROVED");
 
-    const day = await call("GET", `/delivery/my-deliveries/${CARRIER}`, users.driver.token);
+    const day = await call(
+      "GET",
+      `/delivery/my-deliveries/${CARRIER}`,
+      users.driver.token,
+    );
     const row = (day.body.data as Array<Record<string, any>>).find(
       (entry) => entry.id === deliveryId,
     );
@@ -1238,7 +1545,11 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     expect(denied.status).toBe(200);
 
     const cardOf = async (token: string) => {
-      const day = await call("GET", `/delivery/my-deliveries/${CARRIER}`, token);
+      const day = await call(
+        "GET",
+        `/delivery/my-deliveries/${CARRIER}`,
+        token,
+      );
 
       expect(day.status).toBe(200);
 
@@ -1248,7 +1559,10 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     };
 
     // The dispatcher hands the delivery over to another driver.
-    await prisma.delivery.update({ where: { id: deliveryId }, data: { driverId: OTHER_DRIVER } });
+    await prisma.delivery.update({
+      where: { id: deliveryId },
+      data: { driverId: OTHER_DRIVER },
+    });
 
     const handedOver = await cardOf(users.otherDriver.token);
 
@@ -1263,7 +1577,9 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     );
 
     expect(own.body.data.authorization_status).toBe("PENDING");
-    expect((await cardOf(users.otherDriver.token))?.authorization_request).toMatchObject({
+    expect(
+      (await cardOf(users.otherDriver.token))?.authorization_request,
+    ).toMatchObject({
       occurrenceId: own.body.data.id,
       status: "PENDING",
     });
@@ -1272,7 +1588,10 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
   it("on a delivery that already FAILED, the request is born SUPERSEDED", async () => {
     const deliveryId = await inTransit("Já com insucesso");
 
-    await prisma.delivery.update({ where: { id: deliveryId }, data: { status: "FAILED" } });
+    await prisma.delivery.update({
+      where: { id: deliveryId },
+      data: { status: "FAILED" },
+    });
 
     const reported = await report(deliveryId, {
       occurrenceTypeId: TOWER_TYPE,
@@ -1306,10 +1625,18 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     });
 
     // A build that shows forms and sent nothing is plainly wrong answers.
-    const current = await report(deliveryId, { occurrenceTypeId: TOWER_TYPE, form_version: 1 });
+    const current = await report(deliveryId, {
+      occurrenceTypeId: TOWER_TYPE,
+      form_version: 1,
+    });
 
-    expect(current).toMatchObject({ status: 400, body: { code: "OCCURRENCE_FORM_INVALID" } });
-    expect(await prisma.deliveryOccurrence.count({ where: { deliveryId } })).toBe(0);
+    expect(current).toMatchObject({
+      status: 400,
+      body: { code: "OCCURRENCE_FORM_INVALID" },
+    });
+    expect(
+      await prisma.deliveryOccurrence.count({ where: { deliveryId } }),
+    ).toBe(0);
   });
 
   it("a request decided before its notice fans out rings nobody; one still waiting reaches the tower", async () => {
@@ -1326,12 +1653,16 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     // flight finish its batch: from then on only this test claims events.
     // Production has the same shape: an HTTP-only replica publishes, and the
     // worker's sweep expands the event later.
-    const heldWake = vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
+    const heldWake = vi
+      .spyOn(pipeline, "wake")
+      .mockImplementation(() => undefined);
 
     try {
       await vi.waitFor(
         () =>
-          expect((pipeline as unknown as { outboxRunning: unknown }).outboxRunning).toBe(false),
+          expect(
+            (pipeline as unknown as { outboxRunning: unknown }).outboxRunning,
+          ).toBe(false),
         { timeout: 15_000, interval: 50 },
       );
 
@@ -1347,7 +1678,10 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
       expect(denied.status).toBe(200);
 
       const noticeOf = async (deliveryId: string) => {
-        const [event] = await outboxOf(deliveryId, "delivery-occurrence.authorization_requested");
+        const [event] = await outboxOf(
+          deliveryId,
+          "delivery-occurrence.authorization_requested",
+        );
 
         return event;
       };
@@ -1365,7 +1699,9 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
       expect(live.status).toBe("PUBLISHED");
 
       expect(
-        await prisma.notificationDelivery.count({ where: { outboxEventId: stale.id } }),
+        await prisma.notificationDelivery.count({
+          where: { outboxEventId: stale.id },
+        }),
       ).toBe(0);
 
       const reached = await prisma.notificationDelivery.findMany({
@@ -1395,11 +1731,16 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
           form_answers: VALID_ANSWERS,
           form_version: 1,
         }),
-        call("POST", `/delivery/proof/${deliveryId}/business/${CARRIER}`, users.driver.token, {
-          client_submission_id: randomUUID(),
-          photo: key,
-          received_by: "Maria Recebedora",
-        }),
+        call(
+          "POST",
+          `/delivery/proof/${deliveryId}/business/${CARRIER}`,
+          users.driver.token,
+          {
+            client_submission_id: randomUUID(),
+            photo: key,
+            received_by: "Maria Recebedora",
+          },
+        ),
       ]);
 
       expect(reported.status).toBe(201);

@@ -36,7 +36,9 @@ import { ListChatMessagesUseCase } from "../list-chat-messages/list-chat-message
 import { SendChatMessageUseCase } from "../send-chat-message/send-chat-message-usecase";
 
 /** Business id of a MASTER, from the query or the body. */
-const masterBusinessId = z.object({ businessId: z.string().uuid().optional() }).partial();
+const masterBusinessId = z
+  .object({ businessId: z.string().uuid().optional() })
+  .partial();
 
 /**
  * The refusals whose body carries more than code and message: who closed
@@ -86,7 +88,9 @@ class SupportTicketController {
   }
 
   async summary(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { businessId } = request.query as z.infer<typeof ticketsSummarySchema>;
+    const { businessId } = request.query as z.infer<
+      typeof ticketsSummarySchema
+    >;
 
     const counts = await container
       .resolve(GetSupportTicketsSummaryUseCase)
@@ -131,15 +135,19 @@ class SupportTicketController {
     const { businessId } = masterBusinessId.parse(request.query ?? {});
 
     try {
-      const result = await container.resolve(CloseSupportTicketUseCase).execute({
-        userId: request.user.id,
-        businessId,
-        ticketId,
-        outcome,
-        note,
-      });
+      const result = await container
+        .resolve(CloseSupportTicketUseCase)
+        .execute({
+          userId: request.user.id,
+          businessId,
+          ticketId,
+          outcome,
+          note,
+        });
 
-      return reply.status(200).send({ message: CLOSE_MESSAGES[outcome], ...result });
+      return reply
+        .status(200)
+        .send({ message: CLOSE_MESSAGES[outcome], ...result });
     } catch (error) {
       if (sendDetailedError(reply, error)) return;
 
@@ -149,17 +157,21 @@ class SupportTicketController {
 
   async assign(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { ticketId } = ticketParamsSchema.parse(request.params);
-    const { assigneeId, expectedAssigneeId } = assignSupportTicketSchema.parse(request.body);
+    const { assigneeId, expectedAssigneeId } = assignSupportTicketSchema.parse(
+      request.body,
+    );
     const { businessId } = masterBusinessId.parse(request.query ?? {});
 
     try {
-      const result = await container.resolve(AssignSupportTicketUseCase).execute({
-        userId: request.user.id,
-        businessId,
-        ticketId,
-        assigneeId,
-        expectedAssigneeId,
-      });
+      const result = await container
+        .resolve(AssignSupportTicketUseCase)
+        .execute({
+          userId: request.user.id,
+          businessId,
+          ticketId,
+          assigneeId,
+          expectedAssigneeId,
+        });
 
       return reply.status(200).send({
         message: assigneeId ? "Atendente definido." : "Atendimento liberado.",
@@ -181,7 +193,9 @@ class SupportTicketController {
       .resolve(ReopenSupportTicketUseCase)
       .execute({ userId: request.user.id, businessId, ticketId, note });
 
-    return reply.status(200).send({ message: "Atendimento reaberto.", ...result });
+    return reply
+      .status(200)
+      .send({ message: "Atendimento reaberto.", ...result });
   }
 
   async events(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -195,7 +209,10 @@ class SupportTicketController {
     return reply.status(200).send(result);
   }
 
-  async listMessages(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  async listMessages(
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void> {
     const { ticketId } = ticketParamsSchema.parse(request.params);
     const query = request.query as z.infer<typeof listChatMessagesSchema>;
 
@@ -219,7 +236,10 @@ class SupportTicketController {
     return reply.status(200).send(result);
   }
 
-  async sendMessage(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  async sendMessage(
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void> {
     const { ticketId } = ticketParamsSchema.parse(request.params);
     const body = ticketMessageBodySchema.parse(request.body);
     const { businessId } = masterBusinessId.parse(request.query ?? {});
@@ -237,7 +257,9 @@ class SupportTicketController {
         broadcastKey: idempotencyKeyOf(request.headers),
       });
 
-      return reply.status(201).send({ message: "Mensagem enviada!", data: data[0] });
+      return reply
+        .status(201)
+        .send({ message: "Mensagem enviada!", data: data[0] });
     } catch (error) {
       if (sendDetailedError(reply, error)) return;
 
@@ -257,11 +279,15 @@ class SupportTicketController {
       readAt: readAt ? new Date(readAt) : undefined,
     });
 
-    return reply.status(200).send({ message: "Atendimento marcado como lido.", data });
+    return reply
+      .status(200)
+      .send({ message: "Atendimento marcado como lido.", data });
   }
 
   async assignees(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { businessId, search } = request.query as z.infer<typeof listTicketAssigneesSchema>;
+    const { businessId, search } = request.query as z.infer<
+      typeof listTicketAssigneesSchema
+    >;
 
     const result = await container
       .resolve(ListTicketAssigneesUseCase)

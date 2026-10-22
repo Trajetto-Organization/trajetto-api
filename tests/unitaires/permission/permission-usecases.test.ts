@@ -10,11 +10,16 @@ const realtime = vi.hoisted(() => ({
 vi.mock("@/websocket", () => realtime);
 
 const tx = vi.hoisted(() => ({
-  current: { $transaction: async (run: (client: unknown) => Promise<unknown>) => run({}) },
+  current: {
+    $transaction: async (run: (client: unknown) => Promise<unknown>) => run({}),
+  },
 }));
 
 vi.mock("@/../infra/database", () => ({
-  default: { $transaction: (run: (client: unknown) => Promise<unknown>) => tx.current.$transaction(run) },
+  default: {
+    $transaction: (run: (client: unknown) => Promise<unknown>) =>
+      tx.current.$transaction(run),
+  },
 }));
 
 import { CreatePermissionUseCase } from "@/modules/permission/usecases/create-permission/create-permission-usecase";
@@ -54,7 +59,12 @@ const PROFILE = "018f0000-0000-7000-8000-0000000000c1";
 const OWN_PROFILE = "018f0000-0000-7000-8000-0000000000c2";
 const FOREIGN_PROFILE = "018f0000-0000-7000-8000-0000000000c3";
 
-const grant = (permissionKey: PermissionKey, action: string, profileAccessId = PROFILE, businessId = COMPANY) => ({
+const grant = (
+  permissionKey: PermissionKey,
+  action: string,
+  profileAccessId = PROFILE,
+  businessId = COMPANY,
+) => ({
   permissionKey,
   action,
   profileAccessId,
@@ -77,7 +87,13 @@ function makeContext() {
   };
 
   users.user.push(
-    { id: ADMIN, role: "BUSINESS_ADMIN", businessId: COMPANY, profileAccessId: null, profileAccess: null } as unknown as User,
+    {
+      id: ADMIN,
+      role: "BUSINESS_ADMIN",
+      businessId: COMPANY,
+      profileAccessId: null,
+      profileAccess: null,
+    } as unknown as User,
     {
       id: OPERATOR,
       role: "BUSINESS_USER",
@@ -92,7 +108,13 @@ function makeContext() {
       profileAccessId: null,
       profileAccess: null,
     } as unknown as User,
-    { id: MASTER, role: "MASTER", businessId: null, profileAccessId: null, profileAccess: null } as unknown as User,
+    {
+      id: MASTER,
+      role: "MASTER",
+      businessId: null,
+      profileAccessId: null,
+      profileAccess: null,
+    } as unknown as User,
   );
   businesses.business.push(
     { ...BUSINESS_COLUMN_DEFAULTS, id: COMPANY } as unknown as Business,
@@ -103,9 +125,18 @@ function makeContext() {
     { id: OWN_PROFILE, name: "Operação", businessId: COMPANY },
     { id: FOREIGN_PROFILE, name: "Financeiro", businessId: OTHER_COMPANY },
   );
-  permissions.profiles.set(PROFILE, { name: "Financeiro", businessId: COMPANY });
-  permissions.profiles.set(OWN_PROFILE, { name: "Operação", businessId: COMPANY });
-  permissions.profiles.set(FOREIGN_PROFILE, { name: "Financeiro", businessId: OTHER_COMPANY });
+  permissions.profiles.set(PROFILE, {
+    name: "Financeiro",
+    businessId: COMPANY,
+  });
+  permissions.profiles.set(OWN_PROFILE, {
+    name: "Operação",
+    businessId: COMPANY,
+  });
+  permissions.profiles.set(FOREIGN_PROFILE, {
+    name: "Financeiro",
+    businessId: OTHER_COMPANY,
+  });
 
   const transaction = inMemoryTransaction([permissions, audit]);
   tx.current = transaction;
@@ -118,8 +149,20 @@ function makeContext() {
     audit,
     activities,
     transaction,
-    create: new CreatePermissionUseCase(users, permissions, businesses, profiles, service),
-    update: new UpdatePermissionUseCase(users, permissions, businesses, profiles, service),
+    create: new CreatePermissionUseCase(
+      users,
+      permissions,
+      businesses,
+      profiles,
+      service,
+    ),
+    update: new UpdatePermissionUseCase(
+      users,
+      permissions,
+      businesses,
+      profiles,
+      service,
+    ),
     list: new ListPermissionUseCase(users, permissions, businesses),
     byProfile: new ListPermissionsByProfileUseCase(users, permissions),
   };
@@ -133,24 +176,49 @@ describe("creating a permission", () => {
   it("grants, audits and tells the company's sessions to refresh", async () => {
     const context = makeContext();
 
-    const created = await context.create.execute(grant("kanban_manage", "Gerenciar Kanban"), ADMIN);
+    const created = await context.create.execute(
+      grant("kanban_manage", "Gerenciar Kanban"),
+      ADMIN,
+    );
 
-    expect(context.permissions.permissions).toEqual([expect.objectContaining({ id: created.id, profileAccessId: PROFILE })]);
-    expect(context.audit).toEqual([expect.objectContaining({ action: "create", entityId: created.id, businessId: COMPANY })]);
-    expect(realtime.sendSecurityEventToBusiness).toHaveBeenCalledWith(COMPANY, { reason: "permissions_changed" });
+    expect(context.permissions.permissions).toEqual([
+      expect.objectContaining({ id: created.id, profileAccessId: PROFILE }),
+    ]);
+    expect(context.audit).toEqual([
+      expect.objectContaining({
+        action: "create",
+        entityId: created.id,
+        businessId: COMPANY,
+      }),
+    ]);
+    expect(realtime.sendSecurityEventToBusiness).toHaveBeenCalledWith(COMPANY, {
+      reason: "permissions_changed",
+    });
   });
 
   it("refuses a duplicate label and a resource already assigned to the profile with 409", async () => {
     const context = makeContext();
 
-    await context.create.execute(grant("kanban_manage", "Gerenciar Kanban"), ADMIN);
+    await context.create.execute(
+      grant("kanban_manage", "Gerenciar Kanban"),
+      ADMIN,
+    );
 
     await expect(
-      context.create.execute(grant("supplier_manage", "Gerenciar Kanban"), ADMIN),
-    ).rejects.toMatchObject({ statusCode: 409, code: "PERMISSION_ALREADY_EXISTS" });
+      context.create.execute(
+        grant("supplier_manage", "Gerenciar Kanban"),
+        ADMIN,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "PERMISSION_ALREADY_EXISTS",
+    });
     await expect(
       context.create.execute(grant("kanban_manage", "Outro rótulo"), ADMIN),
-    ).rejects.toMatchObject({ statusCode: 409, code: "PERMISSION_ALREADY_ASSIGNED" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "PERMISSION_ALREADY_ASSIGNED",
+    });
     expect(context.permissions.permissions).toHaveLength(1);
   });
 
@@ -158,7 +226,10 @@ describe("creating a permission", () => {
     const context = makeContext();
 
     await expect(
-      context.create.execute(grant("kanban_manage", "Gerenciar Kanban", OWN_PROFILE), OPERATOR),
+      context.create.execute(
+        grant("kanban_manage", "Gerenciar Kanban", OWN_PROFILE),
+        OPERATOR,
+      ),
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
     expect(context.permissions.permissions).toHaveLength(0);
   });
@@ -167,7 +238,10 @@ describe("creating a permission", () => {
     const context = makeContext();
 
     await expect(
-      context.create.execute(grant("kanban_manage", "Gerenciar Kanban", FOREIGN_PROFILE), ADMIN),
+      context.create.execute(
+        grant("kanban_manage", "Gerenciar Kanban", FOREIGN_PROFILE),
+        ADMIN,
+      ),
     ).rejects.toMatchObject({ code: "PROFILE_ACCESS_NOT_FOUND" });
     expect(context.permissions.permissions).toHaveLength(0);
   });
@@ -175,21 +249,30 @@ describe("creating a permission", () => {
   it("refuses an unknown user, company or profile with 404", async () => {
     const context = makeContext();
 
-    await expect(context.create.execute(grant("kanban_manage", "K"), GHOST)).rejects.toMatchObject({
+    await expect(
+      context.create.execute(grant("kanban_manage", "K"), GHOST),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "USER_NOT_FOUND",
     });
     await expect(
-      context.create.execute(grant("kanban_manage", "K", PROFILE, GHOST), ADMIN),
+      context.create.execute(
+        grant("kanban_manage", "K", PROFILE, GHOST),
+        ADMIN,
+      ),
     ).rejects.toMatchObject({ statusCode: 404, code: "BUSINESS_NOT_FOUND" });
-    await expect(context.create.execute(grant("kanban_manage", "K", GHOST), ADMIN)).rejects.toMatchObject({
+    await expect(
+      context.create.execute(grant("kanban_manage", "K", GHOST), ADMIN),
+    ).rejects.toMatchObject({
       code: "PROFILE_ACCESS_NOT_FOUND",
     });
   });
 
   it("rolls the grant back when its audit entry fails, and announces nothing", async () => {
     const context = makeContext();
-    context.activities.createActivityIfEnabled.mockRejectedValueOnce(new Error("audit down"));
+    context.activities.createActivityIfEnabled.mockRejectedValueOnce(
+      new Error("audit down"),
+    );
 
     await expect(
       context.create.execute(grant("kanban_manage", "Gerenciar Kanban"), ADMIN),
@@ -204,10 +287,21 @@ describe("creating a permission", () => {
 describe("updating a permission", () => {
   async function seeded() {
     const context = makeContext();
-    const kanban = await context.create.execute(grant("kanban_manage", "Gerenciar Kanban"), ADMIN);
-    const supplier = await context.create.execute(grant("supplier_manage", "Gerenciar Fornecedores"), ADMIN);
+    const kanban = await context.create.execute(
+      grant("kanban_manage", "Gerenciar Kanban"),
+      ADMIN,
+    );
+    const supplier = await context.create.execute(
+      grant("supplier_manage", "Gerenciar Fornecedores"),
+      ADMIN,
+    );
     const foreign = await context.create.execute(
-      grant("kanban_manage", "Gerenciar Kanban", FOREIGN_PROFILE, OTHER_COMPANY),
+      grant(
+        "kanban_manage",
+        "Gerenciar Kanban",
+        FOREIGN_PROFILE,
+        OTHER_COMPANY,
+      ),
       FOREIGN_ADMIN,
     );
 
@@ -217,7 +311,10 @@ describe("updating a permission", () => {
     return { context, kanban, supplier, foreign };
   }
 
-  const edit = (permissionId: string, changes: Partial<ReturnType<typeof grant>> = {}) => ({
+  const edit = (
+    permissionId: string,
+    changes: Partial<ReturnType<typeof grant>> = {},
+  ) => ({
     permissionId,
     ...grant("kanban_manage", "Gerenciar Kanban"),
     ...changes,
@@ -226,11 +323,18 @@ describe("updating a permission", () => {
   it("changes the flags, audits and announces", async () => {
     const { context, kanban } = await seeded();
 
-    const updated = await context.update.execute(edit(kanban.id, { canWrite: true }), ADMIN);
+    const updated = await context.update.execute(
+      edit(kanban.id, { canWrite: true }),
+      ADMIN,
+    );
 
     expect(updated).toMatchObject({ id: kanban.id, canWrite: true });
-    expect(context.audit).toEqual([expect.objectContaining({ action: "update", entityId: kanban.id })]);
-    expect(realtime.sendSecurityEventToBusiness).toHaveBeenCalledWith(COMPANY, { reason: "permissions_changed" });
+    expect(context.audit).toEqual([
+      expect.objectContaining({ action: "update", entityId: kanban.id }),
+    ]);
+    expect(realtime.sendSecurityEventToBusiness).toHaveBeenCalledWith(COMPANY, {
+      reason: "permissions_changed",
+    });
   });
 
   // Decision 16.100: the body's businessId used to be written back, so a
@@ -240,27 +344,52 @@ describe("updating a permission", () => {
 
     await expect(
       context.update.execute(
-        edit(kanban.id, { businessId: OTHER_COMPANY, profileAccessId: FOREIGN_PROFILE }),
+        edit(kanban.id, {
+          businessId: OTHER_COMPANY,
+          profileAccessId: FOREIGN_PROFILE,
+        }),
         MASTER,
       ),
     ).rejects.toMatchObject({ code: "PROFILE_ACCESS_NOT_FOUND" });
 
-    const row = context.permissions.permissions.find((permission) => permission.id === kanban.id);
+    const row = context.permissions.permissions.find(
+      (permission) => permission.id === kanban.id,
+    );
 
-    expect(row).toMatchObject({ businessId: COMPANY, profileAccessId: PROFILE });
+    expect(row).toMatchObject({
+      businessId: COMPANY,
+      profileAccessId: PROFILE,
+    });
   });
 
   it("is not a duplicate of itself, but refuses another row's label or resource", async () => {
     const { context, kanban } = await seeded();
 
-    await expect(context.update.execute(edit(kanban.id), ADMIN)).resolves.toMatchObject({ id: kanban.id });
+    await expect(
+      context.update.execute(edit(kanban.id), ADMIN),
+    ).resolves.toMatchObject({ id: kanban.id });
 
     await expect(
-      context.update.execute(edit(kanban.id, { action: "Gerenciar Fornecedores" }), ADMIN),
-    ).rejects.toMatchObject({ statusCode: 409, code: "PERMISSION_ALREADY_EXISTS" });
+      context.update.execute(
+        edit(kanban.id, { action: "Gerenciar Fornecedores" }),
+        ADMIN,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "PERMISSION_ALREADY_EXISTS",
+    });
     await expect(
-      context.update.execute(edit(kanban.id, { permissionKey: "supplier_manage", action: "Novo rótulo" }), ADMIN),
-    ).rejects.toMatchObject({ statusCode: 409, code: "PERMISSION_ALREADY_ASSIGNED" });
+      context.update.execute(
+        edit(kanban.id, {
+          permissionKey: "supplier_manage",
+          action: "Novo rótulo",
+        }),
+        ADMIN,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "PERMISSION_ALREADY_ASSIGNED",
+    });
   });
 
   it("refuses another company's permission by its current tenant, leaving it untouched", async () => {
@@ -269,26 +398,39 @@ describe("updating a permission", () => {
     await expect(
       context.update.execute(edit(foreign.id, { canWrite: true }), ADMIN),
     ).rejects.toMatchObject({ statusCode: 404, code: "PERMISSION_NOT_FOUND" });
-    expect(context.permissions.permissions.find((row) => row.id === foreign.id)?.canWrite).toBe(false);
+    expect(
+      context.permissions.permissions.find((row) => row.id === foreign.id)
+        ?.canWrite,
+    ).toBe(false);
   });
 
   it("refuses a BUSINESS_USER moving a permission into their own profile", async () => {
     const { context, kanban } = await seeded();
 
     await expect(
-      context.update.execute(edit(kanban.id, { profileAccessId: OWN_PROFILE }), OPERATOR),
+      context.update.execute(
+        edit(kanban.id, { profileAccessId: OWN_PROFILE }),
+        OPERATOR,
+      ),
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
-    expect(context.permissions.permissions.find((row) => row.id === kanban.id)?.profileAccessId).toBe(PROFILE);
+    expect(
+      context.permissions.permissions.find((row) => row.id === kanban.id)
+        ?.profileAccessId,
+    ).toBe(PROFILE);
   });
 
   it("refuses a permission the actor's own session holds", async () => {
     const { context, kanban } = await seeded();
-    const operator = context.users.user.find((row) => row.id === OPERATOR) as unknown as {
+    const operator = context.users.user.find(
+      (row) => row.id === OPERATOR,
+    ) as unknown as {
       profileAccess: { permissions: { id: string }[] };
     };
     operator.profileAccess.permissions.push({ id: kanban.id });
 
-    await expect(context.update.execute(edit(kanban.id, { canWrite: true }), OPERATOR)).rejects.toMatchObject({
+    await expect(
+      context.update.execute(edit(kanban.id, { canWrite: true }), OPERATOR),
+    ).rejects.toMatchObject({
       statusCode: 403,
       code: "PERMISSION_DENIED",
     });
@@ -297,7 +439,9 @@ describe("updating a permission", () => {
   it("refuses an unknown permission with 404", async () => {
     const { context } = await seeded();
 
-    await expect(context.update.execute(edit(GHOST), ADMIN)).rejects.toMatchObject({
+    await expect(
+      context.update.execute(edit(GHOST), ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "PERMISSION_NOT_FOUND",
     });
@@ -305,12 +449,19 @@ describe("updating a permission", () => {
 
   it("rolls the change back when its audit entry fails", async () => {
     const { context, kanban } = await seeded();
-    context.activities.createActivityIfEnabled.mockRejectedValueOnce(new Error("audit down"));
+    context.activities.createActivityIfEnabled.mockRejectedValueOnce(
+      new Error("audit down"),
+    );
 
-    await expect(context.update.execute(edit(kanban.id, { canWrite: true }), ADMIN)).rejects.toMatchObject({
+    await expect(
+      context.update.execute(edit(kanban.id, { canWrite: true }), ADMIN),
+    ).rejects.toMatchObject({
       statusCode: 500,
     });
-    expect(context.permissions.permissions.find((row) => row.id === kanban.id)?.canWrite).toBe(false);
+    expect(
+      context.permissions.permissions.find((row) => row.id === kanban.id)
+        ?.canWrite,
+    ).toBe(false);
     expect(realtime.sendSecurityEventToBusiness).not.toHaveBeenCalled();
   });
 });
@@ -318,10 +469,21 @@ describe("updating a permission", () => {
 describe("listing permissions", () => {
   async function seeded() {
     const context = makeContext();
-    await context.create.execute(grant("kanban_manage", "Gerenciar Kanban"), ADMIN);
-    await context.create.execute(grant("supplier_manage", "Gerenciar Fornecedores", OWN_PROFILE), ADMIN);
     await context.create.execute(
-      grant("kanban_manage", "Gerenciar Kanban", FOREIGN_PROFILE, OTHER_COMPANY),
+      grant("kanban_manage", "Gerenciar Kanban"),
+      ADMIN,
+    );
+    await context.create.execute(
+      grant("supplier_manage", "Gerenciar Fornecedores", OWN_PROFILE),
+      ADMIN,
+    );
+    await context.create.execute(
+      grant(
+        "kanban_manage",
+        "Gerenciar Kanban",
+        FOREIGN_PROFILE,
+        OTHER_COMPANY,
+      ),
       FOREIGN_ADMIN,
     );
     return context;
@@ -330,8 +492,16 @@ describe("listing permissions", () => {
   it("pins a company user to their company and hides a BUSINESS_USER's own profile", async () => {
     const context = await seeded();
 
-    const admin = await context.list.execute({ userId: ADMIN, page: 1, pageSize: 10 });
-    const operator = await context.list.execute({ userId: OPERATOR, page: 1, pageSize: 10 });
+    const admin = await context.list.execute({
+      userId: ADMIN,
+      page: 1,
+      pageSize: 10,
+    });
+    const operator = await context.list.execute({
+      userId: OPERATOR,
+      page: 1,
+      pageSize: 10,
+    });
 
     expect(admin.total).toBe(2);
     expect(admin.data.every((row) => row.businessId === COMPANY)).toBe(true);
@@ -342,33 +512,56 @@ describe("listing permissions", () => {
     const context = await seeded();
 
     await expect(
-      context.list.execute({ userId: ADMIN, businessId: OTHER_COMPANY, page: 1, pageSize: 10 }),
+      context.list.execute({
+        userId: ADMIN,
+        businessId: OTHER_COMPANY,
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
   });
 
   it("makes the MASTER pick a company, then lists only that one", async () => {
     const context = await seeded();
 
-    await expect(context.list.execute({ userId: MASTER, page: 1, pageSize: 10 })).rejects.toMatchObject({
+    await expect(
+      context.list.execute({ userId: MASTER, page: 1, pageSize: 10 }),
+    ).rejects.toMatchObject({
       statusCode: 400,
       code: "BUSINESS_NOT_IDENTIFIED",
     });
 
-    const other = await context.list.execute({ userId: MASTER, businessId: OTHER_COMPANY, page: 1, pageSize: 10 });
+    const other = await context.list.execute({
+      userId: MASTER,
+      businessId: OTHER_COMPANY,
+      page: 1,
+      pageSize: 10,
+    });
 
-    expect(other.data.map((row) => row.profileAccessId)).toEqual([FOREIGN_PROFILE]);
+    expect(other.data.map((row) => row.profileAccessId)).toEqual([
+      FOREIGN_PROFILE,
+    ]);
   });
 
   it("refuses an unknown company with 404 and turns a repository failure into a 500", async () => {
     const context = await seeded();
 
     await expect(
-      context.list.execute({ userId: MASTER, businessId: GHOST, page: 1, pageSize: 10 }),
+      context.list.execute({
+        userId: MASTER,
+        businessId: GHOST,
+        page: 1,
+        pageSize: 10,
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "BUSINESS_NOT_FOUND" });
 
-    vi.spyOn(context.permissions, "listPermission").mockRejectedValueOnce(new Error("down"));
+    vi.spyOn(context.permissions, "listPermission").mockRejectedValueOnce(
+      new Error("down"),
+    );
 
-    await expect(context.list.execute({ userId: ADMIN, page: 1, pageSize: 10 })).rejects.toMatchObject({
+    await expect(
+      context.list.execute({ userId: ADMIN, page: 1, pageSize: 10 }),
+    ).rejects.toMatchObject({
       statusCode: 500,
     });
   });
@@ -377,10 +570,16 @@ describe("listing permissions", () => {
     const context = await seeded();
 
     const mine = await context.byProfile.execute(PROFILE, COMPANY, ADMIN);
-    const crossed = await context.byProfile.execute(FOREIGN_PROFILE, COMPANY, ADMIN);
+    const crossed = await context.byProfile.execute(
+      FOREIGN_PROFILE,
+      COMPANY,
+      ADMIN,
+    );
 
     expect(mine.map((row) => row.permissionKey)).toEqual(["kanban_manage"]);
     expect(crossed).toEqual([]);
-    await expect(context.byProfile.execute(PROFILE, COMPANY, GHOST)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(
+      context.byProfile.execute(PROFILE, COMPANY, GHOST),
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 });

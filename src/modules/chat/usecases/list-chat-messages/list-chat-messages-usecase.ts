@@ -137,13 +137,17 @@ class ListChatMessagesUseCase {
         ? await this.tickets.findById(ticketId, scope.businessId)
         : null;
 
-    if (ticketId && (!ticket || (scope.driverId && ticket.driverId !== scope.driverId))) {
+    if (
+      ticketId &&
+      (!ticket || (scope.driverId && ticket.driverId !== scope.driverId))
+    ) {
       throw new SupportTicketNotFoundError();
     }
 
     // Whose conversation this is. A driver token can only ever be its own,
     // whatever the query asks for; the staff picks, by thread or by driver.
-    const targetDriverId = scope.driverId ?? ticket?.driverId ?? driverId ?? null;
+    const targetDriverId =
+      scope.driverId ?? ticket?.driverId ?? driverId ?? null;
 
     // A driver resolves their own thread from the token; a foreign threadId
     // answers "not found", never "not yours" — same non-leak rule as
@@ -151,10 +155,10 @@ class ListChatMessagesUseCase {
     const found = ticket
       ? await this.chat.findThreadById(ticket.threadId)
       : threadId
-      ? await this.chat.findThreadById(threadId)
-      : targetDriverId
-        ? await this.chat.findThreadByDriver(scope.businessId, targetDriverId)
-        : null;
+        ? await this.chat.findThreadById(threadId)
+        : targetDriverId
+          ? await this.chat.findThreadByDriver(scope.businessId, targetDriverId)
+          : null;
 
     // Another company's thread, or another driver's for a driver token, is a
     // thread that does not exist — and goes down exactly the path a random id
@@ -181,7 +185,10 @@ class ListChatMessagesUseCase {
         hasNewer: false,
         counterpartLastReadAt: null,
         counterpartDeliveredAt: null,
-        driverUser: await this.resolveDriverUser(scope.businessId, targetDriverId),
+        driverUser: await this.resolveDriverUser(
+          scope.businessId,
+          targetDriverId,
+        ),
         tickets: [],
         counterpartTicketReadAt: {},
       };
@@ -234,7 +241,10 @@ class ListChatMessagesUseCase {
     );
 
     const viewerIsDriverSide = Boolean(scope.driverId);
-    const driverUser = await this.resolveDriverUser(scope.businessId, thread.driverId);
+    const driverUser = await this.resolveDriverUser(
+      scope.businessId,
+      thread.driverId,
+    );
 
     const ticketCursors = await this.ticketReadCursors(
       result.data,
@@ -254,9 +264,16 @@ class ListChatMessagesUseCase {
       nextCursor: result.nextCursor,
       previousCursor: result.previousCursor,
       hasNewer: result.hasNewer,
-      counterpartLastReadAt: latestDate(result.counterpartLastReadAt, ticketCursor ?? null),
+      counterpartLastReadAt: latestDate(
+        result.counterpartLastReadAt,
+        ticketCursor ?? null,
+      ),
       counterpartDeliveredAt: result.counterpartDeliveredAt,
-      tickets: await this.citedTickets(result.data, scope.businessId, viewerIsDriverSide),
+      tickets: await this.citedTickets(
+        result.data,
+        scope.businessId,
+        viewerIsDriverSide,
+      ),
       counterpartTicketReadAt: Object.fromEntries(ticketCursors),
     };
   }
@@ -271,12 +288,18 @@ class ListChatMessagesUseCase {
     if (!this.tickets) return new Map();
 
     const ids = new Set(
-      messages.map((message) => message.ticketId).filter((id): id is string => Boolean(id)),
+      messages
+        .map((message) => message.ticketId)
+        .filter((id): id is string => Boolean(id)),
     );
 
     if (filterTicketId) ids.add(filterTicketId);
 
-    return this.tickets.counterpartReadCursors([...ids], driverUserId, viewerIsDriverSide);
+    return this.tickets.counterpartReadCursors(
+      [...ids],
+      driverUserId,
+      viewerIsDriverSide,
+    );
   }
 
   /** The tickets cited on the page, presented for the separators. */

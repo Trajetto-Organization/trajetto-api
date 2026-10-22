@@ -19,7 +19,11 @@ import {
   branchResponses,
   branchSchemas,
 } from "./documentation/branch-documentation";
-import { ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
 
 const createBranchController = new CreateBranchController();
 const deleteBranchController = new DeleteBranchController();

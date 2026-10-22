@@ -41,7 +41,11 @@ const box = (x: number, y: number, w: number, h: number) => [
 ];
 
 const RECEIPT_LINES = [
-  { text: "RECEBEMOS DE DISTRIBUIDORA LTDA OS PRODUTOS", score: 0.99, box: box(100, 100, 900, 20) },
+  {
+    text: "RECEBEMOS DE DISTRIBUIDORA LTDA OS PRODUTOS",
+    score: 0.99,
+    box: box(100, 100, 900, 20),
+  },
   { text: "N° 000.045.181", score: 0.97, box: box(1060, 150, 160, 24) },
   { text: "DATA DE RECEBIMENTO", score: 0.98, box: box(100, 160, 150, 14) },
   { text: "27/09/2026", score: 0.95, box: box(110, 200, 160, 40) },
@@ -72,7 +76,9 @@ function status(code: number, error: string) {
   };
 }
 
-function reader(overrides: Partial<ConstructorParameters<typeof LocalOcrReader>[0]> = {}) {
+function reader(
+  overrides: Partial<ConstructorParameters<typeof LocalOcrReader>[0]> = {},
+) {
   return new LocalOcrReader({
     url: `${baseUrl}/`,
     token: TOKEN,
@@ -129,7 +135,10 @@ describe("what the reader sends", () => {
   });
 
   it("reads an odometer with the digits profile — the one without the direction classifier", async () => {
-    respond = ok([{ text: "84312", score: 0.99, box: box(0, 0, 100, 40) }], "digits");
+    respond = ok(
+      [{ text: "84312", score: 0.99, box: box(0, 0, 100, 40) }],
+      "digits",
+    );
 
     await reader().read({ kind: "odometer", subject: "o odômetro" }, image);
 
@@ -169,11 +178,21 @@ describe("what it makes of the answer", () => {
   });
 
   it("answers an odometer with fraud declared not assessed", async () => {
-    respond = ok([{ text: "84312", score: 0.99, box: box(0, 0, 100, 40) }], "digits");
+    respond = ok(
+      [{ text: "84312", score: 0.99, box: box(0, 0, 100, 40) }],
+      "digits",
+    );
 
-    const { parsed } = await reader().read({ kind: "odometer", subject: "o odômetro" }, image);
+    const { parsed } = await reader().read(
+      { kind: "odometer", subject: "o odômetro" },
+      image,
+    );
 
-    expect(parsed).toMatchObject({ valor_lido: 84312, legivel: true, fraude_avaliada: false });
+    expect(parsed).toMatchObject({
+      valor_lido: 84312,
+      legivel: true,
+      fraude_avaliada: false,
+    });
   });
 
   it("treats a 200 outside the contract as an invalid answer, never as a verdict", async () => {
@@ -182,9 +201,9 @@ describe("what it makes of the answer", () => {
       res.end(JSON.stringify({ lines: [{ text: 1 }] }));
     };
 
-    await expect(reader().read({ kind: "proof" }, image)).rejects.toBeInstanceOf(
-      PaidInvalidResponseError,
-    );
+    await expect(
+      reader().read({ kind: "proof" }, image),
+    ).rejects.toBeInstanceOf(PaidInvalidResponseError);
   });
 });
 
@@ -202,7 +221,9 @@ describe("what each failure means for the pipeline", () => {
     respond = status(code, error);
     const subject = reader();
 
-    const failure = await subject.read({ kind: "proof" }, image).catch((thrown) => thrown);
+    const failure = await subject
+      .read({ kind: "proof" }, image)
+      .catch((thrown) => thrown);
 
     expect(failure).toBeInstanceOf(LocalOcrHttpError);
     expect(subject.classifyError(failure)).toBe(kind);
@@ -212,12 +233,16 @@ describe("what each failure means for the pipeline", () => {
 
   it("a refused connection is retryable (five in a row open the circuit)", async () => {
     const closed = http.createServer();
-    await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) =>
+      closed.listen(0, "127.0.0.1", resolve),
+    );
     const port = (closed.address() as AddressInfo).port;
     await new Promise<void>((resolve) => closed.close(() => resolve()));
 
     const subject = reader({ url: `http://127.0.0.1:${port}` });
-    const failure = await subject.read({ kind: "proof" }, image).catch((thrown) => thrown);
+    const failure = await subject
+      .read({ kind: "proof" }, image)
+      .catch((thrown) => thrown);
 
     expect(failure).toBeInstanceOf(Error);
     expect(subject.classifyError(failure)).toBe("retryable");
@@ -231,7 +256,9 @@ describe("what each failure means for the pipeline", () => {
 
     const subject = reader({ timeoutMs: 200 });
     const startedAt = Date.now();
-    const failure = await subject.read({ kind: "proof" }, image).catch((thrown) => thrown);
+    const failure = await subject
+      .read({ kind: "proof" }, image)
+      .catch((thrown) => thrown);
 
     expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(["TimeoutError", "AbortError"]).toContain(failure.name);
@@ -239,7 +266,9 @@ describe("what each failure means for the pipeline", () => {
   });
 
   it("an unsupported kind asked by mistake is permanent: the unit is given back", () => {
-    expect(reader().classifyError(new UnsupportedReadingError("condition"))).toBe("permanent");
+    expect(
+      reader().classifyError(new UnsupportedReadingError("condition")),
+    ).toBe("permanent");
   });
 });
 
@@ -251,12 +280,10 @@ describe("its declared budget", () => {
     expect(subject.timeoutMs).toBe(15_000);
     expect(subject.maxConcurrency).toBe(2);
     expect(subject.isConfigured()).toBe(true);
-    expect(["proof", "odometer", "fuel_level", "condition", "working"].map((kind) => subject.supports(kind as never))).toEqual([
-      true,
-      true,
-      false,
-      false,
-      false,
-    ]);
+    expect(
+      ["proof", "odometer", "fuel_level", "condition", "working"].map((kind) =>
+        subject.supports(kind as never),
+      ),
+    ).toEqual([true, true, false, false, false]);
   });
 });

@@ -109,7 +109,10 @@ function occurrenceTypeListWhere(
     );
   }
 
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Types per combination of the three filtered columns, over the base. */

@@ -49,7 +49,9 @@ function dateField(label: string) {
     .string({ required_error: `A ${label} é obrigatória.` })
     .min(1, `A ${label} é obrigatória.`)
     .refine(isFineDate, `A ${label} é inválida.`)
-    .describe(`${label[0].toUpperCase()}${label.slice(1)}. ${DATE_DESCRIPTION}`);
+    .describe(
+      `${label[0].toUpperCase()}${label.slice(1)}. ${DATE_DESCRIPTION}`,
+    );
 }
 
 const paymentDateField = z.preprocess(
@@ -59,7 +61,9 @@ const paymentDateField = z.preprocess(
     .refine(isFineDate, "A data de pagamento é inválida.")
     .nullable()
     .optional()
-    .describe(`Data de pagamento; vazio desfaz o pagamento. ${DATE_DESCRIPTION}`),
+    .describe(
+      `Data de pagamento; vazio desfaz o pagamento. ${DATE_DESCRIPTION}`,
+    ),
 );
 
 const amountField = z.preprocess(

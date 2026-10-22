@@ -38,9 +38,13 @@ interface WorkerMetrics {
   stuck: boolean;
 }
 
-async function readWorkerHeartbeats(now = new Date()): Promise<WorkerMetrics[]> {
+async function readWorkerHeartbeats(
+  now = new Date(),
+): Promise<WorkerMetrics[]> {
   const rows = await database.workerHeartbeat.findMany({
-    where: { updated_at: { gte: new Date(now.getTime() - HEARTBEAT_VISIBLE_MS) } },
+    where: {
+      updated_at: { gte: new Date(now.getTime() - HEARTBEAT_VISIBLE_MS) },
+    },
     orderBy: [{ replica: "asc" }, { worker: "asc" }],
   });
 

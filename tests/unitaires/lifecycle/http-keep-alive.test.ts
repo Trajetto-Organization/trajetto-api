@@ -24,7 +24,10 @@ function seconds(text: string): number {
 
   if (!match) throw new Error(`Duração do Traefik não reconhecida: ${text}`);
 
-  return Number(match[1]) * { ms: 1, s: 1_000, m: 60_000 }[match[2] as "ms" | "s" | "m"];
+  return (
+    Number(match[1]) *
+    { ms: 1, s: 1_000, m: 60_000 }[match[2] as "ms" | "s" | "m"]
+  );
 }
 
 /** The idle timeout the versioned Traefik config gives its upstreams, or its default. */
@@ -32,11 +35,16 @@ function traefikUpstreamIdleMs(): number {
   const dir = resolve(process.cwd(), "infra", "traefik");
   const sources = [join(dir, "traefik.reference.yaml")];
 
-  for (const name of readdirSync(join(dir, "dynamic"))) sources.push(join(dir, "dynamic", name));
+  for (const name of readdirSync(join(dir, "dynamic")))
+    sources.push(join(dir, "dynamic", name));
 
   const declared = sources
     .map((path) => readFileSync(path, "utf8"))
-    .flatMap((text) => [...text.matchAll(/idleConnTimeout:\s*"?([0-9]+(?:ms|s|m))"?/g)].map((match) => seconds(match[1])));
+    .flatMap((text) =>
+      [...text.matchAll(/idleConnTimeout:\s*"?([0-9]+(?:ms|s|m))"?/g)].map(
+        (match) => seconds(match[1]),
+      ),
+    );
 
   return Math.max(TRAEFIK_DEFAULT_IDLE_MS, ...declared);
 }
@@ -48,15 +56,21 @@ afterEach(async () => {
 });
 
 describe("keep-alive between Traefik and a replica", () => {
-  it("outlasts the proxy's idle timeout, so the proxy always closes first", async () => {
-    const { app } = await import("@/http");
-    await app.ready();
+  it(
+    "outlasts the proxy's idle timeout, so the proxy always closes first",
+    async () => {
+      const { app } = await import("@/http");
+      await app.ready();
 
-    cleanup.push(() => app.close());
+      cleanup.push(() => app.close());
 
-    expect(app.server.keepAliveTimeout).toBeGreaterThan(traefikUpstreamIdleMs());
+      expect(app.server.keepAliveTimeout).toBeGreaterThan(
+        traefikUpstreamIdleMs(),
+      );
 
-    // Still bounded: an idle socket is a file descriptor and a little memory.
-    expect(app.server.keepAliveTimeout).toBeLessThanOrEqual(120_000);
-  }, APP_BOOT_TIMEOUT_MS);
+      // Still bounded: an idle socket is a file descriptor and a little memory.
+      expect(app.server.keepAliveTimeout).toBeLessThanOrEqual(120_000);
+    },
+    APP_BOOT_TIMEOUT_MS,
+  );
 });

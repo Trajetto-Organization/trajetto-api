@@ -49,7 +49,9 @@ const BATCHES = {
 const batch = process.env.MUTATION_BATCH;
 
 if (batch && !(batch in BATCHES)) {
-  throw new Error(`MUTATION_BATCH must be one of ${Object.keys(BATCHES).join(", ")}`);
+  throw new Error(
+    `MUTATION_BATCH must be one of ${Object.keys(BATCHES).join(", ")}`,
+  );
 }
 
 const reportDir = batch ? `reports/mutation/${batch}` : "reports/mutation";
@@ -72,7 +74,16 @@ export default {
   // against that one test only and reported Survived wrongly.
   ignoreStatic: process.env.MUTATION_STATIC !== "1",
   // Not copied into the sandbox: reports, uploads and suites Stryker never runs.
-  ignorePatterns: ["coverage", "reports", "tmp", "tests/E2E", "tests/load", "tests/ai-local", "infra/ai-ocr", "docs"],
+  ignorePatterns: [
+    "coverage",
+    "reports",
+    "tmp",
+    "tests/E2E",
+    "tests/load",
+    "tests/ai-local",
+    "infra/ai-ocr",
+    "docs",
+  ],
   reporters: ["clear-text", "progress", "html", "json"],
   htmlReporter: { fileName: `${reportDir}/index.html` },
   jsonReporter: { fileName: `${reportDir}/mutation.json` },

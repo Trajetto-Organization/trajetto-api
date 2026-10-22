@@ -7,9 +7,21 @@ import { z } from "zod";
 const isoDateTime = z.union([z.string(), z.date()]);
 const person = z.object({ id: z.string(), name: z.string() });
 
-const ticketKind = z.enum(["OCCURRENCE", "DELIVERY", "ROUTE", "DRIVER", "LEGACY"]);
+const ticketKind = z.enum([
+  "OCCURRENCE",
+  "DELIVERY",
+  "ROUTE",
+  "DRIVER",
+  "LEGACY",
+]);
 const ticketOutcome = z.enum(["RESOLVED", "APPROVED", "DENIED", "MIGRATED"]);
-const authorizationStatus = z.enum(["NOT_REQUIRED", "PENDING", "APPROVED", "DENIED", "SUPERSEDED"]);
+const authorizationStatus = z.enum([
+  "NOT_REQUIRED",
+  "PENDING",
+  "APPROVED",
+  "DENIED",
+  "SUPERSEDED",
+]);
 
 /** TicketSummary (design §4.1), held to the presenter by the contract test. */
 const ticketSummary = z.object({
@@ -18,19 +30,31 @@ const ticketSummary = z.object({
   kind: ticketKind,
   status: z.enum(["OPEN", "CLOSED"]),
   subject: z.string(),
-  version: z.number().int().describe("Sobe a cada mudança; o cliente descarta evento mais velho."),
+  version: z
+    .number()
+    .int()
+    .describe("Sobe a cada mudança; o cliente descarta evento mais velho."),
   threadId: z.string(),
   driver: person,
   delivery: z
     .object({ id: z.string(), recipient_name: z.string(), status: z.string() })
     .nullable(),
-  route: z.object({ id: z.string(), code: z.number().int(), name: z.string().nullable() }).nullable(),
+  route: z
+    .object({
+      id: z.string(),
+      code: z.number().int(),
+      name: z.string().nullable(),
+    })
+    .nullable(),
   occurrence: z
     .object({
       id: z.string(),
       typeName: z.string(),
       authorization_status: authorizationStatus,
-      escalates_at: z.string().nullable().describe("Só com autorização pendente."),
+      escalates_at: z
+        .string()
+        .nullable()
+        .describe("Só com autorização pendente."),
     })
     .nullable(),
   assignee: person.nullable().describe("Quem atende; null = sem atendente."),
@@ -38,7 +62,13 @@ const ticketSummary = z.object({
     .enum(["STAFF", "DRIVER"])
     .nullable()
     .describe("Derivado do lado da última mensagem."),
-  opened_via: z.enum(["OCCURRENCE_REPORT", "DRIVER_APP", "PANEL", "LEGACY_ROUTING", "MIGRATION"]),
+  opened_via: z.enum([
+    "OCCURRENCE_REPORT",
+    "DRIVER_APP",
+    "PANEL",
+    "LEGACY_ROUTING",
+    "MIGRATION",
+  ]),
   openedBy: person.nullable(),
   closedBy: person.nullable().describe("Quem encerrou."),
   closed_at: z.string().nullable(),
@@ -46,7 +76,9 @@ const ticketSummary = z.object({
   close_note: z.string().nullable(),
   closeOutcomes: z
     .array(z.enum(["RESOLVED", "APPROVED", "DENIED"]))
-    .describe("O que \"Encerrar\" oferece: APPROVED/DENIED com autorização pendente, RESOLVED nos demais, vazio fechado."),
+    .describe(
+      'O que "Encerrar" oferece: APPROVED/DENIED com autorização pendente, RESOLVED nos demais, vazio fechado.',
+    ),
   last_message_at: z.string().nullable(),
   lastMessage: z
     .object({
@@ -77,7 +109,11 @@ const driverTicketViewShape = ticketSummary
   })
   .extend({
     occurrence: z
-      .object({ id: z.string(), typeName: z.string(), authorization_status: authorizationStatus })
+      .object({
+        id: z.string(),
+        typeName: z.string(),
+        authorization_status: authorizationStatus,
+      })
       .nullable(),
   });
 

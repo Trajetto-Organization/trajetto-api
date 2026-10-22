@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -30,7 +38,9 @@ let masterToken = "";
 
 const mail = {
   sent: [] as Array<{ to: string; referenceId?: string }>,
-  behaviour: async (): Promise<{ messageId?: string }> => ({ messageId: "<m@x>" }),
+  behaviour: async (): Promise<{ messageId?: string }> => ({
+    messageId: "<m@x>",
+  }),
 };
 
 const whatsapp = {
@@ -124,7 +134,14 @@ beforeAll(async () => {
   });
 
   masterToken = sign(
-    { tokenType: "access", role: "MASTER", businessId: null, driverId: null, sessionVersion: 0, familyId },
+    {
+      tokenType: "access",
+      role: "MASTER",
+      businessId: null,
+      driverId: null,
+      sessionVersion: 0,
+      familyId,
+    },
     auth.secret_token,
     { subject: MASTER, expiresIn: "1h" },
   );
@@ -200,9 +217,7 @@ describe("an event, end to end", () => {
 
     const rows = await deliveriesOf(eventId);
 
-    expect(
-      rows.map((row) => `${row.channel}:${row.status}`).sort(),
-    ).toEqual([
+    expect(rows.map((row) => `${row.channel}:${row.status}`).sort()).toEqual([
       "ACTIVITY:DELIVERED",
       "EMAIL:DELIVERED",
       "IN_APP:DELIVERED",
@@ -245,9 +260,11 @@ describe("a worker whose lease ran out", () => {
 
     // A comes back and records its failure: this used to turn DELIVERED back
     // into PENDING, and the next claim sent a third copy.
-    await (pipeline as never as {
-      recordDeliveryFailure: (d: unknown, e: unknown) => Promise<void>;
-    }).recordDeliveryFailure(stale, new Error("timeout"));
+    await (
+      pipeline as never as {
+        recordDeliveryFailure: (d: unknown, e: unknown) => Promise<void>;
+      }
+    ).recordDeliveryFailure(stale, new Error("timeout"));
 
     const after = await prisma.notificationDelivery.findUniqueOrThrow({
       where: { id: row.id },
@@ -265,7 +282,10 @@ describe("a send the provider accepted", () => {
 
     // The first DELIVERED write hits a database blip; the next one works.
     const service = pipeline as never as {
-      settleDelivery: (delivery: unknown, data: { status?: string }) => Promise<unknown>;
+      settleDelivery: (
+        delivery: unknown,
+        data: { status?: string },
+      ) => Promise<unknown>;
     };
 
     const original = service.settleDelivery.bind(pipeline);
@@ -360,25 +380,29 @@ describe("a row whose process died on its last attempt", () => {
 });
 
 describe("the two lanes", () => {
-  it("delivers the bell while a backlog of e-mails waits", { timeout: 120_000 }, async () => {
-    // Fifty e-mails queued first, the in-app notification last. One FIFO
-    // made the bell wait behind every one of them — and behind a provider
-    // that hung, for the whole outage.
-    for (let index = 0; index < 50; index += 1) await publish();
-    await pipeline.runOutboxCycle();
+  it(
+    "delivers the bell while a backlog of e-mails waits",
+    { timeout: 120_000 },
+    async () => {
+      // Fifty e-mails queued first, the in-app notification last. One FIFO
+      // made the bell wait behind every one of them — and behind a provider
+      // that hung, for the whole outage.
+      for (let index = 0; index < 50; index += 1) await publish();
+      await pipeline.runOutboxCycle();
 
-    const newest = await publish();
-    await pipeline.runOutboxCycle();
+      const newest = await publish();
+      await pipeline.runOutboxCycle();
 
-    await pipeline.runDeliveryCycle("internal");
+      await pipeline.runDeliveryCycle("internal");
 
-    const bell = (await deliveriesOf(newest)).find(
-      (row) => row.channel === "IN_APP",
-    )!;
+      const bell = (await deliveriesOf(newest)).find(
+        (row) => row.channel === "IN_APP",
+      )!;
 
-    expect(bell.status).toBe("DELIVERED");
-    expect(mail.sent).toHaveLength(0);
-  });
+      expect(bell.status).toBe("DELIVERED");
+      expect(mail.sent).toHaveLength(0);
+    },
+  );
 });
 
 describe("a provider that asks us to wait", () => {
@@ -504,7 +528,10 @@ describe("a tower request decided while its messages wait (decision 6.3)", () =>
     vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
 
     await vi.waitFor(
-      () => expect((pipeline as unknown as { isBusy(): boolean }).isBusy()).toBe(false),
+      () =>
+        expect((pipeline as unknown as { isBusy(): boolean }).isBusy()).toBe(
+          false,
+        ),
       { timeout: 15_000, interval: 50 },
     );
 
@@ -546,7 +573,9 @@ describe("a tower request decided while its messages wait (decision 6.3)", () =>
 
     const channels = (await deliveriesOf(event.id)).map((row) => row.channel);
 
-    expect(channels).toEqual(expect.arrayContaining(["IN_APP", "EMAIL", "WHATSAPP"]));
+    expect(channels).toEqual(
+      expect.arrayContaining(["IN_APP", "EMAIL", "WHATSAPP"]),
+    );
 
     // Decided before the worker reached the rows.
     waiting = false;
@@ -561,13 +590,19 @@ describe("a tower request decided while its messages wait (decision 6.3)", () =>
     // before scheduled may still finish its own send in the background.
     const ours = new Set(rows.map((row) => row.id));
 
-    expect(mail.sent.filter((message) => ours.has(message.referenceId ?? ""))).toEqual([]);
     expect(
-      whatsapp.sent.filter((message) => JSON.stringify(message).includes("Cliente ausente")),
+      mail.sent.filter((message) => ours.has(message.referenceId ?? "")),
+    ).toEqual([]);
+    expect(
+      whatsapp.sent.filter((message) =>
+        JSON.stringify(message).includes("Cliente ausente"),
+      ),
     ).toEqual([]);
 
     for (const channel of ["EMAIL", "WHATSAPP"] as const) {
-      expect(byChannel.get(channel), channel).toMatchObject({ status: "FAILED" });
+      expect(byChannel.get(channel), channel).toMatchObject({
+        status: "FAILED",
+      });
       expect(byChannel.get(channel)?.lastError, channel).toContain(
         "Pedido de autorização já resolvido",
       );

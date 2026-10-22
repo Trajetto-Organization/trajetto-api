@@ -46,19 +46,118 @@ interface Seed {
 
 // Same thirteen routes as the E2E.
 const SEED: Seed[] = [
-  { code: 1, status: "COMPLETED", driverId: ANA, vehicleId: TRUCK_A, destination: "CD Norte", startedMinutes: 10 },
-  { code: 2, status: "CANCELLED", driverId: BRUNO, vehicleId: null, destination: null, startedMinutes: null },
-  { code: 3, status: "PLANNED", driverId: CARLA, vehicleId: TRUCK_B, destination: "CD Sul", startedMinutes: null },
-  { code: 4, status: "PLANNED", driverId: ANA, vehicleId: null, destination: "Zona Leste", startedMinutes: null, id: TIE_4, at: 4 },
-  { code: 5, status: "RELEASED", driverId: BRUNO, vehicleId: TRUCK_A, destination: null, startedMinutes: null, id: TIE_5, at: 4 },
-  { code: 6, status: "IN_PROGRESS", driverId: CARLA, vehicleId: TRUCK_B, destination: "CD Oeste", startedMinutes: 30 },
-  { code: 7, status: "RELEASED", driverId: ANA, vehicleId: TRUCK_B, destination: null, startedMinutes: null, id: TIE_7, at: 7 },
-  { code: 8, status: "PLANNED", driverId: BRUNO, vehicleId: null, destination: "CD Norte", startedMinutes: null, id: TIE_8, at: 7 },
-  { code: 9, status: "COMPLETED", driverId: CARLA, vehicleId: TRUCK_A, destination: "Zona Oeste", startedMinutes: 5 },
-  { code: 10, status: "CANCELLED", driverId: ANA, vehicleId: TRUCK_A, destination: null, startedMinutes: 20 },
-  { code: 11, status: "PLANNED", driverId: BRUNO, vehicleId: TRUCK_B, destination: "Centro", startedMinutes: null },
-  { code: 12, status: "COMPLETED", driverId: CARLA, vehicleId: null, destination: "CD Sul", startedMinutes: 15 },
-  { code: 13, status: "IN_PROGRESS", driverId: ANA, vehicleId: TRUCK_A, destination: null, startedMinutes: 40 },
+  {
+    code: 1,
+    status: "COMPLETED",
+    driverId: ANA,
+    vehicleId: TRUCK_A,
+    destination: "CD Norte",
+    startedMinutes: 10,
+  },
+  {
+    code: 2,
+    status: "CANCELLED",
+    driverId: BRUNO,
+    vehicleId: null,
+    destination: null,
+    startedMinutes: null,
+  },
+  {
+    code: 3,
+    status: "PLANNED",
+    driverId: CARLA,
+    vehicleId: TRUCK_B,
+    destination: "CD Sul",
+    startedMinutes: null,
+  },
+  {
+    code: 4,
+    status: "PLANNED",
+    driverId: ANA,
+    vehicleId: null,
+    destination: "Zona Leste",
+    startedMinutes: null,
+    id: TIE_4,
+    at: 4,
+  },
+  {
+    code: 5,
+    status: "RELEASED",
+    driverId: BRUNO,
+    vehicleId: TRUCK_A,
+    destination: null,
+    startedMinutes: null,
+    id: TIE_5,
+    at: 4,
+  },
+  {
+    code: 6,
+    status: "IN_PROGRESS",
+    driverId: CARLA,
+    vehicleId: TRUCK_B,
+    destination: "CD Oeste",
+    startedMinutes: 30,
+  },
+  {
+    code: 7,
+    status: "RELEASED",
+    driverId: ANA,
+    vehicleId: TRUCK_B,
+    destination: null,
+    startedMinutes: null,
+    id: TIE_7,
+    at: 7,
+  },
+  {
+    code: 8,
+    status: "PLANNED",
+    driverId: BRUNO,
+    vehicleId: null,
+    destination: "CD Norte",
+    startedMinutes: null,
+    id: TIE_8,
+    at: 7,
+  },
+  {
+    code: 9,
+    status: "COMPLETED",
+    driverId: CARLA,
+    vehicleId: TRUCK_A,
+    destination: "Zona Oeste",
+    startedMinutes: 5,
+  },
+  {
+    code: 10,
+    status: "CANCELLED",
+    driverId: ANA,
+    vehicleId: TRUCK_A,
+    destination: null,
+    startedMinutes: 20,
+  },
+  {
+    code: 11,
+    status: "PLANNED",
+    driverId: BRUNO,
+    vehicleId: TRUCK_B,
+    destination: "Centro",
+    startedMinutes: null,
+  },
+  {
+    code: 12,
+    status: "COMPLETED",
+    driverId: CARLA,
+    vehicleId: null,
+    destination: "CD Sul",
+    startedMinutes: 15,
+  },
+  {
+    code: 13,
+    status: "IN_PROGRESS",
+    driverId: ANA,
+    vehicleId: TRUCK_A,
+    destination: null,
+    startedMinutes: 40,
+  },
 ];
 
 const BASE = new Date("2026-09-10T12:00:00.000Z").getTime();
@@ -67,15 +166,35 @@ async function seededBoard(): Promise<InMemoryRouteRepository> {
   const repository = new InMemoryRouteRepository(
     [],
     [
-      { id: TRUCK_A, businessId: CARRIER, license_plate: "AAA1A11", status: "ACTIVE" },
-      { id: TRUCK_B, businessId: CARRIER, license_plate: "BBB2B22", status: "ACTIVE" },
-      { id: FOREIGN_TRUCK, businessId: OTHER, license_plate: "ZZZ9Z99", status: "ACTIVE" },
+      {
+        id: TRUCK_A,
+        businessId: CARRIER,
+        license_plate: "AAA1A11",
+        status: "ACTIVE",
+      },
+      {
+        id: TRUCK_B,
+        businessId: CARRIER,
+        license_plate: "BBB2B22",
+        status: "ACTIVE",
+      },
+      {
+        id: FOREIGN_TRUCK,
+        businessId: OTHER,
+        license_plate: "ZZZ9Z99",
+        status: "ACTIVE",
+      },
     ],
     [
       { id: ANA, businessId: CARRIER, name: "Ana", status: "ACTIVE" },
       { id: BRUNO, businessId: CARRIER, name: "Bruno", status: "ACTIVE" },
       { id: CARLA, businessId: CARRIER, name: "Carla", status: "ACTIVE" },
-      { id: FOREIGN_DRIVER, businessId: OTHER, name: "Motorista alheio", status: "ACTIVE" },
+      {
+        id: FOREIGN_DRIVER,
+        businessId: OTHER,
+        name: "Motorista alheio",
+        status: "ACTIVE",
+      },
     ],
   );
 
@@ -94,7 +213,9 @@ async function seededBoard(): Promise<InMemoryRouteRepository> {
     const createdAt = new Date(BASE + (entry.at ?? entry.code) * 60_000);
 
     Object.assign(row, {
-      id: entry.id ?? `018fe200-0000-7000-8000-${String(entry.code).padStart(12, "0")}`,
+      id:
+        entry.id ??
+        `018fe200-0000-7000-8000-${String(entry.code).padStart(12, "0")}`,
       code: entry.code,
       status: entry.status,
       started_at:
@@ -125,8 +246,18 @@ async function codesOf(
   repository: InMemoryRouteRepository,
   query: Partial<Parameters<InMemoryRouteRepository["listRoutes"]>[0]> = {},
 ): Promise<number[]> {
-  const first = await repository.listRoutes({ businessId: CARRIER, page: 1, pageSize: 10, ...query });
-  const second = await repository.listRoutes({ businessId: CARRIER, page: 2, pageSize: 10, ...query });
+  const first = await repository.listRoutes({
+    businessId: CARRIER,
+    page: 1,
+    pageSize: 10,
+    ...query,
+  });
+  const second = await repository.listRoutes({
+    businessId: CARRIER,
+    page: 2,
+    pageSize: 10,
+    ...query,
+  });
 
   return [...first.data, ...second.data].map((route) => route.code);
 }
@@ -135,42 +266,60 @@ describe("the in-memory board answers what Postgres answers", () => {
   it("orders like the Prisma query, the id breaking ties in both directions", async () => {
     const repository = await seededBoard();
 
-    expect(await codesOf(repository)).toEqual([13, 12, 11, 10, 9, 8, 7, 6, 4, 5, 3, 2, 1]);
-    expect(await codesOf(repository, { sort: "created_at", order: "asc" })).toEqual([
-      1, 2, 3, 4, 5, 6, 8, 7, 9, 10, 11, 12, 13,
+    expect(await codesOf(repository)).toEqual([
+      13, 12, 11, 10, 9, 8, 7, 6, 4, 5, 3, 2, 1,
     ]);
-    expect(await codesOf(repository, { sort: "driverName", order: "asc" })).toEqual([
-      13, 10, 7, 4, 1, 11, 8, 5, 2, 12, 9, 6, 3,
-    ]);
+    expect(
+      await codesOf(repository, { sort: "created_at", order: "asc" }),
+    ).toEqual([1, 2, 3, 4, 5, 6, 8, 7, 9, 10, 11, 12, 13]);
+    expect(
+      await codesOf(repository, { sort: "driverName", order: "asc" }),
+    ).toEqual([13, 10, 7, 4, 1, 11, 8, 5, 2, 12, 9, 6, 3]);
   });
 
   it("places NULLs where Postgres does: plate by default, departure always last", async () => {
     const repository = await seededBoard();
 
-    expect(await codesOf(repository, { sort: "vehiclePlate", order: "asc" })).toEqual([
-      13, 10, 9, 5, 1, 11, 7, 6, 3, 12, 8, 4, 2,
-    ]);
-    expect(await codesOf(repository, { sort: "vehiclePlate", order: "desc" })).toEqual([
-      12, 8, 4, 2, 11, 7, 6, 3, 13, 10, 9, 5, 1,
-    ]);
-    expect(await codesOf(repository, { sort: "started_at", order: "desc" })).toEqual([
-      13, 6, 10, 12, 1, 9, 11, 8, 7, 4, 5, 3, 2,
-    ]);
+    expect(
+      await codesOf(repository, { sort: "vehiclePlate", order: "asc" }),
+    ).toEqual([13, 10, 9, 5, 1, 11, 7, 6, 3, 12, 8, 4, 2]);
+    expect(
+      await codesOf(repository, { sort: "vehiclePlate", order: "desc" }),
+    ).toEqual([12, 8, 4, 2, 11, 7, 6, 3, 13, 10, 9, 5, 1]);
+    expect(
+      await codesOf(repository, { sort: "started_at", order: "desc" }),
+    ).toEqual([13, 6, 10, 12, 1, 9, 11, 8, 7, 4, 5, 3, 2]);
   });
 
   it("orders the status by the enum's declared order", async () => {
     const repository = await seededBoard();
 
     const listing = [
-      ...(await repository.listRoutes({ businessId: CARRIER, page: 1, pageSize: 13, sort: "status", order: "asc" })).data,
+      ...(
+        await repository.listRoutes({
+          businessId: CARRIER,
+          page: 1,
+          pageSize: 13,
+          sort: "status",
+          order: "asc",
+        })
+      ).data,
     ];
 
     expect(listing.map((route) => route.status)).toEqual([
-      "PLANNED", "PLANNED", "PLANNED", "PLANNED",
-      "RELEASED", "RELEASED",
-      "IN_PROGRESS", "IN_PROGRESS",
-      "COMPLETED", "COMPLETED", "COMPLETED",
-      "CANCELLED", "CANCELLED",
+      "PLANNED",
+      "PLANNED",
+      "PLANNED",
+      "PLANNED",
+      "RELEASED",
+      "RELEASED",
+      "IN_PROGRESS",
+      "IN_PROGRESS",
+      "COMPLETED",
+      "COMPLETED",
+      "COMPLETED",
+      "CANCELLED",
+      "CANCELLED",
     ]);
   });
 
@@ -242,12 +391,21 @@ describe("the in-memory board answers what Postgres answers", () => {
 
     // Red before: every route hydrated as "Motorista" matched "motor".
     expect(await codesOf(repository, { search: "motor" })).toEqual([]);
-    expect(await codesOf(repository, { search: "bruno" })).toEqual([11, 8, 5, 2]);
-    expect(await codesOf(repository, { search: "cd", statuses: ["PLANNED"] })).toEqual([8, 3]);
+    expect(await codesOf(repository, { search: "bruno" })).toEqual([
+      11, 8, 5, 2,
+    ]);
+    expect(
+      await codesOf(repository, { search: "cd", statuses: ["PLANNED"] }),
+    ).toEqual([8, 3]);
 
     // The listed rows carry the real names and plates, as the include does.
     const [newest] = (
-      await repository.listRoutes({ businessId: CARRIER, page: 1, pageSize: 10, search: "Rota 13" })
+      await repository.listRoutes({
+        businessId: CARRIER,
+        page: 1,
+        pageSize: 10,
+        search: "Rota 13",
+      })
     ).data;
 
     expect(newest.driver).toEqual({ id: ANA, name: "Ana" });
@@ -257,7 +415,9 @@ describe("the in-memory board answers what Postgres answers", () => {
   it("scopes a driver to their own routes", async () => {
     const repository = await seededBoard();
 
-    expect(await codesOf(repository, { scopeDriverId: ANA })).toEqual([13, 10, 7, 4, 1]);
+    expect(await codesOf(repository, { scopeDriverId: ANA })).toEqual([
+      13, 10, 7, 4, 1,
+    ]);
   });
 });
 

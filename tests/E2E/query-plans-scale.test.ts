@@ -60,7 +60,10 @@ function flatten(node: PlanNode): PlanNode[] {
 
 function describePlan(plan: PlanNode): string {
   return flatten(plan)
-    .map((node) => `${node["Node Type"]}${node["Relation Name"] ? ` ${node["Relation Name"]}` : ""}${node["Index Name"] ? ` [${node["Index Name"]}]` : ""}`)
+    .map(
+      (node) =>
+        `${node["Node Type"]}${node["Relation Name"] ? ` ${node["Relation Name"]}` : ""}${node["Index Name"] ? ` [${node["Index Name"]}]` : ""}`,
+    )
     .join(" → ");
 }
 
@@ -70,7 +73,9 @@ function rowsTouched(plan: PlanNode, table: string): number {
     .filter((node) => node["Relation Name"] === table)
     .reduce(
       (sum, node) =>
-        sum + ((node["Actual Rows"] ?? 0) + (node["Rows Removed by Filter"] ?? 0)) * (node["Actual Loops"] ?? 1),
+        sum +
+        ((node["Actual Rows"] ?? 0) + (node["Rows Removed by Filter"] ?? 0)) *
+          (node["Actual Loops"] ?? 1),
       0,
     );
 }
@@ -83,7 +88,13 @@ function rowsTouched(plan: PlanNode, table: string): number {
 function pagesRead(plan: PlanNode, table: string): number {
   return flatten(plan)
     .filter((node) => node["Relation Name"] === table)
-    .reduce((sum, node) => sum + (node["Shared Hit Blocks"] ?? 0) + (node["Shared Read Blocks"] ?? 0), 0);
+    .reduce(
+      (sum, node) =>
+        sum +
+        (node["Shared Hit Blocks"] ?? 0) +
+        (node["Shared Read Blocks"] ?? 0),
+      0,
+    );
 }
 
 function scanNodes(plan: PlanNode, table: string): PlanNode[] {
@@ -95,12 +106,19 @@ function scanNodes(plan: PlanNode, table: string): PlanNode[] {
  * date as "2026-10-07 12:00:00.000 UTC"; re-sent as text it would not compare
  * with a timestamp column, so its placeholder gets the type back.
  */
-async function planOf(statement: { query: string; params: string }): Promise<PlanNode> {
+async function planOf(statement: {
+  query: string;
+  params: string;
+}): Promise<PlanNode> {
   const params = JSON.parse(statement.params) as unknown[];
   let sql = statement.query;
 
   params.forEach((value, index) => {
-    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(value)) return;
+    if (
+      typeof value !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(value)
+    )
+      return;
 
     const placeholder = `$${index + 1}`;
 
@@ -123,13 +141,25 @@ async function planOf(statement: { query: string; params: string }): Promise<Pla
 
   const raw = rows[0]["QUERY PLAN"];
 
-  return ((typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{ Plan: PlanNode }>)[0].Plan;
+  return (
+    (typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{
+      Plan: PlanNode;
+    }>
+  )[0].Plan;
 }
 
-function only(statements: Array<{ query: string; params: string }>, pattern: RegExp) {
-  const matching = statements.filter((statement) => pattern.test(statement.query));
+function only(
+  statements: Array<{ query: string; params: string }>,
+  pattern: RegExp,
+) {
+  const matching = statements.filter((statement) =>
+    pattern.test(statement.query),
+  );
 
-  expect(matching.length, `nenhuma consulta casou com ${pattern}`).toBeGreaterThan(0);
+  expect(
+    matching.length,
+    `nenhuma consulta casou com ${pattern}`,
+  ).toBeGreaterThan(0);
 
   return matching;
 }
@@ -380,9 +410,17 @@ afterAll(async () => {
 
 describe("the fixture is big enough to mean anything", () => {
   it("has the volume the plans below depend on", async () => {
-    expect(await prisma.delivery.count({ where: { businessId: CARRIER } })).toBe(CARRIER_DELIVERIES);
-    expect(await prisma.routeStop.count({ where: { status: "COMPLETED" } })).toBe(OTHER_DELIVERIES);
-    expect(await prisma.notification.count({ where: { userId: ADMIN, read: false } })).toBe(50);
+    expect(
+      await prisma.delivery.count({ where: { businessId: CARRIER } }),
+    ).toBe(CARRIER_DELIVERIES);
+    expect(
+      await prisma.routeStop.count({ where: { status: "COMPLETED" } }),
+    ).toBe(OTHER_DELIVERIES);
+    expect(
+      await prisma.notification.count({
+        where: { userId: ADMIN, read: false },
+      }),
+    ).toBe(50);
   });
 });
 
@@ -390,12 +428,16 @@ describe("a delivery with no open stop (the route anti-join)", () => {
   it("is found without reading every company's finished stops — the app's count", async () => {
     const repository = new DeliveryRepository(capture);
 
-    const [statement] = await statementsOf(() => repository.countPendingForDriver(CARRIER, DRIVER));
+    const [statement] = await statementsOf(() =>
+      repository.countPendingForDriver(CARRIER, DRIVER),
+    );
     const plan = await planOf(statement);
 
     // The open stops are a handful; the finished ones are the platform's
     // history (40,000 here, about 200 pages of any index over them).
-    expect(rowsTouched(plan, "route_stop"), describePlan(plan)).toBeLessThan(1_000);
+    expect(rowsTouched(plan, "route_stop"), describePlan(plan)).toBeLessThan(
+      1_000,
+    );
     expect(pagesRead(plan, "route_stop"), describePlan(plan)).toBeLessThan(30);
   });
 
@@ -403,20 +445,31 @@ describe("a delivery with no open stop (the route anti-join)", () => {
     const repository = new RouteRepository(capture);
 
     const statements = await statementsOf(() =>
-      repository.listUnroutedDeliveries({ businessId: CARRIER, page: 1, pageSize: 20, includeUnscheduled: true }),
+      repository.listUnroutedDeliveries({
+        businessId: CARRIER,
+        page: 1,
+        pageSize: 20,
+        includeUnscheduled: true,
+      }),
     );
 
     for (const statement of only(statements, /"route_stop"/)) {
       const plan = await planOf(statement);
 
-      expect(rowsTouched(plan, "route_stop"), describePlan(plan)).toBeLessThan(1_000);
-      expect(pagesRead(plan, "route_stop"), describePlan(plan)).toBeLessThan(30);
+      expect(rowsTouched(plan, "route_stop"), describePlan(plan)).toBeLessThan(
+        1_000,
+      );
+      expect(pagesRead(plan, "route_stop"), describePlan(plan)).toBeLessThan(
+        30,
+      );
     }
   });
 });
 
 describe("the deliveries listing's filter counts", () => {
-  async function expectIndexOnly(statements: Array<{ query: string; params: string }>) {
+  async function expectIndexOnly(
+    statements: Array<{ query: string; params: string }>,
+  ) {
     for (const statement of statements) {
       const plan = await planOf(statement);
       const scans = scanNodes(plan, "delivery");
@@ -436,7 +489,11 @@ describe("the deliveries listing's filter counts", () => {
     const repository = new DeliveryRepository(capture);
 
     const statements = await statementsOf(() =>
-      repository.listDeliveries({ businessId: CARRIER, page: 1, pageSize: 10 } as never),
+      repository.listDeliveries({
+        businessId: CARRIER,
+        page: 1,
+        pageSize: 10,
+      } as never),
     );
 
     const facets = only(statements, /GROUP BY/);
@@ -451,7 +508,12 @@ describe("the deliveries listing's filter counts", () => {
     const repository = new DeliveryRepository(capture);
 
     const statements = await statementsOf(() =>
-      repository.listDeliveries({ businessId: CARRIER, scopeDriverId: DRIVER, page: 1, pageSize: 10 } as never),
+      repository.listDeliveries({
+        businessId: CARRIER,
+        scopeDriverId: DRIVER,
+        page: 1,
+        pageSize: 10,
+      } as never),
     );
 
     const facets = only(statements, /GROUP BY/);
@@ -469,13 +531,20 @@ describe("the deliveries listing's filter counts", () => {
     const repository = new DeliveryRepository(capture);
 
     const statements = await statementsOf(() =>
-      repository.listDeliveries({ businessId: CARRIER, statuses: ["DELIVERED"], page: 1, pageSize: 10 } as never),
+      repository.listDeliveries({
+        businessId: CARRIER,
+        statuses: ["DELIVERED"],
+        page: 1,
+        pageSize: 10,
+      } as never),
     );
 
     const facets = only(statements, /GROUP BY/);
 
     expect(facets).toHaveLength(3);
-    expect(facets.some((statement) => /GROUPING SETS/.test(statement.query))).toBe(false);
+    expect(
+      facets.some((statement) => /GROUPING SETS/.test(statement.query)),
+    ).toBe(false);
 
     await expectIndexOnly(facets);
   });
@@ -486,14 +555,23 @@ describe("the occurrences listing's type counts", () => {
     const repository = new DeliveryRepository(capture);
 
     const statements = await statementsOf(() =>
-      repository.listOccurrences({ businessId: CARRIER, page: 1, pageSize: 10 } as never),
+      repository.listOccurrences({
+        businessId: CARRIER,
+        page: 1,
+        pageSize: 10,
+      } as never),
     );
 
-    const [facet] = only(statements, /GROUP BY "public"\."delivery_occurrence"\."occurrenceTypeId"/);
+    const [facet] = only(
+      statements,
+      /GROUP BY "public"\."delivery_occurrence"\."occurrenceTypeId"/,
+    );
     const plan = await planOf(facet);
 
     expect(
-      scanNodes(plan, "delivery_occurrence").every((node) => node["Node Type"] === "Index Only Scan"),
+      scanNodes(plan, "delivery_occurrence").every(
+        (node) => node["Node Type"] === "Index Only Scan",
+      ),
       describePlan(plan),
     ).toBe(true);
   });
@@ -503,10 +581,15 @@ describe("the bell's unread count", () => {
   it("reads the unread rows, not the user's whole history", async () => {
     const repository = new NotificationRepository(capture);
 
-    const [statement] = await statementsOf(() => repository.countUnreadNotifications(ADMIN));
+    const [statement] = await statementsOf(() =>
+      repository.countUnreadNotifications(ADMIN),
+    );
     const plan = await planOf(statement);
 
-    expect(rowsTouched(plan, "notification"), describePlan(plan)).toBeLessThanOrEqual(100);
+    expect(
+      rowsTouched(plan, "notification"),
+      describePlan(plan),
+    ).toBeLessThanOrEqual(100);
   });
 });
 
@@ -528,7 +611,9 @@ describe("the activity trail's total", () => {
     const plan = await planOf(count);
 
     expect(
-      scanNodes(plan, "activity").every((node) => node["Node Type"] === "Index Only Scan"),
+      scanNodes(plan, "activity").every(
+        (node) => node["Node Type"] === "Index Only Scan",
+      ),
       describePlan(plan),
     ).toBe(true);
   });
@@ -548,10 +633,16 @@ describe("the proof audit history tab", () => {
       } as never),
     );
 
-    const [page] = only(statements, /ORDER BY "public"\."delivery_proof_audit"\."reviewed_at" DESC/);
+    const [page] = only(
+      statements,
+      /ORDER BY "public"\."delivery_proof_audit"\."reviewed_at" DESC/,
+    );
     const plan = await planOf(page);
 
-    expect(rowsTouched(plan, "delivery_proof_audit"), describePlan(plan)).toBeLessThan(200);
+    expect(
+      rowsTouched(plan, "delivery_proof_audit"),
+      describePlan(plan),
+    ).toBeLessThan(200);
   });
 });
 
@@ -562,28 +653,48 @@ describe("the webhook monitor", () => {
     const repository = new WebhookDeliveryRepository(capture);
 
     const statements = await statementsOf(() =>
-      repository.monitor({ businessId: CARRIER, since: since(), page: 1, pageSize: 20, cap: 1_000 }),
+      repository.monitor({
+        businessId: CARRIER,
+        since: since(),
+        page: 1,
+        pageSize: 20,
+        cap: 1_000,
+      }),
     );
 
-    const [count] = only(statements, /SELECT COUNT\(\*\) FROM \(SELECT .* LIMIT/);
+    const [count] = only(
+      statements,
+      /SELECT COUNT\(\*\) FROM \(SELECT .* LIMIT/,
+    );
     const plan = await planOf(count);
 
     // The carrier has 3,000 rows; the neighbour 60,000 interleaved by id.
-    expect(rowsTouched(plan, "webhook_delivery"), describePlan(plan)).toBeLessThan(1_500);
+    expect(
+      rowsTouched(plan, "webhook_delivery"),
+      describePlan(plan),
+    ).toBeLessThan(1_500);
   });
 
   it("and reads the p95 from an index, not from each delivered row", async () => {
     const repository = new WebhookDeliveryRepository(capture);
 
     const statements = await statementsOf(() =>
-      repository.monitor({ businessId: CARRIER, since: since(), page: 1, pageSize: 20, cap: 1_000 }),
+      repository.monitor({
+        businessId: CARRIER,
+        since: since(),
+        page: 1,
+        pageSize: 20,
+        cap: 1_000,
+      }),
     );
 
     const [p95] = only(statements, /percentile_disc/);
     const plan = await planOf(p95);
 
     expect(
-      scanNodes(plan, "webhook_delivery").every((node) => node["Node Type"] === "Index Only Scan"),
+      scanNodes(plan, "webhook_delivery").every(
+        (node) => node["Node Type"] === "Index Only Scan",
+      ),
       describePlan(plan),
     ).toBe(true);
   });
@@ -593,10 +704,14 @@ describe("the public API's listing of a small company", () => {
   it("walks that company's ids, not the platform's", async () => {
     const repository = new IntegrationRepository(capture);
 
-    const [page] = await statementsOf(() => repository.listDeliveries({ businessId: SMALL, limit: 100 }));
+    const [page] = await statementsOf(() =>
+      repository.listDeliveries({ businessId: SMALL, limit: 100 }),
+    );
     const plan = await planOf(page);
 
-    expect(rowsTouched(plan, "delivery"), describePlan(plan)).toBeLessThan(SMALL_DELIVERIES);
+    expect(rowsTouched(plan, "delivery"), describePlan(plan)).toBeLessThan(
+      SMALL_DELIVERIES,
+    );
   });
 });
 
@@ -606,13 +721,26 @@ describe("the ticket inbox", () => {
       const repository = new SupportTicketRepository(capture);
 
       const statements = await statementsOf(() =>
-        repository.list({ businessId: CARRIER, requesterUserId: ADMIN, status, scope: "ALL", page: 1, pageSize: 20 }),
+        repository.list({
+          businessId: CARRIER,
+          requesterUserId: ADMIN,
+          status,
+          scope: "ALL",
+          page: 1,
+          pageSize: 20,
+        }),
       );
 
-      const [page] = only(statements, /FROM "public"\."support_ticket" WHERE .* ORDER BY .* LIMIT/);
+      const [page] = only(
+        statements,
+        /FROM "public"\."support_ticket" WHERE .* ORDER BY .* LIMIT/,
+      );
       const plan = await planOf(page);
 
-      expect(rowsTouched(plan, "support_ticket"), describePlan(plan)).toBeLessThan(200);
+      expect(
+        rowsTouched(plan, "support_ticket"),
+        describePlan(plan),
+      ).toBeLessThan(200);
     });
   }
 });

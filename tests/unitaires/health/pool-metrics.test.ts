@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { connectionLimitOf, poolFromMetrics } from "@/shared/health/pool-metrics";
+import {
+  connectionLimitOf,
+  poolFromMetrics,
+} from "@/shared/health/pool-metrics";
 
 /**
  * The Prisma pool of this replica, from `$metrics.json()` (OBS-11, GAP3-10).
@@ -11,13 +14,45 @@ import { connectionLimitOf, poolFromMetrics } from "@/shared/health/pool-metrics
  * first, and the ADR 0001/0004 triggers are written in its terms.
  */
 const SAMPLE = {
-  counters: [{ key: "prisma_pool_connections_opened_total", value: 12, labels: {}, description: "" }],
+  counters: [
+    {
+      key: "prisma_pool_connections_opened_total",
+      value: 12,
+      labels: {},
+      description: "",
+    },
+  ],
   gauges: [
-    { key: "prisma_client_queries_active", value: 10, labels: {}, description: "" },
-    { key: "prisma_client_queries_wait", value: 7, labels: {}, description: "" },
-    { key: "prisma_pool_connections_busy", value: 10, labels: {}, description: "" },
-    { key: "prisma_pool_connections_idle", value: 0, labels: {}, description: "" },
-    { key: "prisma_pool_connections_open", value: 10, labels: {}, description: "" },
+    {
+      key: "prisma_client_queries_active",
+      value: 10,
+      labels: {},
+      description: "",
+    },
+    {
+      key: "prisma_client_queries_wait",
+      value: 7,
+      labels: {},
+      description: "",
+    },
+    {
+      key: "prisma_pool_connections_busy",
+      value: 10,
+      labels: {},
+      description: "",
+    },
+    {
+      key: "prisma_pool_connections_idle",
+      value: 0,
+      labels: {},
+      description: "",
+    },
+    {
+      key: "prisma_pool_connections_open",
+      value: 10,
+      labels: {},
+      description: "",
+    },
   ],
   histograms: [
     {
@@ -40,7 +75,9 @@ describe("poolFromMetrics", () => {
   });
 
   it("reads zero for a gauge a Prisma version does not report", () => {
-    expect(poolFromMetrics({ counters: [], gauges: [], histograms: [] })).toEqual({
+    expect(
+      poolFromMetrics({ counters: [], gauges: [], histograms: [] }),
+    ).toEqual({
       open: 0,
       busy: 0,
       idle: 0,
@@ -52,12 +89,16 @@ describe("poolFromMetrics", () => {
 describe("connectionLimitOf", () => {
   it("reads connection_limit from the URL", () => {
     expect(
-      connectionLimitOf("postgresql://u:p@db:5432/d?schema=public&connection_limit=10"),
+      connectionLimitOf(
+        "postgresql://u:p@db:5432/d?schema=public&connection_limit=10",
+      ),
     ).toBe(10);
   });
 
   it("is null when the URL leaves it to Prisma's default", () => {
-    expect(connectionLimitOf("postgresql://u:p@db:5432/d?schema=public")).toBeNull();
+    expect(
+      connectionLimitOf("postgresql://u:p@db:5432/d?schema=public"),
+    ).toBeNull();
     expect(connectionLimitOf(undefined)).toBeNull();
   });
 });

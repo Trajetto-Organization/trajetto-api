@@ -114,7 +114,11 @@ async function seedUser(
   );
 }
 
-async function seedDriver(businessId: string, id: string, name: string): Promise<void> {
+async function seedDriver(
+  businessId: string,
+  id: string,
+  name: string,
+): Promise<void> {
   await prisma.driver.create({
     data: {
       id,
@@ -263,7 +267,9 @@ describe("planning a route over HTTP", () => {
   it("refuses a planned time without an offset, in Portuguese", async () => {
     // Red before: z.coerce.date() accepted "2026-09-17T08:00" and read it in
     // the server's zone — three hours off in the UTC container.
-    const response = await createRoute({ planned_departure_at: "2026-09-17T08:00" });
+    const response = await createRoute({
+      planned_departure_at: "2026-09-17T08:00",
+    });
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({
@@ -348,7 +354,9 @@ describe("planning a route over HTTP", () => {
   });
 
   it("refuses an instant as the route's day", async () => {
-    const response = await createRoute({ scheduled_date: "2026-09-17T03:00:00.000Z" });
+    const response = await createRoute({
+      scheduled_date: "2026-09-17T03:00:00.000Z",
+    });
 
     expect(response.statusCode).toBe(400);
     expect(response.json().issues).toEqual([
@@ -441,7 +449,9 @@ describe("one route on the street per driver (FLEET-ASSIGN-3)", () => {
     const refused = answers.find((answer) => answer.statusCode === 409)!;
 
     expect(refused.json().code).toBe("ROUTE_DRIVER_BUSY");
-    expect(refused.json().message).toMatch(/^Você já está com a Rota \d+ em andamento\./);
+    expect(refused.json().message).toMatch(
+      /^Você já está com a Rota \d+ em andamento\./,
+    );
 
     expect(
       await prisma.route.count({
@@ -474,7 +484,11 @@ describe("a driver deactivated while a route is being written (decision 8.3)", (
    */
   async function deactivateWhile(
     driverId: string,
-    request: () => Promise<{ statusCode: number; body: string; json: () => any }>,
+    request: () => Promise<{
+      statusCode: number;
+      body: string;
+      json: () => any;
+    }>,
   ) {
     let locked!: () => void;
     let release!: () => void;
@@ -485,7 +499,10 @@ describe("a driver deactivated while a route is being written (decision 8.3)", (
     const deactivation = prisma.$transaction(
       async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "driver" WHERE "id" = ${driverId} FOR UPDATE`;
-        await tx.driver.update({ where: { id: driverId }, data: { status: "INACTIVE" } });
+        await tx.driver.update({
+          where: { id: driverId },
+          data: { status: "INACTIVE" },
+        });
         locked();
         await released;
       },
@@ -524,7 +541,9 @@ describe("a driver deactivated while a route is being written (decision 8.3)", (
     // Red before: the FK check waited for the commit and let the route in.
     expect(response.statusCode, response.body).toBe(400);
     expect(response.json().code).toBe("ROUTE_DRIVER_INACTIVE");
-    expect(await prisma.route.count({ where: { driverId: pedro } })).toBe(before);
+    expect(await prisma.route.count({ where: { driverId: pedro } })).toBe(
+      before,
+    );
   }, 30_000);
 
   it("does not release a route to a driver deactivated in between", async () => {
@@ -561,7 +580,9 @@ describe("a driver deactivated while a route is being written (decision 8.3)", (
 
     expect(response.statusCode, response.body).toBe(400);
     expect(response.json().code).toBe("ROUTE_NOT_RELEASABLE");
-    expect((await prisma.route.findUniqueOrThrow({ where: { id } })).status).toBe("PLANNED");
+    expect(
+      (await prisma.route.findUniqueOrThrow({ where: { id } })).status,
+    ).toBe("PLANNED");
   }, 30_000);
 });
 
@@ -602,10 +623,12 @@ describe("which route is 'the' driver's route on a same-day tie", () => {
 
     const repository = new RouteRepository(prisma);
 
-    expect((await repository.findDriverRoute(CARRIER_A, ANA))?.id).toBe(older.id);
-    expect((await repository.findActiveRouteForDriver(CARRIER_A, ANA))?.id).toBe(
+    expect((await repository.findDriverRoute(CARRIER_A, ANA))?.id).toBe(
       older.id,
     );
+    expect(
+      (await repository.findActiveRouteForDriver(CARRIER_A, ANA))?.id,
+    ).toBe(older.id);
 
     await prisma.route.updateMany({
       where: { id: { in: [newer.id, older.id] } },
@@ -645,8 +668,12 @@ describe("the batch assignment's plan", () => {
       destination: "Zona Leste",
     });
     expect(route.scheduled_date.toISOString()).toBe("2026-09-20T00:00:00.000Z");
-    expect(route.planned_departure_at?.toISOString()).toBe("2026-09-20T10:30:00.000Z");
-    expect(route.planned_arrival_at?.toISOString()).toBe("2026-09-20T20:00:00.000Z");
+    expect(route.planned_departure_at?.toISOString()).toBe(
+      "2026-09-20T10:30:00.000Z",
+    );
+    expect(route.planned_arrival_at?.toISOString()).toBe(
+      "2026-09-20T20:00:00.000Z",
+    );
   });
 
   it("refuses a return before the departure, writing nothing", async () => {
@@ -697,7 +724,9 @@ describe("the batch assignment's plan", () => {
 
     const code = first.json().data.routeCode;
 
-    expect(first.json().message).toBe(`Rota ${code} criada e liberada com 1 entrega.`);
+    expect(first.json().message).toBe(
+      `Rota ${code} criada e liberada com 1 entrega.`,
+    );
 
     // The lost-answer resend: same selection, pair and plan. Red before: it
     // also said "criada e liberada", over a route it neither created nor
@@ -731,7 +760,9 @@ describe("the batch assignment's plan", () => {
     // Red before: the resend answered 200 and kept "Zona Leste", no time.
     expect(route.status).toBe("RELEASED");
     expect(route.destination).toBe("CD Cajamar");
-    expect(route.planned_departure_at?.toISOString()).toBe("2026-09-22T09:45:00.000Z");
+    expect(route.planned_departure_at?.toISOString()).toBe(
+      "2026-09-22T09:45:00.000Z",
+    );
   });
 });
 
@@ -744,7 +775,10 @@ describe("the assignment preview", () => {
     });
 
   it("suggests the driver's own truck and names another driver's", async () => {
-    const own = await preview(dispatcherA, `driverId=${JOAO}&scheduled_date=2026-09-30`);
+    const own = await preview(
+      dispatcherA,
+      `driverId=${JOAO}&scheduled_date=2026-09-30`,
+    );
 
     expect(own.statusCode, own.body).toBe(200);
     expect(own.json().data).toMatchObject({
@@ -873,18 +907,24 @@ describe("the assignment preview", () => {
 
     expect(data.timeZone).toBe("America/Sao_Paulo");
     expect(data.warnings).toEqual([
-      { code: "DRIVER_CNH_EXPIRED", message: "A CNH de Maria venceu em 01/09/2026." },
+      {
+        code: "DRIVER_CNH_EXPIRED",
+        message: "A CNH de Maria venceu em 01/09/2026.",
+      },
       {
         code: "DRIVER_CNH_INCOMPATIBLE",
-        message: "O veículo LIV3C33 exige CNH categoria C, e a CNH de Maria é categoria B.",
+        message:
+          "O veículo LIV3C33 exige CNH categoria C, e a CNH de Maria é categoria B.",
       },
       {
         code: "VEHICLE_OPEN_SERVICE_ORDER",
-        message: "O veículo LIV3C33 tem 1 ordem de serviço aberta desde 10/09/2026.",
+        message:
+          "O veículo LIV3C33 tem 1 ordem de serviço aberta desde 10/09/2026.",
       },
       {
         code: "VEHICLE_CHECKLIST_REJECTED",
-        message: "O último checklist do veículo LIV3C33, de 16/09/2026, foi reprovado.",
+        message:
+          "O último checklist do veículo LIV3C33, de 16/09/2026, foi reprovado.",
       },
     ]);
 
@@ -976,7 +1016,9 @@ describe("the assignment preview", () => {
     const withFleet = await preview(dispatcherB, query, CARRIER_B);
 
     expect(
-      withFleet.json().data.warnings.map((warning: { code: string }) => warning.code),
+      withFleet
+        .json()
+        .data.warnings.map((warning: { code: string }) => warning.code),
     ).toEqual(["VEHICLE_OPEN_SERVICE_ORDER", "VEHICLE_CHECKLIST_REJECTED"]);
 
     // Switched off again (hired, then disabled): no warnings either.
@@ -1014,17 +1056,22 @@ describe("the assignment preview", () => {
 
     const plain = await preview(dispatcherA, query);
 
-    expect(plain.json().data.warnings.map((w: { message: string }) => w.message)).toEqual([
-      `João já tem a Rota ${code} para este dia.`,
-    ]);
+    expect(
+      plain.json().data.warnings.map((w: { message: string }) => w.message),
+    ).toEqual([`João já tem a Rota ${code} para este dia.`]);
 
     // Red before: the dialog sent no selection and warned about this route.
-    const leaving = await preview(dispatcherA, `${query}&deliveryIds=${delivery}`);
+    const leaving = await preview(
+      dispatcherA,
+      `${query}&deliveryIds=${delivery}`,
+    );
 
     expect(leaving.statusCode, leaving.body).toBe(200);
     expect(leaving.json().data.warnings).toEqual([]);
 
-    expect((await preview(dispatcherA, `${query}&deliveryIds=abc`)).statusCode).toBe(400);
+    expect(
+      (await preview(dispatcherA, `${query}&deliveryIds=abc`)).statusCode,
+    ).toBe(400);
   });
 
   it("reads another company's driver or vehicle as absent", async () => {
@@ -1033,7 +1080,10 @@ describe("the assignment preview", () => {
     expect(driver.statusCode).toBe(404);
     expect(driver.json().code).toBe("DRIVER_NOT_FOUND");
 
-    const vehicle = await preview(dispatcherA, `driverId=${JOAO}&vehicleId=${TRUCK_B}`);
+    const vehicle = await preview(
+      dispatcherA,
+      `driverId=${JOAO}&vehicleId=${TRUCK_B}`,
+    );
 
     expect(vehicle.statusCode).toBe(404);
     expect(vehicle.json().code).toBe("VEHICLE_NOT_FOUND");
@@ -1055,7 +1105,11 @@ describe("the assignment preview", () => {
     expect(readOnly.statusCode).toBe(403);
     expect(readOnly.json().code).toBe("PERMISSION_DENIED");
 
-    const noModule = await preview(dispatcherOff, `driverId=${JOAO}`, CARRIER_OFF);
+    const noModule = await preview(
+      dispatcherOff,
+      `driverId=${JOAO}`,
+      CARRIER_OFF,
+    );
 
     expect(noModule.statusCode).toBe(403);
     expect(noModule.json().code).toBe("MODULE_NOT_ENABLED");

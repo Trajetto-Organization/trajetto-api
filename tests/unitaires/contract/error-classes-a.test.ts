@@ -50,7 +50,12 @@ const INTERNAL_SIGNALS = new Set([
   "DeliveryStatusConflictError",
 ]);
 
-const TABLES = [FINE_ERRORS, FUEL_WRITE_ERRORS, FUEL_VEHICLE_READ_ERRORS, FUEL_TYPE_ERRORS];
+const TABLES = [
+  FINE_ERRORS,
+  FUEL_WRITE_ERRORS,
+  FUEL_VEHICLE_READ_ERRORS,
+  FUEL_TYPE_ERRORS,
+];
 
 function errorFiles(): string[] {
   const files: string[] = [];
@@ -61,7 +66,10 @@ function errorFiles(): string[] {
         const full = path.join(dir, entry.name);
 
         if (entry.isDirectory()) walk(full);
-        else if (/-errors?\.ts$/.test(entry.name) && !/http-errors\.ts$/.test(entry.name)) {
+        else if (
+          /-errors?\.ts$/.test(entry.name) &&
+          !/http-errors\.ts$/.test(entry.name)
+        ) {
           files.push(full);
         }
       }
@@ -75,7 +83,9 @@ function errorFiles(): string[] {
 
 type ErrorClass = new (...args: unknown[]) => Error;
 
-async function errorClasses(): Promise<Array<{ name: string; type: ErrorClass; file: string }>> {
+async function errorClasses(): Promise<
+  Array<{ name: string; type: ErrorClass; file: string }>
+> {
   const found: Array<{ name: string; type: ErrorClass; file: string }> = [];
 
   for (const file of errorFiles()) {
@@ -112,7 +122,9 @@ describe("the domain errors of the A–F modules", () => {
       if (inTable) continue;
 
       if (!(type.prototype instanceof AppError)) {
-        unanswered.push(`${name} (${path.relative(ROOT, file)}): plain Error, no table`);
+        unanswered.push(
+          `${name} (${path.relative(ROOT, file)}): plain Error, no table`,
+        );
         continue;
       }
 
@@ -127,7 +139,10 @@ describe("the domain errors of the A–F modules", () => {
       // A base class whose subclasses pass the code (SupportTicketDetailedError).
       if (instance.code === "detalhe") continue;
 
-      if (instance.code === "BAD_REQUEST" || !/^[A-Z][A-Z0-9_]+$/.test(instance.code)) {
+      if (
+        instance.code === "BAD_REQUEST" ||
+        !/^[A-Z][A-Z0-9_]+$/.test(instance.code)
+      ) {
         unanswered.push(`${name}: code ${instance.code}`);
       }
     }
@@ -136,25 +151,52 @@ describe("the domain errors of the A–F modules", () => {
   });
 
   it("answer another company's branch and driver exactly like missing ones", async () => {
-    const { BranchNotFoundError } = await import("@/modules/branch/usecases/errors/branch-not-found-error");
-    const { BranchNotBelongBusinessError } = await import("@/modules/branch/usecases/errors/branch-not-belong-business-error");
-    const { DriverNotFoundError } = await import("@/modules/driver/usecases/errors/driver-not-found-error");
-    const { DriverNotBelongBusinessError } = await import("@/modules/driver/usecases/errors/driver-not-belong-business-error");
+    const { BranchNotFoundError } = await import(
+      "@/modules/branch/usecases/errors/branch-not-found-error"
+    );
+    const { BranchNotBelongBusinessError } = await import(
+      "@/modules/branch/usecases/errors/branch-not-belong-business-error"
+    );
+    const { DriverNotFoundError } = await import(
+      "@/modules/driver/usecases/errors/driver-not-found-error"
+    );
+    const { DriverNotBelongBusinessError } = await import(
+      "@/modules/driver/usecases/errors/driver-not-belong-business-error"
+    );
 
-    const pick = ({ statusCode, code, message }: AppError) => ({ statusCode, code, message });
+    const pick = ({ statusCode, code, message }: AppError) => ({
+      statusCode,
+      code,
+      message,
+    });
 
     // Red before: plain Errors saying "não pertence a esta empresa", which
     // confirmed the id and fell to a 500 wherever no table mapped them.
-    expect(pick(new BranchNotBelongBusinessError())).toEqual(pick(new BranchNotFoundError()));
-    expect(pick(new DriverNotBelongBusinessError())).toEqual(pick(new DriverNotFoundError()));
-    expect(pick(new DriverNotFoundError())).toMatchObject({ statusCode: 404, code: "DRIVER_NOT_FOUND" });
+    expect(pick(new BranchNotBelongBusinessError())).toEqual(
+      pick(new BranchNotFoundError()),
+    );
+    expect(pick(new DriverNotBelongBusinessError())).toEqual(
+      pick(new DriverNotFoundError()),
+    );
+    expect(pick(new DriverNotFoundError())).toMatchObject({
+      statusCode: 404,
+      code: "DRIVER_NOT_FOUND",
+    });
   });
 
   it("make conflicts with the current state 409 and a wrong confirmation 400", async () => {
-    const branch = await import("@/modules/branch/usecases/errors/branch-no-pending-deletion-error");
-    const business = await import("@/modules/business/usecases/errors/business-no-pending-deletion-error");
-    const branchInvalid = await import("@/modules/branch/usecases/errors/branch-deletion-code-invalid-error");
-    const businessUsed = await import("@/modules/business/usecases/errors/business-has-children-error");
+    const branch = await import(
+      "@/modules/branch/usecases/errors/branch-no-pending-deletion-error"
+    );
+    const business = await import(
+      "@/modules/business/usecases/errors/business-no-pending-deletion-error"
+    );
+    const branchInvalid = await import(
+      "@/modules/branch/usecases/errors/branch-deletion-code-invalid-error"
+    );
+    const businessUsed = await import(
+      "@/modules/business/usecases/errors/business-has-children-error"
+    );
 
     expect(new branch.BranchNoPendingDeletionError()).toMatchObject({
       statusCode: 409,
@@ -192,11 +234,21 @@ describe("toHttpError, the convention every controller rethrows through", () => 
   });
 
   it("lets a rule override an AppError's own status (a body link is a 400)", () => {
-    const pathMissing = new AppError("Filial não encontrada.", 404, "BRANCH_NOT_FOUND");
+    const pathMissing = new AppError(
+      "Filial não encontrada.",
+      404,
+      "BRANCH_NOT_FOUND",
+    );
 
     expect(
-      toHttpError(pathMissing, [[AppError, 400, "BRANCH_NOT_FOUND", "A filial informada não existe."]]),
-    ).toMatchObject({ statusCode: 400, code: "BRANCH_NOT_FOUND", message: "A filial informada não existe." });
+      toHttpError(pathMissing, [
+        [AppError, 400, "BRANCH_NOT_FOUND", "A filial informada não existe."],
+      ]),
+    ).toMatchObject({
+      statusCode: 400,
+      code: "BRANCH_NOT_FOUND",
+      message: "A filial informada não existe.",
+    });
   });
 
   it("leaves an unlisted error as it is, for the handler", () => {

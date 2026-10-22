@@ -24,11 +24,12 @@ vi.mock("@/shared/logging/logger", async (importOriginal) =>
 const SITEVERIFY = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
 function answer(body: unknown, status = 200) {
-  return vi.fn(async () =>
-    new Response(JSON.stringify(body), {
-      status,
-      headers: { "content-type": "application/json" },
-    }),
+  return vi.fn(
+    async () =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      }),
   );
 }
 

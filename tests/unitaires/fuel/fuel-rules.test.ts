@@ -40,20 +40,28 @@ describe("isRefuelingInTheFuture", () => {
       isRefuelingInTheFuture(TOMORROW_IN_SP, "America/Sao_Paulo", NIGHT_IN_SP),
     ).toBe(true);
 
-    expect(isRefuelingInTheFuture(JUST_NOW, "America/Sao_Paulo", NIGHT_IN_SP)).toBe(
-      false,
-    );
+    expect(
+      isRefuelingInTheFuture(JUST_NOW, "America/Sao_Paulo", NIGHT_IN_SP),
+    ).toBe(false);
   });
 
   it("depends on the zone: 21:30 in Manaus is still the same day at 01:30 UTC", () => {
     // 2026-09-28T01:30Z is 21:30 of the 27th in Manaus (UTC-4); the picker's
     // midnight of the 27th there is 04:00Z of the 27th.
     expect(
-      isRefuelingInTheFuture("2026-09-27T04:00:00.000Z", "America/Manaus", NIGHT_IN_SP),
+      isRefuelingInTheFuture(
+        "2026-09-27T04:00:00.000Z",
+        "America/Manaus",
+        NIGHT_IN_SP,
+      ),
     ).toBe(false);
 
     expect(
-      isRefuelingInTheFuture("2026-09-28T04:00:00.000Z", "America/Manaus", NIGHT_IN_SP),
+      isRefuelingInTheFuture(
+        "2026-09-28T04:00:00.000Z",
+        "America/Manaus",
+        NIGHT_IN_SP,
+      ),
     ).toBe(true);
   });
 
@@ -66,17 +74,27 @@ describe("isRefuelingInTheFuture", () => {
   it("reads a date-only value as the day it names", () => {
     // 22:30 of the 27th in São Paulo: the 28th is tomorrow.
     expect(
-      isRefuelingInTheFuture("2026-09-28T00:00:00.000Z", "America/Sao_Paulo", NIGHT_IN_SP),
+      isRefuelingInTheFuture(
+        "2026-09-28T00:00:00.000Z",
+        "America/Sao_Paulo",
+        NIGHT_IN_SP,
+      ),
     ).toBe(true);
 
     expect(
-      isRefuelingInTheFuture("2026-09-27T00:00:00.000Z", "America/Sao_Paulo", NIGHT_IN_SP),
+      isRefuelingInTheFuture(
+        "2026-09-27T00:00:00.000Z",
+        "America/Sao_Paulo",
+        NIGHT_IN_SP,
+      ),
     ).toBe(false);
   });
 
   it("falls back to São Paulo for a business row without a zone", () => {
     expect(businessTimeZone({ id: "x" })).toBe("America/Sao_Paulo");
-    expect(businessTimeZone({ timezone: "America/Manaus" })).toBe("America/Manaus");
+    expect(businessTimeZone({ timezone: "America/Manaus" })).toBe(
+      "America/Manaus",
+    );
     expect(businessTimeZone(null)).toBe("America/Sao_Paulo");
   });
 });
@@ -104,7 +122,10 @@ describe("CreateFuelUseCase refuses a fueling dated after the company's today", 
   const BUSINESS = "018fe600-0000-7000-8000-00000000000a";
 
   function useCase(timezone: string) {
-    const stub = <T>(value: T) => async () => value;
+    const stub =
+      <T>(value: T) =>
+      async () =>
+        value;
     const createFuelWithMileage = vi.fn(async () => ({
       fuel: { id: "f1", driverId: "d1", odometer_photo: null },
       created: true,
@@ -120,7 +141,11 @@ describe("CreateFuelUseCase refuses a fueling dated after the company's today", 
         }),
       } as never,
       {
-        findBusinessById: stub({ id: BUSINESS, ai_analysis_limit: 0, timezone }),
+        findBusinessById: stub({
+          id: BUSINESS,
+          ai_analysis_limit: 0,
+          timezone,
+        }),
       } as never,
       {
         findVehicleById: stub({
@@ -145,7 +170,11 @@ describe("CreateFuelUseCase refuses a fueling dated after the company's today", 
       } as never,
       { findFuelTypeById: stub({ id: "ft", businessId: BUSINESS }) } as never,
       {
-        findBranchById: stub({ id: "b1", businessId: BUSINESS, is_active: true }),
+        findBranchById: stub({
+          id: "b1",
+          businessId: BUSINESS,
+          is_active: true,
+        }),
       } as never,
       { findBySubmissionId: stub(null), createFuelWithMileage } as never,
       { publish: vi.fn() } as never,
@@ -181,7 +210,10 @@ describe("CreateFuelUseCase refuses a fueling dated after the company's today", 
 
     await expect(
       instance.execute(fueling(TOMORROW_IN_SP), "admin", { key: "k" }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "REFUELING_DATE_IN_FUTURE" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "REFUELING_DATE_IN_FUTURE",
+    });
 
     expect(createFuelWithMileage).not.toHaveBeenCalled();
   });
@@ -209,7 +241,10 @@ describe("CreateFuelUseCase refuses a fueling dated after the company's today", 
         "admin",
         { key: "k" },
       ),
-    ).rejects.toMatchObject({ statusCode: 400, code: "LOCATION_ADJUSTMENT_TOO_FAR" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "LOCATION_ADJUSTMENT_TOO_FAR",
+    });
 
     expect(createFuelWithMileage).not.toHaveBeenCalled();
   });
@@ -227,7 +262,12 @@ describe("CreateFuelUseCase refuses a fueling dated after the company's today", 
 });
 
 describe("changedLinks", () => {
-  const current = { vehicleId: "v1", driverId: "d1", branchId: "b1", fuelTypeId: "f1" };
+  const current = {
+    vehicleId: "v1",
+    driverId: "d1",
+    branchId: "b1",
+    fuelTypeId: "f1",
+  };
 
   it("sees only links the edit re-points", () => {
     expect(changedLinks(current, {})).toEqual({
@@ -267,7 +307,14 @@ describe("placeReading", () => {
 
   it("keeps a past refueling between its neighbours and leaves the vehicle", () => {
     expect(
-      placeReading({ ...plain, laterDay: 48_000, mileage: 44_500, neighbours: middle, odometer: 50_000, previousMileage: 45_500 }),
+      placeReading({
+        ...plain,
+        laterDay: 48_000,
+        mileage: 44_500,
+        neighbours: middle,
+        odometer: 50_000,
+        previousMileage: 45_500,
+      }),
     ).toEqual({ fits: true, odometer: null });
   });
 
@@ -276,12 +323,26 @@ describe("placeReading", () => {
     // ago moved the odometer past the 48.000 of 2 days ago (the E2E
     // fuel-historical-edit proves the create now goes through this rule).
     expect(
-      placeReading({ ...plain, laterDay: 48_000, mileage: 510_000, neighbours: { before: 45_500, after: 48_000 }, odometer: 50_000, previousMileage: null }),
+      placeReading({
+        ...plain,
+        laterDay: 48_000,
+        mileage: 510_000,
+        neighbours: { before: 45_500, after: 48_000 },
+        odometer: 50_000,
+        previousMileage: null,
+      }),
     ).toEqual({ fits: false });
 
     // Between them it is a late record, and the vehicle stays.
     expect(
-      placeReading({ ...plain, laterDay: 48_000, mileage: 46_000, neighbours: { before: 45_500, after: 48_000 }, odometer: 50_000, previousMileage: null }),
+      placeReading({
+        ...plain,
+        laterDay: 48_000,
+        mileage: 46_000,
+        neighbours: { before: 45_500, after: 48_000 },
+        odometer: 50_000,
+        previousMileage: null,
+      }),
     ).toEqual({ fits: true, odometer: null });
   });
 
@@ -291,41 +352,91 @@ describe("placeReading", () => {
     const today = { before: 49_900, after: 50_100 };
 
     expect(
-      placeReading({ ...plain, mileage: 50_300, neighbours: today, laterDay: null, odometer: 50_100, previousMileage: null }),
+      placeReading({
+        ...plain,
+        mileage: 50_300,
+        neighbours: today,
+        laterDay: null,
+        odometer: 50_100,
+        previousMileage: null,
+      }),
     ).toEqual({ fits: true, odometer: 50_300 });
 
     // Not ahead of the odometer, not between: refused as before.
     expect(
-      placeReading({ ...plain, mileage: 50_100, neighbours: today, laterDay: null, odometer: 50_100, previousMileage: null }),
+      placeReading({
+        ...plain,
+        mileage: 50_100,
+        neighbours: today,
+        laterDay: null,
+        odometer: 50_100,
+        previousMileage: null,
+      }),
     ).toEqual({ fits: false });
 
     // The same reading with a later day after it is bounded by it.
     expect(
-      placeReading({ ...plain, mileage: 50_300, neighbours: today, laterDay: 50_200, odometer: 50_200, previousMileage: null }),
+      placeReading({
+        ...plain,
+        mileage: 50_300,
+        neighbours: today,
+        laterDay: 50_200,
+        odometer: 50_200,
+        previousMileage: null,
+      }),
     ).toEqual({ fits: false });
   });
 
   it("refuses a past refueling above the next reading, even above the odometer", () => {
     for (const mileage of [48_500, 51_000]) {
       expect(
-        placeReading({ ...plain, laterDay: 48_000, mileage, neighbours: middle, odometer: 50_000, previousMileage: 45_500 }),
+        placeReading({
+          ...plain,
+          laterDay: 48_000,
+          mileage,
+          neighbours: middle,
+          odometer: 50_000,
+          previousMileage: 45_500,
+        }),
       ).toEqual({ fits: false });
     }
   });
 
   it("moves the odometer forward for the newest reading ahead of it", () => {
     expect(
-      placeReading({ ...plain, highest: 45_500, mileage: 51_000, neighbours: newest, odometer: 50_000, previousMileage: 48_000 }),
+      placeReading({
+        ...plain,
+        highest: 45_500,
+        mileage: 51_000,
+        neighbours: newest,
+        odometer: 50_000,
+        previousMileage: 48_000,
+      }),
     ).toEqual({ fits: true, odometer: 51_000 });
   });
 
   it("brings the odometer down with the newest refueling that set it, never below the last maintenance", () => {
     expect(
-      placeReading({ ...plain, highest: 14_000, mileage: 15_000, neighbours: { before: 14_000, after: null }, odometer: 150_000, previousMileage: 150_000 }),
+      placeReading({
+        ...plain,
+        highest: 14_000,
+        mileage: 15_000,
+        neighbours: { before: 14_000, after: null },
+        odometer: 150_000,
+        previousMileage: 150_000,
+      }),
     ).toEqual({ fits: true, odometer: 15_000 });
 
     expect(
-      placeReading({ ...plain, highest: 14_000, maintenanceFloor: 15_500, mileage: 15_000, neighbours: { before: 14_000, after: null }, odometer: 150_000, previousMileage: 150_000 }),
+      placeReading({
+        ...plain,
+        highest: 14_000,
+        maintenanceFloor: 15_500,
+        mileage: 15_000,
+        neighbours: { before: 14_000, after: null },
+        odometer: 150_000,
+        previousMileage: 150_000,
+      }),
     ).toEqual({ fits: true, odometer: 15_500 });
   });
 
@@ -333,52 +444,118 @@ describe("placeReading", () => {
     // Red on the old rule (odometer null): the 510.000 of 4 days ago,
     // corrected to 46.000, left the odometer at 510.000 for good.
     expect(
-      placeReading({ ...plain, laterDay: 48_000, highest: 48_000, mileage: 46_000, neighbours: { before: 45_500, after: 48_000 }, odometer: 510_000, previousMileage: 510_000 }),
+      placeReading({
+        ...plain,
+        laterDay: 48_000,
+        highest: 48_000,
+        mileage: 46_000,
+        neighbours: { before: 45_500, after: 48_000 },
+        odometer: 510_000,
+        previousMileage: 510_000,
+      }),
     ).toEqual({ fits: true, odometer: 48_000 });
   });
 
   it("releases to the highest reading of the day for a web refueling that set it", () => {
     expect(
-      placeReading({ ...plain, laterDay: null, highest: 50_280, mileage: 50_250, neighbours: { before: 49_900, after: 50_100 }, odometer: 50_300, previousMileage: 50_300 }),
+      placeReading({
+        ...plain,
+        laterDay: null,
+        highest: 50_280,
+        mileage: 50_250,
+        neighbours: { before: 49_900, after: 50_100 },
+        odometer: 50_300,
+        previousMileage: 50_300,
+      }),
     ).toEqual({ fits: true, odometer: 50_280 });
   });
 
   it("leaves an odometer the refueling did not set", () => {
     expect(
-      placeReading({ ...plain, highest: 45_500, mileage: 47_000, neighbours: newest, odometer: 50_000, previousMileage: 48_000 }),
+      placeReading({
+        ...plain,
+        highest: 45_500,
+        mileage: 47_000,
+        neighbours: newest,
+        odometer: 50_000,
+        previousMileage: 48_000,
+      }),
     ).toEqual({ fits: true, odometer: null });
   });
 
   it("never takes the newest to or below an earlier reading", () => {
     for (const mileage of [45_500, 44_000]) {
       expect(
-        placeReading({ ...plain, highest: 45_500, mileage, neighbours: newest, odometer: 48_000, previousMileage: 48_000 }),
+        placeReading({
+          ...plain,
+          highest: 45_500,
+          mileage,
+          neighbours: newest,
+          odometer: 48_000,
+          previousMileage: 48_000,
+        }),
       ).toEqual({ fits: false });
     }
   });
 
   it("corrects the vehicle's only or oldest refueling", () => {
     expect(
-      placeReading({ ...plain, highest: null, mileage: 9_000, neighbours: { before: null, after: null }, odometer: 90_000, previousMileage: 90_000 }),
+      placeReading({
+        ...plain,
+        highest: null,
+        mileage: 9_000,
+        neighbours: { before: null, after: null },
+        odometer: 90_000,
+        previousMileage: 90_000,
+      }),
     ).toEqual({ fits: true, odometer: 9_000 });
 
     expect(
-      placeReading({ ...plain, laterDay: 45_500, highest: 50_000, mileage: 39_000, neighbours: { before: null, after: 45_500 }, odometer: 50_000, previousMileage: 41_000 }),
+      placeReading({
+        ...plain,
+        laterDay: 45_500,
+        highest: 50_000,
+        mileage: 39_000,
+        neighbours: { before: null, after: 45_500 },
+        odometer: 50_000,
+        previousMileage: 41_000,
+      }),
     ).toEqual({ fits: true, odometer: null });
   });
 
   it("treats a new refueling, or one moved here, alike", () => {
     // Newest there: it has to move that odometer forward.
     expect(
-      placeReading({ ...plain, highest: 45_500, mileage: 49_000, neighbours: newest, odometer: 50_000, previousMileage: null }),
+      placeReading({
+        ...plain,
+        highest: 45_500,
+        mileage: 49_000,
+        neighbours: newest,
+        odometer: 50_000,
+        previousMileage: null,
+      }),
     ).toEqual({ fits: false });
     expect(
-      placeReading({ ...plain, highest: 45_500, mileage: 52_000, neighbours: newest, odometer: 50_000, previousMileage: null }),
+      placeReading({
+        ...plain,
+        highest: 45_500,
+        mileage: 52_000,
+        neighbours: newest,
+        odometer: 50_000,
+        previousMileage: null,
+      }),
     ).toEqual({ fits: true, odometer: 52_000 });
 
     // Nothing before it there: the floor is unknown.
     expect(
-      placeReading({ ...plain, laterDay: 45_500, mileage: 39_000, neighbours: { before: null, after: 45_500 }, odometer: 50_000, previousMileage: null }),
+      placeReading({
+        ...plain,
+        laterDay: 45_500,
+        mileage: 39_000,
+        neighbours: { before: null, after: 45_500 },
+        odometer: 50_000,
+        previousMileage: null,
+      }),
     ).toEqual({ fits: false });
   });
 
@@ -412,19 +589,34 @@ describe("placeReading", () => {
 
       if (!sameVehicle || !aboveBefore) return { fits: false };
 
-      return { fits: true, odometer: odometer === previousMileage ? mileage : null };
+      return {
+        fits: true,
+        odometer: odometer === previousMileage ? mileage : null,
+      };
     };
 
     const readings = [null, 15_000, 17_000, 17_900, 18_200, 20_000, 25_000];
 
     for (const before of readings) {
       for (const after of readings) {
-        for (const mileage of [16_000, 17_000, 17_500, 18_200, 19_000, 20_000, 26_000]) {
+        for (const mileage of [
+          16_000, 17_000, 17_500, 18_200, 19_000, 20_000, 26_000,
+        ]) {
           for (const previousMileage of [null, 17_900]) {
-            const reading = { mileage, neighbours: { before, after }, odometer: 20_000, previousMileage };
+            const reading = {
+              mileage,
+              neighbours: { before, after },
+              odometer: 20_000,
+              previousMileage,
+            };
 
             expect(
-              placeReading({ ...reading, laterDay: after, highest: 20_000, maintenanceFloor: null }),
+              placeReading({
+                ...reading,
+                laterDay: after,
+                highest: 20_000,
+                maintenanceFloor: null,
+              }),
               JSON.stringify(reading),
             ).toEqual(lastRound(reading));
           }

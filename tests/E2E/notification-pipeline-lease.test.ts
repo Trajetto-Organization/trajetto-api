@@ -33,7 +33,12 @@ const RECIPIENT = "018fc000-0000-7000-8000-0000000005c1";
 const mail = { sent: [] as Array<{ referenceId?: string }> };
 
 async function createEvent(
-  data: { status?: "PENDING" | "PROCESSING"; attempts?: number; leaseExpiresAt?: Date | null; availableAt?: Date } = {},
+  data: {
+    status?: "PENDING" | "PROCESSING";
+    attempts?: number;
+    leaseExpiresAt?: Date | null;
+    availableAt?: Date;
+  } = {},
 ): Promise<string> {
   const event = await prisma.domainOutboxEvent.create({
     data: {
@@ -193,7 +198,10 @@ describe("a delivery another replica is still sending", () => {
 
     await pipeline.runDeliveryCycle("external");
 
-    expect(mail.sent, "o e-mail saiu enquanto o dono ainda o enviava").toHaveLength(0);
+    expect(
+      mail.sent,
+      "o e-mail saiu enquanto o dono ainda o enviava",
+    ).toHaveLength(0);
 
     const row = await prisma.notificationDelivery.findUniqueOrThrow({
       where: { id },

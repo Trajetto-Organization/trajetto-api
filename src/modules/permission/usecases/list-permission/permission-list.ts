@@ -116,7 +116,11 @@ function permissionListWhere(
       buildSearchOr<Prisma.PermissionWhereInput>([
         { id: { contains: term, mode: "insensitive" as const } },
         { action: { contains: term, mode: "insensitive" as const } },
-        { profileAccess: { name: { contains: term, mode: "insensitive" as const } } },
+        {
+          profileAccess: {
+            name: { contains: term, mode: "insensitive" as const },
+          },
+        },
         ...(keys.length > 0 ? [{ permissionKey: { in: keys } }] : []),
       ]),
     );
@@ -125,7 +129,9 @@ function permissionListWhere(
   return {
     // Tenant first: no facet or term widens past the company.
     businessId: filters.businessId,
-    ...(filters.hideProfileId && { profileAccessId: { not: filters.hideProfileId } }),
+    ...(filters.hideProfileId && {
+      profileAccessId: { not: filters.hideProfileId },
+    }),
     ...(and.length > 0 && { AND: and }),
   };
 }

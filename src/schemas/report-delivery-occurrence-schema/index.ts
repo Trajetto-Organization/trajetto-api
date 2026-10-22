@@ -116,7 +116,8 @@ const reportDeliveryOccurrenceSchema = z.object({
         if (hasInlineConsecutiveSpaces(value)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: "O nome de quem recebeu não deve conter espaços consecutivos.",
+            message:
+              "O nome de quem recebeu não deve conter espaços consecutivos.",
           });
 
           return;

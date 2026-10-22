@@ -147,7 +147,9 @@ describe("every published operation", () => {
     expect(unpaired, "operações sem rota correspondente").toEqual([]);
 
     expect(
-      routes.filter((route) => !route.hidden && !route.operation).map(({ id }) => id),
+      routes
+        .filter((route) => !route.hidden && !route.operation)
+        .map(({ id }) => id),
       "rotas visíveis fora do documento",
     ).toEqual([]);
   });
@@ -396,7 +398,9 @@ describe("the refusals every client has to handle", () => {
 
     /** Whether the request can name a company for the gate to look up. */
     const namesCompany = (operation: OpenApiOperation): boolean =>
-      (operation.parameters ?? []).some((parameter) => parameter.name === "businessId") ||
+      (operation.parameters ?? []).some(
+        (parameter) => parameter.name === "businessId",
+      ) ||
       Object.values(operation.requestBody?.content ?? {}).some((media) =>
         Boolean(
           (media.schema as { properties?: Record<string, unknown> } | undefined)
@@ -423,9 +427,10 @@ describe("the refusals every client has to handle", () => {
       naming += 1;
 
       expect(forbidden, route.id).toContain("TENANT_INACTIVE");
-      expect(JSON.stringify(route.operation.responses["404"]), route.id).toContain(
-        "TENANT_NOT_FOUND",
-      );
+      expect(
+        JSON.stringify(route.operation.responses["404"]),
+        route.id,
+      ).toContain("TENANT_NOT_FOUND");
     }
 
     // Nearly all of them name one; a floor so the branch above is exercised.
@@ -443,9 +448,10 @@ describe("the refusals every client has to handle", () => {
       const roles = guardsOf(route).flatMap((guard) => guard.roles ?? []);
 
       expect(route.operation["x-roles"], route.id).toEqual(roles);
-      expect(JSON.stringify(route.operation.responses["403"]), route.id).toContain(
-        "AUTH_ROLE_FORBIDDEN",
-      );
+      expect(
+        JSON.stringify(route.operation.responses["403"]),
+        route.id,
+      ).toContain("AUTH_ROLE_FORBIDDEN");
     }
   });
 });
@@ -511,7 +517,12 @@ describe("the writes the driver's app sends", () => {
   it("publishes the fields the fueling body really takes", () => {
     const body = JSON.stringify(byId(CREATE_FUEL).operation.requestBody);
 
-    for (const field of ["photo", "key", "client_submission_id", "current_mileage"]) {
+    for (const field of [
+      "photo",
+      "key",
+      "client_submission_id",
+      "current_mileage",
+    ]) {
       expect(body, field).toContain(`"${field}"`);
     }
 
@@ -539,7 +550,9 @@ describe("the writes the driver's app sends", () => {
     ];
 
     for (const [id, statuses] of expected) {
-      expect(statusesOf(byId(id)), id).toEqual(expect.arrayContaining(statuses));
+      expect(statusesOf(byId(id)), id).toEqual(
+        expect.arrayContaining(statuses),
+      );
     }
 
     expect(JSON.stringify(byId(CREATE_FUEL).operation.responses)).toContain(
@@ -623,7 +636,9 @@ describe("what the document says about the bodies that come back", () => {
 
       expect(types, route.id).not.toContain("application/json");
       expect(
-        types.some((type) => type === "text/csv" || type.includes("spreadsheetml")),
+        types.some(
+          (type) => type === "text/csv" || type.includes("spreadsheetml"),
+        ),
         route.id,
       ).toBe(true);
       expect(success?.headers?.["content-disposition"], route.id).toBeDefined();
@@ -641,7 +656,9 @@ describe("what the document says about the bodies that come back", () => {
     const found: string[] = [];
 
     for (const route of published) {
-      for (const [status, response] of Object.entries(route.operation.responses)) {
+      for (const [status, response] of Object.entries(
+        route.operation.responses,
+      )) {
         if (!/^2/.test(status)) continue;
 
         for (const [type, media] of Object.entries(response.content ?? {})) {
@@ -673,12 +690,18 @@ describe("what the document says about the bodies that come back", () => {
     // document said 400 "Credenciais inválidas!", so a client built from it
     // handled a wrong password on the 400 branch and fell into the generic
     // 401 one — the "session expired" path.
-    const session = published.find((route) => route.id === "POST /user/session");
+    const session = published.find(
+      (route) => route.id === "POST /user/session",
+    );
     const responses = session!.operation.responses;
 
     expect(Object.keys(responses)).toContain("401");
-    expect(JSON.stringify(responses["401"])).toContain("AUTH_INVALID_CREDENTIALS");
-    expect(JSON.stringify(responses["400"])).not.toContain("Credenciais inválidas");
+    expect(JSON.stringify(responses["401"])).toContain(
+      "AUTH_INVALID_CREDENTIALS",
+    );
+    expect(JSON.stringify(responses["400"])).not.toContain(
+      "Credenciais inválidas",
+    );
   });
 
   it("does not validate the e-mail of /user/me as if it were input", () => {

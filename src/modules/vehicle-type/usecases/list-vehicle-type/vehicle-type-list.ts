@@ -24,7 +24,10 @@ const VEHICLE_TYPE_SORT_KEYS = [
 
 type VehicleTypeSortKey = (typeof VEHICLE_TYPE_SORT_KEYS)[number];
 
-const VEHICLE_TYPE_SORT_FALLBACK = { sort: "created_at", order: "desc" } as const;
+const VEHICLE_TYPE_SORT_FALLBACK = {
+  sort: "created_at",
+  order: "desc",
+} as const;
 
 type OrderBy = Prisma.VehicleTypeOrderByWithRelationInput;
 
@@ -98,4 +101,8 @@ export {
   VEHICLE_TYPE_SORT_KEYS,
   vehicleTypeListWhere,
 };
-export type { VehicleTypeListFilters, VehicleTypeListSearchMeta, VehicleTypeSortKey };
+export type {
+  VehicleTypeListFilters,
+  VehicleTypeListSearchMeta,
+  VehicleTypeSortKey,
+};

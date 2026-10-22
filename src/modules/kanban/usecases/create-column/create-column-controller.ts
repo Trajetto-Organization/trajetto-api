@@ -18,10 +18,7 @@ class CreateKanbanColumnController {
       CreateKanbanColumnUseCase,
     );
 
-    await createKanbanColumnUseCase.execute(
-      { ...columnData, businessId },
-      id,
-    );
+    await createKanbanColumnUseCase.execute({ ...columnData, businessId }, id);
 
     return reply.status(201).send({ message: "Coluna criada com sucesso!" });
   }

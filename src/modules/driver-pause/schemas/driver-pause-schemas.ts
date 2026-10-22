@@ -7,7 +7,10 @@ import { pageField, pageSizeField } from "@/shared/pagination/page-size";
 
 import { DRIVER_PAUSE_KINDS } from "../dtos/driver-pause-dto";
 import { PAUSE_NOTE_MAX, normalizePauseNote } from "../rules/pause-rules";
-import { PAUSE_FLAG_CODES, PAUSE_REPORT_MAX_DAYS } from "../rules/pause-report-rules";
+import {
+  PAUSE_FLAG_CODES,
+  PAUSE_REPORT_MAX_DAYS,
+} from "../rules/pause-report-rules";
 
 /**
  * The pause routes' inputs. Mirrored by the app (docs/contratos-app/pauses.md),
@@ -24,7 +27,9 @@ const businessParam = z.object({
 
 const kind = z
   .enum(DRIVER_PAUSE_KINDS, {
-    errorMap: () => ({ message: "Tipo de pausa inválido. Use MEAL, REST ou OTHER." }),
+    errorMap: () => ({
+      message: "Tipo de pausa inválido. Use MEAL, REST ou OTHER.",
+    }),
   })
   .describe("MEAL (refeição), REST (descanso) ou OTHER (outra).");
 
@@ -77,17 +82,19 @@ const note = z
     `Observação livre do motorista (até ${PAUSE_NOTE_MAX} caracteres). Espaços nas pontas e repetidos são limpos, e quebras de linha viram espaço; vazia vira nula.`,
   );
 
-const startPauseBody = z.object({
-  kind: kind.optional(),
-  occurrence_type_id: occurrenceTypeId,
-  start_submission_id: submissionKey("início").describe(
-    "Chave de idempotência do INÍCIO (UUID), gerada uma vez pelo app no toque e repetida em cada reenvio. Reenviar a mesma chave devolve a mesma pausa; é também por ela que o fim aponta a pausa.",
-  ),
-  occurred_at: occurredAtField,
-  latitude: latitude.describe("Latitude no início (opcional)."),
-  longitude: longitude.describe("Longitude no início (opcional)."),
-  note,
-}).refine(typeOrKind, typeOrKindMessage);
+const startPauseBody = z
+  .object({
+    kind: kind.optional(),
+    occurrence_type_id: occurrenceTypeId,
+    start_submission_id: submissionKey("início").describe(
+      "Chave de idempotência do INÍCIO (UUID), gerada uma vez pelo app no toque e repetida em cada reenvio. Reenviar a mesma chave devolve a mesma pausa; é também por ela que o fim aponta a pausa.",
+    ),
+    occurred_at: occurredAtField,
+    latitude: latitude.describe("Latitude no início (opcional)."),
+    longitude: longitude.describe("Longitude no início (opcional)."),
+    note,
+  })
+  .refine(typeOrKind, typeOrKindMessage);
 
 const endPauseBody = z.object({
   ...tenantLockedShape,
@@ -128,12 +135,11 @@ const reportQuery = z.object({
     ),
   to: dayKey
     .optional()
-    .describe("Último dia (AAAA-MM-DD), no fuso da empresa. Ausente: hoje da empresa."),
+    .describe(
+      "Último dia (AAAA-MM-DD), no fuso da empresa. Ausente: hoje da empresa.",
+    ),
   driverId: idFacetField("Motoristas."),
-  flag: facetField(
-    PAUSE_FLAG_CODES,
-    "Só os dias com um destes alertas.",
-  ),
+  flag: facetField(PAUSE_FLAG_CODES, "Só os dias com um destes alertas."),
   page: pageField().optional(),
   pageSize: pageSizeField(10).optional(),
 });

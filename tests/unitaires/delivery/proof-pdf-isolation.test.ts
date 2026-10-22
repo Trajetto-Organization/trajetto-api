@@ -13,7 +13,10 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 
 import type { ProofDocumentSource } from "@/shared/delivery/proof-document";
 import type { User } from "@/modules/user/dtos/user-dto";
-import { noLocationProviders, unsignedSigning } from "../../support/proof-services";
+import {
+  noLocationProviders,
+  unsignedSigning,
+} from "../../support/proof-services";
 
 /**
  * Rendering a receipt PDF must not freeze the replica that serves it.
@@ -39,7 +42,12 @@ function heavyPng(width: number, height: number): Buffer {
   const chunk = (type: string, data: Buffer) => {
     const length = Buffer.alloc(4);
     length.writeUInt32BE(data.length);
-    return Buffer.concat([length, Buffer.from(type, "latin1"), data, Buffer.alloc(4)]);
+    return Buffer.concat([
+      length,
+      Buffer.from(type, "latin1"),
+      data,
+      Buffer.alloc(4),
+    ]);
   };
 
   const header = Buffer.alloc(13);
@@ -150,7 +158,11 @@ afterAll(async () => {
 describe("generating a receipt", () => {
   it("keeps the replica's event loop free while a large photo is rendered", async () => {
     const users = new InMemoryUserRepository();
-    users.user.push({ id: USER, role: "BUSINESS_ADMIN", businessId: BUSINESS } as User);
+    users.user.push({
+      id: USER,
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+    } as User);
 
     const documents = new InMemoryProofDocumentRepository();
     documents.addSource(BUSINESS, source());
@@ -175,7 +187,11 @@ describe("generating a receipt", () => {
 
     // A first render warms up whatever is lazy (module loading, the worker)
     // so the measurement is of rendering, not of starting.
-    await useCase.execute({ userId: USER, businessId: BUSINESS, deliveryId: DELIVERY });
+    await useCase.execute({
+      userId: USER,
+      businessId: BUSINESS,
+      deliveryId: DELIVERY,
+    });
 
     // The best of a few renders, not one. A render on this loop blocks it in
     // EVERY trial. A gap the OS scheduler adds does not: with the rest of the
@@ -255,7 +271,9 @@ describe("the render worker", () => {
       renderProofPdfOffThread(model(), images),
     );
 
-    await expect(renderProofPdfOffThread(model(), images)).rejects.toMatchObject({
+    await expect(
+      renderProofPdfOffThread(model(), images),
+    ).rejects.toMatchObject({
       statusCode: 503,
       code: "PROOF_RENDER_BUSY",
     });
@@ -269,7 +287,9 @@ describe("the render worker", () => {
     const { renderProofPdfOffThread } = await import(
       "@/shared/services/proof-pdf-renderer"
     );
-    const { renderProofPdf } = await import("@/shared/services/proof-pdf-service");
+    const { renderProofPdf } = await import(
+      "@/shared/services/proof-pdf-service"
+    );
 
     const images = { photo: null, signature: null };
 
@@ -281,14 +301,19 @@ describe("the render worker", () => {
     // The PDF carries its creation date, so the bytes are compared by size
     // and structure, not by hash.
     expect(offThread.bytes.length).toBeGreaterThan(1000);
-    expect(Math.abs(offThread.bytes.length - inProcess.bytes.length)).toBeLessThan(64);
+    expect(
+      Math.abs(offThread.bytes.length - inProcess.bytes.length),
+    ).toBeLessThan(64);
     expect(offThread.sha256).toBe(
       createHash("sha256").update(offThread.bytes).digest("hex"),
     );
   }, 60_000);
 
   it("is built as its own entry, where the renderer looks for it in production", () => {
-    const tsup = readFileSync(resolve(__dirname, "../../../tsup.config.ts"), "utf8");
+    const tsup = readFileSync(
+      resolve(__dirname, "../../../tsup.config.ts"),
+      "utf8",
+    );
 
     expect(tsup).toMatch(
       /"proof-pdf-worker":\s*"\.\/src\/shared\/services\/proof-pdf-worker\.ts"/,

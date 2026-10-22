@@ -11,8 +11,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * row locks, the partial unique index, the anti-join of the picker) is in
  * tests/E2E/route-assignment-unit-http.test.ts.
  */
-const emitted: Array<{ room: "business" | "driver"; id: string | null; event: any }> =
-  [];
+const emitted: Array<{
+  room: "business" | "driver";
+  id: string | null;
+  event: any;
+}> = [];
 
 vi.mock("@/websocket", () => ({
   sendRouteEventToBusiness: (id: string, event: unknown) => {
@@ -84,7 +87,9 @@ function makeContext() {
     createActivityIfEnabled: async () => undefined,
   } as unknown as NotificationService;
 
-  const outboxStub = { publish: async () => undefined } as unknown as OutboxService;
+  const outboxStub = {
+    publish: async () => undefined,
+  } as unknown as OutboxService;
   const webhooks = new InMemoryWebhookFanOutService();
 
   const deliveryRepository = new InMemoryDeliveryRepository();
@@ -114,7 +119,12 @@ function makeContext() {
 
   driverRepository.drivers.push(
     { id: DRIVER, name: "João", status: "ACTIVE", businessId: A } as Driver,
-    { id: OTHER_DRIVER, name: "Maria", status: "ACTIVE", businessId: A } as Driver,
+    {
+      id: OTHER_DRIVER,
+      name: "Maria",
+      status: "ACTIVE",
+      businessId: A,
+    } as Driver,
   );
 
   vehicleRepository.vehicles.push({
@@ -193,8 +203,14 @@ function makeContext() {
       notificationService,
       webhooks.asService(),
     ),
-    setLocation: new SetDeliveryLocationUseCase(routeRepository, userRepository),
-    unrouted: new ListUnroutedDeliveriesUseCase(routeRepository, userRepository),
+    setLocation: new SetDeliveryLocationUseCase(
+      routeRepository,
+      userRepository,
+    ),
+    unrouted: new ListUnroutedDeliveriesUseCase(
+      routeRepository,
+      userRepository,
+    ),
     openStops: new ListOpenStopsUseCase(routeRepository, userRepository),
     get: new GetRouteUseCase(routeRepository, userRepository, positions),
     trail: new DriverTrailUseCase(
@@ -280,7 +296,9 @@ describe("the plan version (D5)", () => {
         userId: DISPATCHER,
         businessId: A,
         routeId: route.id,
-        orderedStopIds: openStopsOf(route.id).map((stop) => stop.id).reverse(),
+        orderedStopIds: openStopsOf(route.id)
+          .map((stop) => stop.id)
+          .reverse(),
         expectedPlanVersion: 0,
       }),
     ).rejects.toMatchObject({ statusCode: 409, code: "ROUTE_PLAN_STALE" });
@@ -294,7 +312,10 @@ describe("the plan version (D5)", () => {
   });
 
   it("does not move on a reorder that sends the order it already has", async () => {
-    const route = await plannedRoute([await seedDelivery(), await seedDelivery()]);
+    const route = await plannedRoute([
+      await seedDelivery(),
+      await seedDelivery(),
+    ]);
 
     const result = await context.reorder.execute({
       userId: DISPATCHER,
@@ -354,7 +375,9 @@ describe("adding stops (§4.3)", () => {
     // create's, then the add's — none for the retried one. None while the
     // gate holds the planning lines back from the trail.
     expect(
-      context.routeRepository.events.filter((event) => event.type === "ROUTE_ADDED"),
+      context.routeRepository.events.filter(
+        (event) => event.type === "ROUTE_ADDED",
+      ),
     ).toEqual(
       PLANNING_TIMELINE_EVENTS_ENABLED
         ? [
@@ -379,7 +402,9 @@ describe("adding stops (§4.3)", () => {
   });
 
   it("names the other route when a delivery is already on it", async () => {
-    const taken = await seedDelivery({ code: "NF-77" } as Partial<CreateDeliveryProps>);
+    const taken = await seedDelivery({
+      code: "NF-77",
+    } as Partial<CreateDeliveryProps>);
     const holder = await plannedRoute([taken]);
     const route = await plannedRoute([], OTHER_DRIVER);
 
@@ -446,7 +471,11 @@ describe("adding stops (§4.3)", () => {
       planVersion: 1,
     });
 
-    await context.release.execute({ userId: DISPATCHER, businessId: A, routeId: route.id });
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: A,
+      routeId: route.id,
+    });
     emitted.length = 0;
 
     await context.addStops.execute({
@@ -456,7 +485,9 @@ describe("adding stops (§4.3)", () => {
       deliveryIds: [await seedDelivery()],
     });
 
-    expect(emitted.filter((entry) => entry.event.type === "route.stops_changed")).toEqual([
+    expect(
+      emitted.filter((entry) => entry.event.type === "route.stops_changed"),
+    ).toEqual([
       expect.objectContaining({ room: "business", id: A }),
       expect.objectContaining({ room: "driver", id: DRIVER_USER }),
     ]);
@@ -490,7 +521,9 @@ describe("removing stops in a batch (§4.4)", () => {
 
     expect(mirrored.map((delivery) => delivery.driverId)).toEqual([null, null]);
     expect(
-      context.routeRepository.events.filter((event) => event.type === "ROUTE_REMOVED"),
+      context.routeRepository.events.filter(
+        (event) => event.type === "ROUTE_REMOVED",
+      ),
     ).toHaveLength(PLANNING_TIMELINE_EVENTS_ENABLED ? 2 : 0);
 
     // The retry: nothing left to remove is success, not an error.
@@ -501,7 +534,11 @@ describe("removing stops in a batch (§4.4)", () => {
       stopIds,
     });
 
-    expect(retry).toMatchObject({ removed: [], alreadyGone: stopIds, planVersion: 1 });
+    expect(retry).toMatchObject({
+      removed: [],
+      alreadyGone: stopIds,
+      planVersion: 1,
+    });
   });
 
   it("keeps the single-stop endpoint's 404 for a stop that is not there", async () => {
@@ -519,7 +556,9 @@ describe("removing stops in a batch (§4.4)", () => {
 
   it("refuses a route that already left", async () => {
     const route = await plannedRoute([await seedDelivery()]);
-    const routeRow = context.routeRepository.routes.find((entry) => entry.id === route.id)!;
+    const routeRow = context.routeRepository.routes.find(
+      (entry) => entry.id === route.id,
+    )!;
 
     routeRow.status = "IN_PROGRESS";
 
@@ -539,7 +578,11 @@ describe("moving deliveries between routes (D10)", () => {
     const delivery = await seedDelivery();
     const source = await plannedRoute([delivery]);
 
-    await context.release.execute({ userId: DISPATCHER, businessId: A, routeId: source.id });
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: A,
+      routeId: source.id,
+    });
 
     const target = await plannedRoute([], OTHER_DRIVER);
     const loose = await seedDelivery();
@@ -552,7 +595,11 @@ describe("moving deliveries between routes (D10)", () => {
     });
 
     expect(result.moved).toEqual([
-      { deliveryId: delivery, fromRouteId: source.id, fromRouteCode: source.code },
+      {
+        deliveryId: delivery,
+        fromRouteId: source.id,
+        fromRouteCode: source.code,
+      },
     ]);
     expect(result.cancelledRoutes).toEqual([source.code]);
     expect(openStopsOf(target.id).map((stop) => stop.deliveryId)).toEqual([
@@ -560,7 +607,9 @@ describe("moving deliveries between routes (D10)", () => {
       loose,
     ]);
 
-    const sourceRow = context.routeRepository.routes.find((route) => route.id === source.id)!;
+    const sourceRow = context.routeRepository.routes.find(
+      (route) => route.id === source.id,
+    )!;
 
     expect(sourceRow.status).toBe("CANCELLED");
     expect(sourceRow.cancellation_reason).toBe(
@@ -569,8 +618,9 @@ describe("moving deliveries between routes (D10)", () => {
 
     // The new holder is what the delivery's shadow says.
     expect(
-      context.deliveryRepository.deliveries.find((entry) => entry.id === delivery)!
-        .driverId,
+      context.deliveryRepository.deliveries.find(
+        (entry) => entry.id === delivery,
+      )!.driverId,
     ).toBe(OTHER_DRIVER);
   });
 
@@ -578,8 +628,9 @@ describe("moving deliveries between routes (D10)", () => {
     const delivery = await seedDelivery();
     const source = await plannedRoute([delivery]);
 
-    context.routeRepository.routes.find((route) => route.id === source.id)!.status =
-      "IN_PROGRESS";
+    context.routeRepository.routes.find(
+      (route) => route.id === source.id,
+    )!.status = "IN_PROGRESS";
 
     const target = await plannedRoute([], OTHER_DRIVER);
 
@@ -590,7 +641,10 @@ describe("moving deliveries between routes (D10)", () => {
         routeId: target.id,
         deliveryIds: [delivery],
       }),
-    ).rejects.toMatchObject({ statusCode: 409, code: "DELIVERY_ON_STARTED_ROUTE" });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "DELIVERY_ON_STARTED_ROUTE",
+    });
 
     expect(openStopsOf(target.id)).toHaveLength(0);
     expect(openStopsOf(source.id)).toHaveLength(1);
@@ -622,17 +676,27 @@ describe("plans that change without the page (D5, review r1)", () => {
     const route = await plannedRoute([closed, kept]);
     const dropped: Array<{ routeId: string; planVersion: number }> = [];
 
-    const settled = await context.routeRepository.settleStopForDelivery(closed, A, {
-      from: ["PENDING", "ARRIVED"],
-      status: "CANCELLED",
-      onPlanDropped: (bump) => dropped.push(bump),
-    });
+    const settled = await context.routeRepository.settleStopForDelivery(
+      closed,
+      A,
+      {
+        from: ["PENDING", "ARRIVED"],
+        status: "CANCELLED",
+        onPlanDropped: (bump) => dropped.push(bump),
+      },
+    );
 
     expect(settled).toBeNull();
-    expect(openStopsOf(route.id).map((stop) => stop.deliveryId)).toEqual([kept]);
+    expect(openStopsOf(route.id).map((stop) => stop.deliveryId)).toEqual([
+      kept,
+    ]);
     expect(versionOf(route.id)).toBe(1);
     expect(dropped).toEqual([
-      expect.objectContaining({ routeId: route.id, planVersion: 1, status: "PLANNED" }),
+      expect.objectContaining({
+        routeId: route.id,
+        planVersion: 1,
+        status: "PLANNED",
+      }),
     ]);
 
     // Another company's call finds nothing and moves nothing.
@@ -651,7 +715,10 @@ describe("plans that change without the page (D5, review r1)", () => {
     const second = await seedDelivery();
     const route = await plannedRoute([first, second]);
 
-    const detached = await context.routeRepository.detachFromOpenRoutes([first], A);
+    const detached = await context.routeRepository.detachFromOpenRoutes(
+      [first],
+      A,
+    );
 
     expect(detached.bumped).toEqual([
       expect.objectContaining({ routeId: route.id, planVersion: 1 }),
@@ -671,7 +738,9 @@ describe("the picker's shipper filter (§5.5, review r1)", () => {
 
     await seedDelivery();
     await seedDelivery();
-    const other = await seedDelivery({ shipperId: OTHER_SHIPPER } as Partial<CreateDeliveryProps>);
+    const other = await seedDelivery({
+      shipperId: OTHER_SHIPPER,
+    } as Partial<CreateDeliveryProps>);
 
     const page = await context.routeRepository.listUnroutedDeliveries({
       businessId: A,
@@ -681,7 +750,10 @@ describe("the picker's shipper filter (§5.5, review r1)", () => {
     });
 
     expect(page.data.map((row) => row.id)).toEqual([other]);
-    expect(page.data[0].shipper).toEqual({ id: OTHER_SHIPPER, name: "Atacado Dois" });
+    expect(page.data[0].shipper).toEqual({
+      id: OTHER_SHIPPER,
+      name: "Atacado Dois",
+    });
     expect(page.facets.shipper).toEqual([
       { value: OTHER_SHIPPER, count: 1, label: "Atacado Dois" },
       { value: SHIPPER, count: 2, label: "Embarcador" },
@@ -774,7 +846,9 @@ describe("creating with an Idempotency-Key (§4.7)", () => {
     expect(resend.replayed).toBe(true);
     expect(context.routeRepository.routes).toHaveLength(1);
     expect(
-      context.webhooks.announced.filter((event) => event.topic === "delivery.assigned"),
+      context.webhooks.announced.filter(
+        (event) => event.topic === "delivery.assigned",
+      ),
     ).toHaveLength(1);
   });
 });
@@ -791,7 +865,11 @@ describe("pinning a delivery on the map (D7)", () => {
       point: { latitude: -23.55, longitude: -46.63 },
     });
 
-    expect(pinned).toMatchObject({ latitude: -23.55, longitude: -46.63, geo_source: "MANUAL" });
+    expect(pinned).toMatchObject({
+      latitude: -23.55,
+      longitude: -46.63,
+      geo_source: "MANUAL",
+    });
     expect(versionOf(route.id)).toBe(1);
 
     await expect(
@@ -801,7 +879,10 @@ describe("pinning a delivery on the map (D7)", () => {
         deliveryId: delivery,
         point: { latitude: 48.85, longitude: 2.35 },
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "DELIVERY_LOCATION_INVALID" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "DELIVERY_LOCATION_INVALID",
+    });
   });
 
   it("answers another company's delivery as not found, and a closed one as locked", async () => {
@@ -816,8 +897,9 @@ describe("pinning a delivery on the map (D7)", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 404, code: "DELIVERY_NOT_FOUND" });
 
-    context.deliveryRepository.deliveries.find((entry) => entry.id === delivery)!.status =
-      "DELIVERED";
+    context.deliveryRepository.deliveries.find(
+      (entry) => entry.id === delivery,
+    )!.status = "DELIVERED";
 
     await expect(
       context.setLocation.execute({
@@ -826,14 +908,21 @@ describe("pinning a delivery on the map (D7)", () => {
         deliveryId: delivery,
         point: { latitude: -23.55, longitude: -46.63 },
       }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "DELIVERY_LOCATION_LOCKED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "DELIVERY_LOCATION_LOCKED",
+    });
   });
 });
 
 describe("the picker of deliveries without a route (D3)", () => {
   it("lists PENDING deliveries with no open stop, with the city facet disjunctive", async () => {
-    const free = await seedDelivery({ city: "Campinas" } as Partial<CreateDeliveryProps>);
-    const other = await seedDelivery({ city: "Santos" } as Partial<CreateDeliveryProps>);
+    const free = await seedDelivery({
+      city: "Campinas",
+    } as Partial<CreateDeliveryProps>);
+    const other = await seedDelivery({
+      city: "Santos",
+    } as Partial<CreateDeliveryProps>);
     const routed = await seedDelivery();
 
     await plannedRoute([routed]);
@@ -868,7 +957,11 @@ describe("the picker of deliveries without a route (D3)", () => {
         deliveryIds: [delivery, await seedDelivery()],
       }),
     ).toEqual([
-      expect.objectContaining({ deliveryId: delivery, routeId: route.id, routeStatus: "PLANNED" }),
+      expect.objectContaining({
+        deliveryId: delivery,
+        routeId: route.id,
+        routeStatus: "PLANNED",
+      }),
     ]);
 
     // Another company asks about the same id and learns nothing.
@@ -889,12 +982,41 @@ describe("a driver token plans nothing", () => {
     const stopId = openStopsOf(route.id)[0].id;
 
     const refusals = [
-      context.addStops.execute({ userId: DRIVER_USER, businessId: A, routeId: route.id, deliveryIds: [await seedDelivery()] }),
-      context.removeStops.execute({ userId: DRIVER_USER, businessId: A, routeId: route.id, stopIds: [stopId] }),
-      context.move.execute({ userId: DRIVER_USER, businessId: A, routeId: route.id, deliveryIds: [delivery] }),
-      context.setLocation.execute({ userId: DRIVER_USER, businessId: A, deliveryId: delivery, point: { latitude: -23.5, longitude: -46.6 } }),
-      context.unrouted.execute({ userId: DRIVER_USER, businessId: A, page: 1, pageSize: 10 }),
-      context.openStops.execute({ userId: DRIVER_USER, businessId: A, deliveryIds: [delivery] }),
+      context.addStops.execute({
+        userId: DRIVER_USER,
+        businessId: A,
+        routeId: route.id,
+        deliveryIds: [await seedDelivery()],
+      }),
+      context.removeStops.execute({
+        userId: DRIVER_USER,
+        businessId: A,
+        routeId: route.id,
+        stopIds: [stopId],
+      }),
+      context.move.execute({
+        userId: DRIVER_USER,
+        businessId: A,
+        routeId: route.id,
+        deliveryIds: [delivery],
+      }),
+      context.setLocation.execute({
+        userId: DRIVER_USER,
+        businessId: A,
+        deliveryId: delivery,
+        point: { latitude: -23.5, longitude: -46.6 },
+      }),
+      context.unrouted.execute({
+        userId: DRIVER_USER,
+        businessId: A,
+        page: 1,
+        pageSize: 10,
+      }),
+      context.openStops.execute({
+        userId: DRIVER_USER,
+        businessId: A,
+        deliveryIds: [delivery],
+      }),
     ];
 
     for (const refusal of refusals) {
@@ -919,32 +1041,94 @@ describe("another company's dispatcher naming this company", () => {
     const as = { userId: DISPATCHER_B, businessId: A };
 
     const refusals: Array<[string, Promise<unknown>]> = [
-      ["openStops", context.openStops.execute({ ...as, deliveryIds: [delivery] })],
+      [
+        "openStops",
+        context.openStops.execute({ ...as, deliveryIds: [delivery] }),
+      ],
       ["unrouted", context.unrouted.execute({ ...as, page: 1, pageSize: 10 })],
       [
         "create",
-        context.create.execute({ ...as, driverId: DRIVER, vehicleId: VEHICLE, scheduled_date: DAY, deliveryIds: [loose] }),
+        context.create.execute({
+          ...as,
+          driverId: DRIVER,
+          vehicleId: VEHICLE,
+          scheduled_date: DAY,
+          deliveryIds: [loose],
+        }),
       ],
-      ["update", context.update.execute({ ...as, routeId: route.id, destination: "CD Alheio" })],
-      ["addStops", context.addStops.execute({ ...as, routeId: route.id, deliveryIds: [loose] })],
-      ["removeStops", context.removeStops.execute({ ...as, routeId: route.id, stopIds: [stopId] })],
-      ["reorder", context.reorder.execute({ ...as, routeId: route.id, orderedStopIds: [stopId] })],
-      ["move", context.move.execute({ ...as, routeId: route.id, deliveryIds: [loose] })],
+      [
+        "update",
+        context.update.execute({
+          ...as,
+          routeId: route.id,
+          destination: "CD Alheio",
+        }),
+      ],
+      [
+        "addStops",
+        context.addStops.execute({
+          ...as,
+          routeId: route.id,
+          deliveryIds: [loose],
+        }),
+      ],
+      [
+        "removeStops",
+        context.removeStops.execute({
+          ...as,
+          routeId: route.id,
+          stopIds: [stopId],
+        }),
+      ],
+      [
+        "reorder",
+        context.reorder.execute({
+          ...as,
+          routeId: route.id,
+          orderedStopIds: [stopId],
+        }),
+      ],
+      [
+        "move",
+        context.move.execute({
+          ...as,
+          routeId: route.id,
+          deliveryIds: [loose],
+        }),
+      ],
       [
         "setLocation",
-        context.setLocation.execute({ ...as, deliveryId: delivery, point: { latitude: -23.5, longitude: -46.6 } }),
+        context.setLocation.execute({
+          ...as,
+          deliveryId: delivery,
+          point: { latitude: -23.5, longitude: -46.6 },
+        }),
       ],
       ["release", context.release.execute({ ...as, routeId: route.id })],
-      ["cancel", context.cancel.execute({ ...as, routeId: route.id, reason: "Planejamento alheio" })],
+      [
+        "cancel",
+        context.cancel.execute({
+          ...as,
+          routeId: route.id,
+          reason: "Planejamento alheio",
+        }),
+      ],
     ];
 
     for (const [name, refusal] of refusals) {
-      await expect(refusal, name).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
+      await expect(refusal, name).rejects.toMatchObject({
+        statusCode: 403,
+        code: "TENANT_ACCESS_DENIED",
+      });
     }
 
     // Nothing of A's plan changed.
-    expect(openStopsOf(route.id).map((stop) => stop.deliveryId)).toEqual([delivery]);
-    expect(context.routeRepository.routes.find((row) => row.id === route.id)).toMatchObject({
+    expect(openStopsOf(route.id).map((stop) => stop.deliveryId)).toEqual([
+      delivery,
+    ]);
+    expect(
+      context.routeRepository.routes.find((row) => row.id === route.id),
+    ).toMatchObject({
       status: "PLANNED",
       plan_version: 0,
     });
@@ -963,7 +1147,11 @@ describe("another company's dispatcher naming this company", () => {
     const delivery = await seedDelivery();
 
     await expect(
-      context.openStops.execute({ userId: master, businessId: A, deliveryIds: [delivery] }),
+      context.openStops.execute({
+        userId: master,
+        businessId: A,
+        deliveryIds: [delivery],
+      }),
     ).resolves.toEqual([]);
   });
 });
@@ -985,20 +1173,36 @@ describe("the route map's live layers (§4.2)", () => {
 
   it("shows the dot of THIS route only, and says when it is stale", () => {
     expect(
-      routeDriverPosition({ id: "r1", status: "IN_PROGRESS" }, last("r1", NOW), NOW),
+      routeDriverPosition(
+        { id: "r1", status: "IN_PROGRESS" },
+        last("r1", NOW),
+        NOW,
+      ),
     ).toMatchObject({ fresh: true, latitude: -23.5 });
 
     // Another route of the same driver: never on this map.
     expect(
-      routeDriverPosition({ id: "r1", status: "IN_PROGRESS" }, last("r2", NOW), NOW),
+      routeDriverPosition(
+        { id: "r1", status: "IN_PROGRESS" },
+        last("r2", NOW),
+        NOW,
+      ),
     ).toBeNull();
 
     // A planned or finished route has no live driver.
     expect(
-      routeDriverPosition({ id: "r1", status: "PLANNED" }, last("r1", NOW), NOW),
+      routeDriverPosition(
+        { id: "r1", status: "PLANNED" },
+        last("r1", NOW),
+        NOW,
+      ),
     ).toBeNull();
     expect(
-      routeDriverPosition({ id: "r1", status: "COMPLETED" }, last("r1", NOW), NOW),
+      routeDriverPosition(
+        { id: "r1", status: "COMPLETED" },
+        last("r1", NOW),
+        NOW,
+      ),
     ).toBeNull();
 
     expect(
@@ -1027,7 +1231,9 @@ describe("the route map's live layers (§4.2)", () => {
   it("draws the trail of this route only, from its departure", async () => {
     const delivery = await seedDelivery();
     const route = await plannedRoute([delivery]);
-    const row = context.routeRepository.routes.find((entry) => entry.id === route.id)!;
+    const row = context.routeRepository.routes.find(
+      (entry) => entry.id === route.id,
+    )!;
 
     row.status = "IN_PROGRESS";
     row.started_at = new Date("2026-10-06T11:00:00.000Z");

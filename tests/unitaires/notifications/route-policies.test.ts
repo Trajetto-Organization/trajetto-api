@@ -207,7 +207,11 @@ describe("the plan-changed push", () => {
 
     expect(push.title).toBe("Sua rota foi alterada");
     expect(push.body).toContain("rota 42");
-    expect(push.data).toEqual({ url: "/route", routeId: changed.routeId, planVersion: 3 });
+    expect(push.data).toEqual({
+      url: "/route",
+      routeId: changed.routeId,
+      planVersion: 3,
+    });
   });
 
   it("reaches the route's driver, push-only and mandatory", async () => {

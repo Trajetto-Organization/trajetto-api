@@ -165,7 +165,11 @@ class ChatRepository implements IChatRepository {
       this.prisma.chatThread.count({ where: whereCondition }),
     ]);
 
-    const totalUnread = await this.countTotalUnread({ businessId, requesterUserId, driverId });
+    const totalUnread = await this.countTotalUnread({
+      businessId,
+      requesterUserId,
+      driverId,
+    });
 
     const pageIds = threads.map((thread) => thread.id);
 
@@ -471,7 +475,8 @@ class ChatRepository implements IChatRepository {
             ...base,
             OR: [
               { created_at: around.created_at, id: around.id },
-              ...(ChatRepository.olderThan(around).OR as Prisma.ChatMessageWhereInput[]),
+              ...(ChatRepository.olderThan(around)
+                .OR as Prisma.ChatMessageWhereInput[]),
             ],
           },
           orderBy: [{ created_at: "desc" }, { id: "desc" }],
@@ -593,7 +598,10 @@ class ChatRepository implements IChatRepository {
     if (viewerIsDriverSide) {
       // The company reads as a team: any agent's cursor counts.
       const staffRead = await this.prisma.chatThreadRead.findFirst({
-        where: { threadId, ...(driverUserId && { userId: { not: driverUserId } }) },
+        where: {
+          threadId,
+          ...(driverUserId && { userId: { not: driverUserId } }),
+        },
         orderBy: { last_read_at: "desc" },
         select: { last_read_at: true },
       });
@@ -880,7 +888,9 @@ class ChatRepository implements IChatRepository {
 
     const [total, withApp] = await Promise.all([
       this.prisma.driver.count({ where: active }),
-      this.prisma.driver.count({ where: { AND: [active, hasApp(businessId)] } }),
+      this.prisma.driver.count({
+        where: { AND: [active, hasApp(businessId)] },
+      }),
     ]);
 
     return { withApp, withoutApp: total - withApp };

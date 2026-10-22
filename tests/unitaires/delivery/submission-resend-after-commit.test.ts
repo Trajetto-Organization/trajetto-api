@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { legacyProofUseCase, businessWithoutAI as reportsWithoutAI } from "../../support/delivery-proof-usecases";
+import {
+  legacyProofUseCase,
+  businessWithoutAI as reportsWithoutAI,
+} from "../../support/delivery-proof-usecases";
 
 import { Prisma } from "@prisma/client";
 
@@ -176,7 +179,10 @@ describe("a proof whose twin committed between the pre-check and the read", () =
     };
 
     // Decision 14.3: the proof answers where the submission stands.
-    await expect(send()).resolves.toMatchObject({ replayed: true, category: "DELIVERED" });
+    await expect(send()).resolves.toMatchObject({
+      replayed: true,
+      category: "DELIVERED",
+    });
 
     expect(
       repository.events.filter(

@@ -164,7 +164,8 @@ beforeAll(async () => {
 
   // Before ready(): the route plugins register during boot.
   app.addHook("onRoute", (route) => {
-    if (route.method === "GET") registered.set(route.url, route as RouteOptions);
+    if (route.method === "GET")
+      registered.set(route.url, route as RouteOptions);
   });
 
   await app.ready();
@@ -177,22 +178,37 @@ afterAll(async () => {
 
 describe("a user listing", () => {
   it.each([
-    ["the cursor search", () => `/user/search-user-business?businessId=${BUSINESS}`, () => adminToken],
-    ["the paged list", () => "/user/list-user?page=1&pageSize=10", () => adminToken],
-    ["the MASTER list", () => "/user/list-master-users?page=1&pageSize=10", () => masterToken],
-  ])("%s streams users without the password hash", async (_name, url, token) => {
-    const [meta, ...users] = await lines(url(), token());
+    [
+      "the cursor search",
+      () => `/user/search-user-business?businessId=${BUSINESS}`,
+      () => adminToken,
+    ],
+    [
+      "the paged list",
+      () => "/user/list-user?page=1&pageSize=10",
+      () => adminToken,
+    ],
+    [
+      "the MASTER list",
+      () => "/user/list-master-users?page=1&pageSize=10",
+      () => masterToken,
+    ],
+  ])(
+    "%s streams users without the password hash",
+    async (_name, url, token) => {
+      const [meta, ...users] = await lines(url(), token());
 
-    expect(meta.meta).toBeDefined();
-    expect(users.length).toBeGreaterThan(0);
+      expect(meta.meta).toBeDefined();
+      expect(users.length).toBeGreaterThan(0);
 
-    for (const user of users) {
-      expect(user.id).toBeTruthy();
-      expect(Object.keys(user)).not.toContain("password");
-    }
+      for (const user of users) {
+        expect(user.id).toBeTruthy();
+        expect(Object.keys(user)).not.toContain("password");
+      }
 
-    expect(JSON.stringify(users)).not.toContain(HASH);
-  });
+      expect(JSON.stringify(users)).not.toContain(HASH);
+    },
+  );
 });
 
 describe("the line /docs promises for a user listing", () => {
@@ -229,15 +245,18 @@ describe("the line /docs promises for a user listing", () => {
       () => masterToken,
       "/user/list-master-users",
     ],
-  ])("%s streams exactly the documented line", async (_name, url, token, path) => {
-    const [, ...users] = await lines(url(), token());
+  ])(
+    "%s streams exactly the documented line",
+    async (_name, url, token, path) => {
+      const [, ...users] = await lines(url(), token());
 
-    expect(users.length).toBeGreaterThan(0);
+      expect(users.length).toBeGreaterThan(0);
 
-    const item = documentedLine(path);
+      const item = documentedLine(path);
 
-    for (const user of users) {
-      expect(strictIssues(item, user), String(user.id)).toEqual([]);
-    }
-  });
+      for (const user of users) {
+        expect(strictIssues(item, user), String(user.id)).toEqual([]);
+      }
+    },
+  );
 });

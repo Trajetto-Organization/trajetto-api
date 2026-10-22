@@ -7,7 +7,12 @@
  * pause of that journey (the same principle as occurred_at, MOB-08).
  */
 
-type JourneyRouteStatus = "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+type JourneyRouteStatus =
+  | "PLANNED"
+  | "RELEASED"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "CANCELLED";
 
 interface JourneyRoute {
   id: string;
@@ -36,7 +41,9 @@ function releasedAtOf(route: JourneyRoute): Date | null {
 
   if (route.started_at) return route.started_at;
 
-  return route.status === "RELEASED" || route.status === "IN_PROGRESS" ? route.updated_at : null;
+  return route.status === "RELEASED" || route.status === "IN_PROGRESS"
+    ? route.updated_at
+    : null;
 }
 
 /**
@@ -47,7 +54,11 @@ function releasedAtOf(route: JourneyRoute): Date | null {
  * - it was that day's route, or had already started (a night route that
  *   crosses midnight). A route released today for tomorrow is no journey today.
  */
-function isJourneyRouteAt(route: JourneyRoute, at: Date, dayKey: string): boolean {
+function isJourneyRouteAt(
+  route: JourneyRoute,
+  at: Date,
+  dayKey: string,
+): boolean {
   const time = at.getTime();
   const released = releasedAtOf(route);
 
@@ -62,7 +73,8 @@ function isJourneyRouteAt(route: JourneyRoute, at: Date, dayKey: string): boolea
 
   if (!notFinished) return false;
 
-  const started = route.started_at !== null && route.started_at.getTime() <= time;
+  const started =
+    route.started_at !== null && route.started_at.getTime() <= time;
 
   return route.scheduled_date === dayKey || started;
 }
@@ -76,7 +88,9 @@ function journeyRouteAt(
   at: Date,
   dayKey: string,
 ): JourneyRoute | null {
-  const eligible = routes.filter((route) => isJourneyRouteAt(route, at, dayKey));
+  const eligible = routes.filter((route) =>
+    isJourneyRouteAt(route, at, dayKey),
+  );
 
   eligible.sort((a, b) => {
     const startA = a.started_at?.getTime() ?? -Infinity;

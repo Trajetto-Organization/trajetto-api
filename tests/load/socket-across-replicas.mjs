@@ -16,7 +16,10 @@ import { loadSocketClient } from "./lib/socket-client.mjs";
 const io = await loadSocketClient();
 
 const context = JSON.parse(
-  readFileSync(new URL("./fixtures/load-context.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("./fixtures/load-context.json", import.meta.url),
+    "utf8",
+  ),
 );
 
 const [A, B] = process.env.LOAD_PORTS?.split(" ") ?? ["3341", "3342"];

@@ -74,7 +74,9 @@ describe("the request to the tower", () => {
     expect(rendered.message).toBe(
       'João Motorista pede autorização para "Cliente ausente" na entrega para Mercado Central. Quem atendeu: Porteiro; Ligou para o cliente: Sim',
     );
-    expect(rendered.link).toBe("https://app.trajetto.com.br/dashboard/control-tower");
+    expect(rendered.link).toBe(
+      "https://app.trajetto.com.br/dashboard/control-tower",
+    );
   });
 
   it("caps a long form in the notice", () => {
@@ -105,8 +107,12 @@ describe("the escalation", () => {
   it("says how long the driver has been waiting", () => {
     const payload = { ...requested, waitingMinutes: 12 };
 
-    expect(renderAuthorizationEscalatedInApp(payload, ctx).message).toContain("Há 12 min");
-    expect(renderAuthorizationEscalatedWhatsApp(payload)).toContain("há 12 min");
+    expect(renderAuthorizationEscalatedInApp(payload, ctx).message).toContain(
+      "Há 12 min",
+    );
+    expect(renderAuthorizationEscalatedWhatsApp(payload)).toContain(
+      "há 12 min",
+    );
   });
 });
 
@@ -140,7 +146,10 @@ describe("the answer to the driver", () => {
     const ticketId = "018f6000-0000-7000-8000-0000000000t1";
 
     expect(
-      renderAuthorizationDecidedPush({ ...decided("DENIED", "Volte depois."), ticketId }).data,
+      renderAuthorizationDecidedPush({
+        ...decided("DENIED", "Volte depois."),
+        ticketId,
+      }).data,
     ).toMatchObject({ ticketId });
     expect(
       renderAuthorizationDecidedPush({
@@ -154,7 +163,9 @@ describe("the answer to the driver", () => {
   // Red before: an approval of a blocking type ends the attempt as an
   // insucesso, and the tray still told the driver "pode seguir".
   it("an approval that failed the delivery says so, with the raw status for the app", () => {
-    const push = renderAuthorizationDecidedPush(decided("APPROVED", null, "FAILED"));
+    const push = renderAuthorizationDecidedPush(
+      decided("APPROVED", null, "FAILED"),
+    );
 
     expect(push.body).toBe(
       "Cliente ausente — Mercado Central: entrega registrada como Insucesso.",
@@ -172,14 +183,21 @@ describe("the answer to the driver", () => {
     const push = renderAuthorizationDecidedPush(legacy);
 
     expect(push.body).toBe("Cliente ausente — Mercado Central: pode seguir.");
-    expect(push.data).toMatchObject({ entityId: requested.deliveryId, deliveryStatus: null });
+    expect(push.data).toMatchObject({
+      entityId: requested.deliveryId,
+      deliveryStatus: null,
+    });
   });
 
   it("a denial carries the reason", () => {
-    const push = renderAuthorizationDecidedPush(decided("DENIED", "Deixe com o porteiro."));
+    const push = renderAuthorizationDecidedPush(
+      decided("DENIED", "Deixe com o porteiro."),
+    );
 
     expect(push.title).toBe("⛔ Ocorrência não autorizada");
-    expect(push.body).toBe("Cliente ausente — Mercado Central: Deixe com o porteiro.");
+    expect(push.body).toBe(
+      "Cliente ausente — Mercado Central: Deixe com o porteiro.",
+    );
     expect(push.data).toMatchObject({
       entityId: requested.deliveryId,
       decision: "DENIED",
@@ -191,22 +209,31 @@ describe("the answer to the driver", () => {
   it("reaches the driver who asked, push-only, and nobody when there is no account", async () => {
     const users = new InMemoryUserRepository();
 
-    users.user.push({ id: decided("APPROVED", null).driverUserId, name: "João" } as User);
+    users.user.push({
+      id: decided("APPROVED", null).driverUserId,
+      name: "João",
+    } as User);
 
     const deps = { userRepository: users } as unknown as PolicyDeps;
 
-    const found = await deliveryOccurrenceAuthorizationDecidedPolicy.resolveRecipients(
-      decided("APPROVED", null),
-      deps,
-    );
-    const nobody = await deliveryOccurrenceAuthorizationDecidedPolicy.resolveRecipients(
-      { ...decided("APPROVED", null), driverUserId: null },
-      deps,
-    );
+    const found =
+      await deliveryOccurrenceAuthorizationDecidedPolicy.resolveRecipients(
+        decided("APPROVED", null),
+        deps,
+      );
+    const nobody =
+      await deliveryOccurrenceAuthorizationDecidedPolicy.resolveRecipients(
+        { ...decided("APPROVED", null), driverUserId: null },
+        deps,
+      );
 
-    expect(found.map((user) => user.id)).toEqual([decided("APPROVED", null).driverUserId]);
+    expect(found.map((user) => user.id)).toEqual([
+      decided("APPROVED", null).driverUserId,
+    ]);
     expect(nobody).toEqual([]);
-    expect(deliveryOccurrenceAuthorizationDecidedPolicy.renderInApp).toBeUndefined();
+    expect(
+      deliveryOccurrenceAuthorizationDecidedPolicy.renderInApp,
+    ).toBeUndefined();
   });
 });
 
@@ -245,7 +272,10 @@ describe("a delivery request", () => {
     expect(approved.body).toBe(
       "Entrega com conferência — Mercado Central: entrega registrada como Entregue.",
     );
-    expect(approved.data).toMatchObject({ category: "DELIVERED", deliveryStatus: "DELIVERED" });
+    expect(approved.data).toMatchObject({
+      category: "DELIVERED",
+      deliveryStatus: "DELIVERED",
+    });
 
     const denied = renderAuthorizationDecidedPush({
       ...decided("DENIED", "Canhoto ilegível."),
@@ -254,7 +284,9 @@ describe("a delivery request", () => {
     });
 
     expect(denied.title).toBe("⛔ Entrega não autorizada");
-    expect(denied.body).toBe("Entrega com conferência — Mercado Central: Canhoto ilegível.");
+    expect(denied.body).toBe(
+      "Entrega com conferência — Mercado Central: Canhoto ilegível.",
+    );
   });
 
   it("a payload queued before the category existed reads as an occurrence", () => {
@@ -286,7 +318,11 @@ describe("a notice about a request that no longer waits (review r1)", () => {
     const users = new InMemoryUserRepository();
     const deliveries = new InMemoryDeliveryRepository();
     const types = new InMemoryOccurrenceTypeRepository();
-    const authorizations = new InMemoryOccurrenceAuthorizationRepository(deliveries, types, users);
+    const authorizations = new InMemoryOccurrenceAuthorizationRepository(
+      deliveries,
+      types,
+      users,
+    );
 
     users.user.push(
       {
@@ -334,9 +370,9 @@ describe("a notice about a request that no longer waits (review r1)", () => {
 
     const policy = deliveryOccurrenceAuthorizationRequestedPolicy;
 
-    expect((await policy.resolveRecipients(requested, deps)).map((user) => user.id)).toEqual([
-      ADMIN,
-    ]);
+    expect(
+      (await policy.resolveRecipients(requested, deps)).map((user) => user.id),
+    ).toEqual([ADMIN]);
 
     deliveries.occurrences[0].authorization_status = "APPROVED";
 
@@ -349,9 +385,9 @@ describe("a notice about a request that no longer waits (review r1)", () => {
     const policy = deliveryOccurrenceAuthorizationEscalatedPolicy;
     const payload = { ...requested, waitingMinutes: 11 };
 
-    expect((await policy.resolveRecipients(payload, deps)).map((user) => user.id)).toEqual([
-      ADMIN,
-    ]);
+    expect(
+      (await policy.resolveRecipients(payload, deps)).map((user) => user.id),
+    ).toEqual([ADMIN]);
 
     // Cancelled from the panel: still PENDING in the row until the sweep.
     deliveries.deliveries[0].status = "CANCELLED";
@@ -365,9 +401,14 @@ describe("a notice about a request that no longer waits (review r1)", () => {
     expect(renderAuthorizationRequestedWhatsApp(fromPanel)).toContain(
       "Registrado por: *João Motorista*",
     );
-    expect(renderAuthorizationEscalatedWhatsApp(fromPanel)).not.toContain("O motorista está parado");
-    expect(renderAuthorizationEscalatedWhatsApp({ ...requested, waitingMinutes: 12 })).toContain(
-      "O motorista está parado aguardando",
+    expect(renderAuthorizationEscalatedWhatsApp(fromPanel)).not.toContain(
+      "O motorista está parado",
     );
+    expect(
+      renderAuthorizationEscalatedWhatsApp({
+        ...requested,
+        waitingMinutes: 12,
+      }),
+    ).toContain("O motorista está parado aguardando");
   });
 });

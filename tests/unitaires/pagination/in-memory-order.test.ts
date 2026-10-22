@@ -14,7 +14,11 @@ import type { SortOrder } from "@/shared/pagination/list-query";
  */
 type Value = string | number | boolean | Date | null;
 
-function ordered(values: Value[], order: SortOrder, nulls?: NullsPlacement): Value[] {
+function ordered(
+  values: Value[],
+  order: SortOrder,
+  nulls?: NullsPlacement,
+): Value[] {
   return [...values].sort((a, b) => compareForOrder(a, b, order, nulls));
 }
 
@@ -43,7 +47,11 @@ describe("compareForOrder", () => {
     expect(ordered(["b", null, "a"], "asc", "last")).toEqual(["a", "b", null]);
     expect(ordered(["b", null, "a"], "desc", "last")).toEqual(["b", "a", null]);
     expect(ordered(["b", null, "a"], "asc", "first")).toEqual([null, "a", "b"]);
-    expect(ordered(["b", null, "a"], "desc", "first")).toEqual([null, "b", "a"]);
+    expect(ordered(["b", null, "a"], "desc", "first")).toEqual([
+      null,
+      "b",
+      "a",
+    ]);
   });
 
   it("reads undefined as NULL and two NULLs as a tie", () => {

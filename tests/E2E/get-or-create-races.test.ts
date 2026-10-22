@@ -87,7 +87,10 @@ async function seedDriver(businessId: string): Promise<string> {
 function outcome(results: PromiseSettledResult<{ id: string }>[]) {
   return {
     failures: results
-      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .filter(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      )
       .map((result) =>
         result.reason instanceof Prisma.PrismaClientKnownRequestError
           ? result.reason.code
@@ -128,11 +131,15 @@ describe("the first messages to a driver, sent at the same moment", () => {
         ),
       );
 
-      expect(failures, `rodada ${round}: um envio concorrente falhou`).toEqual([]);
+      expect(failures, `rodada ${round}: um envio concorrente falhou`).toEqual(
+        [],
+      );
       expect(ids.size).toBe(1);
 
       expect(
-        await prisma.chatThread.count({ where: { businessId: carrier, driverId } }),
+        await prisma.chatThread.count({
+          where: { businessId: carrier, driverId },
+        }),
       ).toBe(1);
     }
   });
@@ -156,11 +163,16 @@ describe("the system occurrence type, recorded by rejections landing together", 
         ),
       );
 
-      expect(failures, `rodada ${round}: uma recusa concorrente falhou`).toEqual([]);
+      expect(
+        failures,
+        `rodada ${round}: uma recusa concorrente falhou`,
+      ).toEqual([]);
       expect(ids.size).toBe(1);
 
       expect(
-        await prisma.occurrenceType.count({ where: { businessId: carrier, name } }),
+        await prisma.occurrenceType.count({
+          where: { businessId: carrier, name },
+        }),
       ).toBe(1);
     }
   });
@@ -177,15 +189,22 @@ describe("the AI usage period, on the first analyses of the month", () => {
           clients.map((client) =>
             // Inside a transaction, as requestAnalysis calls it: a P2002
             // there aborts the whole request, not only this statement.
-            client.$transaction((tx) => getOrCreateCurrentPeriod(tx, businessId)),
+            client.$transaction((tx) =>
+              getOrCreateCurrentPeriod(tx, businessId),
+            ),
           ),
         ),
       );
 
-      expect(failures, `rodada ${round}: uma transação concorrente abortou`).toEqual([]);
+      expect(
+        failures,
+        `rodada ${round}: uma transação concorrente abortou`,
+      ).toEqual([]);
       expect(ids.size).toBe(1);
 
-      expect(await prisma.aIUsagePeriod.count({ where: { businessId } })).toBe(1);
+      expect(await prisma.aIUsagePeriod.count({ where: { businessId } })).toBe(
+        1,
+      );
     }
   });
 });

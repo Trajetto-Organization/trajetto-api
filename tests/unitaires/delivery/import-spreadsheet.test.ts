@@ -484,9 +484,9 @@ describe("who may upload, and whose cargo", () => {
   });
 
   it("refuses another company's shipper as if it did not exist", async () => {
-    await expect(run([line("Padaria Central")], OTHER_SHIPPER)).rejects.toMatchObject(
-      { statusCode: 404, code: "SHIPPER_NOT_FOUND" },
-    );
+    await expect(
+      run([line("Padaria Central")], OTHER_SHIPPER),
+    ).rejects.toMatchObject({ statusCode: 404, code: "SHIPPER_NOT_FOUND" });
   });
 
   it("says it was the file when the file cannot be read", async () => {

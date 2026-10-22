@@ -2,7 +2,10 @@ import { z } from "zod";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 import { occurredAtField } from "@/shared/delivery/occurred-at";
-import { routeIdParamSchema, routeStopIdParamSchema } from "@/schemas/route-schema";
+import {
+  routeIdParamSchema,
+  routeStopIdParamSchema,
+} from "@/schemas/route-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 import { errorResponse } from "@/routes/documentation/common-responses";

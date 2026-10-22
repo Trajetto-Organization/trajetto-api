@@ -16,7 +16,11 @@ import {
   profileAccessResponses,
   profileAccessSchemas,
 } from "./documentation/profile-access-documentation";
-import { ndjsonCursor, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
+import {
+  ndjsonCursor,
+  ndjsonList,
+  offsetMetaWith,
+} from "./documentation/ndjson";
 import { profileAccessListSearchMetaDoc } from "@/modules/profile-access/usecases/list-profile-access/list-profile-access-documentation";
 
 const createProfileAccessController = new CreateProfileAccessController();

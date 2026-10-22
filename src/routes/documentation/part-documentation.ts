@@ -20,7 +20,9 @@ const partSearchMetaDoc = searchMetaDoc(
     total: z
       .number()
       .int()
-      .describe("Peças da busca, sem o filtro de fornecedor (o total dos cartões)."),
+      .describe(
+        "Peças da busca, sem o filtro de fornecedor (o total dos cartões).",
+      ),
     withSupplier: z.number().int().describe("Das quais com fornecedor."),
     withoutSupplier: z.number().int().describe("Das quais sem fornecedor."),
     averagePrice: z

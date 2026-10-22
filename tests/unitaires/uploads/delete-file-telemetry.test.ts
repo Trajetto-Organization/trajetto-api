@@ -26,7 +26,8 @@ vi.mock("@/shared/logging/logger", async (importOriginal) =>
  *
  * It now answers whether the object is gone, and a failure names the key.
  */
-const KEY = "odometerPhotos/018fe000-0000-7000-8000-00000000000a/1727136000000-foto-ab12cd34.jpg";
+const KEY =
+  "odometerPhotos/018fe000-0000-7000-8000-00000000000a/1727136000000-foto-ab12cd34.jpg";
 
 describe("deleting from R2", () => {
   const saved = {
@@ -59,8 +60,7 @@ describe("deleting from R2", () => {
   });
 
   // Each error line as the JSON the log shipper receives.
-  const loggedLines = () =>
-    logged("error").map((line) => JSON.stringify(line));
+  const loggedLines = () => logged("error").map((line) => JSON.stringify(line));
 
   it("answers false when storage refuses, and names the key in the log", async () => {
     send.mockRejectedValue(

@@ -54,7 +54,9 @@ const LAST_REQUIRED_OFFSET = 1;
 // On one line: Prisma's messages open with a blank line and span several,
 // which leaves "adiada: " alone on the line anyone greps for.
 const errorMessage = (error: unknown) =>
-  (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim();
+  (error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
 
 /**
  * One DDL statement under the lock timeout. SET LOCAL lives and dies with this
@@ -63,7 +65,9 @@ const errorMessage = (error: unknown) =>
  */
 async function underLockTimeout(ddl: string): Promise<void> {
   await database.$transaction([
-    database.$executeRawUnsafe(`SET LOCAL lock_timeout = '${PARTITION_LOCK_TIMEOUT}'`),
+    database.$executeRawUnsafe(
+      `SET LOCAL lock_timeout = '${PARTITION_LOCK_TIMEOUT}'`,
+    ),
     database.$executeRawUnsafe(ddl),
   ]);
 }

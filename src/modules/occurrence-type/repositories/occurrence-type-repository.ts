@@ -66,7 +66,11 @@ function toListRow(
 ): OccurrenceTypeListRow {
   const { system_key, ...rest } = row;
 
-  return { ...rest, is_default: system_key != null, in_use: inUse.has(row.id!) };
+  return {
+    ...rest,
+    is_default: system_key != null,
+    in_use: inUse.has(row.id!),
+  };
 }
 
 class OccurrenceTypeRepository implements IOccurrenceTypeRepository {
@@ -234,7 +238,12 @@ class OccurrenceTypeRepository implements IOccurrenceTypeRepository {
     // NOT_DELIVERED types, never the platform's own (a rejected proof is not
     // something a driver files).
     const rows = await this.prisma.occurrenceType.findMany({
-      where: { businessId, is_active: true, is_system: false, category: "NOT_DELIVERED" },
+      where: {
+        businessId,
+        is_active: true,
+        is_system: false,
+        category: "NOT_DELIVERED",
+      },
       select: ACTIVE_TYPE_SELECT,
       orderBy: { name: "asc" },
     });
@@ -251,7 +260,12 @@ class OccurrenceTypeRepository implements IOccurrenceTypeRepository {
     businessId: string,
   ): Promise<DeliveredOccurrenceType[]> {
     const rows = await this.prisma.occurrenceType.findMany({
-      where: { businessId, is_active: true, is_system: false, category: "DELIVERED" },
+      where: {
+        businessId,
+        is_active: true,
+        is_system: false,
+        category: "DELIVERED",
+      },
       select: { ...ACTIVE_TYPE_SELECT, system_key: true },
       orderBy: [{ name: "asc" }, { id: "asc" }],
     });
@@ -267,9 +281,16 @@ class OccurrenceTypeRepository implements IOccurrenceTypeRepository {
       .sort((a, b) => Number(b.is_default) - Number(a.is_default));
   }
 
-  async listActivePauseTypes(businessId: string): Promise<PauseOccurrenceType[]> {
+  async listActivePauseTypes(
+    businessId: string,
+  ): Promise<PauseOccurrenceType[]> {
     const rows = await this.prisma.occurrenceType.findMany({
-      where: { businessId, is_active: true, category: "PAUSE", pause_kind: { not: null } },
+      where: {
+        businessId,
+        is_active: true,
+        category: "PAUSE",
+        pause_kind: { not: null },
+      },
       select: { id: true, name: true, pause_kind: true, system_key: true },
       orderBy: [{ name: "asc" }, { id: "asc" }],
     });
@@ -368,7 +389,9 @@ class OccurrenceTypeRepository implements IOccurrenceTypeRepository {
     const category = options?.keepOneActiveOf;
 
     if (!category) {
-      return this.prisma.occurrenceType.delete({ where: { id: occurrenceTypeId } });
+      return this.prisma.occurrenceType.delete({
+        where: { id: occurrenceTypeId },
+      });
     }
 
     return this.prisma.$transaction(async (tx) => {

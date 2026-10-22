@@ -38,10 +38,10 @@ class CreateFuelController {
       );
 
       if (replay) {
-        return reply
-          .header("Idempotency-Key", replayKey)
-          .status(201)
-          .send({ message: "Abastecimento criado com sucesso!", id: replay.id });
+        return reply.header("Idempotency-Key", replayKey).status(201).send({
+          message: "Abastecimento criado com sucesso!",
+          id: replay.id,
+        });
       }
     }
 

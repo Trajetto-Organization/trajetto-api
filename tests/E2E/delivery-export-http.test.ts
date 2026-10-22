@@ -164,7 +164,11 @@ beforeAll(async () => {
   await seedBusiness(BULK_CARRIER);
 
   await prisma.shipper.create({
-    data: { id: BULK_SHIPPER, name: "Embarcador grande", businessId: BULK_CARRIER },
+    data: {
+      id: BULK_SHIPPER,
+      name: "Embarcador grande",
+      businessId: BULK_CARRIER,
+    },
   });
 
   bulkToken = await seedUser(BULK_CARRIER, "BUSINESS_ADMIN");
@@ -412,8 +416,18 @@ describe("exporting the occurrences", () => {
         requires_authorization: true,
         form_version: 1,
         form_fields: [
-          { key: "volumes", label: "Volumes avariados", type: "number", required: true },
-          { key: "foto_ok", label: "Fotografou a avaria", type: "boolean", required: false },
+          {
+            key: "volumes",
+            label: "Volumes avariados",
+            type: "number",
+            required: true,
+          },
+          {
+            key: "foto_ok",
+            label: "Fotografou a avaria",
+            type: "boolean",
+            required: false,
+          },
         ],
         businessId: CARRIER,
       },

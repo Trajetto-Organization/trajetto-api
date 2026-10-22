@@ -53,7 +53,10 @@ function maintenanceDayKey(value: Date, timeZone: string): string {
 }
 
 /** The due day: the last maintenance's day plus the interval, end of month clamped. */
-function maintenanceDueKey(vehicle: MaintenanceVehicle, timeZone: string): string | null {
+function maintenanceDueKey(
+  vehicle: MaintenanceVehicle,
+  timeZone: string,
+): string | null {
   if (!vehicle.last_maintenance_date) return null;
 
   return shiftDateKeyByMonths(

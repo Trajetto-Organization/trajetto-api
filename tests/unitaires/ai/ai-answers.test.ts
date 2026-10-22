@@ -73,7 +73,11 @@ describe("the model's answer", () => {
         "fuel_level",
         '{ "nivel_estimado": "Três quartos", "confianca": "85", "observacao": null }',
       ),
-    ).toEqual({ nivel_estimado: "tres_quartos", confianca: 0.85, observacao: "" });
+    ).toEqual({
+      nivel_estimado: "tres_quartos",
+      confianca: 0.85,
+      observacao: "",
+    });
   });
 
   it("reads an odometer figure written as text, and never invents one", () => {
@@ -121,7 +125,9 @@ describe("the prompts", () => {
    */
   it("carry no informed or expected value", () => {
     for (const prompt of [odometerPrompt(), proofExtractionPrompt()]) {
-      expect(prompt).not.toMatch(/informou|informado|esperado e "|destinatario esperado/i);
+      expect(prompt).not.toMatch(
+        /informou|informado|esperado e "|destinatario esperado/i,
+      );
     }
 
     for (const [field, spec] of Object.entries(CHECKLIST_FIELDS)) {
@@ -146,12 +152,17 @@ describe("the prompts", () => {
       const start = prompt.lastIndexOf("{");
       const template = prompt.slice(start, prompt.indexOf("}", start) + 1);
 
-      return [...template.matchAll(/"([a-z_]+)"\s*:/g)].map((match) => match[1]).sort();
+      return [...template.matchAll(/"([a-z_]+)"\s*:/g)]
+        .map((match) => match[1])
+        .sort();
     };
 
     const expectations: Array<[string, keyof typeof ANSWER_JSON_SCHEMAS]> = [
       [odometerPrompt(), "odometer"],
-      [checklistFieldPrompt(CHECKLIST_FIELDS.fuel_level_adequate), "fuel_level"],
+      [
+        checklistFieldPrompt(CHECKLIST_FIELDS.fuel_level_adequate),
+        "fuel_level",
+      ],
       [checklistFieldPrompt(CHECKLIST_FIELDS.tires_condition), "condition"],
       [checklistFieldPrompt(CHECKLIST_FIELDS.headlights_working), "working"],
       [proofExtractionPrompt(), "proof"],
@@ -162,7 +173,9 @@ describe("the prompts", () => {
       // The reader's own declarations (OCR: fraud and signature not judged)
       // are not questions for a model.
       const zodKeys = Object.keys(answerSchemas[kind].shape)
-        .filter((key) => !(READER_DECLARED_KEYS as readonly string[]).includes(key))
+        .filter(
+          (key) => !(READER_DECLARED_KEYS as readonly string[]).includes(key),
+        )
         .sort();
 
       expect(shape(prompt), kind).toEqual(jsonKeys);

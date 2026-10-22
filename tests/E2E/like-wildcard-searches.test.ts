@@ -229,17 +229,17 @@ describe("a wildcard typed into a list search", () => {
     expect(await shipperNames("_")).toEqual(["Embarcador_Sul"]);
 
     const typeNames = async (term: string) =>
-      (await occurrenceTypes.listOccurrenceTypes({ ...page, search: term })).data.map(
-        (row) => row.name,
-      );
+      (
+        await occurrenceTypes.listOccurrenceTypes({ ...page, search: term })
+      ).data.map((row) => row.name);
 
     expect(await typeNames("50%")).toEqual(["Avaria 50% da carga"]);
     expect(await typeNames("%")).toEqual(["Avaria 50% da carga"]);
 
     const reasonNames = async (term: string) =>
-      (await reasons.listStatusChangeReasons({ ...page, search: term })).data.map(
-        (row) => row.name,
-      );
+      (
+        await reasons.listStatusChangeReasons({ ...page, search: term })
+      ).data.map((row) => row.name);
 
     expect(await reasonNames("50%")).toEqual(["Reentrega 50% cobrada"]);
     expect(await reasonNames("pedido_")).toEqual(["Pedido_cancelado"]);
@@ -258,7 +258,10 @@ describe("a wildcard typed into a list search", () => {
     expect(await fuelTypeDescriptions("50%")).toEqual(["Etanol 50% mistura"]);
     expect(await fuelTypeDescriptions("_")).toEqual(["Diesel_S10"]);
 
-    const fuelTypeList = await fuelTypes.listFuelTypes({ ...page, search: "50%" });
+    const fuelTypeList = await fuelTypes.listFuelTypes({
+      ...page,
+      search: "50%",
+    });
     expect(fuelTypeList.data.map((row) => row.description)).toEqual([
       "Etanol 50% mistura",
     ]);

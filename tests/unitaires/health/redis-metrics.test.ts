@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { parseRedisInfo, readRedisMetrics } from "@/shared/health/redis-metrics";
+import {
+  parseRedisInfo,
+  readRedisMetrics,
+} from "@/shared/health/redis-metrics";
 
 /**
  * Redis on /health/metrics (contract §32): the API survives Redis being down
@@ -61,7 +64,10 @@ describe("the Redis metrics", () => {
     const startedAt = Date.now();
 
     const metrics = await readRedisMetrics(
-      async () => ({ ping: () => new Promise(() => undefined), info: async () => INFO }),
+      async () => ({
+        ping: () => new Promise(() => undefined),
+        info: async () => INFO,
+      }),
       50,
     );
 

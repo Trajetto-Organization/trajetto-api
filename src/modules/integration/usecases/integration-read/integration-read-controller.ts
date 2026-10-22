@@ -52,9 +52,7 @@ class IntegrationReadController {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> => {
-    const result = await this.repository().listDeliveries(
-      this.scope(request),
-    );
+    const result = await this.repository().listDeliveries(this.scope(request));
 
     return reply.status(200).send(result);
   };

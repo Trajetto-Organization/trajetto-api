@@ -39,22 +39,25 @@ const PROVIDER_SECRETS = [
 ] as const;
 
 describe("the process logger and the provider credentials", () => {
-  it.each(PROVIDER_SECRETS)("censors %s at the top, one and two levels down", (key) => {
-    const { lines, sink } = capture();
-    const value = `secret-value-of-${key}`;
-    const log = buildLogger(sink);
+  it.each(PROVIDER_SECRETS)(
+    "censors %s at the top, one and two levels down",
+    (key) => {
+      const { lines, sink } = capture();
+      const value = `secret-value-of-${key}`;
+      const log = buildLogger(sink);
 
-    log.info({ [key]: value }, "top");
-    log.info({ env: { [key]: value } }, "nested");
-    log.info({ config: { provider: { [key]: value } } }, "deeper");
+      log.info({ [key]: value }, "top");
+      log.info({ env: { [key]: value } }, "nested");
+      log.info({ config: { provider: { [key]: value } } }, "deeper");
 
-    expect(lines).toHaveLength(3);
+      expect(lines).toHaveLength(3);
 
-    for (const line of lines) {
-      expect(line).not.toContain(value);
-      expect(line).toContain("[redacted]");
-    }
-  });
+      for (const line of lines) {
+        expect(line).not.toContain(value);
+        expect(line).toContain("[redacted]");
+      }
+    },
+  );
 
   it.each(["password", "refresh_token", "accessToken"])(
     "censors a %s field logged with a body or a user",
@@ -100,8 +103,13 @@ describe("the process logger and the provider credentials", () => {
   it("leaves ordinary fields alone", () => {
     const { lines, sink } = capture();
 
-    buildLogger(sink).info({ env: { RESEND_FROM_EMAIL_DOMAIN: "trajetto.com.br" } }, "x");
+    buildLogger(sink).info(
+      { env: { RESEND_FROM_EMAIL_DOMAIN: "trajetto.com.br" } },
+      "x",
+    );
 
-    expect(JSON.parse(lines[0]).env.RESEND_FROM_EMAIL_DOMAIN).toBe("trajetto.com.br");
+    expect(JSON.parse(lines[0]).env.RESEND_FROM_EMAIL_DOMAIN).toBe(
+      "trajetto.com.br",
+    );
   });
 });

@@ -5,7 +5,10 @@ import { env } from "@/env";
 import { uploadConfig } from "@/config/upload";
 import { senderDomain } from "@/shared/providers/mail-provider/message-id";
 import { TEMPLATE_LANGUAGE } from "@/shared/providers/whatsapp-provider/implementations/meta-cloud-api-provider";
-import { lastHeartbeatOutcome, type HeartbeatOutcome } from "./heartbeat-client";
+import {
+  lastHeartbeatOutcome,
+  type HeartbeatOutcome,
+} from "./heartbeat-client";
 // Side effect: registers "ProofSigningService" (@registry).
 import "@/shared/services/proof-signing/proof-signing-service";
 import type { ProofSigningService } from "@/shared/services/proof-signing/proof-signing-service";
@@ -22,7 +25,12 @@ import type { ProofSigningService } from "@/shared/services/proof-signing/proof-
  * heartbeat check, no internal host.
  */
 
-type ReadinessStatus = "ok" | "warning" | "error" | "not_configured" | "disabled";
+type ReadinessStatus =
+  | "ok"
+  | "warning"
+  | "error"
+  | "not_configured"
+  | "disabled";
 
 type ProviderKey =
   | "email"
@@ -115,7 +123,10 @@ const CERTIFICATE_WARN_DAYS = 30;
 /** A heartbeat older than this on the replica that answered says nothing. */
 const HEARTBEAT_FRESH_MS = 5 * 60 * 1000;
 
-function missing(env: ReadinessEnv, names: Array<keyof ReadinessEnv>): string[] {
+function missing(
+  env: ReadinessEnv,
+  names: Array<keyof ReadinessEnv>,
+): string[] {
   return names.filter((name) => !env[name]);
 }
 
@@ -151,10 +162,14 @@ function settle(readiness: ProviderReadiness): ProviderReadiness {
 function failureKind(error: unknown): "timeout" | "network" {
   const name = (error as { name?: string } | null)?.name;
 
-  return name === "TimeoutError" || name === "AbortError" ? "timeout" : "network";
+  return name === "TimeoutError" || name === "AbortError"
+    ? "timeout"
+    : "network";
 }
 
-async function timed<T>(run: () => Promise<T>): Promise<{ value: T; ms: number }> {
+async function timed<T>(
+  run: () => Promise<T>,
+): Promise<{ value: T; ms: number }> {
   const startedAt = performance.now();
   const value = await run();
 
@@ -242,7 +257,10 @@ async function checkEmail(deps: ReadinessDeps): Promise<ProviderReadiness> {
             ? `Chave aceita e domínio ${domain} verificado.`
             : `Domínio ${domain} com status "${entry.status ?? "desconhecido"}" no Resend: verifique o DNS (SPF/DKIM).`,
           warnings,
-          details: { sender_domain: domain, domain_status: entry.status ?? null },
+          details: {
+            sender_domain: domain,
+            domain_status: entry.status ?? null,
+          },
         }),
       );
     }
@@ -310,7 +328,11 @@ interface MetaError {
 async function checkTemplates(
   deps: ReadinessDeps,
   names: string[],
-): Promise<{ details: Record<string, DetailValue>; problems: string[]; warnings: string[] }> {
+): Promise<{
+  details: Record<string, DetailValue>;
+  problems: string[];
+  warnings: string[];
+}> {
   const { env } = deps;
   const details: Record<string, DetailValue> = {};
 
@@ -342,7 +364,9 @@ async function checkTemplates(
         signal: AbortSignal.timeout(deps.timeoutMs ?? PROBE_TIMEOUT_MS),
       });
       const body = (await readJson(response)) as
-        | ({ data?: Array<{ name?: string; status?: string; language?: string }> } & MetaError)
+        | ({
+            data?: Array<{ name?: string; status?: string; language?: string }>;
+          } & MetaError)
         | null;
 
       if (!response.ok) {
@@ -357,7 +381,8 @@ async function checkTemplates(
 
       const matches = (body?.data ?? []).filter((item) => item.name === name);
       const entry =
-        matches.find((item) => item.language === TEMPLATE_LANGUAGE) ?? matches[0];
+        matches.find((item) => item.language === TEMPLATE_LANGUAGE) ??
+        matches[0];
 
       if (!entry) {
         details[`template:${name}`] = "MISSING";
@@ -369,7 +394,9 @@ async function checkTemplates(
       details[`template:${name}`] = status;
 
       if (status !== "APPROVED") {
-        problems.push(`O template ${name} está ${status}, não APPROVED: os envios com ele falham.`);
+        problems.push(
+          `O template ${name} está ${status}, não APPROVED: os envios com ele falham.`,
+        );
       } else if (entry.language && entry.language !== TEMPLATE_LANGUAGE) {
         warnings.push(
           `O template ${name} está aprovado em ${entry.language}, mas os envios pedem ${TEMPLATE_LANGUAGE}.`,
@@ -391,7 +418,10 @@ async function checkTemplates(
 async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
   const { env } = deps;
   const label = "WhatsApp (Meta)";
-  const lacking = missing(env, ["META_WHATSAPP_ACCESS_TOKEN", "META_WHATSAPP_PHONE_NUMBER_ID"]);
+  const lacking = missing(env, [
+    "META_WHATSAPP_ACCESS_TOKEN",
+    "META_WHATSAPP_PHONE_NUMBER_ID",
+  ]);
   const webhookWarnings =
     env.META_WHATSAPP_APP_SECRET && env.META_WHATSAPP_WEBHOOK_VERIFY_TOKEN
       ? []
@@ -404,7 +434,8 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
       status: "not_configured",
       configured: false,
       missing_env: lacking,
-      message: "Nenhum WhatsApp sai: os envios falham com erro claro até as variáveis existirem.",
+      message:
+        "Nenhum WhatsApp sai: os envios falham com erro claro até as variáveis existirem.",
       warnings: webhookWarnings,
     });
   }
@@ -412,9 +443,10 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
   const timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
   const templates = [
     ...new Set(
-      [env.META_WHATSAPP_TEMPLATE_NAME, env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME].filter(
-        (name): name is string => Boolean(name),
-      ),
+      [
+        env.META_WHATSAPP_TEMPLATE_NAME,
+        env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME,
+      ].filter((name): name is string => Boolean(name)),
     ),
   ];
 
@@ -425,13 +457,19 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
           "?fields=display_phone_number,verified_name,quality_rating",
         {
           method: "GET",
-          headers: { Authorization: `Bearer ${env.META_WHATSAPP_ACCESS_TOKEN}` },
+          headers: {
+            Authorization: `Bearer ${env.META_WHATSAPP_ACCESS_TOKEN}`,
+          },
           signal: AbortSignal.timeout(timeoutMs),
         },
       ),
     );
     const body = (await readJson(response)) as
-      | ({ display_phone_number?: string; verified_name?: string; quality_rating?: string } & MetaError)
+      | ({
+          display_phone_number?: string;
+          verified_name?: string;
+          quality_rating?: string;
+        } & MetaError)
       | null;
 
     if (!response.ok) {
@@ -455,7 +493,9 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
     const warnings = [...checked.warnings, ...webhookWarnings];
 
     if (quality === "RED") {
-      warnings.push("Qualidade do número em RED na Meta: risco de limite de envio.");
+      warnings.push(
+        "Qualidade do número em RED na Meta: risco de limite de envio.",
+      );
     }
 
     return settle(
@@ -504,7 +544,10 @@ async function checkPush(deps: ReadinessDeps): Promise<ProviderReadiness> {
     const { value: response, ms } = await timed(() =>
       deps.fetch("https://exp.host/--/api/v2/push/getReceipts", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
         body: JSON.stringify({ ids: ["00000000-0000-0000-0000-000000000000"] }),
         signal: AbortSignal.timeout(timeoutMs),
       }),
@@ -573,7 +616,9 @@ async function checkStorage(deps: ReadinessDeps): Promise<ProviderReadiness> {
   const timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
 
   try {
-    const { ms } = await timed(() => deps.headBucket(AbortSignal.timeout(timeoutMs)));
+    const { ms } = await timed(() =>
+      deps.headBucket(AbortSignal.timeout(timeoutMs)),
+    );
 
     return base("storage", label, {
       reachable: true,
@@ -582,15 +627,19 @@ async function checkStorage(deps: ReadinessDeps): Promise<ProviderReadiness> {
       details: { storage: "r2", bucket: env.R2_BUCKET_NAME ?? null },
     });
   } catch (error) {
-    const status = (error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata
-      ?.httpStatusCode;
+    const status = (error as { $metadata?: { httpStatusCode?: number } } | null)
+      ?.$metadata?.httpStatusCode;
 
     if (status === 403 || status === 401) {
       return base("storage", label, {
         status: "error",
         reachable: true,
         message: `O R2 recusou a credencial (HTTP ${status}): confira R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY e a permissão no bucket.`,
-        details: { storage: "r2", bucket: env.R2_BUCKET_NAME ?? null, http_status: status },
+        details: {
+          storage: "r2",
+          bucket: env.R2_BUCKET_NAME ?? null,
+          http_status: status,
+        },
       });
     }
 
@@ -598,8 +647,13 @@ async function checkStorage(deps: ReadinessDeps): Promise<ProviderReadiness> {
       return base("storage", label, {
         status: "error",
         reachable: true,
-        message: "O bucket não existe nesta conta: confira R2_BUCKET_NAME e R2_ACCOUNT_ID.",
-        details: { storage: "r2", bucket: env.R2_BUCKET_NAME ?? null, http_status: status },
+        message:
+          "O bucket não existe nesta conta: confira R2_BUCKET_NAME e R2_ACCOUNT_ID.",
+        details: {
+          storage: "r2",
+          bucket: env.R2_BUCKET_NAME ?? null,
+          http_status: status,
+        },
       });
     }
 
@@ -627,7 +681,8 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
     return base("ai_ocr", label, {
       status: "disabled",
       configured: false,
-      message: "AI_PROVIDER=none: as leituras de odômetro, checklist e comprovante estão desligadas.",
+      message:
+        "AI_PROVIDER=none: as leituras de odômetro, checklist e comprovante estão desligadas.",
     });
   }
 
@@ -638,7 +693,8 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
       status: "not_configured",
       configured: false,
       missing_env: lacking,
-      message: "Sem URL ou token o serviço é tratado como desligado: os registros são marcados como não analisados.",
+      message:
+        "Sem URL ou token o serviço é tratado como desligado: os registros são marcados como não analisados.",
     });
   }
 
@@ -647,7 +703,10 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
 
   try {
     const { value: response, ms } = await timed(() =>
-      deps.fetch(`${url}/health`, { method: "GET", signal: AbortSignal.timeout(timeoutMs) }),
+      deps.fetch(`${url}/health`, {
+        method: "GET",
+        signal: AbortSignal.timeout(timeoutMs),
+      }),
     );
     const body = (await readJson(response)) as {
       ok?: boolean;
@@ -661,7 +720,8 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
         status: "warning",
         reachable: true,
         latency_ms: ms,
-        message: "O serviço está aquecendo os modelos; as leituras esperam na fila.",
+        message:
+          "O serviço está aquecendo os modelos; as leituras esperam na fila.",
       });
     }
 
@@ -677,11 +737,17 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
     // The token: the service checks it before anything else, so an empty
     // request with an unknown profile answers 401 for a wrong token and 400
     // for a right one, without reading a photo or taking the slot.
-    const tokenProbe = await deps.fetch(`${url}/v1/read?profile=readiness-probe`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${env.AI_LOCAL_TOKEN}`, "Content-Length": "0" },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    const tokenProbe = await deps.fetch(
+      `${url}/v1/read?profile=readiness-probe`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.AI_LOCAL_TOKEN}`,
+          "Content-Length": "0",
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    );
 
     const details = {
       engine: body?.engine ?? null,
@@ -693,7 +759,8 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
         status: "error",
         reachable: true,
         latency_ms: ms,
-        message: "O serviço recusou o token: AI_LOCAL_TOKEN tem de ser o mesmo AI_TOKEN do trajetto-ai.",
+        message:
+          "O serviço recusou o token: AI_LOCAL_TOKEN tem de ser o mesmo AI_TOKEN do trajetto-ai.",
         details,
       });
     }
@@ -723,7 +790,11 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
 function checkProofCertificate(deps: ReadinessDeps): ProviderReadiness {
   const label = "Certificado do comprovante (ICP-Brasil)";
   const health = deps.proofHealth();
-  const details = { state: health.state, not_after: health.not_after, days_left: health.days_left };
+  const details = {
+    state: health.state,
+    not_after: health.not_after,
+    days_left: health.days_left,
+  };
 
   switch (health.state) {
     case "READY":
@@ -731,8 +802,11 @@ function checkProofCertificate(deps: ReadinessDeps): ProviderReadiness {
         base("proof_certificate", label, {
           message: "Os comprovantes saem assinados.",
           warnings:
-            health.days_left !== null && health.days_left <= CERTIFICATE_WARN_DAYS
-              ? [`O certificado vence em ${health.days_left} dia(s): renove o A1 e troque PROOF_SIGNING_PFX_*.`]
+            health.days_left !== null &&
+            health.days_left <= CERTIFICATE_WARN_DAYS
+              ? [
+                  `O certificado vence em ${health.days_left} dia(s): renove o A1 e troque PROOF_SIGNING_PFX_*.`,
+                ]
               : [],
           details,
         }),
@@ -742,19 +816,22 @@ function checkProofCertificate(deps: ReadinessDeps): ProviderReadiness {
         status: "not_configured",
         configured: false,
         missing_env: ["PROOF_SIGNING_PFX_BASE64", "PROOF_SIGNING_PFX_PASSWORD"],
-        message: "Sem certificado: os comprovantes saem sem assinatura digital (e dizem isso).",
+        message:
+          "Sem certificado: os comprovantes saem sem assinatura digital (e dizem isso).",
         details,
       });
     case "DISABLED":
       return base("proof_certificate", label, {
         status: "disabled",
-        message: "PROOF_SIGNING_DISABLED ligado: os comprovantes saem sem assinatura digital.",
+        message:
+          "PROOF_SIGNING_DISABLED ligado: os comprovantes saem sem assinatura digital.",
         details,
       });
     case "EXPIRED":
       return base("proof_certificate", label, {
         status: "error",
-        message: "Certificado vencido: os comprovantes saem sem assinatura. Renove o A1.",
+        message:
+          "Certificado vencido: os comprovantes saem sem assinatura. Renove o A1.",
         details,
       });
     default:
@@ -829,7 +906,9 @@ function checkHeartbeat(deps: ReadinessDeps): ProviderReadiness {
 // ---------------------------------------------------------------------------
 
 /** Every provider, probed side by side; one failing never hides another. */
-async function checkProviders(deps: ReadinessDeps): Promise<ProviderReadinessReport> {
+async function checkProviders(
+  deps: ReadinessDeps,
+): Promise<ProviderReadinessReport> {
   const now = deps.now ?? (() => new Date());
 
   const providers = await Promise.all([
@@ -862,9 +941,12 @@ function productionDeps(): ReadinessDeps {
         region: "auto",
       });
 
-      await storageClient.send(new HeadBucketCommand({ Bucket: uploadConfig.r2.bucket }), {
-        abortSignal: signal,
-      });
+      await storageClient.send(
+        new HeadBucketCommand({ Bucket: uploadConfig.r2.bucket }),
+        {
+          abortSignal: signal,
+        },
+      );
     },
     proofHealth: () =>
       container.resolve<ProofSigningService>("ProofSigningService").health(),

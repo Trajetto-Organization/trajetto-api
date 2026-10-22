@@ -254,14 +254,26 @@ describe("notifications", () => {
     });
 
     // It used to be 403 "Acesso não autorizado", which confirmed the id.
-    const read = await send("admin", "PATCH", `/notification/${notification.id}/read`);
-    const missing = await send("admin", "PATCH", `/notification/${MISSING}/read`);
+    const read = await send(
+      "admin",
+      "PATCH",
+      `/notification/${notification.id}/read`,
+    );
+    const missing = await send(
+      "admin",
+      "PATCH",
+      `/notification/${MISSING}/read`,
+    );
 
     expectRefusal(read, 404, "NOTIFICATION_NOT_FOUND");
     expectRefusal(missing, 404, "NOTIFICATION_NOT_FOUND");
     expect(read.json().message).toBe(missing.json().message);
 
-    const removed = await send("admin", "DELETE", `/notification/${notification.id}`);
+    const removed = await send(
+      "admin",
+      "DELETE",
+      `/notification/${notification.id}`,
+    );
 
     expectRefusal(removed, 404, "NOTIFICATION_NOT_FOUND");
 
@@ -374,7 +386,11 @@ describe("the user's own account", () => {
 
   it("answers an unknown e-mail confirmation token with 400 AUTH_TOKEN_INVALID", async () => {
     expectRefusal(
-      await send(null, "POST", `/user/email-verification?token=${randomUUID()}`),
+      await send(
+        null,
+        "POST",
+        `/user/email-verification?token=${randomUUID()}`,
+      ),
       400,
       "AUTH_TOKEN_INVALID",
     );
@@ -384,7 +400,12 @@ describe("the user's own account", () => {
 describe("kanban card assignee", () => {
   it("answers a manager naming another company's user like a missing one: 400 ASSIGNED_USER_NOT_FOUND", async () => {
     const column = await prisma.kanbanColumn.create({
-      data: { title: "A fazer", color: "#000000", position: 0, businessId: CARRIER },
+      data: {
+        title: "A fazer",
+        color: "#000000",
+        position: 0,
+        businessId: CARRIER,
+      },
     });
 
     const card = (assignedUserId: string) => ({
@@ -396,8 +417,18 @@ describe("kanban card assignee", () => {
       assignedUserId,
     });
 
-    const foreign = await send("admin", "POST", "/kanban/card/create", card(userIds.otherAdmin));
-    const missing = await send("admin", "POST", "/kanban/card/create", card(MISSING));
+    const foreign = await send(
+      "admin",
+      "POST",
+      "/kanban/card/create",
+      card(userIds.otherAdmin),
+    );
+    const missing = await send(
+      "admin",
+      "POST",
+      "/kanban/card/create",
+      card(MISSING),
+    );
 
     expectRefusal(foreign, 400, "ASSIGNED_USER_NOT_FOUND");
     expectRefusal(missing, 400, "ASSIGNED_USER_NOT_FOUND");
@@ -405,12 +436,19 @@ describe("kanban card assignee", () => {
 
     // The MASTER sees every company, so it is told the real reason.
     expectRefusal(
-      await send("master", "POST", "/kanban/card/create", card(userIds.otherAdmin)),
+      await send(
+        "master",
+        "POST",
+        "/kanban/card/create",
+        card(userIds.otherAdmin),
+      ),
       400,
       "USER_NOT_IN_BUSINESS",
     );
 
-    expect(await prisma.kanbanCard.count({ where: { columnId: column.id } })).toBe(0);
+    expect(
+      await prisma.kanbanCard.count({ where: { columnId: column.id } }),
+    ).toBe(0);
   });
 });
 
@@ -492,8 +530,18 @@ describe("user links to another company's driver or access profile", () => {
     // It used to be 403 DRIVER_NOT_IN_BUSINESS, which confirmed the driver
     // exists at another carrier.
     expectSameAnswer(
-      await send("admin", "POST", "/user/create-user", newUser({ driverId: OTHER_DRIVER })),
-      await send("admin", "POST", "/user/create-user", newUser({ driverId: MISSING })),
+      await send(
+        "admin",
+        "POST",
+        "/user/create-user",
+        newUser({ driverId: OTHER_DRIVER }),
+      ),
+      await send(
+        "admin",
+        "POST",
+        "/user/create-user",
+        newUser({ driverId: MISSING }),
+      ),
       400,
       "DRIVER_NOT_FOUND",
     );
@@ -502,8 +550,18 @@ describe("user links to another company's driver or access profile", () => {
   it("create-user answers another company's access profile like a missing one", async () => {
     // It used to be 403 PROFILE_ACCESS_NOT_IN_BUSINESS.
     expectSameAnswer(
-      await send("admin", "POST", "/user/create-user", newUser({ profileAccessId: OTHER_PROFILE })),
-      await send("admin", "POST", "/user/create-user", newUser({ profileAccessId: MISSING })),
+      await send(
+        "admin",
+        "POST",
+        "/user/create-user",
+        newUser({ profileAccessId: OTHER_PROFILE }),
+      ),
+      await send(
+        "admin",
+        "POST",
+        "/user/create-user",
+        newUser({ profileAccessId: MISSING }),
+      ),
       400,
       "PROFILE_ACCESS_NOT_FOUND",
     );
@@ -513,8 +571,14 @@ describe("user links to another company's driver or access profile", () => {
     const url = `/user/update-user/${userIds.member}`;
 
     expectSameAnswer(
-      await send("admin", "PATCH", url, { driverId: OTHER_DRIVER, profileAccessId: null }),
-      await send("admin", "PATCH", url, { driverId: MISSING, profileAccessId: null }),
+      await send("admin", "PATCH", url, {
+        driverId: OTHER_DRIVER,
+        profileAccessId: null,
+      }),
+      await send("admin", "PATCH", url, {
+        driverId: MISSING,
+        profileAccessId: null,
+      }),
       400,
       "DRIVER_NOT_FOUND",
     );
@@ -579,8 +643,18 @@ describe("user links to another company's driver or access profile", () => {
     };
 
     expectSameAnswer(
-      await send("admin", "POST", "/permission/create-permission", body(OTHER_PROFILE)),
-      await send("admin", "POST", "/permission/create-permission", body(MISSING)),
+      await send(
+        "admin",
+        "POST",
+        "/permission/create-permission",
+        body(OTHER_PROFILE),
+      ),
+      await send(
+        "admin",
+        "POST",
+        "/permission/create-permission",
+        body(MISSING),
+      ),
       400,
       "PROFILE_ACCESS_NOT_FOUND",
     );
@@ -599,8 +673,18 @@ describe("user links to another company's driver or access profile", () => {
     // in the body, so 400; the permission in the path stays a 404 matter.
     expectSameAnswer(
       // The edit names no company (decision 16.100): the body without businessId.
-      await send("admin", "PATCH", `/permission/update-permission/${permission.id}`, editBody(OTHER_PROFILE)),
-      await send("admin", "PATCH", `/permission/update-permission/${permission.id}`, editBody(MISSING)),
+      await send(
+        "admin",
+        "PATCH",
+        `/permission/update-permission/${permission.id}`,
+        editBody(OTHER_PROFILE),
+      ),
+      await send(
+        "admin",
+        "PATCH",
+        `/permission/update-permission/${permission.id}`,
+        editBody(MISSING),
+      ),
       400,
       "PROFILE_ACCESS_NOT_FOUND",
     );
@@ -612,17 +696,33 @@ describe("user links to another company's driver or access profile", () => {
     });
 
     expectSameAnswer(
-      await send("admin", "POST", "/permission/bulk-configure-permissions", bulk(OTHER_PROFILE)),
-      await send("admin", "POST", "/permission/bulk-configure-permissions", bulk(MISSING)),
+      await send(
+        "admin",
+        "POST",
+        "/permission/bulk-configure-permissions",
+        bulk(OTHER_PROFILE),
+      ),
+      await send(
+        "admin",
+        "POST",
+        "/permission/bulk-configure-permissions",
+        bulk(MISSING),
+      ),
       400,
       "PROFILE_ACCESS_NOT_FOUND",
     );
 
     expect(
-      await prisma.permission.count({ where: { profileAccessId: OTHER_PROFILE } }),
+      await prisma.permission.count({
+        where: { profileAccessId: OTHER_PROFILE },
+      }),
     ).toBe(0);
     expect(
-      (await prisma.permission.findUniqueOrThrow({ where: { id: permission.id } })).profileAccessId,
+      (
+        await prisma.permission.findUniqueOrThrow({
+          where: { id: permission.id },
+        })
+      ).profileAccessId,
     ).toBe(OWN_PROFILE);
   });
 });

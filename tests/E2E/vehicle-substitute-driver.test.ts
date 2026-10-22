@@ -39,7 +39,9 @@ let routeId = "";
 
 const storedKeys: string[] = [];
 
-async function storedPhoto(uploadType: "odometerPhotos" | "checklistPhotos"): Promise<string> {
+async function storedPhoto(
+  uploadType: "odometerPhotos" | "checklistPhotos",
+): Promise<string> {
   const key = `${uploadType}/${BUSINESS}/${Date.now()}-test-${randomUUID()}.jpg`;
 
   await uploads.putObject(key, fakeJpeg(), "image/jpeg");
@@ -49,7 +51,9 @@ async function storedPhoto(uploadType: "odometerPhotos" | "checklistPhotos"): Pr
 }
 
 async function currentMileage(): Promise<number> {
-  const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: seed.vehicleId } });
+  const vehicle = await prisma.vehicle.findUniqueOrThrow({
+    where: { id: seed.vehicleId },
+  });
 
   return vehicle.current_mileage;
 }
@@ -81,10 +85,12 @@ async function fuel() {
 
 async function checklist() {
   const photos = await Promise.all(
-    ["current_mileage", "fuel_level_adequate", "tires_condition"].map(async (fieldName) => ({
-      key: await storedPhoto("checklistPhotos"),
-      fieldName,
-    })),
+    ["current_mileage", "fuel_level_adequate", "tires_condition"].map(
+      async (fieldName) => ({
+        key: await storedPhoto("checklistPhotos"),
+        fieldName,
+      }),
+    ),
   );
 
   return app.inject({
@@ -195,7 +201,9 @@ beforeAll(async () => {
   });
 
   substituteId = substitute.id;
-  substituteToken = (await seedUser(prisma, BUSINESS, "BUSINESS_USER", substitute.id)).token;
+  substituteToken = (
+    await seedUser(prisma, BUSINESS, "BUSINESS_USER", substitute.id)
+  ).token;
 
   ({ app } = await import("@/http"));
   await app.ready();
@@ -222,7 +230,9 @@ function expectNotAssigned(response: {
 }) {
   expect(response.statusCode).toBe(403);
   expect(response.json().code).toBe("VEHICLE_NOT_ASSIGNED_TO_DRIVER");
-  expect(response.headers["x-error-code"]).toBe("VEHICLE_NOT_ASSIGNED_TO_DRIVER");
+  expect(response.headers["x-error-code"]).toBe(
+    "VEHICLE_NOT_ASSIGNED_TO_DRIVER",
+  );
   expect(response.json().message).toContain("não está atribuído a você");
 }
 

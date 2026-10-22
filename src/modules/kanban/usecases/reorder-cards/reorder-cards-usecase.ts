@@ -35,7 +35,9 @@ class ReorderKanbanCardsUseCase {
     // cards. `null` is a column that does not exist.
     const columnBusiness = new Map<string, string | null>();
 
-    const businessOfColumn = async (columnId: string): Promise<string | null> => {
+    const businessOfColumn = async (
+      columnId: string,
+    ): Promise<string | null> => {
       if (columnBusiness.has(columnId)) {
         return columnBusiness.get(columnId) ?? null;
       }
@@ -56,7 +58,9 @@ class ReorderKanbanCardsUseCase {
     // on another company's board answers as a missing one (decision 11.3).
     for (const cardData of data.cards) {
       const card = await this.kanban.findCardById(cardData.id);
-      const sourceBusinessId = card ? await businessOfColumn(card.columnId) : null;
+      const sourceBusinessId = card
+        ? await businessOfColumn(card.columnId)
+        : null;
 
       if (!visible(sourceBusinessId)) {
         throw new KanbanCardNotFoundError();

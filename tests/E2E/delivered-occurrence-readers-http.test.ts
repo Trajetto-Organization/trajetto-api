@@ -9,7 +9,11 @@ import type { UploadService } from "@/shared/services/upload-service";
 import { ensureDefaultOccurrenceTypes } from "@/shared/delivery/default-occurrence-types";
 import { IntegrationRepository } from "@/modules/integration/repositories/integration-repository";
 
-import { fakeJpeg, seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
+import {
+  fakeJpeg,
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
 
 /**
  * The readers of a DELIVERED occurrence (decision 14.3; design §4.5, §7.3,
@@ -47,7 +51,9 @@ async function storedPhoto(businessId = CARRIER): Promise<string> {
   return key;
 }
 
-async function deliveryInTransit(recipient = "Mercado Central"): Promise<string> {
+async function deliveryInTransit(
+  recipient = "Mercado Central",
+): Promise<string> {
   const delivery = await prisma.delivery.create({
     data: {
       recipient_name: recipient,
@@ -73,11 +79,18 @@ const report = (deliveryId: string, body: Record<string, unknown>) =>
   });
 
 const get = (url: string, token: string) =>
-  app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
+  app.inject({
+    method: "GET",
+    url,
+    headers: { authorization: `Bearer ${token}` },
+  });
 
 /** The NDJSON feed: the meta line, then one row per occurrence. */
 async function feed(query: string, token = carrier.managerToken) {
-  const response = await get(`/delivery/list-occurrences?page=1&pageSize=50&${query}`, token);
+  const response = await get(
+    `/delivery/list-occurrences?page=1&pageSize=50&${query}`,
+    token,
+  );
 
   expect(response.statusCode, response.body).toBe(200);
 
@@ -90,14 +103,22 @@ async function feed(query: string, token = carrier.managerToken) {
 }
 
 beforeAll(async () => {
-  carrier = await seedFleetDriver(prisma, { businessId: CARRIER, cnpj: "55666889000353" });
-  other = await seedFleetDriver(prisma, { businessId: OTHER, cnpj: "55666889000434" });
+  carrier = await seedFleetDriver(prisma, {
+    businessId: CARRIER,
+    cnpj: "55666889000353",
+  });
+  other = await seedFleetDriver(prisma, {
+    businessId: OTHER,
+    cnpj: "55666889000434",
+  });
 
   await ensureDefaultOccurrenceTypes(prisma, CARRIER);
   await ensureDefaultOccurrenceTypes(prisma, OTHER);
 
   shipperId = (
-    await prisma.shipper.create({ data: { name: "Embarcador", businessId: CARRIER } })
+    await prisma.shipper.create({
+      data: { name: "Embarcador", businessId: CARRIER },
+    })
   ).id;
 
   towerTypeId = (
@@ -114,7 +135,12 @@ beforeAll(async () => {
 
   defaultTypeId = (
     await prisma.occurrenceType.findUniqueOrThrow({
-      where: { businessId_system_key: { businessId: CARRIER, system_key: "delivered_default" } },
+      where: {
+        businessId_system_key: {
+          businessId: CARRIER,
+          system_key: "delivered_default",
+        },
+      },
     })
   ).id;
 
@@ -154,7 +180,10 @@ describe("a delivery request in the tower's queue", () => {
   });
 
   it("shows the category, the signed receipt and signature, and who received", async () => {
-    const queue = await get("/delivery/occurrence-authorizations", carrier.managerToken);
+    const queue = await get(
+      "/delivery/occurrence-authorizations",
+      carrier.managerToken,
+    );
 
     expect(queue.statusCode, queue.body).toBe(200);
 
@@ -162,7 +191,10 @@ describe("a delivery request in the tower's queue", () => {
       (entry) => entry.id === occurrenceId,
     );
 
-    expect(row).toMatchObject({ category: "DELIVERED", received_by: "Porteiro Zé" });
+    expect(row).toMatchObject({
+      category: "DELIVERED",
+      received_by: "Porteiro Zé",
+    });
     // Signed URLs, never the raw storage key.
     expect(row?.receipt_photo_url).toEqual(expect.stringContaining(receipt));
     expect(row?.receipt_photo_url).not.toBe(receipt);
@@ -171,11 +203,16 @@ describe("a delivery request in the tower's queue", () => {
   });
 
   it("is invisible to another company, and refused to a driver", async () => {
-    const own = await get("/delivery/occurrence-authorizations", other.managerToken);
+    const own = await get(
+      "/delivery/occurrence-authorizations",
+      other.managerToken,
+    );
 
     expect(own.statusCode).toBe(200);
     expect(
-      (own.json().data as Array<{ id: string }>).some((entry) => entry.id === occurrenceId),
+      (own.json().data as Array<{ id: string }>).some(
+        (entry) => entry.id === occurrenceId,
+      ),
     ).toBe(false);
 
     const peeking = await get(
@@ -185,7 +222,10 @@ describe("a delivery request in the tower's queue", () => {
 
     expect(peeking.statusCode).toBe(403);
 
-    const driver = await get("/delivery/occurrence-authorizations", carrier.driverToken);
+    const driver = await get(
+      "/delivery/occurrence-authorizations",
+      carrier.driverToken,
+    );
 
     expect(driver.statusCode).toBe(403);
     expect(driver.json().code).toBe("PERMISSION_DENIED");
@@ -203,7 +243,9 @@ describe("a delivery request in the tower's queue", () => {
 
     // The OCCURRENCE event of the request still exists, now APPROVED.
     expect(
-      await prisma.deliveryEvent.count({ where: { deliveryId, type: "OCCURRENCE" } }),
+      await prisma.deliveryEvent.count({
+        where: { deliveryId, type: "OCCURRENCE" },
+      }),
     ).toBe(1);
 
     const page = await new IntegrationRepository().listEvents({
@@ -261,7 +303,9 @@ describe("the Ocorrências feed with proofs in it", () => {
   it("filters by category and counts the delivered apart", async () => {
     const delivered = await feed("category=DELIVERED");
 
-    expect(delivered.rows.every((row) => row.category === "DELIVERED")).toBe(true);
+    expect(delivered.rows.every((row) => row.category === "DELIVERED")).toBe(
+      true,
+    );
     expect(delivered.rows.map((row) => row.id)).toContain(proofId);
     expect(delivered.meta.searchMeta.delivered).toBe(delivered.rows.length);
 
@@ -273,9 +317,12 @@ describe("the Ocorrências feed with proofs in it", () => {
     expect(problems.rows.some((row) => row.id === proofId)).toBe(false);
 
     const facet = Object.fromEntries(
-      (problems.meta.searchMeta.facets.category as Array<{ value: string; count: number }>).map(
-        (option) => [option.value, option.count],
-      ),
+      (
+        problems.meta.searchMeta.facets.category as Array<{
+          value: string;
+          count: number;
+        }>
+      ).map((option) => [option.value, option.count]),
     );
 
     expect(facet.DELIVERED).toBe(delivered.rows.length);

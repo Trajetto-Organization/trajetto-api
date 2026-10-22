@@ -220,8 +220,12 @@ describe("a wildcard typed into a duplicate check", () => {
     ).toBeNull();
 
     // Case still does not matter, and a real underscore still matches.
-    expect(await users.findUserByEmail("JOHN.PROBE@exemplo.com.br")).not.toBeNull();
-    expect(await users.findUserByEmail("mary_ann@exemplo.com.br")).not.toBeNull();
+    expect(
+      await users.findUserByEmail("JOHN.PROBE@exemplo.com.br"),
+    ).not.toBeNull();
+    expect(
+      await users.findUserByEmail("mary_ann@exemplo.com.br"),
+    ).not.toBeNull();
     expect(
       await users.findUserByEmailAndBusinessId("Mary_Ann@exemplo.com.br", A),
     ).not.toBeNull();
@@ -230,25 +234,38 @@ describe("a wildcard typed into a duplicate check", () => {
   it("does not match plates, RENAVAMs, branches or companies by pattern", async () => {
     expect(await vehicles.findVehicleByLicensePlate("ABC%", A)).toBeNull();
     expect(await vehicles.findVehicleByRenavam("9876543210_", A)).toBeNull();
-    expect(await vehicles.findVehicleByLicensePlate("abc1d23", A)).not.toBeNull();
+    expect(
+      await vehicles.findVehicleByLicensePlate("abc1d23", A),
+    ).not.toBeNull();
 
     expect(await branches.findBranchByCorporateReason(A, "Filial%")).toBeNull();
     expect(
       await branches.findBranchByCorporateReason(A, "filial_curinga ltda"),
     ).not.toBeNull();
 
-    expect(await businesses.findBusinessByCorporateReason("Transportadora Curinga _")).toBeNull();
+    expect(
+      await businesses.findBusinessByCorporateReason(
+        "Transportadora Curinga _",
+      ),
+    ).toBeNull();
     expect(await businesses.findBusinessByErpcode("ERP%")).toBeNull();
     expect(await businesses.findBusinessByEmail("contato%")).toBeNull();
     expect(await businesses.findBusinessByErpcode("erp_a1")).not.toBeNull();
   });
 
   it("does not match a tenant's catalogue entries by pattern", async () => {
-    expect(await suppliers.findSupplierByNameAndBusinessId("Fornecedor%", A)).toBeNull();
-    expect(await suppliers.findSupplierByNameAndBusinessId("%", A)).toBeNull();
-    expect(await suppliers.findSupplierByEmailAndBusinessId("compras%", A)).toBeNull();
     expect(
-      await suppliers.findSupplierByEmailAndBusinessId("COMPRAS_A@fornecedor.com.br", A),
+      await suppliers.findSupplierByNameAndBusinessId("Fornecedor%", A),
+    ).toBeNull();
+    expect(await suppliers.findSupplierByNameAndBusinessId("%", A)).toBeNull();
+    expect(
+      await suppliers.findSupplierByEmailAndBusinessId("compras%", A),
+    ).toBeNull();
+    expect(
+      await suppliers.findSupplierByEmailAndBusinessId(
+        "COMPRAS_A@fornecedor.com.br",
+        A,
+      ),
     ).not.toBeNull();
     expect(
       await suppliers.findSupplierByNameAndBusinessId("fornecedor_curinga", A),
@@ -258,15 +275,22 @@ describe("a wildcard typed into a duplicate check", () => {
     expect(await parts.findPartByDescription("FILTRO_OLEO", A)).not.toBeNull();
 
     expect(await fuelTypes.findFuelTypeByDescription("Diesel%", A)).toBeNull();
-    expect(await fuelTypes.findFuelTypeByDescription("diesel_s10", A)).not.toBeNull();
+    expect(
+      await fuelTypes.findFuelTypeByDescription("diesel_s10", A),
+    ).not.toBeNull();
 
-    expect(await vehicleTypes.findVehicleTypeByDescription("Truck%", A)).toBeNull();
+    expect(
+      await vehicleTypes.findVehicleTypeByDescription("Truck%", A),
+    ).toBeNull();
     expect(
       await vehicleTypes.findVehicleTypeByDescription("truck_3eixos", A),
     ).not.toBeNull();
 
     expect(
-      await profiles.findProfileAccessByNameAndBusiness({ name: "G%", businessId: A }),
+      await profiles.findProfileAccessByNameAndBusiness({
+        name: "G%",
+        businessId: A,
+      }),
     ).toBeNull();
     expect(
       await profiles.findProfileAccessByNameAndBusiness({
@@ -275,17 +299,23 @@ describe("a wildcard typed into a duplicate check", () => {
       }),
     ).not.toBeNull();
 
-    expect(await occurrenceTypes.findOccurrenceTypeByName(A, "Cliente%")).toBeNull();
+    expect(
+      await occurrenceTypes.findOccurrenceTypeByName(A, "Cliente%"),
+    ).toBeNull();
     expect(
       await occurrenceTypes.findOccurrenceTypeByName(A, "cliente_ausente"),
     ).not.toBeNull();
 
     expect(await shippers.findShipperByName(A, "Embarcador%")).toBeNull();
-    expect(await shippers.findShipperByName(A, "embarcador_curinga")).not.toBeNull();
+    expect(
+      await shippers.findShipperByName(A, "embarcador_curinga"),
+    ).not.toBeNull();
   });
 
   it("does not collapse two quote requests by pattern", async () => {
     expect(await quotes.findQuoteByEmail("%@exemplo.com.br")).toBeNull();
-    expect(await quotes.findQuoteByEmail("COTACAO_A@exemplo.com.br")).not.toBeNull();
+    expect(
+      await quotes.findQuoteByEmail("COTACAO_A@exemplo.com.br"),
+    ).not.toBeNull();
   });
 });

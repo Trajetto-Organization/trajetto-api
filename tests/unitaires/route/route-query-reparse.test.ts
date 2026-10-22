@@ -20,16 +20,28 @@ describe("route querystrings survive the controller's second parse", () => {
   it("keeps includeUnscheduled true and false through both parses", () => {
     const base = { scheduledFrom: "2026-10-06", scheduledTo: "2026-10-07" };
 
-    expect(twice(listUnroutedDeliveriesSchema, { ...base, includeUnscheduled: "true" }))
-      .toMatchObject({ includeUnscheduled: true });
-    expect(twice(listUnroutedDeliveriesSchema, { ...base, includeUnscheduled: "false" }))
-      .toMatchObject({ includeUnscheduled: false });
-    expect(twice(listUnroutedDeliveriesSchema, {}).includeUnscheduled).toBeUndefined();
+    expect(
+      twice(listUnroutedDeliveriesSchema, {
+        ...base,
+        includeUnscheduled: "true",
+      }),
+    ).toMatchObject({ includeUnscheduled: true });
+    expect(
+      twice(listUnroutedDeliveriesSchema, {
+        ...base,
+        includeUnscheduled: "false",
+      }),
+    ).toMatchObject({ includeUnscheduled: false });
+    expect(
+      twice(listUnroutedDeliveriesSchema, {}).includeUnscheduled,
+    ).toBeUndefined();
   });
 
   it("still refuses anything but true or false on the wire", () => {
-    expect(listUnroutedDeliveriesSchema.safeParse({ includeUnscheduled: "yes" }).success)
-      .toBe(false);
+    expect(
+      listUnroutedDeliveriesSchema.safeParse({ includeUnscheduled: "yes" })
+        .success,
+    ).toBe(false);
   });
 
   it("keeps the dates, lists and pagination of the picker stable", () => {

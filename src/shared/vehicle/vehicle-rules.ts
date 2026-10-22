@@ -5,12 +5,7 @@ import type { VehicleStatusCounts } from "@/modules/vehicle/dtos/vehicle-dto";
  * repositories tally against, so a status added to the enum without a decision
  * about the cards fails to compile rather than silently vanishing from them.
  */
-const VEHICLE_STATUSES = [
-  "ACTIVE",
-  "INACTIVE",
-  "BLOCKED",
-  "IN_ROUTE",
-] as const;
+const VEHICLE_STATUSES = ["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"] as const;
 
 type VehicleStatus = (typeof VEHICLE_STATUSES)[number];
 

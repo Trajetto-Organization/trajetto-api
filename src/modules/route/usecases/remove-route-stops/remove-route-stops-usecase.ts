@@ -74,10 +74,15 @@ class RemoveRouteStopsUseCase {
     }
 
     try {
-      const result = await this.route.removeStops(routeId, businessId, stopIds, {
-        expectedPlanVersion,
-        actorId: userId,
-      });
+      const result = await this.route.removeStops(
+        routeId,
+        businessId,
+        stopIds,
+        {
+          expectedPlanVersion,
+          actorId: userId,
+        },
+      );
 
       if (result.removed.length === 0) return result;
 

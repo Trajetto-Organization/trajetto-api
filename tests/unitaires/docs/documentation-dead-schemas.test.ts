@@ -25,7 +25,12 @@ function sources(dir: string, out: Array<[string, string]> = []) {
 
 /** Top-level keys of each `const name = {` … `};` object in a file. */
 function documentedEntries(source: string) {
-  const entries: Array<{ object: string; key: string; start: number; end: number }> = [];
+  const entries: Array<{
+    object: string;
+    key: string;
+    start: number;
+    end: number;
+  }> = [];
   const objects = /^(?:export )?const (\w+)\s*(?::[^=]+)?=\s*\{\s*$/gm;
 
   for (const match of source.matchAll(objects)) {
@@ -41,7 +46,8 @@ function documentedEntries(source: string) {
       [...body.matchAll(/^ {2}(\w+)\s*(?:[:,(]|\r?$)/gm)].map(([, key]) => key),
     );
 
-    for (const key of keys) entries.push({ object, key, start: match.index!, end });
+    for (const key of keys)
+      entries.push({ object, key, start: match.index!, end });
   }
 
   return entries;
@@ -56,7 +62,9 @@ function deadEntries(files: Array<[string, string]>, docFiles: string[]) {
     for (const { object, key, start, end } of documentedEntries(own)) {
       const read = new RegExp(`\\.${key}\\b`);
       const used = files.some(([file, text]) =>
-        file === docFile ? read.test(text.slice(0, start) + text.slice(end)) : read.test(text),
+        file === docFile
+          ? read.test(text.slice(0, start) + text.slice(end))
+          : read.test(text),
       );
 
       if (!used) dead.push(`${path.basename(docFile)} ${object}.${key}`);
@@ -71,7 +79,10 @@ describe("the documentation schemas", () => {
     const files = sources(SRC);
     const docFiles = files
       .map(([file]) => file)
-      .filter((file) => path.dirname(file) === DOCS && file.endsWith("-documentation.ts"));
+      .filter(
+        (file) =>
+          path.dirname(file) === DOCS && file.endsWith("-documentation.ts"),
+      );
 
     expect(docFiles.length).toBeGreaterThan(20);
     expect(deadEntries(files, docFiles)).toEqual([]);
@@ -89,9 +100,14 @@ describe("the documentation schemas", () => {
           "};",
         ].join("\n"),
       ],
-      [path.join(SRC, "routes", "probe-routes.ts"), "response: { 200: probeResponses.read }"],
+      [
+        path.join(SRC, "routes", "probe-routes.ts"),
+        "response: { 200: probeResponses.read }",
+      ],
     ];
 
-    expect(deadEntries(files, [doc])).toEqual(["probe-documentation.ts probeResponses.forgotten"]);
+    expect(deadEntries(files, [doc])).toEqual([
+      "probe-documentation.ts probeResponses.forgotten",
+    ]);
   });
 });

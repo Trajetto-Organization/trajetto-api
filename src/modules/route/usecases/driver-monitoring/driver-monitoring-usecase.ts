@@ -75,7 +75,9 @@ class DriverMonitoringUseCase {
       driverRefusal: PANEL_DRIVER_REFUSAL,
     });
 
-    const timeZone = resolveTimeZone(await this.operation.timeZoneOf(resolvedBusinessId));
+    const timeZone = resolveTimeZone(
+      await this.operation.timeZoneOf(resolvedBusinessId),
+    );
 
     let window;
 

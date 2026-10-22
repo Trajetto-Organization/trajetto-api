@@ -59,7 +59,8 @@ const createVehicleTypeSchema = z.object({
     z
       .nativeEnum(CnhCategory, {
         errorMap: () => ({
-          message: "Categoria de CNH inválida. Use A, B, C, D, E, AB, AC, AD ou AE.",
+          message:
+            "Categoria de CNH inválida. Use A, B, C, D, E, AB, AC, AD ou AE.",
         }),
       })
       .nullable()

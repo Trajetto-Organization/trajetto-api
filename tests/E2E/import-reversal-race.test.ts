@@ -161,22 +161,29 @@ describe("the undo clicked twice", () => {
       new WebhookFanOutService(),
     );
 
-    const request = { userId: DISPATCHER, businessId: CARRIER, importId: record.id };
+    const request = {
+      userId: DISPATCHER,
+      businessId: CARRIER,
+      importId: record.id,
+    };
 
     const outcomes = await Promise.allSettled([
       useCase.execute(request),
       useCase.execute(request),
     ]);
 
-    const fulfilled = outcomes.filter((outcome) => outcome.status === "fulfilled");
+    const fulfilled = outcomes.filter(
+      (outcome) => outcome.status === "fulfilled",
+    );
     const rejected = outcomes.filter(
-      (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
+      (outcome): outcome is PromiseRejectedResult =>
+        outcome.status === "rejected",
     );
 
     expect(fulfilled).toHaveLength(1);
     expect(
-      (fulfilled[0] as PromiseFulfilledResult<{ removedDeliveries: number }>).value
-        .removedDeliveries,
+      (fulfilled[0] as PromiseFulfilledResult<{ removedDeliveries: number }>)
+        .value.removedDeliveries,
     ).toBe(2);
 
     expect(rejected).toHaveLength(1);
@@ -226,8 +233,12 @@ describe("a delivery the upload created, sitting on somebody else's route", () =
     expect(
       await prisma.delivery.findUnique({ where: { id: onForeignRoute.id } }),
     ).not.toBeNull();
-    expect(await prisma.delivery.findUnique({ where: { id: free.id } })).toBeNull();
+    expect(
+      await prisma.delivery.findUnique({ where: { id: free.id } }),
+    ).toBeNull();
 
-    expect(await prisma.routeStop.count({ where: { routeId: route.id } })).toBe(1);
+    expect(await prisma.routeStop.count({ where: { routeId: route.id } })).toBe(
+      1,
+    );
   });
 });

@@ -95,7 +95,9 @@ class UpdateOccurrenceTypeUseCase {
     const { form_fields: requestedForm, ...otherChanges } = occurrenceTypeData;
 
     const nextForm =
-      requestedForm === undefined ? undefined : normalizeFormFields(requestedForm);
+      requestedForm === undefined
+        ? undefined
+        : normalizeFormFields(requestedForm);
 
     const formChanged =
       nextForm !== undefined &&
@@ -112,7 +114,8 @@ class UpdateOccurrenceTypeUseCase {
     const categoryMoves = nextCategory !== currentCategory;
     const kindMoves =
       otherChanges.pause_kind !== undefined &&
-      (otherChanges.pause_kind ?? null) !== (findOccurrenceType.pause_kind ?? null) &&
+      (otherChanges.pause_kind ?? null) !==
+        (findOccurrenceType.pause_kind ?? null) &&
       // Dropped along with a category change: judged by that change.
       !(categoryMoves && otherChanges.pause_kind === null);
 
@@ -126,7 +129,11 @@ class UpdateOccurrenceTypeUseCase {
     }
 
     const issues = categoryIssues(
-      categoryShapeOf(findOccurrenceType, otherChanges, formChanged ? nextForm : undefined),
+      categoryShapeOf(
+        findOccurrenceType,
+        otherChanges,
+        formChanged ? nextForm : undefined,
+      ),
     );
 
     if (issues.length > 0) throw categoryValidationError(issues);

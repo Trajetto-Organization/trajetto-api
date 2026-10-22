@@ -148,7 +148,10 @@ class GetProofDocumentUseCase {
       );
     }
 
-    const existing = await this.documents.findByDelivery(deliveryId, businessId);
+    const existing = await this.documents.findByDelivery(
+      deliveryId,
+      businessId,
+    );
 
     if (existing && !regenerate) {
       return this.present(existing, source);
@@ -262,7 +265,9 @@ class GetProofDocumentUseCase {
     });
 
     const [photo, signature, map] = await Promise.all([
-      model.receipt.photoKey ? this.uploads.readObject(model.receipt.photoKey) : null,
+      model.receipt.photoKey
+        ? this.uploads.readObject(model.receipt.photoKey)
+        : null,
       model.receipt.signatureKey
         ? this.uploads.readObject(model.receipt.signatureKey)
         : null,
@@ -285,7 +290,12 @@ class GetProofDocumentUseCase {
       } catch (error) {
         // The error class only; a signing error may quote PDF bytes.
         log.error(
-          { err: { name: (error as Error)?.name, message: (error as Error)?.message } },
+          {
+            err: {
+              name: (error as Error)?.name,
+              message: (error as Error)?.message,
+            },
+          },
           "proof signing failed",
         );
 

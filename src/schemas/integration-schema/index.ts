@@ -75,14 +75,13 @@ const integrationListSchema = z.object({
     .transform((value) => {
       const parsed = Math.trunc(Number(value));
 
-      return Number.isFinite(parsed) && parsed >= 1 ? Math.min(parsed, 200) : 50;
+      return Number.isFinite(parsed) && parsed >= 1
+        ? Math.min(parsed, 200)
+        : 50;
     })
     .describe("Até 200 por página. O padrão é 50."),
 
-  cursor: z
-    .string()
-    .optional()
-    .describe("O `next_cursor` da página anterior."),
+  cursor: z.string().optional().describe("O `next_cursor` da página anterior."),
 
   /** ISO date; everything changed at or after it. */
   updated_since: z
@@ -234,7 +233,9 @@ const saveWebhookEndpointSchema = z.object({
     // matches it; a family name (`document.*`) or an invented prefix matched
     // nothing and left the endpoint mute without a word (decision 5.9).
     .superRefine((values, ctx) => {
-      const unknown = [...new Set(values.filter((value) => !isKnownSubscription(value)))];
+      const unknown = [
+        ...new Set(values.filter((value) => !isKnownSubscription(value))),
+      ];
 
       if (unknown.length > 0) {
         ctx.addIssue({

@@ -43,7 +43,10 @@ describe("startRuntimeMetrics", () => {
     vi.useFakeTimers();
 
     const { lines, log } = collector();
-    const metrics = createRuntimeMetrics({ windowMs: 1_000, canaryIntervalMs: 60_000 });
+    const metrics = createRuntimeMetrics({
+      windowMs: 1_000,
+      canaryIntervalMs: 60_000,
+    });
 
     const pool = { limit: 10, open: 10, busy: 10, idle: 0, waiting: 3 };
     const stop = startRuntimeMetrics(log, metrics, async () => pool);
@@ -77,7 +80,10 @@ describe("startRuntimeMetrics", () => {
     };
 
     expect(
-      await readPrismaPool(source, "postgresql://u:p@db:5432/d?connection_limit=10"),
+      await readPrismaPool(
+        source,
+        "postgresql://u:p@db:5432/d?connection_limit=10",
+      ),
     ).toEqual({ limit: 10, open: 10, busy: 9, idle: 1, waiting: 2 });
   });
 
@@ -85,7 +91,10 @@ describe("startRuntimeMetrics", () => {
     vi.useFakeTimers();
 
     const { lines, log } = collector();
-    const metrics = createRuntimeMetrics({ windowMs: 1_000, canaryIntervalMs: 60_000 });
+    const metrics = createRuntimeMetrics({
+      windowMs: 1_000,
+      canaryIntervalMs: 60_000,
+    });
 
     const stop = startRuntimeMetrics(log, metrics, async () => {
       throw new Error("metrics preview renamed");

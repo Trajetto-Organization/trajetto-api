@@ -39,7 +39,10 @@ function publishedVerifier(): Verify {
     Math,
   };
 
-  runInNewContext(`${NODE_VERIFICATION_SAMPLE}\nthis.verify = verifyTrajetto;`, sandbox);
+  runInNewContext(
+    `${NODE_VERIFICATION_SAMPLE}\nthis.verify = verifyTrajetto;`,
+    sandbox,
+  );
 
   return sandbox.verify as Verify;
 }
@@ -63,13 +66,19 @@ describe("the signing key the reference names", () => {
   });
 
   it("names the wildcards that stand for a whole family", () => {
-    expect(description).toMatch(/`delivery\.\*`, `occurrence\.\*`, `proof\.\*`/);
+    expect(description).toMatch(
+      /`delivery\.\*`, `occurrence\.\*`, `proof\.\*`/,
+    );
     expect(description).not.toMatch(/document\.\*/);
   });
 });
 
 describe("the published Node sample", () => {
-  const body = JSON.stringify({ id: "evt-1", topic: "delivery.delivered", data: {} });
+  const body = JSON.stringify({
+    id: "evt-1",
+    topic: "delivery.delivered",
+    data: {},
+  });
 
   it("accepts a call this API signed", () => {
     const secret = newWebhookSecret();
@@ -82,13 +91,17 @@ describe("the published Node sample", () => {
     const secret = newWebhookSecret();
     const { header } = signWebhookPayload(secret, body);
 
-    expect(publishedVerifier()(secret.replace(/^whsec_/, ""), body, header)).toBe(false);
+    expect(
+      publishedVerifier()(secret.replace(/^whsec_/, ""), body, header),
+    ).toBe(false);
   });
 
   it("accepts either secret during a rotation, and refuses a changed body", () => {
     const current = newWebhookSecret();
     const previous = newWebhookSecret();
-    const { header } = signWebhookPayload(current, body, new Date(), [previous]);
+    const { header } = signWebhookPayload(current, body, new Date(), [
+      previous,
+    ]);
 
     const verify = publishedVerifier();
 
@@ -99,7 +112,11 @@ describe("the published Node sample", () => {
 
   it("refuses a replay from outside the tolerance", () => {
     const secret = newWebhookSecret();
-    const { header } = signWebhookPayload(secret, body, new Date(Date.now() - 10 * 60 * 1000));
+    const { header } = signWebhookPayload(
+      secret,
+      body,
+      new Date(Date.now() - 10 * 60 * 1000),
+    );
 
     expect(publishedVerifier()(secret, body, header)).toBe(false);
   });
@@ -112,7 +129,11 @@ describe("the published Node sample", () => {
  * a malformed t), and whoever copied them answered 500 instead of 401.
  */
 describe("the published Node sample on a malformed header", () => {
-  const body = JSON.stringify({ id: "evt-2", topic: "delivery.created", data: {} });
+  const body = JSON.stringify({
+    id: "evt-2",
+    topic: "delivery.created",
+    data: {},
+  });
 
   it("returns false for a 64-character v1 that is not hex, instead of throwing", () => {
     const secret = newWebhookSecret();
@@ -120,9 +141,15 @@ describe("the published Node sample on a malformed header", () => {
 
     const verify = publishedVerifier();
 
-    expect(() => verify(secret, body, `t=${timestamp},v1=${"z".repeat(64)}`)).not.toThrow();
-    expect(verify(secret, body, `t=${timestamp},v1=${"z".repeat(64)}`)).toBe(false);
-    expect(verify(secret, body, `t=${timestamp},v1=ab${"g".repeat(62)}`)).toBe(false);
+    expect(() =>
+      verify(secret, body, `t=${timestamp},v1=${"z".repeat(64)}`),
+    ).not.toThrow();
+    expect(verify(secret, body, `t=${timestamp},v1=${"z".repeat(64)}`)).toBe(
+      false,
+    );
+    expect(verify(secret, body, `t=${timestamp},v1=ab${"g".repeat(62)}`)).toBe(
+      false,
+    );
   });
 
   it("returns false when the header is missing", () => {
@@ -140,7 +167,9 @@ describe("the published Node sample on a malformed header", () => {
     const secret = newWebhookSecret();
     const { header } = signWebhookPayload(secret, body);
 
-    expect(publishedVerifier()(secret, body, `${header},v1=${"z".repeat(64)}`)).toBe(true);
+    expect(
+      publishedVerifier()(secret, body, `${header},v1=${"z".repeat(64)}`),
+    ).toBe(true);
   });
 });
 
@@ -149,7 +178,10 @@ function pythonCommand(): string | null {
   for (const command of ["python3", "python"]) {
     const probe = spawnSync(command, ["--version"], { encoding: "utf8" });
 
-    if (probe.status === 0 && /Python 3/.test(`${probe.stdout}${probe.stderr}`)) {
+    if (
+      probe.status === 0 &&
+      /Python 3/.test(`${probe.stdout}${probe.stderr}`)
+    ) {
       return command;
     }
   }
@@ -160,7 +192,11 @@ function pythonCommand(): string | null {
 const python = pythonCommand();
 
 describe.runIf(python)("the published Python sample", () => {
-  const body = JSON.stringify({ id: "evt-3", topic: "proof.approved", data: {} });
+  const body = JSON.stringify({
+    id: "evt-3",
+    topic: "proof.approved",
+    data: {},
+  });
 
   /** Runs the sample as pasted, over each header; "raise" when it threw. */
   function runPython(secret: string, headers: string[]): string[] {
@@ -193,7 +229,9 @@ describe.runIf(python)("the published Python sample", () => {
     const { header } = signWebhookPayload(secret, body);
 
     expect(runPython(secret, [header])).toEqual(["True"]);
-    expect(runPython(secret.replace(/^whsec_/, ""), [header])).toEqual(["False"]);
+    expect(runPython(secret.replace(/^whsec_/, ""), [header])).toEqual([
+      "False",
+    ]);
   });
 
   it("returns False for a malformed header instead of raising", () => {
@@ -213,6 +251,8 @@ describe.runIf(python)("the published Python sample", () => {
     ).toEqual(["False", "False", "False", "False", "False", "False"]);
 
     // A part without "=" next to the real signature does not hide it.
-    expect(runPython(secret, [`t=${timestamp},lixo,v1=${signature}`])).toEqual(["True"]);
+    expect(runPython(secret, [`t=${timestamp},lixo,v1=${signature}`])).toEqual([
+      "True",
+    ]);
   });
 });

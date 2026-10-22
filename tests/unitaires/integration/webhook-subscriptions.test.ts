@@ -30,19 +30,29 @@ const endpoint = {
 function refusal(input: Record<string, unknown>): string | null {
   const parsed = saveWebhookEndpointSchema.safeParse({ ...endpoint, ...input });
 
-  return parsed.success ? null : parsed.error.issues.map((issue) => issue.message).join(" | ");
+  return parsed.success
+    ? null
+    : parsed.error.issues.map((issue) => issue.message).join(" | ");
 }
 
 describe("the wildcards of each family", () => {
   it("cover every document topic with delivery.*, occurrence.* and proof.*", () => {
-    expect(FAMILY_WILDCARDS.document).toEqual(["delivery.*", "occurrence.*", "proof.*"]);
+    expect(FAMILY_WILDCARDS.document).toEqual([
+      "delivery.*",
+      "occurrence.*",
+      "proof.*",
+    ]);
 
     for (const topic of DOCUMENT_TOPICS) {
-      expect(endpointWantsTopic(FAMILY_WILDCARDS.document, topic), topic).toBe(true);
+      expect(endpointWantsTopic(FAMILY_WILDCARDS.document, topic), topic).toBe(
+        true,
+      );
     }
 
     for (const topic of ROUTE_TOPICS) {
-      expect(endpointWantsTopic(FAMILY_WILDCARDS.document, topic), topic).toBe(false);
+      expect(endpointWantsTopic(FAMILY_WILDCARDS.document, topic), topic).toBe(
+        false,
+      );
     }
   });
 
@@ -50,11 +60,15 @@ describe("the wildcards of each family", () => {
     expect(FAMILY_WILDCARDS.route).toEqual(["route.*"]);
 
     for (const topic of ROUTE_TOPICS) {
-      expect(endpointWantsTopic(FAMILY_WILDCARDS.route, topic), topic).toBe(true);
+      expect(endpointWantsTopic(FAMILY_WILDCARDS.route, topic), topic).toBe(
+        true,
+      );
     }
 
     for (const topic of DOCUMENT_TOPICS) {
-      expect(endpointWantsTopic(FAMILY_WILDCARDS.route, topic), topic).toBe(false);
+      expect(endpointWantsTopic(FAMILY_WILDCARDS.route, topic), topic).toBe(
+        false,
+      );
     }
   });
 
@@ -73,13 +87,19 @@ describe("the subscriptions the API accepts", () => {
   it("takes catalogue names and the known wildcards", () => {
     expect(refusal({ topics: ["route.*"] })).toBeNull();
     expect(refusal({ topics: FAMILY_WILDCARDS.document })).toBeNull();
-    expect(refusal({ topics: [...TOPIC_WILDCARDS, "delivery.delivered"] })).toBeNull();
+    expect(
+      refusal({ topics: [...TOPIC_WILDCARDS, "delivery.delivered"] }),
+    ).toBeNull();
   });
 
   it("refuses a family name, an invented prefix and a bare star, naming them", () => {
-    const message = refusal({ topics: ["document.*", "banana.*", "*", "delivery.*"] });
+    const message = refusal({
+      topics: ["document.*", "banana.*", "*", "delivery.*"],
+    });
 
-    expect(message).toMatch(/não existem no catálogo: document\.\*, banana\.\*, \*/);
+    expect(message).toMatch(
+      /não existem no catálogo: document\.\*, banana\.\*, \*/,
+    );
     expect(message).toMatch(/delivery\.\*, occurrence\.\*, proof\.\*/);
   });
 
@@ -98,7 +118,9 @@ describe("the URL an endpoint is saved with (DLVB-24)", () => {
     const base = "https://erp.exemplo.com.br/";
 
     expect(refusal({ url: base + "a".repeat(2048 - base.length) })).toBeNull();
-    expect(refusal({ url: base + "a".repeat(2049 - base.length) })).toMatch(/2\.048/);
+    expect(refusal({ url: base + "a".repeat(2049 - base.length) })).toMatch(
+      /2\.048/,
+    );
   });
 
   it("refuses at save an address that can never be reached", () => {
@@ -125,12 +147,16 @@ describe("the URL an endpoint is saved with (DLVB-24)", () => {
 
 describe("the names a person types", () => {
   it("follow the product's text rules on endpoints and keys", () => {
-    expect(refusal({ name: "ERP  do embarcador" })).toMatch(/espaços consecutivos/);
+    expect(refusal({ name: "ERP  do embarcador" })).toMatch(
+      /espaços consecutivos/,
+    );
     expect(refusal({ name: " ERP" })).toMatch(/começar ou terminar com espaço/);
 
     expect(
-      createApiKeySchema.safeParse({ name: "ERP  Protheus", scopes: ["deliveries:read"] })
-        .success,
+      createApiKeySchema.safeParse({
+        name: "ERP  Protheus",
+        scopes: ["deliveries:read"],
+      }).success,
     ).toBe(false);
   });
 });
@@ -154,14 +180,18 @@ describe("the rate of a new key (DLVB-20)", () => {
     expect(keyRefusal("--")).toBe(
       "O limite por minuto deve ser um número inteiro de requisições.",
     );
-    expect(keyRefusal(5)).toBe("O limite mínimo é de 10 requisições por minuto.");
+    expect(keyRefusal(5)).toBe(
+      "O limite mínimo é de 10 requisições por minuto.",
+    );
     expect(keyRefusal(6001)).toMatch(/vai até 6\.000 requisições por minuto/);
   });
 
   it("defaults to 120 when omitted", () => {
     expect(
-      createApiKeySchema.parse({ name: "ERP Protheus", scopes: ["deliveries:read"] })
-        .rate_limit_per_minute,
+      createApiKeySchema.parse({
+        name: "ERP Protheus",
+        scopes: ["deliveries:read"],
+      }).rate_limit_per_minute,
     ).toBe(120);
   });
 });

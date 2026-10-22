@@ -44,7 +44,12 @@ describe("the workflows", () => {
       text
         .split(/\r?\n/)
         .filter((line) => /^\s*(?:-\s*)?uses:/.test(line))
-        .filter((line) => !/uses:\s*[\w.-]+\/[\w./-]+@[0-9a-f]{40}\s+#\s*v?\d+\.\d+\.\d+\s*$/.test(line))
+        .filter(
+          (line) =>
+            !/uses:\s*[\w.-]+\/[\w./-]+@[0-9a-f]{40}\s+#\s*v?\d+\.\d+\.\d+\s*$/.test(
+              line,
+            ),
+        )
         .map((line) => `${name}: ${line.trim()}`),
     );
 
@@ -77,7 +82,9 @@ describe("the workflows", () => {
     const deploy = read(".github/workflows/deploy.yml");
 
     expect(deploy).toMatch(/aquasec\/trivy:[\d.]+@sha256:[0-9a-f]{64}/);
-    expect(deploy).toMatch(/trajetto-api@\$\{\{ steps\.build\.outputs\.digest \}\}/);
+    expect(deploy).toMatch(
+      /trajetto-api@\$\{\{ steps\.build\.outputs\.digest \}\}/,
+    );
     expect(deploy).toMatch(/--severity CRITICAL --ignore-unfixed/);
   });
 });
@@ -105,7 +112,9 @@ describe("audit-ci.jsonc", () => {
       // Its own comment: from the end of the previous entry (or the list's
       // opening bracket) up to the id.
       const before = text.slice(0, text.indexOf(`"${id}"`));
-      const comment = before.slice(Math.max(before.lastIndexOf('",'), before.lastIndexOf("[")));
+      const comment = before.slice(
+        Math.max(before.lastIndexOf('",'), before.lastIndexOf("[")),
+      );
 
       expect(comment, id).toMatch(/Revisar até \d{4}-\d{2}-\d{2}/);
     }
@@ -134,17 +143,22 @@ function baseImages(dockerfile: string): string[] {
 describe("the images", () => {
   it("tell an image from a stage of the same file", () => {
     expect(
-      baseImages("FROM alpine AS tools\nFROM node:22@sha256:ab AS base\nFROM base AS runner\nFROM tools"),
+      baseImages(
+        "FROM alpine AS tools\nFROM node:22@sha256:ab AS base\nFROM base AS runner\nFROM tools",
+      ),
     ).toEqual(["FROM alpine AS tools", "FROM node:22@sha256:ab AS base"]);
   });
 
-  it.each(["Dockerfile", "infra/backup/Dockerfile"])("%s pins every base image by digest", (path) => {
-    const bases = baseImages(read(path));
+  it.each(["Dockerfile", "infra/backup/Dockerfile"])(
+    "%s pins every base image by digest",
+    (path) => {
+      const bases = baseImages(read(path));
 
-    expect(bases.length).toBeGreaterThan(0);
+      expect(bases.length).toBeGreaterThan(0);
 
-    for (const line of bases) expect(line).toMatch(/@sha256:[0-9a-f]{64}/);
-  });
+      for (const line of bases) expect(line).toMatch(/@sha256:[0-9a-f]{64}/);
+    },
+  );
 
   it("ships without npm-run-all: the entrypoint runs node directly", () => {
     const pkg = JSON.parse(read("package.json"));

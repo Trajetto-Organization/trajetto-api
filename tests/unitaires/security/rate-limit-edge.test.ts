@@ -12,9 +12,15 @@ import {
 
 vi.mock("@/env", () => ({
   env: {
-    get RATE_LIMIT_TRUSTED_PROXY() { return mode; },
-    get RATE_LIMIT_FORWARDER_SECRET() { return forwarderSecret; },
-    get RATE_LIMIT_EDGE_SECRET() { return edgeSecret; },
+    get RATE_LIMIT_TRUSTED_PROXY() {
+      return mode;
+    },
+    get RATE_LIMIT_FORWARDER_SECRET() {
+      return forwarderSecret;
+    },
+    get RATE_LIMIT_EDGE_SECRET() {
+      return edgeSecret;
+    },
     JWT_SECRET: "access-secret-for-this-test-only",
     JWT_SECRET_REFRESH_TOKEN: "refresh-secret-for-this-test-only",
   },
@@ -109,7 +115,10 @@ describe("behind Cloudflare", () => {
 
     expect(
       clientRateLimitKey(
-        request({ "x-forwarded-for": "10.0.0.5", "cf-connecting-ip": "1.2.3.4" }),
+        request({
+          "x-forwarded-for": "10.0.0.5",
+          "cf-connecting-ip": "1.2.3.4",
+        }),
       ),
     ).toBe("ip:10.0.0.5");
   });
@@ -137,7 +146,9 @@ describe("behind Cloudflare", () => {
     ).toBe("ip:203.0.113.7");
 
     expect(
-      clientRateLimitKey(request({ "cf-connecting-ip": "203.0.113.7" }, TRAEFIK)),
+      clientRateLimitKey(
+        request({ "cf-connecting-ip": "203.0.113.7" }, TRAEFIK),
+      ),
     ).toBe(`ip:${TRAEFIK}`);
   });
 
@@ -146,7 +157,10 @@ describe("behind Cloudflare", () => {
 
     expect(
       clientRateLimitKey(
-        request({ "x-forwarded-for": CF_EDGE, "cf-connecting-ip": "203.0.113.7" }),
+        request({
+          "x-forwarded-for": CF_EDGE,
+          "cf-connecting-ip": "203.0.113.7",
+        }),
       ),
     ).toBe(`ip:${CF_EDGE}`);
   });
@@ -281,9 +295,9 @@ describe("IPv6 clients", () => {
   it("does not merge neighbouring /64s", () => {
     mode = "cloudflare";
 
-    expect(clientRateLimitKey(behindCloudflare("2001:db8:abcd:13::1"))).not.toBe(
-      clientRateLimitKey(behindCloudflare("2001:db8:abcd:12::1")),
-    );
+    expect(
+      clientRateLimitKey(behindCloudflare("2001:db8:abcd:13::1")),
+    ).not.toBe(clientRateLimitKey(behindCloudflare("2001:db8:abcd:12::1")));
   });
 
   it("reads every spelling of the same address the same way", () => {
@@ -328,7 +342,9 @@ describe("IPv6 clients", () => {
   });
 
   it("reads an IPv4-mapped socket address as the IPv4 it is", () => {
-    expect(clientRateLimitKey(request({}, "::ffff:1.2.3.4"))).toBe("ip:1.2.3.4");
+    expect(clientRateLimitKey(request({}, "::ffff:1.2.3.4"))).toBe(
+      "ip:1.2.3.4",
+    );
   });
 
   it("copes with a zone id", () => {
@@ -344,7 +360,10 @@ describe("the socket handshake", () => {
       handshakeAddress(
         {
           address: TRAEFIK,
-          headers: { "x-forwarded-for": CF_EDGE, "cf-connecting-ip": "203.0.113.7" },
+          headers: {
+            "x-forwarded-for": CF_EDGE,
+            "cf-connecting-ip": "203.0.113.7",
+          },
         },
         "cloudflare",
       ),
@@ -354,7 +373,10 @@ describe("the socket handshake", () => {
       handshakeAddress(
         {
           address: TRAEFIK,
-          headers: { "x-forwarded-for": "198.51.100.9", "cf-connecting-ip": "1.2.3.4" },
+          headers: {
+            "x-forwarded-for": "198.51.100.9",
+            "cf-connecting-ip": "1.2.3.4",
+          },
         },
         "cloudflare",
       ),

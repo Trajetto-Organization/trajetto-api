@@ -153,13 +153,19 @@ beforeAll(async () => {
 
   // Today, as a dispatcher sees it: a few dozen open, a handful finished.
   const today = [
-    ...Array.from({ length: OPEN_PENDING }, () => ({ status: "PENDING" as const })),
-    ...Array.from({ length: OPEN_IN_TRANSIT }, () => ({ status: "IN_TRANSIT" as const })),
+    ...Array.from({ length: OPEN_PENDING }, () => ({
+      status: "PENDING" as const,
+    })),
+    ...Array.from({ length: OPEN_IN_TRANSIT }, () => ({
+      status: "IN_TRANSIT" as const,
+    })),
     ...Array.from({ length: DELIVERED_TODAY }, () => ({
       status: "DELIVERED" as const,
       delivered_at: new Date(),
     })),
-    ...Array.from({ length: FAILED_TODAY }, () => ({ status: "FAILED" as const })),
+    ...Array.from({ length: FAILED_TODAY }, () => ({
+      status: "FAILED" as const,
+    })),
   ];
 
   await prisma.delivery.createMany({
@@ -317,7 +323,8 @@ async function boundPlanOf(statement: Sent): Promise<PlanNode> {
 
 function literal(value: unknown): string {
   if (value === null || value === undefined) return "NULL";
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
 
   return `'${String(value).replace(/'/g, "''")}'`;
 }
@@ -335,7 +342,9 @@ async function genericPlanOf(statement: Sent): Promise<PlanNode> {
   const name = `probe_${randomUUID().replace(/-/g, "")}`;
 
   return prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe(`SET LOCAL plan_cache_mode = force_generic_plan`);
+    await tx.$executeRawUnsafe(
+      `SET LOCAL plan_cache_mode = force_generic_plan`,
+    );
     await tx.$executeRawUnsafe(`PREPARE ${name} AS ${statement.query}`);
 
     try {
@@ -434,7 +443,10 @@ describe("the operations summary reads today's rows, not the history", () => {
     // The partial indexes are what make "today" cheap; the literal statuses
     // are what let a generic plan use them.
     expect([...used]).toEqual(
-      expect.arrayContaining(["delivery_delivered_today_idx", "delivery_failed_recent_idx"]),
+      expect.arrayContaining([
+        "delivery_delivered_today_idx",
+        "delivery_failed_recent_idx",
+      ]),
     );
   });
 
@@ -495,7 +507,8 @@ describe("the listing's search stays inside the company", () => {
       expect(
         flatten(plan).some(
           (node) =>
-            node["Node Type"] === "Seq Scan" && node["Relation Name"] === "delivery",
+            node["Node Type"] === "Seq Scan" &&
+            node["Relation Name"] === "delivery",
         ),
         `a busca varreu a tabela:\n${statement.query}`,
       ).toBe(false);
@@ -531,7 +544,9 @@ describe("the export reads what it writes", () => {
 
   it("deliveries: every row once, across ties at the batch boundary", async () => {
     const { ids } = await exported(() =>
-      new DeliveryRepository(capture).streamDeliveriesForExport({ businessId: SMALL }),
+      new DeliveryRepository(capture).streamDeliveriesForExport({
+        businessId: SMALL,
+      }),
     );
 
     expect(ids).toHaveLength(SMALL_VOLUME);
@@ -540,7 +555,9 @@ describe("the export reads what it writes", () => {
 
   it("deliveries: a later batch costs a batch, not the company or the table", async () => {
     const { statements } = await exported(() =>
-      new DeliveryRepository(capture).streamDeliveriesForExport({ businessId: SMALL }),
+      new DeliveryRepository(capture).streamDeliveriesForExport({
+        businessId: SMALL,
+      }),
     );
 
     const later = batches(statements, "delivery")[2];
@@ -549,15 +566,18 @@ describe("the export reads what it writes", () => {
     for (const plan of [await boundPlanOf(later), await genericPlanOf(later)]) {
       const touched = rowsTouched(plan, "delivery");
 
-      expect(touched, `um lote de 1000 leu ${touched} entregas:\n${later.query}`).toBeLessThan(
-        2_000,
-      );
+      expect(
+        touched,
+        `um lote de 1000 leu ${touched} entregas:\n${later.query}`,
+      ).toBeLessThan(2_000);
     }
   });
 
   it("occurrences: every row once", async () => {
     const { ids } = await exported(() =>
-      new DeliveryRepository(capture).streamOccurrencesForExport({ businessId: SMALL }),
+      new DeliveryRepository(capture).streamOccurrencesForExport({
+        businessId: SMALL,
+      }),
     );
 
     expect(ids).toHaveLength(SMALL_VOLUME);
@@ -566,7 +586,9 @@ describe("the export reads what it writes", () => {
 
   it("occurrences: a later batch costs a batch", async () => {
     const { statements } = await exported(() =>
-      new DeliveryRepository(capture).streamOccurrencesForExport({ businessId: SMALL }),
+      new DeliveryRepository(capture).streamOccurrencesForExport({
+        businessId: SMALL,
+      }),
     );
 
     const later = batches(statements, "delivery_occurrence")[2];

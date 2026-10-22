@@ -81,7 +81,9 @@ describe("accountPayableListWhere", () => {
         OR: [
           {
             AND: [
-              { OR: [{ amount_paid: null }, { amount_paid: { lt: amountRef } }] },
+              {
+                OR: [{ amount_paid: null }, { amount_paid: { lt: amountRef } }],
+              },
               { due_date: { lt: todayStart } },
             ],
           },

@@ -20,7 +20,8 @@ const prisma = vi.hoisted(() => ({
   created: 0,
   queries: 0,
   disconnects: 0,
-  query: (): Promise<unknown> => Promise.reject(new Error("Can't reach database server")),
+  query: (): Promise<unknown> =>
+    Promise.reject(new Error("Can't reach database server")),
   disconnect: (): Promise<void> => Promise.resolve(),
 }));
 

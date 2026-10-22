@@ -76,7 +76,11 @@ async function seedCarrier(): Promise<void> {
   });
 
   await prisma.fuelType.create({
-    data: { id: "ft-composition-race", description: "Diesel", businessId: CARRIER },
+    data: {
+      id: "ft-composition-race",
+      description: "Diesel",
+      businessId: CARRIER,
+    },
   });
 }
 
@@ -226,9 +230,13 @@ describe("composing a route while it departs", () => {
       RouteStatusConflictError,
     );
 
-    expect(await prisma.routeStop.count({ where: { deliveryId: late } })).toBe(0);
+    expect(await prisma.routeStop.count({ where: { deliveryId: late } })).toBe(
+      0,
+    );
 
-    const row = await prisma.delivery.findUniqueOrThrow({ where: { id: late } });
+    const row = await prisma.delivery.findUniqueOrThrow({
+      where: { id: late },
+    });
 
     expect(row.status).toBe("PENDING");
     expect(row.driverId).toBeNull();
@@ -298,7 +306,10 @@ describe("composing a route while it departs", () => {
     // that committed first is what it sees: the delivery is on a route that
     // left, and nothing is written.
     const outcome = (
-      detached as PromiseFulfilledResult<{ detached: number; blocked: string[] }>
+      detached as PromiseFulfilledResult<{
+        detached: number;
+        blocked: string[];
+      }>
     ).value;
 
     expect(outcome.detached).toBe(0);
@@ -407,9 +418,9 @@ describe("the stop follows the delivery off the route (IDEMP-11)", () => {
 
     await prisma.$transaction(async (tx) => {
       // The order the use cases take: the route first, then the delivery.
-      expect(
-        await repository.lockRouteOfOpenStop(cancelled, CARRIER, tx),
-      ).toBe(routeId);
+      expect(await repository.lockRouteOfOpenStop(cancelled, CARRIER, tx)).toBe(
+        routeId,
+      );
 
       await tx.delivery.update({
         where: { id: cancelled },
@@ -428,9 +439,9 @@ describe("the stop follows the delivery off the route (IDEMP-11)", () => {
 
     // Before: the stop stayed PENDING, rode out with the departure and held
     // the route open forever.
-    expect(await prisma.routeStop.count({ where: { deliveryId: cancelled } })).toBe(
-      0,
-    );
+    expect(
+      await prisma.routeStop.count({ where: { deliveryId: cancelled } }),
+    ).toBe(0);
     expect(await prisma.routeStop.count({ where: { routeId } })).toBe(1);
 
     const row = await prisma.delivery.findUniqueOrThrow({

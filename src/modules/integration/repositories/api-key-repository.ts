@@ -98,7 +98,9 @@ class ApiKeyRepository implements IApiKeyRepository {
     });
   }
 
-  async findCredentialByPrefix(prefix: string): Promise<ApiKeyCredential | null> {
+  async findCredentialByPrefix(
+    prefix: string,
+  ): Promise<ApiKeyCredential | null> {
     return this.prisma.apiKey.findUnique({
       where: { prefix },
       select: {
@@ -116,7 +118,10 @@ class ApiKeyRepository implements IApiKeyRepository {
   }
 
   async touchLastUsed(id: string, at: Date): Promise<void> {
-    await this.prisma.apiKey.update({ where: { id }, data: { last_used_at: at } });
+    await this.prisma.apiKey.update({
+      where: { id },
+      data: { last_used_at: at },
+    });
   }
 }
 

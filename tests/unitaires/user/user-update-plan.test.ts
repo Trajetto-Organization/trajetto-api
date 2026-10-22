@@ -81,27 +81,45 @@ describe("what ends the sessions", () => {
 
 describe("the links", () => {
   it("an administrator carries neither a profile nor a driver", () => {
-    const plan = ok(planUserUpdate(employee, { role: "BUSINESS_ADMIN", profileAccessId: "profile-ops" }));
+    const plan = ok(
+      planUserUpdate(employee, {
+        role: "BUSINESS_ADMIN",
+        profileAccessId: "profile-ops",
+      }),
+    );
 
     expect(plan.next.profileAccessId).toBeNull();
-    expect(plan.data).toMatchObject({ role: "BUSINESS_ADMIN", profileAccessId: null });
+    expect(plan.data).toMatchObject({
+      role: "BUSINESS_ADMIN",
+      profileAccessId: null,
+    });
   });
 
   it("a profile alone replaces the driver link (USR-EDIT-3)", () => {
-    const plan = ok(planUserUpdate(driverLogin, { profileAccessId: "profile-ops" }));
+    const plan = ok(
+      planUserUpdate(driverLogin, { profileAccessId: "profile-ops" }),
+    );
 
-    expect(plan.next).toMatchObject({ profileAccessId: "profile-ops", driverId: null });
+    expect(plan.next).toMatchObject({
+      profileAccessId: "profile-ops",
+      driverId: null,
+    });
     expect(plan.endsSessions).toBe(true);
   });
 
   it("a driver alone replaces the profile", () => {
     const plan = ok(planUserUpdate(employee, { driverId: "driver-9" }));
 
-    expect(plan.next).toMatchObject({ profileAccessId: null, driverId: "driver-9" });
+    expect(plan.next).toMatchObject({
+      profileAccessId: null,
+      driverId: "driver-9",
+    });
   });
 
   it("both at once is refused", () => {
-    expect(planUserUpdate(employee, { profileAccessId: "p", driverId: "d" })).toEqual({
+    expect(
+      planUserUpdate(employee, { profileAccessId: "p", driverId: "d" }),
+    ).toEqual({
       ok: false,
       error: "both_profile_and_driver",
     });
@@ -115,23 +133,31 @@ describe("the links", () => {
 
     // Demoting an administrator without choosing a profile or driver.
     expect(
-      planUserUpdate({ ...employee, role: "BUSINESS_ADMIN", profileAccessId: null }, {
-        role: "BUSINESS_USER",
-      }),
+      planUserUpdate(
+        { ...employee, role: "BUSINESS_ADMIN", profileAccessId: null },
+        {
+          role: "BUSINESS_USER",
+        },
+      ),
     ).toEqual({ ok: false, error: "assignment_required" });
   });
 
   it("a legacy user with neither can still have the name fixed", () => {
     const legacy = { ...employee, profileAccessId: null };
 
-    expect(ok(planUserUpdate(legacy, { name: "Ana Souza Lima" })).changed).toBe(true);
+    expect(ok(planUserUpdate(legacy, { name: "Ana Souza Lima" })).changed).toBe(
+      true,
+    );
   });
 });
 
 describe("the company", () => {
   it("is never part of the plan, whatever the input carries", () => {
     // A caller that bypasses the schema still cannot move the person.
-    const input = { businessId: "company-b", profileAccessId: "profile-b" } as Parameters<typeof planUserUpdate>[1];
+    const input = {
+      businessId: "company-b",
+      profileAccessId: "profile-b",
+    } as Parameters<typeof planUserUpdate>[1];
     const plan = ok(planUserUpdate(employee, input));
 
     expect(plan.next.businessId).toBe("company-a");
@@ -142,8 +168,12 @@ describe("the company", () => {
 
 describe("the audit wording", () => {
   it("names what changed, in the product's words", () => {
-    const plan = ok(planUserUpdate(employee, { name: "Ana Lima", role: "BUSINESS_ADMIN" }));
+    const plan = ok(
+      planUserUpdate(employee, { name: "Ana Lima", role: "BUSINESS_ADMIN" }),
+    );
 
-    expect(describeChanges(plan.changes)).toBe("nome, nível de acesso, perfil de acesso");
+    expect(describeChanges(plan.changes)).toBe(
+      "nome, nível de acesso, perfil de acesso",
+    );
   });
 });

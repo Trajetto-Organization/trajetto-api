@@ -29,7 +29,9 @@ const apiRoot = path.resolve(benchDir, "../..");
 const scriptsUnderTest = process.env.AI_BENCH_SCRIPTS_DIR
   ? path.resolve(process.env.AI_BENCH_SCRIPTS_DIR)
   : benchDir;
-const tsxCli = createRequire(path.join(apiRoot, "package.json")).resolve("tsx/cli");
+const tsxCli = createRequire(path.join(apiRoot, "package.json")).resolve(
+  "tsx/cli",
+);
 
 const PRODUCT_FILES = [
   "ai-prompts.ts",
@@ -47,7 +49,9 @@ const TIMEOUT = 90_000;
 const trees = [];
 
 function makeTree(mutations = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "trajetto-ai-bench-test-"));
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "trajetto-ai-bench-test-"),
+  );
   trees.push(root);
 
   const scripts = path.join(root, "scripts/ai-benchmark");
@@ -56,21 +60,36 @@ function makeTree(mutations = {}) {
   fs.mkdirSync(ai, { recursive: true });
 
   for (const file of fs.readdirSync(scriptsUnderTest)) {
-    if (file.endsWith(".mjs")) fs.copyFileSync(path.join(scriptsUnderTest, file), path.join(scripts, file));
+    if (file.endsWith(".mjs"))
+      fs.copyFileSync(
+        path.join(scriptsUnderTest, file),
+        path.join(scripts, file),
+      );
   }
 
   for (const file of PRODUCT_FILES) {
-    let text = fs.readFileSync(path.join(apiRoot, "src/shared/ai", file), "utf8");
+    let text = fs.readFileSync(
+      path.join(apiRoot, "src/shared/ai", file),
+      "utf8",
+    );
     for (const [from, to] of mutations[file] ?? []) {
       // A fixture that silently stopped applying would prove nothing.
-      if (!text.includes(from)) throw new Error(`fixture anchor not found in ${file}: ${from}`);
+      if (!text.includes(from))
+        throw new Error(`fixture anchor not found in ${file}: ${from}`);
       text = text.replace(from, to);
     }
     fs.writeFileSync(path.join(ai, file), text);
   }
 
-  fs.copyFileSync(path.join(apiRoot, "package.json"), path.join(root, "package.json"));
-  fs.symlinkSync(path.join(apiRoot, "node_modules"), path.join(root, "node_modules"), "junction");
+  fs.copyFileSync(
+    path.join(apiRoot, "package.json"),
+    path.join(root, "package.json"),
+  );
+  fs.symlinkSync(
+    path.join(apiRoot, "node_modules"),
+    path.join(root, "node_modules"),
+    "junction",
+  );
 
   return root;
 }
@@ -140,7 +159,11 @@ const LABELS = [
 function makeDataset(root) {
   const dataset = path.join(root, "dataset");
   fs.mkdirSync(path.join(dataset, "images"), { recursive: true });
-  for (const item of LABELS) fs.writeFileSync(path.join(dataset, item.file), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  for (const item of LABELS)
+    fs.writeFileSync(
+      path.join(dataset, item.file),
+      Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+    );
   fs.writeFileSync(path.join(dataset, "labels.json"), JSON.stringify(LABELS));
   return dataset;
 }
@@ -149,12 +172,27 @@ function writeRun(runDir, records) {
   fs.mkdirSync(runDir, { recursive: true });
   fs.writeFileSync(
     path.join(runDir, "run.json"),
-    JSON.stringify({ provider: "ollama", model: "fake", describe: {}, segments: [] }),
+    JSON.stringify({
+      provider: "ollama",
+      model: "fake",
+      describe: {},
+      segments: [],
+    }),
   );
-  fs.writeFileSync(path.join(runDir, "results.jsonl"), records.map((r) => `${JSON.stringify(r)}\n`).join(""));
+  fs.writeFileSync(
+    path.join(runDir, "results.jsonl"),
+    records.map((r) => `${JSON.stringify(r)}\n`).join(""),
+  );
 }
 
-const ODOMETER_ANSWER = { valor_lido: 100060, confianca: 90, legivel: true, sinais_fraude: false, motivos_fraude: [], observacao: "ok" };
+const ODOMETER_ANSWER = {
+  valor_lido: 100060,
+  confianca: 90,
+  legivel: true,
+  sinais_fraude: false,
+  motivos_fraude: [],
+  observacao: "ok",
+};
 const PROOF_ANSWER = {
   e_canhoto: "sim",
   numero_documento_lido: "45181",
@@ -183,7 +221,10 @@ function fakeAnswer(format) {
     else if (type === "array") answer[key] = [];
     else answer[key] = "ok";
   }
-  return { ...answer, ...(format?.properties?.valor_lido ? ODOMETER_ANSWER : {}) };
+  return {
+    ...answer,
+    ...(format?.properties?.valor_lido ? ODOMETER_ANSWER : {}),
+  };
 }
 
 beforeAll(async () => {
@@ -198,10 +239,18 @@ beforeAll(async () => {
       };
 
       if (request.url === "/api/version") return reply({ version: "fake" });
-      if (request.url === "/api/show") return reply({ details: { quantization_level: "Q4_0" }, capabilities: ["vision"] });
-      if (request.url === "/api/generate") return reply({ load_duration: 1_000_000 });
+      if (request.url === "/api/show")
+        return reply({
+          details: { quantization_level: "Q4_0" },
+          capabilities: ["vision"],
+        });
+      if (request.url === "/api/generate")
+        return reply({ load_duration: 1_000_000 });
 
-      chats.push({ prompt: payload.messages[0].content, format: payload.format });
+      chats.push({
+        prompt: payload.messages[0].content,
+        format: payload.format,
+      });
       return reply({
         message: { content: JSON.stringify(fakeAnswer(payload.format)) },
         prompt_eval_count: 1000,
@@ -234,25 +283,42 @@ async function runScript(root, script, args) {
     );
     return { code: 0, stdout, stderr };
   } catch (error) {
-    return { code: error.code ?? 1, stdout: error.stdout ?? "", stderr: error.stderr ?? "" };
+    return {
+      code: error.code ?? 1,
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? "",
+    };
   }
 }
 
 function runBenchmark(root, out, extra) {
   return runScript(root, "run-benchmark.mjs", [
-    "--provider", "ollama",
-    "--model", "fake",
-    "--dataset", path.join(root, "dataset"),
-    "--out", out,
-    "--ollama-url", ollamaUrl,
-    "--container", "trajetto-ai-bench-test-missing",
+    "--provider",
+    "ollama",
+    "--model",
+    "fake",
+    "--dataset",
+    path.join(root, "dataset"),
+    "--out",
+    out,
+    "--ollama-url",
+    ollamaUrl,
+    "--container",
+    "trajetto-ai-bench-test-missing",
     ...extra,
   ]);
 }
 
 async function summarize(root, runDir) {
   const json = path.join(root, `summary-${path.basename(runDir)}.json`);
-  const result = await runScript(root, "summarize.mjs", ["--dataset", path.join(root, "dataset"), "--runs", runDir, "--json", json]);
+  const result = await runScript(root, "summarize.mjs", [
+    "--dataset",
+    path.join(root, "dataset"),
+    "--runs",
+    runDir,
+    "--json",
+    json,
+  ]);
   if (result.code !== 0) throw new Error(`summarize failed: ${result.stderr}`);
   return JSON.parse(fs.readFileSync(json, "utf8"))[0];
 }
@@ -287,10 +353,22 @@ describe("prompts measured", () => {
       expect(prod).not.toContain("O motorista informou");
 
       // The exact command of the segment is kept, so the run can be repeated.
-      const info = JSON.parse(fs.readFileSync(path.join(out, "run.json"), "utf8"));
+      const info = JSON.parse(
+        fs.readFileSync(path.join(out, "run.json"), "utf8"),
+      );
       expect(info.segments[0].argv).toEqual([
-        "--provider", "ollama", "--model", "fake", "--dataset", path.join(root, "dataset"),
-        "--out", out, "--ollama-url", ollamaUrl, "--container", "trajetto-ai-bench-test-missing",
+        "--provider",
+        "ollama",
+        "--model",
+        "fake",
+        "--dataset",
+        path.join(root, "dataset"),
+        "--out",
+        out,
+        "--ollama-url",
+        ollamaUrl,
+        "--container",
+        "trajetto-ai-bench-test-missing",
         ...args,
       ]);
     },
@@ -310,14 +388,25 @@ describe("prompts measured", () => {
       });
       makeDataset(root);
 
-      const refused = await runBenchmark(root, path.join(root, "run"), ["--variants", "prod", "--only", "P01"]);
+      const refused = await runBenchmark(root, path.join(root, "run"), [
+        "--variants",
+        "prod",
+        "--only",
+        "P01",
+      ]);
 
       expect(refused.code).not.toBe(0);
       expect(refused.stderr).toContain("serie_lida");
       expect(chats).toHaveLength(0);
 
       // --allow-drift is the explicit override, and then the new line is sent.
-      const allowed = await runBenchmark(root, path.join(root, "run-allowed"), ["--variants", "prod", "--only", "P01", "--allow-drift"]);
+      const allowed = await runBenchmark(root, path.join(root, "run-allowed"), [
+        "--variants",
+        "prod",
+        "--only",
+        "P01",
+        "--allow-drift",
+      ]);
 
       expect(allowed.code, allowed.stderr).toBe(0);
       expect(chats).toHaveLength(1);
@@ -335,14 +424,26 @@ describe("verdict rules", () => {
     async () => {
       // 60 km on 100,000 km: over the absolute threshold (50) and under the
       // relative one (5%). "&&" says verified; "||" says mismatch.
-      const record = { id: "O01", task: "odometer", variant: "prod", wallMs: 1000, jsonValid: true, parsed: ODOMETER_ANSWER };
+      const record = {
+        id: "O01",
+        task: "odometer",
+        variant: "prod",
+        wallMs: 1000,
+        jsonValid: true,
+        parsed: ODOMETER_ANSWER,
+      };
 
       const original = makeTree();
       makeDataset(original);
       writeRun(path.join(original, "run"), [record]);
 
       const changed = makeTree({
-        "ai-rules.ts": [["diff > ODOMETER_MISMATCH_THRESHOLD_KM &&", "diff > ODOMETER_MISMATCH_THRESHOLD_KM ||"]],
+        "ai-rules.ts": [
+          [
+            "diff > ODOMETER_MISMATCH_THRESHOLD_KM &&",
+            "diff > ODOMETER_MISMATCH_THRESHOLD_KM ||",
+          ],
+        ],
       });
       makeDataset(changed);
       writeRun(path.join(changed, "run"), [record]);
@@ -375,21 +476,41 @@ describe("verdict rules", () => {
       const root = makeTree();
       makeDataset(root);
       writeRun(path.join(root, "run"), [
-        { id: "P01", task: "proof", variant: "extract", wallMs: 1000, jsonValid: true, parsed: extraction("27/09/26") },
-        { id: "P08", task: "proof", variant: "extract", wallMs: 1000, jsonValid: true, parsed: extraction("25/09/2026") },
+        {
+          id: "P01",
+          task: "proof",
+          variant: "extract",
+          wallMs: 1000,
+          jsonValid: true,
+          parsed: extraction("27/09/26"),
+        },
+        {
+          id: "P08",
+          task: "proof",
+          variant: "extract",
+          wallMs: 1000,
+          jsonValid: true,
+          parsed: extraction("25/09/2026"),
+        },
       ]);
 
       const summary = await summarize(root, path.join(root, "run"));
-      const byId = Object.fromEntries(summary.items.map((item) => [item.id, item]));
+      const byId = Object.fromEntries(
+        summary.items.map((item) => [item.id, item]),
+      );
 
       expect(byId.P01).toMatchObject({ verdict: "looks_good", ok: true });
       expect(byId.P08).toMatchObject({ verdict: "looks_wrong", ok: true });
-      expect(summary.accuracy.extract.proof.perCriterion.dateVisible).toMatchObject({ hits: 2, total: 2 });
+      expect(
+        summary.accuracy.extract.proof.perCriterion.dateVisible,
+      ).toMatchObject({ hits: 2, total: 2 });
 
       // The NF-e read is compared with the expected one, as the product does
       // for the inputs it builds (PROOF_INPUT_VERSION): an input without the
       // version is not compared, and "not_applicable" would miss both.
-      expect(summary.accuracy.extract.proof.perCriterion.documentMatches).toMatchObject({ hits: 2, total: 2 });
+      expect(
+        summary.accuracy.extract.proof.perCriterion.documentMatches,
+      ).toMatchObject({ hits: 2, total: 2 });
     },
     TIMEOUT,
   );
@@ -405,12 +526,30 @@ describe("run bookkeeping", () => {
       makeDataset(root);
       const out = path.join(root, "run");
       writeRun(out, [
-        { id: "O01", task: "odometer", variant: "prod", error: "529 overloaded_error", jsonValid: false },
-        { id: "P01", task: "proof", variant: "prod", wallMs: 1000, jsonValid: true, parsed: PROOF_ANSWER },
+        {
+          id: "O01",
+          task: "odometer",
+          variant: "prod",
+          error: "529 overloaded_error",
+          jsonValid: false,
+        },
+        {
+          id: "P01",
+          task: "proof",
+          variant: "prod",
+          wallMs: 1000,
+          jsonValid: true,
+          parsed: PROOF_ANSWER,
+        },
       ]);
       fs.rmSync(path.join(out, "run.json"));
 
-      const result = await runBenchmark(root, out, ["--variants", "prod", "--only", "O01,P01"]);
+      const result = await runBenchmark(root, out, [
+        "--variants",
+        "prod",
+        "--only",
+        "O01,P01",
+      ]);
 
       expect(result.code, result.stderr).toBe(0);
       expect(chats).toHaveLength(1);
@@ -430,8 +569,21 @@ describe("run bookkeeping", () => {
       const root = makeTree();
       makeDataset(root);
       writeRun(path.join(root, "run"), [
-        { id: "P01", task: "proof", variant: "prod", wallMs: 1000, jsonValid: true, parsed: PROOF_ANSWER },
-        { id: "O01", task: "odometer", variant: "prod", error: "timeout", jsonValid: false },
+        {
+          id: "P01",
+          task: "proof",
+          variant: "prod",
+          wallMs: 1000,
+          jsonValid: true,
+          parsed: PROOF_ANSWER,
+        },
+        {
+          id: "O01",
+          task: "odometer",
+          variant: "prod",
+          error: "timeout",
+          jsonValid: false,
+        },
       ]);
 
       const summary = await summarize(root, path.join(root, "run"));
@@ -450,14 +602,25 @@ describe("run bookkeeping", () => {
       // ~20 tok/s is a fresh image on 4 vCPU; 1145 tokens in 6.8 s (~169
       // tok/s) is the measured cache hit. prompt_eval_count is full in both.
       const fresh = (id, variant) => ({
-        id, task: "proof", variant, wallMs: 60_000, jsonValid: true, parsed: PROOF_ANSWER,
-        inputTokens: 1141, metrics: { promptEvalMs: 57_000, evalMs: 3000 },
+        id,
+        task: "proof",
+        variant,
+        wallMs: 60_000,
+        jsonValid: true,
+        parsed: PROOF_ANSWER,
+        inputTokens: 1141,
+        metrics: { promptEvalMs: 57_000, evalMs: 3000 },
       });
       writeRun(path.join(root, "run"), [
         fresh("P01", "prod"),
         fresh("P08", "prod"),
         fresh("P08", "extract"),
-        { ...fresh("P01", "extract"), wallMs: 22_000, inputTokens: 1145, metrics: { promptEvalMs: 6_770, evalMs: 3000 } },
+        {
+          ...fresh("P01", "extract"),
+          wallMs: 22_000,
+          inputTokens: 1145,
+          metrics: { promptEvalMs: 6_770, evalMs: 3000 },
+        },
       ]);
 
       const summary = await summarize(root, path.join(root, "run"));
@@ -472,18 +635,35 @@ describe("run bookkeeping", () => {
 
 describe("helpers", () => {
   it("reads anon and file memory from a cgroup v2 memory.stat (captured from a container)", () => {
-    const stat = "anon 3067904\nfile 7413760\nkernel 1003520\nfile_mapped 3289088\n";
+    const stat =
+      "anon 3067904\nfile 7413760\nkernel 1003520\nfile_mapped 3289088\n";
 
-    expect(parseMemoryStat(stat)).toEqual({ anonBytes: 3067904, fileBytes: 7413760 });
-    expect(parseMemoryStat("total_rss 10\ntotal_cache 20\n")).toEqual({ anonBytes: 10, fileBytes: 20 });
+    expect(parseMemoryStat(stat)).toEqual({
+      anonBytes: 3067904,
+      fileBytes: 7413760,
+    });
+    expect(parseMemoryStat("total_rss 10\ntotal_cache 20\n")).toEqual({
+      anonBytes: 10,
+      fileBytes: 20,
+    });
     expect(parseMemoryStat("not a stat file")).toBeNull();
   });
 
   it("schemaDrift reports keys and choices that differ in either direction", () => {
     const prompt = 'Responda APENAS em JSON: { "a": "x" | "y", "b": number }';
 
-    expect(schemaDrift(prompt, { properties: { a: { enum: ["y", "x"] }, b: {} }, required: ["a", "b"] })).toEqual([]);
-    expect(schemaDrift(prompt, { properties: { a: { enum: ["x"] }, b: {}, c: {} }, required: ["a", "b"] })).toEqual([
+    expect(
+      schemaDrift(prompt, {
+        properties: { a: { enum: ["y", "x"] }, b: {} },
+        required: ["a", "b"],
+      }),
+    ).toEqual([]);
+    expect(
+      schemaDrift(prompt, {
+        properties: { a: { enum: ["x"] }, b: {}, c: {} },
+        required: ["a", "b"],
+      }),
+    ).toEqual([
       'prompt: "a" allows ["x","y"] in the prompt and ["x"] in the Ollama schema',
       'prompt: the Ollama schema has "c", the prompt no longer asks for it',
     ]);

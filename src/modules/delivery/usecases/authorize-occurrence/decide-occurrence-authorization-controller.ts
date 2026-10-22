@@ -12,10 +12,11 @@ import {
 class DecideOccurrenceAuthorizationController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
-    const { occurrenceId, businessId } = occurrenceAuthorizationParamsSchema.parse(
-      request.params,
+    const { occurrenceId, businessId } =
+      occurrenceAuthorizationParamsSchema.parse(request.params);
+    const { decision, note } = decideOccurrenceAuthorizationSchema.parse(
+      request.body,
     );
-    const { decision, note } = decideOccurrenceAuthorizationSchema.parse(request.body);
 
     const useCase = container.resolve(DecideOccurrenceAuthorizationUseCase);
 

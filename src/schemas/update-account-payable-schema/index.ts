@@ -37,7 +37,10 @@ const updateAccountPayableSchema = z
     description: accountPayableFields.description,
     document_number: accountPayableFields.document_number,
   })
-  .refine(paymentConsistent, { message: PAYMENT_MESSAGE, path: ["amount_paid"] })
+  .refine(paymentConsistent, {
+    message: PAYMENT_MESSAGE,
+    path: ["amount_paid"],
+  })
   .refine(
     (data) =>
       data.category === undefined ||

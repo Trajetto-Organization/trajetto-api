@@ -41,18 +41,54 @@ type Replier = (reply: FastifyReply, error: unknown) => boolean;
 const app = Fastify();
 
 const cases: Record<string, { replier: Replier; error: () => Error }> = {
-  "list-user": { replier: replyFuelListError, error: () => new ResourceNotFoundError() },
-  "type-business": { replier: replyFuelTypeError, error: () => new BusinessNotFoundError() },
-  "type-user": { replier: replyFuelTypeError, error: () => new ResourceNotFoundError() },
-  "type-missing": { replier: replyFuelTypeError, error: () => new FuelTypeNotFoundError() },
-  "type-foreign": { replier: replyFuelTypeError, error: () => new FuelTypeNotBelongBusinessError() },
-  "type-in-use": { replier: replyFuelTypeError, error: () => new FuelTypeHasAssociatedFuelError(3) },
-  "write-mileage": { replier: replyFuelWriteError, error: () => new VehicleMileageInvalidError() },
-  "write-branch-missing": { replier: replyFuelWriteError, error: () => new BranchNotFoundError() },
-  "write-branch-foreign": { replier: replyFuelWriteError, error: () => new BranchNotBelongBusinessError() },
-  "type-unknown": { replier: replyFuelTypeError, error: () => new Error("boom") },
-  "read-vehicle-missing": { replier: replyFuelVehicleReadError, error: () => new VehicleNotFoundError() },
-  "read-vehicle-foreign": { replier: replyFuelVehicleReadError, error: () => new VehicleNotBelongBusinessError() },
+  "list-user": {
+    replier: replyFuelListError,
+    error: () => new ResourceNotFoundError(),
+  },
+  "type-business": {
+    replier: replyFuelTypeError,
+    error: () => new BusinessNotFoundError(),
+  },
+  "type-user": {
+    replier: replyFuelTypeError,
+    error: () => new ResourceNotFoundError(),
+  },
+  "type-missing": {
+    replier: replyFuelTypeError,
+    error: () => new FuelTypeNotFoundError(),
+  },
+  "type-foreign": {
+    replier: replyFuelTypeError,
+    error: () => new FuelTypeNotBelongBusinessError(),
+  },
+  "type-in-use": {
+    replier: replyFuelTypeError,
+    error: () => new FuelTypeHasAssociatedFuelError(3),
+  },
+  "write-mileage": {
+    replier: replyFuelWriteError,
+    error: () => new VehicleMileageInvalidError(),
+  },
+  "write-branch-missing": {
+    replier: replyFuelWriteError,
+    error: () => new BranchNotFoundError(),
+  },
+  "write-branch-foreign": {
+    replier: replyFuelWriteError,
+    error: () => new BranchNotBelongBusinessError(),
+  },
+  "type-unknown": {
+    replier: replyFuelTypeError,
+    error: () => new Error("boom"),
+  },
+  "read-vehicle-missing": {
+    replier: replyFuelVehicleReadError,
+    error: () => new VehicleNotFoundError(),
+  },
+  "read-vehicle-foreign": {
+    replier: replyFuelVehicleReadError,
+    error: () => new VehicleNotBelongBusinessError(),
+  },
 };
 
 beforeAll(async () => {
@@ -73,7 +109,11 @@ afterAll(async () => {
 
 async function answer(name: string) {
   const response = await app.inject({ method: "GET", url: `/${name}` });
-  const body = response.json() as { code?: string; message?: string; unmapped?: boolean };
+  const body = response.json() as {
+    code?: string;
+    message?: string;
+    unmapped?: boolean;
+  };
 
   return {
     status: response.statusCode,
@@ -93,8 +133,14 @@ describe("the fuel-type and list tables answer with a code", () => {
       expect(await answer(name)).toMatchObject({ status: 599, unmapped: true });
     }
 
-    expect(new ResourceNotFoundError()).toMatchObject({ statusCode: 404, code: "USER_NOT_FOUND" });
-    expect(new BusinessNotFoundError()).toMatchObject({ statusCode: 404, code: "BUSINESS_NOT_FOUND" });
+    expect(new ResourceNotFoundError()).toMatchObject({
+      statusCode: 404,
+      code: "USER_NOT_FOUND",
+    });
+    expect(new BusinessNotFoundError()).toMatchObject({
+      statusCode: 404,
+      code: "BUSINESS_NOT_FOUND",
+    });
     expect(new BusinessNotFoundError()).toBeInstanceOf(AppError);
   });
 
@@ -108,12 +154,19 @@ describe("the fuel-type and list tables answer with a code", () => {
   it("keeps the count in the in-use conflict", async () => {
     const inUse = await answer("type-in-use");
 
-    expect(inUse).toMatchObject({ status: 409, code: "FUEL_TYPE_IN_USE", header: "FUEL_TYPE_IN_USE" });
+    expect(inUse).toMatchObject({
+      status: 409,
+      code: "FUEL_TYPE_IN_USE",
+      header: "FUEL_TYPE_IN_USE",
+    });
     expect(inUse.message).toContain("3 registro(s)");
   });
 
   it("leaves an error it does not know to the caller", async () => {
-    expect(await answer("type-unknown")).toMatchObject({ status: 599, unmapped: true });
+    expect(await answer("type-unknown")).toMatchObject({
+      status: 599,
+      unmapped: true,
+    });
   });
 });
 
@@ -121,7 +174,10 @@ describe("the fuel write table", () => {
   it("explains the timeline rule instead of 'above the current mileage'", async () => {
     const refusal = await answer("write-mileage");
 
-    expect(refusal).toMatchObject({ status: 400, code: "VEHICLE_MILEAGE_INVALID" });
+    expect(refusal).toMatchObject({
+      status: 400,
+      code: "VEHICLE_MILEAGE_INVALID",
+    });
     expect(refusal.message).toContain("entre a leitura anterior e a seguinte");
     expect(refusal.message).not.toBe(new VehicleMileageInvalidError().message);
   });
@@ -140,7 +196,11 @@ describe("a vehicle's fuel history (the vehicle is in the path)", () => {
     // keeps the answer from confirming that the id exists.
     const missing = await answer("read-vehicle-missing");
 
-    expect(missing).toMatchObject({ status: 404, code: "VEHICLE_NOT_FOUND", header: "VEHICLE_NOT_FOUND" });
+    expect(missing).toMatchObject({
+      status: 404,
+      code: "VEHICLE_NOT_FOUND",
+      header: "VEHICLE_NOT_FOUND",
+    });
     expect(await answer("read-vehicle-foreign")).toEqual(missing);
   });
 });

@@ -41,7 +41,10 @@ let token = "";
 
 let server: Server;
 let baseUrl = "";
-const received: Array<{ body: string; headers: Record<string, string | undefined> }> = [];
+const received: Array<{
+  body: string;
+  headers: Record<string, string | undefined>;
+}> = [];
 
 const dispatcher = new WebhookDispatchService(async () => ({ allowed: true }));
 
@@ -188,7 +191,9 @@ describe("an endpoint's credentials at rest", () => {
     expect(stored.secret).not.toContain(firstSecret);
     expect(openSecret(stored.secret)).toBe(firstSecret);
 
-    expect(JSON.stringify(stored.headers)).not.toContain("credencial-do-gateway");
+    expect(JSON.stringify(stored.headers)).not.toContain(
+      "credencial-do-gateway",
+    );
     expect(openHeaders(stored.headers)).toEqual({
       Authorization: "Bearer credencial-do-gateway",
     });
@@ -213,7 +218,9 @@ describe("an endpoint's credentials at rest", () => {
       where: { id: endpointId },
     });
 
-    expect(JSON.stringify(stored.headers)).not.toContain("credencial-do-gateway");
+    expect(JSON.stringify(stored.headers)).not.toContain(
+      "credencial-do-gateway",
+    );
     expect(openHeaders(stored.headers)).toEqual({
       Authorization: "Bearer credencial-do-gateway",
     });
@@ -348,7 +355,9 @@ describe("rotating the secret", () => {
     expect(endpoint.consecutive_failures).toBe(0);
     expect(endpoint.disabled_at).toBeNull();
 
-    await prisma.webhookDelivery.deleteMany({ where: { endpointId: unreadable.id } });
+    await prisma.webhookDelivery.deleteMany({
+      where: { endpointId: unreadable.id },
+    });
     await prisma.webhookEndpoint.delete({ where: { id: unreadable.id } });
   });
 

@@ -44,7 +44,9 @@ async function assertAccountPayableReferences(
     record !== null && record.businessId === businessId;
 
   if (references.branchId) {
-    const branch = await repositories.branch.findBranchById(references.branchId);
+    const branch = await repositories.branch.findBranchById(
+      references.branchId,
+    );
 
     if (!belongs(branch)) throw new AccountPayableReferenceError("branch");
   }

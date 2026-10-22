@@ -6,7 +6,12 @@
  * mass notice belongs to one ticket.
  */
 
-type SupportTicketKind = "OCCURRENCE" | "DELIVERY" | "ROUTE" | "DRIVER" | "LEGACY";
+type SupportTicketKind =
+  | "OCCURRENCE"
+  | "DELIVERY"
+  | "ROUTE"
+  | "DRIVER"
+  | "LEGACY";
 
 type SupportTicketStatus = "OPEN" | "CLOSED";
 
@@ -136,7 +141,11 @@ interface CreateSupportTicketEventProps {
 }
 
 type SupportTicketStatusFilter = "OPEN" | "CLOSED" | "ALL";
-type SupportTicketScope = "ALL" | "MINE" | "UNASSIGNED" | "PENDING_AUTHORIZATION";
+type SupportTicketScope =
+  | "ALL"
+  | "MINE"
+  | "UNASSIGNED"
+  | "PENDING_AUTHORIZATION";
 
 interface ListSupportTicketsProps {
   businessId: string;

@@ -72,7 +72,9 @@ async function serviceOrderPartRoutes(app: FastifyInstance) {
         response: {
           200: ndjsonList(
             itemOf(serviceOrderPartResponses.serviceOrderPartList),
-            offsetMetaWith(serviceOrderPartResponses.serviceOrderPartSearchMeta),
+            offsetMetaWith(
+              serviceOrderPartResponses.serviceOrderPartSearchMeta,
+            ),
           ),
           400: serviceOrderPartResponses.genericError,
           404: serviceOrderPartResponses.sessionUserNotFound,

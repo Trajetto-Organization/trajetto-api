@@ -14,17 +14,29 @@ import {
   WEBHOOK_SECRET_ROTATION_GRACE_MS,
   newWebhookSecret,
 } from "@/shared/integration/webhook-signature";
-import { isSealed, sealHeaders, sealSecret } from "@/shared/integration/secret-box";
+import {
+  isSealed,
+  sealHeaders,
+  sealSecret,
+} from "@/shared/integration/secret-box";
 import {
   MAX_WEBHOOK_ENDPOINTS_PER_BUSINESS,
   REPLAY_WINDOW_DAYS,
 } from "@/shared/integration/webhook-dispatch-rules";
 
-import { audit, scopedBusiness, type ActivityRecorder } from "./integration-admin-access";
+import {
+  audit,
+  scopedBusiness,
+  type ActivityRecorder,
+} from "./integration-admin-access";
 
 function endpointNotFound(): AppError {
   // Another company's endpoint answers exactly like a missing one.
-  return new AppError("Endpoint não encontrado.", 404, "WEBHOOK_ENDPOINT_NOT_FOUND");
+  return new AppError(
+    "Endpoint não encontrado.",
+    404,
+    "WEBHOOK_ENDPOINT_NOT_FOUND",
+  );
 }
 
 interface SaveWebhookEndpointRequest {
@@ -72,7 +84,8 @@ class SaveWebhookEndpointUseCase {
         url: request.url,
         topics: request.topics,
         ...(request.headers !== undefined && {
-          headers: request.headers === null ? null : sealedHeaders(request.headers),
+          headers:
+            request.headers === null ? null : sealedHeaders(request.headers),
         }),
         is_active: request.is_active,
       });
@@ -156,7 +169,10 @@ class ReactivateWebhookEndpointUseCase {
     userId: string,
     businessId: string,
     id: string,
-  ): Promise<{ message: string; data: { id: string; reactivated: boolean; released: number } }> {
+  ): Promise<{
+    message: string;
+    data: { id: string; reactivated: boolean; released: number };
+  }> {
     await scopedBusiness(this.users, userId, businessId);
 
     const endpoint = await this.endpoints.find(id, businessId);
@@ -209,7 +225,11 @@ class RotateWebhookSecretUseCase {
     @inject("NotificationService") private activity: ActivityRecorder,
   ) {}
 
-  async execute(userId: string, businessId: string, id: string): Promise<string> {
+  async execute(
+    userId: string,
+    businessId: string,
+    id: string,
+  ): Promise<string> {
     await scopedBusiness(this.users, userId, businessId);
 
     const secret = newWebhookSecret();
@@ -220,8 +240,11 @@ class RotateWebhookSecretUseCase {
       // Kept as stored when already sealed — never opened here, so a
       // rotation still works when the old value cannot be read, which is
       // exactly when one is needed. A row written in clear is sealed.
-      previousOf: (current) => (isSealed(current) ? current : sealSecret(current)),
-      previousExpiresAt: new Date(Date.now() + WEBHOOK_SECRET_ROTATION_GRACE_MS),
+      previousOf: (current) =>
+        isSealed(current) ? current : sealSecret(current),
+      previousExpiresAt: new Date(
+        Date.now() + WEBHOOK_SECRET_ROTATION_GRACE_MS,
+      ),
     });
 
     if (!rotated) throw endpointNotFound();
@@ -248,7 +271,10 @@ class ListWebhookEndpointsUseCase {
     @inject("UserRepository") private users: IUserRepository,
   ) {}
 
-  async execute(userId: string, businessId: string): Promise<WebhookEndpointSummary[]> {
+  async execute(
+    userId: string,
+    businessId: string,
+  ): Promise<WebhookEndpointSummary[]> {
     await scopedBusiness(this.users, userId, businessId);
 
     return this.endpoints.listByBusiness(businessId);
@@ -267,7 +293,8 @@ class DeleteWebhookEndpointUseCase {
   async execute(userId: string, businessId: string, id: string): Promise<void> {
     await scopedBusiness(this.users, userId, businessId);
 
-    if (!(await this.endpoints.delete(id, businessId))) throw endpointNotFound();
+    if (!(await this.endpoints.delete(id, businessId)))
+      throw endpointNotFound();
 
     audit(this.activity, {
       action: "delete",

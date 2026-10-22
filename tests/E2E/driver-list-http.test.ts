@@ -88,7 +88,13 @@ async function seedProfile(
       businessId,
       permissions: {
         create: [
-          { permissionKey, action: permissionKey, canRead: true, canWrite, businessId },
+          {
+            permissionKey,
+            action: permissionKey,
+            canRead: true,
+            canWrite,
+            businessId,
+          },
         ],
       },
     },
@@ -128,10 +134,14 @@ async function seedUser(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "15m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "15m",
+    },
+  );
 }
 
 /**
@@ -147,8 +157,10 @@ const SEED = Array.from({ length: 12 }, (_, index) => ({
   index,
   name: `Motorista ${String.fromCharCode(65 + index)}`,
   status: index % 4 === 0 ? ("INACTIVE" as const) : ("ACTIVE" as const),
-  contract_type: index % 3 === 0 ? ("THIRD_PARTY" as const) : ("OWNED" as const),
-  cnh_category: index % 3 === 0 ? ("E" as const) : index % 3 === 1 ? ("AB" as const) : null,
+  contract_type:
+    index % 3 === 0 ? ("THIRD_PARTY" as const) : ("OWNED" as const),
+  cnh_category:
+    index % 3 === 0 ? ("E" as const) : index % 3 === 1 ? ("AB" as const) : null,
   cnh_expires_at:
     index === 0
       ? new Date("2020-01-01T00:00:00.000Z")
@@ -172,7 +184,10 @@ interface ListMeta {
     inactive: number;
     owned: number;
     thirdParty: number;
-    facets: Record<string, Array<{ value: string; label?: string; count: number }>>;
+    facets: Record<
+      string,
+      Array<{ value: string; label?: string; count: number }>
+    >;
   };
 }
 
@@ -196,7 +211,12 @@ async function list(
   });
 
   if (response.statusCode !== 200) {
-    return { status: response.statusCode, meta: {} as ListMeta, rows: [], body: response.body };
+    return {
+      status: response.statusCode,
+      meta: {} as ListMeta,
+      rows: [],
+      body: response.body,
+    };
   }
 
   const [first, ...rest] = response.body
@@ -208,7 +228,9 @@ async function list(
 }
 
 const facet = (meta: ListMeta, name: string) =>
-  Object.fromEntries(meta.searchMeta.facets[name].map((entry) => [entry.value, entry.count]));
+  Object.fromEntries(
+    meta.searchMeta.facets[name].map((entry) => [entry.value, entry.count]),
+  );
 
 beforeAll(async () => {
   await seedBusiness(CARRIER);
@@ -277,7 +299,9 @@ beforeAll(async () => {
     where: { businessId: CARRIER, name: SEED[1].name },
   });
 
-  tokens.driver = await seedUser("BUSINESS_USER", CARRIER, { driverId: ownDriver.id });
+  tokens.driver = await seedUser("BUSINESS_USER", CARRIER, {
+    driverId: ownDriver.id,
+  });
   tokens.otherAdmin = await seedUser("BUSINESS_ADMIN", OTHER);
   tokens.master = await seedUser("MASTER", null);
 
@@ -308,7 +332,9 @@ describe("GET /driver/list-driver — order", () => {
     const ascPage2 = await list("sort=name&order=asc", tokens.admin, 2);
     const desc = await list("sort=name&order=desc");
 
-    expect(asc.rows.map((row) => row.name)).toEqual(names([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
+    expect(asc.rows.map((row) => row.name)).toEqual(
+      names([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+    );
     expect(ascPage2.rows.map((row) => row.name)).toEqual(names([10, 11]));
     expect(desc.rows[0].name).toBe(SEED[11].name);
   });
@@ -317,18 +343,35 @@ describe("GET /driver/list-driver — order", () => {
     const asc = await list("sort=cnh_expires_at&order=asc");
     const desc = await list("sort=cnh_expires_at&order=desc");
 
-    expect(asc.rows.slice(0, 6).map((row) => row.name)).toEqual(names([0, 1, 2, 3, 4, 5]));
-    expect(desc.rows.slice(0, 6).map((row) => row.name)).toEqual(names([5, 4, 3, 2, 1, 0]));
+    expect(asc.rows.slice(0, 6).map((row) => row.name)).toEqual(
+      names([0, 1, 2, 3, 4, 5]),
+    );
+    expect(desc.rows.slice(0, 6).map((row) => row.name)).toEqual(
+      names([5, 4, 3, 2, 1, 0]),
+    );
   });
 
   it("orders categories as the licence classes are declared (E before AB), blanks last", async () => {
     const asc = await list("sort=cnh_category&order=asc");
 
-    const categories = asc.rows.map((row) => SEED.find((entry) => entry.name === row.name)!.cnh_category);
+    const categories = asc.rows.map(
+      (row) => SEED.find((entry) => entry.name === row.name)!.cnh_category,
+    );
 
     // E ×4, AB ×4, then the blanks; inside a tie, newest first.
-    expect(categories.slice(0, 8)).toEqual(["E", "E", "E", "E", "AB", "AB", "AB", "AB"]);
-    expect(asc.rows.slice(0, 4).map((row) => row.name)).toEqual(names([9, 6, 3, 0]));
+    expect(categories.slice(0, 8)).toEqual([
+      "E",
+      "E",
+      "E",
+      "E",
+      "AB",
+      "AB",
+      "AB",
+      "AB",
+    ]);
+    expect(asc.rows.slice(0, 4).map((row) => row.name)).toEqual(
+      names([9, 6, 3, 0]),
+    );
   });
 });
 
@@ -340,7 +383,9 @@ describe("GET /driver/list-driver — filters and cards", () => {
   });
 
   it("combines facets with each other, with search and with sort", async () => {
-    const combined = await list("status=ACTIVE&contract_type=THIRD_PARTY&sort=name&order=desc");
+    const combined = await list(
+      "status=ACTIVE&contract_type=THIRD_PARTY&sort=name&order=desc",
+    );
 
     expect(combined.rows.map((row) => row.name)).toEqual(names([9, 6, 3]));
 
@@ -358,7 +403,11 @@ describe("GET /driver/list-driver — filters and cards", () => {
     const norte = await list(`branchId=${NORTE}`);
 
     expect(norte.meta.total).toBe(6);
-    expect(norte.rows.every((row) => row.branch?.corporate_reason === "Filial Norte")).toBe(true);
+    expect(
+      norte.rows.every(
+        (row) => row.branch?.corporate_reason === "Filial Norte",
+      ),
+    ).toBe(true);
 
     const options = norte.meta.searchMeta.facets.branchId;
 
@@ -425,7 +474,10 @@ describe("GET /driver/list-driver — tenants and roles", () => {
   });
 
   it("refuses another company's manager who names this company", async () => {
-    const { status, body } = await list(`businessId=${CARRIER}`, tokens.otherAdmin);
+    const { status, body } = await list(
+      `businessId=${CARRIER}`,
+      tokens.otherAdmin,
+    );
 
     expect(status).toBe(403);
     expect(body).toContain("TENANT_ACCESS_DENIED");
@@ -479,7 +531,9 @@ async function exportCsv(query: string, token = tokens.admin) {
 
 describe("GET /driver/export-driver", () => {
   it("exports the list's filter, not the whole company", async () => {
-    const { response, header, rows } = await exportCsv("status=INACTIVE&sort=name&order=asc");
+    const { response, header, rows } = await exportCsv(
+      "status=INACTIVE&sort=name&order=asc",
+    );
 
     expect(response.statusCode).toBe(200);
     expect(header).toContain("Categoria da CNH");
@@ -502,7 +556,9 @@ describe("GET /driver/export-driver", () => {
 
     expect(response.statusCode, response.body).toBe(400);
     expect(response.json().code).toBe("NOTHING_TO_EXPORT");
-    expect(response.json().message).toBe("Não existem motoristas para exportar!");
+    expect(response.json().message).toBe(
+      "Não existem motoristas para exportar!",
+    );
   });
 
   it("names the file with the company's business day", async () => {

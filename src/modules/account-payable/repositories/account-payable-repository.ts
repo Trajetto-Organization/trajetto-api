@@ -148,7 +148,10 @@ class AccountPayableRepository implements IAccountPayableRepository {
       this.prisma.accountPayable.findMany({
         skip: (page - 1) * pageSize,
         take: pageSize,
-        where: accountPayableListWhere(filters, { ...context, withStatus: true }),
+        where: accountPayableListWhere(filters, {
+          ...context,
+          withStatus: true,
+        }),
         orderBy: resolveOrderBy(ACCOUNT_PAYABLE_SORT, { sort, order }),
         include: ACCOUNT_PAYABLE_INCLUDE,
       }),

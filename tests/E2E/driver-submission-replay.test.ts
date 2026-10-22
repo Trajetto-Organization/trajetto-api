@@ -199,11 +199,9 @@ describe("a resend that no longer passes validation (GAP5-3)", () => {
     const createdId = first.json().id;
 
     // Version N+1 now demands a field the queued body never had.
-    const parse = vi
-      .spyOn(createFuelSchema, "parse")
-      .mockImplementation(() => {
-        throw stricterNextVersion();
-      });
+    const parse = vi.spyOn(createFuelSchema, "parse").mockImplementation(() => {
+      throw stricterNextVersion();
+    });
 
     try {
       const replay = await post(fuelUrl(), await fuelBody(1_100, key), {
@@ -278,7 +276,12 @@ describe("a resend that no longer passes validation (GAP5-3)", () => {
         businessId: BUSINESS,
       },
     });
-    const other = await seedUser(prisma, BUSINESS, "BUSINESS_USER", otherDriver.id);
+    const other = await seedUser(
+      prisma,
+      BUSINESS,
+      "BUSINESS_USER",
+      otherDriver.id,
+    );
 
     const replay = await app.inject({
       method: "POST",
@@ -389,8 +392,12 @@ describe("the same submission sent twice is recorded once (TESTS-11)", () => {
       const mileage = (await vehicleMileage()) + 100;
       const body = await checklistBody(mileage, inBody ? key : null);
 
-      const first = await post(checklistUrl(), body, { "idempotency-key": key });
-      const second = await post(checklistUrl(), body, { "idempotency-key": key });
+      const first = await post(checklistUrl(), body, {
+        "idempotency-key": key,
+      });
+      const second = await post(checklistUrl(), body, {
+        "idempotency-key": key,
+      });
 
       expect(first.statusCode, first.body).toBe(201);
       expect(second.statusCode, second.body).toBe(201);
@@ -407,7 +414,11 @@ describe("the same submission sent twice is recorded once (TESTS-11)", () => {
   it("an arrival", async () => {
     const deliveryId = await deliveryInTransit();
     const key = randomUUID();
-    const body = { client_submission_id: key, latitude: -23.55, longitude: -46.63 };
+    const body = {
+      client_submission_id: key,
+      latitude: -23.55,
+      longitude: -46.63,
+    };
 
     const first = await post(deliveryUrl("arrival", deliveryId), body);
     const second = await post(deliveryUrl("arrival", deliveryId), body);
@@ -415,7 +426,9 @@ describe("the same submission sent twice is recorded once (TESTS-11)", () => {
     expect(first.statusCode, first.body).toBe(201);
     expect(second.statusCode, second.body).toBe(201);
     expect(
-      await prisma.deliveryEvent.count({ where: { client_submission_id: key } }),
+      await prisma.deliveryEvent.count({
+        where: { client_submission_id: key },
+      }),
     ).toBe(1);
   });
 
@@ -434,7 +447,9 @@ describe("the same submission sent twice is recorded once (TESTS-11)", () => {
     expect(first.statusCode, first.body).toBe(201);
     expect(second.statusCode, second.body).toBe(201);
     expect(
-      await prisma.deliveryEvent.count({ where: { client_submission_id: key } }),
+      await prisma.deliveryEvent.count({
+        where: { client_submission_id: key },
+      }),
     ).toBe(1);
   });
 
@@ -448,12 +463,20 @@ describe("the same submission sent twice is recorded once (TESTS-11)", () => {
         description: "Portaria fechada",
       };
 
-      const first = await post(deliveryUrl("report-occurrence", deliveryId), body, {
-        "idempotency-key": key,
-      });
-      const second = await post(deliveryUrl("report-occurrence", deliveryId), body, {
-        "idempotency-key": key,
-      });
+      const first = await post(
+        deliveryUrl("report-occurrence", deliveryId),
+        body,
+        {
+          "idempotency-key": key,
+        },
+      );
+      const second = await post(
+        deliveryUrl("report-occurrence", deliveryId),
+        body,
+        {
+          "idempotency-key": key,
+        },
+      );
 
       expect(first.statusCode, first.body).toBe(201);
       expect(second.statusCode, second.body).toBe(201);

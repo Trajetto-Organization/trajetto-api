@@ -11,7 +11,10 @@ import {
   totalOpenRoutes,
 } from "@/modules/driver/driver-rules";
 
-import { driverHistoryRefusal, NO_DRIVER_HISTORY } from "@/modules/driver/usecases/errors/driver-history-refusal";
+import {
+  driverHistoryRefusal,
+  NO_DRIVER_HISTORY,
+} from "@/modules/driver/usecases/errors/driver-history-refusal";
 
 /**
  * The driver catalogue's pure rules: where a CNH stands on the company's day,
@@ -70,7 +73,9 @@ describe("cnhExpiryIssue", () => {
   });
 
   it("refuses a day that does not exist instead of rolling it over", () => {
-    expect(cnhExpiryIssue("2030-02-30", today)).toMatch(/não é uma data válida/);
+    expect(cnhExpiryIssue("2030-02-30", today)).toMatch(
+      /não é uma data válida/,
+    );
   });
 
   it("refuses more than ten years ahead, and accepts exactly ten", () => {
@@ -85,7 +90,11 @@ describe("cnhExpiryIssue", () => {
 
 describe("openRoutesRefusal", () => {
   it("names the running route and what to do with it", () => {
-    const message = openRoutesRefusal({ PLANNED: 0, RELEASED: 0, IN_PROGRESS: 1 });
+    const message = openRoutesRefusal({
+      PLANNED: 0,
+      RELEASED: 0,
+      IN_PROGRESS: 1,
+    });
 
     expect(message).toBe(
       "Não é possível inativar este motorista: ele tem 1 rota em andamento. " +
@@ -94,21 +103,35 @@ describe("openRoutesRefusal", () => {
   });
 
   it("adds planned and released routes together, in the plural", () => {
-    const message = openRoutesRefusal({ PLANNED: 2, RELEASED: 1, IN_PROGRESS: 1 });
+    const message = openRoutesRefusal({
+      PLANNED: 2,
+      RELEASED: 1,
+      IN_PROGRESS: 1,
+    });
 
-    expect(message).toContain("1 rota em andamento e 3 rotas planejadas ou liberadas");
+    expect(message).toContain(
+      "1 rota em andamento e 3 rotas planejadas ou liberadas",
+    );
     expect(message).toContain("designe outro motorista ou cancele");
   });
 
   it("totals the three statuses", () => {
-    expect(totalOpenRoutes({ PLANNED: 2, RELEASED: 1, IN_PROGRESS: 1 })).toBe(4);
-    expect(totalOpenRoutes({ PLANNED: 0, RELEASED: 0, IN_PROGRESS: 0 })).toBe(0);
+    expect(totalOpenRoutes({ PLANNED: 2, RELEASED: 1, IN_PROGRESS: 1 })).toBe(
+      4,
+    );
+    expect(totalOpenRoutes({ PLANNED: 0, RELEASED: 0, IN_PROGRESS: 0 })).toBe(
+      0,
+    );
   });
 });
 
 describe("openRoutesRefusal speaks of one route or of several", () => {
   it("says 'a rota que ainda não saiu' for a single waiting route", () => {
-    const message = openRoutesRefusal({ PLANNED: 1, RELEASED: 0, IN_PROGRESS: 0 });
+    const message = openRoutesRefusal({
+      PLANNED: 1,
+      RELEASED: 0,
+      IN_PROGRESS: 0,
+    });
 
     expect(message).toBe(
       "Não é possível inativar este motorista: ele tem 1 rota planejada ou liberada. " +
@@ -117,7 +140,11 @@ describe("openRoutesRefusal speaks of one route or of several", () => {
   });
 
   it("says 'as rotas' when more than one is running", () => {
-    const message = openRoutesRefusal({ PLANNED: 0, RELEASED: 0, IN_PROGRESS: 2 });
+    const message = openRoutesRefusal({
+      PLANNED: 0,
+      RELEASED: 0,
+      IN_PROGRESS: 2,
+    });
 
     expect(message).toContain("conclua ou cancele as rotas em andamento");
   });
@@ -168,7 +195,9 @@ describe("birthDateIssue", () => {
   });
 
   it("refuses a date that is not one, and garbage from before 1900", () => {
-    expect(birthDateIssue("1990-13-01", "2026-09-28")).toBe("Data de nascimento inválida.");
+    expect(birthDateIssue("1990-13-01", "2026-09-28")).toBe(
+      "Data de nascimento inválida.",
+    );
     expect(birthDateIssue("0199-05-10", "2026-09-28")).toBe(
       "A data de nascimento é anterior a 1900. Confira a data.",
     );
@@ -181,7 +210,11 @@ describe("driverHistoryRefusal", () => {
   });
 
   it("names the first reason in the dialog's order, with its count", () => {
-    const refusal = driverHistoryRefusal({ ...NO_DRIVER_HISTORY, fuels: 2, pauses: 5 });
+    const refusal = driverHistoryRefusal({
+      ...NO_DRIVER_HISTORY,
+      fuels: 2,
+      pauses: 5,
+    });
 
     expect(refusal?.code).toBe("DRIVER_HAS_FUELS");
     expect(refusal?.statusCode).toBe(409);
@@ -189,20 +222,24 @@ describe("driverHistoryRefusal", () => {
   });
 
   it("puts an app account before everything, and deliveries and routes together", () => {
-    expect(driverHistoryRefusal({ ...NO_DRIVER_HISTORY, users: 1, fines: 3 })?.code).toBe(
-      "DRIVER_HAS_USER",
-    );
+    expect(
+      driverHistoryRefusal({ ...NO_DRIVER_HISTORY, users: 1, fines: 3 })?.code,
+    ).toBe("DRIVER_HAS_USER");
 
-    const operation = driverHistoryRefusal({ ...NO_DRIVER_HISTORY, deliveries: 4, routes: 1 });
+    const operation = driverHistoryRefusal({
+      ...NO_DRIVER_HISTORY,
+      deliveries: 4,
+      routes: 1,
+    });
 
     expect(operation?.code).toBe("DRIVER_HAS_OPERATION");
     expect(operation?.message).toContain("4 entrega(s) e 1 rota(s)");
   });
 
   it("refuses pauses last, as the legal record of the workday", () => {
-    expect(driverHistoryRefusal({ ...NO_DRIVER_HISTORY, pauses: 1 })?.code).toBe(
-      "DRIVER_HAS_PAUSES",
-    );
+    expect(
+      driverHistoryRefusal({ ...NO_DRIVER_HISTORY, pauses: 1 })?.code,
+    ).toBe("DRIVER_HAS_PAUSES");
   });
 });
 

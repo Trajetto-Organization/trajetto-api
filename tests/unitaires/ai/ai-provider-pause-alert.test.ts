@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluateAlerts, type OperationalSnapshot } from "@/shared/health/alert-rules";
+import {
+  evaluateAlerts,
+  type OperationalSnapshot,
+} from "@/shared/health/alert-rules";
 
 /**
  * The AI pipeline paused by the provider pages the operation (AI-8).

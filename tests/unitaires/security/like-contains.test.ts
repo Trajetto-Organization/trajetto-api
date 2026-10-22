@@ -242,7 +242,12 @@ describe("every LIKE filter in src", () => {
       const text = readFileSync(file, "utf8");
       if (![...LIKE_KEYS].some((key) => text.includes(key))) continue;
 
-      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+      const source = ts.createSourceFile(
+        file,
+        text,
+        ts.ScriptTarget.Latest,
+        true,
+      );
 
       const visit = (node: ts.Node) => {
         if (

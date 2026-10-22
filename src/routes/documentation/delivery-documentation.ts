@@ -61,11 +61,17 @@ const driverOccurrenceTypeEntity = z.object({
   form_fields: occurrenceFormFieldsDoc,
   form_version: z
     .number()
-    .describe("Enviada de volta no relato (`form_version`) junto com as respostas."),
+    .describe(
+      "Enviada de volta no relato (`form_version`) junto com as respostas.",
+    ),
   category: z
     .enum(["DELIVERED", "NOT_DELIVERED", "PAUSE"])
-    .describe("Categoria (decisão 14.3). Em `occurrence_types`, sempre NOT_DELIVERED."),
-  requires_receipt_photo: z.boolean().describe("Exige a foto do canhoto (só pela câmera)."),
+    .describe(
+      "Categoria (decisão 14.3). Em `occurrence_types`, sempre NOT_DELIVERED.",
+    ),
+  requires_receipt_photo: z
+    .boolean()
+    .describe("Exige a foto do canhoto (só pela câmera)."),
   requires_signature: z.boolean().describe("Exige a assinatura na tela."),
 });
 
@@ -73,7 +79,7 @@ const driverOccurrenceTypeEntity = z.object({
 const driverDeliveredTypeEntity = driverOccurrenceTypeEntity.extend({
   is_default: z
     .boolean()
-    .describe("O tipo padrão \"Entrega normal\" (o primeiro da lista)."),
+    .describe('O tipo padrão "Entrega normal" (o primeiro da lista).'),
 });
 
 /** Decision 14.4 (contract 3): a pause type and its legal nature. */
@@ -82,7 +88,9 @@ const driverPauseTypeEntity = z.object({
   name: z.string(),
   pause_kind: z
     .enum(["MEAL", "REST", "OTHER"])
-    .describe("A natureza legal (Lei 13.103), enviada como `kind` junto com `occurrence_type_id`."),
+    .describe(
+      "A natureza legal (Lei 13.103), enviada como `kind` junto com `occurrence_type_id`.",
+    ),
   is_default: z.boolean(),
 });
 
@@ -98,14 +106,18 @@ const driverJourneyEntity = z
   .object({
     pause_allowed: z
       .boolean()
-      .describe("Rota liberada ou em andamento do dia agora: o app só oferece \"Iniciar pausa\" então."),
+      .describe(
+        'Rota liberada ou em andamento do dia agora: o app só oferece "Iniciar pausa" então.',
+      ),
     route_id: z.string().nullable().describe("A rota da jornada agora."),
     day: z
       .string()
       .describe(
         "O dia da empresa (AAAA-MM-DD, fuso `time_zone`) em que a resposta foi dada: o app só confia em `pause_allowed` em cache enquanto esse dia durar.",
       ),
-    time_zone: z.string().describe("O fuso da empresa (IANA), ex.: America/Sao_Paulo."),
+    time_zone: z
+      .string()
+      .describe("O fuso da empresa (IANA), ex.: America/Sao_Paulo."),
   })
   .describe("A jornada como o servidor a vê agora (decisão 14.4).");
 
@@ -167,12 +179,16 @@ const deliveryRowEntity = z.object({
   latitude: z
     .number()
     .nullable()
-    .describe("Ponto do ENDEREÇO no mapa da rota (decisão 14.7): um plano, não prova de entrega."),
+    .describe(
+      "Ponto do ENDEREÇO no mapa da rota (decisão 14.7): um plano, não prova de entrega.",
+    ),
   longitude: z.number().nullable(),
   geo_source: z
     .enum(["MANUAL", "GEOCODER"])
     .nullable()
-    .describe("MANUAL: fixado no mapa pelo despachante. Some quando o endereço muda."),
+    .describe(
+      "MANUAL: fixado no mapa pelo despachante. Some quando o endereço muda.",
+    ),
   geo_updated_at: isoDateTime.nullable(),
   status: deliveryStatusEnum,
   kind: z.enum(["DELIVERY", "PICKUP"]),
@@ -215,10 +231,18 @@ const myDeliveryEntity = deliveryRowEntity.extend({
       z.object({
         id: z.string(),
         sequence: z.number(),
-        status: z.enum(["PENDING", "ARRIVED", "COMPLETED", "FAILED", "CANCELLED"]),
+        status: z.enum([
+          "PENDING",
+          "ARRIVED",
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED",
+        ]),
         arrived_at: isoDateTime
           .nullable()
-          .describe("Quando o motorista registrou a chegada nesta parada; nulo antes disso."),
+          .describe(
+            "Quando o motorista registrou a chegada nesta parada; nulo antes disso.",
+          ),
         on_the_way_at: isoDateTime
           .nullable()
           .describe(
@@ -241,10 +265,14 @@ const myDeliveryEntity = deliveryRowEntity.extend({
             .describe("Destino da rota, texto livre, quando foi informado."),
           planned_departure_at: isoDateTime
             .nullable()
-            .describe("Saída prevista (instante em UTC); nula quando não foi planejada."),
+            .describe(
+              "Saída prevista (instante em UTC); nula quando não foi planejada.",
+            ),
           planned_arrival_at: isoDateTime
             .nullable()
-            .describe("Retorno previsto (instante em UTC); nulo quando não foi planejado."),
+            .describe(
+              "Retorno previsto (instante em UTC); nulo quando não foi planejado.",
+            ),
           scheduled_date: isoDateTime
             .nullable()
             .optional()
@@ -254,7 +282,9 @@ const myDeliveryEntity = deliveryRowEntity.extend({
           plan_version: z
             .number()
             .optional()
-            .describe("Versão do plano da rota (decisão 14.7); a mesma de routes[]."),
+            .describe(
+              "Versão do plano da rota (decisão 14.7); a mesma de routes[].",
+            ),
         }),
       }),
     )
@@ -267,7 +297,10 @@ const myDeliveryEntity = deliveryRowEntity.extend({
       occurrenceTypeId: z.string(),
       occurrenceTypeName: z.string(),
       status: z.enum(["PENDING", "APPROVED", "DENIED", "SUPERSEDED"]),
-      note: z.string().nullable().describe("O motivo da torre, sempre presente numa negativa."),
+      note: z
+        .string()
+        .nullable()
+        .describe("O motivo da torre, sempre presente numa negativa."),
       decidedAt: isoDateTime.nullable(),
       requestedAt: isoDateTime,
     })
@@ -299,10 +332,14 @@ const deliveryEventEntity = z.object({
   device_id: z
     .string()
     .nullable()
-    .describe("Identificador do celular que registrou o comprovante (decisão 14.8); só DRIVER_APP."),
+    .describe(
+      "Identificador do celular que registrou o comprovante (decisão 14.8); só DRIVER_APP.",
+    ),
   photo_taken_at: isoDateTime
     .nullable()
-    .describe("Quando a foto do canhoto foi tirada, pelo relógio corrigido do celular; nulo = occurred_at."),
+    .describe(
+      "Quando a foto do canhoto foi tirada, pelo relógio corrigido do celular; nulo = occurred_at.",
+    ),
   gps_address: z
     .object({
       line: z.string().nullable().optional(),
@@ -312,11 +349,15 @@ const deliveryEventEntity = z.object({
       cep: z.string().nullable().optional(),
     })
     .nullable()
-    .describe("Endereço do GPS do comprovante por geocodificação reversa, guardado na primeira emissão do PDF."),
+    .describe(
+      "Endereço do GPS do comprovante por geocodificação reversa, guardado na primeira emissão do PDF.",
+    ),
   gps_address_source: z
     .enum(["PROVIDER", "UNAVAILABLE"])
     .nullable()
-    .describe("UNAVAILABLE: a consulta falhou ou não há provedor; o PDF imprime o endereço da entrega, rotulado."),
+    .describe(
+      "UNAVAILABLE: a consulta falhou ou não há provedor; o PDF imprime o endereço da entrega, rotulado.",
+    ),
   gps_geocoded_at: isoDateTime.nullable(),
   note: z.string().nullable(),
   status_from: deliveryStatusEnum.nullable(),
@@ -334,7 +375,9 @@ const deliveryEventEntity = z.object({
   occurred_at: isoDateTime.nullable(),
   created_at: isoDateTime,
   reportedBy: person.nullable(),
-  reason: person.nullable().describe("O motivo do catálogo, na mudança manual."),
+  reason: person
+    .nullable()
+    .describe("O motivo do catálogo, na mudança manual."),
 });
 
 const deliveryOccurrenceEntity = z.object({
@@ -363,8 +406,14 @@ const deliveryOccurrenceEntity = z.object({
   category: z
     .enum(["DELIVERED", "NOT_DELIVERED", "PAUSE"])
     .describe("Categoria do tipo relatado (decisão 14.3)."),
-  receipt_photo: z.string().nullable().describe("Chave da foto do canhoto, quando houve."),
-  signature: z.string().nullable().describe("Chave da assinatura na tela, quando houve."),
+  receipt_photo: z
+    .string()
+    .nullable()
+    .describe("Chave da foto do canhoto, quando houve."),
+  signature: z
+    .string()
+    .nullable()
+    .describe("Chave da assinatura na tela, quando houve."),
   received_by: z.string().nullable().describe("Quem recebeu (só em entrega)."),
   escalated_at: isoDateTime.nullable(),
   occurrenceType: z.object({
@@ -405,7 +454,9 @@ const timelineEntryEntity = z.object({
     device: z.string().nullable(),
   }),
   photos: z.array(z.string()),
-  location: z.object({ latitude: z.number(), longitude: z.number() }).nullable(),
+  location: z
+    .object({ latitude: z.number(), longitude: z.number() })
+    .nullable(),
   statusFrom: deliveryStatusEnum.nullable(),
   statusTo: deliveryStatusEnum.nullable(),
   reason: z.string().nullable(),
@@ -420,11 +471,15 @@ const deliveryDetailEntity = deliveryRowEntity.extend({
     .describe(
       "A importação que criou a entrega: itens de XML de NF-e não são editáveis.",
     ),
-  driver: z.object({ id: z.string(), name: z.string(), cnh: z.string() }).nullable(),
+  driver: z
+    .object({ id: z.string(), name: z.string(), cnh: z.string() })
+    .nullable(),
   vehicle: z.object({ id: z.string(), license_plate: z.string() }).nullable(),
   items: z.array(deliveryItemEntity),
   events: z.array(deliveryEventEntity).describe("Mais recente primeiro."),
-  occurrences: z.array(deliveryOccurrenceEntity).describe("Mais recente primeiro."),
+  occurrences: z
+    .array(deliveryOccurrenceEntity)
+    .describe("Mais recente primeiro."),
   chatMessages: z
     .array(
       z.object({
@@ -507,10 +562,14 @@ const deliveryResponses = {
         ),
       occurrence_types: z
         .array(driverOccurrenceTypeEntity)
-        .describe("Só os tipos de NÃO ENTREGA ativos: o app instalado (contrato 2) os oferece como problema."),
+        .describe(
+          "Só os tipos de NÃO ENTREGA ativos: o app instalado (contrato 2) os oferece como problema.",
+        ),
       delivered_types: z
         .array(driverDeliveredTypeEntity)
-        .describe("Contrato 3: os tipos de ENTREGA ativos, o padrão primeiro; comprovar = relatar um deles."),
+        .describe(
+          "Contrato 3: os tipos de ENTREGA ativos, o padrão primeiro; comprovar = relatar um deles.",
+        ),
       pause_types: z
         .array(driverPauseTypeEntity)
         .describe("Contrato 3: os tipos de PAUSA ativos."),
@@ -529,32 +588,40 @@ const deliveryResponses = {
       .string()
       .default("Entrega comprovada com sucesso!")
       .describe(
-        "\"Entrega comprovada com sucesso!\", ou \"Entrega registrada. Aguardando autorização da torre.\" quando o tipo padrão exige autorização.",
+        '"Entrega comprovada com sucesso!", ou "Entrega registrada. Aguardando autorização da torre." quando o tipo padrão exige autorização.',
       ),
   }),
   legacyProofOutdated: z
     .object({
-      code: z.string().describe("CLIENT_OUTDATED, VALIDATION_ERROR ou outro código de 400"),
+      code: z
+        .string()
+        .describe("CLIENT_OUTDATED, VALIDATION_ERROR ou outro código de 400"),
       message: z.string(),
       missing: z
         .array(z.enum(["signature", "photos", "form"]))
         .optional()
-        .describe("CLIENT_OUTDATED: o que o tipo padrão passou a exigir e este aplicativo não envia."),
+        .describe(
+          "CLIENT_OUTDATED: o que o tipo padrão passou a exigir e este aplicativo não envia.",
+        ),
       issues: z.array(z.string()).optional(),
     })
     .describe(
-      "CLIENT_OUTDATED (com `missing`): a empresa passou a exigir no tipo padrão \"Entrega normal\" algo que esta versão do aplicativo não envia (assinatura, fotos ou formulário). A fila do aplicativo guarda o comprovante e o reenvia depois da atualização. Também VALIDATION_ERROR, INVALID_STATUS_TRANSITION e os demais códigos do relato.",
+      'CLIENT_OUTDATED (com `missing`): a empresa passou a exigir no tipo padrão "Entrega normal" algo que esta versão do aplicativo não envia (assinatura, fotos ou formulário). A fila do aplicativo guarda o comprovante e o reenvia depois da atualização. Também VALIDATION_ERROR, INVALID_STATUS_TRANSITION e os demais códigos do relato.',
     ),
   occurrenceReported: z.object({
     message: z.string().default("Ocorrência registrada com sucesso!"),
     data: z.object({
-      id: z.string().describe("A ocorrência gravada (ou a já gravada, num reenvio)."),
+      id: z
+        .string()
+        .describe("A ocorrência gravada (ou a já gravada, num reenvio)."),
       authorization_status: authorizationStatusEnum.describe(
         "NOT_REQUIRED: efeito aplicado agora. PENDING: aguardando a torre, sem efeito. APPROVED: relato do painel, num tipo que pede autorização, por quem pode decidir na torre (o autor autoriza). SUPERSEDED: a tentativa já tinha terminado (entrega entregue, cancelada ou com insucesso, ou fora das mãos deste motorista), então não há o que autorizar.",
       ),
       replayed: z
         .boolean()
-        .describe("Verdadeiro quando o envio repetiu um `client_submission_id` já gravado."),
+        .describe(
+          "Verdadeiro quando o envio repetiu um `client_submission_id` já gravado.",
+        ),
       category: z
         .enum(["DELIVERED", "NOT_DELIVERED", "PAUSE"])
         .describe("Categoria do tipo relatado (decisão 14.3)."),
@@ -573,7 +640,9 @@ const deliveryResponses = {
     .object({
       code: z
         .string()
-        .describe("OCCURRENCE_FORM_INVALID, CLIENT_OUTDATED ou outro código de 400"),
+        .describe(
+          "OCCURRENCE_FORM_INVALID, CLIENT_OUTDATED ou outro código de 400",
+        ),
       message: z.string(),
       field_errors: z
         .record(z.string())
@@ -582,15 +651,22 @@ const deliveryResponses = {
       issues: z.array(z.string()).optional(),
       form_fields: occurrenceFormFieldsDoc
         .optional()
-        .describe("CLIENT_OUTDATED: o formulário atual do tipo, para um app que saiba exibi-lo."),
-      form_version: z.number().optional().describe("CLIENT_OUTDATED: a versão atual do formulário."),
+        .describe(
+          "CLIENT_OUTDATED: o formulário atual do tipo, para um app que saiba exibi-lo.",
+        ),
+      form_version: z
+        .number()
+        .optional()
+        .describe("CLIENT_OUTDATED: a versão atual do formulário."),
     })
     .describe(
       "Corpo inválido (VALIDATION_ERROR com `issues`), respostas que não atendem o formulário (OCCURRENCE_FORM_INVALID com `field_errors`), relato de motorista sem `form_version` (app anterior aos formulários) cujas respostas não atendem o formulário (CLIENT_OUTDATED, com `field_errors`, `form_fields` e `form_version`: o app precisa ser atualizado; a fila do app guarda o item e o reenvia depois da atualização), tipo de sistema (OCCURRENCE_TYPE_NOT_REPORTABLE), tipo desativado (OCCURRENCE_TYPE_INACTIVE), tipo de pausa (OCCURRENCE_TYPE_WRONG_CATEGORY), exigências do tipo não atendidas pelo motorista (OCCURRENCE_RECEIPT_PHOTO_REQUIRED, OCCURRENCE_SIGNATURE_REQUIRED, OCCURRENCE_PHOTO_REQUIRED) ou entrega que não pode mais ser entregue (INVALID_STATUS_TRANSITION).",
     ),
   occurrenceReportConflict: z
     .object({
-      code: z.string().describe("OCCURRENCE_FORM_OUTDATED ou DELIVERY_STATUS_CONFLICT"),
+      code: z
+        .string()
+        .describe("OCCURRENCE_FORM_OUTDATED ou DELIVERY_STATUS_CONFLICT"),
       message: z.string(),
       field_errors: z.record(z.string()).optional(),
       form_fields: occurrenceFormFieldsDoc.optional(),
@@ -613,12 +689,18 @@ const deliveryResponses = {
       ),
       replayed: z
         .boolean()
-        .describe("Verdadeiro quando a mesma pessoa repetiu a mesma decisão: nada foi gravado de novo."),
+        .describe(
+          "Verdadeiro quando a mesma pessoa repetiu a mesma decisão: nada foi gravado de novo.",
+        ),
     }),
   }),
   occurrenceAlreadyDecided: z
     .object({
-      code: z.string().describe("OCCURRENCE_ALREADY_DECIDED, OCCURRENCE_AUTHORIZATION_NOT_REQUIRED ou DELIVERY_STATUS_CONFLICT"),
+      code: z
+        .string()
+        .describe(
+          "OCCURRENCE_ALREADY_DECIDED, OCCURRENCE_AUTHORIZATION_NOT_REQUIRED ou DELIVERY_STATUS_CONFLICT",
+        ),
       message: z.string(),
       decision: z
         .object({
@@ -656,28 +738,40 @@ const deliveryResponses = {
         receipt_photo_url: z
           .string()
           .nullable()
-          .describe("Foto do canhoto, URL assinada de vida curta; null sem canhoto."),
+          .describe(
+            "Foto do canhoto, URL assinada de vida curta; null sem canhoto.",
+          ),
         signature_url: z
           .string()
           .nullable()
-          .describe("Assinatura na tela, URL assinada de vida curta; null sem assinatura."),
+          .describe(
+            "Assinatura na tela, URL assinada de vida curta; null sem assinatura.",
+          ),
         received_by: z
           .string()
           .nullable()
-          .describe("Quem recebeu, informado pelo motorista (só pedidos de entrega)."),
+          .describe(
+            "Quem recebeu, informado pelo motorista (só pedidos de entrega).",
+          ),
         form_answers: occurrenceFormAnswersDoc,
         form_version: z.number().nullable(),
         form_fields: occurrenceFormFieldsDoc,
         answers: z
           .array(z.object({ label: z.string(), value: z.string() }))
-          .describe("As respostas já rotuladas e formatadas, na ordem do formulário."),
+          .describe(
+            "As respostas já rotuladas e formatadas, na ordem do formulário.",
+          ),
         reportedBy: person,
         occurred_at: isoDateTime.nullable(),
         created_at: isoDateTime,
         escalated_at: isoDateTime
           .nullable()
-          .describe("Quando o pedido sem resposta foi escalado aos administradores."),
-        escalates_at: isoDateTime.describe("Quando escala (10 min depois do pedido)."),
+          .describe(
+            "Quando o pedido sem resposta foi escalado aos administradores.",
+          ),
+        escalates_at: isoDateTime.describe(
+          "Quando escala (10 min depois do pedido).",
+        ),
         delivery: z.object({
           id: z.string(),
           code: z.string().nullable(),
@@ -693,7 +787,9 @@ const deliveryResponses = {
         }),
       }),
     ),
-    total: z.number().describe("Quantos aguardam ao todo (a lista traz no máximo 100)."),
+    total: z
+      .number()
+      .describe("Quantos aguardam ao todo (a lista traz no máximo 100)."),
     businessId: z.string(),
   }),
   deliveriesImported: z.object({
@@ -701,7 +797,9 @@ const deliveryResponses = {
     data: z.object({
       importId: z
         .string()
-        .describe("A linha de Importações desta importação (pode ser estornada)."),
+        .describe(
+          "A linha de Importações desta importação (pode ser estornada).",
+        ),
       imported: z.number(),
       duplicated: z.number(),
       invalid: z.number(),
@@ -759,9 +857,11 @@ const deliveryResponses = {
     // The feed reads the whole row: the form answers (6.2) and the tower's
     // authorization (6.3) come along.
     form_answers: z
-    .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
-    .nullable()
-    .describe("Respostas do formulário do tipo de ocorrência, por chave do campo."),
+      .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+      .nullable()
+      .describe(
+        "Respostas do formulário do tipo de ocorrência, por chave do campo.",
+      ),
     form_version: z.number().nullable(),
     authorization_status: z.enum([
       "NOT_REQUIRED",
@@ -797,10 +897,14 @@ const deliveryResponses = {
       totals: z.object({
         unassigned: z
           .number()
-          .describe("Pendentes sem motorista, de qualquer data (o que ainda deve rota)."),
+          .describe(
+            "Pendentes sem motorista, de qualquer data (o que ainda deve rota).",
+          ),
         designated: z.number().describe(OPERATION_COUNTER_TEXT.designated),
         inRoute: z.number().describe(OPERATION_COUNTER_TEXT.inRoute),
-        deliveredToday: z.number().describe(OPERATION_COUNTER_TEXT.deliveredToday),
+        deliveredToday: z
+          .number()
+          .describe(OPERATION_COUNTER_TEXT.deliveredToday),
         failedToday: z.number().describe(OPERATION_COUNTER_TEXT.failedToday),
         occurrencesToday: z
           .number()
@@ -816,8 +920,12 @@ const deliveryResponses = {
             cnh: z.string(),
             designated: z.number().describe(OPERATION_COUNTER_TEXT.designated),
             inRoute: z.number().describe(OPERATION_COUNTER_TEXT.inRoute),
-            deliveredToday: z.number().describe(OPERATION_COUNTER_TEXT.deliveredToday),
-            failedToday: z.number().describe(OPERATION_COUNTER_TEXT.failedToday),
+            deliveredToday: z
+              .number()
+              .describe(OPERATION_COUNTER_TEXT.deliveredToday),
+            failedToday: z
+              .number()
+              .describe(OPERATION_COUNTER_TEXT.failedToday),
           }),
         )
         .describe(

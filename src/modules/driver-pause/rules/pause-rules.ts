@@ -38,7 +38,10 @@ function pauseEndedAt(
  * delivers out of order after a failure). Never after the end; unreadable,
  * the end itself (a zero-length pause is honest about what we know).
  */
-function pauseStartedAtFromEnd(resolvedStart: Date | null, endedAt: Date): Date {
+function pauseStartedAtFromEnd(
+  resolvedStart: Date | null,
+  endedAt: Date,
+): Date {
   if (!resolvedStart || resolvedStart.getTime() > endedAt.getTime()) {
     return new Date(endedAt);
   }
@@ -86,7 +89,9 @@ function toPauseView(
     id: pause.id,
     kind: pause.kind,
     occurrence_type:
-      typeName !== undefined ? { id: pause.occurrenceTypeId, name: typeName } : null,
+      typeName !== undefined
+        ? { id: pause.occurrenceTypeId, name: typeName }
+        : null,
     started_at: pause.started_at.toISOString(),
     ended_at: pause.ended_at ? pause.ended_at.toISOString() : null,
     duration_minutes: pause.ended_at

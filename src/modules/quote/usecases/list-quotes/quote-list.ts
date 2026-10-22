@@ -14,7 +14,14 @@ import type { SortOrder, SortSpec } from "@/shared/pagination/list-query";
 const QUOTE_STATUSES = ["PENDING", "CONTACTED", "CLOSED", "CONVERTED"] as const;
 
 /** What the public form offers (create-quote-schema). */
-const QUOTE_FLEET_SIZES = ["1-5", "6-15", "16-30", "31-50", "51-100", "101+"] as const;
+const QUOTE_FLEET_SIZES = [
+  "1-5",
+  "6-15",
+  "16-30",
+  "31-50",
+  "51-100",
+  "101+",
+] as const;
 
 type QuoteFleetSize = (typeof QUOTE_FLEET_SIZES)[number];
 
@@ -33,23 +40,26 @@ type QuoteSortKey = (typeof QUOTE_SORT_KEYS)[number];
 
 const QUOTE_SORT_FALLBACK = { sort: "created_at", order: "desc" } as const;
 
-const QUOTE_SORT: SortSpec<QuoteSortKey, Prisma.QuoteOrderByWithRelationInput> = {
-  keys: QUOTE_SORT_KEYS,
-  fallback: QUOTE_SORT_FALLBACK,
-  columns: {
-    created_at: (order: SortOrder) => ({ created_at: order }),
-    updated_at: (order: SortOrder) => ({ updated_at: order }),
-    name: (order: SortOrder) => ({ name: order }),
-    company: (order: SortOrder) => ({ company: order }),
-    email: (order: SortOrder) => ({ email: order }),
-    // By the pipeline's order (the enum's), not alphabetically.
-    status: (order: SortOrder) => ({ status: order }),
-    // Never contacted: last either way.
-    contacted_at: (order: SortOrder) => ({ contacted_at: { sort: order, nulls: "last" } }),
-  },
-  // Newest first inside a tie; the id breaks what created_at cannot.
-  tiebreaker: [{ created_at: "desc" }, { id: "desc" }],
-};
+const QUOTE_SORT: SortSpec<QuoteSortKey, Prisma.QuoteOrderByWithRelationInput> =
+  {
+    keys: QUOTE_SORT_KEYS,
+    fallback: QUOTE_SORT_FALLBACK,
+    columns: {
+      created_at: (order: SortOrder) => ({ created_at: order }),
+      updated_at: (order: SortOrder) => ({ updated_at: order }),
+      name: (order: SortOrder) => ({ name: order }),
+      company: (order: SortOrder) => ({ company: order }),
+      email: (order: SortOrder) => ({ email: order }),
+      // By the pipeline's order (the enum's), not alphabetically.
+      status: (order: SortOrder) => ({ status: order }),
+      // Never contacted: last either way.
+      contacted_at: (order: SortOrder) => ({
+        contacted_at: { sort: order, nulls: "last" },
+      }),
+    },
+    // Newest first inside a tie; the id breaks what created_at cannot.
+    tiebreaker: [{ created_at: "desc" }, { id: "desc" }],
+  };
 
 interface QuoteListFilters {
   search?: string;
@@ -71,7 +81,11 @@ function quoteListWhere(
     and.push({ status: { in: filters.statuses } });
   }
 
-  if (except !== "fleet_size" && except !== "facets" && filters.fleetSizes?.length) {
+  if (
+    except !== "fleet_size" &&
+    except !== "facets" &&
+    filters.fleetSizes?.length
+  ) {
     and.push({ fleet_size: { in: filters.fleetSizes } });
   }
 
@@ -79,7 +93,8 @@ function quoteListWhere(
 
   if (term) {
     const digits = term.replace(/\D/g, "");
-    const phoneDigits = digits.startsWith("55") && digits.length > 10 ? digits.slice(2) : digits;
+    const phoneDigits =
+      digits.startsWith("55") && digits.length > 10 ? digits.slice(2) : digits;
 
     and.push(
       buildSearchOr<Prisma.QuoteWhereInput>([
@@ -129,14 +144,21 @@ function summarizeQuoteList(
   groups: QuoteGroupCount[],
   filters: Pick<QuoteListFilters, "statuses" | "fleetSizes">,
 ): { total: number; searchMeta: QuoteListSearchMeta } {
-  const statusFilter = filters.statuses?.length ? new Set<string>(filters.statuses) : null;
-  const fleetFilter = filters.fleetSizes?.length ? new Set<string>(filters.fleetSizes) : null;
+  const statusFilter = filters.statuses?.length
+    ? new Set<string>(filters.statuses)
+    : null;
+  const fleetFilter = filters.fleetSizes?.length
+    ? new Set<string>(filters.fleetSizes)
+    : null;
 
-  const matchesStatus = (group: QuoteGroupCount) => !statusFilter || statusFilter.has(group.status);
+  const matchesStatus = (group: QuoteGroupCount) =>
+    !statusFilter || statusFilter.has(group.status);
   const matchesFleet = (group: QuoteGroupCount) =>
     !fleetFilter || fleetFilter.has(group.fleet_size);
 
-  const total = sumCounts(groups.filter((group) => matchesStatus(group) && matchesFleet(group)));
+  const total = sumCounts(
+    groups.filter((group) => matchesStatus(group) && matchesFleet(group)),
+  );
 
   // Each facet (and the per-stage cards) with the OTHER filter applied.
   const forStatus = groups.filter(matchesFleet);
@@ -154,10 +176,15 @@ function summarizeQuoteList(
       closed: byStatus("CLOSED"),
       converted: byStatus("CONVERTED"),
       facets: {
-        status: QUOTE_STATUSES.map((status) => ({ value: status, count: byStatus(status) })),
+        status: QUOTE_STATUSES.map((status) => ({
+          value: status,
+          count: byStatus(status),
+        })),
         fleet_size: QUOTE_FLEET_SIZES.map((size) => ({
           value: size,
-          count: sumCounts(forFleet.filter((group) => group.fleet_size === size)),
+          count: sumCounts(
+            forFleet.filter((group) => group.fleet_size === size),
+          ),
         })),
       },
     },

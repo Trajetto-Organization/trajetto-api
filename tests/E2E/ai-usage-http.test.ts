@@ -84,10 +84,14 @@ async function session(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "15m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "15m",
+    },
+  );
 }
 
 async function seedBusiness(id: string, cnpj: string) {
@@ -167,7 +171,9 @@ beforeAll(async () => {
     CARRIER,
     "CHECKLIST",
     4,
-    new Date(quotaPeriodFor(new Date(), "America/Manaus").startsAt.getTime() - 60_000),
+    new Date(
+      quotaPeriodFor(new Date(), "America/Manaus").startsAt.getTime() - 60_000,
+    ),
   );
   await prisma.aIUsagePeriod.update({
     where: { id: periodId },
@@ -196,7 +202,11 @@ describe("GET /business/get-ai-usage", () => {
     const data = response.json().data;
 
     expect(data.ai_analysis_used).toBe(10);
-    expect(data.ai_analysis_used_by_type).toEqual({ fuel: 2, checklist: 5, proof: 3 });
+    expect(data.ai_analysis_used_by_type).toEqual({
+      fuel: 2,
+      checklist: 5,
+      proof: 3,
+    });
   });
 
   it("says when the month began and when it resets, at midnight in the company's zone", async () => {
@@ -272,7 +282,10 @@ describe("GET /business/get-ai-usage", () => {
 
   it("publishes every refusal it can answer", () => {
     const document = app.swagger() as unknown as {
-      paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
+      paths: Record<
+        string,
+        Record<string, { responses: Record<string, unknown> }>
+      >;
     };
 
     const route = document.paths["/business/get-ai-usage/{businessId}"].get;

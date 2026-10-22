@@ -95,7 +95,9 @@ describe("recording a send the provider accepted", () => {
 
     const lastTry = Math.max(...db.attempts);
 
-    expect(lastTry).toBeLessThanOrEqual(startedAt + 180_000 - RECORD_LEASE_MARGIN_MS);
+    expect(lastTry).toBeLessThanOrEqual(
+      startedAt + 180_000 - RECORD_LEASE_MARGIN_MS,
+    );
     // Kept trying for most of the lease, not just four seconds.
     expect(lastTry - startedAt).toBeGreaterThan(150_000);
   });

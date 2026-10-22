@@ -14,7 +14,13 @@ import {
  * is caught here before any E2E.
  */
 
-const STATUSES: DeliveryStatus[] = ["PENDING", "IN_TRANSIT", "DELIVERED", "FAILED", "CANCELLED"];
+const STATUSES: DeliveryStatus[] = [
+  "PENDING",
+  "IN_TRANSIT",
+  "DELIVERED",
+  "FAILED",
+  "CANCELLED",
+];
 
 const ALLOWED: Record<DeliveryStatus, DeliveryStatus[]> = {
   PENDING: ["IN_TRANSIT", "CANCELLED"],

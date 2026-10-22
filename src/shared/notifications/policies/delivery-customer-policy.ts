@@ -18,7 +18,10 @@ import {
   renderDeliveryMessage,
   type DeliveryMessageVariables,
 } from "@/shared/delivery/message-template";
-import { customerLinks, fitWhatsAppBody } from "@/shared/delivery/whatsapp-body";
+import {
+  customerLinks,
+  fitWhatsAppBody,
+} from "@/shared/delivery/whatsapp-body";
 
 import type { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 

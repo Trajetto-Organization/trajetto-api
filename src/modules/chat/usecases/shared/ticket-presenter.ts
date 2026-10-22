@@ -82,7 +82,8 @@ function presentTicket(
           escalates_at:
             row.occurrence.authorization_status === "PENDING"
               ? new Date(
-                  row.occurrence.created_at.getTime() + AUTHORIZATION_ESCALATION_MS,
+                  row.occurrence.created_at.getTime() +
+                    AUTHORIZATION_ESCALATION_MS,
                 ).toISOString()
               : null,
         }

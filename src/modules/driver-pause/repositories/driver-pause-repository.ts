@@ -7,7 +7,10 @@ import {
 import type { IDriverPauseRepository } from "./IDriver-pause-repository";
 import { pauseConflictOf } from "./pause-conflicts";
 import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
-import { journeyRouteAt, type JourneyRoute } from "../rules/pause-journey-rules";
+import {
+  journeyRouteAt,
+  type JourneyRoute,
+} from "../rules/pause-journey-rules";
 
 import type {
   CloseDriverPauseData,
@@ -164,7 +167,10 @@ class DriverPauseRepository implements IDriverPauseRepository {
     });
   }
 
-  async defaultPauseType(businessId: string, kind: DriverPauseKind): Promise<PauseTypeInfo> {
+  async defaultPauseType(
+    businessId: string,
+    kind: DriverPauseKind,
+  ): Promise<PauseTypeInfo> {
     const id = await this.defaultPauseTypeId(businessId, kind);
 
     return this.prisma.occurrenceType.findUniqueOrThrow({
@@ -173,7 +179,10 @@ class DriverPauseRepository implements IDriverPauseRepository {
     });
   }
 
-  async pauseTypeNames(businessId: string, ids: string[]): Promise<Map<string, string>> {
+  async pauseTypeNames(
+    businessId: string,
+    ids: string[],
+  ): Promise<Map<string, string>> {
     if (ids.length === 0) return new Map();
 
     const rows = await this.prisma.occurrenceType.findMany({
@@ -195,10 +204,16 @@ class DriverPauseRepository implements IDriverPauseRepository {
     kind: DriverPauseKind,
   ): Promise<string> {
     const where = {
-      businessId_system_key: { businessId, system_key: DEFAULT_PAUSE_TYPE_KEY[kind] },
+      businessId_system_key: {
+        businessId,
+        system_key: DEFAULT_PAUSE_TYPE_KEY[kind],
+      },
     };
 
-    const found = await this.prisma.occurrenceType.findUnique({ where, select: { id: true } });
+    const found = await this.prisma.occurrenceType.findUnique({
+      where,
+      select: { id: true },
+    });
     if (found) return found.id;
 
     await ensureDefaultOccurrenceTypes(this.prisma, businessId);
@@ -218,18 +233,29 @@ class DriverPauseRepository implements IDriverPauseRepository {
     occurrenceTypeId: string,
   ): Promise<string | null> {
     const type = await this.prisma.occurrenceType.findFirst({
-      where: { id: occurrenceTypeId, businessId, category: "PAUSE", pause_kind: kind },
+      where: {
+        id: occurrenceTypeId,
+        businessId,
+        category: "PAUSE",
+        pause_kind: kind,
+      },
       select: { id: true },
     });
 
     return type?.id ?? null;
   }
 
-  async createPause(data: CreateDriverPauseData): Promise<CreateDriverPauseResult> {
+  async createPause(
+    data: CreateDriverPauseData,
+  ): Promise<CreateDriverPauseResult> {
     // The FK accepts any tenant's type: the tenant, category and nature are
     // checked here, before the insert.
     const occurrenceTypeId = data.occurrenceTypeId
-      ? await this.ownPauseTypeId(data.businessId, data.kind, data.occurrenceTypeId)
+      ? await this.ownPauseTypeId(
+          data.businessId,
+          data.kind,
+          data.occurrenceTypeId,
+        )
       : await this.defaultPauseTypeId(data.businessId, data.kind);
 
     if (!occurrenceTypeId) return { status: "invalid-type" };
@@ -266,12 +292,18 @@ class DriverPauseRepository implements IDriverPauseRepository {
     }
   }
 
-  async closePause(data: CloseDriverPauseData): Promise<CloseDriverPauseResult> {
+  async closePause(
+    data: CloseDriverPauseData,
+  ): Promise<CloseDriverPauseResult> {
     try {
       // Conditional on still being open: a concurrent end waits for the row
       // lock, then finds ended_at set and writes nothing.
       const moved = await this.prisma.driverPause.updateMany({
-        where: { id: data.pauseId, businessId: data.businessId, ended_at: null },
+        where: {
+          id: data.pauseId,
+          businessId: data.businessId,
+          ended_at: null,
+        },
         data: {
           ended_at: data.ended_at,
           end_submission_id: data.end_submission_id,

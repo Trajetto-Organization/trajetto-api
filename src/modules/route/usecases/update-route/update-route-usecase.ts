@@ -118,7 +118,11 @@ class UpdateRouteUseCase {
       const findDriver = await this.driver.findDriverById(driverId);
 
       if (!findDriver || findDriver.businessId !== businessId) {
-        throw new AppError("Motorista não encontrado.", 404, "DRIVER_NOT_FOUND");
+        throw new AppError(
+          "Motorista não encontrado.",
+          404,
+          "DRIVER_NOT_FOUND",
+        );
       }
 
       if (findDriver.status !== "ACTIVE") {

@@ -43,8 +43,18 @@ beforeEach(() => {
 
   users.user.push(
     { id: ADMIN_A, role: "BUSINESS_ADMIN", businessId: A } as User,
-    { id: DRIVER_USER, role: "BUSINESS_USER", businessId: A, driverId: DRIVER } as User,
-    { id: OTHER_DRIVER_USER, role: "BUSINESS_USER", businessId: A, driverId: OTHER_DRIVER } as User,
+    {
+      id: DRIVER_USER,
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId: DRIVER,
+    } as User,
+    {
+      id: OTHER_DRIVER_USER,
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId: OTHER_DRIVER,
+    } as User,
     { id: ADMIN_B, role: "BUSINESS_ADMIN", businessId: B } as User,
     { id: MASTER, role: "MASTER", businessId: null } as unknown as User,
   );
@@ -84,7 +94,11 @@ describe("GetDeliveryUseCase", () => {
       created_at: new Date("2026-10-05T15:00:00.000Z"),
     } as never);
 
-    const detail = (await get().execute({ userId: ADMIN_A, businessId: A, deliveryId: id })) as {
+    const detail = (await get().execute({
+      userId: ADMIN_A,
+      businessId: A,
+      deliveryId: id,
+    })) as {
       id: string;
       events: Array<{ photo: string | null; signature: string | null }>;
       timeline: unknown[];
@@ -102,9 +116,15 @@ describe("GetDeliveryUseCase", () => {
   it("lets a driver open his own delivery only; a colleague's reads as missing", async () => {
     const id = await delivery();
 
-    await expect(get().execute({ userId: DRIVER_USER, businessId: A, deliveryId: id })).resolves.toBeTruthy();
     await expect(
-      get().execute({ userId: OTHER_DRIVER_USER, businessId: A, deliveryId: id }),
+      get().execute({ userId: DRIVER_USER, businessId: A, deliveryId: id }),
+    ).resolves.toBeTruthy();
+    await expect(
+      get().execute({
+        userId: OTHER_DRIVER_USER,
+        businessId: A,
+        deliveryId: id,
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "DELIVERY_NOT_FOUND" });
   });
 
@@ -124,16 +144,24 @@ describe("GetDeliveryUseCase", () => {
       get().execute({ userId: ADMIN_B, businessId: A, deliveryId: id }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
 
-    await expect(get().execute({ userId: MASTER, businessId: A, deliveryId: id })).resolves.toBeTruthy();
+    await expect(
+      get().execute({ userId: MASTER, businessId: A, deliveryId: id }),
+    ).resolves.toBeTruthy();
   });
 
   it("answers 404 for an unknown delivery or session user", async () => {
     await expect(
-      get().execute({ userId: ADMIN_A, businessId: A, deliveryId: "018f5400-0000-7000-8000-0000000000ff" }),
+      get().execute({
+        userId: ADMIN_A,
+        businessId: A,
+        deliveryId: "018f5400-0000-7000-8000-0000000000ff",
+      }),
     ).rejects.toMatchObject({ statusCode: 404, code: "DELIVERY_NOT_FOUND" });
 
     const id = await delivery();
-    await expect(get().execute({ userId: "nobody", businessId: A, deliveryId: id })).rejects.toMatchObject({
+    await expect(
+      get().execute({ userId: "nobody", businessId: A, deliveryId: id }),
+    ).rejects.toMatchObject({
       statusCode: 404,
       code: "USER_NOT_FOUND",
     });
@@ -152,7 +180,14 @@ describe("ListMessageTemplatesUseCase", () => {
       ["DISPATCHED", "EMAIL", A],
       ["DELIVERED", "EMAIL", B],
     ] as const) {
-      await templates.save({ businessId, topic, channel, subject: null, body: `${topic} ${channel}`, is_active: true } as never);
+      await templates.save({
+        businessId,
+        topic,
+        channel,
+        subject: null,
+        body: `${topic} ${channel}`,
+        is_active: true,
+      } as never);
     }
   });
 
@@ -170,7 +205,9 @@ describe("ListMessageTemplatesUseCase", () => {
   });
 
   it("refuses another company's templates (403) and asks the MASTER to pick one (400)", async () => {
-    await expect(list().execute({ userId: ADMIN_A, businessId: B })).rejects.toMatchObject({
+    await expect(
+      list().execute({ userId: ADMIN_A, businessId: B }),
+    ).rejects.toMatchObject({
       statusCode: 403,
       code: "TENANT_ACCESS_DENIED",
     });
@@ -217,7 +254,11 @@ describe("TrackDeliveryUseCase", () => {
         scheduled_date: "2026-10-06",
         delivered_at: null,
         received_by: null,
-        business: { corporate_reason: "Transportadora A Ltda", fantasy_name: "Transportadora A", timezone: "America/Sao_Paulo" },
+        business: {
+          corporate_reason: "Transportadora A Ltda",
+          fantasy_name: "Transportadora A",
+          timezone: "America/Sao_Paulo",
+        },
       },
       events: [],
       occurrences: [],
@@ -242,11 +283,23 @@ describe("TrackDeliveryUseCase", () => {
     const token = await trackable(new Date(Date.now() - 1000));
     const use = new TrackDeliveryUseCase(recipients);
 
-    const expired = await use.execute({ token }).catch((error: unknown) => error);
-    const wrong = await use.execute({ token: "0".repeat(64) }).catch((error: unknown) => error);
+    const expired = await use
+      .execute({ token })
+      .catch((error: unknown) => error);
+    const wrong = await use
+      .execute({ token: "0".repeat(64) })
+      .catch((error: unknown) => error);
 
-    expect(expired).toMatchObject({ statusCode: 404, code: "TRACKING_NOT_FOUND", message: "Acompanhamento não encontrado." });
-    expect(wrong).toMatchObject({ statusCode: 404, code: "TRACKING_NOT_FOUND", message: "Acompanhamento não encontrado." });
+    expect(expired).toMatchObject({
+      statusCode: 404,
+      code: "TRACKING_NOT_FOUND",
+      message: "Acompanhamento não encontrado.",
+    });
+    expect(wrong).toMatchObject({
+      statusCode: 404,
+      code: "TRACKING_NOT_FOUND",
+      message: "Acompanhamento não encontrado.",
+    });
   });
 
   it("keeps a link open until the very instant it expires", async () => {
@@ -255,6 +308,8 @@ describe("TrackDeliveryUseCase", () => {
 
     const token = await trackable(new Date("2026-10-06T12:00:00.000Z"));
 
-    await expect(new TrackDeliveryUseCase(recipients).execute({ token })).resolves.toBeTruthy();
+    await expect(
+      new TrackDeliveryUseCase(recipients).execute({ token }),
+    ).resolves.toBeTruthy();
   });
 });

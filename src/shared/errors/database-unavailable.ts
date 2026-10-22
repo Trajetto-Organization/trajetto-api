@@ -24,7 +24,14 @@ const DATABASE_RETRY_AFTER_SECONDS = 5;
  * Constraint and not-found codes (P2002, P2025, ...) are deliberately absent:
  * those are answers about the data, and a retry would get the same answer.
  */
-const UNAVAILABLE_CODES = new Set(["P1001", "P1002", "P1008", "P1017", "P2024", "P2037"]);
+const UNAVAILABLE_CODES = new Set([
+  "P1001",
+  "P1002",
+  "P1008",
+  "P1017",
+  "P2024",
+  "P2037",
+]);
 
 /**
  * P2028 covers every interactive-transaction failure; only the variant where
@@ -44,7 +51,9 @@ const TRANSACTION_START_TIMEOUT = /unable to start a transaction/i;
  * decode is `N/A` too, but WITH a message of its own — our query's fault,
  * so it stays out. Only the empty pair is the outage.
  */
-function isRawQueryWithoutAnswer(error: Prisma.PrismaClientKnownRequestError): boolean {
+function isRawQueryWithoutAnswer(
+  error: Prisma.PrismaClientKnownRequestError,
+): boolean {
   if (error.code !== "P2010") return false;
 
   const meta = error.meta as { code?: unknown; message?: unknown } | undefined;
@@ -73,7 +82,9 @@ function isDatabaseUnavailable(error: unknown): boolean {
 
     if (isRawQueryWithoutAnswer(error)) return true;
 
-    return error.code === "P2028" && TRANSACTION_START_TIMEOUT.test(error.message);
+    return (
+      error.code === "P2028" && TRANSACTION_START_TIMEOUT.test(error.message)
+    );
   }
 
   return false;

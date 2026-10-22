@@ -230,8 +230,4 @@ async function shutdownProofRenderer(): Promise<void> {
   if (current) await current.terminate();
 }
 
-export {
-  MAX_PENDING_RENDERS,
-  renderProofPdfOffThread,
-  shutdownProofRenderer,
-};
+export { MAX_PENDING_RENDERS, renderProofPdfOffThread, shutdownProofRenderer };

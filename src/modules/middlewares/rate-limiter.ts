@@ -1,7 +1,4 @@
-import {
-  clientRateLimitKey,
-  rateLimitExceeded,
-} from "@/config/rate-limit";
+import { clientRateLimitKey, rateLimitExceeded } from "@/config/rate-limit";
 import { RateLimitOptions } from "@fastify/rate-limit";
 
 export interface RateLimiterOptions extends RateLimitOptions {

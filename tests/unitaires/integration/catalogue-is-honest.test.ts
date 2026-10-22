@@ -54,10 +54,8 @@ const FIRED_BY_EXPRESSION: Record<string, string> = {
     'update-delivery-status: `integrationTopic` picks it for status === "CANCELLED"',
   "delivery.in_transit":
     'update-delivery-status: `integrationTopic` picks it for status === "IN_TRANSIT"',
-  "proof.approved":
-    "review-proof-audit: the ternary on the reviewer's verdict",
-  "proof.rejected":
-    "review-proof-audit: the ternary on the reviewer's verdict",
+  "proof.approved": "review-proof-audit: the ternary on the reviewer's verdict",
+  "proof.rejected": "review-proof-audit: the ternary on the reviewer's verdict",
 };
 
 describe("the catalogue is honest", () => {
@@ -70,8 +68,10 @@ describe("the catalogue is honest", () => {
       return !FIRED_BY_EXPRESSION[topic];
     });
 
-    expect(missing, `Tópicos publicados que nada dispara: ${missing.join(", ")}`)
-      .toEqual([]);
+    expect(
+      missing,
+      `Tópicos publicados que nada dispara: ${missing.join(", ")}`,
+    ).toEqual([]);
   });
 
   it("does not carry a note about a topic that was removed", () => {

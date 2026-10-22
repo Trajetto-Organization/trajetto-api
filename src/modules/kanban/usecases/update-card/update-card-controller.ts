@@ -22,9 +22,7 @@ class UpdateKanbanCardController {
     // an assignee of another company is ASSIGNED_USER_NOT_FOUND for a manager,
     // USER_NOT_IN_BUSINESS only for the MASTER, who sees every company.
     await updateKanbanCardUseCase.execute(cardData, cardId, id);
-    return reply
-      .status(200)
-      .send({ message: "Card atualizado com sucesso!" });
+    return reply.status(200).send({ message: "Card atualizado com sucesso!" });
   }
 }
 

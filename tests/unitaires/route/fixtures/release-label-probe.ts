@@ -22,7 +22,10 @@ async function main(): Promise<void> {
   const published: Array<{ payload: Record<string, unknown> }> = [];
 
   const outbox = {
-    publish: async (_tx: unknown, event: { payload: Record<string, unknown> }) => {
+    publish: async (
+      _tx: unknown,
+      event: { payload: Record<string, unknown> },
+    ) => {
       published.push(event);
     },
   } as unknown as OutboxService;
@@ -31,7 +34,9 @@ async function main(): Promise<void> {
     routes,
     new InMemoryUserRepository(),
     new InMemoryDriverRepository(),
-    { createActivityIfEnabled: async () => undefined } as unknown as NotificationService,
+    {
+      createActivityIfEnabled: async () => undefined,
+    } as unknown as NotificationService,
     outbox,
     new InMemoryWebhookFanOutService().asService(),
   );

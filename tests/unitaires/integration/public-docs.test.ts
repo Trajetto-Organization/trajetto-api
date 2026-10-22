@@ -104,8 +104,9 @@ describe("the public reference", () => {
     // Pruning components by guessing which are still referenced ships a
     // dangling $ref, which renders as an empty box and tells the reader
     // nothing about what to send. Reachability through $ref cannot guess.
-    const schemas = (document.components as { schemas: Record<string, unknown> })
-      .schemas;
+    const schemas = (
+      document.components as { schemas: Record<string, unknown> }
+    ).schemas;
 
     expect(Object.keys(schemas)).toEqual(
       expect.arrayContaining(["PublicDelivery", "PublicItem"]),
@@ -116,8 +117,9 @@ describe("the public reference", () => {
     // Copying every component published whatever the internal document
     // registered — an internal route's body, or a schema nobody refers to.
     // What remains is what the public paths reach, plus the webhook payloads.
-    const schemas = (document.components as { schemas: Record<string, unknown> })
-      .schemas;
+    const schemas = (
+      document.components as { schemas: Record<string, unknown> }
+    ).schemas;
 
     expect(schemas.InternalUser).toBeUndefined();
     expect(schemas.InternalSecret).toBeUndefined();
@@ -136,15 +138,18 @@ describe("the public reference", () => {
     // The signature recipe is the single thing integrators get wrong, so it
     // is in the description rather than only in an endpoint's prose.
     expect(String(document.info?.description)).toContain("HMAC SHA-256");
-    expect(String(document.info?.description)).toContain("X-Trajetto-Signature");
+    expect(String(document.info?.description)).toContain(
+      "X-Trajetto-Signature",
+    );
   });
 
   it("survives a source document with nothing in it", () => {
     const empty = buildPublicApiDocument({});
 
     expect(empty.paths).toEqual({});
-    expect((empty.components as { securitySchemes: object }).securitySchemes)
-      .toEqual({});
+    expect(
+      (empty.components as { securitySchemes: object }).securitySchemes,
+    ).toEqual({});
   });
 });
 

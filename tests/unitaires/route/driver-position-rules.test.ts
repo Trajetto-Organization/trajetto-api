@@ -78,10 +78,9 @@ describe("what a phone sends and what we keep", () => {
   it("refuses Null Island", () => {
     // What a device with no fix reports. A dot in the Gulf of Guinea is worse
     // than no dot: it redraws the whole map to fit.
-    const { accepted } = acceptPings(
-      [ping({ latitude: 0, longitude: 0 })],
-      { now: NOW },
-    );
+    const { accepted } = acceptPings([ping({ latitude: 0, longitude: 0 })], {
+      now: NOW,
+    });
 
     expect(accepted).toHaveLength(0);
   });
@@ -166,8 +165,10 @@ describe("what a phone sends and what we keep", () => {
   });
 
   it("still bounds a batch, and says how many it could not take", () => {
-    const flood = Array.from({ length: MAX_PINGS_PER_BATCH + 220 }, (_, index) =>
-      ping({ recorded_at: new Date(NOW.getTime() - index * 1_000) }),
+    const flood = Array.from(
+      { length: MAX_PINGS_PER_BATCH + 220 },
+      (_, index) =>
+        ping({ recorded_at: new Date(NOW.getTime() - index * 1_000) }),
     );
 
     const { accepted, rejected } = acceptPings(flood, { now: NOW });
@@ -211,7 +212,7 @@ describe("thinning a trail down to what a browser can draw", () => {
   it("always keeps where the driver ended", () => {
     // The last point is where the truck IS. Dropping it to satisfy an even
     // stride would be the one error nobody would forgive.
-    const last = <T,>(values: T[]): T => values[values.length - 1];
+    const last = <T>(values: T[]): T => values[values.length - 1];
 
     expect(last(downsample(trail, 200))).toBe(2399);
     expect(last(downsample(trail, 7))).toBe(2399);

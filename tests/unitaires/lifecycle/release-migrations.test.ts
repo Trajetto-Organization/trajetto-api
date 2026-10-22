@@ -19,7 +19,7 @@ import {
  * `migrate deploy` of every image version — the old one included — refused to
  * run (P3009). The next restart of any replica was an outage until someone
  * resolved it by hand. As a one-off Swarm job run by the promote workflow (on
- * the Dokploy host, which runs the stacks in Swarm), a failing migration fails
+ * the Dokploy host, which runs the Applications in Swarm), a failing migration fails
  * one step, `stable` does not move and the running replicas never notice.
  */
 const sh = hasShell("sh");
@@ -62,6 +62,7 @@ function release(args: string[], env: Record<string, string> = {}) {
       STUB_ENV_PATH: `${box.root}/env-path`,
       STUB_ENV_COPY: `${box.root}/env-copy`,
       MIGRATE_POLL_SECONDS: "0",
+      API_SERVICE: "trajetto-api-a1b2c3",
       ...env,
     },
   });
@@ -83,10 +84,16 @@ describe.skipIf(!sh)("the release migration job", () => {
   });
 
   it("accepts the main-<sha> builds published before the staging branch (a rollback target)", () => {
-    const result = release(["ghcr.io/trajetto-organization/trajetto-api:main-0a1b2c3"]);
+    const result = release([
+      "ghcr.io/trajetto-organization/trajetto-api:main-0a1b2c3",
+    ]);
 
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(box.calls("docker").some((call) => call.startsWith("docker service create"))).toBe(true);
+    expect(
+      box
+        .calls("docker")
+        .some((call) => call.startsWith("docker service create")),
+    ).toBe(true);
   });
 
   it("runs the image as a one-off job with no healthcheck, and removes it", () => {
@@ -94,7 +101,9 @@ describe.skipIf(!sh)("the release migration job", () => {
 
     expect(result.status, result.stdout + result.stderr).toBe(0);
 
-    const create = box.calls("docker").find((call) => call.startsWith("docker service create"));
+    const create = box
+      .calls("docker")
+      .find((call) => call.startsWith("docker service create"));
 
     expect(create).toBeDefined();
     expect(create).toContain("--mode replicated-job");
@@ -103,9 +112,15 @@ describe.skipIf(!sh)("the release migration job", () => {
     // with it, Swarm would kill the job halfway through a migration.
     expect(create).toContain("--no-healthcheck");
     expect(create).toContain("--with-registry-auth");
-    expect(create).toMatch(new RegExp(`${IMAGE.replace(/[.]/g, "\\.")} \\./docker-entrypoint\\.sh migrate$`));
+    expect(create).toMatch(
+      new RegExp(
+        `${IMAGE.replace(/[.]/g, "\\.")} \\./docker-entrypoint\\.sh migrate$`,
+      ),
+    );
 
-    expect(box.calls("docker").some((call) => call.startsWith("docker service rm"))).toBe(true);
+    expect(
+      box.calls("docker").some((call) => call.startsWith("docker service rm")),
+    ).toBe(true);
     expect(result.stdout).toContain("migrate-job-log-line");
   });
 
@@ -115,7 +130,9 @@ describe.skipIf(!sh)("the release migration job", () => {
     mkdirSync(tmp);
     release([IMAGE], { TMPDIR: tmp });
 
-    expect(readFileSync(`${box.root}/env-copy`, "utf8")).toContain("DATABASE_URL=");
+    expect(readFileSync(`${box.root}/env-copy`, "utf8")).toContain(
+      "DATABASE_URL=",
+    );
     expect(existsSync(`${box.root}/env-path`)).toBe(true);
     // Nothing left where mktemp wrote it: the file held the database password.
     expect(readdirSync(tmp)).toEqual([]);
@@ -127,40 +144,64 @@ describe.skipIf(!sh)("the release migration job", () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it("joins the stack's internal network, where the database is", () => {
+  it("joins dokploy-network, where the Dokploy Postgres service is", () => {
     release([IMAGE]);
 
-    expect(box.calls("docker").find((call) => call.includes("service create"))).toContain(
-      "--network trajetto_backend",
-    );
+    expect(
+      box.calls("docker").find((call) => call.includes("service create")),
+    ).toContain("--network dokploy-network");
   });
 
-  it("follows STACK_NAME, the Dokploy app name, for the service and the network", () => {
-    const result = release([IMAGE], { STACK_NAME: "trajetto-api-x1y2" });
+  it("reuses the env of the service API_SERVICE names (the Application's appName)", () => {
+    const result = release([IMAGE], {
+      API_SERVICE: "trajetto-api-x1y2",
+      MIGRATE_NETWORK: "other-overlay",
+    });
 
     expect(result.status, result.stderr).toBe(0);
     expect(
-      box.calls("docker").some(
-        (call) => call.startsWith("docker service inspect --format") && call.endsWith(" trajetto-api-x1y2_api"),
-      ),
+      box
+        .calls("docker")
+        .some(
+          (call) =>
+            call.startsWith("docker service inspect --format") &&
+            call.endsWith(" trajetto-api-x1y2"),
+        ),
     ).toBe(true);
-    expect(box.calls("docker").find((call) => call.includes("service create"))).toContain(
-      "--network trajetto-api-x1y2_backend",
-    );
+    expect(
+      box.calls("docker").find((call) => call.includes("service create")),
+    ).toContain("--network other-overlay");
   });
 
   it.each([
-    ["network", { STUB_NETWORK_EXIT: "1" }],
-    ["API service", { STUB_SERVICE_EXIT: "1" }],
-  ])("refuses a stack name whose %s does not exist, creating nothing", (_what, env) => {
-    // It fell back to `minha_rede`, the Portainer overlay: on Dokploy that
-    // network is not there, and the database is not on a shared one anyway.
-    const result = release([IMAGE], env);
+    ["unset", ""],
+    ["with shell in it", "trajetto-api;id"],
+    ["with a second line", "trajetto-api\nid"],
+  ])("refuses an API_SERVICE %s, without touching docker", (_what, service) => {
+    // A Dokploy service name carries a random suffix: there is no default
+    // worth guessing, and the job must never borrow another service's env.
+    const result = release([IMAGE], { API_SERVICE: service });
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("STACK_NAME");
-    expect(box.calls("docker").some((call) => call.includes("service create"))).toBe(false);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("API_SERVICE");
+    expect(box.calls("docker")).toEqual([]);
   });
+
+  it.each([
+    ["network", { STUB_NETWORK_EXIT: "1" }, "MIGRATE_NETWORK"],
+    ["API service", { STUB_SERVICE_EXIT: "1" }, "API_SERVICE"],
+  ])(
+    "refuses when the %s does not exist, creating nothing",
+    (_what, env, hint) => {
+      const result = release([IMAGE], env);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(hint);
+      expect(
+        box.calls("docker").some((call) => call.includes("service create")),
+      ).toBe(false);
+    },
+  );
 
   it("fails the step when the job fails, and shows why", () => {
     const result = release([IMAGE], { STUB_STATE: "Failed 2 seconds ago" });
@@ -179,9 +220,9 @@ describe.skipIf(!sh)("the release migration job", () => {
     });
 
     expect(result.status).not.toBe(0);
-    expect(box.calls("docker").some((call) => call.startsWith("docker service rm"))).toBe(
-      false,
-    );
+    expect(
+      box.calls("docker").some((call) => call.startsWith("docker service rm")),
+    ).toBe(false);
     expect(result.stderr).toMatch(/trajetto-migrate-/);
   });
 
@@ -204,19 +245,25 @@ describe.skipIf(!sh)("the release migration job", () => {
       });
 
       expect(result.status).not.toBe(0);
-      expect(box.calls("docker").some((call) => call.startsWith("docker service rm"))).toBe(
-        false,
-      );
+      expect(
+        box
+          .calls("docker")
+          .some((call) => call.startsWith("docker service rm")),
+      ).toBe(false);
       expect(readdirSync(tmp)).toEqual([]);
     },
   );
 });
 
 describe("the promote workflow", () => {
-  const workflow = readFileSync(repoFile(".github/workflows/deploy.yml"), "utf8");
+  const workflow = readFileSync(
+    repoFile(".github/workflows/deploy.yml"),
+    "utf8",
+  );
   const job = workflow.slice(workflow.indexOf("\n  promote-production:"));
   const steps = job.split(/\n      - name: /).slice(1);
-  const index = (name: string) => steps.findIndex((step) => step.startsWith(name));
+  const index = (name: string) =>
+    steps.findIndex((step) => step.startsWith(name));
 
   it("migrates once, before `stable` moves and before the stack is told to pull", () => {
     const migrate = index("Run database migrations");
@@ -242,14 +289,21 @@ describe("the promote workflow", () => {
     const command = step.slice(step.indexOf("ssh -i"));
 
     // The option on the ssh command line itself, before the destination.
-    expect(command).toMatch(/^ssh -i[\s\S]*?-o ServerAliveInterval=\d+[\s\S]*?"\$SSH_USER@/);
+    expect(command).toMatch(
+      /^ssh -i[\s\S]*?-o ServerAliveInterval=\d+[\s\S]*?"\$SSH_USER@/,
+    );
   });
 });
 
-describe("the production stack", () => {
-  it("lets boot migrations be switched off once the job runs them", () => {
-    const compose = readFileSync(repoFile("compose.production.yaml"), "utf8");
+describe("the image's boot", () => {
+  it("migrates on boot unless the API Application switches it off for the job", () => {
+    // Unset in the Application's environment, the entrypoint keeps migrating
+    // on boot; MIGRATIONS_VIA_JOB pairs with RUN_MIGRATIONS_ON_BOOT=false.
+    const entrypoint = readFileSync(
+      repoFile("infra/scripts/docker-entrypoint.sh"),
+      "utf8",
+    );
 
-    expect(compose).toMatch(/RUN_MIGRATIONS_ON_BOOT: \$\{RUN_MIGRATIONS_ON_BOOT:-true\}/);
+    expect(entrypoint).toContain('"${RUN_MIGRATIONS_ON_BOOT:-true}" = "true"');
   });
 });

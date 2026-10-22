@@ -65,7 +65,9 @@ beforeAll(async () => {
   });
 
   PROFILE = (
-    await prisma.profileAccess.create({ data: { name: "Operação", businessId: CARRIER } })
+    await prisma.profileAccess.create({
+      data: { name: "Operação", businessId: CARRIER },
+    })
   ).id;
 
   await prisma.permission.create({
@@ -141,7 +143,10 @@ describe("the admin-users lists' connection budget", () => {
       order: "desc",
     });
 
-    expect(result.data[0]).toMatchObject({ usersCount: 3, permissionsCount: 1 });
+    expect(result.data[0]).toMatchObject({
+      usersCount: 3,
+      permissionsCount: 1,
+    });
     expect(pool.peak).toBeLessThanOrEqual(BUDGET);
   });
 

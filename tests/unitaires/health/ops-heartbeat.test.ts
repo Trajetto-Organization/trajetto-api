@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -49,7 +46,8 @@ function healthySnapshot() {
 }
 
 const fetchMock = vi.fn(
-  async (_url: string, _init?: RequestInit) => new Response("OK", { status: 200 }),
+  async (_url: string, _init?: RequestInit) =>
+    new Response("OK", { status: 200 }),
 );
 
 beforeEach(() => {
@@ -107,7 +105,10 @@ describe("the ops heartbeat job", () => {
     snapshot.current = {
       ...healthySnapshot(),
       deliveryFailures: [
-        { channel: "WHATSAPP", lastError: "[whatsapp http=401 code=190] Session has expired" },
+        {
+          channel: "WHATSAPP",
+          lastError: "[whatsapp http=401 code=190] Session has expired",
+        },
       ],
     };
 
@@ -122,8 +123,10 @@ describe("the ops heartbeat job", () => {
   });
 
   it("uses the explicit failure URL when one is set (Uptime Kuma)", async () => {
-    envMock.HEALTHCHECK_PING_URL = "https://kuma.exemplo.com/api/push/tok?status=up&msg=OK";
-    envMock.HEALTHCHECK_FAIL_URL = "https://kuma.exemplo.com/api/push/tok?status=down&msg=degraded";
+    envMock.HEALTHCHECK_PING_URL =
+      "https://kuma.exemplo.com/api/push/tok?status=up&msg=OK";
+    envMock.HEALTHCHECK_FAIL_URL =
+      "https://kuma.exemplo.com/api/push/tok?status=down&msg=degraded";
     snapshot.current = { ...healthySnapshot(), redisOk: false };
 
     await runJob();
@@ -144,16 +147,22 @@ describe("the ops heartbeat job", () => {
   });
 
   it("keeps Kuma's msg to a size a URL and a notification can carry", async () => {
-    envMock.HEALTHCHECK_PING_URL = "https://kuma.exemplo.com/api/push/tok?status=up&msg=OK";
-    envMock.HEALTHCHECK_FAIL_URL = "https://kuma.exemplo.com/api/push/tok?status=down";
+    envMock.HEALTHCHECK_PING_URL =
+      "https://kuma.exemplo.com/api/push/tok?status=up&msg=OK";
+    envMock.HEALTHCHECK_FAIL_URL =
+      "https://kuma.exemplo.com/api/push/tok?status=down";
     snapshot.current = {
       ...healthySnapshot(),
-      collectionErrors: Array.from({ length: 40 }, (_, i) => `parte ${i}: ${"x".repeat(150)}`),
+      collectionErrors: Array.from(
+        { length: 40 },
+        (_, i) => `parte ${i}: ${"x".repeat(150)}`,
+      ),
     };
 
     await runJob();
 
-    const msg = new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("msg") ?? "";
+    const msg =
+      new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("msg") ?? "";
 
     expect(msg.length).toBeGreaterThan(0);
     expect(msg.length).toBeLessThanOrEqual(500);
@@ -164,14 +173,5 @@ describe("the ops heartbeat job", () => {
     fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
 
     await expect(runJob()).resolves.toBeDefined();
-  });
-});
-
-describe("the production compose", () => {
-  it("passes the heartbeat URLs to the API, optional", () => {
-    const compose = readFileSync(resolve(process.cwd(), "compose.production.yaml"), "utf8");
-
-    expect(compose).toMatch(/HEALTHCHECK_PING_URL: \$\{HEALTHCHECK_PING_URL:-\}/);
-    expect(compose).toMatch(/HEALTHCHECK_FAIL_URL: \$\{HEALTHCHECK_FAIL_URL:-\}/);
   });
 });

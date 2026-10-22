@@ -33,7 +33,10 @@ const DRIVER = "018fed00-0000-7000-8000-0000000000d1";
 const FOREIGN_DRIVER = "018fed00-0000-7000-8000-0000000000d2";
 const TOWER_TYPE = "018fed00-0000-7000-8000-0000000000e1";
 
-const users = {} as Record<"admin" | "second" | "driver" | "otherAdmin", { id: string; token: string }>;
+const users = {} as Record<
+  "admin" | "second" | "driver" | "otherAdmin",
+  { id: string; token: string }
+>;
 
 let cnpjSeq = 0;
 
@@ -93,7 +96,15 @@ async function seedUser(
   const familyId = randomUUID();
 
   await prisma.user.create({
-    data: { id, name, email: `${id}@exemplo.com.br`, password: "x", role, businessId, driverId },
+    data: {
+      id,
+      name,
+      email: `${id}@exemplo.com.br`,
+      password: "x",
+      role,
+      businessId,
+      driverId,
+    },
   });
 
   await prisma.refreshToken.create({
@@ -108,14 +119,22 @@ async function seedUser(
 
   return {
     id,
-    token: sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-      subject: id,
-      expiresIn: "15m",
-    }),
+    token: sign(
+      { tokenType: "access", sessionVersion: 0, familyId },
+      auth.secret_token,
+      {
+        subject: id,
+        expiresIn: "15m",
+      },
+    ),
   };
 }
 
-async function inTransit(recipient: string, businessId = CARRIER, driverId = DRIVER) {
+async function inTransit(
+  recipient: string,
+  businessId = CARRIER,
+  driverId = DRIVER,
+) {
   const shipperId =
     businessId === CARRIER
       ? SHIPPER
@@ -123,7 +142,11 @@ async function inTransit(recipient: string, businessId = CARRIER, driverId = DRI
           await prisma.shipper.upsert({
             where: { id: "018fed00-0000-7000-8000-0000000000f2" },
             update: {},
-            create: { id: "018fed00-0000-7000-8000-0000000000f2", name: "Outro", businessId },
+            create: {
+              id: "018fed00-0000-7000-8000-0000000000f2",
+              name: "Outro",
+              businessId,
+            },
           })
         ).id;
 
@@ -163,14 +186,21 @@ beforeAll(async () => {
   await seedBusiness(CARRIER);
   await seedBusiness(OTHER);
 
-  await prisma.shipper.create({ data: { id: SHIPPER, name: "Embarcador", businessId: CARRIER } });
+  await prisma.shipper.create({
+    data: { id: SHIPPER, name: "Embarcador", businessId: CARRIER },
+  });
 
   await seedDriver(DRIVER, CARRIER);
   await seedDriver(FOREIGN_DRIVER, OTHER);
 
   users.admin = await seedUser("Ana Torre", "BUSINESS_ADMIN", CARRIER);
   users.second = await seedUser("Bruno Torre", "BUSINESS_ADMIN", CARRIER);
-  users.driver = await seedUser("João Motorista", "BUSINESS_USER", CARRIER, DRIVER);
+  users.driver = await seedUser(
+    "João Motorista",
+    "BUSINESS_USER",
+    CARRIER,
+    DRIVER,
+  );
   users.otherAdmin = await seedUser("Outra Torre", "BUSINESS_ADMIN", OTHER);
 
   await prisma.occurrenceType.create({
@@ -207,9 +237,13 @@ describe("numbering per company", () => {
 
     expect(answers.map((answer) => answer.status)).toEqual(Array(20).fill(201));
 
-    const numbers = answers.map((answer) => answer.body.data.number).sort((a, b) => a - b);
+    const numbers = answers
+      .map((answer) => answer.body.data.number)
+      .sort((a, b) => a - b);
 
-    expect(numbers).toEqual(Array.from({ length: 20 }, (_, index) => index + 1));
+    expect(numbers).toEqual(
+      Array.from({ length: 20 }, (_, index) => index + 1),
+    );
 
     const foreign = await call(
       "/chat/tickets",
@@ -234,7 +268,12 @@ describe("one open ticket per delivery", () => {
     const deliveryId = await inTransit("Corrida");
 
     const [a, b] = await Promise.all([
-      call("/chat/tickets", users.driver.token, { deliveryId }, { "idempotency-key": randomUUID() }),
+      call(
+        "/chat/tickets",
+        users.driver.token,
+        { deliveryId },
+        { "idempotency-key": randomUUID() },
+      ),
       call(
         "/chat/tickets",
         users.admin.token,
@@ -246,7 +285,11 @@ describe("one open ticket per delivery", () => {
     expect([a.status, b.status].sort()).toEqual([200, 201]);
     expect(a.body.data.id).toBe(b.body.data.id);
     expect([a.body.created, b.body.created].sort()).toEqual([false, true]);
-    expect(await prisma.supportTicket.count({ where: { deliveryId, status: "OPEN" } })).toBe(1);
+    expect(
+      await prisma.supportTicket.count({
+        where: { deliveryId, status: "OPEN" },
+      }),
+    ).toBe(1);
   });
 });
 
@@ -265,8 +308,13 @@ describe("two operators closing a request at once", () => {
     const ticketId = reported.body.data.ticket.id;
 
     const [approve, deny] = await Promise.all([
-      call(`/chat/tickets/${ticketId}/close`, users.admin.token, { outcome: "APPROVED" }),
-      call(`/chat/tickets/${ticketId}/close`, users.second.token, { outcome: "DENIED", note: "Não" }),
+      call(`/chat/tickets/${ticketId}/close`, users.admin.token, {
+        outcome: "APPROVED",
+      }),
+      call(`/chat/tickets/${ticketId}/close`, users.second.token, {
+        outcome: "DENIED",
+        note: "Não",
+      }),
     ]);
 
     const statuses = [approve.status, deny.status].sort();
@@ -275,9 +323,14 @@ describe("two operators closing a request at once", () => {
 
     const loser = approve.status === 409 ? approve : deny;
 
-    expect(["OCCURRENCE_ALREADY_DECIDED", "SUPPORT_TICKET_ALREADY_CLOSED"]).toContain(loser.body.code);
+    expect([
+      "OCCURRENCE_ALREADY_DECIDED",
+      "SUPPORT_TICKET_ALREADY_CLOSED",
+    ]).toContain(loser.body.code);
 
-    const ticket = await prisma.supportTicket.findUniqueOrThrow({ where: { id: ticketId } });
+    const ticket = await prisma.supportTicket.findUniqueOrThrow({
+      where: { id: ticketId },
+    });
     const occurrence = await prisma.deliveryOccurrence.findUniqueOrThrow({
       where: { id: reported.body.data.id },
     });
@@ -286,7 +339,9 @@ describe("two operators closing a request at once", () => {
     expect(ticket.status).toBe("CLOSED");
     expect(ticket.close_outcome).toBe(occurrence.authorization_status);
     expect(
-      await prisma.supportTicketEvent.count({ where: { ticketId, type: "CLOSED" } }),
+      await prisma.supportTicketEvent.count({
+        where: { ticketId, type: "CLOSED" },
+      }),
     ).toBe(1);
 
     if (occurrence.authorization_status === "APPROVED") {
@@ -315,15 +370,23 @@ describe("two operators closing a request at once", () => {
         users.admin.token,
         { decision: "APPROVED" },
       ),
-      call(`/chat/tickets/${ticketId}/close`, users.second.token, { outcome: "APPROVED" }),
+      call(`/chat/tickets/${ticketId}/close`, users.second.token, {
+        outcome: "APPROVED",
+      }),
     ]);
 
     expect([fromQueue.status, fromTicket.status]).toContain(200);
 
-    const ticket = await prisma.supportTicket.findUniqueOrThrow({ where: { id: ticketId } });
+    const ticket = await prisma.supportTicket.findUniqueOrThrow({
+      where: { id: ticketId },
+    });
 
     expect(ticket.status).toBe("CLOSED");
-    expect(await prisma.supportTicketEvent.count({ where: { ticketId, type: "CLOSED" } })).toBe(1);
+    expect(
+      await prisma.supportTicketEvent.count({
+        where: { ticketId, type: "CLOSED" },
+      }),
+    ).toBe(1);
   });
 });
 
@@ -360,14 +423,24 @@ describe("repair of messages without a ticket (rolling deploy)", () => {
 
     expect(first + second).toBeGreaterThanOrEqual(1);
 
-    const filed = await prisma.chatMessage.findUniqueOrThrow({ where: { id: orphan.id } });
+    const filed = await prisma.chatMessage.findUniqueOrThrow({
+      where: { id: orphan.id },
+    });
 
     expect(filed.ticketId).not.toBeNull();
 
-    const ticket = await prisma.supportTicket.findUniqueOrThrow({ where: { id: filed.ticketId! } });
+    const ticket = await prisma.supportTicket.findUniqueOrThrow({
+      where: { id: filed.ticketId! },
+    });
 
-    expect(ticket).toMatchObject({ kind: "DELIVERY", deliveryId, opened_via: "LEGACY_ROUTING" });
-    expect(ticket.last_driver_message_at?.getTime()).toBe(orphan.created_at.getTime());
+    expect(ticket).toMatchObject({
+      kind: "DELIVERY",
+      deliveryId,
+      opened_via: "LEGACY_ROUTING",
+    });
+    expect(ticket.last_driver_message_at?.getTime()).toBe(
+      orphan.created_at.getTime(),
+    );
     expect(await prisma.supportTicket.count({ where: { deliveryId } })).toBe(1);
 
     // Nothing left to do on the next run.
@@ -388,7 +461,9 @@ describe("repair, judged like a live legacy send (review round 2)", () => {
   async function threadId() {
     return (
       await prisma.chatThread.upsert({
-        where: { businessId_driverId: { businessId: CARRIER, driverId: DRIVER } },
+        where: {
+          businessId_driverId: { businessId: CARRIER, driverId: DRIVER },
+        },
         update: {},
         create: { businessId: CARRIER, driverId: DRIVER },
       })
@@ -406,11 +481,15 @@ describe("repair, judged like a live legacy send (review round 2)", () => {
     );
     expect(opened.status, JSON.stringify(opened.body)).toBe(201);
 
-    const reply = await call(`/chat/tickets/${opened.body.data.id}/messages`, users.admin.token, {
-      kind: "TEXT",
-      body: "Consegue confirmar o número?",
-      clientSubmissionId: randomUUID(),
-    });
+    const reply = await call(
+      `/chat/tickets/${opened.body.data.id}/messages`,
+      users.admin.token,
+      {
+        kind: "TEXT",
+        body: "Consegue confirmar o número?",
+        clientSubmissionId: randomUUID(),
+      },
+    );
     expect(reply.status, JSON.stringify(reply.body)).toBe(201);
 
     return {
@@ -421,7 +500,8 @@ describe("repair, judged like a live legacy send (review round 2)", () => {
   }
 
   it("files the driver's answer to the tower's message of the last 30 minutes in that ticket", async () => {
-    const { ticketId, repliedAt } = await towerTicketWithReply("Resposta Reparada");
+    const { ticketId, repliedAt } =
+      await towerTicketWithReply("Resposta Reparada");
 
     // The old app's answer: no delivery, no route, a minute after the tower.
     const orphan = await prisma.chatMessage.create({
@@ -437,17 +517,24 @@ describe("repair, judged like a live legacy send (review round 2)", () => {
     await repair();
 
     expect(
-      (await prisma.chatMessage.findUniqueOrThrow({ where: { id: orphan.id } })).ticketId,
+      (await prisma.chatMessage.findUniqueOrThrow({ where: { id: orphan.id } }))
+        .ticketId,
     ).toBe(ticketId);
   });
 
   it("never moves a ticket back in the list order when it files an older message", async () => {
-    const { deliveryId, ticketId, repliedAt } = await towerTicketWithReply("Ordem Reparada");
+    const { deliveryId, ticketId, repliedAt } =
+      await towerTicketWithReply("Ordem Reparada");
     // Older than the reply but after this database's backfill, which filed
     // everything before it (the repair never looks earlier).
-    const backfilledAt = (await new SupportTicketRepository().ticketsBackfilledAt()) ?? new Date(0);
+    const backfilledAt =
+      (await new SupportTicketRepository().ticketsBackfilledAt()) ??
+      new Date(0);
     const writtenAt = new Date(
-      Math.max(repliedAt.getTime() - 10 * 60_000, (backfilledAt.getTime() + repliedAt.getTime()) / 2),
+      Math.max(
+        repliedAt.getTime() - 10 * 60_000,
+        (backfilledAt.getTime() + repliedAt.getTime()) / 2,
+      ),
     );
 
     const orphan = await prisma.chatMessage.create({
@@ -463,13 +550,18 @@ describe("repair, judged like a live legacy send (review round 2)", () => {
 
     await repair();
 
-    const ticket = await prisma.supportTicket.findUniqueOrThrow({ where: { id: ticketId } });
+    const ticket = await prisma.supportTicket.findUniqueOrThrow({
+      where: { id: ticketId },
+    });
 
-    expect((await prisma.chatMessage.findUniqueOrThrow({ where: { id: orphan.id } })).ticketId).toBe(
-      ticketId,
-    );
+    expect(
+      (await prisma.chatMessage.findUniqueOrThrow({ where: { id: orphan.id } }))
+        .ticketId,
+    ).toBe(ticketId);
     expect(ticket.last_message_at?.getTime()).toBe(repliedAt.getTime());
-    expect(ticket.last_driver_message_at?.getTime()).toBe(orphan.created_at.getTime());
+    expect(ticket.last_driver_message_at?.getTime()).toBe(
+      orphan.created_at.getTime(),
+    );
   });
 
   it("does not walk messages from before tickets existed, nor mass notices", async () => {
@@ -497,7 +589,16 @@ describe("repair, judged like a live legacy send (review round 2)", () => {
 
     await repair();
 
-    expect((await prisma.chatMessage.findUniqueOrThrow({ where: { id: ancient.id } })).ticketId).toBeNull();
-    expect((await prisma.chatMessage.findUniqueOrThrow({ where: { id: notice.id } })).ticketId).toBeNull();
+    expect(
+      (
+        await prisma.chatMessage.findUniqueOrThrow({
+          where: { id: ancient.id },
+        })
+      ).ticketId,
+    ).toBeNull();
+    expect(
+      (await prisma.chatMessage.findUniqueOrThrow({ where: { id: notice.id } }))
+        .ticketId,
+    ).toBeNull();
   });
 });

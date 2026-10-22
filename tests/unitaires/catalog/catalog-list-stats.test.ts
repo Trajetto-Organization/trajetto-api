@@ -22,8 +22,14 @@ import { InMemoryFuelTypeRepository } from "@/modules/fuel-type/repositories/in-
 const A = "018fe800-0000-7000-8000-00000000000a";
 const B = "018fe800-0000-7000-8000-00000000000b";
 
-const FLEET_ON = { is_active: true, entitlements: [{ module: "FLEET", enabled: true }] };
-const FLEET_OFF = { is_active: true, entitlements: [{ module: "DELIVERIES", enabled: true }] };
+const FLEET_ON = {
+  is_active: true,
+  entitlements: [{ module: "FLEET", enabled: true }],
+};
+const FLEET_OFF = {
+  is_active: true,
+  entitlements: [{ module: "DELIVERIES", enabled: true }],
+};
 
 function usersReturning(user: object) {
   return { findUserById: async () => user } as never;
@@ -55,23 +61,54 @@ describe("summarizeCatalogUsage", () => {
   });
 
   it("has no leader while nothing points at any entry", () => {
-    expect(summarizeCatalogUsage([{ id: "1", label: "Van", count: 0 }]).leader).toBeNull();
-    expect(summarizeCatalogUsage([])).toEqual({ total: 0, linked: 0, unused: 0, leader: null });
+    expect(
+      summarizeCatalogUsage([{ id: "1", label: "Van", count: 0 }]).leader,
+    ).toBeNull();
+    expect(summarizeCatalogUsage([])).toEqual({
+      total: 0,
+      linked: 0,
+      unused: 0,
+      leader: null,
+    });
   });
 });
 
 describe("access profile cards", () => {
   function setup(caller: object) {
     const users: Array<{ id: string; profileAccessId: string | null }> = [];
-    const profiles = new InMemoryProfileAccessRepository({ users: () => users });
-    const business = { findBusinessById: async (id: string) => ({ id }) } as never;
+    const profiles = new InMemoryProfileAccessRepository({
+      users: () => users,
+    });
+    const business = {
+      findBusinessById: async (id: string) => ({ id }),
+    } as never;
 
     profiles.profileAccess.push(
-      { id: "p-fin", name: "Financeiro", businessId: A, created_at: new Date(1) },
+      {
+        id: "p-fin",
+        name: "Financeiro",
+        businessId: A,
+        created_at: new Date(1),
+      },
       { id: "p-ops", name: "Operação", businessId: A, created_at: new Date(2) },
-      { id: "p-own", name: "Supervisão", businessId: A, created_at: new Date(3) },
-      { id: "p-idle", name: "Auditoria", businessId: A, created_at: new Date(4) },
-      { id: "p-other", name: "Financeiro", businessId: B, created_at: new Date(5) },
+      {
+        id: "p-own",
+        name: "Supervisão",
+        businessId: A,
+        created_at: new Date(3),
+      },
+      {
+        id: "p-idle",
+        name: "Auditoria",
+        businessId: A,
+        created_at: new Date(4),
+      },
+      {
+        id: "p-other",
+        name: "Financeiro",
+        businessId: B,
+        created_at: new Date(5),
+      },
     );
 
     users.push(
@@ -82,16 +119,27 @@ describe("access profile cards", () => {
       { id: "u5", profileAccessId: "p-own" },
       { id: "u6", profileAccessId: "p-own" },
       // Another company's crowd: never counted for A.
-      ...Array.from({ length: 9 }, (_, index) => ({ id: `x${index}`, profileAccessId: "p-other" })),
+      ...Array.from({ length: 9 }, (_, index) => ({
+        id: `x${index}`,
+        profileAccessId: "p-other",
+      })),
     );
 
-    return new ListProfileAccessUseCase(usersReturning(caller), profiles, business);
+    return new ListProfileAccessUseCase(
+      usersReturning(caller),
+      profiles,
+      business,
+    );
   }
 
   it("count the company's whole search, not the page on screen", async () => {
     const list = setup({ id: "admin", role: "BUSINESS_ADMIN", businessId: A });
 
-    const result = await list.execute({ userId: "admin", page: 1, pageSize: 1 });
+    const result = await list.execute({
+      userId: "admin",
+      page: 1,
+      pageSize: 1,
+    });
 
     expect(result.data).toHaveLength(1);
     expect(result.meta).toEqual({
@@ -110,7 +158,11 @@ describe("access profile cards", () => {
       profileAccessId: "p-own",
     });
 
-    const { meta } = await list.execute({ userId: "operator", page: 1, pageSize: 10 });
+    const { meta } = await list.execute({
+      userId: "operator",
+      page: 1,
+      pageSize: 10,
+    });
 
     expect(meta).toEqual({
       total: 3,
@@ -150,10 +202,42 @@ describe("vehicle type cards", () => {
     const at = (ms: number) => new Date(ms);
 
     types.vehicleTypes.push(
-      { id: "t-truck", description: "Truck", number_of_axles: 3, required_cnh_category: null, businessId: A, created_at: at(1), updated_at: at(1) },
-      { id: "t-van", description: "Van", number_of_axles: 2, required_cnh_category: null, businessId: A, created_at: at(2), updated_at: at(2) },
-      { id: "t-idle", description: "Bitrem", number_of_axles: 7, required_cnh_category: null, businessId: A, created_at: at(3), updated_at: at(3) },
-      { id: "t-other", description: "Carreta", number_of_axles: 5, required_cnh_category: null, businessId: B, created_at: at(4), updated_at: at(4) },
+      {
+        id: "t-truck",
+        description: "Truck",
+        number_of_axles: 3,
+        required_cnh_category: null,
+        businessId: A,
+        created_at: at(1),
+        updated_at: at(1),
+      },
+      {
+        id: "t-van",
+        description: "Van",
+        number_of_axles: 2,
+        required_cnh_category: null,
+        businessId: A,
+        created_at: at(2),
+        updated_at: at(2),
+      },
+      {
+        id: "t-idle",
+        description: "Bitrem",
+        number_of_axles: 7,
+        required_cnh_category: null,
+        businessId: A,
+        created_at: at(3),
+        updated_at: at(3),
+      },
+      {
+        id: "t-other",
+        description: "Carreta",
+        number_of_axles: 5,
+        required_cnh_category: null,
+        businessId: B,
+        created_at: at(4),
+        updated_at: at(4),
+      },
     );
 
     vehicles.push(
@@ -171,7 +255,11 @@ describe("vehicle type cards", () => {
   }
 
   it("count the company's whole search, not the page on screen", async () => {
-    const result = await setup().execute({ userId: "admin", page: 1, pageSize: 1 });
+    const result = await setup().execute({
+      userId: "admin",
+      page: 1,
+      pageSize: 1,
+    });
 
     expect(result.data).toHaveLength(1);
     expect(result.meta).toEqual({
@@ -190,7 +278,12 @@ describe("vehicle type cards", () => {
       search: "bitrem",
     });
 
-    expect(meta).toEqual({ total: 1, vehicles: 0, withoutVehicles: 1, mostUsed: null });
+    expect(meta).toEqual({
+      total: 1,
+      vehicles: 0,
+      withoutVehicles: 1,
+      mostUsed: null,
+    });
   });
 });
 
@@ -207,15 +300,51 @@ describe("fuel type cards", () => {
     const at = new Date(0);
 
     fuelTypes.fuelTypes.push(
-      { id: "f-diesel", description: "Diesel", businessId: A, created_at: at, updated_at: at },
-      { id: "f-gas", description: "Gasolina", businessId: A, created_at: at, updated_at: at },
-      { id: "f-gnv", description: "GNV", businessId: A, created_at: at, updated_at: at },
-      { id: "f-other", description: "Diesel", businessId: B, created_at: at, updated_at: at },
+      {
+        id: "f-diesel",
+        description: "Diesel",
+        businessId: A,
+        created_at: at,
+        updated_at: at,
+      },
+      {
+        id: "f-gas",
+        description: "Gasolina",
+        businessId: A,
+        created_at: at,
+        updated_at: at,
+      },
+      {
+        id: "f-gnv",
+        description: "GNV",
+        businessId: A,
+        created_at: at,
+        updated_at: at,
+      },
+      {
+        id: "f-other",
+        description: "Diesel",
+        businessId: B,
+        created_at: at,
+        updated_at: at,
+      },
     );
 
-    fuelTypes.vehicleFuelTypeIds.push("f-diesel", "f-diesel", "f-gas", "f-other", "f-other");
+    fuelTypes.vehicleFuelTypeIds.push(
+      "f-diesel",
+      "f-diesel",
+      "f-gas",
+      "f-other",
+      "f-other",
+    );
 
-    const refuel = (fuelTypeId: string, businessId: string, iso: string, liters: number, amount: number) => ({
+    const refuel = (
+      fuelTypeId: string,
+      businessId: string,
+      iso: string,
+      liters: number,
+      amount: number,
+    ) => ({
       fuelTypeId,
       businessId,
       refueling_date: new Date(iso),
@@ -239,7 +368,12 @@ describe("fuel type cards", () => {
     return new ListFuelTypeUseCase(usersReturning(caller), fuelTypes, business);
   }
 
-  const admin = { id: "admin", role: "BUSINESS_ADMIN", businessId: A, business: FLEET_ON };
+  const admin = {
+    id: "admin",
+    role: "BUSINESS_ADMIN",
+    businessId: A,
+    business: FLEET_ON,
+  };
 
   it("sum the company's business month and name the fuel most refueled", async () => {
     const { meta, total } = await setup(admin).execute({
@@ -308,7 +442,13 @@ describe("fuel type cards", () => {
       business: FLEET_ON,
       profileAccess: {
         permissions: [
-          { id: "1", permissionKey: "fuel_type_manage", action: "x", canRead: true, canWrite: false },
+          {
+            id: "1",
+            permissionKey: "fuel_type_manage",
+            action: "x",
+            canRead: true,
+            canWrite: false,
+          },
         ],
       },
     };
@@ -331,8 +471,20 @@ describe("fuel type cards", () => {
       business: FLEET_ON,
       profileAccess: {
         permissions: [
-          { id: "1", permissionKey: "fuel_type_manage", action: "x", canRead: true, canWrite: false },
-          { id: "2", permissionKey: "fuel_manage", action: "x", canRead: true, canWrite: false },
+          {
+            id: "1",
+            permissionKey: "fuel_type_manage",
+            action: "x",
+            canRead: true,
+            canWrite: false,
+          },
+          {
+            id: "2",
+            permissionKey: "fuel_manage",
+            action: "x",
+            canRead: true,
+            canWrite: false,
+          },
         ],
       },
     };

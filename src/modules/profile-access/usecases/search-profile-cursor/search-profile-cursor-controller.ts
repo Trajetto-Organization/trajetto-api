@@ -5,7 +5,6 @@ import { z } from "zod";
 import { SearchProfileCursorUseCase } from "./search-profile-cursor-usecase";
 import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
 
-
 import { sendAsNDJSON } from "@/config/stream-utils";
 
 class SearchProfileCursorController {

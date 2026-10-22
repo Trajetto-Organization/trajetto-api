@@ -408,27 +408,28 @@ class CreateFuelUseCase {
       // are one serializable transaction; the pipeline turns the event into
       // the activity trail entry after the commit. A concurrent retry
       // returns the original record without publishing anything.
-      const { fuel: fuelCreated, created } = await this.fuel.createFuelWithMileage(
-        fuelDataWithPhoto,
-        (tx, fuel) =>
-          this.outbox.publish(tx, {
-            topic: "fuel.created",
-            aggregateType: "fuel",
-            aggregateId: fuel.id,
-            businessId: fuelData.businessId,
-            actorId: userId,
-            eventKey: `fuel.created:${fuel.id}`,
-            payload: {
-              fuelId: fuel.id,
+      const { fuel: fuelCreated, created } =
+        await this.fuel.createFuelWithMileage(
+          fuelDataWithPhoto,
+          (tx, fuel) =>
+            this.outbox.publish(tx, {
+              topic: "fuel.created",
+              aggregateType: "fuel",
+              aggregateId: fuel.id,
               businessId: fuelData.businessId,
-              vehiclePlate: findVehicle.license_plate,
-              vehicleDescription: findVehicle.description,
-              origin: fuelData.created_from,
-            },
-          }),
-        // The company's day decides which readings are "after" a web date.
-        { timeZone: businessTimeZone(findBusiness) },
-      );
+              actorId: userId,
+              eventKey: `fuel.created:${fuel.id}`,
+              payload: {
+                fuelId: fuel.id,
+                businessId: fuelData.businessId,
+                vehiclePlate: findVehicle.license_plate,
+                vehicleDescription: findVehicle.description,
+                origin: fuelData.created_from,
+              },
+            }),
+          // The company's day decides which readings are "after" a web date.
+          { timeZone: businessTimeZone(findBusiness) },
+        );
 
       if (!created) {
         // An idempotent replay. The app resends the key it already uploaded,
@@ -455,10 +456,7 @@ class CreateFuelUseCase {
          * caller and said nothing about whose record came back.
          */
         if (
-          !submissionBelongsToCaller(
-            findUser.driverId,
-            fuelCreated.driverId,
-          )
+          !submissionBelongsToCaller(findUser.driverId, fuelCreated.driverId)
         ) {
           throw new SubmissionOwnerMismatchError();
         }

@@ -75,7 +75,11 @@ async function seedBusiness(
 
   if (modules.length > 0) {
     await prisma.businessEntitlement.createMany({
-      data: modules.map((module) => ({ businessId: id, module, enabled: true })),
+      data: modules.map((module) => ({
+        businessId: id,
+        module,
+        enabled: true,
+      })),
     });
   }
 }
@@ -232,7 +236,11 @@ beforeAll(async () => {
 
   supplierC = (
     await prisma.supplier.create({
-      data: { businessId: C, name: `Fornecedor ${RUN}`, cnpj: "11222333000181" },
+      data: {
+        businessId: C,
+        name: `Fornecedor ${RUN}`,
+        cnpj: "11222333000181",
+      },
     })
   ).id;
 
@@ -244,7 +252,9 @@ afterAll(async () => {
   const companies = [A, B, C];
 
   await prisma.shipper.deleteMany({ where: { businessId: { in: companies } } });
-  await prisma.supplier.deleteMany({ where: { businessId: { in: companies } } });
+  await prisma.supplier.deleteMany({
+    where: { businessId: { in: companies } },
+  });
 
   const everyone = [
     MASTER,
@@ -259,7 +269,10 @@ afterAll(async () => {
   await prisma.refreshToken.deleteMany({ where: { userId: { in: everyone } } });
   await prisma.activity.deleteMany({
     where: {
-      OR: [{ businessId: { in: companies } }, { performedBy: { in: everyone } }],
+      OR: [
+        { businessId: { in: companies } },
+        { performedBy: { in: everyone } },
+      ],
     },
   });
   await prisma.user.deleteMany({ where: { id: { in: everyone } } });
@@ -327,7 +340,9 @@ describe("BUSINESS_USER with Entregas read-only", () => {
 
 describe("BUSINESS_USER with the full profile", () => {
   it("reads both sections", async () => {
-    expect((await call("GET", listDeliveries(A), tokens.full)).statusCode).toBe(200);
+    expect((await call("GET", listDeliveries(A), tokens.full)).statusCode).toBe(
+      200,
+    );
     expect(
       (await call("GET", listOccurrenceTypes(A), tokens.full)).statusCode,
     ).toBe(200);
@@ -356,7 +371,9 @@ describe("a profile row that exists but is not readable", () => {
 
 describe("the driver", () => {
   it("reads the day", async () => {
-    expect((await call("GET", listDeliveries(A), tokens.driver)).statusCode).toBe(200);
+    expect(
+      (await call("GET", listDeliveries(A), tokens.driver)).statusCode,
+    ).toBe(200);
   });
 
   it("is refused the company's occurrence catalogue with PERMISSION_DENIED", async () => {
@@ -397,9 +414,9 @@ describe("a company without the module", () => {
 
 describe("MASTER is module-gated on the company it names (decision 4.3)", () => {
   it("reads a company that hired the module", async () => {
-    expect((await call("GET", listDeliveries(A), tokens.master)).statusCode).toBe(
-      200,
-    );
+    expect(
+      (await call("GET", listDeliveries(A), tokens.master)).statusCode,
+    ).toBe(200);
   });
 
   it("is refused the reads of a company that did not", async () => {

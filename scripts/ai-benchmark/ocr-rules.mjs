@@ -57,8 +57,17 @@ function meanScore(lines) {
 // Receipt (canhoto)
 // ---------------------------------------------------------------------------
 
-const RECEIPT_KEYS = ["RECEBEMOS", "DATADERECEBIMENTO", "ASSINATURADORECEBEDOR", "IDENTIFICACAOEASSINATURA"];
-const NOT_RECEIPT_KEYS = ["NFCE", "CONSUMIDORELETRONICA", "DOCUMENTOAUXILIARDANOTAFISCALDECONSUMIDOR"];
+const RECEIPT_KEYS = [
+  "RECEBEMOS",
+  "DATADERECEBIMENTO",
+  "ASSINATURADORECEBEDOR",
+  "IDENTIFICACAOEASSINATURA",
+];
+const NOT_RECEIPT_KEYS = [
+  "NFCE",
+  "CONSUMIDORELETRONICA",
+  "DOCUMENTOAUXILIARDANOTAFISCALDECONSUMIDOR",
+];
 
 function findLabel(lines, key) {
   return lines.find((line) => compact(line.text).includes(key)) ?? null;
@@ -77,9 +86,17 @@ function nearestBelow(label, candidates, maxHeights = 6) {
     if (candidate === label) continue;
     if (candidate.cy < label.minY) continue;
     if (candidate.cy - label.cy > maxHeights * label.h) continue;
-    if (candidate.cx < label.minX - 0.4 * label.w || candidate.cx > label.maxX + 0.8 * label.w) continue;
+    if (
+      candidate.cx < label.minX - 0.4 * label.w ||
+      candidate.cx > label.maxX + 0.8 * label.w
+    )
+      continue;
 
-    const dx = Math.max(0, label.minX - candidate.maxX, candidate.minX - label.maxX);
+    const dx = Math.max(
+      0,
+      label.minX - candidate.maxX,
+      candidate.minX - label.maxX,
+    );
     const dy = candidate.cy - label.cy;
     const distance = Math.hypot(dx, dy);
 
@@ -108,7 +125,12 @@ function proofFromLines(rawLines) {
   const receiptHits = RECEIPT_KEYS.filter((key) => all.includes(key)).length;
   const notReceipt = NOT_RECEIPT_KEYS.some((key) => all.includes(key));
 
-  const isReceipt = receiptHits >= 1 && !notReceipt ? "sim" : lines.length >= 3 || notReceipt ? "nao" : "nao_sei";
+  const isReceipt =
+    receiptHits >= 1 && !notReceipt
+      ? "sim"
+      : lines.length >= 3 || notReceipt
+        ? "nao"
+        : "nao_sei";
 
   // The invoice number: the 000.000.000 group (stub's "Nº", or the DANFE's).
   let number = null;
@@ -116,7 +138,15 @@ function proofFromLines(rawLines) {
     const text = normalize(line.text);
     if (/CHAVE|PROTOCOLO|CNPJ|INSCRICAO/.test(text)) continue;
     const match = text.match(INVOICE_PATTERN);
-    if (match && !/\d/.test(text.slice(match.index + match[0].length, match.index + match[0].length + 1))) {
+    if (
+      match &&
+      !/\d/.test(
+        text.slice(
+          match.index + match[0].length,
+          match.index + match[0].length + 1,
+        ),
+      )
+    ) {
       number = `${match[1]}${match[2]}${match[3]}`;
       break;
     }
@@ -127,7 +157,10 @@ function proofFromLines(rawLines) {
   // taken (the product's own rule: "any date on the paper" is not enough).
   const dateLabel = findLabel(lines, "DATADERECEBIMENTO");
   const dateLines = lines.filter(
-    (line) => line !== dateLabel && plausibleDate(line.text) && !/EMISS|VALOR|R\$|SAIDA|ENTRADA/.test(normalize(line.text)),
+    (line) =>
+      line !== dateLabel &&
+      plausibleDate(line.text) &&
+      !/EMISS|VALOR|R\$|SAIDA|ENTRADA/.test(normalize(line.text)),
   );
   let date = null;
   if (dateLabel) {
@@ -141,11 +174,18 @@ function proofFromLines(rawLines) {
   }
 
   // The recipient's name: letters only, nearest below the signature label.
-  const signerLabel = findLabel(lines, "ASSINATURADORECEBEDOR") ?? findLabel(lines, "IDENTIFICACAOEASSINATURA");
+  const signerLabel =
+    findLabel(lines, "ASSINATURADORECEBEDOR") ??
+    findLabel(lines, "IDENTIFICACAOEASSINATURA");
   let name = null;
   if (signerLabel) {
     const candidates = lines.filter(
-      (line) => /[A-Za-z]{3,}/.test(line.text) && !/\d/.test(line.text) && !/DANFE|IDENTIFICACAO|EMITENTE|DOCUMENTO|SERIE/.test(normalize(line.text)),
+      (line) =>
+        /[A-Za-z]{3,}/.test(line.text) &&
+        !/\d/.test(line.text) &&
+        !/DANFE|IDENTIFICACAO|EMITENTE|DOCUMENTO|SERIE/.test(
+          normalize(line.text),
+        ),
     );
     const found = nearestBelow(signerLabel, candidates);
     if (found) name = found.text.trim();
@@ -185,7 +225,23 @@ function proofFromLines(rawLines) {
  * The usual OCR letter-for-digit swaps, applied only to a token that is
  * already mostly digits (an odometer field never holds letters).
  */
-const DIGIT_SWAPS = { O: "0", o: "0", D: "0", Q: "0", I: "1", l: "1", "|": "1", Z: "2", z: "2", S: "5", s: "5", B: "8", G: "6", b: "6", g: "9" };
+const DIGIT_SWAPS = {
+  O: "0",
+  o: "0",
+  D: "0",
+  Q: "0",
+  I: "1",
+  l: "1",
+  "|": "1",
+  Z: "2",
+  z: "2",
+  S: "5",
+  s: "5",
+  B: "8",
+  G: "6",
+  b: "6",
+  g: "9",
+};
 
 function asDigits(text) {
   const trimmed = text.trim();
@@ -196,10 +252,14 @@ function asDigits(text) {
 }
 
 function digitRuns(rawLines) {
-  const lines = rawLines.map((line) => ({ ...line, text: asDigits(line.text) }));
+  const lines = rawLines.map((line) => ({
+    ...line,
+    text: asDigits(line.text),
+  }));
   // "100 120": two dial labels the detector boxed together, not a reading.
   const numeric = lines.filter(
-    (line) => /^\s*\d[\d\s]*$/.test(line.text) && !/\d{2,}\s+\d{2,}/.test(line.text),
+    (line) =>
+      /^\s*\d[\d\s]*$/.test(line.text) && !/\d{2,}\s+\d{2,}/.test(line.text),
   );
   const runs = numeric.map((line) => ({
     text: line.text.replace(/\s/g, ""),
@@ -212,7 +272,9 @@ function digitRuns(rawLines) {
 
   // A drum odometer may come back one box per digit: merge single digits
   // that sit side by side on one row (never multi-digit dial labels).
-  const singles = numeric.filter((line) => line.text.trim().length === 1).sort((a, b) => a.minX - b.minX);
+  const singles = numeric
+    .filter((line) => line.text.trim().length === 1)
+    .sort((a, b) => a.minX - b.minX);
   const used = new Set();
   for (const start of singles) {
     if (used.has(start)) continue;
@@ -221,7 +283,8 @@ function digitRuns(rawLines) {
     let last = start;
     for (const next of singles) {
       if (used.has(next)) continue;
-      const sameRow = Math.abs(next.cy - last.cy) < 0.4 * Math.max(next.h, last.h);
+      const sameRow =
+        Math.abs(next.cy - last.cy) < 0.4 * Math.max(next.h, last.h);
       const gap = next.minX - last.maxX;
       if (sameRow && gap > -0.3 * last.h && gap < 0.8 * last.h) {
         run.push(next);
@@ -250,21 +313,37 @@ function odometerFromLines(rawLines) {
   const hasContext = /ODO|KM|TRIP/.test(all);
 
   const runs = digitRuns(lines).filter((run) =>
-    run.text.length >= 5 && run.text.length <= 7 ? true : run.text.length === 4 && hasContext,
+    run.text.length >= 5 && run.text.length <= 7
+      ? true
+      : run.text.length === 4 && hasContext,
   );
 
   let chosen = null;
-  const odoLabel = lines.find((line) => compact(line.text) === "ODO" || compact(line.text).startsWith("ODO"));
+  const odoLabel = lines.find(
+    (line) =>
+      compact(line.text) === "ODO" || compact(line.text).startsWith("ODO"),
+  );
 
   if (odoLabel && runs.length > 0) {
     const label = geometry(odoLabel);
-    chosen = runs
-      .filter((run) => run.cy >= label.minY - label.h)
-      .sort((a, b) => Math.hypot(a.cx - label.cx, a.cy - label.cy) - Math.hypot(b.cx - label.cx, b.cy - label.cy))[0] ?? null;
+    chosen =
+      runs
+        .filter((run) => run.cy >= label.minY - label.h)
+        .sort(
+          (a, b) =>
+            Math.hypot(a.cx - label.cx, a.cy - label.cy) -
+            Math.hypot(b.cx - label.cx, b.cy - label.cy),
+        )[0] ?? null;
   }
 
   // No ODO label: the tallest single-line run, then the longest.
-  chosen ??= runs.sort((a, b) => Number(a.merged) - Number(b.merged) || b.h - a.h || b.text.length - a.text.length)[0] ?? null;
+  chosen ??=
+    runs.sort(
+      (a, b) =>
+        Number(a.merged) - Number(b.merged) ||
+        b.h - a.h ||
+        b.text.length - a.text.length,
+    )[0] ?? null;
 
   return {
     valor_lido: chosen ? Number(chosen.text) : null,
@@ -284,17 +363,36 @@ function odometerFromLines(rawLines) {
  * question at all (fuel gauge, tyre, windshield, extinguisher: it does not).
  */
 function answerFromOcr(item, kind, lines) {
-  if (item.task === "proof") return { answer: proofFromLines(lines), covered: true };
-  if (kind === "odometer") return { answer: odometerFromLines(lines), covered: true };
+  if (item.task === "proof")
+    return { answer: proofFromLines(lines), covered: true };
+  if (kind === "odometer")
+    return { answer: odometerFromLines(lines), covered: true };
 
   if (kind === "fuel_level") {
-    return { answer: { nivel_estimado: "ilegivel", confianca: 0, observacao: "OCR não cobre" }, covered: false };
+    return {
+      answer: {
+        nivel_estimado: "ilegivel",
+        confianca: 0,
+        observacao: "OCR não cobre",
+      },
+      covered: false,
+    };
   }
   if (kind === "condition") {
-    return { answer: { condicao_observada: "nao_sei", confianca: 0, observacao: "OCR não cobre" }, covered: false };
+    return {
+      answer: {
+        condicao_observada: "nao_sei",
+        confianca: 0,
+        observacao: "OCR não cobre",
+      },
+      covered: false,
+    };
   }
 
-  return { answer: { item_ok: "nao_sei", confianca: 0, observacao: "OCR não cobre" }, covered: false };
+  return {
+    answer: { item_ok: "nao_sei", confianca: 0, observacao: "OCR não cobre" },
+    covered: false,
+  };
 }
 
 export { answerFromOcr, odometerFromLines, proofFromLines };

@@ -47,7 +47,8 @@ class CreateKanbanCardUseCase {
     // 403 "not yours" would confirm the id exists on some other board.
     if (
       !findColumn ||
-      (findUser.role !== "MASTER" && findUser.businessId !== findColumn.businessId)
+      (findUser.role !== "MASTER" &&
+        findUser.businessId !== findColumn.businessId)
     ) {
       throw new KanbanColumnNotFoundError();
     }
@@ -77,7 +78,10 @@ class CreateKanbanCardUseCase {
 
     // Read before the transaction: the message prints the due day in the
     // company's zone (decision 1.1), and the render never queries.
-    const timeZone = await loadBusinessTimeZone(this.business, findColumn.businessId);
+    const timeZone = await loadBusinessTimeZone(
+      this.business,
+      findColumn.businessId,
+    );
 
     try {
       // Card and outbox event commit together; the pipeline notifies the

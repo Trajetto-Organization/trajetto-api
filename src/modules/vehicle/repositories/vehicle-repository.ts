@@ -545,7 +545,10 @@ class VehicleRepository implements IVehicleRepository {
       `;
 
       const activeCount = await tx.vehicle.count({
-        where: { businessId: vehicleData.businessId, status: { not: "INACTIVE" } },
+        where: {
+          businessId: vehicleData.businessId,
+          status: { not: "INACTIVE" },
+        },
       });
 
       if (limit.occupiesSlot && limit.max > 0 && activeCount >= limit.max) {

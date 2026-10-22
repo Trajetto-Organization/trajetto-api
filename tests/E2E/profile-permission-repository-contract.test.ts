@@ -61,7 +61,13 @@ const at = (minutes: number) => new Date(START + minutes * 60_000);
 const TIE_HIGH = "01890000-0000-7000-8000-00000000ff02";
 const TIE_LOW = "01890000-0000-7000-8000-00000000ff01";
 
-const profiles: Array<{ key: string; id: string; name: string; business: string; minutes: number }> = [];
+const profiles: Array<{
+  key: string;
+  id: string;
+  name: string;
+  business: string;
+  minutes: number;
+}> = [];
 
 function profileId(key: string): string {
   return profiles.find((profile) => profile.key === key)!.id;
@@ -86,10 +92,22 @@ const harnesses: Harness[] = [
     profiles: new ProfileAccessRepository(prisma as never),
     permissions: new PermissionRepository(prisma as never),
   },
-  { name: "in-memory", profiles: memoryProfiles, permissions: memoryPermissions },
+  {
+    name: "in-memory",
+    profiles: memoryProfiles,
+    permissions: memoryPermissions,
+  },
 ];
 
-const grants: Array<[profile: string, key: PermissionKey, read: boolean, write: boolean, minutes: number]> = [
+const grants: Array<
+  [
+    profile: string,
+    key: PermissionKey,
+    read: boolean,
+    write: boolean,
+    minutes: number,
+  ]
+> = [
   ["ops", "kanban_manage", true, true, 1],
   ["ops", "supplier_manage", true, false, 2],
   ["fin", "account_payable_manage", true, true, 3],
@@ -107,12 +125,42 @@ beforeAll(async () => {
 
   profiles.push(
     { key: "ops", id: randomUUID(), name: "Operacao", business: A, minutes: 1 },
-    { key: "fin", id: randomUUID(), name: "Financeiro", business: A, minutes: 2 },
-    { key: "stock", id: randomUUID(), name: "Almoxarifado", business: A, minutes: 3 },
-    { key: "tie-high", id: TIE_HIGH, name: "Empate Alto", business: A, minutes: 4 },
-    { key: "tie-low", id: TIE_LOW, name: "Empate Baixo", business: A, minutes: 4 },
+    {
+      key: "fin",
+      id: randomUUID(),
+      name: "Financeiro",
+      business: A,
+      minutes: 2,
+    },
+    {
+      key: "stock",
+      id: randomUUID(),
+      name: "Almoxarifado",
+      business: A,
+      minutes: 3,
+    },
+    {
+      key: "tie-high",
+      id: TIE_HIGH,
+      name: "Empate Alto",
+      business: A,
+      minutes: 4,
+    },
+    {
+      key: "tie-low",
+      id: TIE_LOW,
+      name: "Empate Baixo",
+      business: A,
+      minutes: 4,
+    },
     { key: "zeta", id: randomUUID(), name: "Zeta", business: A, minutes: 5 },
-    { key: "other", id: randomUUID(), name: "Operacao", business: B, minutes: 6 },
+    {
+      key: "other",
+      id: randomUUID(),
+      name: "Operacao",
+      business: B,
+      minutes: 6,
+    },
   );
 
   // Postgres: the rows as the screens would have written them.
@@ -168,10 +216,19 @@ beforeAll(async () => {
       businessId: profile.business,
     });
 
-    const row = memoryProfiles.profileAccess.find((item) => item.id === created.id)!;
-    Object.assign(row, { id: profile.id, created_at: at(profile.minutes), updated_at: at(profile.minutes) });
+    const row = memoryProfiles.profileAccess.find(
+      (item) => item.id === created.id,
+    )!;
+    Object.assign(row, {
+      id: profile.id,
+      created_at: at(profile.minutes),
+      updated_at: at(profile.minutes),
+    });
 
-    memoryPermissions.profiles.set(profile.id, { name: profile.name, businessId: profile.business });
+    memoryPermissions.profiles.set(profile.id, {
+      name: profile.name,
+      businessId: profile.business,
+    });
   }
 
   for (const [profile, key, read, write, minutes] of grants) {
@@ -184,7 +241,9 @@ beforeAll(async () => {
       profileAccessId: profileId(profile),
     });
 
-    const row = memoryPermissions.permissions.find((item) => item.id === created.id)!;
+    const row = memoryPermissions.permissions.find(
+      (item) => item.id === created.id,
+    )!;
     Object.assign(row, { created_at: at(minutes), updated_at: at(minutes) });
   }
 }, 120_000);
@@ -200,7 +259,12 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
   "%s access-profile and permission repositories",
   (_name, harness) => {
     const list = (extra: Record<string, unknown> = {}) =>
-      harness.profiles.listProfileAccess({ page: 1, pageSize: 50, businessId: A, ...extra });
+      harness.profiles.listProfileAccess({
+        page: 1,
+        pageSize: 50,
+        businessId: A,
+        ...extra,
+      });
 
     it("list one company's profiles, newest first, the id breaking ties", async () => {
       const { data, total } = await list();
@@ -231,8 +295,15 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
       expect(names(desc.data)).toEqual([...names(asc.data)].reverse());
 
       const first = await list({ sort: "name", order: "asc", pageSize: 4 });
-      const second = await list({ sort: "name", order: "asc", pageSize: 4, page: 2 });
-      expect([...names(first.data), ...names(second.data)]).toEqual(names(asc.data));
+      const second = await list({
+        sort: "name",
+        order: "asc",
+        pageSize: 4,
+        page: 2,
+      });
+      expect([...names(first.data), ...names(second.data)]).toEqual(
+        names(asc.data),
+      );
     });
 
     it("sort by how many people and permissions each profile holds", async () => {
@@ -248,9 +319,14 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
         ["Almoxarifado", 0],
       ]);
 
-      const byPermissions = await list({ sort: "permissionsCount", order: "asc" });
+      const byPermissions = await list({
+        sort: "permissionsCount",
+        order: "asc",
+      });
 
-      expect(byPermissions.data.map((row) => [row.name, row.permissionsCount])).toEqual([
+      expect(
+        byPermissions.data.map((row) => [row.name, row.permissionsCount]),
+      ).toEqual([
         ["Zeta", 0],
         ["Empate Alto", 0],
         ["Empate Baixo", 0],
@@ -261,39 +337,58 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
     });
 
     it("search by name or id, hide the reader's own profile, never another company", async () => {
-      expect(names((await list({ search: "EMPATE" })).data)).toEqual(["Empate Alto", "Empate Baixo"]);
-      expect(names((await list({ search: TIE_LOW.slice(-6) })).data)).toEqual(["Empate Baixo"]);
+      expect(names((await list({ search: "EMPATE" })).data)).toEqual([
+        "Empate Alto",
+        "Empate Baixo",
+      ]);
+      expect(names((await list({ search: TIE_LOW.slice(-6) })).data)).toEqual([
+        "Empate Baixo",
+      ]);
 
       const hidden = await list({ hideProfileId: profileId("ops") });
       expect(names(hidden.data)).not.toContain("Operacao");
       expect(hidden.total).toBe(5);
 
-      const other = await harness.profiles.listProfileAccess({ page: 1, pageSize: 50, businessId: B });
+      const other = await harness.profiles.listProfileAccess({
+        page: 1,
+        pageSize: 50,
+        businessId: B,
+      });
       expect(other.data.map((row) => row.id)).toEqual([profileId("other")]);
     });
 
     it("refuse a second profile with the same name in the company, not in another (P2002)", async () => {
       await expect(
-        harness.profiles.createProfileAccess({ name: "Financeiro", businessId: A }),
+        harness.profiles.createProfileAccess({
+          name: "Financeiro",
+          businessId: A,
+        }),
       ).rejects.toMatchObject({ code: "P2002" });
 
       await expect(
-        harness.profiles.updateProfileAccess({ profileAccessId: profileId("zeta"), name: "Financeiro" }),
+        harness.profiles.updateProfileAccess({
+          profileAccessId: profileId("zeta"),
+          name: "Financeiro",
+        }),
       ).rejects.toMatchObject({ code: "P2002" });
 
-      const elsewhere = await harness.profiles.createProfileAccess({ name: "Financeiro", businessId: B });
+      const elsewhere = await harness.profiles.createProfileAccess({
+        name: "Financeiro",
+        businessId: B,
+      });
       expect(elsewhere.businessId).toBe(B);
       await harness.profiles.deleteProfileAccess(elsewhere.id);
     });
 
     it("list permissions with booleans ordered as Postgres orders them", async () => {
-      const { data, groups, profileNames } = await harness.permissions.listPermission({
-        page: 1,
-        pageSize: 50,
-        businessId: A,
-        sort: "canWrite",
-        order: "asc",
-      });
+      const { data, groups, profileNames } =
+        await harness.permissions.listPermission({
+          page: 1,
+          pageSize: 50,
+          businessId: A,
+          sort: "canWrite",
+          order: "asc",
+        });
 
       // false before true; inside each, created_at desc.
       expect(data.map((row) => [row.permissionKey, row.canWrite])).toEqual([
@@ -302,12 +397,19 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
         ["account_payable_manage", true],
         ["kanban_manage", true],
       ]);
-      expect(data.find((row) => row.permissionKey === "kanban_manage")!.profileAccess).toEqual({
+      expect(
+        data.find((row) => row.permissionKey === "kanban_manage")!
+          .profileAccess,
+      ).toEqual({
         name: "Operacao",
       });
 
       expect(groups.reduce((sum, group) => sum + group.count, 0)).toBe(4);
-      expect([...profileNames.values()].sort()).toEqual(["Almoxarifado", "Financeiro", "Operacao"]);
+      expect([...profileNames.values()].sort()).toEqual([
+        "Almoxarifado",
+        "Financeiro",
+        "Operacao",
+      ]);
     });
 
     it("filter permissions by write and search the resource label", async () => {
@@ -350,7 +452,8 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
     });
 
     it("refuse an update onto another permission's slot (P2002)", async () => {
-      const [kanban, supplier] = await harness.permissions.findPermissionsByProfile(profileId("ops"), A);
+      const [kanban, supplier] =
+        await harness.permissions.findPermissionsByProfile(profileId("ops"), A);
 
       await expect(
         harness.permissions.updatePermission({
@@ -367,27 +470,44 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
     });
 
     it("refuse a bulk set with a repeated resource and keep the old one (P2002)", async () => {
-      const before = await harness.permissions.findPermissionsByProfile(profileId("fin"), A);
+      const before = await harness.permissions.findPermissionsByProfile(
+        profileId("fin"),
+        A,
+      );
 
       await expect(
         harness.permissions.bulkConfigurePermissions({
           businessId: A,
           profileAccessId: profileId("fin"),
           permissions: [
-            { permissionKey: "supplier_manage", canRead: true, canWrite: false },
+            {
+              permissionKey: "supplier_manage",
+              canRead: true,
+              canWrite: false,
+            },
             { permissionKey: "supplier_manage", canRead: true, canWrite: true },
           ],
         }),
       ).rejects.toMatchObject({ code: "P2002" });
 
-      expect(await harness.permissions.findPermissionsByProfile(profileId("fin"), A)).toEqual(before);
+      expect(
+        await harness.permissions.findPermissionsByProfile(profileId("fin"), A),
+      ).toEqual(before);
     });
 
     it("read a profile's permissions in resource order", async () => {
-      const rows = await harness.permissions.findPermissionsByProfile(profileId("ops"), A);
+      const rows = await harness.permissions.findPermissionsByProfile(
+        profileId("ops"),
+        A,
+      );
 
-      expect(rows.map((row) => row.permissionKey)).toEqual(["kanban_manage", "supplier_manage"]);
-      expect(await harness.permissions.findPermissionsByProfile(profileId("ops"), B)).toEqual([]);
+      expect(rows.map((row) => row.permissionKey)).toEqual([
+        "kanban_manage",
+        "supplier_manage",
+      ]);
+      expect(
+        await harness.permissions.findPermissionsByProfile(profileId("ops"), B),
+      ).toEqual([]);
     });
   },
 );

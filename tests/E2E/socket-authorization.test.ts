@@ -333,7 +333,9 @@ describe("when the re-evaluation cannot read the database", () => {
     };
 
     try {
-      io.sendSecurityEventToBusiness(CARRIER, { reason: "permissions_changed" });
+      io.sendSecurityEventToBusiness(CARRIER, {
+        reason: "permissions_changed",
+      });
 
       await new Promise((resolve) => setTimeout(resolve, 1500));
     } finally {

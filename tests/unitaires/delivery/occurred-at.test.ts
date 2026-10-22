@@ -91,9 +91,19 @@ describe("resolveOccurredAt", () => {
   });
 
   it("ignores what is absent or is not an ISO instant", () => {
-    for (const occurredAt of [undefined, "", "0", "ontem", "2026-13-45T99:00:00Z"]) {
+    for (const occurredAt of [
+      undefined,
+      "",
+      "0",
+      "ontem",
+      "2026-13-45T99:00:00Z",
+    ]) {
       expect(
-        resolveOccurredAt({ occurredAt, clientSentAt: NOW.toISOString(), now: NOW }),
+        resolveOccurredAt({
+          occurredAt,
+          clientSentAt: NOW.toISOString(),
+          now: NOW,
+        }),
       ).toBeNull();
     }
   });

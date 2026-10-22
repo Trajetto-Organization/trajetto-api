@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { createHmac, randomUUID } from "node:crypto";
 import { createServer, type Server as HttpServer } from "node:http";
@@ -96,10 +104,13 @@ function postCallback(body: string, signature = sign(body)) {
 function stubFetch() {
   const fetchMock = vi.fn(
     async () =>
-      new Response(JSON.stringify({ messages: [{ id: `wamid.${randomUUID()}` }] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify({ messages: [{ id: `wamid.${randomUUID()}` }] }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
   );
 
   vi.stubGlobal("fetch", fetchMock);
@@ -108,7 +119,10 @@ function stubFetch() {
 }
 
 const send = () =>
-  provider.sendMessage({ phoneNumber: "11999990000", message: "Sua entrega saiu." });
+  provider.sendMessage({
+    phoneNumber: "11999990000",
+    message: "Sua entrega saiu.",
+  });
 
 /**
  * Whether the other replica heard `change`. By content, not position: a frame
@@ -195,7 +209,9 @@ afterAll(async () => {
 
   vi.unstubAllGlobals();
 
-  await (otherReplica.io?.of("/").adapter as { close?: () => unknown } | undefined)?.close?.();
+  await (
+    otherReplica.io?.of("/").adapter as { close?: () => unknown } | undefined
+  )?.close?.();
   await otherReplica.pub?.quit();
   await otherReplica.sub?.quit();
 
@@ -224,7 +240,11 @@ describe("a signed PAUSED callback", () => {
     const result = await send();
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ success: false, retryable: true, errorCode: 132015 });
+    expect(result).toMatchObject({
+      success: false,
+      retryable: true,
+      errorCode: 132015,
+    });
 
     // As long as Meta said, not the hour a refused send would have guessed.
     expect(result.retryAfterSeconds).toBeGreaterThan(3 * 3600 - 5);
@@ -232,7 +252,10 @@ describe("a signed PAUSED callback", () => {
 
   it("tells the other replicas, through the adapter", async () => {
     await postCallback(
-      templateCallback({ event: "PAUSED", other_info: { title: "SECOND_PAUSE" } }),
+      templateCallback({
+        event: "PAUSED",
+        other_info: { title: "SECOND_PAUSE" },
+      }),
     );
 
     // Counted from the entry's time (a whole second), so a second or two may
@@ -240,7 +263,11 @@ describe("a signed PAUSED callback", () => {
     expect(
       await eventually(() =>
         otherReplica.heard.some((entry) => {
-          const change = entry as { template?: string; action?: string; seconds?: number };
+          const change = entry as {
+            template?: string;
+            action?: string;
+            seconds?: number;
+          };
 
           return (
             change.template === TEMPLATE &&
@@ -260,7 +287,10 @@ describe("a signed REINSTATED callback", () => {
     await postCallback(templateCallback({ event: "PAUSED" }));
 
     const response = await postCallback(
-      templateCallback({ event: "REINSTATED", other_info: { title: "UNPAUSE" } }),
+      templateCallback({
+        event: "REINSTATED",
+        other_info: { title: "UNPAUSE" },
+      }),
     );
 
     expect(response.statusCode).toBe(200);
@@ -297,11 +327,14 @@ describe("what another replica announces", () => {
 
     const callsWhilePaused = fetchMock.mock.calls.length;
 
-    otherReplica.io!.serverSideEmit(LANE_EVENT, { template: TEMPLATE, action: "resume" });
+    otherReplica.io!.serverSideEmit(LANE_EVENT, {
+      template: TEMPLATE,
+      action: "resume",
+    });
 
-    expect(
-      await eventually(async () => (await send()).success === true),
-    ).toBe(true);
+    expect(await eventually(async () => (await send()).success === true)).toBe(
+      true,
+    );
 
     expect(fetchMock.mock.calls.length).toBeGreaterThan(callsWhilePaused);
   });

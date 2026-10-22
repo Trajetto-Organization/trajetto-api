@@ -3,24 +3,25 @@
 > O Traefik que atende `www.intrajetto.com`, `intrajetto.com` e
 > `trajettoapi.thorsolucoes.com.br` é o do **Dokploy**: um contêiner
 > (`dokploy-traefik`) na rede `dokploy-network`, configurado no host, fora de
-> qualquer repositório. Os labels de cada serviço vivem no
-> `compose.production.yaml` de cada repo (roteadores com o prefixo da stack,
-> para staging e produção dividirem o mesmo Traefik); a configuração
-> **estática** e as opções de TLS não cabem em label nenhum, e por isso ficam
-> de referência aqui. Nada nesta pasta é aplicado por deploy: alguém com acesso
+> qualquer repositório. Cada serviço é um **Application** do Dokploy (imagem
+> do GHCR, sem compose): o domínio, a porta e o HTTPS de cada um são campos do
+> Application, e o Dokploy escreve o roteador correspondente em
+> `/etc/dokploy/traefik/dynamic/<appName>.yml` (editável em _Advanced →
+> Traefik_). A configuração **estática** e as opções de TLS não cabem ali, e
+> por isso ficam de referência aqui. Nada nesta pasta é aplicado por deploy: alguém com acesso
 > ao host aplica. O deploy em si: `docs/deploy.md`.
 
-## Uma imagem, duas stacks
+## Uma imagem, dois ambientes
 
 Staging e produção rodam a **mesma imagem** de cada serviço, promovida por
 digest (decisão 12.2): o `deploy.yml` da API publica só `sha-<sha>` a cada
 push na branch `staging`, move a tag `staging` para o digest recém-construído
 e, na promoção (o merge em `main`), move `stable` para o mesmo digest. A web também: a URL da API, a do socket, a chave do Turnstile, os
-tiles do mapa e o `APP_ENV` são lidos em runtime do Environment da stack, não
-embutidos no build. O que diferencia as stacks diante deste Traefik é só
-Environment: `ROUTER_PREFIX` (nomes de roteadores e middlewares únicos por
-stack), `WEB_HOST`/`WEB_APEX_HOST` e `API_HOST`. Nada aqui muda entre
-ambientes.
+tiles do mapa e o `APP_ENV` são lidos em runtime do Environment do
+Application, não embutidos no build. Diante deste Traefik, o que diferencia
+staging de produção é o domínio configurado em cada Application (o Dokploy dá
+a cada um o seu roteador, nomeado pelo appName, então não há colisão de
+nomes). Nada aqui muda entre ambientes.
 
 ## Arquivos
 
@@ -39,10 +40,11 @@ ambientes.
   O `tls.yaml` daqui passa a valer entre Cloudflare e origem (modo _Full
   (strict)_) e para qualquer acesso direto ao IP.
 - **HSTS do apex.** `intrajetto.com` (`WEB_APEX_HOST`) só redireciona para o
-  `www` (`WEB_HOST`), e é o Traefik quem responde. O middleware
-  `<prefixo>-apex-hsts` no `trajetto-ui/compose.production.yaml` põe
+  `www` (`WEB_HOST`), e é o Traefik quem responde. O redirect e o
   `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`
-  no próprio 301 — requisito da lista de preload. O `www` já envia o mesmo
+  no próprio 301 (requisito da lista de preload) vão na configuração Traefik
+  do Application da web (_Advanced → Traefik_): o Dokploy não tem campo
+  para middleware. O `www` já envia o mesmo
   header pelo `next.config.mjs`.
 - **WebSocket e `readTimeout`.** O `readTimeout` vale para receber a
   requisição, não para uma conexão já promovida: medido localmente no Traefik
@@ -59,8 +61,9 @@ Conferir no host antes de aplicar (são os padrões do Dokploy, não garantia):
 | configuração estática                | `/etc/dokploy/traefik/traefik.yml` (também editável no painel: _Settings → Server → Traefik_) |
 | pasta dinâmica (provider de arquivo) | `/etc/dokploy/traefik/dynamic`                                                                |
 | contêiner                            | `dokploy-traefik` (`docker exec dokploy-traefik traefik version`)                             |
-| resolver de certificados             | `letsencrypt` (o `TRAEFIK_CERTRESOLVER` dos composes)                                         |
-| rede                                 | `dokploy-network` (o `TRAEFIK_NETWORK` dos composes)                                          |
+| resolver de certificados             | `letsencrypt` (o que o Dokploy usa quando o domínio pede HTTPS)                               |
+| rede                                 | `dokploy-network` (onde o Dokploy põe todo Application e Database)                            |
+| roteador de cada Application         | `/etc/dokploy/traefik/dynamic/<appName>.yml` (_Advanced → Traefik_ no Application)            |
 
 ## Aplicar
 
@@ -87,9 +90,8 @@ Conferir no host antes de aplicar (são os padrões do Dokploy, não garantia):
    e middlewares que o Dokploy mantém lá.
 3. Reiniciar o Traefik (configuração estática só é lida na partida):
    `docker restart dokploy-traefik`, ou _Reload_ no painel.
-4. Fazer o deploy do app da web (a imagem que a stack já roda, `stable` ou
-   `staging`; não é preciso build novo) para os labels do HSTS do apex
-   (`<prefixo>-apex-hsts`) valerem.
+4. Conferir a configuração Traefik do Application da web (redirect do apex
+   com HSTS); não é preciso build novo.
 
 ## Verificar
 

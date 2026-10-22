@@ -89,7 +89,10 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
   }
 
   private async countList(
-    filters: Omit<ListServiceOrderPartByBusinessIdProps, "page" | "pageSize" | "sort" | "order">,
+    filters: Omit<
+      ListServiceOrderPartByBusinessIdProps,
+      "page" | "pageSize" | "sort" | "order"
+    >,
   ): Promise<Pick<ListServiceOrderPartProps, "aggregate" | "partCounts">> {
     // The value needs price × quantity × (1 − discount) per line, which
     // Prisma's aggregate cannot express; the WHERE mirrors the listing's.
@@ -112,7 +115,10 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
     });
 
     const ids = Array.from(
-      new Set([...grouped.map((group) => group.partId), ...(filters.partIds ?? [])]),
+      new Set([
+        ...grouped.map((group) => group.partId),
+        ...(filters.partIds ?? []),
+      ]),
     );
 
     // Names only from this company's catalog.
@@ -123,7 +129,9 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
         })
       : [];
 
-    const countOf = new Map(grouped.map((group) => [group.partId, group._count._all]));
+    const countOf = new Map(
+      grouped.map((group) => [group.partId, group._count._all]),
+    );
 
     return {
       aggregate: {
@@ -214,7 +222,11 @@ class ServiceOrderPartRepository implements IServiceOrderPartRepository {
       select: {
         total_amount: true,
         parts: {
-          select: { unit_price: true, quantity: true, discount_percentage: true },
+          select: {
+            unit_price: true,
+            quantity: true,
+            discount_percentage: true,
+          },
         },
       },
     });

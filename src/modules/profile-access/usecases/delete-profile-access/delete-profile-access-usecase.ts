@@ -12,7 +12,10 @@ import { AppError } from "@/shared/errors/AppError";
 import { ProfileAccessNotFoundError } from "../errors/profile-access-not-found-error";
 import { ProfileAccessCannotBeDeletedByHimselfError } from "../errors/profile-access-cannot-be-deleted-by-himself-error";
 
-import { sendCatalogChangedEvent, sendSecurityEventToBusiness } from "@/websocket";
+import {
+  sendCatalogChangedEvent,
+  sendSecurityEventToBusiness,
+} from "@/websocket";
 import { ProfileAccessInUseError } from "../errors/profile-access-in-use-error";
 
 import database from "@/../infra/database";

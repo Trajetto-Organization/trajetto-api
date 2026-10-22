@@ -96,9 +96,11 @@ describe("worker heartbeats", () => {
     registry.beginCycle("b");
     registry.beginCycle("a");
 
-    expect(registry.snapshot().map((entry) => entry.worker).sort()).toEqual([
-      "a",
-      "b",
-    ]);
+    expect(
+      registry
+        .snapshot()
+        .map((entry) => entry.worker)
+        .sort(),
+    ).toEqual(["a", "b"]);
   });
 });

@@ -71,7 +71,10 @@ import { tolerateEmptyJsonBody } from "@/shared/http/json-body-parser";
 import { rejectUnstorableText } from "@/shared/http/unstorable-text";
 import { buildPublicBaseUrl } from "@/shared/utils/public-base-url";
 import { clientRateLimitKey, rateLimitExceeded } from "@/config/rate-limit";
-import { HTTP_KEEP_ALIVE_TIMEOUT_MS, HTTP_REQUEST_TIMEOUT_MS } from "@/config/http-server";
+import {
+  HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  HTTP_REQUEST_TIMEOUT_MS,
+} from "@/config/http-server";
 import {
   configureIntegrationRateGuard,
   createIntegrationRateGuard,
@@ -237,7 +240,10 @@ if (docsAccess.kind === "disabled" && docsAccess.reason === "weak-password") {
 // Redis is down AND when it is hung, and `skipOnError: true` below lets the
 // request pass instead of returning 500 — the limiter fails open, never the
 // request.
-const rateLimitRedis = new Redis(env.REDIS_URL, redisClientOptions("rate-limit"));
+const rateLimitRedis = new Redis(
+  env.REDIS_URL,
+  redisClientOptions("rate-limit"),
+);
 
 attachRedisConnectionLog(rateLimitRedis, "rate-limit");
 
@@ -303,7 +309,10 @@ const moveRateLimiterFirst = async (instance: typeof app) => {
     if (declared === undefined || !Array.isArray(hooks)) return;
     if (hooks.length <= declared) return;
 
-    routeOptions.onRequest = [...hooks.slice(declared), ...hooks.slice(0, declared)];
+    routeOptions.onRequest = [
+      ...hooks.slice(declared),
+      ...hooks.slice(0, declared),
+    ];
   });
 };
 
@@ -519,10 +528,12 @@ app.setNotFoundHandler((request, reply) => {
   // `code` (and the header) tell an app build whose route was renamed or
   // removed apart from a refusal on the merits: its queue keeps the item and
   // sends it again once the app is updated, instead of failing it (GAP5-2).
-  return reply
-    .header("x-error-code", "ROUTE_NOT_FOUND")
-    .status(404)
-    .send({ message, error: "Not Found", statusCode: 404, code: "ROUTE_NOT_FOUND" });
+  return reply.header("x-error-code", "ROUTE_NOT_FOUND").status(404).send({
+    message,
+    error: "Not Found",
+    statusCode: 404,
+    code: "ROUTE_NOT_FOUND",
+  });
 });
 
 /**
@@ -654,7 +665,10 @@ app.setErrorHandler((error, request, reply) => {
   if (isDatabaseDown || isSessionCheckOutage) {
     // Still error level — it is ours — but a message of its own, so an alert
     // on bugs does not page for an outage the readiness probe already sees.
-    request.log.error(logContext, "Database unavailable while processing request");
+    request.log.error(
+      logContext,
+      "Database unavailable while processing request",
+    );
   } else if (statusCode >= 500 && !(error instanceof ServiceBusyError)) {
     // A load-shedding 503 is the server working as designed; at error level a
     // credential-stuffing run would bury the real failures under stack traces.
@@ -710,10 +724,14 @@ app.setErrorHandler((error, request, reply) => {
       });
     }
 
-    return sendError(reply.header("x-error-code", error.code), error.statusCode, {
-      code: error.code,
-      message: error.message,
-    });
+    return sendError(
+      reply.header("x-error-code", error.code),
+      error.statusCode,
+      {
+        code: error.code,
+        message: error.message,
+      },
+    );
   }
 
   if (isDatabaseDown) {

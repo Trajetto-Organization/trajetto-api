@@ -21,7 +21,9 @@ vi.mock("@/env", () => ({
 
 describe("the configured reader", () => {
   it("is the local OCR service: 15 s per call, no client retry, one read in flight", async () => {
-    const { createConfiguredImageReader } = await import("@/shared/ai/ai-provider");
+    const { createConfiguredImageReader } = await import(
+      "@/shared/ai/ai-provider"
+    );
 
     const reader = createConfiguredImageReader({
       AI_PROVIDER: "local",
@@ -36,7 +38,9 @@ describe("the configured reader", () => {
   });
 
   it("reads only the receipt and the odometer: the other checklist items are not OCR questions", async () => {
-    const { createConfiguredImageReader } = await import("@/shared/ai/ai-provider");
+    const { createConfiguredImageReader } = await import(
+      "@/shared/ai/ai-provider"
+    );
 
     const reader = createConfiguredImageReader({
       AI_PROVIDER: "local",
@@ -64,11 +68,19 @@ describe("the configured reader", () => {
 
     expect(aiProviderConfigured(config)).toBe(true);
 
-    expect(createConfiguredImageReader({ ...config, AI_PROVIDER: "none" })).toBeNull();
-    expect(aiProviderConfigured({ ...config, AI_PROVIDER: "none" })).toBe(false);
+    expect(
+      createConfiguredImageReader({ ...config, AI_PROVIDER: "none" }),
+    ).toBeNull();
+    expect(aiProviderConfigured({ ...config, AI_PROVIDER: "none" })).toBe(
+      false,
+    );
     expect(aiProviderConfigured({ ...config, AI_LOCAL_TOKEN: "" })).toBe(false);
-    expect(aiProviderConfigured({ ...config, AI_LOCAL_URL: undefined })).toBe(false);
-    expect(createConfiguredImageReader({ ...config, AI_LOCAL_TOKEN: undefined })).toBeNull();
+    expect(aiProviderConfigured({ ...config, AI_LOCAL_URL: undefined })).toBe(
+      false,
+    );
+    expect(
+      createConfiguredImageReader({ ...config, AI_LOCAL_TOKEN: undefined }),
+    ).toBeNull();
   });
 });
 
@@ -84,7 +96,9 @@ describe("the environment", () => {
 
     expect(parsed.success).toBe(false);
     expect(
-      parsed.success ? "" : parsed.error.issues.map((issue) => issue.message).join(" "),
+      parsed.success
+        ? ""
+        : parsed.error.issues.map((issue) => issue.message).join(" "),
     ).toMatch(/anthropic foi removido \(ADR 0010\)/);
   });
 
@@ -96,7 +110,9 @@ describe("the environment", () => {
     // Other required variables may be missing here; only the AI keys matter.
     const issues = parsed.success
       ? []
-      : parsed.error.issues.filter((issue) => String(issue.path[0]).startsWith("AI_"));
+      : parsed.error.issues.filter((issue) =>
+          String(issue.path[0]).startsWith("AI_"),
+        );
 
     expect(issues).toEqual([]);
 
@@ -116,7 +132,9 @@ describe("the environment", () => {
       AI_LOCAL_MAX_CONCURRENCY: "9",
     });
 
-    const paths = parsed.success ? [] : parsed.error.issues.map((issue) => issue.path[0]);
+    const paths = parsed.success
+      ? []
+      : parsed.error.issues.map((issue) => issue.path[0]);
 
     expect(paths).toContain("AI_LOCAL_TOKEN");
     expect(paths).toContain("AI_LOCAL_MAX_CONCURRENCY");
@@ -128,7 +146,9 @@ describe("the AI lease invariant", () => {
     const { LOCAL_AI_DEFAULT_TIMEOUT_MS, LOCAL_AI_MAX_RETRIES } = await import(
       "@/shared/ai/ai-provider-defaults"
     );
-    const { AI_IMAGE_FETCH_TIMEOUT_MS } = await import("@/shared/ai/ai-provider");
+    const { AI_IMAGE_FETCH_TIMEOUT_MS } = await import(
+      "@/shared/ai/ai-provider"
+    );
     const { AI_CLAIM_LEASE_SECONDS, assertAILeaseInvariant } = await import(
       "@/shared/ai/ai-rules"
     );

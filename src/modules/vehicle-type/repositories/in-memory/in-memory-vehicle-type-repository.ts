@@ -28,7 +28,11 @@ const UUID_PATTERN =
 type Comparable = string | number | null | undefined;
 
 /** Postgres order: NULLS LAST ascending, NULLS FIRST descending. */
-function compareNullable(a: Comparable, b: Comparable, order: SortOrder): number {
+function compareNullable(
+  a: Comparable,
+  b: Comparable,
+  order: SortOrder,
+): number {
   const aNull = a === null || a === undefined;
   const bNull = b === null || b === undefined;
 
@@ -79,7 +83,10 @@ class InMemoryVehicleTypeRepository implements IVehicleTypeRepository {
     ).length;
   }
 
-  private sortValue(row: VehicleTypeListRow, key: VehicleTypeSortKey): Comparable {
+  private sortValue(
+    row: VehicleTypeListRow,
+    key: VehicleTypeSortKey,
+  ): Comparable {
     switch (key) {
       case "created_at":
         return new Date(row.created_at).getTime();
@@ -114,7 +121,8 @@ class InMemoryVehicleTypeRepository implements IVehicleTypeRepository {
     });
 
     const key = sort ?? VEHICLE_TYPE_SORT_FALLBACK.sort;
-    const direction = order ?? (sort ? "asc" : VEHICLE_TYPE_SORT_FALLBACK.order);
+    const direction =
+      order ?? (sort ? "asc" : VEHICLE_TYPE_SORT_FALLBACK.order);
 
     const rows: VehicleTypeListRow[] = matching
       .map((vehicleType) => ({
@@ -123,7 +131,11 @@ class InMemoryVehicleTypeRepository implements IVehicleTypeRepository {
       }))
       .sort(
         (a, b) =>
-          compareNullable(this.sortValue(a, key), this.sortValue(b, key), direction) ||
+          compareNullable(
+            this.sortValue(a, key),
+            this.sortValue(b, key),
+            direction,
+          ) ||
           compareNullable(
             new Date(a.created_at).getTime(),
             new Date(b.created_at).getTime(),
@@ -159,7 +171,9 @@ class InMemoryVehicleTypeRepository implements IVehicleTypeRepository {
 
     // Like the real one: only `undefined` is "not sent".
     const filteredData = Object.fromEntries(
-      Object.entries(vehicleTypeData).filter(([, value]) => value !== undefined),
+      Object.entries(vehicleTypeData).filter(
+        ([, value]) => value !== undefined,
+      ),
     );
 
     const updatedVehicleType: VehicleType = {

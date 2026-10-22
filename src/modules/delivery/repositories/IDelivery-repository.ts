@@ -141,7 +141,9 @@ interface IDeliveryRepository {
    * The manager's cross-delivery occurrence feed: one page in the requested
    * order, plus the per-type counts its cards, filters and pager come from.
    */
-  listOccurrences: (props: ListOccurrencesProps) => Promise<ListOccurrencesResult>;
+  listOccurrences: (
+    props: ListOccurrencesProps,
+  ) => Promise<ListOccurrencesResult>;
   /**
    * The two numbers of the monitoring panel and the dashboard's "Operação de
    * hoje" that are not the tower's day: the backlog without a driver (any

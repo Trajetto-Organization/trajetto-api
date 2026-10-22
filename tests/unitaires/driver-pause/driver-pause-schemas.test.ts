@@ -29,21 +29,38 @@ describe("the start body", () => {
     }
 
     expect(
-      startPauseBody.parse({ kind: "MEAL", start_submission_id: KEY, latitude: "-23.55" }).latitude,
+      startPauseBody.parse({
+        kind: "MEAL",
+        start_submission_id: KEY,
+        latitude: "-23.55",
+      }).latitude,
     ).toBe(-23.55);
 
     expect(
-      startPauseBody.safeParse({ kind: "MEAL", start_submission_id: KEY, latitude: 91 }).success,
+      startPauseBody.safeParse({
+        kind: "MEAL",
+        start_submission_id: KEY,
+        latitude: 91,
+      }).success,
     ).toBe(false);
   });
 
   it("cleans the note, and refuses only one that is really too long", () => {
     expect(
-      startPauseBody.parse({ kind: "REST", start_submission_id: KEY, note: "  Posto   BR \n 116 " })
-        .note,
+      startPauseBody.parse({
+        kind: "REST",
+        start_submission_id: KEY,
+        note: "  Posto   BR \n 116 ",
+      }).note,
     ).toBe("Posto BR 116");
 
-    expect(startPauseBody.parse({ kind: "REST", start_submission_id: KEY, note: "   " }).note).toBeNull();
+    expect(
+      startPauseBody.parse({
+        kind: "REST",
+        start_submission_id: KEY,
+        note: "   ",
+      }).note,
+    ).toBeNull();
 
     // 250 characters that clean down to 200.
     expect(
@@ -55,20 +72,29 @@ describe("the start body", () => {
     ).toBe(true);
 
     expect(
-      startPauseBody.safeParse({ kind: "REST", start_submission_id: KEY, note: "a".repeat(201) })
-        .success,
+      startPauseBody.safeParse({
+        kind: "REST",
+        start_submission_id: KEY,
+        note: "a".repeat(201),
+      }).success,
     ).toBe(false);
   });
 
   it("names the pause kinds it knows and requires a real key", () => {
-    const wrongKind = startPauseBody.safeParse({ kind: "LUNCH", start_submission_id: KEY });
+    const wrongKind = startPauseBody.safeParse({
+      kind: "LUNCH",
+      start_submission_id: KEY,
+    });
 
     expect(wrongKind.success).toBe(false);
-    expect(JSON.stringify(wrongKind.error?.issues)).toContain("MEAL, REST ou OTHER");
-
-    expect(startPauseBody.safeParse({ kind: "MEAL", start_submission_id: "abc" }).success).toBe(
-      false,
+    expect(JSON.stringify(wrongKind.error?.issues)).toContain(
+      "MEAL, REST ou OTHER",
     );
+
+    expect(
+      startPauseBody.safeParse({ kind: "MEAL", start_submission_id: "abc" })
+        .success,
+    ).toBe(false);
   });
 });
 
@@ -106,6 +132,8 @@ describe("the report query", () => {
 
     expect(reportQuery.safeParse({ from: "01/09/2026" }).success).toBe(false);
     expect(reportQuery.safeParse({ flag: "TIRED" }).success).toBe(false);
-    expect(reportQuery.safeParse({ driverId: "not-a-uuid" }).success).toBe(false);
+    expect(reportQuery.safeParse({ driverId: "not-a-uuid" }).success).toBe(
+      false,
+    );
   });
 });

@@ -77,7 +77,12 @@ class CurrentDriverPauseUseCase {
     );
 
     const day = businessDateKey(now, timeZone);
-    const journeyRouteId = await this.pauses.findJourneyRouteAt(businessId, driver, now, day);
+    const journeyRouteId = await this.pauses.findJourneyRouteAt(
+      businessId,
+      driver,
+      now,
+      day,
+    );
 
     const typeNames = await this.pauses.pauseTypeNames(businessId, [
       ...(open ? [open.occurrenceTypeId] : []),

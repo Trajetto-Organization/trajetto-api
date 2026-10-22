@@ -63,8 +63,12 @@ describe("the driver's age", () => {
   it("refuses an impossible day and garbage from before 1900", () => {
     at("2026-09-29T12:00:00.000Z");
 
-    expect(createDriverSchema.safeParse(body("1990-02-30")).success).toBe(false);
-    expect(createDriverSchema.safeParse(body("0199-05-10")).success).toBe(false);
+    expect(createDriverSchema.safeParse(body("1990-02-30")).success).toBe(
+      false,
+    );
+    expect(createDriverSchema.safeParse(body("0199-05-10")).success).toBe(
+      false,
+    );
   });
 });
 

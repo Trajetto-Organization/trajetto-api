@@ -80,7 +80,8 @@ async function seedBusiness(id: string, withDeliveries = true): Promise<void> {
   });
 }
 
-const shipperOf = (businessId: string) => `${businessId.slice(0, -4)}f00${businessId.slice(-1)}`;
+const shipperOf = (businessId: string) =>
+  `${businessId.slice(0, -4)}f00${businessId.slice(-1)}`;
 
 async function seedDriver(businessId: string, id: string): Promise<void> {
   await prisma.driver.create({
@@ -133,10 +134,14 @@ async function seedUser(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "15m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "15m",
+    },
+  );
 }
 
 let routeCode = 100;
@@ -149,8 +154,16 @@ async function seedRoute(
   businessId: string,
   driverId: string,
   recipients: Array<{ name: string; telephone?: string | null }>,
-  status: "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" = "IN_PROGRESS",
-): Promise<{ routeId: string; stops: Array<{ stopId: string; deliveryId: string }> }> {
+  status:
+    | "PLANNED"
+    | "RELEASED"
+    | "IN_PROGRESS"
+    | "COMPLETED"
+    | "CANCELLED" = "IN_PROGRESS",
+): Promise<{
+  routeId: string;
+  stops: Array<{ stopId: string; deliveryId: string }>;
+}> {
   const deliveries = [];
 
   for (const recipient of recipients) {
@@ -179,7 +192,8 @@ async function seedRoute(
       code: routeCode,
       scheduled_date: new Date(),
       status,
-      started_at: status === "IN_PROGRESS" ? new Date(Date.now() - 60 * 60 * 1000) : null,
+      started_at:
+        status === "IN_PROGRESS" ? new Date(Date.now() - 60 * 60 * 1000) : null,
       businessId,
       driverId,
       stops: {
@@ -194,7 +208,10 @@ async function seedRoute(
 
   return {
     routeId: route.id,
-    stops: route.stops.map((stop) => ({ stopId: stop.id, deliveryId: stop.deliveryId })),
+    stops: route.stops.map((stop) => ({
+      stopId: stop.id,
+      deliveryId: stop.deliveryId,
+    })),
   };
 }
 
@@ -250,11 +267,23 @@ beforeAll(async () => {
   await seedDriver(CARRIER_NO_MODULE, DRIVER_NO_MODULE);
 
   driverTokenA = await seedUser(CARRIER_A, "BUSINESS_USER", DRIVER_A);
-  otherDriverTokenA = await seedUser(CARRIER_A, "BUSINESS_USER", OTHER_DRIVER_A);
+  otherDriverTokenA = await seedUser(
+    CARRIER_A,
+    "BUSINESS_USER",
+    OTHER_DRIVER_A,
+  );
   adminTokenA = await seedUser(CARRIER_A, "BUSINESS_ADMIN");
   driverTokenB = await seedUser(CARRIER_B, "BUSINESS_USER", DRIVER_B);
-  driverTokenNoTemplate = await seedUser(CARRIER_NO_TEMPLATE, "BUSINESS_USER", DRIVER_NO_TEMPLATE);
-  driverTokenNoModule = await seedUser(CARRIER_NO_MODULE, "BUSINESS_USER", DRIVER_NO_MODULE);
+  driverTokenNoTemplate = await seedUser(
+    CARRIER_NO_TEMPLATE,
+    "BUSINESS_USER",
+    DRIVER_NO_TEMPLATE,
+  );
+  driverTokenNoModule = await seedUser(
+    CARRIER_NO_MODULE,
+    "BUSINESS_USER",
+    DRIVER_NO_MODULE,
+  );
 
   // A has written "a caminho"; the other carrier wrote every other moment
   // but not this one.
@@ -346,20 +375,37 @@ describe("the driver marks a stop of their running route", () => {
       { name: "Segunda" },
     ]);
 
-    const first = await mark(driverTokenA, { ...stops[0], routeId, businessId: CARRIER_A });
-    const second = await mark(driverTokenA, { ...stops[1], routeId, businessId: CARRIER_A });
+    const first = await mark(driverTokenA, {
+      ...stops[0],
+      routeId,
+      businessId: CARRIER_A,
+    });
+    const second = await mark(driverTokenA, {
+      ...stops[1],
+      routeId,
+      businessId: CARRIER_A,
+    });
 
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
 
-    const [a, b] = await Promise.all([stopRow(stops[0].stopId), stopRow(stops[1].stopId)]);
+    const [a, b] = await Promise.all([
+      stopRow(stops[0].stopId),
+      stopRow(stops[1].stopId),
+    ]);
 
-    expect(a.on_the_way_at?.toISOString()).toBe(first.json().data.on_the_way_at);
-    expect(b.on_the_way_at!.getTime()).toBeGreaterThanOrEqual(a.on_the_way_at!.getTime());
+    expect(a.on_the_way_at?.toISOString()).toBe(
+      first.json().data.on_the_way_at,
+    );
+    expect(b.on_the_way_at!.getTime()).toBeGreaterThanOrEqual(
+      a.on_the_way_at!.getTime(),
+    );
   });
 
   it("dates a mark sent late by the tap, corrected by the phone's send stamp", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [{ name: "Offline" }]);
+    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [
+      { name: "Offline" },
+    ]);
 
     // The phone's clock runs 5 min fast: tap at its 10 min ago, sent at its now.
     const phoneNow = Date.now() + 5 * 60 * 1000;
@@ -379,13 +425,17 @@ describe("the driver marks a stop of their running route", () => {
 
     const recorded = new Date(response.json().data.on_the_way_at).getTime();
 
-    expect(Math.abs(recorded - (Date.now() - 10 * 60 * 1000))).toBeLessThan(10_000);
+    expect(Math.abs(recorded - (Date.now() - 10 * 60 * 1000))).toBeLessThan(
+      10_000,
+    );
   });
 });
 
 describe("a resend of the same submission", () => {
   it("answers the same result, writes one event, even racing the first send", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [{ name: "Reenvio" }]);
+    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [
+      { name: "Reenvio" },
+    ]);
     const target = { ...stops[0], routeId, businessId: CARRIER_A };
     const body = { client_submission_id: randomUUID() };
 
@@ -412,7 +462,9 @@ describe("a resend of the same submission", () => {
   });
 
   it("refuses a key already used by another event with 409 SUBMISSION_ID_REUSED", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [{ name: "Chave" }]);
+    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [
+      { name: "Chave" },
+    ]);
     const key = randomUUID();
 
     await prisma.deliveryEvent.create({
@@ -462,9 +514,15 @@ describe("a resend of the same submission", () => {
 
 describe("who may mark", () => {
   it("another driver of the same company: 404, as if the stop did not exist", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [{ name: "Alheia" }]);
+    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [
+      { name: "Alheia" },
+    ]);
 
-    const response = await mark(otherDriverTokenA, { ...stops[0], routeId, businessId: CARRIER_A });
+    const response = await mark(otherDriverTokenA, {
+      ...stops[0],
+      routeId,
+      businessId: CARRIER_A,
+    });
 
     expect(response.statusCode).toBe(404);
     expect(response.json().code).toBe("ROUTE_STOP_NOT_FOUND");
@@ -473,9 +531,15 @@ describe("who may mark", () => {
   });
 
   it("a driver of another company, naming their own company: 404", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [{ name: "Outra empresa" }]);
+    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [
+      { name: "Outra empresa" },
+    ]);
 
-    const response = await mark(driverTokenB, { ...stops[0], routeId, businessId: CARRIER_B });
+    const response = await mark(driverTokenB, {
+      ...stops[0],
+      routeId,
+      businessId: CARRIER_B,
+    });
 
     expect(response.statusCode).toBe(404);
     expect(response.json().code).toBe("ROUTE_STOP_NOT_FOUND");
@@ -483,9 +547,15 @@ describe("who may mark", () => {
   });
 
   it("a driver of another company, naming this one: refused by the tenant guard", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [{ name: "Guarda" }]);
+    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [
+      { name: "Guarda" },
+    ]);
 
-    const response = await mark(driverTokenB, { ...stops[0], routeId, businessId: CARRIER_A });
+    const response = await mark(driverTokenB, {
+      ...stops[0],
+      routeId,
+      businessId: CARRIER_A,
+    });
 
     expect(response.statusCode).toBe(403);
     expect(response.json().code).toBe("TENANT_ACCESS_DENIED");
@@ -493,9 +563,15 @@ describe("who may mark", () => {
   });
 
   it("the company's administrator: 403 PERMISSION_DENIED", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [{ name: "Painel" }]);
+    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [
+      { name: "Painel" },
+    ]);
 
-    const response = await mark(adminTokenA, { ...stops[0], routeId, businessId: CARRIER_A });
+    const response = await mark(adminTokenA, {
+      ...stops[0],
+      routeId,
+      businessId: CARRIER_A,
+    });
 
     expect(response.statusCode).toBe(403);
     expect(response.json().code).toBe("PERMISSION_DENIED");
@@ -535,7 +611,11 @@ describe("what state refuses", () => {
       data: { status: "ARRIVED", arrived_at: new Date() },
     });
 
-    const response = await mark(driverTokenA, { ...stops[0], routeId, businessId: CARRIER_A });
+    const response = await mark(driverTokenA, {
+      ...stops[0],
+      routeId,
+      businessId: CARRIER_A,
+    });
 
     expect(response.statusCode).toBe(409);
     expect(response.json().code).toBe("ROUTE_STOP_NOT_PENDING");
@@ -552,7 +632,11 @@ describe("what state refuses", () => {
       "RELEASED",
     );
 
-    const response = await mark(driverTokenA, { ...stops[0], routeId, businessId: CARRIER_A });
+    const response = await mark(driverTokenA, {
+      ...stops[0],
+      routeId,
+      businessId: CARRIER_A,
+    });
 
     expect(response.statusCode).toBe(409);
     expect(response.json().code).toBe("ROUTE_NOT_IN_PROGRESS");
@@ -562,7 +646,9 @@ describe("what state refuses", () => {
   });
 
   it("a malformed body: 400 VALIDATION_ERROR (latitude without longitude)", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [{ name: "Metade" }]);
+    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [
+      { name: "Metade" },
+    ]);
 
     const response = await mark(
       driverTokenA,
@@ -592,16 +678,22 @@ describe("the message to the person waiting", () => {
 
     await drain();
 
-    const sent = whatsapp.sent.filter((entry) => entry.phoneNumber.includes("65933330000"));
+    const sent = whatsapp.sent.filter((entry) =>
+      entry.phoneNumber.includes("65933330000"),
+    );
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].message).toContain("Padaria Central, o motorista está a caminho.");
+    expect(sent[0].message).toContain(
+      "Padaria Central, o motorista está a caminho.",
+    );
   });
 
   it("does not go out when the company wrote no ON_THE_WAY template", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_NO_TEMPLATE, DRIVER_NO_TEMPLATE, [
-      { name: "Sem modelo", telephone: "65944440000" },
-    ]);
+    const { routeId, stops } = await seedRoute(
+      CARRIER_NO_TEMPLATE,
+      DRIVER_NO_TEMPLATE,
+      [{ name: "Sem modelo", telephone: "65944440000" }],
+    );
 
     const response = await mark(driverTokenNoTemplate, {
       ...stops[0],
@@ -615,16 +707,22 @@ describe("the message to the person waiting", () => {
 
     await drain();
 
-    expect(whatsapp.sent.filter((entry) => entry.phoneNumber.includes("65944440000"))).toEqual(
-      [],
-    );
+    expect(
+      whatsapp.sent.filter((entry) =>
+        entry.phoneNumber.includes("65944440000"),
+      ),
+    ).toEqual([]);
 
     // Decided before any delivery row exists: no failure to count.
     expect(
-      await prisma.notificationDelivery.count({ where: { outboxEventId: row.id } }),
+      await prisma.notificationDelivery.count({
+        where: { outboxEventId: row.id },
+      }),
     ).toBe(0);
     expect(
-      await prisma.externalRecipient.count({ where: { deliveryId: stops[0].deliveryId } }),
+      await prisma.externalRecipient.count({
+        where: { deliveryId: stops[0].deliveryId },
+      }),
     ).toBe(0);
   });
 
@@ -634,7 +732,13 @@ describe("the message to the person waiting", () => {
     ]);
 
     expect(
-      (await mark(driverTokenA, { ...stops[0], routeId, businessId: CARRIER_A })).statusCode,
+      (
+        await mark(driverTokenA, {
+          ...stops[0],
+          routeId,
+          businessId: CARRIER_A,
+        })
+      ).statusCode,
     ).toBe(200);
 
     expect(await outboxRows(stops[0].deliveryId)).toHaveLength(0);
@@ -646,7 +750,13 @@ describe("the message to the person waiting", () => {
     ]);
 
     expect(
-      (await mark(driverTokenA, { ...stops[0], routeId, businessId: CARRIER_A })).statusCode,
+      (
+        await mark(driverTokenA, {
+          ...stops[0],
+          routeId,
+          businessId: CARRIER_A,
+        })
+      ).statusCode,
     ).toBe(200);
 
     // Delivered before the pipeline reached the queued message.
@@ -657,9 +767,11 @@ describe("the message to the person waiting", () => {
 
     await drain();
 
-    expect(whatsapp.sent.filter((entry) => entry.phoneNumber.includes("65955550000"))).toEqual(
-      [],
-    );
+    expect(
+      whatsapp.sent.filter((entry) =>
+        entry.phoneNumber.includes("65955550000"),
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -668,7 +780,9 @@ describe("the message templates endpoints accept the new moment", () => {
     const saved = await app.inject({
       method: "PUT",
       url: `/delivery/message-template/${CARRIER_B}`,
-      headers: { authorization: `Bearer ${await seedUser(CARRIER_B, "BUSINESS_ADMIN")}` },
+      headers: {
+        authorization: `Bearer ${await seedUser(CARRIER_B, "BUSINESS_ADMIN")}`,
+      },
       payload: {
         topic: "ON_THE_WAY",
         channel: "EMAIL",
@@ -682,19 +796,25 @@ describe("the message templates endpoints accept the new moment", () => {
     const listed = await app.inject({
       method: "GET",
       url: `/delivery/message-templates?businessId=${CARRIER_B}`,
-      headers: { authorization: `Bearer ${await seedUser(CARRIER_B, "BUSINESS_ADMIN")}` },
+      headers: {
+        authorization: `Bearer ${await seedUser(CARRIER_B, "BUSINESS_ADMIN")}`,
+      },
     });
 
     expect(listed.statusCode).toBe(200);
     expect(listed.json().data).toEqual(
-      expect.arrayContaining([expect.objectContaining({ topic: "ON_THE_WAY", channel: "EMAIL" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ topic: "ON_THE_WAY", channel: "EMAIL" }),
+      ]),
     );
   });
 });
 
 describe("the operation's screens", () => {
   it("the tower's feed shows the mark with its route; the monitoring board, the stop's instant", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [{ name: "Torre" }]);
+    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [
+      { name: "Torre" },
+    ]);
 
     const marked = (
       await mark(driverTokenA, { ...stops[0], routeId, businessId: CARRIER_A })
@@ -708,7 +828,9 @@ describe("the operation's screens", () => {
 
     expect(tower.statusCode).toBe(200);
 
-    const route = await prisma.route.findUniqueOrThrow({ where: { id: routeId } });
+    const route = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
 
     expect(tower.json().data.events).toEqual(
       expect.arrayContaining([
@@ -735,16 +857,24 @@ describe("the operation's screens", () => {
       .json()
       .data.routes.find((entry: { id: string }) => entry.id === routeId);
 
-    expect(new Date(card.stops[0].onTheWayAt).toISOString()).toBe(marked.on_the_way_at);
+    expect(new Date(card.stops[0].onTheWayAt).toISOString()).toBe(
+      marked.on_the_way_at,
+    );
     expect(card.progress.onTheWay).toBe(1);
   });
 });
 
 describe("the route detail", () => {
   it("serves each stop's on_the_way_at", async () => {
-    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [{ name: "Detalhe" }]);
+    const { routeId, stops } = await seedRoute(CARRIER_A, DRIVER_A, [
+      { name: "Detalhe" },
+    ]);
 
-    const marked = await mark(driverTokenA, { ...stops[0], routeId, businessId: CARRIER_A });
+    const marked = await mark(driverTokenA, {
+      ...stops[0],
+      routeId,
+      businessId: CARRIER_A,
+    });
 
     const detail = await app.inject({
       method: "GET",
@@ -756,6 +886,8 @@ describe("the route detail", () => {
 
     const [stop] = detail.json().data.stops;
 
-    expect(new Date(stop.on_the_way_at).toISOString()).toBe(marked.json().data.on_the_way_at);
+    expect(new Date(stop.on_the_way_at).toISOString()).toBe(
+      marked.json().data.on_the_way_at,
+    );
   });
 });

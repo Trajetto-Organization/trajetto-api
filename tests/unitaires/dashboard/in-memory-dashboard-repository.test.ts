@@ -23,11 +23,17 @@ describe("the in-memory dashboard repository", () => {
     };
 
     expect(
-      await repository.countByMonth({ entity: "supplier", ...window, timeZone: SP }, "empresa"),
+      await repository.countByMonth(
+        { entity: "supplier", ...window, timeZone: SP },
+        "empresa",
+      ),
     ).toEqual([{ month: "2025-05", count: 1 }]);
 
     expect(
-      await repository.countByMonth({ entity: "supplier", ...window, timeZone: "UTC" }, "empresa"),
+      await repository.countByMonth(
+        { entity: "supplier", ...window, timeZone: "UTC" },
+        "empresa",
+      ),
     ).toEqual([{ month: "2025-06", count: 1 }]);
   });
 
@@ -36,7 +42,11 @@ describe("the in-memory dashboard repository", () => {
     const start = zonedWallTimeToUtc(MANAUS, 2026, 9, 27);
     const end = zonedWallTimeToUtc(MANAUS, 2026, 9, 28);
 
-    repository.addEntityCount("delivery", 2, zonedWallTimeToUtc(MANAUS, 2026, 9, 27, 23, 30).toISOString());
+    repository.addEntityCount(
+      "delivery",
+      2,
+      zonedWallTimeToUtc(MANAUS, 2026, 9, 27, 23, 30).toISOString(),
+    );
     repository.addEntityCount("delivery", 5, end.toISOString());
 
     const buckets = await repository.countManyByPeriod({
@@ -64,7 +74,10 @@ describe("the in-memory dashboard repository", () => {
     };
 
     expect(
-      await repository.countManyByMonth({ entities: ["fine"], ...window }, "empresa"),
+      await repository.countManyByMonth(
+        { entities: ["fine"], ...window },
+        "empresa",
+      ),
     ).toEqual({ fine: [] });
     expect(await repository.getCostsByMonth(window, "empresa")).toEqual([]);
   });

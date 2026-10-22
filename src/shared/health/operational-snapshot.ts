@@ -5,7 +5,10 @@ import database from "@/../infra/database";
 import { RedisConnection } from "@/../infra/cache/redis-connection";
 
 import { readWebhookQueueMetrics } from "@/shared/integration/webhook-metrics";
-import { DELIVERY_LANES, type DeliveryLane } from "@/shared/notifications/pipeline-rules";
+import {
+  DELIVERY_LANES,
+  type DeliveryLane,
+} from "@/shared/notifications/pipeline-rules";
 import { CronSchedulerService } from "@/shared/services/cron-scheduler-service";
 
 import { PROVIDER_PAUSED_MARKER } from "@/shared/ai/provider-failure";
@@ -88,7 +91,9 @@ async function part<T>(
   try {
     return await read();
   } catch (error) {
-    errors.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    errors.push(
+      `${name}: ${error instanceof Error ? error.message : String(error)}`,
+    );
 
     return fallback;
   }
@@ -115,10 +120,11 @@ async function collectOperationalSnapshot(
     null,
   );
 
-  const deliveryEligibleLagSec: OperationalSnapshot["deliveryEligibleLagSec"] = {
-    internal: null,
-    external: null,
-  };
+  const deliveryEligibleLagSec: OperationalSnapshot["deliveryEligibleLagSec"] =
+    {
+      internal: null,
+      external: null,
+    };
 
   for (const lane of Object.keys(DELIVERY_LANES) as DeliveryLane[]) {
     deliveryEligibleLagSec[lane] = await part(
@@ -222,7 +228,9 @@ async function collectOperationalSnapshot(
         .map((job) => ({
           job: job.job,
           lastStatus: job.last_status,
-          lastSucceededAt: job.last_succeeded_at ? new Date(job.last_succeeded_at) : null,
+          lastSucceededAt: job.last_succeeded_at
+            ? new Date(job.last_succeeded_at)
+            : null,
           staleRunning: job.stale_running,
         })),
     [],
@@ -260,7 +268,10 @@ async function collectOperationalSnapshot(
           current_setting('max_connections') AS max
       `;
 
-      return connectionUsagePercent(Number(row?.active ?? 0), Number(row?.max ?? 0));
+      return connectionUsagePercent(
+        Number(row?.active ?? 0),
+        Number(row?.max ?? 0),
+      );
     },
     0,
   );
@@ -273,7 +284,9 @@ async function collectOperationalSnapshot(
     "proof_signing",
     errors,
     async () => {
-      const health = container.resolve<ProofSigningService>("ProofSigningService").health(now);
+      const health = container
+        .resolve<ProofSigningService>("ProofSigningService")
+        .health(now);
 
       return {
         state: health.state,
@@ -317,7 +330,10 @@ async function pingRedis(): Promise<boolean> {
         await client.ping();
       })(),
       new Promise((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("timeout")), REDIS_TIMEOUT_MS);
+        timer = setTimeout(
+          () => reject(new Error("timeout")),
+          REDIS_TIMEOUT_MS,
+        );
         timer.unref();
       }),
     ]);
@@ -330,4 +346,8 @@ async function pingRedis(): Promise<boolean> {
   }
 }
 
-export { FAILURE_WINDOW_MS, aiCredentialFailuresSql, collectOperationalSnapshot };
+export {
+  FAILURE_WINDOW_MS,
+  aiCredentialFailuresSql,
+  collectOperationalSnapshot,
+};

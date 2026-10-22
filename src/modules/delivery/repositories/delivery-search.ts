@@ -59,7 +59,10 @@ async function narrowDeliverySearch(
 ): Promise<NarrowedDeliveryFilters> {
   const term = filters.search?.trim() ?? "";
 
-  if ([...term].length < SEARCH_PREFILTER_MIN_LENGTH || term.includes(SEARCH_FIELD_SEPARATOR)) {
+  if (
+    [...term].length < SEARCH_PREFILTER_MIN_LENGTH ||
+    term.includes(SEARCH_FIELD_SEPARATOR)
+  ) {
     return filters;
   }
 

@@ -222,7 +222,9 @@ const serviceOrderResponses = {
     "BUSINESS_NOT_FOUND: a empresa informada não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",
   ),
 
-  sessionUserNotFound: codedError("USER_NOT_FOUND: o usuário da sessão não existe mais."),
+  sessionUserNotFound: codedError(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
   serviceOrderConflict: codedError(
     "SERVICE_ORDER_HAS_ACCOUNTS_PAYABLE: uma conta a pagar aponta para a ordem. SERVICE_ORDER_COMPLETED: a ordem está concluída.",

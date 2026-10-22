@@ -32,7 +32,10 @@ const CNH_CATEGORIES = [
  * column, and finding them is exactly why someone opens that filter.
  */
 const CNH_CATEGORY_NONE = "NONE";
-const CNH_CATEGORY_FACET_VALUES = [...CNH_CATEGORIES, CNH_CATEGORY_NONE] as const;
+const CNH_CATEGORY_FACET_VALUES = [
+  ...CNH_CATEGORIES,
+  CNH_CATEGORY_NONE,
+] as const;
 
 type DriverStatus = (typeof DRIVER_STATUSES)[number];
 type DriverContractType = (typeof DRIVER_CONTRACT_TYPES)[number];
@@ -184,7 +187,10 @@ function driverListWhere(
 
   // The tenant stays a top-level key: the (businessId, created_at) index
   // serves every read of the list, and no facet can widen past it.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Drivers per combination of the four faceted columns, over the base. */

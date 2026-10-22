@@ -38,29 +38,33 @@ afterEach(async () => {
 });
 
 describe("the API's HTTP server", () => {
-  it("bounds how long a whole request may take to arrive", async () => {
-    const { app } = await import("@/http");
-    await app.ready();
+  it(
+    "bounds how long a whole request may take to arrive",
+    async () => {
+      const { app } = await import("@/http");
+      await app.ready();
 
-    cleanup.push(() => app.close());
+      cleanup.push(() => app.close());
 
-    expect(app.server.requestTimeout).toBeGreaterThan(0);
+      expect(app.server.requestTimeout).toBeGreaterThan(0);
 
-    // Never shorter than the app build in drivers' hands waits for an upload
-    // (UPLOAD_TIMEOUT_MS = 120 s in trajetto-mobile's utils/api.ts on main):
-    // its fuelings and checklists still arrive as multipart with up to 5 MB of
-    // photos, Cloudflare streams a body to the origin at the phone's pace, and
-    // a cap below the app's own patience fails uploads the phone would have
-    // finished. Far below forever all the same.
-    expect(app.server.requestTimeout).toBeGreaterThanOrEqual(120_000);
-    expect(app.server.requestTimeout).toBeLessThanOrEqual(300_000);
+      // Never shorter than the app build in drivers' hands waits for an upload
+      // (UPLOAD_TIMEOUT_MS = 120 s in trajetto-mobile's utils/api.ts on main):
+      // its fuelings and checklists still arrive as multipart with up to 5 MB of
+      // photos, Cloudflare streams a body to the origin at the phone's pace, and
+      // a cap below the app's own patience fails uploads the phone would have
+      // finished. Far below forever all the same.
+      expect(app.server.requestTimeout).toBeGreaterThanOrEqual(120_000);
+      expect(app.server.requestTimeout).toBeLessThanOrEqual(300_000);
 
-    // Node SWAPS the two when headersTimeout is the larger one, and the body
-    // then gets the headers' budget instead of this one.
-    expect(app.server.headersTimeout).toBeLessThanOrEqual(
-      app.server.requestTimeout,
-    );
-  }, APP_BOOT_TIMEOUT_MS);
+      // Node SWAPS the two when headersTimeout is the larger one, and the body
+      // then gets the headers' budget instead of this one.
+      expect(app.server.headersTimeout).toBeLessThanOrEqual(
+        app.server.requestTimeout,
+      );
+    },
+    APP_BOOT_TIMEOUT_MS,
+  );
 });
 
 describe("the edge in front of it", () => {

@@ -106,7 +106,10 @@ describe("the sequence of an event", () => {
 
     const first = sequenceOf(inTransit[0].signed_body);
 
-    expect(Number.isSafeInteger(first), `sequence ausente do corpo: ${String(first)}`).toBe(true);
+    expect(
+      Number.isSafeInteger(first),
+      `sequence ausente do corpo: ${String(first)}`,
+    ).toBe(true);
 
     // One fact, one number, whichever endpoint receives it.
     expect(sequenceOf(inTransit[1].signed_body)).toBe(first);
@@ -134,7 +137,9 @@ describe("the sequence of an event", () => {
       data: buildResendRow(original),
     });
 
-    expect(sequenceOf(resent.signed_body)).toBe(sequenceOf(original.signed_body));
+    expect(sequenceOf(resent.signed_body)).toBe(
+      sequenceOf(original.signed_body),
+    );
     expect(Number.isSafeInteger(sequenceOf(resent.signed_body))).toBe(true);
   });
 });

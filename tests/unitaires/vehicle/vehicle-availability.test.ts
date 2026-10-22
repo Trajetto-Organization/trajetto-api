@@ -85,7 +85,11 @@ describe("vehicle status tally", () => {
   it("keeps the four counts adding up to the total under a search filter", async () => {
     const repository = new InMemoryVehicleRepository();
 
-    seedVehicle(repository, { id: "v1", license_plate: "AAA1A11", renavam: "1" });
+    seedVehicle(repository, {
+      id: "v1",
+      license_plate: "AAA1A11",
+      renavam: "1",
+    });
     seedVehicle(repository, {
       id: "v2",
       license_plate: "AAA2A22",

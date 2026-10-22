@@ -113,7 +113,9 @@ function unmatched(
       if (routes.some((route) => route.pattern.test(shape))) continue;
 
       const line = source.slice(0, match.index).split("\n").length;
-      misses.add(`${shape}  (${file.slice(resolve(API_ROOT, "..").length + 1)}:${line})`);
+      misses.add(
+        `${shape}  (${file.slice(resolve(API_ROOT, "..").length + 1)}:${line})`,
+      );
     }
   }
 
@@ -159,19 +161,30 @@ describe.skipIf(!existsSync(WEB))("what the web calls", () => {
   it("sees the calls the browser makes through the runtime config", () => {
     const browserCalls = sourceFiles(WEB).flatMap((file) =>
       [...readFileSync(file, "utf8").matchAll(WEB_CALL)]
-        .filter(([call]) => call.includes("publicApiUrl") || call.startsWith("relayUrl"))
+        .filter(
+          ([call]) =>
+            call.includes("publicApiUrl") || call.startsWith("relayUrl"),
+        )
         .map(calledPath),
     );
 
     expect(browserCalls).toContain("/user/me");
-    expect(browserCalls.some((call) => call.startsWith("/kanban/list/"))).toBe(true);
+    expect(browserCalls.some((call) => call.startsWith("/kanban/list/"))).toBe(
+      true,
+    );
   });
 });
 
 describe.skipIf(!existsSync(APP))("what the app calls", () => {
   it("always has a route to land on", () => {
-    const files = ["app", "features", "hooks", "providers", "store", "utils"]
-      .flatMap((dir) => sourceFiles(join(APP, dir)));
+    const files = [
+      "app",
+      "features",
+      "hooks",
+      "providers",
+      "store",
+      "utils",
+    ].flatMap((dir) => sourceFiles(join(APP, dir)));
 
     const misses = unmatched(
       files,

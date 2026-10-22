@@ -76,7 +76,9 @@ beforeAll(async () => {
   shipperOf = {};
 
   for (const businessId of [CARRIER, OTHER]) {
-    const shipper = await prisma.shipper.create({ data: { name: "Embarcador", businessId } });
+    const shipper = await prisma.shipper.create({
+      data: { name: "Embarcador", businessId },
+    });
     shipperOf[businessId] = shipper.id;
   }
 
@@ -120,7 +122,14 @@ beforeAll(async () => {
 
   const crafted = (
     id: string,
-    data: { recipient_name: string; city: string; code?: string; invoice_number?: string; invoice_key?: string; driverId?: string },
+    data: {
+      recipient_name: string;
+      city: string;
+      code?: string;
+      invoice_number?: string;
+      invoice_key?: string;
+      driverId?: string;
+    },
     businessId = CARRIER,
   ) => ({
     id,
@@ -142,11 +151,25 @@ beforeAll(async () => {
         invoice_key: INVOICE_KEY,
         driverId: DRIVER,
       }),
-      crafted(CRAFTED.carlos, { recipient_name: "Carlos Souza", city: "Santos" }),
-      crafted(CRAFTED.percent, { recipient_name: "Desconto 50% Ltda", city: "Sorocaba" }),
+      crafted(CRAFTED.carlos, {
+        recipient_name: "Carlos Souza",
+        city: "Santos",
+      }),
+      crafted(CRAFTED.percent, {
+        recipient_name: "Desconto 50% Ltda",
+        city: "Sorocaba",
+      }),
       crafted(CRAFTED.ana, { recipient_name: "Ana", city: "Paulínia" }),
       // The same recipient in another company: never a result here.
-      crafted(randomUUID(), { recipient_name: "Maria Aparecida", city: "Campinas", code: "PED-777" }, OTHER),
+      crafted(
+        randomUUID(),
+        {
+          recipient_name: "Maria Aparecida",
+          city: "Campinas",
+          code: "PED-777",
+        },
+        OTHER,
+      ),
     ],
   });
 
@@ -214,7 +237,11 @@ describe("the search finds exactly what the ILIKE search found", () => {
     ["the recipient, in any case", () => "aparecida", [CRAFTED.maria]],
     ["the order code", () => "PED-777", [CRAFTED.maria]],
     ["the NF-e number", () => "x4455", [CRAFTED.maria]],
-    ["a slice of the NF-e key", () => INVOICE_KEY.slice(10, 22), [CRAFTED.maria]],
+    [
+      "a slice of the NF-e key",
+      () => INVOICE_KEY.slice(10, 22),
+      [CRAFTED.maria],
+    ],
     ["a slice of the id", () => CRAFTED.carlos.slice(0, 13), [CRAFTED.carlos]],
     ["the city", () => "CAMPINAS", [CRAFTED.maria]],
     ["the driver's name", () => "joão bat", [CRAFTED.maria]],
@@ -246,7 +273,9 @@ describe("the search finds exactly what the ILIKE search found", () => {
         search,
       } as never);
 
-    expect((await asDriver("Campinas")).data.map((delivery) => delivery.id)).toEqual([CRAFTED.maria]);
+    expect(
+      (await asDriver("Campinas")).data.map((delivery) => delivery.id),
+    ).toEqual([CRAFTED.maria]);
     expect((await asDriver("Santos")).data).toEqual([]);
   });
 
@@ -261,7 +290,12 @@ describe("the search finds exactly what the ILIKE search found", () => {
 
     expect(VOLUME).toBeGreaterThan(SEARCH_PREFILTER_CAP);
     expect(result.statusTotal).toBe(VOLUME);
-    expect(result.statements.some((statement) => /ILIKE/.test(statement.query) && /GROUP BY/.test(statement.query))).toBe(true);
+    expect(
+      result.statements.some(
+        (statement) =>
+          /ILIKE/.test(statement.query) && /GROUP BY/.test(statement.query),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -275,21 +309,34 @@ describe("with a selective term", () => {
     Plans?: PlanNode[];
   }
 
-  const flatten = (node: PlanNode): PlanNode[] => [node, ...(node.Plans ?? []).flatMap(flatten)];
+  const flatten = (node: PlanNode): PlanNode[] => [
+    node,
+    ...(node.Plans ?? []).flatMap(flatten),
+  ];
 
-  async function rowsTouched(statement: { query: string; params: string }): Promise<number> {
+  async function rowsTouched(statement: {
+    query: string;
+    params: string;
+  }): Promise<number> {
     const rows = await prisma.$queryRawUnsafe<{ "QUERY PLAN": unknown }[]>(
       `EXPLAIN (ANALYZE, FORMAT JSON) ${statement.query}`,
       ...(JSON.parse(statement.params) as unknown[]),
     );
 
     const raw = rows[0]["QUERY PLAN"];
-    const plan = ((typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{ Plan: PlanNode }>)[0].Plan;
+    const plan = (
+      (typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{
+        Plan: PlanNode;
+      }>
+    )[0].Plan;
 
     return flatten(plan)
       .filter((node) => node["Relation Name"] === "delivery")
       .reduce(
-        (sum, node) => sum + ((node["Actual Rows"] ?? 0) + (node["Rows Removed by Filter"] ?? 0)) * (node["Actual Loops"] ?? 1),
+        (sum, node) =>
+          sum +
+          ((node["Actual Rows"] ?? 0) + (node["Rows Removed by Filter"] ?? 0)) *
+            (node["Actual Loops"] ?? 1),
         0,
       );
   }
@@ -301,14 +348,19 @@ describe("with a selective term", () => {
     expect(result.statusTotal).toBe(1);
 
     const listing = result.statements.filter(
-      (statement) => /FROM "public"\."delivery"/.test(statement.query) && /(GROUP BY|ORDER BY)/.test(statement.query),
+      (statement) =>
+        /FROM "public"\."delivery"/.test(statement.query) &&
+        /(GROUP BY|ORDER BY)/.test(statement.query),
     );
 
     // The page and the status, shipper and driver counts.
     expect(listing.length).toBeGreaterThanOrEqual(4);
 
     for (const statement of listing) {
-      expect(await rowsTouched(statement), statement.query.slice(0, 160)).toBeLessThan(100);
+      expect(
+        await rowsTouched(statement),
+        statement.query.slice(0, 160),
+      ).toBeLessThan(100);
     }
   });
 
@@ -323,19 +375,27 @@ describe("with a selective term", () => {
       expect((await ilikeMatches(term)).length).toBe(PROLIFIC_DELIVERIES);
 
       // No fallback: the counts never ran the ILIKE over the company.
-      expect(result.statements.some((statement) => /ILIKE/.test(statement.query) && /GROUP BY/.test(statement.query))).toBe(
-        false,
-      );
+      expect(
+        result.statements.some(
+          (statement) =>
+            /ILIKE/.test(statement.query) && /GROUP BY/.test(statement.query),
+        ),
+      ).toBe(false);
 
       const listing = result.statements.filter(
-        (statement) => /FROM "public"\."delivery"/.test(statement.query) && /(GROUP BY|ORDER BY)/.test(statement.query),
+        (statement) =>
+          /FROM "public"\."delivery"/.test(statement.query) &&
+          /(GROUP BY|ORDER BY)/.test(statement.query),
       );
 
       expect(listing.length).toBeGreaterThanOrEqual(4);
 
       // The driver's rows, not the company's (more than twenty thousand).
       for (const statement of listing) {
-        expect(await rowsTouched(statement), statement.query.slice(0, 160)).toBeLessThan(PROLIFIC_DELIVERIES * 2);
+        expect(
+          await rowsTouched(statement),
+          statement.query.slice(0, 160),
+        ).toBeLessThan(PROLIFIC_DELIVERIES * 2);
       }
     }
   });

@@ -39,8 +39,10 @@ const ids = {
   adminId: "",
 };
 
-const tokens: Record<"admin" | "readOnly" | "noAccess" | "driver" | "otherAdmin" | "master", string> =
-  {} as never;
+const tokens: Record<
+  "admin" | "readOnly" | "noAccess" | "driver" | "otherAdmin" | "master",
+  string
+> = {} as never;
 
 interface PartRow {
   id: string;
@@ -57,7 +59,9 @@ interface PartMeta {
     withSupplier: number;
     withoutSupplier: number;
     averagePrice: number;
-    facets: { supplierId: Array<{ value: string; label: string; count: number }> };
+    facets: {
+      supplierId: Array<{ value: string; label: string; count: number }>;
+    };
   };
 }
 
@@ -118,7 +122,9 @@ beforeAll(async () => {
   });
 
   tokens.driver = (
-    await seedUser(prisma, "Motorista", "BUSINESS_USER", CARRIER, { driverId: driverUser.id })
+    await seedUser(prisma, "Motorista", "BUSINESS_USER", CARRIER, {
+      driverId: driverUser.id,
+    })
   ).token;
 
   const other = await seedUser(prisma, "Outro", "BUSINESS_ADMIN", OTHER);
@@ -130,7 +136,8 @@ beforeAll(async () => {
   const now = Date.now();
 
   for (let index = 0; index < 12; index += 1) {
-    const supplierId = index % 3 === 0 ? ids.beta : index % 2 === 0 ? ids.alfa : null;
+    const supplierId =
+      index % 3 === 0 ? ids.beta : index % 2 === 0 ? ids.alfa : null;
 
     const part = await prisma.part.create({
       data: {
@@ -161,7 +168,10 @@ beforeAll(async () => {
   ).id;
 
   const branchId = await seedBranch(prisma, CARRIER, "Filial");
-  ids.vehicle = await seedVehicle(prisma, CARRIER, { plate: "PQR7S77", branchId });
+  ids.vehicle = await seedVehicle(prisma, CARRIER, {
+    plate: "PQR7S77",
+    branchId,
+  });
 
   ids.order = (
     await prisma.serviceOrder.create({
@@ -212,7 +222,12 @@ describe("GET /part/list-part", () => {
     const bySupplier = await parts("sort=supplierName&order=asc");
 
     // Alfa (2, 4, 8, 10) first, newest first inside it.
-    expect(names(bySupplier.rows).slice(0, 4)).toEqual(["P10", "P08", "P04", "P02"]);
+    expect(names(bySupplier.rows).slice(0, 4)).toEqual([
+      "P10",
+      "P08",
+      "P04",
+      "P02",
+    ]);
   });
 
   it("filters by supplier with the cards over the whole catalog", async () => {
@@ -237,7 +252,12 @@ describe("GET /part/list-part", () => {
   it("brings how many order lines use each part", async () => {
     const { rows } = await parts("search=P01");
 
-    expect(rows).toEqual([expect.objectContaining({ description: "P01", service_order_parts_count: 1 })]);
+    expect(rows).toEqual([
+      expect.objectContaining({
+        description: "P01",
+        service_order_parts_count: 1,
+      }),
+    ]);
   });
 
   it("never shows another company's part or supplier name", async () => {
@@ -249,9 +269,13 @@ describe("GET /part/list-part", () => {
   });
 
   it("refuses a foreign manager, makes the master name the company, refuses profiles without the key", async () => {
-    expect((await parts(`businessId=${CARRIER}`, tokens.otherAdmin)).status).toBe(403);
+    expect(
+      (await parts(`businessId=${CARRIER}`, tokens.otherAdmin)).status,
+    ).toBe(403);
     expect((await parts("", tokens.master)).status).toBe(400);
-    expect((await parts(`businessId=${CARRIER}`, tokens.master)).meta.total).toBe(12);
+    expect(
+      (await parts(`businessId=${CARRIER}`, tokens.master)).meta.total,
+    ).toBe(12);
     expect((await parts("", tokens.readOnly)).status).toBe(200);
     expect((await parts("", tokens.noAccess)).status).toBe(403);
     expect((await parts("", tokens.driver)).status).toBe(403);
@@ -300,7 +324,11 @@ describe("one description per company (FLEET-DUP-1's key)", () => {
   });
 
   it("counts a legacy trailing space as the same description", async () => {
-    const response = await create({ description: "correia", unit_price: 1 }, OTHER, tokens.otherAdmin);
+    const response = await create(
+      { description: "correia", unit_price: 1 },
+      OTHER,
+      tokens.otherAdmin,
+    );
 
     expect(response.statusCode).toBe(409);
   });
@@ -312,7 +340,9 @@ describe("one description per company (FLEET-DUP-1's key)", () => {
   });
 
   it("lets a part change the case of its own description", async () => {
-    const own = await prisma.part.findFirstOrThrow({ where: { description: "P04", businessId: CARRIER } });
+    const own = await prisma.part.findFirstOrThrow({
+      where: { description: "P04", businessId: CARRIER },
+    });
 
     const response = await app.inject({
       method: "PATCH",
@@ -342,13 +372,25 @@ describe("DELETE /part/delete-part", () => {
   });
 
   it("answers a line saved between the count and the delete with 409, not 500", async () => {
-    const { DeletePartUseCase } = await import("@/modules/part/usecases/delete-part/delete-part-usecase");
-    const { PartRepository } = await import("@/modules/part/repositories/part-repository");
-    const { UserRepository } = await import("@/modules/user/repositories/user-repository");
-    const { BusinessRepository } = await import("@/modules/business/repositories/business-repository");
+    const { DeletePartUseCase } = await import(
+      "@/modules/part/usecases/delete-part/delete-part-usecase"
+    );
+    const { PartRepository } = await import(
+      "@/modules/part/repositories/part-repository"
+    );
+    const { UserRepository } = await import(
+      "@/modules/user/repositories/user-repository"
+    );
+    const { BusinessRepository } = await import(
+      "@/modules/business/repositories/business-repository"
+    );
 
     const part = await prisma.part.create({
-      data: { description: "Peça disputada", unit_price: 9, businessId: CARRIER },
+      data: {
+        description: "Peça disputada",
+        unit_price: 9,
+        businessId: CARRIER,
+      },
     });
 
     // The race, made deterministic: another request saves a line right
@@ -360,7 +402,13 @@ describe("DELETE /part/delete-part", () => {
 
         if (lines === 0) {
           await prisma.serviceOrderPart.create({
-            data: { serviceOrderId: ids.order, partId, unit_price: 9, quantity: 1, businessId: CARRIER },
+            data: {
+              serviceOrderId: ids.order,
+              partId,
+              unit_price: 9,
+              quantity: 1,
+              businessId: CARRIER,
+            },
           });
         }
 
@@ -376,13 +424,17 @@ describe("DELETE /part/delete-part", () => {
     );
 
     try {
-      await expect(useCase.execute(part.id, ids.adminId, CARRIER)).rejects.toMatchObject({
+      await expect(
+        useCase.execute(part.id, ids.adminId, CARRIER),
+      ).rejects.toMatchObject({
         statusCode: 409,
         code: "PART_IN_USE",
         message: expect.stringContaining("1 lançamento(s)"),
       });
 
-      expect(await prisma.part.findUnique({ where: { id: part.id } })).not.toBeNull();
+      expect(
+        await prisma.part.findUnique({ where: { id: part.id } }),
+      ).not.toBeNull();
     } finally {
       // Leave the order's lines as the card tests below expect them.
       await prisma.serviceOrderPart.deleteMany({ where: { partId: part.id } });
@@ -398,7 +450,9 @@ describe("DELETE /part/delete-part", () => {
     // A 403 "não pertence" confirmed the id exists in another company.
     expect(foreign.statusCode).toBe(404);
     expect(foreign.json()).toEqual(missing.json());
-    expect(await prisma.part.findUnique({ where: { id: ids.otherPart } })).not.toBeNull();
+    expect(
+      await prisma.part.findUnique({ where: { id: ids.otherPart } }),
+    ).not.toBeNull();
   });
 });
 
@@ -410,7 +464,9 @@ describe("service order lines: cards and the order's total", () => {
       withDiscount: number;
       totalValue: number;
       averageValue: number;
-      facets: { partId: Array<{ value: string; label: string; count: number }> };
+      facets: {
+        partId: Array<{ value: string; label: string; count: number }>;
+      };
     };
   }
 
@@ -422,7 +478,9 @@ describe("service order lines: cards and the order's total", () => {
     );
 
   it("warns when the parts pass the order's typed total, without refusing", async () => {
-    const p10 = await prisma.part.findFirstOrThrow({ where: { description: "P10", businessId: CARRIER } });
+    const p10 = await prisma.part.findFirstOrThrow({
+      where: { description: "P10", businessId: CARRIER },
+    });
 
     const response = await app.inject({
       method: "POST",
@@ -463,13 +521,19 @@ describe("service order lines: cards and the order's total", () => {
     const byPart = await lines(`partId=${ids.usedPart}`);
 
     expect(byPart.meta.searchMeta).toMatchObject({ total: 1, totalValue: 27 });
-    expect(byPart.meta.searchMeta.facets.partId.map((option) => option.label)).toEqual(["P01", "P10"]);
+    expect(
+      byPart.meta.searchMeta.facets.partId.map((option) => option.label),
+    ).toEqual(["P01", "P10"]);
   });
 
   it("keeps the walls: foreign manager 403, master names the company, no key 403", async () => {
-    expect((await lines(`businessId=${CARRIER}`, tokens.otherAdmin)).status).toBe(403);
+    expect(
+      (await lines(`businessId=${CARRIER}`, tokens.otherAdmin)).status,
+    ).toBe(403);
     expect((await lines("", tokens.master)).status).toBe(400);
-    expect((await lines(`businessId=${CARRIER}`, tokens.master)).meta.total).toBe(2);
+    expect(
+      (await lines(`businessId=${CARRIER}`, tokens.master)).meta.total,
+    ).toBe(2);
     expect((await lines("", tokens.readOnly)).status).toBe(200);
     expect((await lines("", tokens.noAccess)).status).toBe(403);
   });

@@ -22,7 +22,10 @@ import type { IImportRepository } from "@/modules/import/repositories/IImport-re
 import type { Shipper } from "@/modules/shipper/dtos/shipper-dto";
 import type { OccurrenceType } from "@/modules/occurrence-type/dtos/occurrence-type-dto";
 import type { StatusChangeReason } from "@/modules/status-change-reason/dtos/status-change-reason-dto";
-import type { ImportRecord, ImportReport } from "@/modules/import/dtos/import-dto";
+import type {
+  ImportRecord,
+  ImportReport,
+} from "@/modules/import/dtos/import-dto";
 
 import { expectPrismaCode } from "../contract/support";
 
@@ -68,12 +71,48 @@ const at = (minutes: number) => new Date(T0 + minutes * 60_000);
 // ---------------------------------------------------------------------------
 
 const SHIPPERS = [
-  { id: idOf("5a", 1), name: "Alfa Transportes", cnpj: "11222333000181", is_active: true, created_at: at(1) },
-  { id: idOf("5a", 2), name: "Bravo Bebidas", cnpj: null, is_active: false, created_at: at(2) },
-  { id: idOf("5a", 3), name: "Charlie Loja 2", cnpj: "45723174000110", is_active: true, created_at: at(3) },
-  { id: idOf("5a", 4), name: "Delta Atacado", cnpj: "22333444000192", is_active: true, created_at: at(4) },
-  { id: idOf("5b", 9), name: "Echo", cnpj: null, is_active: true, created_at: at(0) },
-  { id: idOf("5b", 1), name: "Foxtrot", cnpj: null, is_active: false, created_at: at(0) },
+  {
+    id: idOf("5a", 1),
+    name: "Alfa Transportes",
+    cnpj: "11222333000181",
+    is_active: true,
+    created_at: at(1),
+  },
+  {
+    id: idOf("5a", 2),
+    name: "Bravo Bebidas",
+    cnpj: null,
+    is_active: false,
+    created_at: at(2),
+  },
+  {
+    id: idOf("5a", 3),
+    name: "Charlie Loja 2",
+    cnpj: "45723174000110",
+    is_active: true,
+    created_at: at(3),
+  },
+  {
+    id: idOf("5a", 4),
+    name: "Delta Atacado",
+    cnpj: "22333444000192",
+    is_active: true,
+    created_at: at(4),
+  },
+  {
+    id: idOf("5b", 9),
+    name: "Echo",
+    cnpj: null,
+    is_active: true,
+    created_at: at(0),
+  },
+  {
+    id: idOf("5b", 1),
+    name: "Foxtrot",
+    cnpj: null,
+    is_active: false,
+    created_at: at(0),
+  },
 ];
 
 const OTHER_SHIPPER = {
@@ -85,12 +124,60 @@ const OTHER_SHIPPER = {
 };
 
 const TYPES = [
-  { id: idOf("6a", 1), name: "Avaria", description: "Carga danificada", is_active: true, blocks_delivery: true, requires_photo: true, created_at: at(1) },
-  { id: idOf("6a", 2), name: "Bloqueio", description: null, is_active: true, blocks_delivery: true, requires_photo: false, created_at: at(2) },
-  { id: idOf("6a", 3), name: "Cancelado", description: null, is_active: false, blocks_delivery: true, requires_photo: false, created_at: at(3) },
-  { id: idOf("6a", 4), name: "Devolvido", description: "Apenas registro", is_active: true, blocks_delivery: false, requires_photo: false, created_at: at(4) },
-  { id: idOf("6b", 9), name: "Espera", description: null, is_active: true, blocks_delivery: false, requires_photo: true, created_at: at(0) },
-  { id: idOf("6b", 1), name: "Fechado", description: "Registro do portao", is_active: false, blocks_delivery: false, requires_photo: false, created_at: at(0) },
+  {
+    id: idOf("6a", 1),
+    name: "Avaria",
+    description: "Carga danificada",
+    is_active: true,
+    blocks_delivery: true,
+    requires_photo: true,
+    created_at: at(1),
+  },
+  {
+    id: idOf("6a", 2),
+    name: "Bloqueio",
+    description: null,
+    is_active: true,
+    blocks_delivery: true,
+    requires_photo: false,
+    created_at: at(2),
+  },
+  {
+    id: idOf("6a", 3),
+    name: "Cancelado",
+    description: null,
+    is_active: false,
+    blocks_delivery: true,
+    requires_photo: false,
+    created_at: at(3),
+  },
+  {
+    id: idOf("6a", 4),
+    name: "Devolvido",
+    description: "Apenas registro",
+    is_active: true,
+    blocks_delivery: false,
+    requires_photo: false,
+    created_at: at(4),
+  },
+  {
+    id: idOf("6b", 9),
+    name: "Espera",
+    description: null,
+    is_active: true,
+    blocks_delivery: false,
+    requires_photo: true,
+    created_at: at(0),
+  },
+  {
+    id: idOf("6b", 1),
+    name: "Fechado",
+    description: "Registro do portao",
+    is_active: false,
+    blocks_delivery: false,
+    requires_photo: false,
+    created_at: at(0),
+  },
 ];
 
 /** Matches the name sort, the "REGISTRO" search and every filter below. */
@@ -105,11 +192,41 @@ const OTHER_TYPE = {
 };
 
 const REASONS = [
-  { id: idOf("7a", 1), name: "Atraso", description: "Cliente pediu outro dia", is_active: true, created_at: at(1) },
-  { id: idOf("7a", 2), name: "Balcao", description: null, is_active: false, created_at: at(2) },
-  { id: idOf("7a", 3), name: "Confirmado", description: "Cliente confirmou", is_active: true, created_at: at(3) },
-  { id: idOf("7b", 9), name: "Duplicado", description: null, is_active: true, created_at: at(0) },
-  { id: idOf("7b", 1), name: "Erro", description: null, is_active: false, created_at: at(0) },
+  {
+    id: idOf("7a", 1),
+    name: "Atraso",
+    description: "Cliente pediu outro dia",
+    is_active: true,
+    created_at: at(1),
+  },
+  {
+    id: idOf("7a", 2),
+    name: "Balcao",
+    description: null,
+    is_active: false,
+    created_at: at(2),
+  },
+  {
+    id: idOf("7a", 3),
+    name: "Confirmado",
+    description: "Cliente confirmou",
+    is_active: true,
+    created_at: at(3),
+  },
+  {
+    id: idOf("7b", 9),
+    name: "Duplicado",
+    description: null,
+    is_active: true,
+    created_at: at(0),
+  },
+  {
+    id: idOf("7b", 1),
+    name: "Erro",
+    description: null,
+    is_active: false,
+    created_at: at(0),
+  },
 ];
 
 /** Matches the "cliente" search, and is cited: it would count as "em uso". */
@@ -167,12 +284,66 @@ const collationRow = (prefix: string, name: string, index: number) => ({
 });
 
 const IMPORTS = [
-  { id: idOf("8a", 1), source: "SPREADSHEET", status: "COMPLETED", filename: "alfa.csv", imported: 10, duplicated: 0, invalid: 2, created_at: at(1) },
-  { id: idOf("8a", 2), source: "NFE_XML", status: "COMPLETED", filename: "bravo.xml", imported: 1, duplicated: 1, invalid: 0, created_at: at(2) },
-  { id: idOf("8a", 3), source: "SPREADSHEET", status: "REVERSED", filename: "charlie.csv", imported: 5, duplicated: 3, invalid: 1, created_at: at(3) },
-  { id: idOf("8a", 4), source: "SPREADSHEET", status: "IN_PROGRESS", filename: "delta.csv", imported: 0, duplicated: 0, invalid: 0, created_at: at(4) },
-  { id: idOf("8b", 9), source: "NFE_XML", status: "COMPLETED", filename: "echo.xml", imported: 2, duplicated: 0, invalid: 0, created_at: at(0) },
-  { id: idOf("8b", 1), source: "SPREADSHEET", status: "COMPLETED", filename: "foxtrot.csv", imported: 2, duplicated: 0, invalid: 0, created_at: at(0) },
+  {
+    id: idOf("8a", 1),
+    source: "SPREADSHEET",
+    status: "COMPLETED",
+    filename: "alfa.csv",
+    imported: 10,
+    duplicated: 0,
+    invalid: 2,
+    created_at: at(1),
+  },
+  {
+    id: idOf("8a", 2),
+    source: "NFE_XML",
+    status: "COMPLETED",
+    filename: "bravo.xml",
+    imported: 1,
+    duplicated: 1,
+    invalid: 0,
+    created_at: at(2),
+  },
+  {
+    id: idOf("8a", 3),
+    source: "SPREADSHEET",
+    status: "REVERSED",
+    filename: "charlie.csv",
+    imported: 5,
+    duplicated: 3,
+    invalid: 1,
+    created_at: at(3),
+  },
+  {
+    id: idOf("8a", 4),
+    source: "SPREADSHEET",
+    status: "IN_PROGRESS",
+    filename: "delta.csv",
+    imported: 0,
+    duplicated: 0,
+    invalid: 0,
+    created_at: at(4),
+  },
+  {
+    id: idOf("8b", 9),
+    source: "NFE_XML",
+    status: "COMPLETED",
+    filename: "echo.xml",
+    imported: 2,
+    duplicated: 0,
+    invalid: 0,
+    created_at: at(0),
+  },
+  {
+    id: idOf("8b", 1),
+    source: "SPREADSHEET",
+    status: "COMPLETED",
+    filename: "foxtrot.csv",
+    imported: 2,
+    duplicated: 0,
+    invalid: 0,
+    created_at: at(0),
+  },
 ] as const;
 
 /** Matches every list, sort and filter of the imports block. */
@@ -222,23 +393,44 @@ function twins(): Implementations {
 
   shippers.shippers.push(
     ...SHIPPERS.map(
-      (row) => ({ ...row, businessId: BUSINESS, updated_at: row.created_at }) as Shipper,
+      (row) =>
+        ({
+          ...row,
+          businessId: BUSINESS,
+          updated_at: row.created_at,
+        }) as Shipper,
     ),
-    { ...OTHER_SHIPPER, businessId: OTHER, updated_at: OTHER_SHIPPER.created_at } as Shipper,
+    {
+      ...OTHER_SHIPPER,
+      businessId: OTHER,
+      updated_at: OTHER_SHIPPER.created_at,
+    } as Shipper,
   );
 
   types.occurrenceTypes.push(
     ...TYPES.map(
       (row) =>
-        ({ ...row, businessId: BUSINESS, updated_at: row.created_at }) as OccurrenceType,
+        ({
+          ...row,
+          businessId: BUSINESS,
+          updated_at: row.created_at,
+        }) as OccurrenceType,
     ),
-    { ...OTHER_TYPE, businessId: OTHER, updated_at: OTHER_TYPE.created_at } as OccurrenceType,
+    {
+      ...OTHER_TYPE,
+      businessId: OTHER,
+      updated_at: OTHER_TYPE.created_at,
+    } as OccurrenceType,
   );
 
   reasons.statusChangeReasons.push(
     ...REASONS.map(
       (row) =>
-        ({ ...row, businessId: BUSINESS, updated_at: row.created_at }) as StatusChangeReason,
+        ({
+          ...row,
+          businessId: BUSINESS,
+          updated_at: row.created_at,
+        }) as StatusChangeReason,
     ),
     {
       ...OTHER_REASON,
@@ -340,19 +532,29 @@ async function seedPostgres(): Promise<void> {
     await prisma.shipper.create({ data: { ...row, businessId: BUSINESS } });
   }
 
-  await prisma.shipper.create({ data: { ...OTHER_SHIPPER, businessId: OTHER } });
+  await prisma.shipper.create({
+    data: { ...OTHER_SHIPPER, businessId: OTHER },
+  });
 
   for (const row of TYPES) {
-    await prisma.occurrenceType.create({ data: { ...row, businessId: BUSINESS } });
+    await prisma.occurrenceType.create({
+      data: { ...row, businessId: BUSINESS },
+    });
   }
 
-  await prisma.occurrenceType.create({ data: { ...OTHER_TYPE, businessId: OTHER } });
+  await prisma.occurrenceType.create({
+    data: { ...OTHER_TYPE, businessId: OTHER },
+  });
 
   for (const row of REASONS) {
-    await prisma.statusChangeReason.create({ data: { ...row, businessId: BUSINESS } });
+    await prisma.statusChangeReason.create({
+      data: { ...row, businessId: BUSINESS },
+    });
   }
 
-  await prisma.statusChangeReason.create({ data: { ...OTHER_REASON, businessId: OTHER } });
+  await prisma.statusChangeReason.create({
+    data: { ...OTHER_REASON, businessId: OTHER },
+  });
 
   for (const [index, name] of COLLATION_NAMES.entries()) {
     await prisma.shipper.create({
@@ -469,370 +671,491 @@ afterAll(async () => {
 // Helpers: what is compared is order, membership and counts.
 // ---------------------------------------------------------------------------
 
-const namesOf = (rows: ReadonlyArray<{ name: string }>) => rows.map((row) => row.name);
+const namesOf = (rows: ReadonlyArray<{ name: string }>) =>
+  rows.map((row) => row.name);
 
 /** GROUP BY has no order; the twin's Map has insertion order. */
 function sortedGroups<T extends object>(groups: ReadonlyArray<T>): T[] {
   return [...groups].sort((a, b) =>
-    JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0,
+    JSON.stringify(a) < JSON.stringify(b)
+      ? -1
+      : JSON.stringify(a) > JSON.stringify(b)
+        ? 1
+        : 0,
   );
 }
 
 const byName = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-describe.each(["prisma", "in-memory"] as const)("the catalog repositories (%s)", (kind) => {
-  const repos = () => implementations[kind];
+describe.each(["prisma", "in-memory"] as const)(
+  "the catalog repositories (%s)",
+  (kind) => {
+    const repos = () => implementations[kind];
 
-  describe("shippers", () => {
-    const list = (props: Partial<Parameters<IShipperRepository["listShippers"]>[0]>) =>
-      repos().shippers.listShippers({ page: 1, pageSize: 10, businessId: BUSINESS, ...props });
-
-    it("orders newest first, ties by id desc, across pages, within the company", async () => {
-      const first = await list({ pageSize: 4 });
-      const second = await list({ pageSize: 4, page: 2 });
-
-      expect(namesOf([...first.data, ...second.data])).toEqual([
-        "Delta Atacado",
-        "Charlie Loja 2",
-        "Bravo Bebidas",
-        "Alfa Transportes",
-        "Echo",
-        "Foxtrot",
-      ]);
-    });
-
-    it("keeps the id desc tiebreaker when created_at is ascending", async () => {
-      const { data } = await list({ sort: "created_at", order: "asc" });
-
-      expect(namesOf(data).slice(0, 3)).toEqual(["Echo", "Foxtrot", "Alfa Transportes"]);
-    });
-
-    it("sorts by name both ways", async () => {
-      const expected = SHIPPERS.map((row) => row.name).sort(byName);
-
-      expect(namesOf((await list({ sort: "name", order: "asc" })).data)).toEqual(expected);
-      expect(namesOf((await list({ sort: "name", order: "desc" })).data)).toEqual(
-        [...expected].reverse(),
-      );
-    });
-
-    it("filters by status, and groups over the search without the filter", async () => {
-      const { data, groups } = await list({ statuses: ["inactive"] });
-
-      expect(namesOf(data)).toEqual(["Bravo Bebidas", "Foxtrot"]);
-      expect(sortedGroups(groups)).toEqual(
-        sortedGroups([
-          { is_active: true, count: 4, withCnpj: 3 },
-          { is_active: false, count: 2, withCnpj: 0 },
-        ]),
-      );
-    });
-
-    it("searches a name with a digit as a name, and a masked CNPJ by its digits", async () => {
-      const byName_ = await list({ search: "loja 2" });
-
-      expect(namesOf(byName_.data)).toEqual(["Charlie Loja 2"]);
-      expect(byName_.groups).toEqual([{ is_active: true, count: 1, withCnpj: 1 }]);
-
-      expect(namesOf((await list({ search: "22.333.444" })).data)).toEqual(["Delta Atacado"]);
-      expect(namesOf((await list({ search: idOf("5a", 2) })).data)).toEqual(["Bravo Bebidas"]);
-    });
-
-    it("pages the picker by name over active shippers, with the same search", async () => {
-      const first = await repos().shippers.searchShipperWithCursor({
-        limit: 2,
-        businessId: BUSINESS,
-      });
-
-      expect(namesOf(first.data)).toEqual(["Alfa Transportes", "Charlie Loja 2"]);
-      expect(first.hasMore).toBe(true);
-
-      const second = await repos().shippers.searchShipperWithCursor({
-        limit: 2,
-        businessId: BUSINESS,
-        cursor: first.nextCursor ?? undefined,
-      });
-
-      expect(namesOf(second.data)).toEqual(["Delta Atacado", "Echo"]);
-      expect(second.hasMore).toBe(false);
-
-      for (const search of ["loja 2", "45.723.174/0001-10"]) {
-        const found = await repos().shippers.searchShipperWithCursor({
-          limit: 10,
+    describe("shippers", () => {
+      const list = (
+        props: Partial<Parameters<IShipperRepository["listShippers"]>[0]>,
+      ) =>
+        repos().shippers.listShippers({
+          page: 1,
+          pageSize: 10,
           businessId: BUSINESS,
-          search,
+          ...props,
         });
 
-        expect(namesOf(found.data)).toEqual(["Charlie Loja 2"]);
-      }
-    });
-  });
+      it("orders newest first, ties by id desc, across pages, within the company", async () => {
+        const first = await list({ pageSize: 4 });
+        const second = await list({ pageSize: 4, page: 2 });
 
-  describe("occurrence types", () => {
-    const list = (
-      props: Partial<Parameters<IOccurrenceTypeRepository["listOccurrenceTypes"]>[0]>,
-    ) =>
-      repos().types.listOccurrenceTypes({
-        page: 1,
-        pageSize: 10,
-        businessId: BUSINESS,
-        ...props,
+        expect(namesOf([...first.data, ...second.data])).toEqual([
+          "Delta Atacado",
+          "Charlie Loja 2",
+          "Bravo Bebidas",
+          "Alfa Transportes",
+          "Echo",
+          "Foxtrot",
+        ]);
       });
 
-    it("orders newest first, ties by id desc, and sorts by name both ways", async () => {
-      expect(namesOf((await list({})).data)).toEqual([
-        "Devolvido",
-        "Cancelado",
-        "Bloqueio",
-        "Avaria",
-        "Espera",
-        "Fechado",
-      ]);
+      it("keeps the id desc tiebreaker when created_at is ascending", async () => {
+        const { data } = await list({ sort: "created_at", order: "asc" });
 
-      const expected = TYPES.map((row) => row.name).sort(byName);
-
-      expect(namesOf((await list({ sort: "name", order: "asc" })).data)).toEqual(expected);
-      expect(namesOf((await list({ sort: "name", order: "desc" })).data)).toEqual(
-        [...expected].reverse(),
-      );
-    });
-
-    it("applies the blocking, photo and status filters, and groups without them", async () => {
-      const blockingWithoutPhoto = await list({ blocking: ["yes"], photo: ["no"] });
-
-      expect(namesOf(blockingWithoutPhoto.data)).toEqual(["Cancelado", "Bloqueio"]);
-
-      const activeOnly = await list({ statuses: ["active"], photo: ["yes"] });
-
-      expect(namesOf(activeOnly.data)).toEqual(["Avaria", "Espera"]);
-
-      // One group per combination of the three columns, over the base only.
-      expect(sortedGroups(blockingWithoutPhoto.groups)).toEqual(
-        sortedGroups([
-          { is_active: true, blocks_delivery: true, requires_photo: true, category: "NOT_DELIVERED", count: 1 },
-          { is_active: true, blocks_delivery: true, requires_photo: false, category: "NOT_DELIVERED", count: 1 },
-          { is_active: false, blocks_delivery: true, requires_photo: false, category: "NOT_DELIVERED", count: 1 },
-          { is_active: true, blocks_delivery: false, requires_photo: false, category: "NOT_DELIVERED", count: 1 },
-          { is_active: true, blocks_delivery: false, requires_photo: true, category: "NOT_DELIVERED", count: 1 },
-          { is_active: false, blocks_delivery: false, requires_photo: false, category: "NOT_DELIVERED", count: 1 },
-        ]),
-      );
-    });
-
-    it("searches the name and the description, case-insensitively", async () => {
-      const { data, groups } = await list({ search: "REGISTRO" });
-
-      expect(namesOf(data)).toEqual(["Devolvido", "Fechado"]);
-      expect(sortedGroups(groups)).toEqual(
-        sortedGroups([
-          { is_active: true, blocks_delivery: false, requires_photo: false, category: "NOT_DELIVERED", count: 1 },
-          { is_active: false, blocks_delivery: false, requires_photo: false, category: "NOT_DELIVERED", count: 1 },
-        ]),
-      );
-    });
-  });
-
-  describe("status change reasons", () => {
-    const list = (
-      props: Partial<Parameters<IStatusChangeReasonRepository["listStatusChangeReasons"]>[0]>,
-    ) =>
-      repos().reasons.listStatusChangeReasons({
-        page: 1,
-        pageSize: 10,
-        businessId: BUSINESS,
-        ...props,
+        expect(namesOf(data).slice(0, 3)).toEqual([
+          "Echo",
+          "Foxtrot",
+          "Alfa Transportes",
+        ]);
       });
 
-    it("orders newest first, ties by id desc, and sorts by name", async () => {
-      expect(namesOf((await list({})).data)).toEqual([
-        "Confirmado",
-        "Balcao",
-        "Atraso",
-        "Duplicado",
-        "Erro",
-      ]);
+      it("sorts by name both ways", async () => {
+        const expected = SHIPPERS.map((row) => row.name).sort(byName);
 
-      expect(namesOf((await list({ sort: "name", order: "desc" })).data)).toEqual([
-        "Erro",
-        "Duplicado",
-        "Confirmado",
-        "Balcao",
-        "Atraso",
-      ]);
-    });
-
-    it("filters by status; groups and 'em uso' follow the search, not the filter", async () => {
-      const active = await list({ statuses: ["active"] });
-
-      expect(namesOf(active.data)).toEqual(["Confirmado", "Atraso", "Duplicado"]);
-      expect(sortedGroups(active.groups)).toEqual(
-        sortedGroups([
-          { is_active: true, count: 3 },
-          { is_active: false, count: 2 },
-        ]),
-      );
-      expect(active.used).toBe(2);
-
-      const searched = await list({ search: "cliente" });
-
-      expect(namesOf(searched.data)).toEqual(["Confirmado", "Atraso"]);
-      expect(searched.used).toBe(1);
-    });
-  });
-
-  describe("imports", () => {
-    const list = (props: Partial<Parameters<IImportRepository["listImports"]>[0]>) =>
-      repos().imports.listImports({
-        page: 1,
-        pageSize: 10,
-        businessId: BUSINESS,
-        includeReport: false,
-        ...props,
+        expect(
+          namesOf((await list({ sort: "name", order: "asc" })).data),
+        ).toEqual(expected);
+        expect(
+          namesOf((await list({ sort: "name", order: "desc" })).data),
+        ).toEqual([...expected].reverse());
       });
 
-    const filenames = (rows: ReadonlyArray<{ filename: string }>) =>
-      rows.map((row) => row.filename);
+      it("filters by status, and groups over the search without the filter", async () => {
+        const { data, groups } = await list({ statuses: ["inactive"] });
 
-    it("orders newest first with ties by id desc, and by the counters", async () => {
-      expect(filenames((await list({})).data)).toEqual([
-        "delta.csv",
-        "charlie.csv",
-        "bravo.xml",
-        "alfa.csv",
-        "echo.xml",
-        "foxtrot.csv",
-      ]);
-
-      // Equal counters fall back to created_at desc, then id desc.
-      expect(filenames((await list({ sort: "imported", order: "asc" })).data)).toEqual([
-        "delta.csv",
-        "bravo.xml",
-        "echo.xml",
-        "foxtrot.csv",
-        "charlie.csv",
-        "alfa.csv",
-      ]);
-
-      expect(filenames((await list({ sort: "filename", order: "desc" })).data)).toEqual([
-        "foxtrot.csv",
-        "echo.xml",
-        "delta.csv",
-        "charlie.csv",
-        "bravo.xml",
-        "alfa.csv",
-      ]);
-    });
-
-    it("filters by status and source, and groups over the company", async () => {
-      const { data, groups } = await list({
-        statuses: ["COMPLETED"],
-        sources: ["SPREADSHEET"],
+        expect(namesOf(data)).toEqual(["Bravo Bebidas", "Foxtrot"]);
+        expect(sortedGroups(groups)).toEqual(
+          sortedGroups([
+            { is_active: true, count: 4, withCnpj: 3 },
+            { is_active: false, count: 2, withCnpj: 0 },
+          ]),
+        );
       });
 
-      expect(filenames(data)).toEqual(["alfa.csv", "foxtrot.csv"]);
-      expect(sortedGroups(groups)).toEqual(
-        sortedGroups([
-          { status: "COMPLETED", source: "SPREADSHEET", count: 2 },
-          { status: "COMPLETED", source: "NFE_XML", count: 2 },
-          { status: "REVERSED", source: "SPREADSHEET", count: 1 },
-          { status: "IN_PROGRESS", source: "SPREADSHEET", count: 1 },
-        ]),
-      );
-    });
+      it("searches a name with a digit as a name, and a masked CNPJ by its digits", async () => {
+        const byName_ = await list({ search: "loja 2" });
 
-    it("leaves the report out of the rows when asked", async () => {
-      const { data } = await list({ pageSize: 1 });
+        expect(namesOf(byName_.data)).toEqual(["Charlie Loja 2"]);
+        expect(byName_.groups).toEqual([
+          { is_active: true, count: 1, withCnpj: 1 },
+        ]);
 
-      expect(data[0]).not.toHaveProperty("report");
-    });
-  });
-
-  // TEST-PAR-2: a write on an id that is not there is P2025 everywhere, and
-  // the twin no longer turns index -1 into "the last row".
-  describe("writes on a row that does not exist", () => {
-    const MISSING = idOf("9f", 99);
-
-    it("answers P2025 and leaves every row in place", async () => {
-      const { shippers, types, reasons } = repos();
-
-      await expectPrismaCode(shippers.updateShipper(MISSING, { name: "X" }), "P2025");
-      await expectPrismaCode(shippers.deleteShipper(MISSING), "P2025");
-      await expectPrismaCode(types.updateOccurrenceType(MISSING, { name: "X" }), "P2025");
-      await expectPrismaCode(types.deleteOccurrenceType(MISSING), "P2025");
-      await expectPrismaCode(reasons.updateStatusChangeReason(MISSING, { name: "X" }), "P2025");
-      await expectPrismaCode(reasons.deleteStatusChangeReason(MISSING), "P2025");
-
-      for (const row of SHIPPERS) expect(await shippers.findShipperById(row.id)).not.toBeNull();
-      for (const row of TYPES) expect(await types.findOccurrenceTypeById(row.id)).not.toBeNull();
-      for (const row of REASONS) expect(await reasons.findStatusChangeReasonById(row.id)).not.toBeNull();
-    });
-
-    it("refuses a second reason with the same name in the company (P2002), not in another", async () => {
-      const { reasons } = repos();
-
-      await expectPrismaCode(
-        reasons.createStatusChangeReason({ name: "Atraso", businessId: BUSINESS }),
-        "P2002",
-      );
-      await expectPrismaCode(
-        reasons.updateStatusChangeReason(REASONS[1].id, { name: "Atraso" }),
-        "P2002",
-      );
-
-      // Case-sensitive, like the plain unique index.
-      const lower = await reasons.createStatusChangeReason({ name: "atraso", businessId: BUSINESS });
-      await reasons.deleteStatusChangeReason(lower.id!);
-    });
-  });
-
-  describe("the collation", () => {
-    it("orders shipper, type and reason names the way the database does", async () => {
-      const shippers = await repos().shippers.listShippers({
-        page: 1,
-        pageSize: 20,
-        businessId: COLLATION,
-        sort: "name",
-        order: "asc",
-      });
-      const types = await repos().types.listOccurrenceTypes({
-        page: 1,
-        pageSize: 20,
-        businessId: COLLATION,
-        sort: "name",
-        order: "asc",
-      });
-      const reasons = await repos().reasons.listStatusChangeReasons({
-        page: 1,
-        pageSize: 20,
-        businessId: COLLATION,
-        sort: "name",
-        order: "desc",
+        expect(namesOf((await list({ search: "22.333.444" })).data)).toEqual([
+          "Delta Atacado",
+        ]);
+        expect(namesOf((await list({ search: idOf("5a", 2) })).data)).toEqual([
+          "Bravo Bebidas",
+        ]);
       });
 
-      expect(namesOf(shippers.data)).toEqual(COLLATION_ORDER);
-      expect(namesOf(types.data)).toEqual(COLLATION_ORDER);
-      expect(namesOf(reasons.data)).toEqual([...COLLATION_ORDER].reverse());
+      it("pages the picker by name over active shippers, with the same search", async () => {
+        const first = await repos().shippers.searchShipperWithCursor({
+          limit: 2,
+          businessId: BUSINESS,
+        });
+
+        expect(namesOf(first.data)).toEqual([
+          "Alfa Transportes",
+          "Charlie Loja 2",
+        ]);
+        expect(first.hasMore).toBe(true);
+
+        const second = await repos().shippers.searchShipperWithCursor({
+          limit: 2,
+          businessId: BUSINESS,
+          cursor: first.nextCursor ?? undefined,
+        });
+
+        expect(namesOf(second.data)).toEqual(["Delta Atacado", "Echo"]);
+        expect(second.hasMore).toBe(false);
+
+        for (const search of ["loja 2", "45.723.174/0001-10"]) {
+          const found = await repos().shippers.searchShipperWithCursor({
+            limit: 10,
+            businessId: BUSINESS,
+            search,
+          });
+
+          expect(namesOf(found.data)).toEqual(["Charlie Loja 2"]);
+        }
+      });
     });
 
-    it("pages the picker's cursor in that same order", async () => {
-      const seen: string[] = [];
-      let cursor: string | undefined;
+    describe("occurrence types", () => {
+      const list = (
+        props: Partial<
+          Parameters<IOccurrenceTypeRepository["listOccurrenceTypes"]>[0]
+        >,
+      ) =>
+        repos().types.listOccurrenceTypes({
+          page: 1,
+          pageSize: 10,
+          businessId: BUSINESS,
+          ...props,
+        });
 
-      for (let page = 0; page < 5; page += 1) {
-        const result = await repos().shippers.searchShipperWithCursor({
-          limit: 4,
+      it("orders newest first, ties by id desc, and sorts by name both ways", async () => {
+        expect(namesOf((await list({})).data)).toEqual([
+          "Devolvido",
+          "Cancelado",
+          "Bloqueio",
+          "Avaria",
+          "Espera",
+          "Fechado",
+        ]);
+
+        const expected = TYPES.map((row) => row.name).sort(byName);
+
+        expect(
+          namesOf((await list({ sort: "name", order: "asc" })).data),
+        ).toEqual(expected);
+        expect(
+          namesOf((await list({ sort: "name", order: "desc" })).data),
+        ).toEqual([...expected].reverse());
+      });
+
+      it("applies the blocking, photo and status filters, and groups without them", async () => {
+        const blockingWithoutPhoto = await list({
+          blocking: ["yes"],
+          photo: ["no"],
+        });
+
+        expect(namesOf(blockingWithoutPhoto.data)).toEqual([
+          "Cancelado",
+          "Bloqueio",
+        ]);
+
+        const activeOnly = await list({ statuses: ["active"], photo: ["yes"] });
+
+        expect(namesOf(activeOnly.data)).toEqual(["Avaria", "Espera"]);
+
+        // One group per combination of the three columns, over the base only.
+        expect(sortedGroups(blockingWithoutPhoto.groups)).toEqual(
+          sortedGroups([
+            {
+              is_active: true,
+              blocks_delivery: true,
+              requires_photo: true,
+              category: "NOT_DELIVERED",
+              count: 1,
+            },
+            {
+              is_active: true,
+              blocks_delivery: true,
+              requires_photo: false,
+              category: "NOT_DELIVERED",
+              count: 1,
+            },
+            {
+              is_active: false,
+              blocks_delivery: true,
+              requires_photo: false,
+              category: "NOT_DELIVERED",
+              count: 1,
+            },
+            {
+              is_active: true,
+              blocks_delivery: false,
+              requires_photo: false,
+              category: "NOT_DELIVERED",
+              count: 1,
+            },
+            {
+              is_active: true,
+              blocks_delivery: false,
+              requires_photo: true,
+              category: "NOT_DELIVERED",
+              count: 1,
+            },
+            {
+              is_active: false,
+              blocks_delivery: false,
+              requires_photo: false,
+              category: "NOT_DELIVERED",
+              count: 1,
+            },
+          ]),
+        );
+      });
+
+      it("searches the name and the description, case-insensitively", async () => {
+        const { data, groups } = await list({ search: "REGISTRO" });
+
+        expect(namesOf(data)).toEqual(["Devolvido", "Fechado"]);
+        expect(sortedGroups(groups)).toEqual(
+          sortedGroups([
+            {
+              is_active: true,
+              blocks_delivery: false,
+              requires_photo: false,
+              category: "NOT_DELIVERED",
+              count: 1,
+            },
+            {
+              is_active: false,
+              blocks_delivery: false,
+              requires_photo: false,
+              category: "NOT_DELIVERED",
+              count: 1,
+            },
+          ]),
+        );
+      });
+    });
+
+    describe("status change reasons", () => {
+      const list = (
+        props: Partial<
+          Parameters<
+            IStatusChangeReasonRepository["listStatusChangeReasons"]
+          >[0]
+        >,
+      ) =>
+        repos().reasons.listStatusChangeReasons({
+          page: 1,
+          pageSize: 10,
+          businessId: BUSINESS,
+          ...props,
+        });
+
+      it("orders newest first, ties by id desc, and sorts by name", async () => {
+        expect(namesOf((await list({})).data)).toEqual([
+          "Confirmado",
+          "Balcao",
+          "Atraso",
+          "Duplicado",
+          "Erro",
+        ]);
+
+        expect(
+          namesOf((await list({ sort: "name", order: "desc" })).data),
+        ).toEqual(["Erro", "Duplicado", "Confirmado", "Balcao", "Atraso"]);
+      });
+
+      it("filters by status; groups and 'em uso' follow the search, not the filter", async () => {
+        const active = await list({ statuses: ["active"] });
+
+        expect(namesOf(active.data)).toEqual([
+          "Confirmado",
+          "Atraso",
+          "Duplicado",
+        ]);
+        expect(sortedGroups(active.groups)).toEqual(
+          sortedGroups([
+            { is_active: true, count: 3 },
+            { is_active: false, count: 2 },
+          ]),
+        );
+        expect(active.used).toBe(2);
+
+        const searched = await list({ search: "cliente" });
+
+        expect(namesOf(searched.data)).toEqual(["Confirmado", "Atraso"]);
+        expect(searched.used).toBe(1);
+      });
+    });
+
+    describe("imports", () => {
+      const list = (
+        props: Partial<Parameters<IImportRepository["listImports"]>[0]>,
+      ) =>
+        repos().imports.listImports({
+          page: 1,
+          pageSize: 10,
+          businessId: BUSINESS,
+          includeReport: false,
+          ...props,
+        });
+
+      const filenames = (rows: ReadonlyArray<{ filename: string }>) =>
+        rows.map((row) => row.filename);
+
+      it("orders newest first with ties by id desc, and by the counters", async () => {
+        expect(filenames((await list({})).data)).toEqual([
+          "delta.csv",
+          "charlie.csv",
+          "bravo.xml",
+          "alfa.csv",
+          "echo.xml",
+          "foxtrot.csv",
+        ]);
+
+        // Equal counters fall back to created_at desc, then id desc.
+        expect(
+          filenames((await list({ sort: "imported", order: "asc" })).data),
+        ).toEqual([
+          "delta.csv",
+          "bravo.xml",
+          "echo.xml",
+          "foxtrot.csv",
+          "charlie.csv",
+          "alfa.csv",
+        ]);
+
+        expect(
+          filenames((await list({ sort: "filename", order: "desc" })).data),
+        ).toEqual([
+          "foxtrot.csv",
+          "echo.xml",
+          "delta.csv",
+          "charlie.csv",
+          "bravo.xml",
+          "alfa.csv",
+        ]);
+      });
+
+      it("filters by status and source, and groups over the company", async () => {
+        const { data, groups } = await list({
+          statuses: ["COMPLETED"],
+          sources: ["SPREADSHEET"],
+        });
+
+        expect(filenames(data)).toEqual(["alfa.csv", "foxtrot.csv"]);
+        expect(sortedGroups(groups)).toEqual(
+          sortedGroups([
+            { status: "COMPLETED", source: "SPREADSHEET", count: 2 },
+            { status: "COMPLETED", source: "NFE_XML", count: 2 },
+            { status: "REVERSED", source: "SPREADSHEET", count: 1 },
+            { status: "IN_PROGRESS", source: "SPREADSHEET", count: 1 },
+          ]),
+        );
+      });
+
+      it("leaves the report out of the rows when asked", async () => {
+        const { data } = await list({ pageSize: 1 });
+
+        expect(data[0]).not.toHaveProperty("report");
+      });
+    });
+
+    // TEST-PAR-2: a write on an id that is not there is P2025 everywhere, and
+    // the twin no longer turns index -1 into "the last row".
+    describe("writes on a row that does not exist", () => {
+      const MISSING = idOf("9f", 99);
+
+      it("answers P2025 and leaves every row in place", async () => {
+        const { shippers, types, reasons } = repos();
+
+        await expectPrismaCode(
+          shippers.updateShipper(MISSING, { name: "X" }),
+          "P2025",
+        );
+        await expectPrismaCode(shippers.deleteShipper(MISSING), "P2025");
+        await expectPrismaCode(
+          types.updateOccurrenceType(MISSING, { name: "X" }),
+          "P2025",
+        );
+        await expectPrismaCode(types.deleteOccurrenceType(MISSING), "P2025");
+        await expectPrismaCode(
+          reasons.updateStatusChangeReason(MISSING, { name: "X" }),
+          "P2025",
+        );
+        await expectPrismaCode(
+          reasons.deleteStatusChangeReason(MISSING),
+          "P2025",
+        );
+
+        for (const row of SHIPPERS)
+          expect(await shippers.findShipperById(row.id)).not.toBeNull();
+        for (const row of TYPES)
+          expect(await types.findOccurrenceTypeById(row.id)).not.toBeNull();
+        for (const row of REASONS)
+          expect(
+            await reasons.findStatusChangeReasonById(row.id),
+          ).not.toBeNull();
+      });
+
+      it("refuses a second reason with the same name in the company (P2002), not in another", async () => {
+        const { reasons } = repos();
+
+        await expectPrismaCode(
+          reasons.createStatusChangeReason({
+            name: "Atraso",
+            businessId: BUSINESS,
+          }),
+          "P2002",
+        );
+        await expectPrismaCode(
+          reasons.updateStatusChangeReason(REASONS[1].id, { name: "Atraso" }),
+          "P2002",
+        );
+
+        // Case-sensitive, like the plain unique index.
+        const lower = await reasons.createStatusChangeReason({
+          name: "atraso",
+          businessId: BUSINESS,
+        });
+        await reasons.deleteStatusChangeReason(lower.id!);
+      });
+    });
+
+    describe("the collation", () => {
+      it("orders shipper, type and reason names the way the database does", async () => {
+        const shippers = await repos().shippers.listShippers({
+          page: 1,
+          pageSize: 20,
           businessId: COLLATION,
-          cursor,
+          sort: "name",
+          order: "asc",
+        });
+        const types = await repos().types.listOccurrenceTypes({
+          page: 1,
+          pageSize: 20,
+          businessId: COLLATION,
+          sort: "name",
+          order: "asc",
+        });
+        const reasons = await repos().reasons.listStatusChangeReasons({
+          page: 1,
+          pageSize: 20,
+          businessId: COLLATION,
+          sort: "name",
+          order: "desc",
         });
 
-        seen.push(...namesOf(result.data));
+        expect(namesOf(shippers.data)).toEqual(COLLATION_ORDER);
+        expect(namesOf(types.data)).toEqual(COLLATION_ORDER);
+        expect(namesOf(reasons.data)).toEqual([...COLLATION_ORDER].reverse());
+      });
 
-        if (!result.hasMore) break;
+      it("pages the picker's cursor in that same order", async () => {
+        const seen: string[] = [];
+        let cursor: string | undefined;
 
-        cursor = result.nextCursor ?? undefined;
-      }
+        for (let page = 0; page < 5; page += 1) {
+          const result = await repos().shippers.searchShipperWithCursor({
+            limit: 4,
+            businessId: COLLATION,
+            cursor,
+          });
 
-      expect(seen).toEqual(COLLATION_ORDER);
+          seen.push(...namesOf(result.data));
+
+          if (!result.hasMore) break;
+
+          cursor = result.nextCursor ?? undefined;
+        }
+
+        expect(seen).toEqual(COLLATION_ORDER);
+      });
     });
-  });
-});
+  },
+);

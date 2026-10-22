@@ -23,8 +23,10 @@ function deepStrict(schema: z.ZodTypeAny): z.ZodTypeAny {
       .strict();
   }
 
-  if (schema instanceof z.ZodOptional) return deepStrict(schema.unwrap()).optional();
-  if (schema instanceof z.ZodNullable) return deepStrict(schema.unwrap()).nullable();
+  if (schema instanceof z.ZodOptional)
+    return deepStrict(schema.unwrap()).optional();
+  if (schema instanceof z.ZodNullable)
+    return deepStrict(schema.unwrap()).nullable();
   if (schema instanceof z.ZodArray) return z.array(deepStrict(schema.element));
 
   if (schema instanceof z.ZodUnion) {

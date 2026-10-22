@@ -52,7 +52,11 @@ describe("delivery-proof.ai-flagged", () => {
   });
 
   it("reaches the driver who proved it, by push and in the app, never by e-mail", async () => {
-    const driver = { id: "driver-user-1", businessId: "biz-1", role: "BUSINESS_USER" };
+    const driver = {
+      id: "driver-user-1",
+      businessId: "biz-1",
+      role: "BUSINESS_USER",
+    };
 
     expect(
       await proofAIFeedbackPolicy.resolveRecipients(payload, users(driver)),

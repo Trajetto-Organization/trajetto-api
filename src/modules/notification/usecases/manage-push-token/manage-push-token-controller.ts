@@ -8,10 +8,7 @@ import { container } from "tsyringe";
 import { z } from "zod";
 
 const pushTokenSchema = z.object({
-  token: z
-    .string()
-    .min(1, "Token é obrigatório.")
-    .max(4096, "Token inválido."),
+  token: z.string().min(1, "Token é obrigatório.").max(4096, "Token inválido."),
   platform: z.enum(["android", "ios"], {
     errorMap: () => ({ message: "Plataforma inválida (android ou ios)." }),
   }),
@@ -26,7 +23,9 @@ class RegisterPushTokenController {
     const { id, sessionId } = request.user;
     const { token, platform } = pushTokenSchema.parse(request.body);
 
-    const registerPushTokenUseCase = container.resolve(RegisterPushTokenUseCase);
+    const registerPushTokenUseCase = container.resolve(
+      RegisterPushTokenUseCase,
+    );
 
     await registerPushTokenUseCase.execute({
       userId: id,

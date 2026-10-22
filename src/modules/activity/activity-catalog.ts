@@ -41,7 +41,11 @@ const ACTIVITY_STATUS_CATALOG = [
   { value: "Inativo", module: "CORE", aliases: ["INACTIVE"] },
   { value: "Bloqueado", module: "CORE", aliases: ["BLOCKED"] },
   // Deliveries and routes.
-  { value: "Em rota", module: "DELIVERIES", aliases: ["Em Rota", "IN_TRANSIT", "IN_ROUTE"] },
+  {
+    value: "Em rota",
+    module: "DELIVERIES",
+    aliases: ["Em Rota", "IN_TRANSIT", "IN_ROUTE"],
+  },
   { value: "Entregue", module: "DELIVERIES", aliases: ["DELIVERED"] },
   { value: "Insucesso", module: "DELIVERIES", aliases: ["FAILED"] },
   { value: "Cancelada", module: "DELIVERIES", aliases: ["CANCELLED"] },
@@ -132,7 +136,8 @@ function storedStatusesFor(values: readonly string[]): string[] {
 
     stored.add(value);
 
-    for (const alias of (entry as ActivityStatusEntry | undefined)?.aliases ?? []) {
+    for (const alias of (entry as ActivityStatusEntry | undefined)?.aliases ??
+      []) {
       stored.add(alias);
     }
   }
@@ -142,9 +147,9 @@ function storedStatusesFor(values: readonly string[]): string[] {
 
 /** The canonical status of a stored one ("Em Rota" → "Em rota"), or itself. */
 function canonicalStatus(stored: string): string {
-  const entry = (ACTIVITY_STATUS_CATALOG as readonly ActivityStatusEntry[]).find(
-    (item) => item.value === stored || item.aliases?.includes(stored),
-  );
+  const entry = (
+    ACTIVITY_STATUS_CATALOG as readonly ActivityStatusEntry[]
+  ).find((item) => item.value === stored || item.aliases?.includes(stored));
 
   return entry?.value ?? stored;
 }

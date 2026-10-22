@@ -83,12 +83,19 @@ function cell(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
 
   if (typeof value === "object") {
-    const rich = value as { text?: string; result?: unknown; richText?: Array<{ text: string }> };
+    const rich = value as {
+      text?: string;
+      result?: unknown;
+      richText?: Array<{ text: string }>;
+    };
 
     if (typeof rich.text === "string") return rich.text.trim();
 
     if (Array.isArray(rich.richText)) {
-      return rich.richText.map((part) => part.text).join("").trim();
+      return rich.richText
+        .map((part) => part.text)
+        .join("")
+        .trim();
     }
 
     if (rich.result != null) return String(rich.result).trim();
@@ -212,9 +219,7 @@ function parseDeliverySpreadsheet(matrix: unknown[][]): ParseResult {
   if (!headerRow) {
     return {
       rows,
-      errors: [
-        { line: 1, column: null, message: "A planilha está vazia." },
-      ],
+      errors: [{ line: 1, column: null, message: "A planilha está vazia." }],
       unknownHeaders: [],
     };
   }
@@ -330,7 +335,10 @@ function parseDeliverySpreadsheet(matrix: unknown[][]): ParseResult {
     const routeDate = parseDate(read("route_date"));
 
     if (routeDate === "invalid") {
-      fail(headerOf("route_date"), "Data inválida. Use 16/09/2026 ou 2026-09-16.");
+      fail(
+        headerOf("route_date"),
+        "Data inválida. Use 16/09/2026 ou 2026-09-16.",
+      );
     }
 
     // Items: a quantity with no description is a typo, and a description with
@@ -360,7 +368,9 @@ function parseDeliverySpreadsheet(matrix: unknown[][]): ParseResult {
     const routeCnh = read("route_driver_cnh");
     const routePlate = read("route_vehicle_plate").toUpperCase();
 
-    const wantsRoute = Boolean(routeName || routeCnh || routePlate || routeDate);
+    const wantsRoute = Boolean(
+      routeName || routeCnh || routePlate || routeDate,
+    );
 
     // The route needs a driver. Naming a route with nobody to drive it would
     // create a plan that can never be released, which is worse than saying so

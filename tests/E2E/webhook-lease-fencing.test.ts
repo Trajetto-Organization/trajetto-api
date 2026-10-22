@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 
 import {
@@ -113,7 +118,10 @@ async function seedEndpoint(path: string): Promise<string> {
   return endpoint.id;
 }
 
-async function until(condition: () => boolean, timeoutMs = 10_000): Promise<void> {
+async function until(
+  condition: () => boolean,
+  timeoutMs = 10_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
 
   while (!condition()) {
@@ -193,7 +201,9 @@ describe("shutting down with a batch in flight", () => {
       payload: {},
     });
 
-    const dispatcher = new WebhookDispatchService(async () => ({ allowed: true }));
+    const dispatcher = new WebhookDispatchService(async () => ({
+      allowed: true,
+    }));
 
     const batch = dispatcher.processBatch();
 

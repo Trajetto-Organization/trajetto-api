@@ -81,15 +81,25 @@ async function tokenFor(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "15m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "15m",
+    },
+  );
 }
 
 const FORM = [
   { key: "quem_atendeu", label: "Quem atendeu", type: "text", required: true },
-  { key: "motivo", label: "Motivo", type: "select", required: true, options: ["Ausente", "Recusa"] },
+  {
+    key: "motivo",
+    label: "Motivo",
+    type: "select",
+    required: true,
+    options: ["Ausente", "Recusa"],
+  },
 ];
 
 async function send(
@@ -109,7 +119,9 @@ async function send(
 }
 
 const typeNamed = (name: string) =>
-  prisma.occurrenceType.findFirstOrThrow({ where: { businessId: CARRIER, name } });
+  prisma.occurrenceType.findFirstOrThrow({
+    where: { businessId: CARRIER, name },
+  });
 
 beforeAll(async () => {
   await seedBusiness(CARRIER);
@@ -148,18 +160,25 @@ afterAll(async () => {
 
 describe("creating a type with a form", () => {
   it("stores the form normalized, version 1, and the authorization flag", async () => {
-    const answer = await send("POST", `/occurrence-type/create-occurrence-type/${CARRIER}`, {
-      name: "Cliente ausente",
-      blocks_delivery: true,
-      requires_authorization: true,
-      form_fields: FORM,
-    });
+    const answer = await send(
+      "POST",
+      `/occurrence-type/create-occurrence-type/${CARRIER}`,
+      {
+        name: "Cliente ausente",
+        blocks_delivery: true,
+        requires_authorization: true,
+        form_fields: FORM,
+      },
+    );
 
     expect(answer.status).toBe(201);
 
     const type = await typeNamed("Cliente ausente");
 
-    expect(type).toMatchObject({ requires_authorization: true, form_version: 1 });
+    expect(type).toMatchObject({
+      requires_authorization: true,
+      form_version: 1,
+    });
     expect(type.form_fields).toEqual([
       {
         key: "quem_atendeu",
@@ -180,13 +199,17 @@ describe("creating a type with a form", () => {
   });
 
   it("refuses a definition that does not hold, saying why", async () => {
-    const answer = await send("POST", `/occurrence-type/create-occurrence-type/${CARRIER}`, {
-      name: "Forma ruim",
-      form_fields: [
-        { key: "a", label: "A", type: "select", options: ["Só"] },
-        { key: "a", label: "B", type: "text" },
-      ],
-    });
+    const answer = await send(
+      "POST",
+      `/occurrence-type/create-occurrence-type/${CARRIER}`,
+      {
+        name: "Forma ruim",
+        form_fields: [
+          { key: "a", label: "A", type: "select", options: ["Só"] },
+          { key: "a", label: "B", type: "text" },
+        ],
+      },
+    );
 
     expect(answer.status).toBe(400);
     expect(answer.body.code).toBe("VALIDATION_ERROR");
@@ -196,7 +219,9 @@ describe("creating a type with a form", () => {
         'A chave "a" aparece em mais de um campo.',
       ]),
     );
-    expect(await prisma.occurrenceType.count({ where: { name: "Forma ruim" } })).toBe(0);
+    expect(
+      await prisma.occurrenceType.count({ where: { name: "Forma ruim" } }),
+    ).toBe(0);
   });
 
   it("stores no form as NULL, not as an empty array", async () => {
@@ -220,25 +245,38 @@ describe("editing the form", () => {
     const url = `/occurrence-type/update-occurrence-type/${type.id}/business/${CARRIER}`;
 
     // The dialog sends the form back on every save.
-    const same = await send("PATCH", url, { name: "Cliente ausente", form_fields: FORM });
+    const same = await send("PATCH", url, {
+      name: "Cliente ausente",
+      form_fields: FORM,
+    });
 
     expect(same.status).toBe(200);
     expect((await typeNamed("Cliente ausente")).form_version).toBe(1);
 
     const changed = await send("PATCH", url, {
-      form_fields: [...FORM, { key: "protocolo", label: "Protocolo", type: "text", required: false }],
+      form_fields: [
+        ...FORM,
+        { key: "protocolo", label: "Protocolo", type: "text", required: false },
+      ],
     });
 
     expect(changed.status).toBe(200);
     expect((await typeNamed("Cliente ausente")).form_version).toBe(2);
 
-    const cleared = await send("PATCH", url, { form_fields: null, requires_authorization: false });
+    const cleared = await send("PATCH", url, {
+      form_fields: null,
+      requires_authorization: false,
+    });
 
     expect(cleared.status).toBe(200);
 
     const after = await typeNamed("Cliente ausente");
 
-    expect(after).toMatchObject({ form_fields: null, form_version: 3, requires_authorization: false });
+    expect(after).toMatchObject({
+      form_fields: null,
+      form_version: 3,
+      requires_authorization: false,
+    });
 
     // Unrelated edits leave the version alone.
     await send("PATCH", url, { description: "Ninguém atendeu" });
@@ -256,7 +294,10 @@ describe("editing the form", () => {
       otherAdminToken,
     );
 
-    expect(foreign).toMatchObject({ status: 404, body: { code: "OCCURRENCE_TYPE_NOT_FOUND" } });
+    expect(foreign).toMatchObject({
+      status: 404,
+      body: { code: "OCCURRENCE_TYPE_NOT_FOUND" },
+    });
 
     const driver = await send(
       "PATCH",

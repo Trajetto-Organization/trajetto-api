@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -18,7 +26,9 @@ import { container } from "tsyringe";
  * provider takes 2.5s — past the budget, well inside the 180s lease.
  */
 vi.mock("@/shared/notifications/pipeline-rules", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/shared/notifications/pipeline-rules")>()),
+  ...(await importOriginal<
+    typeof import("@/shared/notifications/pipeline-rules")
+  >()),
   PER_DELIVERY_TIMEOUT_MS: 1_000,
 }));
 
@@ -145,61 +155,69 @@ afterAll(async () => {
 }, 60_000);
 
 describe("a send that outlives the pipeline's patience", () => {
-  it("is recorded as what the provider answered, and never sent twice", { timeout: 30_000 }, async () => {
-    const id = await emailRow();
+  it(
+    "is recorded as what the provider answered, and never sent twice",
+    { timeout: 30_000 },
+    async () => {
+      const id = await emailRow();
 
-    await pipeline.runDeliveryCycle("external");
+      await pipeline.runDeliveryCycle("external");
 
-    // The worker moved on; the row is still this claim's, under its lease.
-    // Back in PENDING it would be on a ~30s timer to a second copy.
-    const meanwhile = await prisma.notificationDelivery.findUniqueOrThrow({
-      where: { id },
-    });
+      // The worker moved on; the row is still this claim's, under its lease.
+      // Back in PENDING it would be on a ~30s timer to a second copy.
+      const meanwhile = await prisma.notificationDelivery.findUniqueOrThrow({
+        where: { id },
+      });
 
-    expect(meanwhile.status).toBe("PROCESSING");
+      expect(meanwhile.status).toBe("PROCESSING");
 
-    // The provider accepts.
-    await sleep(PROVIDER_DELAY_MS);
+      // The provider accepts.
+      await sleep(PROVIDER_DELAY_MS);
 
-    // Whatever the row says now, make it due, the way the clock eventually
-    // would, and run the lane again.
-    await prisma.notificationDelivery.updateMany({
-      where: { id, status: "PENDING" },
-      data: { availableAt: new Date() },
-    });
+      // Whatever the row says now, make it due, the way the clock eventually
+      // would, and run the lane again.
+      await prisma.notificationDelivery.updateMany({
+        where: { id, status: "PENDING" },
+        data: { availableAt: new Date() },
+      });
 
-    await pipeline.runDeliveryCycle("external");
-    await sleep(PROVIDER_DELAY_MS);
+      await pipeline.runDeliveryCycle("external");
+      await sleep(PROVIDER_DELAY_MS);
 
-    expect(mail.sent, "o mesmo e-mail saiu duas vezes").toHaveLength(1);
+      expect(mail.sent, "o mesmo e-mail saiu duas vezes").toHaveLength(1);
 
-    const row = await prisma.notificationDelivery.findUniqueOrThrow({
-      where: { id },
-    });
+      const row = await prisma.notificationDelivery.findUniqueOrThrow({
+        where: { id },
+      });
 
-    expect(row.status).toBe("DELIVERED");
-    expect(row.attempts).toBe(1);
-    expect(row.providerMessageId).toBeTruthy();
-  });
+      expect(row.status).toBe("DELIVERED");
+      expect(row.attempts).toBe(1);
+      expect(row.providerMessageId).toBeTruthy();
+    },
+  );
 
-  it("is retried on the schedule when the provider finally refuses it", { timeout: 30_000 }, async () => {
-    mail.outcome = "refuse";
+  it(
+    "is retried on the schedule when the provider finally refuses it",
+    { timeout: 30_000 },
+    async () => {
+      mail.outcome = "refuse";
 
-    const id = await emailRow();
+      const id = await emailRow();
 
-    await pipeline.runDeliveryCycle("external");
-    await sleep(PROVIDER_DELAY_MS + 500);
+      await pipeline.runDeliveryCycle("external");
+      await sleep(PROVIDER_DELAY_MS + 500);
 
-    const row = await prisma.notificationDelivery.findUniqueOrThrow({
-      where: { id },
-    });
+      const row = await prisma.notificationDelivery.findUniqueOrThrow({
+        where: { id },
+      });
 
-    // The real reason, not "the pipeline got bored": what support reads in
-    // the dead letter has to be what the provider said.
-    expect(row.status).toBe("PENDING");
-    expect(row.lastError).toContain("SMTP 451");
-    expect(row.attempts).toBe(1);
-    expect(row.availableAt.getTime()).toBeGreaterThan(Date.now() + 10_000);
-    expect(mail.sent).toHaveLength(1);
-  });
+      // The real reason, not "the pipeline got bored": what support reads in
+      // the dead letter has to be what the provider said.
+      expect(row.status).toBe("PENDING");
+      expect(row.lastError).toContain("SMTP 451");
+      expect(row.attempts).toBe(1);
+      expect(row.availableAt.getTime()).toBeGreaterThan(Date.now() + 10_000);
+      expect(mail.sent).toHaveLength(1);
+    },
+  );
 });

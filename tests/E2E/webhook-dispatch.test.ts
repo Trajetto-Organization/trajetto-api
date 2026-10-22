@@ -509,7 +509,9 @@ describe("an endpoint built to hurt the dispatcher", () => {
 
     const after = process.memoryUsage();
     const grew =
-      after.heapUsed + after.arrayBuffers - (before.heapUsed + before.arrayBuffers);
+      after.heapUsed +
+      after.arrayBuffers -
+      (before.heapUsed + before.arrayBuffers);
 
     expect(grew).toBeLessThan(96 * 1024 * 1024);
 
@@ -700,7 +702,9 @@ describe("a retry sends the same bytes", () => {
     const timestampOf = (header: string | undefined) =>
       Number(/(?:^|,)t=(\d+)/.exec(header ?? "")?.[1]);
 
-    expect(timestampOf(received[1].headers["x-trajetto-signature"])).toBeGreaterThanOrEqual(
+    expect(
+      timestampOf(received[1].headers["x-trajetto-signature"]),
+    ).toBeGreaterThanOrEqual(
       timestampOf(received[0].headers["x-trajetto-signature"]),
     );
   });
@@ -780,14 +784,18 @@ describe("where a webhook does NOT go", () => {
     });
 
     expect(row.status).toBe("FAILED");
-    expect(row.lastError ?? "").not.toMatch(/ECONNREFUSED|fetch failed|connect/i);
+    expect(row.lastError ?? "").not.toMatch(
+      /ECONNREFUSED|fetch failed|connect/i,
+    );
 
     // A permanent refusal switches the endpoint off, so the next sweep does
     // not try the same internal address again.
     expect(
-      (await prisma.webhookEndpoint.findUniqueOrThrow({
-        where: { id: endpoint.id },
-      })).disabled_at,
+      (
+        await prisma.webhookEndpoint.findUniqueOrThrow({
+          where: { id: endpoint.id },
+        })
+      ).disabled_at,
     ).not.toBeNull();
   });
 

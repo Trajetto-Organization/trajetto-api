@@ -16,7 +16,10 @@ import {
 
 import { businessDateKey, businessMonthKey } from "@/shared/time/business-day";
 
-import { tallyMaintenance, type MaintenanceVehicle } from "../maintenance-standing";
+import {
+  tallyMaintenance,
+  type MaintenanceVehicle,
+} from "../maintenance-standing";
 
 /** A vehicle as the status and maintenance counts read it, with its tenant. */
 interface DashboardVehicleRow extends MaintenanceVehicle {
@@ -25,7 +28,11 @@ interface DashboardVehicleRow extends MaintenanceVehicle {
 }
 
 /** The company's civil day or month, the same key the SQL groups by. */
-function periodKey(at: Date, granularity: PeriodGranularity, timeZone: string): string {
+function periodKey(
+  at: Date,
+  granularity: PeriodGranularity,
+  timeZone: string,
+): string {
   return granularity === "month"
     ? businessMonthKey(at, timeZone)
     : businessDateKey(at, timeZone);
@@ -90,7 +97,11 @@ class InMemoryDashboardRepository implements IDashboardRepository {
 
         // `business` is the tenant itself and carries no businessId, exactly
         // as in the real repository.
-        if (businessId && entity !== "business" && entry.businessId !== businessId) {
+        if (
+          businessId &&
+          entity !== "business" &&
+          entry.businessId !== businessId
+        ) {
           continue;
         }
 
@@ -119,13 +130,18 @@ class InMemoryDashboardRepository implements IDashboardRepository {
       let before = 0;
 
       for (const entry of this.data.entityCounts[entity] ?? []) {
-        if (businessId && entity !== "business" && entry.businessId !== businessId) {
+        if (
+          businessId &&
+          entity !== "business" &&
+          entry.businessId !== businessId
+        ) {
           continue;
         }
 
         total += entry.count;
 
-        if (new Date(entry.date).getTime() < params.before.getTime()) before += entry.count;
+        if (new Date(entry.date).getTime() < params.before.getTime())
+          before += entry.count;
       }
 
       result[entity] = { total, before };
@@ -143,7 +159,10 @@ class InMemoryDashboardRepository implements IDashboardRepository {
       businessId,
     );
 
-    return grouped[params.entity].map(({ period, count }) => ({ month: period, count }));
+    return grouped[params.entity].map(({ period, count }) => ({
+      month: period,
+      count,
+    }));
   }
 
   async countManyByMonth(
@@ -221,7 +240,9 @@ class InMemoryDashboardRepository implements IDashboardRepository {
   /** The same tenant filter as the real `where: { businessId }`. */
   private vehiclesOf(businessId?: string): DashboardVehicleRow[] {
     return businessId
-      ? this.data.vehicles.filter((vehicle) => vehicle.businessId === businessId)
+      ? this.data.vehicles.filter(
+          (vehicle) => vehicle.businessId === businessId,
+        )
       : this.data.vehicles;
   }
 
@@ -241,7 +262,11 @@ class InMemoryDashboardRepository implements IDashboardRepository {
     params: MaintenanceStatsParams,
     businessId?: string,
   ): Promise<MaintenanceStatsResult> {
-    return tallyMaintenance(this.vehiclesOf(businessId), params.today, params.timeZone);
+    return tallyMaintenance(
+      this.vehiclesOf(businessId),
+      params.today,
+      params.timeZone,
+    );
   }
 
   async countVehiclesByType(

@@ -29,28 +29,34 @@ function capture(): { lines: string[]; sink: Writable } {
 }
 
 describe("the process logger and the proof secrets", () => {
-  it.each(SECRET_ENV_KEYS)("censors %s at the top, one and two levels down", (key) => {
-    const { lines, sink } = capture();
-    const value = `secret-value-of-${key}`;
+  it.each(SECRET_ENV_KEYS)(
+    "censors %s at the top, one and two levels down",
+    (key) => {
+      const { lines, sink } = capture();
+      const value = `secret-value-of-${key}`;
 
-    const log = buildLogger(sink);
+      const log = buildLogger(sink);
 
-    log.info({ [key]: value }, "top");
-    log.info({ env: { [key]: value } }, "nested");
-    log.info({ config: { proof: { [key]: value } } }, "deeper");
+      log.info({ [key]: value }, "top");
+      log.info({ env: { [key]: value } }, "nested");
+      log.info({ config: { proof: { [key]: value } } }, "deeper");
 
-    expect(lines).toHaveLength(3);
+      expect(lines).toHaveLength(3);
 
-    for (const line of lines) {
-      expect(line).not.toContain(value);
-      expect(line).toContain("[redacted]");
-    }
-  });
+      for (const line of lines) {
+        expect(line).not.toContain(value);
+        expect(line).toContain("[redacted]");
+      }
+    },
+  );
 
   it("leaves other fields alone", () => {
     const { lines, sink } = capture();
 
-    buildLogger(sink).info({ env: { PROOF_SIGNATURE_PROFILE: "cms" } }, "profile");
+    buildLogger(sink).info(
+      { env: { PROOF_SIGNATURE_PROFILE: "cms" } },
+      "profile",
+    );
 
     expect(JSON.parse(lines[0]).env.PROOF_SIGNATURE_PROFILE).toBe("cms");
   });

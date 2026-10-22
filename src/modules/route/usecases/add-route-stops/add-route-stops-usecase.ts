@@ -115,7 +115,9 @@ class AddRouteStopsUseCase {
      */
     const openHere = new Set(
       findRoute.stops
-        .filter((stop) => stop.status === "PENDING" || stop.status === "ARRIVED")
+        .filter(
+          (stop) => stop.status === "PENDING" || stop.status === "ARRIVED",
+        )
         .map((stop) => stop.deliveryId),
     );
 
@@ -169,7 +171,8 @@ class AddRouteStopsUseCase {
         );
 
         const current =
-          (await this.route.findRouteById(routeId, businessId, tx)) ?? findRoute;
+          (await this.route.findRouteById(routeId, businessId, tx)) ??
+          findRoute;
 
         for (const delivery of deliveries) {
           await this.webhooks.announce(

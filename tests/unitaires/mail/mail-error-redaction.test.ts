@@ -38,7 +38,11 @@ const RECIPIENT = "ana.cliente@exemplo.com.br";
 function smtpRejection(): Error {
   return Object.assign(
     new Error(`550 5.1.1 <${RECIPIENT}>: Recipient address rejected`),
-    { responseCode: 550, code: "EENVELOPE", response: `550 5.1.1 <${RECIPIENT}>` },
+    {
+      responseCode: 550,
+      code: "EENVELOPE",
+      response: `550 5.1.1 <${RECIPIENT}>`,
+    },
   );
 }
 
@@ -81,7 +85,10 @@ describe("redactEmails", () => {
 
 describe("toMailDeliveryError", () => {
   it("never carries the recipient in the message the pipeline stores", () => {
-    const error = toMailDeliveryError(smtpRejection(), "Falha ao enviar e-mail");
+    const error = toMailDeliveryError(
+      smtpRejection(),
+      "Falha ao enviar e-mail",
+    );
 
     expect(error.message).not.toContain(RECIPIENT);
     expect(error.message).toContain("a***@exemplo.com.br");
@@ -93,12 +100,15 @@ describe("toMailDeliveryError", () => {
 
   it("nor in the cause a logger would print after it", () => {
     // pino's err serializer and console.error both walk `cause`.
-    const error = toMailDeliveryError(smtpRejection(), "Falha ao enviar e-mail");
+    const error = toMailDeliveryError(
+      smtpRejection(),
+      "Falha ao enviar e-mail",
+    );
 
     expect(JSON.stringify(error.cause ?? null)).not.toContain(RECIPIENT);
-    expect(String((error.cause as Error | undefined)?.message ?? "")).not.toContain(
-      RECIPIENT,
-    );
+    expect(
+      String((error.cause as Error | undefined)?.message ?? ""),
+    ).not.toContain(RECIPIENT);
   });
 });
 

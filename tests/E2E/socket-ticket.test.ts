@@ -147,11 +147,14 @@ function open(
       done({ connected: true, socket });
     });
 
-    socket.on("connect_error", (error: Error & { data?: { code?: string } }) => {
-      clearTimeout(timer);
-      socket.disconnect();
-      done({ connected: false, code: error.data?.code });
-    });
+    socket.on(
+      "connect_error",
+      (error: Error & { data?: { code?: string } }) => {
+        clearTimeout(timer);
+        socket.disconnect();
+        done({ connected: false, code: error.data?.code });
+      },
+    );
   });
 }
 

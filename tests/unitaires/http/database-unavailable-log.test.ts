@@ -30,11 +30,15 @@ const kinds: Record<string, () => Error> = {
       "AUTH_SESSION_UNAVAILABLE",
     ),
   database: () =>
-    new Prisma.PrismaClientKnownRequestError("Server has closed the connection.", {
-      code: "P1017",
-      clientVersion: Prisma.prismaVersion.client,
-    }),
-  bug: () => new TypeError("Cannot read properties of undefined (reading 'role')"),
+    new Prisma.PrismaClientKnownRequestError(
+      "Server has closed the connection.",
+      {
+        code: "P1017",
+        clientVersion: Prisma.prismaVersion.client,
+      },
+    ),
+  bug: () =>
+    new TypeError("Cannot read properties of undefined (reading 'role')"),
 };
 
 type Line = { level: "error" | "warn"; message: string };
@@ -94,7 +98,10 @@ describe("the error handler's log line", () => {
     expect(response.headers["retry-after"]).toBe("5");
 
     expect(lines).toEqual([
-      { level: "error", message: "Database unavailable while processing request" },
+      {
+        level: "error",
+        message: "Database unavailable while processing request",
+      },
     ]);
   });
 
@@ -103,7 +110,10 @@ describe("the error handler's log line", () => {
 
     expect(response.statusCode).toBe(503);
     expect(lines).toEqual([
-      { level: "error", message: "Database unavailable while processing request" },
+      {
+        level: "error",
+        message: "Database unavailable while processing request",
+      },
     ]);
   });
 

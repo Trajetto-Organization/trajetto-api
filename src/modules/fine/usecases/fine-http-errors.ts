@@ -1,6 +1,5 @@
 import { FastifyReply } from "fastify";
 
-
 import { BranchNotFoundError } from "@/modules/branch/usecases/errors/branch-not-found-error";
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";

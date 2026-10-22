@@ -49,7 +49,9 @@ class IntegrationInvoiceKeyExistsError
   }
 }
 
-function pointsAtDelivery(error: unknown): error is AppError & PointsAtDelivery {
+function pointsAtDelivery(
+  error: unknown,
+): error is AppError & PointsAtDelivery {
   return (
     error instanceof IdempotencyKeyReusedError ||
     error instanceof IntegrationInvoiceKeyExistsError

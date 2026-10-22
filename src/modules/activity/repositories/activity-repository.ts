@@ -55,7 +55,9 @@ function roleCondition(role: string): Prisma.ActivityWhereInput {
 }
 
 /** The server-side facets of the table (decision 8.8, FLEET-ACT-3). */
-function facetConditions(filters: ActivityListFilters): Prisma.ActivityWhereInput[] {
+function facetConditions(
+  filters: ActivityListFilters,
+): Prisma.ActivityWhereInput[] {
   const and: Prisma.ActivityWhereInput[] = [];
 
   if (filters.statuses?.length) {
@@ -254,15 +256,12 @@ class ActivityRepository implements IActivityRepository {
     } else {
       scopeBusinessId = businessId;
 
-      and.push(
-        ...(businessId ? [{ businessId }] : []),
-        {
-          OR: [
-            { user: { NOT: { role: "MASTER" } } },
-            { visibilityLevel: TENANT_VISIBLE },
-          ],
-        },
-      );
+      and.push(...(businessId ? [{ businessId }] : []), {
+        OR: [
+          { user: { NOT: { role: "MASTER" } } },
+          { visibilityLevel: TENANT_VISIBLE },
+        ],
+      });
     }
 
     and.push(...facetConditions(filters));
@@ -281,7 +280,9 @@ class ActivityRepository implements IActivityRepository {
   }
 
   /** The company's zone; the platform default without one. */
-  private async timeZoneOf(businessId: string | null | undefined): Promise<string> {
+  private async timeZoneOf(
+    businessId: string | null | undefined,
+  ): Promise<string> {
     if (!businessId) return DEFAULT_BUSINESS_TIMEZONE;
 
     const business = await this.prisma.business.findUnique({

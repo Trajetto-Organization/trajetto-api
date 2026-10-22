@@ -51,7 +51,10 @@ interface TicketPermissions {
 }
 
 type TicketDetail =
-  | (TicketSummary & { occurrenceDetail: OccurrenceDetail | null; permissions: TicketPermissions })
+  | (TicketSummary & {
+      occurrenceDetail: OccurrenceDetail | null;
+      permissions: TicketPermissions;
+    })
   | (DriverTicketView & { permissions: TicketPermissions });
 
 /**
@@ -89,7 +92,11 @@ class GetSupportTicketUseCase {
     if (!row) throw new SupportTicketNotFoundError();
 
     const [unread, lastMessages] = await Promise.all([
-      this.tickets.unreadCounts([row.id], scope.user.id, Boolean(scope.driverId)),
+      this.tickets.unreadCounts(
+        [row.id],
+        scope.user.id,
+        Boolean(scope.driverId),
+      ),
       this.tickets.lastMessages([row.id]),
     ]);
 
@@ -107,7 +114,8 @@ class GetSupportTicketUseCase {
       canClose: open && operator,
       canReopen: operator && canReopen(row),
       // The decision's single rule (canDecideAuthorizations) is the operator's.
-      canDecide: open && operator && row.occurrence?.authorization_status === "PENDING",
+      canDecide:
+        open && operator && row.occurrence?.authorization_status === "PENDING",
       closeOutcomes: operator ? summary.closeOutcomes : [],
     };
 
@@ -128,7 +136,10 @@ class GetSupportTicketUseCase {
     occurrenceId: string,
     businessId: string,
   ): Promise<OccurrenceDetail | null> {
-    const found = await this.authorizations.findForDecision(occurrenceId, businessId);
+    const found = await this.authorizations.findForDecision(
+      occurrenceId,
+      businessId,
+    );
 
     if (!found) return null;
 
@@ -136,11 +147,16 @@ class GetSupportTicketUseCase {
       id: found.id,
       typeName: found.occurrenceType.name,
       description: found.description,
-      photos: await Promise.all(found.photos.map((key) => this.uploadService.getFileUrl(key))),
+      photos: await Promise.all(
+        found.photos.map((key) => this.uploadService.getFileUrl(key)),
+      ),
       receipt_photo_url: found.receipt_photo
         ? await this.uploadService.getFileUrl(found.receipt_photo)
         : null,
-      answers: labelledAnswers(found.occurrenceType.form_fields, found.form_answers),
+      answers: labelledAnswers(
+        found.occurrenceType.form_fields,
+        found.form_answers,
+      ),
       reportedBy: { id: found.reportedBy.id, name: found.reportedBy.name },
       occurred_at: found.occurred_at,
       created_at: found.created_at,

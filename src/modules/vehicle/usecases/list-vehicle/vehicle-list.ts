@@ -112,14 +112,21 @@ function vehicleListWhere(
         { renavam: { contains: term, mode: "insensitive" } },
         { fleet_id: { contains: term, mode: "insensitive" } },
         { driver: { name: { contains: term, mode: "insensitive" } } },
-        { vehicleType: { description: { contains: term, mode: "insensitive" } } },
-        { branch: { corporate_reason: { contains: term, mode: "insensitive" } } },
+        {
+          vehicleType: { description: { contains: term, mode: "insensitive" } },
+        },
+        {
+          branch: { corporate_reason: { contains: term, mode: "insensitive" } },
+        },
       ]),
     );
   }
 
   // The tenant stays a top-level key: (businessId, created_at) serves it.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Vehicles per branch over every filter but the branch one. */

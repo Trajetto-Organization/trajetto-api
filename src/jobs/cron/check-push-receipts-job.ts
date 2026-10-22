@@ -60,12 +60,22 @@ function classifyExpoReceipt(
 ): TicketVerdict | null {
   if (!receipt) {
     return now.getTime() - ticketCreatedAt.getTime() > RECEIPT_WINDOW_MS
-      ? { status: "expired", errorCode: null, errorMessage: null, pruneToken: false }
+      ? {
+          status: "expired",
+          errorCode: null,
+          errorMessage: null,
+          pruneToken: false,
+        }
       : null;
   }
 
   if (receipt.status === "ok") {
-    return { status: "ok", errorCode: null, errorMessage: null, pruneToken: false };
+    return {
+      status: "ok",
+      errorCode: null,
+      errorMessage: null,
+      pruneToken: false,
+    };
   }
 
   const errorCode = receipt.details?.error ?? "error";

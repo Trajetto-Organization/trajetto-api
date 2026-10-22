@@ -200,7 +200,10 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 /** Rows spread over several endpoints: the claim caps rows per endpoint. */
-async function queueWebhooks(endpoints: number, events: number): Promise<string[]> {
+async function queueWebhooks(
+  endpoints: number,
+  events: number,
+): Promise<string[]> {
   for (let index = 0; index < endpoints; index += 1) {
     await prisma.webhookEndpoint.create({
       data: {
@@ -236,65 +239,81 @@ const permissiveDispatcher = () =>
   new WebhookDispatchService(async () => ({ allowed: true }));
 
 describe("webhook_delivery", () => {
-  it("skips the rows another replica holds and delivers the rest", { timeout: 60_000 }, async () => {
-    const ids = await queueWebhooks(4, 3);
-    const held = ids.slice(0, 6);
+  it(
+    "skips the rows another replica holds and delivers the rest",
+    { timeout: 60_000 },
+    async () => {
+      const ids = await queueWebhooks(4, 3);
+      const held = ids.slice(0, 6);
 
-    const release = await holdRows("webhook_delivery", held);
+      const release = await holdRows("webhook_delivery", held);
 
-    try {
-      await withinBudget(permissiveDispatcher().processBatch(), "o despacho de webhooks");
+      try {
+        await withinBudget(
+          permissiveDispatcher().processBatch(),
+          "o despacho de webhooks",
+        );
 
-      const heldRows = await prisma.webhookDelivery.findMany({
-        where: { id: { in: held } },
-      });
+        const heldRows = await prisma.webhookDelivery.findMany({
+          where: { id: { in: held } },
+        });
 
-      expect(heldRows.map((row) => `${row.status}:${row.attempts}`)).toEqual(
-        held.map(() => "PENDING:0"),
+        expect(heldRows.map((row) => `${row.status}:${row.attempts}`)).toEqual(
+          held.map(() => "PENDING:0"),
+        );
+
+        expect(
+          (
+            await prisma.webhookDelivery.findMany({
+              where: { id: { notIn: held } },
+            })
+          ).map((row) => row.status),
+        ).toEqual(ids.slice(6).map(() => "DELIVERED"));
+
+        expect(webhookPosts.sort()).toEqual(ids.slice(6).sort());
+      } finally {
+        await release();
+      }
+    },
+  );
+
+  it(
+    "is drained by three replicas at once with every row posted exactly once",
+    { timeout: 90_000 },
+    async () => {
+      // 60 rows: three claims' worth, so the replicas really do overlap.
+      const ids = await queueWebhooks(6, 10);
+
+      await Promise.all([
+        permissiveDispatcher().processBatch(),
+        permissiveDispatcher().processBatch(),
+        permissiveDispatcher().processBatch(),
+      ]);
+
+      const duplicates = webhookPosts.filter(
+        (id, index) => webhookPosts.indexOf(id) !== index,
       );
 
+      expect(duplicates, "o mesmo webhook foi postado mais de uma vez").toEqual(
+        [],
+      );
+      expect(webhookPosts.sort()).toEqual([...ids].sort());
+
+      const rows = await prisma.webhookDelivery.findMany();
+
       expect(
-        (await prisma.webhookDelivery.findMany({
-          where: { id: { notIn: held } },
-        })).map((row) => row.status),
-      ).toEqual(ids.slice(6).map(() => "DELIVERED"));
-
-      expect(webhookPosts.sort()).toEqual(ids.slice(6).sort());
-    } finally {
-      await release();
-    }
-  });
-
-  it("is drained by three replicas at once with every row posted exactly once", { timeout: 90_000 }, async () => {
-    // 60 rows: three claims' worth, so the replicas really do overlap.
-    const ids = await queueWebhooks(6, 10);
-
-    await Promise.all([
-      permissiveDispatcher().processBatch(),
-      permissiveDispatcher().processBatch(),
-      permissiveDispatcher().processBatch(),
-    ]);
-
-    const duplicates = webhookPosts.filter(
-      (id, index) => webhookPosts.indexOf(id) !== index,
-    );
-
-    expect(duplicates, "o mesmo webhook foi postado mais de uma vez").toEqual([]);
-    expect(webhookPosts.sort()).toEqual([...ids].sort());
-
-    const rows = await prisma.webhookDelivery.findMany();
-
-    expect(
-      rows.filter((row) => row.status !== "DELIVERED" || row.attempts !== 1),
-    ).toEqual([]);
-  });
+        rows.filter((row) => row.status !== "DELIVERED" || row.attempts !== 1),
+      ).toEqual([]);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
 // domain_outbox_event and notification_delivery
 // ---------------------------------------------------------------------------
 
-type Pipeline = import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;
+type Pipeline =
+  import("@/shared/notifications/notification-pipeline-service").NotificationPipelineService;
 
 /**
  * A fresh pipeline per "replica". The constructor is private because
@@ -359,92 +378,113 @@ async function queueEmails(count: number): Promise<string[]> {
 }
 
 describe("domain_outbox_event", () => {
-  it("skips the events another replica holds and expands the rest", { timeout: 60_000 }, async () => {
-    const ids = await publishEvents(12);
-    const held = ids.slice(0, 5);
+  it(
+    "skips the events another replica holds and expands the rest",
+    { timeout: 60_000 },
+    async () => {
+      const ids = await publishEvents(12);
+      const held = ids.slice(0, 5);
 
-    const release = await holdRows("domain_outbox_event", held);
+      const release = await holdRows("domain_outbox_event", held);
 
-    try {
-      await withinBudget((await newPipeline()).runOutboxCycle(), "a expansão do outbox");
+      try {
+        await withinBudget(
+          (await newPipeline()).runOutboxCycle(),
+          "a expansão do outbox",
+        );
 
+        const events = await prisma.domainOutboxEvent.findMany();
+
+        for (const event of events) {
+          expect(`${event.status}:${event.attempts}`, event.id).toBe(
+            held.includes(event.id) ? "PENDING:0" : "PUBLISHED:1",
+          );
+        }
+      } finally {
+        await release();
+      }
+    },
+  );
+
+  it(
+    "is drained by two replicas at once with every event expanded once",
+    { timeout: 90_000 },
+    async () => {
+      await publishEvents(30);
+
+      const [a, b] = [await newPipeline(), await newPipeline()];
+
+      await Promise.all([a.runOutboxCycle(), b.runOutboxCycle()]);
+
+      // The partial unique indexes would hide a double expansion from a row
+      // count; the attempt counter is what a second claim moves.
       const events = await prisma.domainOutboxEvent.findMany();
 
-      for (const event of events) {
-        expect(`${event.status}:${event.attempts}`, event.id).toBe(
-          held.includes(event.id) ? "PENDING:0" : "PUBLISHED:1",
-        );
-      }
-    } finally {
-      await release();
-    }
-  });
-
-  it("is drained by two replicas at once with every event expanded once", { timeout: 90_000 }, async () => {
-    await publishEvents(30);
-
-    const [a, b] = [await newPipeline(), await newPipeline()];
-
-    await Promise.all([a.runOutboxCycle(), b.runOutboxCycle()]);
-
-    // The partial unique indexes would hide a double expansion from a row
-    // count; the attempt counter is what a second claim moves.
-    const events = await prisma.domainOutboxEvent.findMany();
-
-    expect(
-      events
-        .filter((event) => event.status !== "PUBLISHED" || event.attempts !== 1)
-        .map((event) => `${event.id}:${event.status}:${event.attempts}`),
-    ).toEqual([]);
-  });
+      expect(
+        events
+          .filter(
+            (event) => event.status !== "PUBLISHED" || event.attempts !== 1,
+          )
+          .map((event) => `${event.id}:${event.status}:${event.attempts}`),
+      ).toEqual([]);
+    },
+  );
 });
 
 describe("notification_delivery", () => {
-  it("skips the deliveries another replica holds and sends the rest", { timeout: 60_000 }, async () => {
-    const ids = await queueEmails(12);
-    const held = ids.slice(0, 5);
+  it(
+    "skips the deliveries another replica holds and sends the rest",
+    { timeout: 60_000 },
+    async () => {
+      const ids = await queueEmails(12);
+      const held = ids.slice(0, 5);
 
-    const release = await holdRows("notification_delivery", held);
+      const release = await holdRows("notification_delivery", held);
 
-    try {
-      await withinBudget(
-        (await newPipeline()).runDeliveryCycle("external"),
-        "a fila de entregas externas",
+      try {
+        await withinBudget(
+          (await newPipeline()).runDeliveryCycle("external"),
+          "a fila de entregas externas",
+        );
+
+        const rows = await prisma.notificationDelivery.findMany();
+
+        for (const row of rows) {
+          expect(`${row.status}:${row.attempts}`, row.id).toBe(
+            held.includes(row.id) ? "PENDING:0" : "DELIVERED:1",
+          );
+        }
+
+        expect(mail.sent.sort()).toEqual(ids.slice(5).sort());
+      } finally {
+        await release();
+      }
+    },
+  );
+
+  it(
+    "is drained by two replicas at once with every e-mail sent once",
+    { timeout: 90_000 },
+    async () => {
+      // Sixty: three batches, so both replicas keep claiming while the other
+      // is mid-batch.
+      const ids = await queueEmails(60);
+
+      const [a, b] = [await newPipeline(), await newPipeline()];
+
+      await Promise.all([
+        a.runDeliveryCycle("external"),
+        b.runDeliveryCycle("external"),
+      ]);
+
+      const duplicates = mail.sent.filter(
+        (id, index) => mail.sent.indexOf(id) !== index,
       );
 
-      const rows = await prisma.notificationDelivery.findMany();
-
-      for (const row of rows) {
-        expect(`${row.status}:${row.attempts}`, row.id).toBe(
-          held.includes(row.id) ? "PENDING:0" : "DELIVERED:1",
-        );
-      }
-
-      expect(mail.sent.sort()).toEqual(ids.slice(5).sort());
-    } finally {
-      await release();
-    }
-  });
-
-  it("is drained by two replicas at once with every e-mail sent once", { timeout: 90_000 }, async () => {
-    // Sixty: three batches, so both replicas keep claiming while the other
-    // is mid-batch.
-    const ids = await queueEmails(60);
-
-    const [a, b] = [await newPipeline(), await newPipeline()];
-
-    await Promise.all([
-      a.runDeliveryCycle("external"),
-      b.runDeliveryCycle("external"),
-    ]);
-
-    const duplicates = mail.sent.filter(
-      (id, index) => mail.sent.indexOf(id) !== index,
-    );
-
-    expect(duplicates, "o mesmo e-mail saiu mais de uma vez").toEqual([]);
-    expect(mail.sent.sort()).toEqual([...ids].sort());
-  });
+      expect(duplicates, "o mesmo e-mail saiu mais de uma vez").toEqual([]);
+      expect(mail.sent.sort()).toEqual([...ids].sort());
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -452,64 +492,69 @@ describe("notification_delivery", () => {
 // ---------------------------------------------------------------------------
 
 describe("ai_analysis_request", () => {
-  it("skips the requests another replica holds and works through the rest", { timeout: 60_000 }, async () => {
-    const period = await prisma.aIUsagePeriod.upsert({
-      where: {
-        businessId_periodStart: {
-          businessId: CARRIER,
-          periodStart: new Date("2026-09-01"),
+  it(
+    "skips the requests another replica holds and works through the rest",
+    { timeout: 60_000 },
+    async () => {
+      const period = await prisma.aIUsagePeriod.upsert({
+        where: {
+          businessId_periodStart: {
+            businessId: CARRIER,
+            periodStart: new Date("2026-09-01"),
+          },
         },
-      },
-      create: { businessId: CARRIER, periodStart: new Date("2026-09-01") },
-      update: {},
-    });
-
-    const ids: string[] = [];
-
-    // Requests with no unit: the pipeline closes each one without ever
-    // reaching the provider, which is all this case needs — the claim is
-    // what is under test, and the attempt counter records it.
-    for (let index = 0; index < 8; index += 1) {
-      const request = await prisma.aIAnalysisRequest.create({
-        data: {
-          idempotencyKey: randomUUID(),
-          type: "DELIVERY_PROOF",
-          recordId: randomUUID(),
-          businessId: CARRIER,
-          periodId: period.id,
-          requestedById: RECIPIENT,
-          input: { photoPath: "deliveryProof/x/foto.webp" },
-        },
+        create: { businessId: CARRIER, periodStart: new Date("2026-09-01") },
+        update: {},
       });
 
-      ids.push(request.id);
-    }
+      const ids: string[] = [];
 
-    const held = ids.slice(0, 3);
-    const release = await holdRows("ai_analysis_request", held);
+      // Requests with no unit: the pipeline closes each one without ever
+      // reaching the provider, which is all this case needs — the claim is
+      // what is under test, and the attempt counter records it.
+      for (let index = 0; index < 8; index += 1) {
+        const request = await prisma.aIAnalysisRequest.create({
+          data: {
+            idempotencyKey: randomUUID(),
+            type: "DELIVERY_PROOF",
+            recordId: randomUUID(),
+            businessId: CARRIER,
+            periodId: period.id,
+            requestedById: RECIPIENT,
+            input: { photoPath: "deliveryProof/x/foto.webp" },
+          },
+        });
 
-    try {
-      const { AIAnalysisPipelineService } = await import(
-        "@/shared/ai/ai-analysis-pipeline-service"
-      );
-
-      const pipeline = new (AIAnalysisPipelineService as unknown as new () => {
-        runCycle(): Promise<void>;
-      })();
-
-      await withinBudget(pipeline.runCycle(), "a fila de análises IA");
-
-      const rows = await prisma.aIAnalysisRequest.findMany();
-
-      for (const row of rows) {
-        if (held.includes(row.id)) {
-          expect(`${row.status}:${row.attempts}`, row.id).toBe("PENDING:0");
-        } else {
-          expect(row.attempts, row.id).toBe(1);
-        }
+        ids.push(request.id);
       }
-    } finally {
-      await release();
-    }
-  });
+
+      const held = ids.slice(0, 3);
+      const release = await holdRows("ai_analysis_request", held);
+
+      try {
+        const { AIAnalysisPipelineService } = await import(
+          "@/shared/ai/ai-analysis-pipeline-service"
+        );
+
+        const pipeline =
+          new (AIAnalysisPipelineService as unknown as new () => {
+            runCycle(): Promise<void>;
+          })();
+
+        await withinBudget(pipeline.runCycle(), "a fila de análises IA");
+
+        const rows = await prisma.aIAnalysisRequest.findMany();
+
+        for (const row of rows) {
+          if (held.includes(row.id)) {
+            expect(`${row.status}:${row.attempts}`, row.id).toBe("PENDING:0");
+          } else {
+            expect(row.attempts, row.id).toBe(1);
+          }
+        }
+      } finally {
+        await release();
+      }
+    },
+  );
 });

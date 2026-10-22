@@ -29,11 +29,14 @@ import {
  */
 const assignDeliveriesSchema = z
   .object({
-  ...tenantLockedShape,
+    ...tenantLockedShape,
     deliveryIds: z
-      .array(z.string().uuid("Cada entrega deve ter um identificador válido."), {
-        required_error: "Selecione ao menos uma entrega para atribuir.",
-      })
+      .array(
+        z.string().uuid("Cada entrega deve ter um identificador válido."),
+        {
+          required_error: "Selecione ao menos uma entrega para atribuir.",
+        },
+      )
       .min(1, "Selecione ao menos uma entrega para atribuir.")
       .max(100, "Atribua no máximo 100 entregas por vez.")
       .describe("Entregas pendentes selecionadas na tabela."),

@@ -1,6 +1,7 @@
 # trajetto-ai: the OCR service of the AI readings (ADR 0010, decision 14.1).
 # RapidOCR on ONNX Runtime, CPU only, no PaddlePaddle. Internal network only:
-# no Traefik, no published port, no egress (compose.production.yaml).
+# a Dokploy Application with no domain and no published port, reached by the
+# API at http://<appName>:8080 on dokploy-network (docs/deploy.md).
 #
 #   docker build -t trajetto-ai infra/ai-ocr                 runtime image
 #   docker build --target test infra/ai-ocr                  runs the pytest suite
@@ -46,8 +47,10 @@ RUN python -m pytest -q -p no:cacheprovider tests
 # --- runtime ------------------------------------------------------------------
 FROM base AS runtime
 
-# Never root: the container decodes images that come from outside. With
-# read_only + tmpfs /tmp in the compose file, nothing here is writable.
+# Never root: the container decodes images that come from outside. With a
+# read-only root filesystem and a tmpfs /tmp (when the deploy sets them: the
+# Dokploy Application has no field for it, docs/deploy.md), nothing here is
+# writable.
 USER 10001
 
 EXPOSE 8080

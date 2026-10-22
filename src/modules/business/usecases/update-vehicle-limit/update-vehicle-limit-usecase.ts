@@ -11,7 +11,6 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import database from "@/../infra/database";
 
-
 interface UpdateVehicleLimitRequest {
   userId: string;
   businessId: string;
@@ -59,7 +58,9 @@ class UpdateVehicleLimitUseCase {
       // only says "20" cannot tell a plan upgrade from a downgrade. NO KEY
       // UPDATE leaves the foreign-key checks of the company's own writes
       // alone (see manage-entitlements).
-      const [locked] = await tx.$queryRaw<Array<{ vehicle_limit: number | null }>>`
+      const [locked] = await tx.$queryRaw<
+        Array<{ vehicle_limit: number | null }>
+      >`
         SELECT "vehicle_limit" FROM "business" WHERE "id" = ${businessId} FOR NO KEY UPDATE
       `;
 

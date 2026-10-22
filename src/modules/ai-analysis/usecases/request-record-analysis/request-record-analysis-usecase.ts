@@ -105,7 +105,8 @@ class RequestRecordAnalysisUseCase {
       throw new AppError(NOT_COVERED_MESSAGE, 409, "AI_NOT_COVERED");
     }
 
-    const outcome = await AIAnalysisService.getInstance().requestAnalysis(input);
+    const outcome =
+      await AIAnalysisService.getInstance().requestAnalysis(input);
 
     if (outcome === "not_covered") {
       throw new AppError(NOT_COVERED_MESSAGE, 409, "AI_NOT_COVERED");
@@ -208,7 +209,10 @@ class RequestRecordAnalysisUseCase {
     const covered = Object.fromEntries(
       Object.entries(pending).filter(([field]) =>
         readerSupports(
-          checklistReadingKind(field, (checklist as Record<string, unknown>)[field]),
+          checklistReadingKind(
+            field,
+            (checklist as Record<string, unknown>)[field],
+          ),
         ),
       ),
     );
@@ -275,10 +279,14 @@ class RequestRecordAnalysisUseCase {
       `${field}\u0000${photo}`;
 
     const read = new Set(
-      taken.filter((row) => row.consumed).map((row) => keyOf(row.unitKey, row.photo)),
+      taken
+        .filter((row) => row.consumed)
+        .map((row) => keyOf(row.unitKey, row.photo)),
     );
     const reading = new Set(
-      taken.filter((row) => !row.consumed).map((row) => keyOf(row.unitKey, row.photo)),
+      taken
+        .filter((row) => !row.consumed)
+        .map((row) => keyOf(row.unitKey, row.photo)),
     );
 
     let inFlight = false;

@@ -50,7 +50,9 @@ const publicBadRequestResponse = publicErrorBody([
     issues: z
       .array(z.string())
       .optional()
-      .describe("Só em VALIDATION_ERROR: uma frase por campo ou parâmetro recusado."),
+      .describe(
+        "Só em VALIDATION_ERROR: uma frase por campo ou parâmetro recusado.",
+      ),
   })
   .describe(
     "Requisição recusada: VALIDATION_ERROR (um campo ou parâmetro inválido; uma frase por campo em `issues`) ou MALFORMED_REQUEST (corpo que não é JSON válido). Corrija antes de repetir.",
@@ -64,7 +66,9 @@ const publicNotFoundResponse = publicErrorBody(["NOT_FOUND"]).describe(
  * The company ceiling's 429. Merged by the transform with the per-key one it
  * derives from `ensureApiKey`, so the two causes read side by side.
  */
-const publicBusinessRateLimitResponse = publicErrorBody(["RATE_LIMITED"]).describe(
+const publicBusinessRateLimitResponse = publicErrorBody([
+  "RATE_LIMITED",
+]).describe(
   "RATE_LIMITED também quando a EMPRESA da chave atingiu o teto por minuto somado entre todas as chaves dela; essa recusa traz só `retry-after`, sem os cabeçalhos `x-ratelimit-*`.",
 );
 

@@ -44,7 +44,9 @@ function redisClientOptions(role: RedisRole): RedisOptions {
     case "socket-handshake":
       return {
         connectionName:
-          role === "rate-limit" ? "trajetto-rate-limit" : "trajetto-socket-handshake",
+          role === "rate-limit"
+            ? "trajetto-rate-limit"
+            : "trajetto-socket-handshake",
         maxRetriesPerRequest: 1,
         enableOfflineQueue: false,
         commandTimeout: COUNTER_COMMAND_TIMEOUT_MS,

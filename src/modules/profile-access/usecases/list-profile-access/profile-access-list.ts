@@ -52,7 +52,9 @@ interface ProfileListFilters {
   hideProfileId?: string | null;
 }
 
-function profileListWhere(filters: ProfileListFilters): Prisma.ProfileAccessWhereInput {
+function profileListWhere(
+  filters: ProfileListFilters,
+): Prisma.ProfileAccessWhereInput {
   const term = filters.search?.trim() ?? "";
 
   return {
@@ -83,7 +85,9 @@ interface ProfileListSearchMeta {
 }
 
 /** Folds the users count of each profile of the search (the repository's `usage`). */
-function summarizeProfileList(usage: ReadonlyArray<CatalogUsage>): ProfileListSearchMeta {
+function summarizeProfileList(
+  usage: ReadonlyArray<CatalogUsage>,
+): ProfileListSearchMeta {
   const { total, linked, unused, leader } = summarizeCatalogUsage(usage);
 
   return { total, linkedUsers: linked, withoutUsers: unused, mostUsed: leader };

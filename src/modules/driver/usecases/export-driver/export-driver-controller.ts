@@ -31,19 +31,17 @@ class ExportDriverController {
 
     const exportDriverUseCase = container.resolve(ExportDriverUseCase);
 
-    const { iterator, columns, filename } = await exportDriverUseCase.execute(
-      {
-        userId: id,
-        businessId,
-        search: search?.trim() || undefined,
-        sort,
-        order,
-        statuses: status,
-        contractTypes: contract_type,
-        cnhCategories: cnh_category,
-        branchIds: branchId,
-      },
-    );
+    const { iterator, columns, filename } = await exportDriverUseCase.execute({
+      userId: id,
+      businessId,
+      search: search?.trim() || undefined,
+      sort,
+      order,
+      statuses: status,
+      contractTypes: contract_type,
+      cnhCategories: cnh_category,
+      branchIds: branchId,
+    });
 
     const writer = format === "excel" ? new ExcelWriter() : new CsvWriter();
 

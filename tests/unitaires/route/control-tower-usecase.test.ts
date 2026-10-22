@@ -26,15 +26,36 @@ const NOW = new Date("2026-09-18T01:00:00.000Z");
 const SP = "018f0000-0000-7000-8000-00000000a001";
 const ACRE = "018f0000-0000-7000-8000-00000000a002";
 
-const MANAGER = { id: "manager", businessId: SP, role: "BUSINESS_ADMIN", driverId: null };
-const ACRE_MANAGER = { id: "acre", businessId: ACRE, role: "BUSINESS_ADMIN", driverId: null };
-const MASTER = { id: "master", businessId: null, role: "MASTER", driverId: null };
-const DRIVER_USER = { id: "driver-user", businessId: SP, role: "BUSINESS_USER", driverId: "d1" };
+const MANAGER = {
+  id: "manager",
+  businessId: SP,
+  role: "BUSINESS_ADMIN",
+  driverId: null,
+};
+const ACRE_MANAGER = {
+  id: "acre",
+  businessId: ACRE,
+  role: "BUSINESS_ADMIN",
+  driverId: null,
+};
+const MASTER = {
+  id: "master",
+  businessId: null,
+  role: "MASTER",
+  driverId: null,
+};
+const DRIVER_USER = {
+  id: "driver-user",
+  businessId: SP,
+  role: "BUSINESS_USER",
+  driverId: "d1",
+};
 
 const users = [MANAGER, ACRE_MANAGER, MASTER, DRIVER_USER];
 
 const userRepository = {
-  findUserById: async (id: string) => users.find((user) => user.id === id) ?? null,
+  findUserById: async (id: string) =>
+    users.find((user) => user.id === id) ?? null,
 } as never;
 
 const at = (iso: string) => new Date(iso);
@@ -44,7 +65,10 @@ let operation: InMemoryOperationDayRepository;
 let positions: InMemoryDriverPositionRepository;
 
 function route(
-  overrides: Partial<OperationRows["routes"][number]> & { id: string; driverId: string },
+  overrides: Partial<OperationRows["routes"][number]> & {
+    id: string;
+    driverId: string;
+  },
 ): OperationRows["routes"][number] {
   return {
     businessId: SP,
@@ -92,7 +116,10 @@ function stop(
     status,
     on_the_way_at: null,
     arrived_at: null,
-    completed_at: status === "FAILED" || status === "COMPLETED" ? at("2026-09-17T18:00:00.000Z") : null,
+    completed_at:
+      status === "FAILED" || status === "COMPLETED"
+        ? at("2026-09-17T18:00:00.000Z")
+        : null,
     updated_at: at("2026-09-17T18:00:00.000Z"),
   };
 }
@@ -135,9 +162,17 @@ describe("the funnel counts the documents active in the company's day (TWR-1/TWR
     operation.rows.deliveries.push(
       // Delivered at 09:00 in São Paulo on the 17th. After 21:00 the UTC day
       // is already the 18th and the old counters had dropped it.
-      delivery({ id: "morning", status: "DELIVERED", delivered_at: at("2026-09-17T12:00:00.000Z") }),
+      delivery({
+        id: "morning",
+        status: "DELIVERED",
+        delivered_at: at("2026-09-17T12:00:00.000Z"),
+      }),
       // 23:00 on the 16th: yesterday.
-      delivery({ id: "yesterday", status: "DELIVERED", delivered_at: at("2026-09-17T02:00:00.000Z") }),
+      delivery({
+        id: "yesterday",
+        status: "DELIVERED",
+        delivered_at: at("2026-09-17T02:00:00.000Z"),
+      }),
       // Imported last week, out with a driver now: "Em rota" is now.
       delivery({ id: "out", status: "IN_TRANSIT", driverId: "d1" }),
       // On today's route, not out yet.
@@ -147,11 +182,23 @@ describe("the funnel counts the documents active in the company's day (TWR-1/TWR
       // On tomorrow's route.
       delivery({ id: "tomorrow", status: "PENDING", driverId: "d2" }),
       // Failed today on the street.
-      delivery({ id: "refused", status: "FAILED", updated_at: at("2026-09-17T20:00:00.000Z") }),
+      delivery({
+        id: "refused",
+        status: "FAILED",
+        updated_at: at("2026-09-17T20:00:00.000Z"),
+      }),
       // Failed on the 16th, address edited today (DLV-MON-2).
-      delivery({ id: "edited", status: "FAILED", updated_at: at("2026-09-17T21:00:00.000Z") }),
+      delivery({
+        id: "edited",
+        status: "FAILED",
+        updated_at: at("2026-09-17T21:00:00.000Z"),
+      }),
       // Cancelled from the panel today.
-      delivery({ id: "cancelled", status: "CANCELLED", updated_at: at("2026-09-17T15:00:00.000Z") }),
+      delivery({
+        id: "cancelled",
+        status: "CANCELLED",
+        updated_at: at("2026-09-17T15:00:00.000Z"),
+      }),
     );
 
     operation.rows.stops.push(
@@ -197,7 +244,9 @@ describe("the funnel counts the documents active in the company's day (TWR-1/TWR
   it("counts by the São Paulo day at 22:00, not by the UTC one", async () => {
     const result = await tower().execute({ userId: MANAGER.id, now: NOW });
 
-    const totals = Object.fromEntries(result.funnel.map((entry) => [entry.status, entry.total]));
+    const totals = Object.fromEntries(
+      result.funnel.map((entry) => [entry.status, entry.total]),
+    );
 
     expect(result.day).toBe("2026-09-17");
     expect(totals).toEqual({
@@ -215,15 +264,27 @@ describe("the funnel counts the documents active in the company's day (TWR-1/TWR
   it("reads another company's day in its own zone", async () => {
     operation.rows.deliveries.push(
       // 23:30 on the 16th in Rio Branco, 01:30 on the 17th in São Paulo.
-      delivery({ id: "acre-late", businessId: ACRE, status: "DELIVERED", delivered_at: at("2026-09-17T04:30:00.000Z") }),
+      delivery({
+        id: "acre-late",
+        businessId: ACRE,
+        status: "DELIVERED",
+        delivered_at: at("2026-09-17T04:30:00.000Z"),
+      }),
       // 00:30 on the 17th in Rio Branco.
-      delivery({ id: "acre-early", businessId: ACRE, status: "DELIVERED", delivered_at: at("2026-09-17T05:30:00.000Z") }),
+      delivery({
+        id: "acre-early",
+        businessId: ACRE,
+        status: "DELIVERED",
+        delivered_at: at("2026-09-17T05:30:00.000Z"),
+      }),
     );
 
     const acre = await tower().execute({ userId: ACRE_MANAGER.id, now: NOW });
 
     expect(acre.timeZone).toBe("America/Rio_Branco");
-    expect(acre.funnel.find((entry) => entry.status === "DELIVERED")?.total).toBe(1);
+    expect(
+      acre.funnel.find((entry) => entry.status === "DELIVERED")?.total,
+    ).toBe(1);
 
     // And not a single one of São Paulo's documents.
     expect(acre.progress.total).toBe(1);
@@ -234,9 +295,19 @@ describe("punctuality is judged at 'now', on today's routes only (TWR-3/TWR-4)",
   it("does not call tomorrow's route or a later departure 'não saiu'", async () => {
     operation.rows.routes.push(
       // Planned for 21:30 today: at 22:00 it is late and still in the yard.
-      route({ id: "r1", driverId: "d1", status: "RELEASED", planned_departure_at: at("2026-09-18T00:30:00.000Z") }),
+      route({
+        id: "r1",
+        driverId: "d1",
+        status: "RELEASED",
+        planned_departure_at: at("2026-09-18T00:30:00.000Z"),
+      }),
       // Planned for 23:30 today: not yet.
-      route({ id: "r2", driverId: "d2", status: "RELEASED", planned_departure_at: at("2026-09-18T02:30:00.000Z") }),
+      route({
+        id: "r2",
+        driverId: "d2",
+        status: "RELEASED",
+        planned_departure_at: at("2026-09-18T02:30:00.000Z"),
+      }),
       // Tomorrow at 08:00: not today's plan at all.
       route({
         id: "r3",
@@ -255,7 +326,10 @@ describe("punctuality is judged at 'now', on today's routes only (TWR-3/TWR-4)",
       }),
     );
 
-    const { punctuality } = await tower().execute({ userId: MANAGER.id, now: NOW });
+    const { punctuality } = await tower().execute({
+      userId: MANAGER.id,
+      now: NOW,
+    });
 
     expect(punctuality).toEqual({
       onTime: 1,
@@ -271,17 +345,45 @@ describe("punctuality is judged at 'now', on today's routes only (TWR-3/TWR-4)",
 describe("the map and the routes on the street (TWR-8/TWR-9)", () => {
   beforeEach(() => {
     operation.rows.routes.push(
-      route({ id: "r1", driverId: "d1", status: "IN_PROGRESS", started_at: at("2026-09-17T23:00:00.000Z"), vehicleId: "v1" }),
-      route({ id: "r2", driverId: "d2", status: "IN_PROGRESS", started_at: at("2026-09-17T22:00:00.000Z") }),
-      route({ id: "r3", driverId: "d3", status: "COMPLETED", completed_at: at("2026-09-18T00:00:00.000Z") }),
-      route({ id: "r4", driverId: "d4", status: "COMPLETED", completed_at: at("2026-09-17T22:00:00.000Z") }),
+      route({
+        id: "r1",
+        driverId: "d1",
+        status: "IN_PROGRESS",
+        started_at: at("2026-09-17T23:00:00.000Z"),
+        vehicleId: "v1",
+      }),
+      route({
+        id: "r2",
+        driverId: "d2",
+        status: "IN_PROGRESS",
+        started_at: at("2026-09-17T22:00:00.000Z"),
+      }),
+      route({
+        id: "r3",
+        driverId: "d3",
+        status: "COMPLETED",
+        completed_at: at("2026-09-18T00:00:00.000Z"),
+      }),
+      route({
+        id: "r4",
+        driverId: "d4",
+        status: "COMPLETED",
+        completed_at: at("2026-09-17T22:00:00.000Z"),
+      }),
     );
 
     operation.rows.deliveries.push(
-      delivery({ id: "a", status: "DELIVERED", delivered_at: at("2026-09-17T23:30:00.000Z") }),
+      delivery({
+        id: "a",
+        status: "DELIVERED",
+        delivered_at: at("2026-09-17T23:30:00.000Z"),
+      }),
       delivery({ id: "b", status: "IN_TRANSIT" }),
     );
-    operation.rows.stops.push(stop("s1", "r1", "a", "COMPLETED", 1), stop("s2", "r1", "b", "PENDING", 2));
+    operation.rows.stops.push(
+      stop("s1", "r1", "a", "COMPLETED", 1),
+      stop("s2", "r1", "b", "PENDING", 2),
+    );
 
     const point = (driverId: string, routeId: string, minutesAgo: number) => ({
       driverId,
@@ -304,12 +406,23 @@ describe("the map and the routes on the street (TWR-8/TWR-9)", () => {
   it("draws running trucks, finished ones for two hours, and nothing older", async () => {
     const result = await tower().execute({ userId: MANAGER.id, now: NOW });
 
-    const byDriver = Object.fromEntries(result.positions.map((position) => [position.driverId, position]));
+    const byDriver = Object.fromEntries(
+      result.positions.map((position) => [position.driverId, position]),
+    );
 
-    expect(byDriver.d1).toMatchObject({ state: "moving", fresh: true, vehiclePlate: "ABC1D23", routeStatus: "IN_PROGRESS" });
+    expect(byDriver.d1).toMatchObject({
+      state: "moving",
+      fresh: true,
+      vehiclePlate: "ABC1D23",
+      routeStatus: "IN_PROGRESS",
+    });
 
     // Ended an hour ago: its own look, not "sem reportar".
-    expect(byDriver.d3).toMatchObject({ state: "ended", fresh: false, routeStatus: "COMPLETED" });
+    expect(byDriver.d3).toMatchObject({
+      state: "ended",
+      fresh: false,
+      routeStatus: "COMPLETED",
+    });
     expect(byDriver.d3.endedAt).toBe("2026-09-18T00:00:00.000Z");
 
     // Ended three hours ago: off the map.
@@ -318,19 +431,44 @@ describe("the map and the routes on the street (TWR-8/TWR-9)", () => {
 
   it("marks a truck on a running route whose driver has an open pause, and only that one", async () => {
     operation.rows.pauses = [
-      { driverId: "d1", businessId: SP, started_at: at("2026-09-18T00:40:00.000Z"), ended_at: null },
+      {
+        driverId: "d1",
+        businessId: SP,
+        started_at: at("2026-09-18T00:40:00.000Z"),
+        ended_at: null,
+      },
       // A finished route's driver on a break is not the tower's business.
-      { driverId: "d3", businessId: SP, started_at: at("2026-09-18T00:30:00.000Z"), ended_at: null },
+      {
+        driverId: "d3",
+        businessId: SP,
+        started_at: at("2026-09-18T00:30:00.000Z"),
+        ended_at: null,
+      },
       // A closed pause, and another company's open one, change nothing.
-      { driverId: "d1", businessId: SP, started_at: at("2026-09-17T23:10:00.000Z"), ended_at: at("2026-09-17T23:20:00.000Z") },
-      { driverId: "d1", businessId: ACRE, started_at: at("2026-09-18T00:45:00.000Z"), ended_at: null },
+      {
+        driverId: "d1",
+        businessId: SP,
+        started_at: at("2026-09-17T23:10:00.000Z"),
+        ended_at: at("2026-09-17T23:20:00.000Z"),
+      },
+      {
+        driverId: "d1",
+        businessId: ACRE,
+        started_at: at("2026-09-18T00:45:00.000Z"),
+        ended_at: null,
+      },
     ];
 
     const result = await tower().execute({ userId: MANAGER.id, now: NOW });
 
-    const byDriver = Object.fromEntries(result.positions.map((position) => [position.driverId, position]));
+    const byDriver = Object.fromEntries(
+      result.positions.map((position) => [position.driverId, position]),
+    );
 
-    expect(byDriver.d1).toMatchObject({ state: "moving", pausedSince: "2026-09-18T00:40:00.000Z" });
+    expect(byDriver.d1).toMatchObject({
+      state: "moving",
+      pausedSince: "2026-09-18T00:40:00.000Z",
+    });
     expect(byDriver.d3).toMatchObject({ state: "ended", pausedSince: null });
   });
 
@@ -365,10 +503,12 @@ describe("the map and the routes on the street (TWR-8/TWR-9)", () => {
 
     const result = await tower().execute({ userId: MANAGER.id, now: NOW });
 
-    expect(result.positions.find((position) => position.driverId === "d2")).toBeUndefined();
-    expect(result.activeRoutes.find((entry) => entry.routeId === "r2")?.lastSignalAt).toBe(
-      quietSince.toISOString(),
-    );
+    expect(
+      result.positions.find((position) => position.driverId === "d2"),
+    ).toBeUndefined();
+    expect(
+      result.activeRoutes.find((entry) => entry.routeId === "r2")?.lastSignalAt,
+    ).toBe(quietSince.toISOString());
   });
 
   it("never reads another company's last signal", async () => {
@@ -387,15 +527,28 @@ describe("the map and the routes on the street (TWR-8/TWR-9)", () => {
 
     const result = await tower().execute({ userId: MANAGER.id, now: NOW });
 
-    expect(result.activeRoutes.find((entry) => entry.routeId === "r2")?.lastSignalAt).toBeNull();
+    expect(
+      result.activeRoutes.find((entry) => entry.routeId === "r2")?.lastSignalAt,
+    ).toBeNull();
   });
 });
 
 describe("the feed shows occurrences, failures and routes of the day (TWR-6/TWR-7)", () => {
   it("lists what happened today, newest first, and nothing from yesterday", async () => {
     operation.rows.routes.push(
-      route({ id: "r1", driverId: "d1", status: "IN_PROGRESS", started_at: at("2026-09-17T11:00:00.000Z") }),
-      route({ id: "r2", driverId: "d2", status: "CANCELLED", started_at: at("2026-09-17T10:00:00.000Z"), updated_at: at("2026-09-17T13:00:00.000Z") }),
+      route({
+        id: "r1",
+        driverId: "d1",
+        status: "IN_PROGRESS",
+        started_at: at("2026-09-17T11:00:00.000Z"),
+      }),
+      route({
+        id: "r2",
+        driverId: "d2",
+        status: "CANCELLED",
+        started_at: at("2026-09-17T10:00:00.000Z"),
+        updated_at: at("2026-09-17T13:00:00.000Z"),
+      }),
     );
 
     operation.rows.deliveries.push(
@@ -447,7 +600,9 @@ describe("the feed shows occurrences, failures and routes of the day (TWR-6/TWR-
 
 describe("who may open the tower", () => {
   it("refuses a driver token", async () => {
-    await expect(tower().execute({ userId: DRIVER_USER.id, now: NOW })).rejects.toMatchObject({
+    await expect(
+      tower().execute({ userId: DRIVER_USER.id, now: NOW }),
+    ).rejects.toMatchObject({
       statusCode: 403,
     });
   });
@@ -459,11 +614,17 @@ describe("who may open the tower", () => {
   });
 
   it("asks a MASTER which company", async () => {
-    await expect(tower().execute({ userId: MASTER.id, now: NOW })).rejects.toMatchObject({
+    await expect(
+      tower().execute({ userId: MASTER.id, now: NOW }),
+    ).rejects.toMatchObject({
       statusCode: 400,
     });
 
-    const result = await tower().execute({ userId: MASTER.id, businessId: ACRE, now: NOW });
+    const result = await tower().execute({
+      userId: MASTER.id,
+      businessId: ACRE,
+      now: NOW,
+    });
 
     expect(result.timeZone).toBe("America/Rio_Branco");
   });
@@ -503,7 +664,11 @@ describe("the trail's day is the company's day", () => {
   });
 
   it("keeps the morning and the late evening in the same day at 22:00", async () => {
-    const result = await trail().execute({ userId: MANAGER.id, driverId: "d1", now: NOW });
+    const result = await trail().execute({
+      userId: MANAGER.id,
+      driverId: "d1",
+      now: NOW,
+    });
 
     expect(result.day).toBe("2026-09-17");
     expect(result.recorded).toBe(2);
@@ -528,7 +693,12 @@ describe("the trail's day is the company's day", () => {
 
   it("refuses a day that does not exist", async () => {
     await expect(
-      trail().execute({ userId: MANAGER.id, driverId: "d1", day: "2026-02-30", now: NOW }),
+      trail().execute({
+        userId: MANAGER.id,
+        driverId: "d1",
+        day: "2026-02-30",
+        now: NOW,
+      }),
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 });
@@ -538,12 +708,32 @@ describe("the monitoring board by route (DLVP-MON-1)", () => {
 
   beforeEach(() => {
     operation.rows.routes.push(
-      route({ id: "r1", driverId: "d1", status: "COMPLETED", completed_at: at("2026-09-17T20:00:00.000Z") }),
-      route({ id: "r2", driverId: "d2", status: "IN_PROGRESS", started_at: at("2026-09-17T12:00:00.000Z") }),
+      route({
+        id: "r1",
+        driverId: "d1",
+        status: "COMPLETED",
+        completed_at: at("2026-09-17T20:00:00.000Z"),
+      }),
+      route({
+        id: "r2",
+        driverId: "d2",
+        status: "IN_PROGRESS",
+        started_at: at("2026-09-17T12:00:00.000Z"),
+      }),
       // Yesterday's route still running: today's board has it.
-      route({ id: "r3", driverId: "d3", status: "IN_PROGRESS", scheduled_date: day("2026-09-16") }),
+      route({
+        id: "r3",
+        driverId: "d3",
+        status: "IN_PROGRESS",
+        scheduled_date: day("2026-09-16"),
+      }),
       route({ id: "r4", driverId: "d4", status: "CANCELLED" }),
-      route({ id: "r5", driverId: "d4", status: "PLANNED", scheduled_date: day("2026-09-18") }),
+      route({
+        id: "r5",
+        driverId: "d4",
+        status: "PLANNED",
+        scheduled_date: day("2026-09-18"),
+      }),
     );
 
     operation.rows.deliveries.push(
@@ -560,20 +750,37 @@ describe("the monitoring board by route (DLVP-MON-1)", () => {
   });
 
   it("lists today's routes, running first, with one entry per stop", async () => {
-    const result = await board().execute({ userId: MANAGER.id, page: 1, pageSize: 20, now: NOW });
+    const result = await board().execute({
+      userId: MANAGER.id,
+      page: 1,
+      pageSize: 20,
+      now: NOW,
+    });
 
     expect(result.routes.map((entry) => entry.id)).toEqual(["r2", "r3", "r1"]);
     expect(result.meta.total).toBe(3);
 
     const running = result.routes[0];
 
-    expect(running.stops.map((entry) => entry.status)).toEqual(["COMPLETED", "FAILED", "PENDING"]);
-    expect(running.progress).toMatchObject({ completion: 66.7, deliveredRate: 33.3 });
+    expect(running.stops.map((entry) => entry.status)).toEqual([
+      "COMPLETED",
+      "FAILED",
+      "PENDING",
+    ]);
+    expect(running.progress).toMatchObject({
+      completion: 66.7,
+      deliveredRate: 33.3,
+    });
     expect(running.scheduledDate).toBe("2026-09-17");
   });
 
   it("pages without losing the total", async () => {
-    const result = await board().execute({ userId: MANAGER.id, page: 2, pageSize: 2, now: NOW });
+    const result = await board().execute({
+      userId: MANAGER.id,
+      page: 2,
+      pageSize: 2,
+      now: NOW,
+    });
 
     expect(result.routes.map((entry) => entry.id)).toEqual(["r1"]);
     expect(result.meta).toEqual({ total: 3, page: 2, pageSize: 2 });
@@ -581,17 +788,33 @@ describe("the monitoring board by route (DLVP-MON-1)", () => {
 
   it("refuses a driver token", async () => {
     await expect(
-      board().execute({ userId: DRIVER_USER.id, page: 1, pageSize: 20, now: NOW }),
+      board().execute({
+        userId: DRIVER_USER.id,
+        page: 1,
+        pageSize: 20,
+        now: NOW,
+      }),
     ).rejects.toMatchObject({ statusCode: 403 });
   });
 
   it("refuses a company user naming another company, and shows them nothing of it", async () => {
     await expect(
-      board().execute({ userId: ACRE_MANAGER.id, businessId: SP, page: 1, pageSize: 20, now: NOW }),
+      board().execute({
+        userId: ACRE_MANAGER.id,
+        businessId: SP,
+        page: 1,
+        pageSize: 20,
+        now: NOW,
+      }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
 
     // Their own board is their own company's: none of São Paulo's routes.
-    const own = await board().execute({ userId: ACRE_MANAGER.id, page: 1, pageSize: 20, now: NOW });
+    const own = await board().execute({
+      userId: ACRE_MANAGER.id,
+      page: 1,
+      pageSize: 20,
+      now: NOW,
+    });
 
     expect(own.routes).toEqual([]);
     expect(own.meta.total).toBe(0);
@@ -600,9 +823,18 @@ describe("the monitoring board by route (DLVP-MON-1)", () => {
   it("asks a MASTER which company, then reads the one named", async () => {
     await expect(
       board().execute({ userId: MASTER.id, page: 1, pageSize: 20, now: NOW }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "BUSINESS_NOT_IDENTIFIED" });
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BUSINESS_NOT_IDENTIFIED",
+    });
 
-    const named = await board().execute({ userId: MASTER.id, businessId: SP, page: 1, pageSize: 20, now: NOW });
+    const named = await board().execute({
+      userId: MASTER.id,
+      businessId: SP,
+      page: 1,
+      pageSize: 20,
+      now: NOW,
+    });
 
     expect(named.meta.total).toBe(3);
   });
@@ -614,7 +846,12 @@ describe("the monitoring board by route (DLVP-MON-1)", () => {
   });
 
   it("returns an empty page past the last one, keeping the total", async () => {
-    const result = await board().execute({ userId: MANAGER.id, page: 9, pageSize: 2, now: NOW });
+    const result = await board().execute({
+      userId: MANAGER.id,
+      page: 9,
+      pageSize: 2,
+      now: NOW,
+    });
 
     expect(result.routes).toEqual([]);
     expect(result.meta.total).toBe(3);
@@ -625,23 +862,44 @@ describe("the monitoring board by driver reads the tower's day (decision 7.1, DL
   const board = () => new DriverMonitoringUseCase(userRepository, operation);
 
   beforeEach(() => {
-    operation.rows.drivers.find((driver) => driver.id === "d1")!.cnh = "12345678900";
+    operation.rows.drivers.find((driver) => driver.id === "d1")!.cnh =
+      "12345678900";
 
     operation.rows.routes.push(
-      route({ id: "r1", driverId: "d1", status: "IN_PROGRESS", started_at: at("2026-09-17T12:00:00.000Z") }),
+      route({
+        id: "r1",
+        driverId: "d1",
+        status: "IN_PROGRESS",
+        started_at: at("2026-09-17T12:00:00.000Z"),
+      }),
       route({ id: "r2", driverId: "d2", status: "RELEASED" }),
       // Tomorrow's route: not today's load.
       route({ id: "r3", driverId: "d2", scheduled_date: day("2026-09-18") }),
     );
 
     operation.rows.deliveries.push(
-      delivery({ id: "a", status: "DELIVERED", driverId: "d1", delivered_at: at("2026-09-17T13:00:00.000Z") }),
-      delivery({ id: "b", status: "FAILED", driverId: "d1", updated_at: at("2026-09-17T14:00:00.000Z") }),
+      delivery({
+        id: "a",
+        status: "DELIVERED",
+        driverId: "d1",
+        delivered_at: at("2026-09-17T13:00:00.000Z"),
+      }),
+      delivery({
+        id: "b",
+        status: "FAILED",
+        driverId: "d1",
+        updated_at: at("2026-09-17T14:00:00.000Z"),
+      }),
       delivery({ id: "c", status: "IN_TRANSIT", driverId: "d1" }),
       delivery({ id: "d", status: "PENDING", driverId: "d2" }),
       delivery({ id: "e", status: "PENDING", driverId: "d2" }),
       // Another company's driver id never shows up here.
-      delivery({ id: "x", businessId: ACRE, status: "IN_TRANSIT", driverId: "d9" }),
+      delivery({
+        id: "x",
+        businessId: ACRE,
+        status: "IN_TRANSIT",
+        driverId: "d9",
+      }),
     );
 
     operation.rows.stops.push(
@@ -656,27 +914,57 @@ describe("the monitoring board by driver reads the tower's day (decision 7.1, DL
   it("splits the day's active documents by driver, without tomorrow's load", async () => {
     const result = await board().execute({ userId: MANAGER.id, now: NOW });
 
-    expect(result).toMatchObject({ day: "2026-09-17", timeZone: "America/Sao_Paulo" });
+    expect(result).toMatchObject({
+      day: "2026-09-17",
+      timeZone: "America/Sao_Paulo",
+    });
 
     expect(result.drivers).toEqual([
       // On the street first.
-      { driverId: "d1", driverName: "Ana", cnh: "12345678900", designated: 0, inRoute: 1, deliveredToday: 1, failedToday: 1 },
+      {
+        driverId: "d1",
+        driverName: "Ana",
+        cnh: "12345678900",
+        designated: 0,
+        inRoute: 1,
+        deliveredToday: 1,
+        failedToday: 1,
+      },
       // e is on tomorrow's route: one designada, not two.
-      { driverId: "d2", driverName: "Bruno", cnh: "", designated: 1, inRoute: 0, deliveredToday: 0, failedToday: 0 },
+      {
+        driverId: "d2",
+        driverName: "Bruno",
+        cnh: "",
+        designated: 1,
+        inRoute: 0,
+        deliveredToday: 0,
+        failedToday: 0,
+      },
     ]);
   });
 
   it("adds up to the tower's funnel for the documents with a driver", async () => {
     const [drivers, tower] = await Promise.all([
       board().execute({ userId: MANAGER.id, now: NOW }),
-      new ControlTowerUseCase(userRepository, positions, operation).execute({ userId: MANAGER.id, now: NOW }),
+      new ControlTowerUseCase(userRepository, positions, operation).execute({
+        userId: MANAGER.id,
+        now: NOW,
+      }),
     ]);
 
-    const funnel = Object.fromEntries(tower.funnel.map((entry) => [entry.status, entry.total]));
-    const sum = (key: "designated" | "inRoute" | "deliveredToday" | "failedToday") =>
-      drivers.drivers.reduce((total, row) => total + row[key], 0);
+    const funnel = Object.fromEntries(
+      tower.funnel.map((entry) => [entry.status, entry.total]),
+    );
+    const sum = (
+      key: "designated" | "inRoute" | "deliveredToday" | "failedToday",
+    ) => drivers.drivers.reduce((total, row) => total + row[key], 0);
 
-    expect([sum("designated"), sum("inRoute"), sum("deliveredToday"), sum("failedToday")]).toEqual([
+    expect([
+      sum("designated"),
+      sum("inRoute"),
+      sum("deliveredToday"),
+      sum("failedToday"),
+    ]).toEqual([
       funnel.PENDING,
       funnel.IN_TRANSIT,
       funnel.DELIVERED,
@@ -685,7 +973,9 @@ describe("the monitoring board by driver reads the tower's day (decision 7.1, DL
   });
 
   it("refuses a driver token and another company's id", async () => {
-    await expect(board().execute({ userId: DRIVER_USER.id, now: NOW })).rejects.toMatchObject({
+    await expect(
+      board().execute({ userId: DRIVER_USER.id, now: NOW }),
+    ).rejects.toMatchObject({
       statusCode: 403,
     });
 
@@ -695,7 +985,9 @@ describe("the monitoring board by driver reads the tower's day (decision 7.1, DL
   });
 
   it("asks a MASTER which company, and refuses a day that does not exist", async () => {
-    await expect(board().execute({ userId: MASTER.id, now: NOW })).rejects.toMatchObject({
+    await expect(
+      board().execute({ userId: MASTER.id, now: NOW }),
+    ).rejects.toMatchObject({
       statusCode: 400,
     });
 

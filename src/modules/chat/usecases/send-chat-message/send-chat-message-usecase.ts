@@ -282,7 +282,11 @@ class SendChatMessageUseCase {
     }
 
     if (!audience && driverIds.length === 0) {
-      throw new AppError("Informe ao menos um motorista.", 400, "CHAT_RECIPIENTS_REQUIRED");
+      throw new AppError(
+        "Informe ao menos um motorista.",
+        400,
+        "CHAT_RECIPIENTS_REQUIRED",
+      );
     }
 
     const isBroadcast = Boolean(audience) || driverIds.length > 1;
@@ -342,7 +346,11 @@ class SendChatMessageUseCase {
     // The schema already refused these shapes on the wire; asserting them
     // here keeps the rules true for any caller of the use case.
     if (kind === "TEXT" && !body?.trim()) {
-      throw new AppError("Uma mensagem de texto precisa de texto.", 400, "CHAT_TEXT_REQUIRED");
+      throw new AppError(
+        "Uma mensagem de texto precisa de texto.",
+        400,
+        "CHAT_TEXT_REQUIRED",
+      );
     }
 
     if (kind !== "TEXT" && !attachmentKey) {
@@ -431,7 +439,9 @@ class SendChatMessageUseCase {
     const routeByDriver = isBroadcast
       ? await this.chat.findRunningRoutes(
           scope.businessId,
-          targets.filter((target) => target.appUserId).map((target) => target.id),
+          targets
+            .filter((target) => target.appUserId)
+            .map((target) => target.id),
         )
       : new Map(
           await Promise.all(
@@ -483,7 +493,9 @@ class SendChatMessageUseCase {
 
       // A message of a ticket is about the ticket's delivery and route.
       if (ticket.deliveryId && deliveryChip?.id !== ticket.deliveryId) {
-        const ofTicket = await this.delivery.findDeliveryById(ticket.deliveryId);
+        const ofTicket = await this.delivery.findDeliveryById(
+          ticket.deliveryId,
+        );
 
         deliveryChip = ofTicket
           ? {
@@ -550,7 +562,7 @@ class SendChatMessageUseCase {
               driverRef,
               scope.user.name,
               userId,
-          Boolean(scope.driverId),
+              Boolean(scope.driverId),
             );
 
             results.push(replayed);
@@ -579,7 +591,11 @@ class SendChatMessageUseCase {
             // The ticket's row lock serializes this message against a close:
             // a message never lands "after" the ticket closed.
             if (ticket && this.tickets) {
-              const locked = await this.tickets.lockForUpdate(ticket.id, scope.businessId, tx);
+              const locked = await this.tickets.lockForUpdate(
+                ticket.id,
+                scope.businessId,
+                tx,
+              );
 
               if (!locked || locked.status !== "OPEN") {
                 throw new SupportTicketClosedError({
@@ -609,7 +625,11 @@ class SendChatMessageUseCase {
 
             if (ticket && this.tickets) {
               ticket = await this.tickets.touchOnMessage(
-                { id: ticket.id, at: created.created_at, side: messageSide(!staffSender) },
+                {
+                  id: ticket.id,
+                  at: created.created_at,
+                  side: messageSide(!staffSender),
+                },
                 tx,
               );
 
@@ -637,7 +657,11 @@ class SendChatMessageUseCase {
                   );
 
                   ticket =
-                    (await this.tickets.findById(ticket.id, scope.businessId, tx)) ?? ticket;
+                    (await this.tickets.findById(
+                      ticket.id,
+                      scope.businessId,
+                      tx,
+                    )) ?? ticket;
                 }
               }
             }
@@ -699,7 +723,7 @@ class SendChatMessageUseCase {
             driverRef,
             scope.user.name,
             userId,
-          Boolean(scope.driverId),
+            Boolean(scope.driverId),
           );
 
           results.push(replayed);
@@ -928,7 +952,10 @@ class SendChatMessageUseCase {
     const tickets = this.tickets!;
     const deps = { tickets, chat: this.chat };
 
-    const thread = await this.chat.findThreadByDriver(input.businessId, input.target.id);
+    const thread = await this.chat.findThreadByDriver(
+      input.businessId,
+      input.target.id,
+    );
     const driverUserId = input.sender.isDriver
       ? input.sender.id
       : input.target.appUserId;
@@ -962,7 +989,9 @@ class SendChatMessageUseCase {
     const opened = {
       via: "LEGACY_ROUTING" as const,
       userId: input.sender.id,
-      actorKind: input.sender.isDriver ? ("DRIVER_APP" as const) : ("USER" as const),
+      actorKind: input.sender.isDriver
+        ? ("DRIVER_APP" as const)
+        : ("USER" as const),
       actorName: input.sender.name,
     };
 
@@ -1051,8 +1080,14 @@ class SendChatMessageUseCase {
     // The replay is normally the requester's own message; a key reused by
     // someone else still names its real author.
     const author =
-      message.senderId === requesterId ? null : await this.user.findUserById(message.senderId);
-    const senderName = author ? author.name : message.senderId === requesterId ? requesterName : "";
+      message.senderId === requesterId
+        ? null
+        : await this.user.findUserById(message.senderId);
+    const senderName = author
+      ? author.name
+      : message.senderId === requesterId
+        ? requesterName
+        : "";
     const senderSide: "DRIVER" | "STAFF" = author
       ? author.driverId
         ? "DRIVER"
@@ -1071,9 +1106,10 @@ class SendChatMessageUseCase {
       this.uploadService,
     );
 
-    const thread = message.ticketId && this.tickets
-      ? await this.chat.findThreadById(message.threadId)
-      : null;
+    const thread =
+      message.ticketId && this.tickets
+        ? await this.chat.findThreadById(message.threadId)
+        : null;
     const ticket =
       thread && message.ticketId && this.tickets
         ? await this.tickets.findById(message.ticketId, thread.businessId)

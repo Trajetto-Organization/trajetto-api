@@ -39,15 +39,18 @@ const CANARY = "GET /__sweep-canary/forgot-its-hook";
 const OPEN_BY_DESIGN: Array<{ pattern: RegExp; reason: string }> = [
   {
     pattern: /^GET \/integration\/docs(\/openapi\.json)?$/,
-    reason: "public integration portal: only the integration endpoints, rate-limited",
+    reason:
+      "public integration portal: only the integration endpoints, rate-limited",
   },
   {
     pattern: /^(GET|HEAD) \/docs(\/.*)?$/,
-    reason: "Swagger UI: its own Basic-auth hook (docs-access.ts), not a bearer token",
+    reason:
+      "Swagger UI: its own Basic-auth hook (docs-access.ts), not a bearer token",
   },
   {
     pattern: /^PUT \/uploads\/local$/,
-    reason: "development stand-in for the bucket; authorised by the signed token in the query, not registered on R2",
+    reason:
+      "development stand-in for the bucket; authorised by the signed token in the query, not registered on R2",
   },
   {
     pattern: /^(GET|HEAD) \/tmp\/\*$/,
@@ -99,7 +102,9 @@ beforeAll(async () => {
 
   await app.ready();
 
-  const document = (await app.inject({ method: "GET", url: "/docs/json" })).json() as {
+  const document = (
+    await app.inject({ method: "GET", url: "/docs/json" })
+  ).json() as {
     paths: Record<string, Record<string, { security?: unknown[] }>>;
   };
 
@@ -160,23 +165,27 @@ async function sweep(): Promise<string[]> {
 }
 
 describe("a route called with no credentials", () => {
-  it("answers 401 unless it is anonymous on purpose", { timeout: 120_000 }, async () => {
-    const open = await sweep();
+  it(
+    "answers 401 unless it is anonymous on purpose",
+    { timeout: 120_000 },
+    async () => {
+      const open = await sweep();
 
-    // The canary first: if it is not caught, an empty list below means
-    // nothing.
-    expect(
-      open.some((entry) => entry.startsWith(`${CANARY} ->`)),
-      "a varredura não pegou a rota-canário sem hook de autenticação",
-    ).toBe(true);
+      // The canary first: if it is not caught, an empty list below means
+      // nothing.
+      expect(
+        open.some((entry) => entry.startsWith(`${CANARY} ->`)),
+        "a varredura não pegou a rota-canário sem hook de autenticação",
+      ).toBe(true);
 
-    // The document calls the canary protected — which is exactly why a
-    // document-driven contract cannot catch this.
-    expect(documentedAnonymous.has(CANARY)).toBe(false);
+      // The document calls the canary protected — which is exactly why a
+      // document-driven contract cannot catch this.
+      expect(documentedAnonymous.has(CANARY)).toBe(false);
 
-    expect(
-      open.filter((entry) => !entry.startsWith(`${CANARY} ->`)),
-      "rotas que responderam sem token (se é de propósito, documente-as sem security ou liste em OPEN_BY_DESIGN)",
-    ).toEqual([]);
-  });
+      expect(
+        open.filter((entry) => !entry.startsWith(`${CANARY} ->`)),
+        "rotas que responderam sem token (se é de propósito, documente-as sem security ou liste em OPEN_BY_DESIGN)",
+      ).toEqual([]);
+    },
+  );
 });

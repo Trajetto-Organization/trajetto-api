@@ -28,7 +28,10 @@ describe("the disjunctive counts", () => {
     { values: { status: "inactive", blocking: "no" }, count: 2 },
   ];
 
-  const domains = { status: ["active", "inactive"], blocking: ["yes", "no"] } as const;
+  const domains = {
+    status: ["active", "inactive"],
+    blocking: ["yes", "no"],
+  } as const;
 
   it("counts each filter with the others applied, never its own", () => {
     const { total, facets } = disjunctiveFacets(
@@ -54,11 +57,7 @@ describe("the disjunctive counts", () => {
   });
 
   it("keeps everything when nothing is chosen, and lists empty values with 0", () => {
-    const { total, facets } = disjunctiveFacets(
-      [groups[0]],
-      {},
-      domains,
-    );
+    const { total, facets } = disjunctiveFacets([groups[0]], {}, domains);
 
     expect(total).toBe(3);
     expect(facets.status).toEqual([
@@ -91,9 +90,27 @@ describe("the occurrence types' cards and filters", () => {
   it("counts each card without its own filter", () => {
     const { total, searchMeta } = summarizeOccurrenceTypeList(
       [
-        { is_active: true, blocks_delivery: true, requires_photo: true, category: "NOT_DELIVERED", count: 2 },
-        { is_active: true, blocks_delivery: false, requires_photo: false, category: "NOT_DELIVERED", count: 4 },
-        { is_active: false, blocks_delivery: true, requires_photo: false, category: "NOT_DELIVERED", count: 1 },
+        {
+          is_active: true,
+          blocks_delivery: true,
+          requires_photo: true,
+          category: "NOT_DELIVERED",
+          count: 2,
+        },
+        {
+          is_active: true,
+          blocks_delivery: false,
+          requires_photo: false,
+          category: "NOT_DELIVERED",
+          count: 4,
+        },
+        {
+          is_active: false,
+          blocks_delivery: true,
+          requires_photo: false,
+          category: "NOT_DELIVERED",
+          count: 1,
+        },
       ],
       { blocking: ["yes"] },
     );
@@ -166,7 +183,8 @@ describe("the query strings", () => {
     expect(shipper.success && shipper.data.status).toEqual(["inactive"]);
 
     expect(
-      listShipperSchema.safeParse({ page: "1", pageSize: "10", sort: "cnpj" }).success,
+      listShipperSchema.safeParse({ page: "1", pageSize: "10", sort: "cnpj" })
+        .success,
     ).toBe(false);
 
     const types = listOccurrenceTypeSchema.safeParse({
@@ -185,6 +203,9 @@ describe("the query strings", () => {
       status: "COMPLETED,REVERSED",
     });
 
-    expect(imports.success && imports.data.status).toEqual(["COMPLETED", "REVERSED"]);
+    expect(imports.success && imports.data.status).toEqual([
+      "COMPLETED",
+      "REVERSED",
+    ]);
   });
 });

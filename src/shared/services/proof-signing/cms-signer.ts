@@ -60,31 +60,51 @@ const set = (...value: Node[]): Node =>
   asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SET, true, value);
 
 const oid = (value: string): Node =>
-  asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(value).getBytes());
+  asn1.create(
+    asn1.Class.UNIVERSAL,
+    asn1.Type.OID,
+    false,
+    asn1.oidToDer(value).getBytes(),
+  );
 
 const octets = (bytes: Buffer): Node =>
-  asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, binary(bytes));
+  asn1.create(
+    asn1.Class.UNIVERSAL,
+    asn1.Type.OCTETSTRING,
+    false,
+    binary(bytes),
+  );
 
 const nullValue = (): Node =>
   asn1.create(asn1.Class.UNIVERSAL, asn1.Type.NULL, false, "");
 
 const integer = (value: number): Node =>
-  asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, asn1.integerToDer(value).getBytes());
+  asn1.create(
+    asn1.Class.UNIVERSAL,
+    asn1.Type.INTEGER,
+    false,
+    asn1.integerToDer(value).getBytes(),
+  );
 
 const context = (tag: number, value: Node[]): Node =>
   asn1.create(asn1.Class.CONTEXT_SPECIFIC, tag as forge.asn1.Type, true, value);
 
-const toDer = (node: Node): Buffer => Buffer.from(asn1.toDer(node).getBytes(), "binary");
+const toDer = (node: Node): Buffer =>
+  Buffer.from(asn1.toDer(node).getBytes(), "binary");
 
 const fromDer = (bytes: Buffer): Node =>
   asn1.fromDer(forge.util.createBuffer(binary(bytes)));
 
 const algorithm = (value: string): Node => sequence(oid(value), nullValue());
 
-const attribute = (type: string, value: Node): Node => sequence(oid(type), set(value));
+const attribute = (type: string, value: Node): Node =>
+  sequence(oid(type), set(value));
 
 /** The issuer Name and serial INTEGER nodes, exactly as in the certificate. */
-function issuerAndSerial(certificateDer: Buffer): { issuer: Node; serial: Node } {
+function issuerAndSerial(certificateDer: Buffer): {
+  issuer: Node;
+  serial: Node;
+} {
   const certificate = fromDer(certificateDer).value as Node[];
   const tbs = certificate[0].value as Node[];
 
@@ -123,7 +143,9 @@ function signedAttributes(
     );
   } else {
     const { issuer, serial } = issuerAndSerial(certificate.certificateDer);
-    const certificateHash = createHash("sha256").update(certificate.certificateDer).digest();
+    const certificateHash = createHash("sha256")
+      .update(certificate.certificateDer)
+      .digest();
 
     // SigningCertificateV2 { certs: [ESSCertIDv2 { certHash, issuerSerial }] }.
     // hashAlgorithm is omitted: its DEFAULT is SHA-256 (RFC 5035).
@@ -144,11 +166,19 @@ function signedAttributes(
         OID.sigPolicyId,
         sequence(
           oid(AD_RB_POLICY.oid),
-          sequence(algorithm(OID.sha256), octets(Buffer.from(AD_RB_POLICY.sha256, "hex"))),
+          sequence(
+            algorithm(OID.sha256),
+            octets(Buffer.from(AD_RB_POLICY.sha256, "hex")),
+          ),
           sequence(
             sequence(
               oid(OID.spqEtsUri),
-              asn1.create(asn1.Class.UNIVERSAL, asn1.Type.IA5STRING, false, AD_RB_POLICY.uri),
+              asn1.create(
+                asn1.Class.UNIVERSAL,
+                asn1.Type.IA5STRING,
+                false,
+                AD_RB_POLICY.uri,
+              ),
             ),
           ),
         ),
@@ -173,10 +203,19 @@ function buildDetachedCms(
   signingTime: Date = new Date(),
 ): Buffer {
   const digest = createHash("sha256").update(content).digest();
-  const attributes = signedAttributes(profile, digest, certificate, signingTime);
+  const attributes = signedAttributes(
+    profile,
+    digest,
+    certificate,
+    signingTime,
+  );
 
   // Signed as an explicit SET OF (tag 0x31), stored as [0] IMPLICIT.
-  const signature = rsaSign("sha256", toDer(set(...attributes)), certificate.privateKey);
+  const signature = rsaSign(
+    "sha256",
+    toDer(set(...attributes)),
+    certificate.privateKey,
+  );
 
   const { issuer, serial } = issuerAndSerial(certificate.certificateDer);
 
@@ -194,7 +233,10 @@ function buildDetachedCms(
     set(algorithm(OID.sha256)),
     // Detached: the content type only, no eContent.
     sequence(oid(OID.data)),
-    context(0, [certificate.certificateDer, ...certificate.chainDer].map(fromDer)),
+    context(
+      0,
+      [certificate.certificateDer, ...certificate.chainDer].map(fromDer),
+    ),
     set(signerInfo),
   );
 
@@ -211,7 +253,12 @@ class ProofCmsSigner extends Signer {
   }
 
   async sign(pdfBuffer: Buffer, signingTime?: Date): Promise<Buffer> {
-    return buildDetachedCms(pdfBuffer, this.certificate, this.profile, signingTime);
+    return buildDetachedCms(
+      pdfBuffer,
+      this.certificate,
+      this.profile,
+      signingTime,
+    );
   }
 }
 

@@ -41,7 +41,8 @@ if (!outDir || inputs.length === 0) {
 // The statement map is the source's fingerprint: same file, same lines.
 const fingerprint = (fileCoverage) => JSON.stringify(fileCoverage.statementMap);
 
-const at = ({ start, end }) => `${start.line}:${start.column}-${end.line}:${end.column}`;
+const at = ({ start, end }) =>
+  `${start.line}:${start.column}-${end.line}:${end.column}`;
 
 // v8's placeholder for a file no test loaded (`all: true`); not a function.
 const EMPTY_REPORT = "(empty-report)";
@@ -53,7 +54,10 @@ const shapes = (fileCoverage) => {
     if (fn.name !== EMPTY_REPORT) shape.set(`fn ${at(fn.loc)}`, fn.name);
   }
   for (const branch of Object.values(fileCoverage.branchMap ?? {})) {
-    shape.set(`branch ${at(branch.loc)}`, JSON.stringify([branch.type, branch.locations.map(at)]));
+    shape.set(
+      `branch ${at(branch.loc)}`,
+      JSON.stringify([branch.type, branch.locations.map(at)]),
+    );
   }
   return shape;
 };
@@ -88,7 +92,9 @@ for (const input of inputs) {
 }
 
 if (drifted.size > 0) {
-  console.error(`source changed between runs for ${drifted.size} file(s); refusing to merge:`);
+  console.error(
+    `source changed between runs for ${drifted.size} file(s); refusing to merge:`,
+  );
   for (const [file, [a, b]] of [...drifted].slice(0, 20)) {
     console.error(`  ${file}\n    ${a}\n    ${b}`);
   }

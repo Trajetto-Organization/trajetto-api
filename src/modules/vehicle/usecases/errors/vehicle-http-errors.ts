@@ -46,7 +46,12 @@ const VEHICLE_HTTP_ERRORS: ReadonlyArray<
 > = [
   [BusinessNotFoundError, 404, "BUSINESS_NOT_FOUND"],
   [VehicleNotFoundError, 404, "VEHICLE_NOT_FOUND"],
-  [VehicleNotBelongBusinessError, 404, "VEHICLE_NOT_FOUND", "Veículo não encontrado!"],
+  [
+    VehicleNotBelongBusinessError,
+    404,
+    "VEHICLE_NOT_FOUND",
+    "Veículo não encontrado!",
+  ],
   [VehicleNotAssignedToDriverError, 403, "VEHICLE_NOT_ASSIGNED_TO_DRIVER"],
   [VehicleTypeNotFoundError, 400, "VEHICLE_TYPE_NOT_FOUND"],
   [

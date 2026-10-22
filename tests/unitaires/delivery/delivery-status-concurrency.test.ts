@@ -135,8 +135,8 @@ const move = (
     businessId: BUSINESS,
     deliveryId,
     status,
-  reasonId: REASON,
-});
+    reasonId: REASON,
+  });
 
 describe("a transition the status machine allows", () => {
   it("still goes through", async () => {
@@ -358,7 +358,9 @@ describe("the panel editing while the driver proves the delivery", () => {
     const delivery = await seedDelivery(repository);
 
     // O que aconteceu na janela: a comprovação landou.
-    const row = repository.deliveries.find((entry) => entry.id === delivery.id)!;
+    const row = repository.deliveries.find(
+      (entry) => entry.id === delivery.id,
+    )!;
 
     row.status = "DELIVERED";
 

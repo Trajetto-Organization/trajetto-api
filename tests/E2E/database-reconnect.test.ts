@@ -152,18 +152,22 @@ describe("a database that dropped every connection the API held", () => {
     expect(last(statuses), `respostas: ${statuses.join(", ")}`).toBe(200);
   });
 
-  it("serves an authenticated request again, and never answers 401 on the way", { timeout: 30_000 }, async () => {
-    expect((await authenticated()).statusCode).toBe(200);
+  it(
+    "serves an authenticated request again, and never answers 401 on the way",
+    { timeout: 30_000 },
+    async () => {
+      expect((await authenticated()).statusCode).toBe(200);
 
-    expect(await terminateEveryOtherBackend()).toBeGreaterThan(0);
+      expect(await terminateEveryOtherBackend()).toBeGreaterThan(0);
 
-    const statuses = await untilOk(authenticated);
+      const statuses = await untilOk(authenticated);
 
-    // A 401 is the one answer both clients read as "your session ended":
-    // every driver logged out because Postgres restarted.
-    expect(statuses, `respostas: ${statuses.join(", ")}`).not.toContain(401);
-    expect(last(statuses), `respostas: ${statuses.join(", ")}`).toBe(200);
-  });
+      // A 401 is the one answer both clients read as "your session ended":
+      // every driver logged out because Postgres restarted.
+      expect(statuses, `respostas: ${statuses.join(", ")}`).not.toContain(401);
+      expect(last(statuses), `respostas: ${statuses.join(", ")}`).toBe(200);
+    },
+  );
 });
 
 function last(statuses: number[]): number | undefined {

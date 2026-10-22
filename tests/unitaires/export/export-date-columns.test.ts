@@ -51,7 +51,9 @@ describe("export date columns", () => {
     );
 
     const { columns } = await useCase.execute({ userId: "user-1" });
-    const printed = String(column(columns, "delivered_at").formatter!(EVENING_IN_MANAUS));
+    const printed = String(
+      column(columns, "delivered_at").formatter!(EVENING_IN_MANAUS),
+    );
 
     expect(printed).toContain("17/09/2026");
     expect(printed).toContain("21:30");
@@ -65,7 +67,9 @@ describe("export date columns", () => {
     );
 
     const { columns } = await useCase.execute({ userId: "user-1" });
-    const printed = String(column(columns, "created_at").formatter!(EVENING_IN_MANAUS));
+    const printed = String(
+      column(columns, "created_at").formatter!(EVENING_IN_MANAUS),
+    );
 
     expect(printed).toContain("17/09/2026");
     expect(printed).toContain("21:30");
@@ -108,7 +112,9 @@ describe("export date columns", () => {
       const columns = await columnsOf();
 
       for (const key of ["created_at", "updated_at"]) {
-        const printed = String(column(columns, key).formatter!(EVENING_IN_MANAUS));
+        const printed = String(
+          column(columns, key).formatter!(EVENING_IN_MANAUS),
+        );
 
         expect(printed, key).toContain("17/09/2026");
         expect(printed, key).toContain("21:30");

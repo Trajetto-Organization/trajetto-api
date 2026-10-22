@@ -48,41 +48,81 @@ const FUEL_SEED: Array<{
   {
     key: "f1",
     minute: 1,
-    data: fuel(F.A, F.branchA, F.vA1, F.dA1, F.typeA, "2026-09-01T10:00:00.000Z", {
-      notes: "tanque cheio",
-      client_submission_id: "fuel-contract-1",
-      current_mileage: 1100,
-    }),
+    data: fuel(
+      F.A,
+      F.branchA,
+      F.vA1,
+      F.dA1,
+      F.typeA,
+      "2026-09-01T10:00:00.000Z",
+      {
+        notes: "tanque cheio",
+        client_submission_id: "fuel-contract-1",
+        current_mileage: 1100,
+      },
+    ),
   },
   {
     key: "f2",
     minute: 2,
-    data: fuel(F.A, F.branchA, F.vA1, F.dA2, F.typeA, "2026-09-02T10:00:00.000Z", {
-      notes: "desconto 10%",
-      current_mileage: 1200,
-    }),
+    data: fuel(
+      F.A,
+      F.branchA,
+      F.vA1,
+      F.dA2,
+      F.typeA,
+      "2026-09-02T10:00:00.000Z",
+      {
+        notes: "desconto 10%",
+        current_mileage: 1200,
+      },
+    ),
   },
   {
     key: "f3",
     minute: 3,
-    data: fuel(F.A, F.branchA, F.vA2, F.dA1, F.typeA, "2026-09-02T10:00:00.000Z", {
-      current_mileage: 2100,
-    }),
+    data: fuel(
+      F.A,
+      F.branchA,
+      F.vA2,
+      F.dA1,
+      F.typeA,
+      "2026-09-02T10:00:00.000Z",
+      {
+        current_mileage: 2100,
+      },
+    ),
   },
   {
     key: "f4",
     minute: 3,
-    data: fuel(F.A, F.branchA, F.vA1, F.dA1, F.typeA, "2026-09-02T10:00:00.000Z", {
-      current_mileage: 1250,
-    }),
+    data: fuel(
+      F.A,
+      F.branchA,
+      F.vA1,
+      F.dA1,
+      F.typeA,
+      "2026-09-02T10:00:00.000Z",
+      {
+        current_mileage: 1250,
+      },
+    ),
   },
   {
     key: "fB",
     minute: 4,
-    data: fuel(F.B, F.branchB, F.vB, F.dB, F.typeB, "2026-09-01T10:00:00.000Z", {
-      client_submission_id: "fuel-contract-1",
-      current_mileage: 500,
-    }),
+    data: fuel(
+      F.B,
+      F.branchB,
+      F.vB,
+      F.dB,
+      F.typeB,
+      "2026-09-01T10:00:00.000Z",
+      {
+        client_submission_id: "fuel-contract-1",
+        current_mileage: 500,
+      },
+    ),
   },
 ];
 
@@ -127,11 +167,19 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
     it("lists one company newest first, the id breaking a created_at tie, and pages", async () => {
       const h = harness();
 
-      const all = await h.repo.listFuels({ businessId: F.A, page: 1, pageSize: 10 });
+      const all = await h.repo.listFuels({
+        businessId: F.A,
+        page: 1,
+        pageSize: 10,
+      });
 
       expect(ids(all.data)).toEqual([...tie(h), h.id("f2"), h.id("f1")]);
 
-      const second = await h.repo.listFuels({ businessId: F.A, page: 2, pageSize: 2 });
+      const second = await h.repo.listFuels({
+        businessId: F.A,
+        page: 2,
+        pageSize: 2,
+      });
 
       expect(ids(second.data)).toEqual([h.id("f2"), h.id("f1")]);
     });
@@ -154,9 +202,22 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
     it("searches the plate, the driver, and the notes literally and case-insensitively", async () => {
       const h = harness();
       const search = async (term: string) =>
-        ids((await h.repo.listFuels({ businessId: F.A, search: term, page: 1, pageSize: 10 })).data);
+        ids(
+          (
+            await h.repo.listFuels({
+              businessId: F.A,
+              search: term,
+              page: 1,
+              pageSize: 10,
+            })
+          ).data,
+        );
 
-      expect(await search("abc1d")).toEqual([h.id("f4"), h.id("f2"), h.id("f1")]);
+      expect(await search("abc1d")).toEqual([
+        h.id("f4"),
+        h.id("f2"),
+        h.id("f1"),
+      ]);
       expect(await search("MARCOS")).toEqual([...tie(h), h.id("f1")]);
       expect(await search("10%")).toEqual([h.id("f2")]);
       expect(await search("_")).toEqual([]);
@@ -168,21 +229,46 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
       const h = harness();
 
       expect(
-        ids((await h.repo.listFuels({ businessId: F.A, driverId: F.dA2, page: 1, pageSize: 10 })).data),
+        ids(
+          (
+            await h.repo.listFuels({
+              businessId: F.A,
+              driverId: F.dA2,
+              page: 1,
+              pageSize: 10,
+            })
+          ).data,
+        ),
       ).toEqual([h.id("f2")]);
       expect(
-        ids((await h.repo.listFuels({ businessId: F.A, vehicleIds: [F.vA2], page: 1, pageSize: 10 })).data),
+        ids(
+          (
+            await h.repo.listFuels({
+              businessId: F.A,
+              vehicleIds: [F.vA2],
+              page: 1,
+              pageSize: 10,
+            })
+          ).data,
+        ),
       ).toEqual([h.id("f3")]);
     });
 
     it("groups the base for the cards and names only the company's catalog", async () => {
       const h = harness();
 
-      const result = await h.repo.listFuels({ businessId: F.A, page: 1, pageSize: 1 });
+      const result = await h.repo.listFuels({
+        businessId: F.A,
+        page: 1,
+        pageSize: 1,
+      });
       const count = result.groups.reduce((sum, group) => sum + group.count, 0);
 
       expect(count).toBe(4);
-      expect(result.labels.vehicleId).toEqual({ [F.vA1]: F.plateA1, [F.vA2]: F.plateA2 });
+      expect(result.labels.vehicleId).toEqual({
+        [F.vA1]: F.plateA1,
+        [F.vA2]: F.plateA2,
+      });
     });
   });
 
@@ -190,16 +276,32 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
     it("answer another company's refueling with null", async () => {
       const h = harness();
 
-      expect((await h.repo.getFuelByIdAndBusiness({ businessId: F.A, fuelId: h.id("f1") }))?.id).toBe(h.id("f1"));
-      expect(await h.repo.getFuelByIdAndBusiness({ businessId: F.B, fuelId: h.id("f1") })).toBeNull();
+      expect(
+        (
+          await h.repo.getFuelByIdAndBusiness({
+            businessId: F.A,
+            fuelId: h.id("f1"),
+          })
+        )?.id,
+      ).toBe(h.id("f1"));
+      expect(
+        await h.repo.getFuelByIdAndBusiness({
+          businessId: F.B,
+          fuelId: h.id("f1"),
+        }),
+      ).toBeNull();
       expect(await h.repo.findFuelById(F.missing)).toBeNull();
     });
 
     it("find an idempotency key only in its company", async () => {
       const h = harness();
 
-      expect((await h.repo.findBySubmissionId(F.A, "fuel-contract-1"))?.id).toBe(h.id("f1"));
-      expect((await h.repo.findBySubmissionId(F.B, "fuel-contract-1"))?.id).toBe(h.id("fB"));
+      expect(
+        (await h.repo.findBySubmissionId(F.A, "fuel-contract-1"))?.id,
+      ).toBe(h.id("f1"));
+      expect(
+        (await h.repo.findBySubmissionId(F.B, "fuel-contract-1"))?.id,
+      ).toBe(h.id("fB"));
       expect(await h.repo.findBySubmissionId(F.A, "never-sent")).toBeNull();
     });
 
@@ -214,9 +316,31 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
     it("find the previous refueling by date, the later record winning a same-date tie", async () => {
       const h = harness();
 
-      expect((await h.repo.getPreviousFuelByVehicleId(F.vA1, "2026-09-03T00:00:00.000Z", F.A))?.id).toBe(h.id("f4"));
-      expect((await h.repo.getPreviousFuelByVehicleId(F.vA1, "2026-09-02T10:00:00.000Z", F.A))?.id).toBe(h.id("f1"));
-      expect(await h.repo.getPreviousFuelByVehicleId(F.vA1, "2026-09-01T10:00:00.000Z", F.A)).toBeNull();
+      expect(
+        (
+          await h.repo.getPreviousFuelByVehicleId(
+            F.vA1,
+            "2026-09-03T00:00:00.000Z",
+            F.A,
+          )
+        )?.id,
+      ).toBe(h.id("f4"));
+      expect(
+        (
+          await h.repo.getPreviousFuelByVehicleId(
+            F.vA1,
+            "2026-09-02T10:00:00.000Z",
+            F.A,
+          )
+        )?.id,
+      ).toBe(h.id("f1"));
+      expect(
+        await h.repo.getPreviousFuelByVehicleId(
+          F.vA1,
+          "2026-09-01T10:00:00.000Z",
+          F.A,
+        ),
+      ).toBeNull();
     });
 
     it("never reads another company's refueling, even by the vehicle's id", async () => {
@@ -224,7 +348,13 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
       // but an unscoped read is one forgotten check away from a leak.
       const h = harness();
 
-      expect(await h.repo.getPreviousFuelByVehicleId(F.vA1, "2026-09-03T00:00:00.000Z", F.B)).toBeNull();
+      expect(
+        await h.repo.getPreviousFuelByVehicleId(
+          F.vA1,
+          "2026-09-03T00:00:00.000Z",
+          F.B,
+        ),
+      ).toBeNull();
     });
   });
 
@@ -253,9 +383,24 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
     it("answers nothing for another company's vehicle or a cursor that does not exist", async () => {
       const h = harness();
 
-      expect((await h.repo.searchFuelByVehicleWithCursor({ vehicleId: F.vB, businessId: F.A, limit: 10 })).data).toEqual([]);
       expect(
-        (await h.repo.searchFuelByVehicleWithCursor({ vehicleId: F.vA1, businessId: F.A, cursor: F.missing, limit: 10 })).data,
+        (
+          await h.repo.searchFuelByVehicleWithCursor({
+            vehicleId: F.vB,
+            businessId: F.A,
+            limit: 10,
+          })
+        ).data,
+      ).toEqual([]);
+      expect(
+        (
+          await h.repo.searchFuelByVehicleWithCursor({
+            vehicleId: F.vA1,
+            businessId: F.A,
+            cursor: F.missing,
+            limit: 10,
+          })
+        ).data,
       ).toEqual([]);
     });
   });
@@ -267,9 +412,17 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
 
       await expectPrismaCode(
         h.repo.createFuel(
-          fuel(F.A, F.branchA, F.vA2, F.dA2, F.typeA, "2026-09-05T10:00:00.000Z", {
-            client_submission_id: "fuel-contract-1",
-          }),
+          fuel(
+            F.A,
+            F.branchA,
+            F.vA2,
+            F.dA2,
+            F.typeA,
+            "2026-09-05T10:00:00.000Z",
+            {
+              client_submission_id: "fuel-contract-1",
+            },
+          ),
         ),
         "P2002",
       );
@@ -279,11 +432,19 @@ function fuelRepositoryContract(harness: () => FuelHarness): void {
       const h = harness();
 
       const created = await h.repo.createFuel(
-        fuel(F.A, F.branchA, F.vA2, F.dA2, F.typeA, "2026-09-05T10:00:00.000Z", {
-          notes: "",
-          latitude: 0,
-          longitude: 0,
-        }),
+        fuel(
+          F.A,
+          F.branchA,
+          F.vA2,
+          F.dA2,
+          F.typeA,
+          "2026-09-05T10:00:00.000Z",
+          {
+            notes: "",
+            latitude: 0,
+            longitude: 0,
+          },
+        ),
       );
 
       expect(created).toMatchObject({ notes: "", latitude: 0, longitude: 0 });

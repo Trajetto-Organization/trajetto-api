@@ -33,17 +33,27 @@ describe("a journey route at the tap", () => {
 
   it("is not a route released only after the tap (an offline pause replayed later)", () => {
     expect(
-      isJourneyRouteAt(route({ released_at: new Date("2026-10-05T16:00:00.000Z") }), TAP, TODAY),
+      isJourneyRouteAt(
+        route({ released_at: new Date("2026-10-05T16:00:00.000Z") }),
+        TAP,
+        TODAY,
+      ),
     ).toBe(false);
   });
 
   it("is not a route released today for tomorrow", () => {
-    expect(isJourneyRouteAt(route({ scheduled_date: "2026-10-06" }), TAP, TODAY)).toBe(false);
+    expect(
+      isJourneyRouteAt(route({ scheduled_date: "2026-10-06" }), TAP, TODAY),
+    ).toBe(false);
   });
 
   it("is not a planned route, nor one unreleased (released_at cleared)", () => {
     expect(
-      isJourneyRouteAt(route({ status: "PLANNED", released_at: null }), TAP, TODAY),
+      isJourneyRouteAt(
+        route({ status: "PLANNED", released_at: null }),
+        TAP,
+        TODAY,
+      ),
     ).toBe(false);
   });
 
@@ -55,7 +65,9 @@ describe("a journey route at the tap", () => {
       started_at: new Date("2026-10-04T22:00:00.000Z"),
     });
 
-    expect(isJourneyRouteAt(night, new Date("2026-10-05T04:00:00.000Z"), TODAY)).toBe(true);
+    expect(
+      isJourneyRouteAt(night, new Date("2026-10-05T04:00:00.000Z"), TODAY),
+    ).toBe(true);
   });
 
   it("is a route completed AFTER the tap (the start arrived late)", () => {
@@ -87,15 +99,24 @@ describe("a journey route at the tap", () => {
   it("stands in started_at, then updated_at, for a route released before the column", () => {
     expect(
       isJourneyRouteAt(
-        route({ status: "IN_PROGRESS", released_at: null, started_at: new Date("2026-10-05T11:00:00.000Z") }),
+        route({
+          status: "IN_PROGRESS",
+          released_at: null,
+          started_at: new Date("2026-10-05T11:00:00.000Z"),
+        }),
         TAP,
         TODAY,
       ),
     ).toBe(true);
-    expect(isJourneyRouteAt(route({ released_at: null }), TAP, TODAY)).toBe(true);
+    expect(isJourneyRouteAt(route({ released_at: null }), TAP, TODAY)).toBe(
+      true,
+    );
     expect(
       isJourneyRouteAt(
-        route({ released_at: null, updated_at: new Date("2026-10-05T16:00:00.000Z") }),
+        route({
+          released_at: null,
+          updated_at: new Date("2026-10-05T16:00:00.000Z"),
+        }),
         TAP,
         TODAY,
       ),
@@ -116,7 +137,10 @@ describe("a journey route at the tap", () => {
 
 describe("which route the pause is pinned to", () => {
   it("prefers the route on the street, then the latest released", () => {
-    const released = route({ id: "released", released_at: new Date("2026-10-05T14:00:00.000Z") });
+    const released = route({
+      id: "released",
+      released_at: new Date("2026-10-05T14:00:00.000Z"),
+    });
     const running = route({
       id: "running",
       status: "IN_PROGRESS",
@@ -124,7 +148,9 @@ describe("which route the pause is pinned to", () => {
     });
 
     expect(journeyRouteAt([released, running], TAP, TODAY)?.id).toBe("running");
-    expect(journeyRouteAt([released, route({ id: "older" })], TAP, TODAY)?.id).toBe("released");
+    expect(
+      journeyRouteAt([released, route({ id: "older" })], TAP, TODAY)?.id,
+    ).toBe("released");
     expect(journeyRouteAt([], TAP, TODAY)).toBeNull();
   });
 });

@@ -168,8 +168,11 @@ describe("a request queued while another one hangs on the provider", () => {
       expect(await statusWithin(lateId, 3_000)).toBe("COMPLETED");
 
       expect(
-        (await prisma.aIAnalysisRequest.findUniqueOrThrow({ where: { id: hungId } }))
-          .status,
+        (
+          await prisma.aIAnalysisRequest.findUniqueOrThrow({
+            where: { id: hungId },
+          })
+        ).status,
       ).toBe("PROCESSING");
     } finally {
       hung.resolve();
@@ -177,8 +180,11 @@ describe("a request queued while another one hangs on the provider", () => {
     }
 
     expect(
-      (await prisma.aIAnalysisRequest.findUniqueOrThrow({ where: { id: hungId } }))
-        .status,
+      (
+        await prisma.aIAnalysisRequest.findUniqueOrThrow({
+          where: { id: hungId },
+        })
+      ).status,
     ).toBe("COMPLETED");
   });
 

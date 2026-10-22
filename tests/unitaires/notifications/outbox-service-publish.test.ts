@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { enterRequestContext, withoutRequestContext } from "@/shared/http/request-context";
+import {
+  enterRequestContext,
+  withoutRequestContext,
+} from "@/shared/http/request-context";
 
 /**
  * What `OutboxService` writes for an event (mutation run 06/10: the row's
@@ -12,18 +15,28 @@ const afterCommit = vi.hoisted(() => ({ created: [] as unknown[] }));
 const woken = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("@/../infra/database", () => ({
-  default: { domainOutboxEvent: { create: async (args: unknown) => void afterCommit.created.push(args) } },
+  default: {
+    domainOutboxEvent: {
+      create: async (args: unknown) => void afterCommit.created.push(args),
+    },
+  },
 }));
 
 vi.mock("@/shared/notifications/notification-pipeline-service", () => ({
-  NotificationPipelineService: { getInstance: () => ({ wake: () => void (woken.count += 1) }) },
+  NotificationPipelineService: {
+    getInstance: () => ({ wake: () => void (woken.count += 1) }),
+  },
 }));
 
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
-
 const created: Array<{ data: Record<string, unknown> }> = [];
-const tx = { domainOutboxEvent: { create: async (args: { data: Record<string, unknown> }) => void created.push(args) } };
+const tx = {
+  domainOutboxEvent: {
+    create: async (args: { data: Record<string, unknown> }) =>
+      void created.push(args),
+  },
+};
 
 const base = {
   topic: "delivery.created",
@@ -42,13 +55,16 @@ beforeEach(() => {
 
 describe("OutboxService.publish", () => {
   it("writes the row with the caller's key, tenant, actor and correlation", async () => {
-    await new OutboxService().publish(tx as never, {
-      ...base,
-      eventKey: "fixed-key",
-      businessId: "business-1",
-      actorId: "user-1",
-      correlationId: "corr-1",
-    } as never);
+    await new OutboxService().publish(
+      tx as never,
+      {
+        ...base,
+        eventKey: "fixed-key",
+        businessId: "business-1",
+        actorId: "user-1",
+        correlationId: "corr-1",
+      } as never,
+    );
 
     expect(created).toEqual([
       {
@@ -73,12 +89,20 @@ describe("OutboxService.publish", () => {
     });
 
     const [{ data }] = created;
-    expect(String(data.eventKey)).toMatch(/^delivery\.created:delivery-1:[0-9a-f-]{36}$/);
-    expect(data).toMatchObject({ businessId: null, actorId: null, correlationId: "request-7" });
+    expect(String(data.eventKey)).toMatch(
+      /^delivery\.created:delivery-1:[0-9a-f-]{36}$/,
+    );
+    expect(data).toMatchObject({
+      businessId: null,
+      actorId: null,
+      correlationId: "request-7",
+    });
   });
 
   it("has no correlation outside a request", async () => {
-    await withoutRequestContext(() => new OutboxService().publish(tx as never, base as never));
+    await withoutRequestContext(() =>
+      new OutboxService().publish(tx as never, base as never),
+    );
 
     expect(created[0].data.correlationId).toBeNull();
   });
@@ -100,7 +124,10 @@ describe("OutboxService.publish", () => {
 
 describe("OutboxService.publishAfterCommit", () => {
   it("writes through the database client and wakes the pipeline", async () => {
-    await new OutboxService().publishAfterCommit({ ...base, eventKey: "k" } as never);
+    await new OutboxService().publishAfterCommit({
+      ...base,
+      eventKey: "k",
+    } as never);
     await settle();
 
     expect(afterCommit.created).toHaveLength(1);

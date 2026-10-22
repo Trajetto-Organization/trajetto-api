@@ -7,7 +7,10 @@ import type {
   SaveDeliveryMessageTemplateProps,
 } from "./IDelivery-message-template-repository";
 
-import type { NotificationChannel, DeliveryMessageTopic as PrismaTopic } from "@prisma/client";
+import type {
+  NotificationChannel,
+  DeliveryMessageTopic as PrismaTopic,
+} from "@prisma/client";
 
 class DeliveryMessageTemplateRepository
   implements IDeliveryMessageTemplateRepository

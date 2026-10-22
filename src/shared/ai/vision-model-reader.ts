@@ -78,7 +78,10 @@ class VisionModelReader implements ImageReader {
 
     const { text, usage } = await this.provider.complete({
       // Only a model wants base64; OCR gets the bytes as they are.
-      image: { base64: image.bytes.toString("base64"), mediaType: image.mediaType },
+      image: {
+        base64: image.bytes.toString("base64"),
+        mediaType: image.mediaType,
+      },
       prompt,
       maxTokens: AI_MAX_OUTPUT_TOKENS,
     });

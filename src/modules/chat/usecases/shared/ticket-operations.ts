@@ -8,7 +8,10 @@ import type {
   SupportTicketOutcome,
 } from "../../dtos/support-ticket-dto";
 
-import { sendSupportTicketEvent, type SupportTicketRealtimeType } from "@/websocket";
+import {
+  sendSupportTicketEvent,
+  type SupportTicketRealtimeType,
+} from "@/websocket";
 
 import { occurrenceTicketSubject } from "./ticket-rules";
 import { driverTicketView, presentTicket } from "./ticket-presenter";
@@ -58,7 +61,11 @@ async function openOccurrenceTicket(
   // Another driver's ticket (the delivery was reassigned) is not this
   // driver's context: the occurrence gets its own ticket instead.
   if (existing && existing.driverId === input.driverId) {
-    const ticket = await deps.tickets.linkOccurrence(existing.id, input.occurrenceId, tx);
+    const ticket = await deps.tickets.linkOccurrence(
+      existing.id,
+      input.occurrenceId,
+      tx,
+    );
 
     await deps.tickets.addEvent(
       {
@@ -79,7 +86,11 @@ async function openOccurrenceTicket(
   // The thread is the channel: an upsert that converges between replicas,
   // on the report's own connection (a second pooled one mid-transaction
   // starves the pool at peak, and would survive a rollback).
-  const thread = await deps.chat.getOrCreateThread(input.businessId, input.driverId, tx);
+  const thread = await deps.chat.getOrCreateThread(
+    input.businessId,
+    input.driverId,
+    tx,
+  );
 
   const ticket = await deps.tickets.create(
     {
@@ -87,7 +98,10 @@ async function openOccurrenceTicket(
       threadId: thread.id,
       driverId: input.driverId,
       kind: "OCCURRENCE",
-      subject: occurrenceTicketSubject(input.occurrenceTypeName, input.recipientName),
+      subject: occurrenceTicketSubject(
+        input.occurrenceTypeName,
+        input.recipientName,
+      ),
       deliveryId: input.deliveryId,
       occurrenceId: input.occurrenceId,
       opened_via: "OCCURRENCE_REPORT",
@@ -132,7 +146,11 @@ async function closeTicketForOccurrence(
   input: CloseForOccurrenceInput,
   tx: unknown,
 ): Promise<SupportTicket | null> {
-  const found = await tickets.findByOccurrence(input.occurrenceId, input.businessId, tx);
+  const found = await tickets.findByOccurrence(
+    input.occurrenceId,
+    input.businessId,
+    tx,
+  );
 
   if (!found) return null;
 
@@ -223,7 +241,11 @@ async function recordAuthorizationSuperseded(
   input: { occurrenceId: string; businessId: string },
   tx: unknown,
 ): Promise<SupportTicket | null> {
-  const found = await tickets.findByOccurrence(input.occurrenceId, input.businessId, tx);
+  const found = await tickets.findByOccurrence(
+    input.occurrenceId,
+    input.businessId,
+    tx,
+  );
 
   if (!found) return null;
 
@@ -307,14 +329,21 @@ class OccurrenceTicketService {
   ) {}
 
   open(input: OpenOccurrenceTicketInput, tx: unknown) {
-    return openOccurrenceTicket({ tickets: this.tickets, chat: this.chat }, input, tx);
+    return openOccurrenceTicket(
+      { tickets: this.tickets, chat: this.chat },
+      input,
+      tx,
+    );
   }
 
   closeForOccurrence(input: CloseForOccurrenceInput, tx: unknown) {
     return closeTicketForOccurrence(this.tickets, input, tx);
   }
 
-  recordSuperseded(input: { occurrenceId: string; businessId: string }, tx: unknown) {
+  recordSuperseded(
+    input: { occurrenceId: string; businessId: string },
+    tx: unknown,
+  ) {
     return recordAuthorizationSuperseded(this.tickets, input, tx);
   }
 

@@ -25,7 +25,9 @@ function isNull(value: OrderValue): value is null | undefined {
   return value === null || value === undefined;
 }
 
-function comparable(value: Exclude<OrderValue, null | undefined>): string | number {
+function comparable(
+  value: Exclude<OrderValue, null | undefined>,
+): string | number {
   if (value instanceof Date) return value.getTime();
 
   // false < true, as Postgres orders booleans.
@@ -56,7 +58,7 @@ function compareCodePoints(a: string, b: string): number {
     index += left > 0xffff ? 2 : 1;
   }
 
-  return Math.sign((a.length - index) - (b.length - index));
+  return Math.sign(a.length - index - (b.length - index));
 }
 
 /**
@@ -96,4 +98,9 @@ function compareForOrder(
   return order === "asc" ? base : -base;
 }
 
-export { compareCodePoints, compareForOrder, type NullsPlacement, type OrderValue };
+export {
+  compareCodePoints,
+  compareForOrder,
+  type NullsPlacement,
+  type OrderValue,
+};

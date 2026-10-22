@@ -64,7 +64,10 @@ function partListWhere(
     );
   }
 
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Parts and the sum of their prices per supplier (null = no supplier). */

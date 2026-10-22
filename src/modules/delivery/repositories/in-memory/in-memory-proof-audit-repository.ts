@@ -31,7 +31,10 @@ function byQueueOrder(left: ProofAuditRecord, right: ProofAuditRecord): number {
 }
 
 /** Postgres ORDER BY reviewed_at DESC (nulls first, its default), id DESC. */
-function byDecisionOrder(left: ProofAuditRecord, right: ProofAuditRecord): number {
+function byDecisionOrder(
+  left: ProofAuditRecord,
+  right: ProofAuditRecord,
+): number {
   if (left.reviewed_at === null && right.reviewed_at !== null) return -1;
   if (right.reviewed_at === null && left.reviewed_at !== null) return 1;
 
@@ -209,7 +212,10 @@ class InMemoryProofAuditRepository implements IProofAuditRepository {
           reviewerName: entry.reviewedById
             ? (this.reviewers.get(entry.reviewedById) ?? null)
             : null,
-          analysisStatus: this.latestAnalysisStatus(businessId, entry.deliveryId),
+          analysisStatus: this.latestAnalysisStatus(
+            businessId,
+            entry.deliveryId,
+          ),
         })),
 
       total: filtered.length,

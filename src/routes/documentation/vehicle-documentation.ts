@@ -37,7 +37,9 @@ const dateLike = z.union([z.string(), z.date()]);
 
 const statusEnum = z
   .enum(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"])
-  .describe("IN_ROUTE é escrito pela rota; as pessoas escolhem entre os outros três.");
+  .describe(
+    "IN_ROUTE é escrito pela rota; as pessoas escolhem entre os outros três.",
+  );
 
 /** One line of GET /vehicle/list-vehicle. */
 const vehicleListItem = z.object({
@@ -55,7 +57,9 @@ const vehicleListItem = z.object({
   maintenance_interval_km: z.number(),
   maintenance_interval_months: z.number().int(),
   renavam: z.string(),
-  manufacturing_year: dateLike.describe("1º de janeiro do ano (UTC); só o ano conta."),
+  manufacturing_year: dateLike.describe(
+    "1º de janeiro do ano (UTC); só o ano conta.",
+  ),
   model_year: dateLike.describe("1º de janeiro do ano (UTC); só o ano conta."),
   km_per_liter: z.number().describe("Até duas casas decimais."),
   number_of_axles: z.number().int(),
@@ -80,7 +84,9 @@ const vehicleSearchItem = vehicleListItem
     driver: z
       .object({ name: z.string() })
       .nullable()
-      .describe("O motorista responsável, para o seletor dizer de quem é o veículo."),
+      .describe(
+        "O motorista responsável, para o seletor dizer de quem é o veículo.",
+      ),
     vehicleType: z
       .object({
         description: z.string(),
@@ -105,7 +111,9 @@ const vehicleListSearchMetaDoc = searchMetaDoc(
     total: z
       .number()
       .int()
-      .describe("Veículos da busca e dos demais filtros, sem o de status (o total dos cartões)."),
+      .describe(
+        "Veículos da busca e dos demais filtros, sem o de status (o total dos cartões).",
+      ),
     statusCounts: z
       .object({
         ACTIVE: z.number().int(),
@@ -113,12 +121,15 @@ const vehicleListSearchMetaDoc = searchMetaDoc(
         BLOCKED: z.number().int(),
         IN_ROUTE: z.number().int(),
       })
-      .describe("Os quatro status sobre a mesma base de `total`; somam `total`."),
+      .describe(
+        "Os quatro status sobre a mesma base de `total`; somam `total`.",
+      ),
   },
   ["status", "branchId"],
 );
 
-const message = (text: string) => z.object({ message: z.string().default(text) });
+const message = (text: string) =>
+  z.object({ message: z.string().default(text) });
 
 const vehicleResponses = {
   vehicleCreated: message("Veículo criado com sucesso!"),
@@ -135,8 +146,14 @@ const vehicleResponses = {
     brand: z.string().describe("Marca"),
     model: z.string().describe("Modelo"),
     acquisition_date: dateLike.describe("Data de aquisição"),
-    fleet_type: z.enum(["OWNED", "THIRD_PARTY"]).describe("Frota própria ou terceirizada"),
-    fleet_id: z.string().nullable().optional().describe("Identificador na frota"),
+    fleet_type: z
+      .enum(["OWNED", "THIRD_PARTY"])
+      .describe("Frota própria ou terceirizada"),
+    fleet_id: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("Identificador na frota"),
     last_maintenance_date: dateLike
       .nullable()
       .optional()
@@ -148,17 +165,31 @@ const vehicleResponses = {
       .optional()
       .describe("Quilometragem da última manutenção"),
     maintenance_interval_km: z.number().describe("Intervalo de revisão em km"),
-    maintenance_interval_months: z.number().describe("Intervalo de revisão em meses"),
+    maintenance_interval_months: z
+      .number()
+      .describe("Intervalo de revisão em meses"),
     renavam: z.string().describe("RENAVAM"),
-    manufacturing_year: dateLike.describe("Ano de fabricação (1º de janeiro, UTC)"),
+    manufacturing_year: dateLike.describe(
+      "Ano de fabricação (1º de janeiro, UTC)",
+    ),
     model_year: dateLike.describe("Ano do modelo (1º de janeiro, UTC)"),
-    km_per_liter: z.number().describe("Consumo em km/l, até duas casas decimais"),
+    km_per_liter: z
+      .number()
+      .describe("Consumo em km/l, até duas casas decimais"),
     number_of_axles: z.number().describe("Número de eixos"),
     status: statusEnum,
     businessId: z.string().describe("ID da empresa"),
-    vehicleTypeId: z.string().nullable().optional().describe("ID do tipo de veículo"),
+    vehicleTypeId: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("ID do tipo de veículo"),
     fuelTypeId: z.string().describe("ID do tipo de combustível"),
-    driverId: z.string().nullable().optional().describe("ID do motorista responsável"),
+    driverId: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("ID do motorista responsável"),
     branchId: z.string().nullable().optional().describe("ID da filial"),
     last_fuel_mileage: z
       .number()

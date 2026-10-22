@@ -23,7 +23,8 @@ import type { UploadService } from "@/shared/services/upload-service";
  * recipient and no carrier from it.
  */
 const DELIVERY = "018f0000-0000-7000-8000-0000000000e1";
-const TOKEN = "9f1c2a4e6b8d0f3a5c7e9b1d3f5a7c9e9f1c2a4e6b8d0f3a5c7e9b1d3f5a7c9e";
+const TOKEN =
+  "9f1c2a4e6b8d0f3a5c7e9b1d3f5a7c9e9f1c2a4e6b8d0f3a5c7e9b1d3f5a7c9e";
 
 const bytes = Buffer.from("%PDF-1.7 comprovante");
 
@@ -83,7 +84,9 @@ async function verify(timezone?: string | null) {
     getFileUrl: async () => "https://signed.example/doc-1.pdf",
   } as unknown as UploadService;
 
-  return new VerifyProofDocumentUseCase(documents, uploads).execute({ token: TOKEN });
+  return new VerifyProofDocumentUseCase(documents, uploads).execute({
+    token: TOKEN,
+  });
 }
 
 describe("the public verification summary", () => {
@@ -101,8 +104,12 @@ describe("the public verification summary", () => {
   });
 
   it("falls back to Brasília for a company with no zone or an unknown one, like the PDF", async () => {
-    expect((await verify(undefined)).summary.timeZone).toBe("America/Sao_Paulo");
+    expect((await verify(undefined)).summary.timeZone).toBe(
+      "America/Sao_Paulo",
+    );
     expect((await verify("")).summary.timeZone).toBe("America/Sao_Paulo");
-    expect((await verify("Not/A_Zone")).summary.timeZone).toBe("America/Sao_Paulo");
+    expect((await verify("Not/A_Zone")).summary.timeZone).toBe(
+      "America/Sao_Paulo",
+    );
   });
 });

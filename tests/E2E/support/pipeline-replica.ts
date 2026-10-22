@@ -32,7 +32,11 @@ import { container } from "tsyringe";
  * a SIGKILL from the parent is the crash.
  */
 const FAKE = process.env.FAKE_PROVIDER_URL ?? "";
-const WORKERS = new Set((process.env.REPLICA_WORKERS ?? "notifications").split(",").map((w) => w.trim()));
+const WORKERS = new Set(
+  (process.env.REPLICA_WORKERS ?? "notifications")
+    .split(",")
+    .map((w) => w.trim()),
+);
 
 const REWRITTEN_HOSTS = ["https://graph.facebook.com", "https://exp.host"];
 
@@ -48,11 +52,22 @@ const REPLICA_HEADER = "x-replica-pid";
 function tagged(init?: RequestInit): RequestInit {
   const headers = Object.fromEntries(new Headers(init?.headers).entries());
 
-  return { ...init, headers: { ...headers, [REPLICA_HEADER]: String(process.pid) } };
+  return {
+    ...init,
+    headers: { ...headers, [REPLICA_HEADER]: String(process.pid) },
+  };
 }
 
-globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+globalThis.fetch = ((
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+) => {
+  const url =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url;
   const host = REWRITTEN_HOSTS.find((prefix) => url.startsWith(prefix));
 
   if (host) return realFetch(`${FAKE}${url.slice(host.length)}`, tagged(init));
@@ -71,7 +86,11 @@ async function main(): Promise<void> {
 
   // After the app registered the real providers: the last registration wins.
   container.registerInstance("MailProvider", {
-    sendMail: async (message: { to: string; subject: string; referenceId?: string }) => {
+    sendMail: async (message: {
+      to: string;
+      subject: string;
+      referenceId?: string;
+    }) => {
       let response: Response;
 
       try {
@@ -80,7 +99,9 @@ async function main(): Promise<void> {
           headers: {
             "content-type": "application/json",
             [REPLICA_HEADER]: String(process.pid),
-            ...(message.referenceId ? { "Resend-Idempotency-Key": message.referenceId } : {}),
+            ...(message.referenceId
+              ? { "Resend-Idempotency-Key": message.referenceId }
+              : {}),
           },
           body: JSON.stringify({
             to: message.to,
@@ -90,14 +111,20 @@ async function main(): Promise<void> {
           signal: AbortSignal.timeout(10_000),
         });
       } catch (error) {
-        throw new MailDeliveryError("Falha ao enviar e-mail", { retryable: true, cause: error });
+        throw new MailDeliveryError("Falha ao enviar e-mail", {
+          retryable: true,
+          cause: error,
+        });
       }
 
       if (!response.ok) {
-        throw new MailDeliveryError(`Falha ao enviar e-mail (${response.status})`, {
-          retryable: response.status >= 500,
-          responseCode: response.status,
-        });
+        throw new MailDeliveryError(
+          `Falha ao enviar e-mail (${response.status})`,
+          {
+            retryable: response.status >= 500,
+            responseCode: response.status,
+          },
+        );
       }
 
       const { messageId } = (await response.json()) as { messageId: string };
@@ -127,16 +154,21 @@ async function main(): Promise<void> {
     // The receiver is on loopback, which the production verifier refuses —
     // rightly. The claim, the send and the settling writes are the real ones.
     const { fetch: undiciFetch } = await import("undici");
-    const dispatcher = new WebhookDispatchService(async () => ({ allowed: true }), {
-      fetchImpl: ((url: string, init: Parameters<typeof undiciFetch>[1]) =>
-        undiciFetch(url, {
-          ...init,
-          headers: {
-            ...Object.fromEntries(new Headers(init?.headers as HeadersInit).entries()),
-            [REPLICA_HEADER]: String(process.pid),
-          },
-        })) as typeof undiciFetch,
-    });
+    const dispatcher = new WebhookDispatchService(
+      async () => ({ allowed: true }),
+      {
+        fetchImpl: ((url: string, init: Parameters<typeof undiciFetch>[1]) =>
+          undiciFetch(url, {
+            ...init,
+            headers: {
+              ...Object.fromEntries(
+                new Headers(init?.headers as HeadersInit).entries(),
+              ),
+              [REPLICA_HEADER]: String(process.pid),
+            },
+          })) as typeof undiciFetch,
+      },
+    );
 
     await dispatcher.initialize();
 
@@ -152,25 +184,30 @@ async function main(): Promise<void> {
   }
 
   if (WORKERS.has("ai")) {
-    const [{ AIAnalysisPipelineService }, { AIAnalysisProvider }, { LocalOcrReader }, { fakeImageLoader }] =
-      await Promise.all([
-        import("@/shared/ai/ai-analysis-pipeline-service"),
-        import("@/shared/ai/ai-provider"),
-        import("@/shared/ai/local/local-ocr-reader"),
-        import("@/shared/ai/testing/fake-image-reader"),
-      ]);
+    const [
+      { AIAnalysisPipelineService },
+      { AIAnalysisProvider },
+      { LocalOcrReader },
+      { fakeImageLoader },
+    ] = await Promise.all([
+      import("@/shared/ai/ai-analysis-pipeline-service"),
+      import("@/shared/ai/ai-provider"),
+      import("@/shared/ai/local/local-ocr-reader"),
+      import("@/shared/ai/testing/fake-image-reader"),
+    ]);
 
     const pipeline = AIAnalysisPipelineService.getInstance();
 
-    (pipeline as unknown as { provider: unknown }).provider = new AIAnalysisProvider(
-      new LocalOcrReader({
-        url: FAKE,
-        token: "t".repeat(40),
-        timeoutMs: Number(process.env.REPLICA_AI_TIMEOUT_MS ?? 20_000),
-        maxConcurrency: 2,
-      }),
-      fakeImageLoader,
-    );
+    (pipeline as unknown as { provider: unknown }).provider =
+      new AIAnalysisProvider(
+        new LocalOcrReader({
+          url: FAKE,
+          token: "t".repeat(40),
+          timeoutMs: Number(process.env.REPLICA_AI_TIMEOUT_MS ?? 20_000),
+          maxConcurrency: 2,
+        }),
+        fakeImageLoader,
+      );
 
     await pipeline.initialize();
     pipeline.wake();
@@ -211,6 +248,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  process.stderr.write(`replica failed to boot: ${error instanceof Error ? error.stack : String(error)}\n`);
+  process.stderr.write(
+    `replica failed to boot: ${error instanceof Error ? error.stack : String(error)}\n`,
+  );
   process.exit(1);
 });

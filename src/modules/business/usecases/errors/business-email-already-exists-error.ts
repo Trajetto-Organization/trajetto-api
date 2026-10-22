@@ -6,7 +6,11 @@ import { AppError } from "@/shared/errors/AppError";
  */
 class BusinessEmailAlreadyExistsError extends AppError {
   constructor() {
-    super("Já existe uma empresa com este e-mail.", 409, "BUSINESS_EMAIL_TAKEN");
+    super(
+      "Já existe uma empresa com este e-mail.",
+      409,
+      "BUSINESS_EMAIL_TAKEN",
+    );
   }
 }
 

@@ -16,8 +16,14 @@ import {
  */
 const listQuotesQuerySchema = listPagesSchema.extend({
   ...sortFields(QUOTE_SORT_KEYS, QUOTE_SORT_FALLBACK),
-  status: facetField(QUOTE_STATUSES, "Estágio do orçamento: PENDING, CONTACTED, CLOSED ou CONVERTED."),
-  fleet_size: facetField(QUOTE_FLEET_SIZES, "Tamanho da frota informado no pedido."),
+  status: facetField(
+    QUOTE_STATUSES,
+    "Estágio do orçamento: PENDING, CONTACTED, CLOSED ou CONVERTED.",
+  ),
+  fleet_size: facetField(
+    QUOTE_FLEET_SIZES,
+    "Tamanho da frota informado no pedido.",
+  ),
 });
 
 export { listQuotesQuerySchema };

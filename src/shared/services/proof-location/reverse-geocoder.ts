@@ -82,9 +82,7 @@ function reverseUrl(
   latitude: number,
   longitude: number,
 ): string {
-  const url = new URL(
-    `${config.url!.replace(/\/+$/, "")}/reverse`,
-  );
+  const url = new URL(`${config.url!.replace(/\/+$/, "")}/reverse`);
 
   url.searchParams.set("format", "jsonv2");
   url.searchParams.set("lat", String(latitude));

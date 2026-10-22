@@ -20,7 +20,9 @@ vi.mock("@/../infra/database", () => ({
     $queryRaw: vi
       .fn()
       .mockRejectedValue(
-        new Error("Can't reach database server at `trajetto-database-internal:5432`"),
+        new Error(
+          "Can't reach database server at `trajetto-database-internal:5432`",
+        ),
       ),
   },
 }));

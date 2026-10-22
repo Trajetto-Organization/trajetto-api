@@ -1,11 +1,13 @@
 # Variáveis de ambiente da API
 
-> Toda variável que a API, a stack de produção, os serviços auxiliares, os
-> scripts de operação e o CI leem: para que serve, se é obrigatória, se é
-> segredo, o formato, o valor em cada ambiente e onde ela mora. O modelo
-> versionado, comentado, é o [`.env.example`](../.env.example) (o teste
+> Toda variável que a API, os serviços auxiliares (`trajetto-ai` e
+> `trajetto-backup`), os scripts de operação e o CI leem: para que serve, se é
+> obrigatória, se é segredo, o formato, o valor em cada ambiente e **onde ela
+> é definida**. O modelo versionado, comentado, é o
+> [`.env.example`](../.env.example) (o teste
 > `tests/unitaires/security/env-example.test.ts` mantém a lista igual ao
-> schema). Como montar cada ambiente no Dokploy: [`deploy.md`](./deploy.md).
+> schema). Como montar cada ambiente no Dokploy, clique a clique:
+> [`deploy.md`](./deploy.md#7-montar-o-dokploy-do-zero-staging-e-produção).
 
 ## Sumário
 
@@ -25,7 +27,7 @@
 - [10. Comprovante de entrega](#10-comprovante-de-entrega)
 - [11. Documentação, app, webhooks e auditoria](#11-documentação-app-webhooks-e-auditoria)
 - [12. Monitoramento](#12-monitoramento)
-- [13. Só na stack (`compose.production.yaml`)](#13-só-na-stack-composeproductionyaml)
+- [13. Configurações do Dokploy que não são variáveis](#13-configurações-do-dokploy-que-não-são-variáveis)
 - [14. Serviço de backup](#14-serviço-de-backup)
 - [15. Scripts de operação no host](#15-scripts-de-operação-no-host)
 - [16. GitHub Actions](#16-github-actions)
@@ -35,18 +37,23 @@
 
 ## Onde cada valor mora
 
-| Ambiente        | Onde                                                                         | Observação                                                                                                                                              |
-| --------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Desenvolvimento | `.env` na raiz (copiado de `.env.example`)                                   | o **único** arquivo que a API lê; `.env.development`, `.env.staging`, `.env.production` e `.env.test` não são carregados por nada e não são versionados |
-| Staging         | _Environment_ do app Compose `trajetto-staging` no Dokploy                   | o mesmo compose da produção; muda o valor                                                                                                               |
-| Produção        | _Environment_ do app Compose `trajetto` no Dokploy                           | idem                                                                                                                                                    |
-| CI (validação)  | bloco `env:` dos workflows                                                   | valores fixos de teste, sem segredo (banco e Redis dos service containers)                                                                              |
-| CI (deploy)     | _environments_ `staging` e `production` do GitHub e variáveis do repositório | seção 16                                                                                                                                                |
+| Ambiente                          | Onde                                                                                                                               | Observação                                                                                                                                              |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desenvolvimento                   | `.env` na raiz (copiado de `.env.example`)                                                                                         | o **único** arquivo que a API lê; `.env.development`, `.env.staging`, `.env.production` e `.env.test` não são carregados por nada e não são versionados |
+| Staging e produção: API           | aba _Environment_ da Application **`trajetto-api`**, no projeto `trajetto-api` do environment `staging` ou `production` do Dokploy | seções 1 a 12 deste documento; uma variável por linha, `NOME=valor`, sem aspas                                                                          |
+| Staging e produção: IA            | aba _Environment_ da Application **`trajetto-ai`**                                                                                 | seção 9 (`AI_TOKEN`, `OCR_THREADS`, `AI_MAX_QUEUE`)                                                                                                     |
+| Staging e produção: backup        | aba _Environment_ da Application **`trajetto-backup`**                                                                             | seção 14 (`PG*` e `BACKUP_*`)                                                                                                                           |
+| Staging e produção: banco e Redis | campos dos Databases **PostgreSQL** e **Redis** do Dokploy (usuário, senha, banco, imagem, comando)                                | não são variáveis de ambiente que você digita; a seção 13 diz quais campos e onde cada valor reaparece                                                  |
+| CI (validação)                    | bloco `env:` dos workflows                                                                                                         | valores fixos de teste, sem segredo (banco e Redis dos service containers)                                                                              |
+| CI (deploy)                       | _environments_ `staging` e `production` do GitHub e variáveis do repositório                                                       | seção 16                                                                                                                                                |
+
+Salvar o _Environment_ de uma Application não reinicia nada: a mudança vale
+no próximo **Deploy** (do painel ou do pipeline).
 
 O app mobile não lê nada daqui (a URL da API dele vem dos environments do EAS,
 `trajetto-mobile/docs/variaveis-de-ambiente.md`); a web lê as dela no
-Environment do app da web (`trajetto-ui/docs/variaveis-de-ambiente.md`) e
-divide com a API só `RATE_LIMIT_FORWARDER_SECRET` e `TURNSTILE_SECRET_KEY`.
+Environment da Application da web (`trajetto-ui/docs/variaveis-de-ambiente.md`)
+e divide com a API só `RATE_LIMIT_FORWARDER_SECRET` e `TURNSTILE_SECRET_KEY`.
 A tabela completa do que precisa casar entre a API, a web e o app (URLs,
 origens, segredos compartilhados, R2, IA, push) é a mesma nos três
 repositórios: [`deploy.md` → Os três repositórios juntos](./deploy.md#26-os-três-repositórios-juntos).
@@ -57,12 +64,13 @@ repositórios: [`deploy.md` → Os três repositórios juntos](./deploy.md#26-os
   do arquivo funciona) e valida com o schema zod
   `src/schemas/env-schema/index.ts`. Valor faltando ou inválido derruba o
   boot com `Invalid enviroment variables` e a lista do que corrigir.
-- **Vazio conta como ausente** (`defined-env.ts`): o compose repassa uma
-  variável não definida como `""`, e o padrão dela continua valendo.
-- O compose de produção **não usa `env_file`**: cada variável que a API lê
-  precisa estar listada no `environment:` do serviço `api`. Definir no Dokploy
-  uma variável que o compose não repassa não faz nada (o teste
-  `compose-proof-env.test.ts` confere as do comprovante).
+- Em staging e produção não há `.env`: o contêiner recebe exatamente as
+  variáveis do _Environment_ da Application `trajetto-api`. Toda variável que
+  a API lê pode ser definida lá; a que não estiver lá não existe (vale o
+  padrão). `${VAR}` **não** é expandido no Environment do Dokploy: escreva os
+  valores por extenso (por exemplo, a `DATABASE_URL` inteira).
+- **Vazio conta como ausente** (`defined-env.ts`): `NOME=` vale o mesmo que
+  não ter a linha, e o padrão dela continua valendo.
 - Travas de produção (`NODE_ENV=production`, que a imagem sempre é):
   `UPLOAD_STORAGE_TYPE=r2` com as quatro `R2_*`; `RATE_LIMIT_TRUSTED_PROXY`
   definida; servidores públicos do OpenStreetMap recusados; `https` no mapa e
@@ -70,18 +78,19 @@ repositórios: [`deploy.md` → Os três repositórios juntos](./deploy.md#26-os
   `JWT_SECRET_REFRESH_TOKEN` com 32+ caracteres, diferentes entre si e sem o
   prefixo `GENERATE_`.
 - `DATABASE_URL` não está no schema: quem a lê é o Prisma (e os scripts de
-  boot).
+  boot). Sem ela o boot para ao esperar o Postgres.
 
 ## Como gerar os segredos
 
-| Segredo                                                                                     | Comando                                                                                         |
-| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`                                                    | `openssl rand -base64 48` (duas vezes: valores diferentes)                                      |
-| `REDIS_PASSWORD`, `AI_LOCAL_TOKEN`, `RATE_LIMIT_FORWARDER_SECRET`, `RATE_LIMIT_EDGE_SECRET` | `openssl rand -hex 32`                                                                          |
-| `WEBHOOK_SECRETS_KEY`                                                                       | `openssl rand -base64 32` (exatamente 32 bytes)                                                 |
-| `POSTGRES_PASSWORD`, `MASTER_USER_INITIAL_PASSWORD`, `DOCS_PASSWORD` (20+)                  | `openssl rand -base64 24` (ou o gerenciador de senhas)                                          |
-| `BACKUP_AGE_RECIPIENT`                                                                      | `age-keygen -o trajetto-backup.agekey` → a linha `public key` (a privada fica fora do servidor) |
-| chaves SSH do CI                                                                            | `ssh-keygen -t ed25519 -f <nome> -N ''`                                                         |
+| Segredo                                                                                                              | Comando                                                                                         |
+| -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`                                                                             | `openssl rand -base64 48` (duas vezes: valores diferentes)                                      |
+| senha do Redis, token da IA (`AI_LOCAL_TOKEN` = `AI_TOKEN`), `RATE_LIMIT_FORWARDER_SECRET`, `RATE_LIMIT_EDGE_SECRET` | `openssl rand -hex 32`                                                                          |
+| senha do Postgres                                                                                                    | `openssl rand -hex 24` (hex: entra na `DATABASE_URL` sem escape)                                |
+| `WEBHOOK_SECRETS_KEY`                                                                                                | `openssl rand -base64 32` (exatamente 32 bytes)                                                 |
+| `MASTER_USER_INITIAL_PASSWORD`, `DOCS_PASSWORD` (20+)                                                                | `openssl rand -base64 24` (ou o gerenciador de senhas)                                          |
+| `BACKUP_AGE_RECIPIENT`                                                                                               | `age-keygen -o trajetto-backup.agekey` → a linha `public key` (a privada fica fora do servidor) |
+| chaves SSH do CI                                                                                                     | `ssh-keygen -t ed25519 -f <nome> -N ''`                                                         |
 
 Nenhum segredo vai para o repositório, para o log nem para um print. Segredos
 **diferentes** em staging e produção.
@@ -89,62 +98,80 @@ Nenhum segredo vai para o repositório, para o log nem para um print. Segredos
 ## Legenda
 
 - **Obrig.**: `sempre` (o boot falha sem ela em qualquer ambiente), `prod`
-  (o boot falha sem ela com `NODE_ENV=production`), `stack` (o
-  `compose.production.yaml` não renderiza sem ela), `não`.
+  (o boot falha sem ela com `NODE_ENV=production`), `deploy` (o boot não
+  exige, mas sem ela o ambiente fica errado — defina em staging e produção),
+  `não`.
 - **Segredo**: 🔒 = trate como senha (Dokploy, gerenciador de senhas; nunca em
   log); vazio = não é segredo.
 - **Dev / Staging / Produção**: o valor esperado em cada ambiente; "—" = não
-  definir.
+  definir. Salvo indicação, staging e produção ficam no _Environment_ da
+  Application `trajetto-api`.
 
 ## 1. Identidade e processo
 
-| Variável                       | Obrig. | Segredo | Formato / padrão                                                 | Dev               | Staging                                    | Produção                       | Para quê                                                                                                                                                                |
-| ------------------------------ | ------ | ------- | ---------------------------------------------------------------- | ----------------- | ------------------------------------------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                     | não    |         | `development`\|`test`\|`production`; padrão `development`        | `development`     | `production` (fixo no compose e na imagem) | `production`                   | liga as travas de produção; o build inlina `production`                                                                                                                 |
-| `APP_ENV`                      | stack  |         | `development`\|`staging`\|`production`; vazio segue o `NODE_ENV` | `development`     | `staging`                                  | `production`                   | qual implantação é esta (a imagem é a mesma); `staging`/`production` exigem `NODE_ENV=production`                                                                       |
-| `PORT`                         | não    |         | número; padrão `3333`                                            | `3333`            | —                                          | —                              | porta do HTTP (o Traefik fala com 3333)                                                                                                                                 |
-| `LOG_LEVEL`                    | não    |         | `fatal`…`trace`\|`silent`; padrão `info`                         | `info` ou `debug` | `info`                                     | `info`                         | nível do logger único; `debug` acrescenta as linhas por socket                                                                                                          |
-| `WORKERS_ENABLED`              | não    |         | `true`\|`false`; padrão `true`                                   | `true`            | `true`                                     | `true`                         | se esta réplica roda pipelines, dispatcher de webhooks e crons; `false` só com um serviço `worker` dedicado ([deploy.md](./deploy.md#19-réplicas-workers-e-tempo-real)) |
-| `PIPELINE_SWEEP_INTERVAL_MS`   | não    |         | ≥ 500; padrão `30000`                                            | —                 | —                                          | — (`2000` num worker dedicado) | varredura de fundo dos pipelines                                                                                                                                        |
-| `WAIT_FOR_POSTGRES_TIMEOUT_MS` | não    |         | ms; padrão `120000`                                              | —                 | —                                          | —                              | quanto o boot espera o Postgres responder                                                                                                                               |
-| `UV_THREADPOOL_SIZE`           | não    |         | número; `8` na imagem                                            | —                 | —                                          | —                              | threads do libuv (bcrypt, gzip, fs, dns); só mude com medição                                                                                                           |
-| `NODE_OPTIONS`                 | não    |         | montada pelo compose: `--max-old-space-size=${API_HEAP_MB}`      | —                 | —                                          | —                              | teto do heap do V8 (não defina à mão; use `API_HEAP_MB`)                                                                                                                |
+| Variável                       | Obrig. | Segredo | Formato / padrão                                                 | Dev               | Staging                     | Produção                       | Para quê                                                                                                                                                                                         |
+| ------------------------------ | ------ | ------- | ---------------------------------------------------------------- | ----------------- | --------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `NODE_ENV`                     | não    |         | `development`\|`test`\|`production`; padrão `development`        | `development`     | — (a imagem é `production`) | — (idem)                       | liga as travas de produção; o build inlina `production`                                                                                                                                          |
+| `APP_ENV`                      | deploy |         | `development`\|`staging`\|`production`; vazio segue o `NODE_ENV` | `development`     | `staging`                   | `production`                   | qual implantação é esta (a imagem é a mesma). **Nada obriga**: vazia, a API se comporta como produção. `staging`/`production` exigem `NODE_ENV=production`                                       |
+| `PORT`                         | não    |         | número; padrão `3333`                                            | `3333`            | —                           | —                              | porta do HTTP (o domínio da Application aponta para a 3333)                                                                                                                                      |
+| `LOG_LEVEL`                    | não    |         | `fatal`…`trace`\|`silent`; padrão `info`                         | `info` ou `debug` | `info`                      | `info`                         | nível do logger único; `debug` acrescenta as linhas por socket                                                                                                                                   |
+| `NODE_OPTIONS`                 | deploy |         | `--max-old-space-size=<MB>`                                      | —                 | `--max-old-space-size=768`  | `--max-old-space-size=768`     | teto do heap do V8, ~75 % do _Memory Limit_ da Application (1 GiB): um heap descontrolado termina num "heap out of memory" limpo, não num SIGKILL no meio de uma requisição. Suba os dois juntos |
+| `WORKERS_ENABLED`              | não    |         | `true`\|`false`; padrão `true`                                   | `true`            | `true`                      | `true`                         | se esta réplica roda pipelines, dispatcher de webhooks e crons; `false` só com uma Application `worker` dedicada ([deploy.md](./deploy.md#19-réplicas-workers-e-tempo-real))                     |
+| `PIPELINE_SWEEP_INTERVAL_MS`   | não    |         | ≥ 500; padrão `30000`                                            | —                 | —                           | — (`2000` num worker dedicado) | varredura de fundo dos pipelines                                                                                                                                                                 |
+| `WAIT_FOR_POSTGRES_TIMEOUT_MS` | não    |         | ms; padrão `120000`                                              | —                 | —                           | —                              | quanto o boot espera o Postgres responder                                                                                                                                                        |
+| `UV_THREADPOOL_SIZE`           | não    |         | número; `8` na imagem                                            | —                 | —                           | —                              | threads do libuv (bcrypt, gzip, fs, dns); só mude com medição                                                                                                                                    |
 
 ## 2. Banco de dados
 
-| Variável                                                                                                        | Obrig. | Segredo | Formato / padrão                                                              | Dev                                                         | Staging                               | Produção                                               | Para quê                                                                                                                                                                                                                                        |
-| --------------------------------------------------------------------------------------------------------------- | ------ | ------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                                                                                  | sempre | 🔒      | `postgresql://USER:SENHA@HOST:5432/BANCO?connection_limit=10&pool_timeout=20` | apontando para `127.0.0.1:5432` (pode usar `${POSTGRES_*}`) | **montada pelo compose** (não defina) | **montada pelo compose**                               | conexão do Prisma em runtime; em produção leva `socket_timeout`, `max_idle_connection_lifetime` e os tetos `statement_timeout`/`lock_timeout`/`idle_in_transaction_session_timeout` ([arquitetura.md](./arquitetura.md#conexão-com-o-postgres)) |
-| `MIGRATION_DATABASE_URL`                                                                                        | não    | 🔒      | URL sem tetos de runtime                                                      | — (vazio = usa a `DATABASE_URL`)                            | montada pelo compose                  | montada pelo compose                                   | `prisma migrate deploy` e os seeds do entrypoint (pool de 2)                                                                                                                                                                                    |
-| `POSTGRES_HOST`                                                                                                 | stack  |         | host                                                                          | `localhost`                                                 | `trajetto-database`                   | `trajetto-database`                                    | o nome do serviço do banco na rede interna                                                                                                                                                                                                      |
-| `POSTGRES_PORT`                                                                                                 | stack  |         | porta                                                                         | `5432`                                                      | `5432`                                | `5432`                                                 |                                                                                                                                                                                                                                                 |
-| `POSTGRES_USERNAME`                                                                                             | stack  |         | texto                                                                         | `postgres`                                                  | próprio                               | próprio                                                | usuário do Postgres (cria o banco no primeiro boot do volume)                                                                                                                                                                                   |
-| `POSTGRES_PASSWORD`                                                                                             | stack  | 🔒      | texto                                                                         | qualquer (local)                                            | **própria**                           | **própria**                                            | senha do Postgres                                                                                                                                                                                                                               |
-| `POSTGRES_DATABASE`                                                                                             | stack  |         | texto                                                                         | `trajetto`                                                  | próprio                               | próprio                                                | nome do banco                                                                                                                                                                                                                                   |
-| `POSTGRES_VOLUME`                                                                                               | stack  |         | nome de volume                                                                | —                                                           | ex. `trajetto-staging_postgres_data`  | `trajetto_postgres_data`                               | nome fixo do volume do banco; único por stack                                                                                                                                                                                                   |
-| `POSTGRES_IMAGE`                                                                                                | não    |         | imagem com digest; padrão `postgres:16-alpine`                                | —                                                           | o digest em uso                       | o digest em uso                                        | fixa a imagem do banco (a tag flutuante atualizaria o banco num deploy); o `restore-postgres.sh` usa a mesma                                                                                                                                    |
-| `RUN_MIGRATIONS_ON_BOOT`                                                                                        | não    |         | `true`\|`false`; padrão `true`                                                | —                                                           | `true`                                | `false` **depois** de ligar o job de migrations        | migrar e semear no boot de cada réplica                                                                                                                                                                                                         |
-| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                                | não    |         | `true`\|`false`; padrão `false`                                               | —                                                           | `true` só no primeiro boot            | `false` (`true` só numa instalação nova, uma vez)      | o boot de produção recusa banco sem nenhuma migration aplicada                                                                                                                                                                                  |
-| `PG_SHARED_BUFFERS`, `PG_EFFECTIVE_CACHE_SIZE`, `PG_WORK_MEM`, `PG_MAINTENANCE_WORK_MEM`, `PG_RANDOM_PAGE_COST` | não    |         | ex. `1GB`, `3GB`, `16MB`, `256MB`, `1.1`                                      | —                                                           | —                                     | só quando o bloco `command:` do banco for descomentado | tuning do Postgres ([deploy.md](./deploy.md#10-postgres-e-redis))                                                                                                                                                                               |
+O banco de staging e o de produção são Databases **PostgreSQL** do Dokploy
+(seção 13). A API recebe a conexão em duas URLs que **você monta** com os
+dados do Database (usuário, senha, banco e o _Internal Host_, que é o App
+Name). Os parâmetros depois do `?` são fixos — copie inteiros:
+
+```
+DATABASE_URL=postgresql://<USUÁRIO>:<SENHA>@<APP NAME DO POSTGRES>:5432/<BANCO>?schema=public&connection_limit=10&pool_timeout=20&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
+MIGRATION_DATABASE_URL=postgresql://<USUÁRIO>:<SENHA>@<APP NAME DO POSTGRES>:5432/<BANCO>?schema=public&connection_limit=2&connect_timeout=10
+```
+
+Exemplo de host: `trajetto-postgres-production` (staging:
+`trajetto-postgres-staging`). O porquê de cada parâmetro está em
+[`arquitetura.md`](./arquitetura.md#conexão-com-o-postgres).
+
+| Variável                                                                                        | Obrig. | Segredo      | Formato / padrão                | Dev                                                         | Staging                                | Produção                                          | Para quê                                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------- | ------ | ------------ | ------------------------------- | ----------------------------------------------------------- | -------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                                                                  | sempre | 🔒           | URL acima                       | apontando para `127.0.0.1:5432` (pode usar `${POSTGRES_*}`) | a URL acima, com o Postgres de staging | a URL acima, com o Postgres de produção           | conexão do Prisma em runtime: pool de 10, `socket_timeout`, `max_idle_connection_lifetime` e os tetos `statement_timeout`/`lock_timeout`/`idle_in_transaction_session_timeout`                                                                                    |
+| `MIGRATION_DATABASE_URL`                                                                        | deploy | 🔒           | URL sem tetos de runtime        | — (vazio = usa a `DATABASE_URL`)                            | a URL acima                            | a URL acima                                       | `prisma migrate deploy` e os seeds do entrypoint e do job de migrations (pool de 2). Sem ela as migrations rodam com os tetos de runtime e um `CREATE INDEX` longo é cancelado                                                                                    |
+| `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USERNAME`, `POSTGRES_PASSWORD`, `POSTGRES_DATABASE` | não    | 🔒 (a senha) | —                               | `localhost`, `5432`, `postgres`, qualquer, `trajetto`       | —                                      | —                                                 | **só desenvolvimento**: o `compose.development.yaml` cria o banco com elas e o `.env` monta a `DATABASE_URL`. Em staging e produção esses valores são campos do Database (seção 13). O `backup-postgres.sh` lê `POSTGRES_USERNAME`/`POSTGRES_DATABASE` (seção 14) |
+| `RUN_MIGRATIONS_ON_BOOT`                                                                        | não    |              | `true`\|`false`; padrão `true`  | —                                                           | `true`                                 | `false` **depois** de ligar o job de migrations   | migrar e semear no boot de cada réplica                                                                                                                                                                                                                           |
+| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                | não    |              | `true`\|`false`; padrão `false` | —                                                           | `true` só no primeiro boot             | `false` (`true` só numa instalação nova, uma vez) | o boot de produção recusa banco sem nenhuma migration aplicada                                                                                                                                                                                                    |
+
+Tuning do Postgres (`shared_buffers` e afins) não é variável: é o comando
+personalizado do Database ([deploy.md](./deploy.md#10-postgres-e-redis)).
 
 ## 3. Redis e tempo real
 
-| Variável               | Obrig. | Segredo        | Formato / padrão                            | Dev                      | Staging                  | Produção                 | Para quê                                                                                                              |
-| ---------------------- | ------ | -------------- | ------------------------------------------- | ------------------------ | ------------------------ | ------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `REDIS_URL`            | sempre | 🔒 (com senha) | `redis://[:SENHA@]HOST:PORT`                | `redis://localhost:6379` | **montada pelo compose** | **montada pelo compose** | rate limit e adapter do Socket.IO                                                                                     |
-| `REDIS_HOST`           | stack  |                | host                                        | `localhost`              | `trajetto-redis`         | `trajetto-redis`         | usado para montar o `REDIS_URL`                                                                                       |
-| `REDIS_PORT`           | stack  |                | porta                                       | `6379`                   | `6379`                   | `6379`                   | idem                                                                                                                  |
-| `REDIS_PASSWORD`       | stack  | 🔒             | hex de 32 bytes                             | —                        | **própria**              | **própria**              | senha do Redis da stack                                                                                               |
-| `REDIS_ENFORCE_AUTH`   | não    |                | `true`\|`false`; padrão `true`              | —                        | —                        | —                        | `false` só no primeiro rollout a partir de uma API sem senha no Redis                                                 |
-| `SOCKET_ADAPTER_KEY`   | não    |                | `[A-Za-z0-9._:-]{1,64}`; padrão `socket.io` | —                        | —                        | —                        | prefixo dos canais do adapter; só para duas stacks que dividam um Redis                                               |
-| `SOCKET_REVALIDATE_MS` | não    |                | ≥ 1000; padrão `180000`                     | —                        | —                        | —                        | de quanto em quanto cada réplica revalida no banco as sessões dos sockets (não repassada pelo compose: vale o padrão) |
+O Redis de cada ambiente é um Database **Redis** do Dokploy (seção 13), com
+senha. A API recebe:
+
+```
+REDIS_URL=redis://:<SENHA DO REDIS>@<APP NAME DO REDIS>:6379
+```
+
+(ex. `trajetto-redis-production`).
+
+| Variável                                     | Obrig. | Segredo        | Formato / padrão                            | Dev                        | Staging     | Produção    | Para quê                                                                                           |
+| -------------------------------------------- | ------ | -------------- | ------------------------------------------- | -------------------------- | ----------- | ----------- | -------------------------------------------------------------------------------------------------- |
+| `REDIS_URL`                                  | sempre | 🔒 (com senha) | `redis://[:SENHA@]HOST:PORT`                | `redis://localhost:6379`   | a URL acima | a URL acima | rate limit e adapter do Socket.IO                                                                  |
+| `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | não    |                | —                                           | `localhost`, `6379`, vazio | —           | —           | **só desenvolvimento** (o `.env` de dev); em staging e produção a senha é o campo do Database      |
+| `SOCKET_ADAPTER_KEY`                         | não    |                | `[A-Za-z0-9._:-]{1,64}`; padrão `socket.io` | —                          | —           | —           | prefixo dos canais do adapter; só para dois ambientes que dividam um Redis (cada um tem o próprio) |
+| `SOCKET_REVALIDATE_MS`                       | não    |                | ≥ 1000; padrão `180000`                     | —                          | —           | —           | de quanto em quanto cada réplica revalida no banco as sessões dos sockets                          |
 
 ## 4. URLs, sessão e usuário master
 
 | Variável                        | Obrig. | Segredo | Formato / padrão                   | Dev                     | Staging                                                      | Produção                                  | Para quê                                                                                                |
 | ------------------------------- | ------ | ------- | ---------------------------------- | ----------------------- | ------------------------------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `HTTP_REQUEST`                  | sempre |         | URL                                | `http://localhost:3000` | origem da web de staging                                     | `https://www.intrajetto.com`              | URL pública da **web**: única origem do CORS e base dos links (PDF, QR, rastreio, e-mails)              |
-| `API_HTTP_REQUEST`              | não    |         | URL                                | `http://localhost:3333` | URL da API de staging                                        | `https://trajettoapi.thorsolucoes.com.br` | URL pública da própria API                                                                              |
+| `HTTP_REQUEST`                  | sempre |         | URL                                | `http://localhost:3000` | `https://staging.intrajetto.com`                             | `https://www.intrajetto.com`              | URL pública da **web**: única origem do CORS e base dos links (PDF, QR, rastreio, e-mails)              |
+| `API_HTTP_REQUEST`              | não    |         | URL                                | `http://localhost:3333` | `https://trajettoapi-staging.thorsolucoes.com.br`            | `https://trajettoapi.thorsolucoes.com.br` | URL pública da própria API (o host é o da aba _Domains_ da Application)                                 |
 | `JWT_SECRET`                    | sempre | 🔒      | 32+ caracteres em staging/produção | qualquer                | **próprio**                                                  | **próprio**                               | assina o access token                                                                                   |
 | `JWT_SECRET_REFRESH_TOKEN`      | sempre | 🔒      | 32+, diferente do `JWT_SECRET`     | qualquer (diferente)    | **próprio**                                                  | **próprio**                               | assina o refresh token; perdê-lo desloga todo mundo                                                     |
 | `MASTER_USER_EMAIL`             | sempre |         | e-mail                             | `admin@example.com`     | o da equipe                                                  | o da equipe                               | usuário MASTER criado pelo seed                                                                         |
@@ -154,27 +181,27 @@ Nenhum segredo vai para o repositório, para o log nem para um print. Segredos
 
 ## 5. Borda, rate limit e anti-bot
 
-| Variável                      | Obrig. | Segredo | Formato / padrão                                         | Dev     | Staging                                               | Produção                       | Para quê                                                                                                    |
-| ----------------------------- | ------ | ------- | -------------------------------------------------------- | ------- | ----------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `RATE_LIMIT_TRUSTED_PROXY`    | prod   |         | `none`\|`xff`\|`cloudflare`; compose padrão `cloudflare` | `none`  | `cloudflare`                                          | `cloudflare`                   | de onde vem o endereço do cliente nos limites anônimos ([deploy.md](./deploy.md#11-domínios-tls-e-a-borda)) |
-| `RATE_LIMIT_FORWARDER_SECRET` | não    | 🔒      | 32+ caracteres                                           | vazio   | **o mesmo da web de staging**                         | **o mesmo da web de produção** | o servidor da web repassa o IP do navegador junto com ele; sem ele todo usuário web conta como um endereço  |
-| `RATE_LIMIT_EDGE_SECRET`      | não    | 🔒      | 32+ caracteres                                           | vazio   | opcional                                              | recomendado                    | valor da Transform Rule da Cloudflare (`x-trajetto-edge-secret`); só defina **depois** das regras ativas    |
-| `TURNSTILE_SECRET_KEY`        | não    | 🔒      | chave secreta do Turnstile                               | vazio   | a de staging                                          | a de produção (a mesma da web) | verifica o token do formulário público de orçamento                                                         |
-| `TURNSTILE_REQUIRED`          | não    |         | `true`\|`false`; padrão `false`                          | `false` | `true` quando a web que repassa o token estiver no ar | idem                           | recusa pedido sem token                                                                                     |
+| Variável                      | Obrig. | Segredo | Formato / padrão                                    | Dev     | Staging                                               | Produção                       | Para quê                                                                                                    |
+| ----------------------------- | ------ | ------- | --------------------------------------------------- | ------- | ----------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `RATE_LIMIT_TRUSTED_PROXY`    | prod   |         | `none`\|`xff`\|`cloudflare`; sem padrão em produção | `none`  | `cloudflare`                                          | `cloudflare`                   | de onde vem o endereço do cliente nos limites anônimos ([deploy.md](./deploy.md#11-domínios-tls-e-a-borda)) |
+| `RATE_LIMIT_FORWARDER_SECRET` | não    | 🔒      | 32+ caracteres                                      | vazio   | **o mesmo da web de staging**                         | **o mesmo da web de produção** | o servidor da web repassa o IP do navegador junto com ele; sem ele todo usuário web conta como um endereço  |
+| `RATE_LIMIT_EDGE_SECRET`      | não    | 🔒      | 32+ caracteres                                      | vazio   | opcional                                              | recomendado                    | valor da Transform Rule da Cloudflare (`x-trajetto-edge-secret`); só defina **depois** das regras ativas    |
+| `TURNSTILE_SECRET_KEY`        | não    | 🔒      | chave secreta do Turnstile                          | vazio   | a de staging                                          | a de produção (a mesma da web) | verifica o token do formulário público de orçamento                                                         |
+| `TURNSTILE_REQUIRED`          | não    |         | `true`\|`false`; padrão `false`                     | `false` | `true` quando a web que repassa o token estiver no ar | idem                           | recusa pedido sem token                                                                                     |
 
 ## 6. Arquivos (R2)
 
-| Variável                        | Obrig.      | Segredo | Formato / padrão                             | Dev                             | Staging               | Produção                                           | Para quê                                                                |
-| ------------------------------- | ----------- | ------- | -------------------------------------------- | ------------------------------- | --------------------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
-| `UPLOAD_STORAGE_TYPE`           | prod (`r2`) |         | `local`\|`r2`; padrão `local`                | `local`                         | `r2`                  | `r2`                                               | onde ficam fotos, assinaturas e PDFs                                    |
-| `UPLOAD_LOCAL_PATH`             | não         |         | caminho; padrão `./tmp`                      | `./tmp`                         | `./tmp`               | `./tmp`                                            | pasta do modo `local`                                                   |
-| `UPLOAD_SIGNED_URL_TTL_SECONDS` | não         |         | 60–3600; padrão `900`                        | —                               | —                     | —                                                  | validade das URLs assinadas (não repassada pelo compose: vale o padrão) |
-| `UPLOAD_ORPHAN_GC`              | não         |         | `off`\|`dry-run`\|`delete`; padrão `dry-run` | `dry-run`                       | `dry-run`             | `dry-run`, depois `delete` após ler alguns resumos | coletor noturno de objetos sem linha                                    |
-| `R2_ACCOUNT_ID`                 | prod        |         | id da conta Cloudflare                       | vazio                           | da conta              | da conta                                           |                                                                         |
-| `R2_BUCKET_NAME`                | prod        |         | nome                                         | vazio                           | **bucket de staging** | bucket de produção                                 | bucket **privado** de fotos (com CORS da web)                           |
-| `R2_ACCESS_KEY_ID`              | prod        | 🔒      |                                              | vazio                           | token de staging      | token de produção                                  | credencial S3 do R2                                                     |
-| `R2_SECRET_ACCESS_KEY`          | prod        | 🔒      |                                              | vazio                           | idem                  | idem                                               |                                                                         |
-| `R2_ENDPOINT`                   | não         |         | URL                                          | só nos testes de upload (MinIO) | —                     | —                                                  | endpoint S3 alternativo (path-style)                                    |
+| Variável                        | Obrig.      | Segredo | Formato / padrão                             | Dev                             | Staging               | Produção                                           | Para quê                                      |
+| ------------------------------- | ----------- | ------- | -------------------------------------------- | ------------------------------- | --------------------- | -------------------------------------------------- | --------------------------------------------- |
+| `UPLOAD_STORAGE_TYPE`           | prod (`r2`) |         | `local`\|`r2`; padrão `local`                | `local`                         | `r2`                  | `r2`                                               | onde ficam fotos, assinaturas e PDFs          |
+| `UPLOAD_LOCAL_PATH`             | não         |         | caminho; padrão `./tmp`                      | `./tmp`                         | `./tmp`               | `./tmp`                                            | pasta do modo `local`                         |
+| `UPLOAD_SIGNED_URL_TTL_SECONDS` | não         |         | 60–3600; padrão `900`                        | —                               | —                     | —                                                  | validade das URLs assinadas                   |
+| `UPLOAD_ORPHAN_GC`              | não         |         | `off`\|`dry-run`\|`delete`; padrão `dry-run` | `dry-run`                       | `dry-run`             | `dry-run`, depois `delete` após ler alguns resumos | coletor noturno de objetos sem linha          |
+| `R2_ACCOUNT_ID`                 | prod        |         | id da conta Cloudflare                       | vazio                           | da conta              | da conta                                           |                                               |
+| `R2_BUCKET_NAME`                | prod        |         | nome                                         | vazio                           | **bucket de staging** | bucket de produção                                 | bucket **privado** de fotos (com CORS da web) |
+| `R2_ACCESS_KEY_ID`              | prod        | 🔒      |                                              | vazio                           | token de staging      | token de produção                                  | credencial S3 do R2                           |
+| `R2_SECRET_ACCESS_KEY`          | prod        | 🔒      |                                              | vazio                           | idem                  | idem                                               |                                               |
+| `R2_ENDPOINT`                   | não         |         | URL                                          | só nos testes de upload (MinIO) | —                     | —                                                  | endpoint S3 alternativo (path-style)          |
 
 ## 7. WhatsApp (Meta)
 
@@ -202,55 +229,54 @@ resto funciona.
 
 ## 9. IA local
 
-Do lado da **API** (serviço `api`):
+Do lado da **API** (_Environment_ da Application `trajetto-api`):
 
-| Variável                   | Obrig. | Segredo | Formato / padrão                                            | Dev                                                         | Staging                                        | Produção    | Para quê                                                                           |
-| -------------------------- | ------ | ------- | ----------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------- | ----------- | ---------------------------------------------------------------------------------- |
-| `AI_PROVIDER`              | não    |         | `local`\|`none`; padrão `local` (`anthropic` impede o boot) | `local`                                                     | `local` ou `none`                              | `local`     | liga/desliga as leituras de foto                                                   |
-| `AI_LOCAL_URL`             | não    |         | URL                                                         | `http://127.0.0.1:18080`                                    | **fixa no compose**: `http://trajetto-ai:8080` | idem        | endereço do serviço `trajetto-ai`                                                  |
-| `AI_LOCAL_TOKEN`           | stack  | 🔒      | 32+ caracteres                                              | `dev-only-token-0123456789abcdef0123` (o do compose de dev) | **próprio**                                    | **próprio** | bearer de toda chamada; o compose entrega o mesmo valor ao serviço como `AI_TOKEN` |
-| `AI_LOCAL_TIMEOUT_MS`      | não    |         | padrão `15000`                                              | —                                                           | —                                              | —           | orçamento de uma leitura (precisa caber no lease de 300 s, ou o boot para)         |
-| `AI_LOCAL_MAX_CONCURRENCY` | não    |         | 1–4; padrão `1`                                             | —                                                           | —                                              | —           | leituras em voo por réplica                                                        |
+| Variável                   | Obrig. | Segredo | Formato / padrão                                            | Dev                                                         | Staging                                    | Produção                             | Para quê                                                                                                                                   |
+| -------------------------- | ------ | ------- | ----------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AI_PROVIDER`              | não    |         | `local`\|`none`; padrão `local` (`anthropic` impede o boot) | `local`                                                     | `local`, ou `none` sem a Application da IA | `local`                              | liga/desliga as leituras de foto                                                                                                           |
+| `AI_LOCAL_URL`             | deploy |         | URL                                                         | `http://127.0.0.1:18080`                                    | `http://trajetto-ai-staging:8080`          | `http://trajetto-ai-production:8080` | `http://<App Name da Application trajetto-ai>:8080`. **Sem ela (ou sem o token) a IA fica desligada em silêncio**: a API trata como `none` |
+| `AI_LOCAL_TOKEN`           | deploy | 🔒      | 32+ caracteres                                              | `dev-only-token-0123456789abcdef0123` (o do compose de dev) | **próprio**                                | **próprio**                          | bearer de toda chamada; **o mesmo valor** do `AI_TOKEN` da Application `trajetto-ai`                                                       |
+| `AI_LOCAL_TIMEOUT_MS`      | não    |         | padrão `15000`                                              | —                                                           | —                                          | —                                    | orçamento de uma leitura (precisa caber no lease de 300 s, ou o boot para)                                                                 |
+| `AI_LOCAL_MAX_CONCURRENCY` | não    |         | 1–4; padrão `1`                                             | —                                                           | —                                          | —                                    | leituras em voo por réplica                                                                                                                |
 
-Do lado do **serviço** `trajetto-ai` (montadas pelo compose; não defina à mão):
+Do lado do **serviço** (_Environment_ da Application `trajetto-ai`):
 
-| Variável           | Origem                    | Para quê                                                                      |
-| ------------------ | ------------------------- | ----------------------------------------------------------------------------- |
-| `AI_TOKEN`         | `${AI_LOCAL_TOKEN}`       | token exigido em toda leitura (o serviço não sobe com menos de 32 caracteres) |
-| `OCR_THREADS`      | `${AI_CPUS:-2}`           | threads do ONNX = CPUs do contêiner                                           |
-| `AI_MAX_QUEUE`     | `${AI_MAX_QUEUE:-2}`      | leituras esperando atrás da que roda; acima disso, 503 `busy`                 |
-| `AI_QUEUE_WAIT_MS` | padrão do serviço `10000` | quanto uma leitura espera na fila antes do 503 (não repassada pelo compose)   |
-| `PORT`             | padrão `8080`             | porta do serviço                                                              |
+| Variável           | Obrig.                              | Segredo | Padrão  | Staging / Produção                                            | Para quê                                                               |
+| ------------------ | ----------------------------------- | ------- | ------- | ------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `AI_TOKEN`         | sempre (o serviço não sobe sem ela) | 🔒      | —       | **o mesmo valor** do `AI_LOCAL_TOKEN` da API daquele ambiente | token exigido em toda leitura; recusa subir com menos de 32 caracteres |
+| `OCR_THREADS`      | não                                 |         | `2`     | `2` (= o _CPU Limit_ da Application)                          | threads do ONNX; igual às CPUs do contêiner                            |
+| `AI_MAX_QUEUE`     | não                                 |         | `2`     | `2`                                                           | leituras esperando atrás da que roda; acima disso, 503 `busy`          |
+| `AI_QUEUE_WAIT_MS` | não                                 |         | `10000` | —                                                             | quanto uma leitura espera na fila antes do 503                         |
+| `PORT`             | não                                 |         | `8080`  | — (a API chama a 8080)                                        | porta do serviço                                                       |
 
-Da **stack** (dimensionamento): `AI_IMAGE_TAG`, `AI_REPLICAS`, `AI_CPUS`,
-`AI_MEMORY_LIMIT` — seção 13.
+Réplicas, memória e CPU da IA não são variáveis: são _Replicas_ e
+_Resources_ da Application (seção 13).
 
 ## 10. Comprovante de entrega
 
-Todas opcionais e todas repassadas pelo compose. Sem certificado, o PDF sai
-"sem assinatura digital" e diz isso; sem mapa/geocoder, imprime o endereço
-cadastrado.
+Todas opcionais. Sem certificado, o PDF sai "sem assinatura digital" e diz
+isso; sem mapa/geocoder, imprime o endereço cadastrado.
 
-| Variável                                        | Segredo             | Formato / padrão                              | Staging               | Produção                                            | Para quê                                             |
-| ----------------------------------------------- | ------------------- | --------------------------------------------- | --------------------- | --------------------------------------------------- | ---------------------------------------------------- |
-| `PROOF_VERIFICATION_TTL_DAYS`                   |                     | inteiro; padrão `1825`                        | padrão                | padrão                                              | validade do link público do QR                       |
-| `PROOF_SIGNING_PFX_BASE64`                      | 🔒                  | base64 do `.pfx`                              | vazio                 | o A1 (e-CNPJ)                                       | certificado ICP-Brasil (ou o `_PATH`, nunca os dois) |
-| `PROOF_SIGNING_PFX_PATH`                        |                     | caminho, ex. `/run/secrets/proof_signing.pfx` | vazio                 | alternativa ao base64 (secret montado)              |                                                      |
-| `PROOF_SIGNING_PFX_PASSWORD`                    | 🔒                  |                                               | vazio                 | a senha do A1                                       |                                                      |
-| `PROOF_SIGNATURE_PROFILE`                       |                     | `pades-ad-rb`\|`cms`; padrão `pades-ad-rb`    | —                     | —                                                   | perfil da assinatura                                 |
-| `PROOF_SIGNING_DISABLED`                        |                     | `true`\|`false`; padrão `false`               | —                     | `true` só num incidente                             | desliga a assinatura sem remover o certificado       |
-| `PROOF_SIGNER_LOCATION`, `PROOF_SIGNER_CONTACT` |                     | texto                                         | —                     | ex. `Rio de Janeiro, RJ`, e-mail de suporte         | metadados da assinatura                              |
-| `PROOF_SIGNER_BRAND`                            |                     | padrão `TRAJETTO`                             | —                     | —                                                   | a marca no texto de garantia                         |
-| `PROOF_ISSUER_LEGAL_NAME`                       |                     | padrão `Trajetto Sistemas Ltda`               | —                     | a razão social                                      | quem gerou um documento **sem** assinatura           |
-| `PROOF_ISSUER_CNPJ`                             |                     | CNPJ válido                                   | —                     | o CNPJ                                              | idem (vazio = omitido)                               |
-| `PROOF_MAP_TILE_URL`                            | 🔒 (pode ter chave) | template XYZ `https://…/{z}/{x}/{y}`          | opcional              | provedor escolhido (nunca `tile.openstreetmap.org`) | mapa estático                                        |
-| `PROOF_MAP_TILE_ATTRIBUTION`                    |                     | texto                                         | obrigatório com a URL | idem                                                | crédito impresso no mapa                             |
-| `PROOF_MAP_TIMEOUT_MS`                          |                     | ≥ 200; padrão `3000`                          | —                     | —                                                   | orçamento de todos os tiles                          |
-| `REVERSE_GEOCODER_URL`                          |                     | URL Nominatim-compatível, https               | opcional              | provedor (nunca `nominatim.openstreetmap.org`)      | endereço do GPS do comprovante                       |
-| `REVERSE_GEOCODER_KEY`                          | 🔒                  |                                               |                       |                                                     | chave do provedor                                    |
-| `REVERSE_GEOCODER_KEY_PARAM`                    |                     | padrão `key`                                  |                       |                                                     | nome do parâmetro da chave                           |
-| `REVERSE_GEOCODER_USER_AGENT`                   |                     | texto                                         |                       |                                                     | User-Agent exigido por alguns provedores             |
-| `REVERSE_GEOCODER_TIMEOUT_MS`                   |                     | ≥ 200; padrão `2500`                          |                       |                                                     |                                                      |
+| Variável                                        | Segredo             | Formato / padrão                           | Staging               | Produção                                                               | Para quê                                             |
+| ----------------------------------------------- | ------------------- | ------------------------------------------ | --------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------- |
+| `PROOF_VERIFICATION_TTL_DAYS`                   |                     | inteiro; padrão `1825`                     | padrão                | padrão                                                                 | validade do link público do QR                       |
+| `PROOF_SIGNING_PFX_BASE64`                      | 🔒                  | base64 do `.pfx`                           | vazio                 | o A1 (e-CNPJ)                                                          | certificado ICP-Brasil (ou o `_PATH`, nunca os dois) |
+| `PROOF_SIGNING_PFX_PATH`                        |                     | caminho de um arquivo montado no contêiner | vazio                 | alternativa ao base64 (arquivo em _Advanced → Volumes_ da Application) |                                                      |
+| `PROOF_SIGNING_PFX_PASSWORD`                    | 🔒                  |                                            | vazio                 | a senha do A1                                                          |                                                      |
+| `PROOF_SIGNATURE_PROFILE`                       |                     | `pades-ad-rb`\|`cms`; padrão `pades-ad-rb` | —                     | —                                                                      | perfil da assinatura                                 |
+| `PROOF_SIGNING_DISABLED`                        |                     | `true`\|`false`; padrão `false`            | —                     | `true` só num incidente                                                | desliga a assinatura sem remover o certificado       |
+| `PROOF_SIGNER_LOCATION`, `PROOF_SIGNER_CONTACT` |                     | texto                                      | —                     | ex. `Rio de Janeiro, RJ`, e-mail de suporte                            | metadados da assinatura                              |
+| `PROOF_SIGNER_BRAND`                            |                     | padrão `TRAJETTO`                          | —                     | —                                                                      | a marca no texto de garantia                         |
+| `PROOF_ISSUER_LEGAL_NAME`                       |                     | padrão `Trajetto Sistemas Ltda`            | —                     | a razão social                                                         | quem gerou um documento **sem** assinatura           |
+| `PROOF_ISSUER_CNPJ`                             |                     | CNPJ válido                                | —                     | o CNPJ                                                                 | idem (vazio = omitido)                               |
+| `PROOF_MAP_TILE_URL`                            | 🔒 (pode ter chave) | template XYZ `https://…/{z}/{x}/{y}`       | opcional              | provedor escolhido (nunca `tile.openstreetmap.org`)                    | mapa estático                                        |
+| `PROOF_MAP_TILE_ATTRIBUTION`                    |                     | texto                                      | obrigatório com a URL | idem                                                                   | crédito impresso no mapa                             |
+| `PROOF_MAP_TIMEOUT_MS`                          |                     | ≥ 200; padrão `3000`                       | —                     | —                                                                      | orçamento de todos os tiles                          |
+| `REVERSE_GEOCODER_URL`                          |                     | URL Nominatim-compatível, https            | opcional              | provedor (nunca `nominatim.openstreetmap.org`)                         | endereço do GPS do comprovante                       |
+| `REVERSE_GEOCODER_KEY`                          | 🔒                  |                                            |                       |                                                                        | chave do provedor                                    |
+| `REVERSE_GEOCODER_KEY_PARAM`                    |                     | padrão `key`                               |                       |                                                                        | nome do parâmetro da chave                           |
+| `REVERSE_GEOCODER_USER_AGENT`                   |                     | texto                                      |                       |                                                                        | User-Agent exigido por alguns provedores             |
+| `REVERSE_GEOCODER_TIMEOUT_MS`                   |                     | ≥ 200; padrão `2500`                       |                       |                                                                        |                                                      |
 
 ## 11. Documentação, app, webhooks e auditoria
 
@@ -270,93 +296,120 @@ cadastrado.
 | `HEALTHCHECK_PING_URL` | 🔒      | URL do check (ex. `https://hc-ping.com/<uuid>`) | um check de staging (opcional) | **definir**                        | dead man's switch do `ops-heartbeat` (1/min; `/fail` com os motivos); vazio = só log |
 | `HEALTHCHECK_FAIL_URL` | 🔒      | URL                                             | —                              | só no Uptime Kuma (`?status=down`) | URL de falha quando o serviço não segue a convenção `/fail`                          |
 
-## 13. Só na stack (`compose.production.yaml`)
+## 13. Configurações do Dokploy que não são variáveis
 
-Lidas pelo compose para montar os serviços; a API não as lê diretamente.
+O que no compose antigo era variável da stack virou campo do Dokploy. Passo a
+passo de cada um em [`deploy.md`](./deploy.md#7-montar-o-dokploy-do-zero-staging-e-produção).
 
-| Variável               | Obrig. | Padrão            | Staging                             | Produção                              | Para quê                                |
-| ---------------------- | ------ | ----------------- | ----------------------------------- | ------------------------------------- | --------------------------------------- |
-| `ROUTER_PREFIX`        | stack  | —                 | `trajetto-staging`                  | `trajetto`                            | prefixo único dos roteadores do Traefik |
-| `API_HOST`             | stack  | —                 | host de staging                     | `trajettoapi.thorsolucoes.com.br`     | `Host()` do roteador                    |
-| `TRAEFIK_NETWORK`      | não    | `dokploy-network` | —                                   | —                                     | rede do Traefik (externa)               |
-| `TRAEFIK_CERTRESOLVER` | não    | `letsencrypt`     | —                                   | —                                     | resolver de certificados                |
-| `API_IMAGE_TAG`        | não    | `stable`          | `staging`                           | — (só `sha-<sha>` no primeiro deploy) | tag da imagem da API                    |
-| `AI_IMAGE_TAG`         | não    | `stable`          | `staging`                           | idem                                  | tag da imagem da IA                     |
-| `BACKUP_IMAGE_TAG`     | não    | `stable`          | `staging`                           | idem                                  | tag da imagem do backup                 |
-| `API_HEAP_MB`          | não    | `768`             | menor se dividir a VPS              | `768`                                 | heap do Node (sobe junto com o limite)  |
-| `API_MEMORY_LIMIT`     | não    | `1024M`           | idem                                | `1024M`                               | limite de memória de cada réplica       |
-| `AI_REPLICAS`          | não    | `1`               | `1` (ou `0` com `AI_PROVIDER=none`) | `1`                                   | réplicas do `trajetto-ai`               |
-| `AI_CPUS`              | não    | `2`               | menor se dividir a VPS              | `2`                                   | CPUs do `trajetto-ai` (e `OCR_THREADS`) |
-| `AI_MEMORY_LIMIT`      | não    | `1024M`           | idem                                | `1024M`                               | memória do `trajetto-ai`                |
-| `AI_MAX_QUEUE`         | não    | `2`               | —                                   | —                                     | fila interna do `trajetto-ai`           |
+| Antes (variável da stack)                                              | Agora (onde no Dokploy)                                                                                                                                                              | Staging                                           | Produção                                                                                     |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `API_IMAGE_TAG`, `AI_IMAGE_TAG`, `BACKUP_IMAGE_TAG`                    | _General → Provider → Docker → Docker Image_ de cada Application                                                                                                                     | `ghcr.io/trajetto-organization/<imagem>:staging`  | `ghcr.io/trajetto-organization/<imagem>:stable`                                              |
+| credencial do GHCR (antes: `docker login` no host)                     | _General → Provider → Docker_: _Registry URL_ `ghcr.io`, _Username_, _Password_ (token classic `read:packages`)                                                                      | o mesmo token                                     | o mesmo token                                                                                |
+| `API_HOST`, `ROUTER_PREFIX`, `TRAEFIK_CERTRESOLVER`, `TRAEFIK_NETWORK` | aba _Domains_ da `trajetto-api`: _Host_, _Container Port_ `3333`, _HTTPS_, _Let's Encrypt_ (rede: sempre `dokploy-network`)                                                          | `trajettoapi-staging.thorsolucoes.com.br`         | `trajettoapi.thorsolucoes.com.br`                                                            |
+| réplicas da API (2 fixas no compose), `AI_REPLICAS`                    | _Advanced → Cluster Settings → Replicas_                                                                                                                                             | API 2 (ou 1); IA 1                                | API 2; IA 1                                                                                  |
+| `API_MEMORY_LIMIT`                                                     | _Advanced → Resources → Memory Limit_ da `trajetto-api`                                                                                                                              | `1073741824` (ou menos, com `NODE_OPTIONS` junto) | `1073741824`                                                                                 |
+| `API_HEAP_MB`                                                          | variável `NODE_OPTIONS=--max-old-space-size=768` (seção 1)                                                                                                                           | idem                                              | idem                                                                                         |
+| `AI_CPUS`, `AI_MEMORY_LIMIT`                                           | _Resources_ da `trajetto-ai` (_CPU Limit_ `2000000000`, _Memory Limit_ `1073741824`) e `OCR_THREADS` igual às CPUs                                                                   | idem                                              | idem                                                                                         |
+| healthcheck, update/rollback, restart policy, stop grace               | _Advanced → Swarm Settings_ de cada Application (JSON pronto no `deploy.md`)                                                                                                         | idem                                              | idem                                                                                         |
+| `POSTGRES_USERNAME`, `POSTGRES_PASSWORD`, `POSTGRES_DATABASE`          | campos _Database User_, _Database Password_, _Database Name_ do Database PostgreSQL                                                                                                  | próprios                                          | próprios (e reaparecem na `DATABASE_URL`, na `MIGRATION_DATABASE_URL` e nas `PG*` do backup) |
+| `POSTGRES_HOST`, `POSTGRES_PORT`                                       | _Internal Host_ (= App Name) e _Internal Port_ (5432) do Database                                                                                                                    | `trajetto-postgres-staging`                       | `trajetto-postgres-production`                                                               |
+| `POSTGRES_IMAGE`                                                       | campo da imagem do Database, com digest                                                                                                                                              | `postgres:16-alpine@sha256:…`                     | idem                                                                                         |
+| `POSTGRES_VOLUME`                                                      | criado e nomeado pelo Dokploy (_Advanced → Volumes_ do Database)                                                                                                                     | —                                                 | —                                                                                            |
+| `PG_SHARED_BUFFERS` e demais `PG_*` de tuning                          | comando personalizado do Database (se a versão tiver)                                                                                                                                | defaults                                          | conforme a RAM                                                                               |
+| `REDIS_PASSWORD`, `REDIS_HOST`, `REDIS_PORT`                           | _Database Password_, _Internal Host_ e _Internal Port_ do Database Redis                                                                                                             | próprios                                          | próprios (e reaparecem no `REDIS_URL`)                                                       |
+| sem persistência e teto de memória do Redis                            | comando personalizado do Database Redis: `redis-server --requirepass <senha> --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru`; _Memory Limit_ `536870912` | idem                                              | idem                                                                                         |
 
 ## 14. Serviço de backup
 
-O serviço `trajetto-backup` recebe `PGHOST`, `PGPORT`, `PGUSER`,
-`PGPASSWORD` e `PGDATABASE` montados pelo compose a partir das `POSTGRES_*`.
+Tudo no _Environment_ da Application `trajetto-backup`. Sem o compose para
+montá-las, as `PG*` são digitadas com os dados do Database PostgreSQL.
 
-| Variável                      | Obrig. | Segredo | Formato / padrão                | Staging                     | Produção                | Para quê                                                                                                   |
-| ----------------------------- | ------ | ------- | ------------------------------- | --------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `BACKUP_R2_ACCOUNT_ID`        | stack  |         | id da conta                     | da conta                    | da conta                |                                                                                                            |
-| `BACKUP_R2_BUCKET`            | stack  |         | nome                            | bucket de backup de staging | bucket **só** de backup | destino dos dumps cifrados                                                                                 |
-| `BACKUP_R2_ACCESS_KEY_ID`     | stack  | 🔒      |                                 | token só desse bucket       | idem                    |                                                                                                            |
-| `BACKUP_R2_SECRET_ACCESS_KEY` | stack  | 🔒      |                                 |                             |                         |                                                                                                            |
-| `BACKUP_AGE_RECIPIENT`        | stack  |         | `age1…` (chave **pública**)     | própria                     | própria                 | cifra o dump antes de sair do contêiner                                                                    |
-| `BACKUP_HEARTBEAT_URL`        | stack  | 🔒      | URL do check (período 1 dia)    | própria                     | própria                 | sucesso/`fail` de cada noite                                                                               |
-| `BACKUP_AT_UTC`               | não    |         | `HH:MM`; padrão `02:30`         | —                           | —                       | horário do dump (antes das 03:17 UTC)                                                                      |
-| `BACKUP_EXCLUDE_TRAIL`        | não    |         | `true`\|`false`; padrão `false` | —                           | decisão de produto      | deixa as linhas de `driver_position` fora do dump                                                          |
-| `BACKUP_RUN_NOW`              | não    |         | `true`\|`false`                 | —                           | —                       | roda um backup também na partida (ensaio); não é repassada pelo compose — use `docker exec … backup-to-r2` |
+| Variável                      | Obrig. | Segredo | Formato / padrão                | Staging                      | Produção                       | Para quê                                                              |
+| ----------------------------- | ------ | ------- | ------------------------------- | ---------------------------- | ------------------------------ | --------------------------------------------------------------------- |
+| `PGHOST`                      | sempre |         | host                            | `trajetto-postgres-staging`  | `trajetto-postgres-production` | o App Name do Database PostgreSQL                                     |
+| `PGPORT`                      | não    |         | padrão `5432`                   | `5432`                       | `5432`                         |                                                                       |
+| `PGUSER`                      | sempre |         | texto                           | o usuário do Database        | idem                           |                                                                       |
+| `PGPASSWORD`                  | sempre | 🔒      | texto                           | a senha do Database          | idem                           |                                                                       |
+| `PGDATABASE`                  | sempre |         | texto                           | o banco do Database          | idem                           | também dá nome ao arquivo do dump                                     |
+| `BACKUP_R2_ACCOUNT_ID`        | sempre |         | id da conta                     | da conta                     | da conta                       |                                                                       |
+| `BACKUP_R2_BUCKET`            | sempre |         | nome                            | bucket de backup de staging  | bucket **só** de backup        | destino dos dumps cifrados                                            |
+| `BACKUP_R2_ACCESS_KEY_ID`     | sempre | 🔒      |                                 | token só desse bucket        | idem                           |                                                                       |
+| `BACKUP_R2_SECRET_ACCESS_KEY` | sempre | 🔒      |                                 |                              |                                |                                                                       |
+| `BACKUP_AGE_RECIPIENT`        | sempre |         | `age1…` (chave **pública**)     | própria                      | própria                        | cifra o dump antes de sair do contêiner                               |
+| `BACKUP_HEARTBEAT_URL`        | sempre | 🔒      | URL do check (período 1 dia)    | própria                      | própria                        | sucesso/`fail` de cada noite                                          |
+| `BACKUP_AT_UTC`               | não    |         | `HH:MM`; padrão `02:30`         | `02:30`                      | `02:30`                        | horário do dump (antes das 03:17 UTC, o primeiro job que apaga dados) |
+| `BACKUP_EXCLUDE_TRAIL`        | não    |         | `true`\|`false`; padrão `false` | —                            | decisão de produto             | deixa as linhas de `driver_position` fora do dump                     |
+| `BACKUP_RUN_NOW`              | não    |         | `true`\|`false`; padrão `false` | `true` só no primeiro deploy | idem                           | roda um backup também na partida (ensaio); tire depois do primeiro    |
+
+"sempre" aqui quer dizer: sem ela o backup **falha na hora do dump** (e avisa
+o `/fail` do heartbeat, se `BACKUP_HEARTBEAT_URL` existir). O contêiner sobe
+mesmo assim — por isso o primeiro deploy usa `BACKUP_RUN_NOW=true`.
 
 Do script manual `infra/scripts/backup-postgres.sh`: `POSTGRES_USERNAME`,
-`POSTGRES_DATABASE`, `POSTGRES_CONTAINER` (qual contêiner), `BACKUP_EXCLUDE_TRAIL`,
-`BACKUP_TRAIL_ONLY`. Do `infra/scripts/restore-postgres.sh`: `POSTGRES_IMAGE`,
-`KEEP_CONTAINER`.
+`POSTGRES_DATABASE`, `POSTGRES_SERVICE` (o App Name do Database: o script
+acha o contêiner) ou `POSTGRES_CONTAINER` (um contêiner direto), `BACKUP_EXCLUDE_TRAIL`,
+`BACKUP_TRAIL_ONLY`. Do `infra/scripts/restore-postgres.sh`: `POSTGRES_IMAGE`
+(a mesma imagem do Database), `KEEP_CONTAINER`.
 
 ## 15. Scripts de operação no host
 
-No ambiente do usuário de deploy do host do Dokploy (todas opcionais):
+Definidas no comando restrito do `~/.ssh/authorized_keys` do usuário de
+deploy (ou na linha de comando, à mão):
 
-| Variável                  | Script                      | Padrão            | Para quê                                         |
-| ------------------------- | --------------------------- | ----------------- | ------------------------------------------------ |
-| `STACK_NAME`              | `run-release-migrations.sh` | `trajetto`        | nome da stack (= nome do app no Dokploy)         |
-| `API_SERVICE`             | idem                        | `<stack>_api`     | serviço cujo env o job de migrations reaproveita |
-| `MIGRATE_NETWORK`         | idem                        | `<stack>_backend` | rede do job                                      |
-| `MIGRATE_TIMEOUT_SECONDS` | idem                        | `900`             | espera do job                                    |
-| `MIGRATE_POLL_SECONDS`    | idem                        | `5`               | intervalo da espera                              |
-| `ROLLOUT_TIMEOUT_SECONDS` | `verify-rollout.sh`         | `600`             | prazo da convergência                            |
-| `ROLLOUT_POLL_SECONDS`    | idem                        | `5`               | intervalo da conferência                         |
+| Variável                  | Script                      | Padrão            | Valor com as Applications                     | Para quê                                                             |
+| ------------------------- | --------------------------- | ----------------- | --------------------------------------------- | -------------------------------------------------------------------- |
+| `API_SERVICE`             | `run-release-migrations.sh` | — (obrigatória)   | `trajetto-api-production` (o App Name da API) | serviço cujo env o job de migrations reaproveita                     |
+| `MIGRATE_NETWORK`         | idem                        | `dokploy-network` | padrão                                        | rede do job (onde o Postgres está)                                   |
+| `MIGRATE_TIMEOUT_SECONDS` | idem                        | `900`             | padrão                                        | espera do job                                                        |
+| `MIGRATE_POLL_SECONDS`    | idem                        | `5`               | padrão                                        | intervalo da espera                                                  |
+| `ROLLOUT_TIMEOUT_SECONDS` | `verify-rollout.sh`         | `600`             | padrão                                        | prazo da convergência                                                |
+| `ROLLOUT_POLL_SECONDS`    | idem                        | `5`               | padrão                                        | intervalo da conferência                                             |
+| `POSTGRES_SERVICE`        | `backup-postgres.sh`        | —                 | `trajetto-postgres-production`                | acha o contêiner do Database pelo App Name (ou `POSTGRES_CONTAINER`) |
+
+O serviço que o `verify-rollout.sh` confere vem do CI (variável
+`SWARM_API_SERVICE`, seção 16).
 
 ## 16. GitHub Actions
 
+No repositório `Trajetto-Organization/trajetto-api`, _Settings →
+Environments_ (por ambiente) e _Settings → Secrets and variables → Actions_
+(repositório).
+
 ### Environment `staging`
 
-| Nome                                                           | Tipo     | Para quê                                      |
-| -------------------------------------------------------------- | -------- | --------------------------------------------- |
-| `DOKPLOY_URL`                                                  | secret   | painel do Dokploy (https)                     |
-| `DOKPLOY_API_KEY`                                              | secret   | chave de API do Dokploy                       |
-| `DOKPLOY_COMPOSE_ID`                                           | secret   | id do app `trajetto-staging`                  |
-| `SWARM_API_SERVICE`                                            | variable | `trajetto-staging_api`                        |
-| `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS` | secrets  | acesso SSH ao host (conferência do rollout)   |
-| `DEPLOY_VERIFY_SSH_KEY`                                        | secret   | chave privada restrita ao `verify-rollout.sh` |
+| Nome                                                           | Tipo     | Obrig.                                  | Valor / para quê                                                    |
+| -------------------------------------------------------------- | -------- | --------------------------------------- | ------------------------------------------------------------------- |
+| `DOKPLOY_URL`                                                  | secret   | sim (com as duas abaixo)                | painel do Dokploy, `https://`                                       |
+| `DOKPLOY_API_KEY`                                              | secret   | sim                                     | chave de API do Dokploy (_Settings → Profile → API/CLI_)            |
+| `DOKPLOY_API_APPLICATION_ID`                                   | secret   | sim                                     | applicationId da `trajetto-api` de staging (o fim da URL no painel) |
+| `DOKPLOY_AI_APPLICATION_ID`                                    | secret   | não (sem ele: aviso, IA não atualizada) | applicationId da `trajetto-ai` de staging                           |
+| `DOKPLOY_BACKUP_APPLICATION_ID`                                | secret   | não (idem)                              | applicationId da `trajetto-backup` de staging                       |
+| `SWARM_API_SERVICE`                                            | variable | sim, com a conferência ligada           | `trajetto-api-staging` (o App Name da API)                          |
+| `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS` | secrets  | idem                                    | acesso SSH ao host (conferência do rollout)                         |
+| `DEPLOY_VERIFY_SSH_KEY`                                        | secret   | idem                                    | chave privada restrita ao `verify-rollout.sh`                       |
+
+Sem nenhum dos três `DOKPLOY_*` obrigatórios: o deploy é pulado com aviso.
+Com só alguns: o job falha.
 
 ### Environment `production` (com revisores obrigatórios)
 
-Os mesmos, com `DOKPLOY_COMPOSE_ID` do app `trajetto`, `SWARM_API_SERVICE=trajetto_api`
-e mais `DEPLOY_SSH_KEY` (chave privada restrita ao `run-release-migrations.sh`).
+Os mesmos nomes, com os applicationIds das Applications de produção,
+`SWARM_API_SERVICE=trajetto-api-production` e mais `DEPLOY_SSH_KEY` (chave
+privada restrita ao `run-release-migrations.sh`).
 
 ### Repositório
 
-| Nome                      | Tipo       | Valores                                                                           | Para quê                                      |
-| ------------------------- | ---------- | --------------------------------------------------------------------------------- | --------------------------------------------- |
-| `MIGRATIONS_VIA_JOB`      | variable   | `true`                                                                            | migrations como job único no promote          |
-| `ROLLOUT_VERIFY`          | variable   | `off` (só emergência)                                                             | desliga a conferência do rollout              |
-| `IMAGE_SCAN_ENFORCE`      | variable   | `true`                                                                            | Trivy passa a falhar o build                  |
-| `CLIENT_REPOS_READ_TOKEN` | secret     | token só leitura de `trajetto-fleet-manager-ui` e `trajetto-fleet-manager-mobile` | contrato de rotas no `ci.yml`                 |
-| `GITHUB_TOKEN`            | automático | —                                                                                 | GHCR (push/retag), `gh api`, semantic-release |
+| Nome                      | Tipo       | Valores                                                                                           | Para quê                                      |
+| ------------------------- | ---------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `MIGRATIONS_VIA_JOB`      | variable   | `true`                                                                                            | migrations como job único no promote          |
+| `ROLLOUT_VERIFY`          | variable   | `off` (só emergência; pode ficar só num environment)                                              | desliga a conferência do rollout              |
+| `IMAGE_SCAN_ENFORCE`      | variable   | `true`                                                                                            | Trivy passa a falhar o build                  |
+| `CLIENT_REPOS_READ_TOKEN` | secret     | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` | contrato de rotas no `ci.yml`                 |
+| `GITHUB_TOKEN`            | automático | —                                                                                                 | GHCR (push/retag), `gh api`, semantic-release |
 
-Opcionais do `.github/scripts/dokploy-deploy.mjs` (não definidas hoje):
-`DOKPLOY_WAIT` (`false` só dispara), `DOKPLOY_TIMEOUT_SECONDS` (900),
-`DOKPLOY_POLL_SECONDS` (10).
+Opcionais do `.github/scripts/dokploy-deploy.mjs` (não definidas hoje; o
+workflow define as outras): `DOKPLOY_WAIT` (`false` só dispara),
+`DOKPLOY_TIMEOUT_SECONDS` (900), `DOKPLOY_POLL_SECONDS` (10).
 
 O bloco `env:` dos workflows define os valores de teste da validação
 (`NODE_ENV=test`, `DATABASE_URL` e `REDIS_URL` dos service containers, JWTs e
@@ -378,34 +431,42 @@ master de mentira, `UPLOAD_STORAGE_TYPE=local`). Não são segredos.
 
 ## Matriz produção × staging
 
-| Variável                                                                                | Produção                          | Staging                        | Nota                                                                    |
-| --------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------ | ----------------------------------------------------------------------- |
-| `APP_ENV`                                                                               | `production`                      | `staging`                      | obrigatória                                                             |
-| `ROUTER_PREFIX`                                                                         | `trajetto`                        | `trajetto-staging`             | única por stack                                                         |
-| `API_HOST`                                                                              | `trajettoapi.thorsolucoes.com.br` | host próprio                   |                                                                         |
-| `POSTGRES_VOLUME`                                                                       | `trajetto_postgres_data`          | outro nome                     | dois apps no mesmo volume = dois Postgres no mesmo disco                |
-| `*_IMAGE_TAG`                                                                           | `stable` (padrão)                 | `staging`                      | `sha-<sha>` só para fixar um build                                      |
-| `HTTP_REQUEST`, `API_HTTP_REQUEST`                                                      | origens de produção               | as de staging                  |                                                                         |
-| `JWT_*`, `REDIS_PASSWORD`, `POSTGRES_PASSWORD`, `AI_LOCAL_TOKEN`, `WEBHOOK_SECRETS_KEY` | próprios                          | **outros**                     | nunca compartilhar                                                      |
-| `R2_*`                                                                                  | bucket de produção                | bucket de staging              | CORS de cada bucket                                                     |
-| `META_WHATSAPP_*`, `RESEND_*`                                                           | reais                             | de teste                       | staging não fala com cliente real (é configuração, não trava no código) |
-| `BACKUP_*`                                                                              | bucket de backup                  | bucket de backup de staging    | o compose exige nos dois                                                |
-| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                        | `false`                           | `true` só no primeiro boot     |                                                                         |
-| `RUN_MIGRATIONS_ON_BOOT`                                                                | `false` com o job ligado          | `true`                         |                                                                         |
-| `RATE_LIMIT_TRUSTED_PROXY`                                                              | `cloudflare`                      | `cloudflare`                   |                                                                         |
-| `SOCKET_ADAPTER_KEY`                                                                    | vazio                             | vazio                          | cada stack tem o próprio Redis                                          |
-| `AI_PROVIDER` / `AI_REPLICAS`                                                           | `local` / `1`                     | `local` / `1`, ou `none` / `0` |                                                                         |
-| `PROOF_SIGNING_*`                                                                       | o A1                              | vazio                          |                                                                         |
+| Valor                                                                      | Produção                                        | Staging                                       | Onde                                                                            |
+| -------------------------------------------------------------------------- | ----------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
+| `APP_ENV`                                                                  | `production`                                    | `staging`                                     | `trajetto-api`; nada obriga, confira                                            |
+| tag das imagens                                                            | `:stable`                                       | `:staging`                                    | _Docker Image_ das três Applications                                            |
+| domínio da API                                                             | `trajettoapi.thorsolucoes.com.br`               | `trajettoapi-staging.thorsolucoes.com.br`     | _Domains_ da `trajetto-api`                                                     |
+| hosts internos (App Names)                                                 | `trajetto-*-production`                         | `trajetto-*-staging`                          | `DATABASE_URL`, `MIGRATION_DATABASE_URL`, `REDIS_URL`, `AI_LOCAL_URL`, `PGHOST` |
+| `HTTP_REQUEST`, `API_HTTP_REQUEST`                                         | origens de produção                             | as de staging                                 | `trajetto-api`                                                                  |
+| senhas do Postgres e do Redis, `JWT_*`, token da IA, `WEBHOOK_SECRETS_KEY` | próprios                                        | **outros**                                    | Databases e Applications; nunca compartilhar                                    |
+| `R2_*`                                                                     | bucket de produção                              | bucket de staging                             | `trajetto-api` (CORS de cada bucket)                                            |
+| `META_WHATSAPP_*`, `RESEND_*`                                              | reais                                           | de teste                                      | `trajetto-api` (configuração, não trava no código)                              |
+| `BACKUP_*`                                                                 | bucket de backup                                | bucket de backup de staging                   | `trajetto-backup`                                                               |
+| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                           | `false`                                         | `true` só no primeiro boot                    | `trajetto-api`                                                                  |
+| `RUN_MIGRATIONS_ON_BOOT`                                                   | `false` com o job ligado                        | `true`                                        | `trajetto-api`                                                                  |
+| `RATE_LIMIT_TRUSTED_PROXY`                                                 | `cloudflare`                                    | `cloudflare`                                  | `trajetto-api`                                                                  |
+| `SOCKET_ADAPTER_KEY`                                                       | vazio                                           | vazio                                         | cada ambiente tem o próprio Redis                                               |
+| IA                                                                         | `AI_PROVIDER=local` + Application `trajetto-ai` | idem, ou `AI_PROVIDER=none` sem a Application | `trajetto-api` / `trajetto-ai`                                                  |
+| `PROOF_SIGNING_*`                                                          | o A1                                            | vazio                                         | `trajetto-api`                                                                  |
+| `SWARM_API_SERVICE`, `DOKPLOY_*_APPLICATION_ID`                            | os de produção                                  | os de staging                                 | environments do GitHub                                                          |
 
 ## Variáveis que não existem mais
 
 Apague se ainda estiverem em algum Environment, `.env` ou secret:
 
-| Variável                                                                                                                                  | Por quê                                                                                              |
-| ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`, `AI_ANTHROPIC_MODEL`                                                                                                 | a leitura de fotos é local (ADR 0010); `AI_PROVIDER=anthropic` impede o boot. Revogue a chave antiga |
-| `RABBITMQ_URL`                                                                                                                            | o broker saiu em 09/2026; o Postgres é a fila                                                        |
-| `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_HTTP_REQUEST`, `TRAJETTO_WHATSAPP_BUSINESS_PHONE`, `TRAJETTO_WHATSAPP_INSTANCE_NAME` | o WhatsApp é a Cloud API oficial da Meta                                                             |
-| `R2_PUBLIC_DOMAIN`                                                                                                                        | o bucket é privado; toda leitura é URL assinada                                                      |
-| `STAGING_ENABLED` (variável do GitHub)                                                                                                    | o deploy de staging depende só dos secrets do Dokploy                                                |
-| `PORTAINER_WEBHOOK_URL`, `PORTAINER_STAGING_WEBHOOK_URL` (secrets do GitHub)                                                              | o deploy é pelo Dokploy                                                                              |
+| Variável                                                                                                                                             | Por quê                                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ROUTER_PREFIX`, `API_HOST`, `TRAEFIK_NETWORK`, `TRAEFIK_CERTRESOLVER`                                                                               | eram labels do Traefik no compose; agora é a aba _Domains_ da Application (seção 13)                                                            |
+| `API_IMAGE_TAG`, `AI_IMAGE_TAG`, `BACKUP_IMAGE_TAG`                                                                                                  | a tag é o _Docker Image_ de cada Application                                                                                                    |
+| `API_HEAP_MB`, `API_MEMORY_LIMIT`, `AI_REPLICAS`, `AI_CPUS`, `AI_MEMORY_LIMIT`                                                                       | `NODE_OPTIONS`, _Replicas_ e _Resources_ das Applications                                                                                       |
+| `POSTGRES_VOLUME`, `POSTGRES_IMAGE`, `PG_SHARED_BUFFERS`, `PG_EFFECTIVE_CACHE_SIZE`, `PG_WORK_MEM`, `PG_MAINTENANCE_WORK_MEM`, `PG_RANDOM_PAGE_COST` | o banco é um Database do Dokploy (volume, imagem e comando são campos dele); `POSTGRES_IMAGE` continua só como entrada do `restore-postgres.sh` |
+| `POSTGRES_*` e `REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD` em staging e produção                                                                      | campos dos Databases; a API lê só as URLs. Continuam no `.env` de desenvolvimento                                                               |
+| `STACK_NAME` (scripts do host)                                                                                                                       | o `run-release-migrations.sh` não monta mais nomes de stack; use `API_SERVICE` (seção 15)                                                       |
+| `REDIS_ENFORCE_AUTH`                                                                                                                                 | transição de um Redis sem senha; o Redis do Dokploy nasce com senha                                                                             |
+| `DOKPLOY_COMPOSE_ID` (secret do GitHub)                                                                                                              | era o id do app Compose; agora são os `DOKPLOY_*_APPLICATION_ID`                                                                                |
+| `ANTHROPIC_API_KEY`, `AI_ANTHROPIC_MODEL`                                                                                                            | a leitura de fotos é local (ADR 0010); `AI_PROVIDER=anthropic` impede o boot. Revogue a chave antiga                                            |
+| `RABBITMQ_URL`                                                                                                                                       | o broker saiu em 09/2026; o Postgres é a fila                                                                                                   |
+| `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_HTTP_REQUEST`, `TRAJETTO_WHATSAPP_BUSINESS_PHONE`, `TRAJETTO_WHATSAPP_INSTANCE_NAME`            | o WhatsApp é a Cloud API oficial da Meta                                                                                                        |
+| `R2_PUBLIC_DOMAIN`                                                                                                                                   | o bucket é privado; toda leitura é URL assinada                                                                                                 |
+| `STAGING_ENABLED` (variável do GitHub)                                                                                                               | o deploy de staging depende só dos secrets do Dokploy                                                                                           |
+| `PORTAINER_WEBHOOK_URL`, `PORTAINER_STAGING_WEBHOOK_URL` (secrets do GitHub)                                                                         | o deploy é pelo Dokploy                                                                                                                         |

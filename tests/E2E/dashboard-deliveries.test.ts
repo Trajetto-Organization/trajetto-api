@@ -54,7 +54,16 @@ const SHIPPER = "018fd200-0000-7000-8000-0000000000f1";
 const OTHER_SHIPPER = "018fd200-0000-7000-8000-0000000000f2";
 const OCCURRENCE_TYPE = "018fd200-0000-7000-8000-0000000000e1";
 
-const USERS = [DISPATCHER, MECHANIC, READER, ADMIN, DRIVER_USER, WRITE_ONLY, OUTSIDER, MASTER];
+const USERS = [
+  DISPATCHER,
+  MECHANIC,
+  READER,
+  ADMIN,
+  DRIVER_USER,
+  WRITE_ONLY,
+  OUTSIDER,
+  MASTER,
+];
 
 const profiles: string[] = [];
 const tokens = new Map<string, string>();
@@ -88,7 +97,11 @@ async function tokenFor(userId: string): Promise<string> {
   return token;
 }
 
-async function seedBusiness(id: string, label: string, timezone?: string): Promise<void> {
+async function seedBusiness(
+  id: string,
+  label: string,
+  timezone?: string,
+): Promise<void> {
   await prisma.business.create({
     data: {
       id,
@@ -179,8 +192,17 @@ beforeAll(async () => {
     ],
   });
 
-  const dispatcherProfile = await seedProfile(HIRED, "Despacho", "delivery_manage");
-  const readerProfile = await seedProfile(HIRED, "Consulta", "delivery_manage", false);
+  const dispatcherProfile = await seedProfile(
+    HIRED,
+    "Despacho",
+    "delivery_manage",
+  );
+  const readerProfile = await seedProfile(
+    HIRED,
+    "Consulta",
+    "delivery_manage",
+    false,
+  );
   const mechanicProfile = await seedProfile(HIRED, "Oficina", "fuel_manage");
 
   // Write without read: bulk-configure still stores such rows, and legacy
@@ -220,7 +242,10 @@ beforeAll(async () => {
   const user = (
     id: string,
     name: string,
-    extra: Omit<Prisma.UserCreateManyInput, "id" | "name" | "email" | "password">,
+    extra: Omit<
+      Prisma.UserCreateManyInput,
+      "id" | "name" | "email" | "password"
+    >,
   ): Prisma.UserCreateManyInput => ({
     id,
     name,
@@ -246,7 +271,10 @@ beforeAll(async () => {
         businessId: HIRED,
         profileAccessId: mechanicProfile,
       }),
-      user(ADMIN, "Administradora", { role: "BUSINESS_ADMIN", businessId: HIRED }),
+      user(ADMIN, "Administradora", {
+        role: "BUSINESS_ADMIN",
+        businessId: HIRED,
+      }),
       user(WRITE_ONLY, "So escrita", {
         role: "BUSINESS_USER",
         businessId: HIRED,
@@ -358,7 +386,11 @@ beforeAll(async () => {
    * not the gate is there.
    */
   await prisma.shipper.create({
-    data: { id: OTHER_SHIPPER, name: "Embarcador da outra", businessId: NOT_HIRED },
+    data: {
+      id: OTHER_SHIPPER,
+      name: "Embarcador da outra",
+      businessId: NOT_HIRED,
+    },
   });
 
   await prisma.delivery.createMany({
@@ -397,7 +429,9 @@ afterAll(async () => {
   await prisma.user.deleteMany({ where: { id: { in: USERS } } });
   await prisma.driver.deleteMany({ where: { id: DRIVER } });
 
-  await prisma.permission.deleteMany({ where: { profileAccessId: { in: profiles } } });
+  await prisma.permission.deleteMany({
+    where: { profileAccessId: { in: profiles } },
+  });
   await prisma.profileAccess.deleteMany({ where: { id: { in: profiles } } });
 
   await prisma.businessEntitlement.deleteMany({
@@ -471,7 +505,13 @@ describe("the other profiles of the same company", () => {
     expect(overview.deliveryOperation).toEqual(TODAY);
 
     for (const point of overview.activityTrends) {
-      for (const key of ["parts", "suppliers", "serviceOrders", "fines", "businesses"]) {
+      for (const key of [
+        "parts",
+        "suppliers",
+        "serviceOrders",
+        "fines",
+        "businesses",
+      ]) {
         expect(point, key).not.toHaveProperty(key);
       }
 

@@ -134,7 +134,10 @@ describe("the public topic of a feed event", () => {
     "names an occurrence that took effect (%s) as the webhook does",
     async (status) => {
       const { data } = await topicsOf([
-        event({ type: "OCCURRENCE", occurrence: { authorization_status: status } }),
+        event({
+          type: "OCCURRENCE",
+          occurrence: { authorization_status: status },
+        }),
       ]);
 
       expect(data.map((row) => row.topic)).toEqual(["occurrence.reported"]);
@@ -145,7 +148,10 @@ describe("the public topic of a feed event", () => {
     "leaves out a request that took no effect (%s)",
     async (status) => {
       const { data } = await topicsOf([
-        event({ type: "OCCURRENCE", occurrence: { authorization_status: status } }),
+        event({
+          type: "OCCURRENCE",
+          occurrence: { authorization_status: status },
+        }),
       ]);
 
       expect(data).toEqual([]);
@@ -171,11 +177,17 @@ describe("the public topic of a feed event", () => {
 
   // Decision 14.7: a route plan change is planning, not a public fact, and
   // must not fall into delivery.note.
-  it.each([["ROUTE_ADDED"], ["ROUTE_REMOVED"]])("leaves out %s", async (type) => {
-    const { data } = await topicsOf([event({ type, note: "Rota 12" }), event({ type: "PROOF" })]);
+  it.each([["ROUTE_ADDED"], ["ROUTE_REMOVED"]])(
+    "leaves out %s",
+    async (type) => {
+      const { data } = await topicsOf([
+        event({ type, note: "Rota 12" }),
+        event({ type: "PROOF" }),
+      ]);
 
-    expect(data.map((row) => row.topic)).toEqual(["proof.registered"]);
-  });
+      expect(data.map((row) => row.topic)).toEqual(["proof.registered"]);
+    },
+  );
 
   it("reads the occurrence's category with the event", async () => {
     const { findMany, repository } = repositoryWith();
@@ -191,7 +203,11 @@ describe("the public topic of a feed event", () => {
     const { data } = await topicsOf([
       event({ type: "ARRIVAL" }),
       event({ type: "PROOF" }),
-      event({ type: "STATUS_CHANGE", status_from: "IN_TRANSIT", status_to: "FAILED" }),
+      event({
+        type: "STATUS_CHANGE",
+        status_from: "IN_TRANSIT",
+        status_to: "FAILED",
+      }),
       event({ type: "NOTE", note: "Ligar antes." }),
     ]);
 

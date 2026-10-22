@@ -200,8 +200,16 @@ describe("board positions under concurrency", () => {
     await Promise.all([
       repository.deleteColumn(columns[0].id),
       repository.deleteColumn(columns[3].id),
-      repository.createColumn({ title: "Nova 1", color: "#000000", businessId: CARRIER }),
-      repository.createColumn({ title: "Nova 2", color: "#000000", businessId: CARRIER }),
+      repository.createColumn({
+        title: "Nova 1",
+        color: "#000000",
+        businessId: CARRIER,
+      }),
+      repository.createColumn({
+        title: "Nova 2",
+        color: "#000000",
+        businessId: CARRIER,
+      }),
     ]);
 
     // 8 - 2 + 2 columns, positions 0..7 with no gap and no repeat.
@@ -258,7 +266,9 @@ describe("board tenant walls over HTTP", () => {
     });
 
     expect(response.statusCode).toBe(403);
-    expect(await prisma.kanbanColumn.count({ where: { title: "Invasão" } })).toBe(0);
+    expect(
+      await prisma.kanbanColumn.count({ where: { title: "Invasão" } }),
+    ).toBe(0);
   });
 
   it("refuses a read-only profile writing and lets it read the board", async () => {
@@ -300,7 +310,9 @@ describe("board tenant walls over HTTP", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(await prisma.kanbanCard.count({ where: { title: "Cruzado" } })).toBe(0);
+    expect(await prisma.kanbanCard.count({ where: { title: "Cruzado" } })).toBe(
+      0,
+    );
   });
 });
 
@@ -355,8 +367,12 @@ describe("another company's ids over HTTP are not found", () => {
     });
 
     await same(
-      await send("PATCH", `/kanban/card/update/${theirs.id}`, { title: "Invadido" }),
-      await send("PATCH", `/kanban/card/update/${MISSING}`, { title: "Invadido" }),
+      await send("PATCH", `/kanban/card/update/${theirs.id}`, {
+        title: "Invadido",
+      }),
+      await send("PATCH", `/kanban/card/update/${MISSING}`, {
+        title: "Invadido",
+      }),
       "KANBAN_CARD_NOT_FOUND",
     );
 
@@ -376,7 +392,9 @@ describe("another company's ids over HTTP are not found", () => {
       "KANBAN_CARD_NOT_FOUND",
     );
 
-    expect(await prisma.kanbanCard.findUnique({ where: { id: theirs.id } })).toMatchObject({
+    expect(
+      await prisma.kanbanCard.findUnique({ where: { id: theirs.id } }),
+    ).toMatchObject({
       title: "Da transportadora",
       columnId: column.id,
     });
@@ -397,41 +415,72 @@ describe("another company's ids over HTTP are not found", () => {
     };
 
     await same(
-      await send("POST", "/kanban/card/create", { ...card, columnId: theirs.id }),
+      await send("POST", "/kanban/card/create", {
+        ...card,
+        columnId: theirs.id,
+      }),
       await send("POST", "/kanban/card/create", { ...card, columnId: MISSING }),
       "KANBAN_COLUMN_NOT_FOUND",
     );
 
     await same(
-      await send("PATCH", `/kanban/column/update/${theirs.id}/business/${OTHER}`, { title: "X" }),
-      await send("PATCH", `/kanban/column/update/${MISSING}/business/${OTHER}`, { title: "X" }),
+      await send(
+        "PATCH",
+        `/kanban/column/update/${theirs.id}/business/${OTHER}`,
+        { title: "X" },
+      ),
+      await send(
+        "PATCH",
+        `/kanban/column/update/${MISSING}/business/${OTHER}`,
+        { title: "X" },
+      ),
       "KANBAN_COLUMN_NOT_FOUND",
     );
 
     await same(
-      await send("DELETE", `/kanban/column/delete/${theirs.id}/business/${OTHER}`),
-      await send("DELETE", `/kanban/column/delete/${MISSING}/business/${OTHER}`),
+      await send(
+        "DELETE",
+        `/kanban/column/delete/${theirs.id}/business/${OTHER}`,
+      ),
+      await send(
+        "DELETE",
+        `/kanban/column/delete/${MISSING}/business/${OTHER}`,
+      ),
       "KANBAN_COLUMN_NOT_FOUND",
     );
 
-    expect(await prisma.kanbanColumn.findUnique({ where: { id: theirs.id } })).toMatchObject({
+    expect(
+      await prisma.kanbanColumn.findUnique({ where: { id: theirs.id } }),
+    ).toMatchObject({
       title: "Coluna alheia",
     });
-    expect(await prisma.kanbanCard.count({ where: { title: "Plantado" } })).toBe(0);
+    expect(
+      await prisma.kanbanCard.count({ where: { title: "Plantado" } }),
+    ).toBe(0);
   });
 
   it("naming another company's board in the path is refused the same way, whatever column id comes with it", async () => {
-    const theirs = await prisma.kanbanColumn.findFirstOrThrow({ where: { businessId: CARRIER } });
+    const theirs = await prisma.kanbanColumn.findFirstOrThrow({
+      where: { businessId: CARRIER },
+    });
 
-    const real = await send("DELETE", `/kanban/column/delete/${theirs.id}/business/${CARRIER}`);
-    const fake = await send("DELETE", `/kanban/column/delete/${MISSING}/business/${CARRIER}`);
+    const real = await send(
+      "DELETE",
+      `/kanban/column/delete/${theirs.id}/business/${CARRIER}`,
+    );
+    const fake = await send(
+      "DELETE",
+      `/kanban/column/delete/${MISSING}/business/${CARRIER}`,
+    );
 
     // The route's tenant guard answers first (TENANT_ACCESS_DENIED), before
     // the use case looks the column up.
     expect(real.statusCode).toBe(403);
     expect(real.json()).toEqual(fake.json());
     expect(real.json().code).toEqual(expect.any(String));
-    expect(await prisma.kanbanColumn.count({ where: { id: theirs.id } })).toBe(1);
+    expect(await prisma.kanbanColumn.count({ where: { id: theirs.id } })).toBe(
+      1,
+    );
   });
 });
 
@@ -497,8 +546,16 @@ describe("card writes under the lock of the column the card is in now", () => {
     });
 
   it("a delete whose card moved while it waited compacts the new column under that column's lock", async () => {
-    const from = await repository.createColumn({ title: "De", color: "#000000", businessId: OTHER });
-    const to = await repository.createColumn({ title: "Para", color: "#000000", businessId: OTHER });
+    const from = await repository.createColumn({
+      title: "De",
+      color: "#000000",
+      businessId: OTHER,
+    });
+    const to = await repository.createColumn({
+      title: "Para",
+      color: "#000000",
+      businessId: OTHER,
+    });
 
     const moving = await card(from.id, "em trânsito");
     await card(to.id, "t0");
@@ -533,7 +590,9 @@ describe("card writes under the lock of the column the card is in now", () => {
     // well inside this pause.
     await new Promise((resolve) => setTimeout(resolve, 500));
     await lockWaiters(1);
-    expect(settled, "a exclusão compactou a coluna nova sem o lock dela").toBe(false);
+    expect(settled, "a exclusão compactou a coluna nova sem o lock dela").toBe(
+      false,
+    );
 
     target.release();
     await target.done;
@@ -553,16 +612,29 @@ describe("card writes under the lock of the column the card is in now", () => {
   });
 
   it("a move to a column deleted meanwhile, and a delete of a card already gone, are not-found errors", async () => {
-    const column = await repository.createColumn({ title: "Some", color: "#000000", businessId: OTHER });
+    const column = await repository.createColumn({
+      title: "Some",
+      color: "#000000",
+      businessId: OTHER,
+    });
     const kept = await card(column.id, "fica");
 
-    const vanished = await repository.createColumn({ title: "Vai sumir", color: "#000000", businessId: OTHER });
+    const vanished = await repository.createColumn({
+      title: "Vai sumir",
+      color: "#000000",
+      businessId: OTHER,
+    });
     await repository.deleteColumn(vanished.id);
 
     // The old code met the FK error and the use case answered a generic 500.
     await expect(
-      repository.reorderCards({ cards: [{ id: kept.id, position: 0, columnId: vanished.id }] }),
-    ).rejects.toMatchObject({ statusCode: 404, code: "KANBAN_COLUMN_NOT_FOUND" });
+      repository.reorderCards({
+        cards: [{ id: kept.id, position: 0, columnId: vanished.id }],
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "KANBAN_COLUMN_NOT_FOUND",
+    });
 
     await expect(repository.deleteColumn(vanished.id)).rejects.toMatchObject({
       statusCode: 404,

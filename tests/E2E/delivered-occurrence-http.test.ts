@@ -11,7 +11,11 @@ import { operationDay } from "@/shared/route/operation-day-rules";
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { ExternalRecipientRepository } from "@/modules/delivery/repositories/external-recipient-repository";
 
-import { fakeJpeg, seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
+import {
+  fakeJpeg,
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
 
 /**
  * Proving a delivery is reporting a DELIVERED occurrence (decision 14.3;
@@ -62,7 +66,10 @@ async function deliveryInTransit(): Promise<string> {
   return delivery.id;
 }
 
-async function typeId(systemKey: string, businessId = CARRIER): Promise<string> {
+async function typeId(
+  systemKey: string,
+  businessId = CARRIER,
+): Promise<string> {
   return (
     await prisma.occurrenceType.findUniqueOrThrow({
       where: { businessId_system_key: { businessId, system_key: systemKey } },
@@ -70,7 +77,12 @@ async function typeId(systemKey: string, businessId = CARRIER): Promise<string> 
   ).id;
 }
 
-const report = (deliveryId: string, token: string, body: Record<string, unknown>, businessId = CARRIER) =>
+const report = (
+  deliveryId: string,
+  token: string,
+  body: Record<string, unknown>,
+  businessId = CARRIER,
+) =>
   app.inject({
     method: "POST",
     url: `/delivery/report-occurrence/${deliveryId}/business/${businessId}`,
@@ -97,18 +109,28 @@ async function webhookTopics(deliveryId: string): Promise<string[]> {
   return rows.map((row) => row.topic).sort();
 }
 
-const refusal = (response: { statusCode: number; json: () => { code?: string } }) =>
-  `${response.statusCode} ${response.json().code}`;
+const refusal = (response: {
+  statusCode: number;
+  json: () => { code?: string };
+}) => `${response.statusCode} ${response.json().code}`;
 
 beforeAll(async () => {
-  carrier = await seedFleetDriver(prisma, { businessId: CARRIER, cnpj: "55666889000191" });
-  other = await seedFleetDriver(prisma, { businessId: OTHER, cnpj: "55666889000272" });
+  carrier = await seedFleetDriver(prisma, {
+    businessId: CARRIER,
+    cnpj: "55666889000191",
+  });
+  other = await seedFleetDriver(prisma, {
+    businessId: OTHER,
+    cnpj: "55666889000272",
+  });
 
   await ensureDefaultOccurrenceTypes(prisma, CARRIER);
   await ensureDefaultOccurrenceTypes(prisma, OTHER);
 
   shipperId = (
-    await prisma.shipper.create({ data: { name: "Embarcador", businessId: CARRIER } })
+    await prisma.shipper.create({
+      data: { name: "Embarcador", businessId: CARRIER },
+    })
   ).id;
 
   // Somebody's ERP, so `announce` writes rows to assert on.
@@ -118,7 +140,12 @@ beforeAll(async () => {
       url: "https://erp.exemplo.com.br/webhook",
       secret: "segredo-do-teste",
       businessId: CARRIER,
-      topics: ["delivery.delivered", "proof.registered", "occurrence.reported", "delivery.failed"],
+      topics: [
+        "delivery.delivered",
+        "proof.registered",
+        "occurrence.reported",
+        "delivery.failed",
+      ],
     },
   });
 
@@ -153,7 +180,11 @@ describe("a driver reporting the default delivery type", () => {
     expect(response.statusCode, response.body).toBe(201);
     expect(response.json()).toMatchObject({
       message: "Entrega registrada com sucesso!",
-      data: { category: "DELIVERED", delivery_status: "DELIVERED", authorization_status: "NOT_REQUIRED" },
+      data: {
+        category: "DELIVERED",
+        delivery_status: "DELIVERED",
+        authorization_status: "NOT_REQUIRED",
+      },
     });
 
     const occurrence = await prisma.deliveryOccurrence.findUniqueOrThrow({
@@ -177,14 +208,23 @@ describe("a driver reporting the default delivery type", () => {
       received_by: occurrence.received_by,
     });
     expect(
-      await prisma.deliveryEvent.count({ where: { deliveryId, type: "OCCURRENCE" } }),
+      await prisma.deliveryEvent.count({
+        where: { deliveryId, type: "OCCURRENCE" },
+      }),
     ).toBe(0);
 
-    const delivery = await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } });
+    const delivery = await prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    });
 
     expect(delivery.status).toBe("DELIVERED");
-    expect(await prisma.deliveryProofAudit.count({ where: { deliveryId } })).toBe(1);
-    expect(await webhookTopics(deliveryId)).toEqual(["delivery.delivered", "proof.registered"]);
+    expect(
+      await prisma.deliveryProofAudit.count({ where: { deliveryId } }),
+    ).toBe(1);
+    expect(await webhookTopics(deliveryId)).toEqual([
+      "delivery.delivered",
+      "proof.registered",
+    ]);
   });
 
   it("answers the resend and the same key through the legacy route as the same submission", async () => {
@@ -199,13 +239,25 @@ describe("a driver reporting the default delivery type", () => {
 
     const first = await report(deliveryId, carrier.driverToken, body);
     const again = await report(deliveryId, carrier.driverToken, body);
-    const legacy = await legacyProof(deliveryId, { client_submission_id: submission, photo: receipt });
+    const legacy = await legacyProof(deliveryId, {
+      client_submission_id: submission,
+      photo: receipt,
+    });
 
     expect(first.statusCode).toBe(201);
-    expect(again.json().data).toMatchObject({ id: first.json().data.id, replayed: true });
+    expect(again.json().data).toMatchObject({
+      id: first.json().data.id,
+      replayed: true,
+    });
     expect(legacy.statusCode, legacy.body).toBe(201);
-    expect(await prisma.deliveryEvent.count({ where: { deliveryId, type: "PROOF" } })).toBe(1);
-    expect(await prisma.deliveryOccurrence.count({ where: { deliveryId } })).toBe(1);
+    expect(
+      await prisma.deliveryEvent.count({
+        where: { deliveryId, type: "PROOF" },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.deliveryOccurrence.count({ where: { deliveryId } }),
+    ).toBe(1);
   });
 
   it("records one proof for the same submission sent twice at once", async () => {
@@ -216,12 +268,25 @@ describe("a driver reporting the default delivery type", () => {
       receipt_photo: await storedPhoto(),
     };
 
-    const responses = await Promise.all([1, 2].map(() => report(deliveryId, carrier.driverToken, body)));
+    const responses = await Promise.all(
+      [1, 2].map(() => report(deliveryId, carrier.driverToken, body)),
+    );
 
-    expect(responses.map((response) => response.statusCode)).toEqual([201, 201]);
-    expect(new Set(responses.map((response) => response.json().data.id)).size).toBe(1);
-    expect(await prisma.deliveryEvent.count({ where: { deliveryId, type: "PROOF" } })).toBe(1);
-    expect(await webhookTopics(deliveryId)).toEqual(["delivery.delivered", "proof.registered"]);
+    expect(responses.map((response) => response.statusCode)).toEqual([
+      201, 201,
+    ]);
+    expect(
+      new Set(responses.map((response) => response.json().data.id)).size,
+    ).toBe(1);
+    expect(
+      await prisma.deliveryEvent.count({
+        where: { deliveryId, type: "PROOF" },
+      }),
+    ).toBe(1);
+    expect(await webhookTopics(deliveryId)).toEqual([
+      "delivery.delivered",
+      "proof.registered",
+    ]);
   });
 
   it("refuses a missing receipt with its code, the panel with DRIVER_ONLY, and a pause type", async () => {
@@ -253,7 +318,8 @@ describe("a driver reporting the default delivery type", () => {
       ),
     ).toBe("400 OCCURRENCE_TYPE_WRONG_CATEGORY");
     expect(
-      (await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } })).status,
+      (await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } }))
+        .status,
     ).toBe("IN_TRANSIT");
   });
 
@@ -299,23 +365,33 @@ describe("the installed app's proof route", () => {
     });
 
     expect(response.statusCode, response.body).toBe(201);
-    expect(response.json()).toEqual({ message: "Entrega comprovada com sucesso!" });
+    expect(response.json()).toEqual({
+      message: "Entrega comprovada com sucesso!",
+    });
 
-    const occurrence = await prisma.deliveryOccurrence.findFirstOrThrow({ where: { deliveryId } });
+    const occurrence = await prisma.deliveryOccurrence.findFirstOrThrow({
+      where: { deliveryId },
+    });
 
     expect(occurrence).toMatchObject({
       category: "DELIVERED",
       occurrenceTypeId: await typeId("delivered_default"),
       received_by: "João",
     });
-    expect(await webhookTopics(deliveryId)).toEqual(["delivery.delivered", "proof.registered"]);
+    expect(await webhookTopics(deliveryId)).toEqual([
+      "delivery.delivered",
+      "proof.registered",
+    ]);
   });
 
   it("is CLIENT_OUTDATED with what is missing once the default asks for a signature", async () => {
     const deliveryId = await deliveryInTransit();
     const fallback = await typeId("delivered_default");
 
-    await prisma.occurrenceType.update({ where: { id: fallback }, data: { requires_signature: true } });
+    await prisma.occurrenceType.update({
+      where: { id: fallback },
+      data: { requires_signature: true },
+    });
 
     try {
       const response = await legacyProof(deliveryId, {
@@ -327,10 +403,14 @@ describe("the installed app's proof route", () => {
       expect(response.json().missing).toEqual(["signature"]);
       expect(response.headers["x-error-code"]).toBe("CLIENT_OUTDATED");
       expect(
-        (await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } })).status,
+        (await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } }))
+          .status,
       ).toBe("IN_TRANSIT");
     } finally {
-      await prisma.occurrenceType.update({ where: { id: fallback }, data: { requires_signature: false } });
+      await prisma.occurrenceType.update({
+        where: { id: fallback },
+        data: { requires_signature: false },
+      });
     }
   });
 });
@@ -374,29 +454,42 @@ describe("a delivery type that asks the tower", () => {
     expect(decided.statusCode, decided.body).toBe(200);
     expect(decided.json().data).toMatchObject({ deliveryStatus: "DELIVERED" });
 
-    const delivery = await prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId } });
-    const proof = await prisma.deliveryEvent.findFirstOrThrow({ where: { deliveryId, type: "PROOF" } });
+    const delivery = await prisma.delivery.findUniqueOrThrow({
+      where: { id: deliveryId },
+    });
+    const proof = await prisma.deliveryEvent.findFirstOrThrow({
+      where: { deliveryId, type: "PROOF" },
+    });
 
     expect(delivery.status).toBe("DELIVERED");
-    expect(Math.abs(delivery.delivered_at!.getTime() - tappedAt.getTime())).toBeLessThan(2_000);
+    expect(
+      Math.abs(delivery.delivered_at!.getTime() - tappedAt.getTime()),
+    ).toBeLessThan(2_000);
     expect(proof).toMatchObject({
       occurrenceId: reported.json().data.id,
       reportedById: carrier.driverUserId,
       received_by: "Porteiro",
     });
     expect(
-      (await prisma.deliveryOccurrence.findUniqueOrThrow({ where: { id: reported.json().data.id } }))
-        .authorization_status,
+      (
+        await prisma.deliveryOccurrence.findUniqueOrThrow({
+          where: { id: reported.json().data.id },
+        })
+      ).authorization_status,
     ).toBe("APPROVED");
-    expect(await webhookTopics(deliveryId)).toEqual(["delivery.delivered", "proof.registered"]);
+    expect(await webhookTopics(deliveryId)).toEqual([
+      "delivery.delivered",
+      "proof.registered",
+    ]);
   });
 });
 
 describe("the readers that count problems, not deliveries", () => {
-  it("leaves a DELIVERED occurrence out of \"Ocorrências hoje\" and counts a problem", async () => {
+  it('leaves a DELIVERED occurrence out of "Ocorrências hoje" and counts a problem', async () => {
     const deliveries = new DeliveryRepository();
     const today = () => operationDay("America/Sao_Paulo", new Date());
-    const before = (await deliveries.operationBacklog(CARRIER, today())).occurrencesToday;
+    const before = (await deliveries.operationBacklog(CARRIER, today()))
+      .occurrencesToday;
 
     const proven = await deliveryInTransit();
 
@@ -406,10 +499,15 @@ describe("the readers that count problems, not deliveries", () => {
       receipt_photo: await storedPhoto(),
     });
 
-    expect((await deliveries.operationBacklog(CARRIER, today())).occurrencesToday).toBe(before);
+    expect(
+      (await deliveries.operationBacklog(CARRIER, today())).occurrencesToday,
+    ).toBe(before);
 
     const problem = await prisma.occurrenceType.create({
-      data: { businessId: CARRIER, name: `Portão fechado ${randomUUID().slice(0, 6)}` },
+      data: {
+        businessId: CARRIER,
+        name: `Portão fechado ${randomUUID().slice(0, 6)}`,
+      },
     });
 
     await report(await deliveryInTransit(), carrier.driverToken, {
@@ -417,7 +515,9 @@ describe("the readers that count problems, not deliveries", () => {
       client_submission_id: randomUUID(),
     });
 
-    expect((await deliveries.operationBacklog(CARRIER, today())).occurrencesToday).toBe(before + 1);
+    expect(
+      (await deliveries.operationBacklog(CARRIER, today())).occurrencesToday,
+    ).toBe(before + 1);
   });
 
   it("never shows the DELIVERED occurrence on the public tracking page: the PROOF already says it", async () => {
@@ -461,7 +561,8 @@ describe("what the PROOF event records about the phone", () => {
       url: `/delivery/report-occurrence/${deliveryId}/business/${CARRIER}`,
       headers: {
         authorization: `Bearer ${carrier.driverToken}`,
-        "x-trajetto-client-version": "platform=android; version=1.5.0; build=51; contract=3",
+        "x-trajetto-client-version":
+          "platform=android; version=1.5.0; build=51; contract=3",
       },
       payload: {
         occurrenceTypeId: await typeId("delivered_default"),
@@ -503,6 +604,10 @@ describe("what the PROOF event records about the phone", () => {
       where: { deliveryId, type: "PROOF" },
     });
 
-    expect(proof).toMatchObject({ actor: "DRIVER_APP", device_id: null, photo_taken_at: null });
+    expect(proof).toMatchObject({
+      actor: "DRIVER_APP",
+      device_id: null,
+      photo_taken_at: null,
+    });
   });
 });

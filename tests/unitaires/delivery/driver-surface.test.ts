@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { legacyProofUseCase, businessWithoutAI as reportsWithoutAI } from "../../support/delivery-proof-usecases";
+import {
+  legacyProofUseCase,
+  businessWithoutAI as reportsWithoutAI,
+} from "../../support/delivery-proof-usecases";
 import { InMemoryProofAuditRepository } from "@/modules/delivery/repositories/in-memory/in-memory-proof-audit-repository";
 import type { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
@@ -225,7 +228,12 @@ describe("driver surface: my-deliveries", () => {
       repos.userRepository,
       repos.deliveryRepository,
       repos.occurrenceTypeRepository,
-      new InMemoryDriverPauseRepository([], [], [], [{ id: BUSINESS, timezone: "America/Sao_Paulo" }]),
+      new InMemoryDriverPauseRepository(
+        [],
+        [],
+        [],
+        [{ id: BUSINESS, timezone: "America/Sao_Paulo" }],
+      ),
     );
 
     const result = await useCase.execute({
@@ -252,7 +260,12 @@ describe("driver surface: my-deliveries", () => {
       repos.userRepository,
       repos.deliveryRepository,
       repos.occurrenceTypeRepository,
-      new InMemoryDriverPauseRepository([], [], [], [{ id: BUSINESS, timezone: "America/Sao_Paulo" }]),
+      new InMemoryDriverPauseRepository(
+        [],
+        [],
+        [],
+        [{ id: BUSINESS, timezone: "America/Sao_Paulo" }],
+      ),
     );
 
     await expect(
@@ -536,9 +549,7 @@ describe("driver surface: proof", () => {
     const [event] = repos.deliveryRepository.events;
     expect(event.type).toBe("PROOF");
     expect(event.photo).toBe(`deliveryPhotos/${BUSINESS}/canhoto.webp`);
-    expect(event.signature).toBe(
-      `deliveryPhotos/${BUSINESS}/assinatura.png`,
-    );
+    expect(event.signature).toBe(`deliveryPhotos/${BUSINESS}/assinatura.png`);
 
     // The outbox resend after a dead network: no second event, no error,
     // and the delivery stays proven.

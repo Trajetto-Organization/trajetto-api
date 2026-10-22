@@ -13,7 +13,10 @@ import { verifyPermission } from "@/modules/middlewares/verify-permission";
 import { verifyBusinessActive } from "@/modules/middlewares/verify-tenant-active";
 import { verifyModuleEnabled } from "@/modules/middlewares/verify-module-enabled";
 
-import { importSchemas, importResponses } from "./documentation/import-documentation";
+import {
+  importSchemas,
+  importResponses,
+} from "./documentation/import-documentation";
 import { ndjsonList, offsetMetaWith } from "./documentation/ndjson";
 import { importListSearchMetaDoc } from "@/modules/import/usecases/list-imports/list-imports-documentation";
 import { XLSX, fileResponse } from "./documentation/doc-only-responses";
@@ -45,7 +48,10 @@ async function importRoutes(app: FastifyInstance) {
     {
       onRequest: [ensureAuthenticated],
       // Uploads are the dispatcher's, never the driver's (decision 4.4).
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read", { allowDriver: false })],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read", { allowDriver: false }),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["import"],
@@ -111,13 +117,16 @@ async function importRoutes(app: FastifyInstance) {
     {
       onRequest: [ensureAuthenticated],
       // Uploads are the dispatcher's, never the driver's (decision 4.4).
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read", { allowDriver: false })],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read", { allowDriver: false }),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["import"],
         summary: "Lista as importações da empresa",
         description:
-          "Planilhas (`source` SPREADSHEET) e XMLs de NF-e (`source` NFE_XML): toda importação grava uma linha aqui. Token de motorista recebe 403 PERMISSION_DENIED. Responde em application/x-ndjson, NÃO em JSON: a primeira linha é o envelope `{meta:{total,page,pageSize,searchMeta}}` (total do filtro e, em `searchMeta.facets`, as opções dos filtros de status e origem com as contagens, cada uma com o outro filtro aplicado) e cada linha seguinte é uma importação. Tabela paginada no servidor: ordena por `sort`/`order` (created_at, filename, imported, duplicated, invalid; padrão a mais recente primeiro) e filtra por `status` (IN_PROGRESS, COMPLETED, REVERSED) e `source` (SPREADSHEET, NFE_XML). Chamar response.json() nisso dá erro de parse — leia linha a linha. Existe para o relatório sobreviver à requisição que o produziu: \"qual das duzentas falhou?\" é perguntado horas depois, por quem não fez o upload e não pode refazê-lo para descobrir.",
+          'Planilhas (`source` SPREADSHEET) e XMLs de NF-e (`source` NFE_XML): toda importação grava uma linha aqui. Token de motorista recebe 403 PERMISSION_DENIED. Responde em application/x-ndjson, NÃO em JSON: a primeira linha é o envelope `{meta:{total,page,pageSize,searchMeta}}` (total do filtro e, em `searchMeta.facets`, as opções dos filtros de status e origem com as contagens, cada uma com o outro filtro aplicado) e cada linha seguinte é uma importação. Tabela paginada no servidor: ordena por `sort`/`order` (created_at, filename, imported, duplicated, invalid; padrão a mais recente primeiro) e filtra por `status` (IN_PROGRESS, COMPLETED, REVERSED) e `source` (SPREADSHEET, NFE_XML). Chamar response.json() nisso dá erro de parse — leia linha a linha. Existe para o relatório sobreviver à requisição que o produziu: "qual das duzentas falhou?" é perguntado horas depois, por quem não fez o upload e não pode refazê-lo para descobrir.',
         querystring: importSchemas.listImports,
         response: {
           200: ndjsonList(
@@ -139,13 +148,16 @@ async function importRoutes(app: FastifyInstance) {
     {
       onRequest: [ensureAuthenticated],
       // Uploads are the dispatcher's, never the driver's (decision 4.4).
-      preHandler: [deliveriesModule, verifyPermission("delivery_manage", "read", { allowDriver: false })],
+      preHandler: [
+        deliveriesModule,
+        verifyPermission("delivery_manage", "read", { allowDriver: false }),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["import"],
         summary: "Lê uma importação com o relatório por linha",
         description:
-          "Uma importação com o relatório linha a linha (`report.rows`, `report.unknownHeaders`, `report.routes`). É daqui que a tela lê o relatório ao abrir uma importação: a listagem pedida com includeReport=false traz só os contadores, porque o relatório tem uma entrada por linha da planilha. A leitura é filtrada pela empresa: a importação de outra transportadora responde 404 IMPORT_NOT_FOUND, nunca \"existe mas não é sua\".",
+          'Uma importação com o relatório linha a linha (`report.rows`, `report.unknownHeaders`, `report.routes`). É daqui que a tela lê o relatório ao abrir uma importação: a listagem pedida com includeReport=false traz só os contadores, porque o relatório tem uma entrada por linha da planilha. A leitura é filtrada pela empresa: a importação de outra transportadora responde 404 IMPORT_NOT_FOUND, nunca "existe mas não é sua".',
         params: importSchemas.importBusinessParams,
         response: {
           200: importResponses.importDetail,

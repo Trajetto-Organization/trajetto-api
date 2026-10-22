@@ -41,22 +41,38 @@ function uniqueViolation(target: string): Prisma.PrismaClientKnownRequestError {
 class InMemorySupportTicketRepository implements ISupportTicketRepository {
   public tickets: SupportTicket[] = [];
   public events: SupportTicketEvent[] = [];
-  public reads: Array<{ ticketId: string; userId: string; last_read_at: Date }> = [];
+  public reads: Array<{
+    ticketId: string;
+    userId: string;
+    last_read_at: Date;
+  }> = [];
   public counters = new Map<string, number>();
 
   /** Seeded by tests: the occurrence behind an OCCURRENCE ticket. */
   public occurrenceDirectory = new Map<
     string,
-    { typeName: string; authorization_status: OccurrenceAuthorizationState; created_at: Date }
+    {
+      typeName: string;
+      authorization_status: OccurrenceAuthorizationState;
+      created_at: Date;
+    }
   >();
 
-  constructor(public chat: InMemoryChatRepository = new InMemoryChatRepository()) {}
+  constructor(
+    public chat: InMemoryChatRepository = new InMemoryChatRepository(),
+  ) {}
 
-  private violatesOpenUniqueness(candidate: SupportTicket, ignoreId?: string): string | null {
+  private violatesOpenUniqueness(
+    candidate: SupportTicket,
+    ignoreId?: string,
+  ): string | null {
     for (const ticket of this.tickets) {
       if (ticket.id === ignoreId) continue;
 
-      if (candidate.occurrenceId && ticket.occurrenceId === candidate.occurrenceId) {
+      if (
+        candidate.occurrenceId &&
+        ticket.occurrenceId === candidate.occurrenceId
+      ) {
         return "occurrenceId";
       }
 
@@ -139,10 +155,15 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
   }
 
   private find(id: string, businessId: string): SupportTicket | undefined {
-    return this.tickets.find((ticket) => ticket.id === id && ticket.businessId === businessId);
+    return this.tickets.find(
+      (ticket) => ticket.id === id && ticket.businessId === businessId,
+    );
   }
 
-  async findById(id: string, businessId: string): Promise<SupportTicket | null> {
+  async findById(
+    id: string,
+    businessId: string,
+  ): Promise<SupportTicket | null> {
     const found = this.find(id, businessId);
 
     return found ? { ...found } : null;
@@ -179,8 +200,12 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
       },
       driverUserId,
       delivery:
-        ticket.deliveryId && delivery ? { id: ticket.deliveryId, ...delivery } : null,
-      route: route ? { id: route.id, code: route.code, name: route.name } : null,
+        ticket.deliveryId && delivery
+          ? { id: ticket.deliveryId, ...delivery }
+          : null,
+      route: route
+        ? { id: route.id, code: route.code, name: route.name }
+        : null,
       occurrence:
         ticket.occurrenceId && occurrence
           ? { id: ticket.occurrenceId, ...occurrence }
@@ -191,7 +216,10 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
     };
   }
 
-  async findRowById(id: string, businessId: string): Promise<SupportTicketRow | null> {
+  async findRowById(
+    id: string,
+    businessId: string,
+  ): Promise<SupportTicketRow | null> {
     const found = this.find(id, businessId);
 
     return found ? this.toRow(found) : null;
@@ -199,7 +227,9 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
 
   async findByOccurrence(occurrenceId: string, businessId: string) {
     const found = this.tickets.find(
-      (ticket) => ticket.occurrenceId === occurrenceId && ticket.businessId === businessId,
+      (ticket) =>
+        ticket.occurrenceId === occurrenceId &&
+        ticket.businessId === businessId,
     );
 
     return found ? { ...found } : null;
@@ -208,7 +238,8 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
   async findBySubmissionId(clientSubmissionId: string, businessId: string) {
     const found = this.tickets.find(
       (ticket) =>
-        ticket.client_submission_id === clientSubmissionId && ticket.businessId === businessId,
+        ticket.client_submission_id === clientSubmissionId &&
+        ticket.businessId === businessId,
     );
 
     return found ? { ...found } : null;
@@ -296,21 +327,29 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
       ? this.tickets.find((row) => row.id === message.ticketId)
       : undefined;
 
-    return ticket && message ? { ticket: { ...ticket }, at: message.created_at } : null;
+    return ticket && message
+      ? { ticket: { ...ticket }, at: message.created_at }
+      : null;
   }
 
   async lockForUpdate(id: string, businessId: string) {
     return this.findById(id, businessId);
   }
 
-  private mutate(id: string, change: (ticket: SupportTicket) => void): SupportTicket {
+  private mutate(
+    id: string,
+    change: (ticket: SupportTicket) => void,
+  ): SupportTicket {
     const ticket = this.tickets.find((row) => row.id === id);
 
     if (!ticket) {
-      throw new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
-        code: "P2025",
-        clientVersion: "in-memory",
-      });
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Record to update not found.",
+        {
+          code: "P2025",
+          clientVersion: "in-memory",
+        },
+      );
     }
 
     change(ticket);
@@ -319,7 +358,10 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
     return { ...ticket };
   }
 
-  async linkOccurrence(id: string, occurrenceId: string): Promise<SupportTicket> {
+  async linkOccurrence(
+    id: string,
+    occurrenceId: string,
+  ): Promise<SupportTicket> {
     const candidate = this.tickets.find((row) => row.id === id);
 
     if (candidate) {
@@ -359,7 +401,10 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
 
     if (!ticket || ticket.status !== "OPEN") return false;
 
-    if (props.expectedAssigneeId !== undefined && ticket.assigneeId !== props.expectedAssigneeId) {
+    if (
+      props.expectedAssigneeId !== undefined &&
+      ticket.assigneeId !== props.expectedAssigneeId
+    ) {
       return false;
     }
 
@@ -375,7 +420,8 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
   async autoAssign(id: string, assigneeId: string, at: Date): Promise<boolean> {
     const ticket = this.tickets.find((row) => row.id === id);
 
-    if (!ticket || ticket.status !== "OPEN" || ticket.assigneeId !== null) return false;
+    if (!ticket || ticket.status !== "OPEN" || ticket.assigneeId !== null)
+      return false;
 
     this.mutate(id, (row) => {
       row.assigneeId = assigneeId;
@@ -392,7 +438,10 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
     if (!ticket || ticket.status !== "CLOSED") return false;
 
     // The same partial unique index guards a reopen in Postgres.
-    const violation = this.violatesOpenUniqueness({ ...ticket, status: "OPEN" }, id);
+    const violation = this.violatesOpenUniqueness(
+      { ...ticket, status: "OPEN" },
+      id,
+    );
     if (violation) throw uniqueViolation(violation);
 
     this.mutate(id, (row) => {
@@ -408,7 +457,11 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
     return true;
   }
 
-  async touchOnMessage(props: { id: string; at: Date; side: "DRIVER" | "STAFF" }) {
+  async touchOnMessage(props: {
+    id: string;
+    at: Date;
+    side: "DRIVER" | "STAFF";
+  }) {
     // GREATEST/LEAST semantics of the SQL: advance-only, NULL skipped.
     const later = (current: Date | null) =>
       current && current > props.at ? current : props.at;
@@ -416,7 +469,8 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
     return this.mutate(props.id, (ticket) => {
       if (
         props.side === "STAFF" &&
-        (ticket.first_staff_reply_at === null || props.at < ticket.first_staff_reply_at)
+        (ticket.first_staff_reply_at === null ||
+          props.at < ticket.first_staff_reply_at)
       ) {
         ticket.first_staff_reply_at = props.at;
       }
@@ -439,7 +493,9 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
     });
   }
 
-  async addEvent(props: CreateSupportTicketEventProps): Promise<SupportTicketEvent> {
+  async addEvent(
+    props: CreateSupportTicketEventProps,
+  ): Promise<SupportTicketEvent> {
     const event: SupportTicketEvent = {
       id: uuidV7(),
       ticketId: props.ticketId,
@@ -462,7 +518,10 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
 
   async listEvents(ticketId: string, businessId: string, limit: number) {
     return this.events
-      .filter((event) => event.ticketId === ticketId && event.businessId === businessId)
+      .filter(
+        (event) =>
+          event.ticketId === ticketId && event.businessId === businessId,
+      )
       .sort((a, b) => {
         const byDate = a.created_at.getTime() - b.created_at.getTime();
         return byDate !== 0 ? byDate : a.id.localeCompare(b.id);
@@ -471,19 +530,29 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
       .map((event) => ({ ...event }));
   }
 
-  private matches(ticket: SupportTicket, props: ListSupportTicketsProps): boolean {
+  private matches(
+    ticket: SupportTicket,
+    props: ListSupportTicketsProps,
+  ): boolean {
     if (ticket.businessId !== props.businessId) return false;
     if (props.driverId && ticket.driverId !== props.driverId) return false;
     if (props.status !== "ALL" && ticket.status !== props.status) return false;
     if (props.kind && ticket.kind !== props.kind) return false;
-    if (props.filterDriverId && ticket.driverId !== props.filterDriverId) return false;
-    if (props.deliveryId && ticket.deliveryId !== props.deliveryId) return false;
+    if (props.filterDriverId && ticket.driverId !== props.filterDriverId)
+      return false;
+    if (props.deliveryId && ticket.deliveryId !== props.deliveryId)
+      return false;
     if (props.routeId && ticket.routeId !== props.routeId) return false;
-    if (props.occurrenceId && ticket.occurrenceId !== props.occurrenceId) return false;
+    if (props.occurrenceId && ticket.occurrenceId !== props.occurrenceId)
+      return false;
 
     if (!props.driverId) {
-      if (props.scope === "MINE" && ticket.assigneeId !== props.requesterUserId) return false;
-      if (props.scope === "UNASSIGNED" && (ticket.assigneeId !== null || ticket.status !== "OPEN")) {
+      if (props.scope === "MINE" && ticket.assigneeId !== props.requesterUserId)
+        return false;
+      if (
+        props.scope === "UNASSIGNED" &&
+        (ticket.assigneeId !== null || ticket.status !== "OPEN")
+      ) {
         return false;
       }
       if (props.scope === "PENDING_AUTHORIZATION") {
@@ -541,11 +610,14 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
       (row) => row.ticketId === ticket.id && row.userId === requesterUserId,
     )?.last_read_at;
     const threadCursor = this.chat.reads.find(
-      (row) => row.threadId === ticket.threadId && row.userId === requesterUserId,
+      (row) =>
+        row.threadId === ticket.threadId && row.userId === requesterUserId,
     )?.last_read_at;
 
     // GREATEST ignores nulls in Postgres.
-    const cursors = [ticketCursor, threadCursor].filter((value): value is Date => Boolean(value));
+    const cursors = [ticketCursor, threadCursor].filter(
+      (value): value is Date => Boolean(value),
+    );
     const cursor = cursors.length
       ? new Date(Math.max(...cursors.map((value) => value.getTime())))
       : null;
@@ -584,14 +656,17 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
     return {
       open: open.length,
       unassigned: open.filter((ticket) => ticket.assigneeId === null).length,
-      mine: open.filter((ticket) => ticket.assigneeId === requesterUserId).length,
+      mine: open.filter((ticket) => ticket.assigneeId === requesterUserId)
+        .length,
       pendingAuthorization: open.filter(
         (ticket) =>
           ticket.occurrenceId !== null &&
-          this.occurrenceDirectory.get(ticket.occurrenceId)?.authorization_status === "PENDING",
+          this.occurrenceDirectory.get(ticket.occurrenceId)
+            ?.authorization_status === "PENDING",
       ).length,
       unreadOpen: Math.min(
-        open.filter((ticket) => this.unreadOf(ticket, requesterUserId) > 0).length,
+        open.filter((ticket) => this.unreadOf(ticket, requesterUserId) > 0)
+          .length,
         UNREAD_DISPLAY_CAP,
       ),
     };
@@ -663,14 +738,17 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
 
       const current = result.get(read.ticketId);
 
-      if (!current || read.last_read_at > current) result.set(read.ticketId, read.last_read_at);
+      if (!current || read.last_read_at > current)
+        result.set(read.ticketId, read.last_read_at);
     }
 
     return result;
   }
 
   async markRead(ticketId: string, userId: string, at: Date): Promise<void> {
-    const existing = this.reads.find((row) => row.ticketId === ticketId && row.userId === userId);
+    const existing = this.reads.find(
+      (row) => row.ticketId === ticketId && row.userId === userId,
+    );
 
     if (!existing) {
       this.reads.push({ ticketId, userId, last_read_at: at });
@@ -682,7 +760,9 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
 
   async findManyRows(ids: string[], businessId: string) {
     return this.tickets
-      .filter((ticket) => ids.includes(ticket.id) && ticket.businessId === businessId)
+      .filter(
+        (ticket) => ids.includes(ticket.id) && ticket.businessId === businessId,
+      )
       .map((ticket) => this.toRow(ticket));
   }
 
@@ -707,7 +787,9 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
       })
       .slice(0, limit)
       .flatMap((message) => {
-        const thread = this.chat.threads.find((row) => row.id === message.threadId);
+        const thread = this.chat.threads.find(
+          (row) => row.id === message.threadId,
+        );
 
         return thread
           ? [

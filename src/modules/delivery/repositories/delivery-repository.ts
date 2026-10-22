@@ -76,7 +76,6 @@ const NOT_ON_A_ROUTE: Prisma.DeliveryWhereInput = {
   stops: { none: { status: { in: ["PENDING", "ARRIVED"] } } },
 };
 
-
 /**
  * The tenant of a delivery, for the rows that copy it.
  *
@@ -250,7 +249,9 @@ class DeliveryRepository implements IDeliveryRepository {
 
     const driverIds = [
       ...new Set([
-        ...byDriver.flatMap((group) => (group.driverId ? [group.driverId] : [])),
+        ...byDriver.flatMap((group) =>
+          group.driverId ? [group.driverId] : [],
+        ),
         ...(filters.driverIds ?? []),
       ]),
     ];
@@ -336,13 +337,22 @@ class DeliveryRepository implements IDeliveryRepository {
       return {
         byStatus: rows
           .filter((row) => row.set === 3 && row.status)
-          .map((row) => ({ status: row.status as DeliveryStatus, _count: { _all: row.count } })),
+          .map((row) => ({
+            status: row.status as DeliveryStatus,
+            _count: { _all: row.count },
+          })),
         byShipper: rows
           .filter((row) => row.set === 5 && row.shipperId)
-          .map((row) => ({ shipperId: row.shipperId as string, _count: { _all: row.count } })),
+          .map((row) => ({
+            shipperId: row.shipperId as string,
+            _count: { _all: row.count },
+          })),
         byDriver: rows
           .filter((row) => row.set === 6)
-          .map((row) => ({ driverId: row.driverId, _count: { _all: row.count } })),
+          .map((row) => ({
+            driverId: row.driverId,
+            _count: { _all: row.count },
+          })),
       };
     }
 
@@ -738,7 +748,12 @@ class DeliveryRepository implements IDeliveryRepository {
       typeIds.size > 0
         ? await this.prisma.occurrenceType.findMany({
             where: { businessId: filters.businessId, id: { in: [...typeIds] } },
-            select: { id: true, name: true, blocks_delivery: true, category: true },
+            select: {
+              id: true,
+              name: true,
+              blocks_delivery: true,
+              category: true,
+            },
           })
         : [];
 
@@ -1023,7 +1038,9 @@ class DeliveryRepository implements IDeliveryRepository {
   ): AsyncGenerator<Record<string, unknown>> {
     // The listing's own `where` (decision 5.8): the file is what the screen
     // shows — the id and the driver searches, and every facet, included.
-    const where = deliveryListWhere(await narrowDeliverySearch(this.prisma, filters));
+    const where = deliveryListWhere(
+      await narrowDeliverySearch(this.prisma, filters),
+    );
 
     const batchSize = 1000;
 

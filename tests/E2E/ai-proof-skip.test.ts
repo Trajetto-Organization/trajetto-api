@@ -27,7 +27,11 @@ const prisma = new PrismaClient();
 const BUSINESS = "018fdc90-0000-7000-8000-0000000000b1";
 const USER = "018fdc90-0000-7000-8000-0000000000c1";
 
-const saved = { url: env.AI_LOCAL_URL, token: env.AI_LOCAL_TOKEN, provider: env.AI_PROVIDER };
+const saved = {
+  url: env.AI_LOCAL_URL,
+  token: env.AI_LOCAL_TOKEN,
+  provider: env.AI_PROVIDER,
+};
 
 function configureReader(on: boolean) {
   env.AI_PROVIDER = "local";
@@ -106,7 +110,9 @@ describe("a delivery proof the AI will not read", () => {
     configureReader(false);
 
     await expect(
-      AIAnalysisService.getInstance().requestAnalysis(proofRequest(randomUUID())),
+      AIAnalysisService.getInstance().requestAnalysis(
+        proofRequest(randomUUID()),
+      ),
     ).resolves.toBe("unavailable");
   });
 

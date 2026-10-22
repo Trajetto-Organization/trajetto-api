@@ -51,10 +51,14 @@ function driverHistoryRefusal(counts: DriverHistoryCounts): AppError | null {
   }
 
   if (counts.deliveries > 0 || counts.routes > 0) {
-    return new DriverHasAssociatedOperationError(counts.deliveries, counts.routes);
+    return new DriverHasAssociatedOperationError(
+      counts.deliveries,
+      counts.routes,
+    );
   }
 
-  if (counts.pauses > 0) return new DriverHasAssociatedPausesError(counts.pauses);
+  if (counts.pauses > 0)
+    return new DriverHasAssociatedPausesError(counts.pauses);
 
   return null;
 }

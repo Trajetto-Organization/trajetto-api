@@ -39,8 +39,12 @@ describe("createQuoteSchema — message", () => {
 
   it("counts the limit after the normalisation, as the web does", () => {
     // 129 + CRLF + 100 = 231 characters as posted, 230 as read.
-    expect(parse(`${"a".repeat(129)}\r\n${"b".repeat(100)}`).success).toBe(true);
-    expect(parse(`${"a".repeat(130)}\r\n${"b".repeat(100)}`).success).toBe(false);
+    expect(parse(`${"a".repeat(129)}\r\n${"b".repeat(100)}`).success).toBe(
+      true,
+    );
+    expect(parse(`${"a".repeat(130)}\r\n${"b".repeat(100)}`).success).toBe(
+      false,
+    );
   });
 
   it("accepts a blank line between paragraphs (decision 5.5)", () => {
@@ -70,11 +74,18 @@ describe("createQuoteSchema — message", () => {
   });
 
   it("refuses a space at either end of a line, in the web's words", () => {
-    for (const refused of ["Linha 1 \r\nLinha 2", "Itens:\n - um", "Linha 1\n \nLinha 2", "Linha 1\t\nLinha 2"]) {
+    for (const refused of [
+      "Linha 1 \r\nLinha 2",
+      "Itens:\n - um",
+      "Linha 1\n \nLinha 2",
+      "Linha 1\t\nLinha 2",
+    ]) {
       const parsed = parse(refused);
 
       expect(parsed.success, JSON.stringify(refused)).toBe(false);
-      expect(parsed.success ? [] : parsed.error.issues.map((issue) => issue.message)).toEqual([
+      expect(
+        parsed.success ? [] : parsed.error.issues.map((issue) => issue.message),
+      ).toEqual([
         "As linhas da mensagem não podem começar ou terminar com espaço.",
       ]);
     }

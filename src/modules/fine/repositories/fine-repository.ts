@@ -160,7 +160,10 @@ class FineRepository implements IFineRepository {
     ]);
 
     return {
-      data: data.map((fine) => ({ ...fine, status: fineStatus(fine, todayStart) })),
+      data: data.map((fine) => ({
+        ...fine,
+        status: fineStatus(fine, todayStart),
+      })),
       groups,
       labels: {
         branchId: Object.fromEntries(
@@ -272,7 +275,11 @@ class FineRepository implements IFineRepository {
     }
   }
 
-  async updateFine({ fineData, fineId, businessId }: UpdateFine): Promise<Fine> {
+  async updateFine({
+    fineData,
+    fineId,
+    businessId,
+  }: UpdateFine): Promise<Fine> {
     const filteredData = Object.fromEntries(
       Object.entries(fineData).filter(([, value]) => value !== undefined),
     );

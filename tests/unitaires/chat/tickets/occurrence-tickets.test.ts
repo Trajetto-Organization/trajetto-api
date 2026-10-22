@@ -33,7 +33,9 @@ import { sendSupportTicketEvent } from "@/websocket";
  * Postgres in tests/E2E/support-ticket-http.test.ts.
  */
 vi.mock("@/../infra/database", () => ({
-  default: { $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}) },
+  default: {
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({}),
+  },
 }));
 
 vi.mock("@/websocket", async (importOriginal) => ({
@@ -50,9 +52,12 @@ const OPERATOR = "018f5100-0000-7000-8000-0000000000a2";
 const DRIVER_ID = "018f5100-0000-7000-8000-0000000000d1";
 const SHIPPER = "018f5100-0000-7000-8000-0000000000f1";
 
-const notificationStub = { createActivityIfEnabled: async () => {} } as unknown as NotificationService;
+const notificationStub = {
+  createActivityIfEnabled: async () => {},
+} as unknown as NotificationService;
 const uploadStub = {
-  resolvePresignedUploads: async (photos: Array<{ key: string }>) => photos.map(({ key }) => ({ path: key })),
+  resolvePresignedUploads: async (photos: Array<{ key: string }>) =>
+    photos.map(({ key }) => ({ path: key })),
   getFileUrl: async (key: string) => `https://signed/${key}`,
 } as unknown as UploadService;
 const outbox = { publish: async () => {} } as unknown as OutboxService;
@@ -62,15 +67,30 @@ function makeContext() {
   const deliveries = new InMemoryDeliveryRepository();
   const routes = new InMemoryRouteRepository();
   const types = new InMemoryOccurrenceTypeRepository();
-  const authorizations = new InMemoryOccurrenceAuthorizationRepository(deliveries, types, users);
+  const authorizations = new InMemoryOccurrenceAuthorizationRepository(
+    deliveries,
+    types,
+    users,
+  );
 
   deliveries.routeStops = routes.stops;
   deliveries.driverUserIds.add(DRIVER_USER);
   deliveries.driverOfUser.set(DRIVER_USER, DRIVER_ID);
 
   users.user.push(
-    { id: DRIVER_USER, name: "João Motorista", role: "BUSINESS_USER", businessId: BUSINESS, driverId: DRIVER_ID } as User,
-    { id: OPERATOR, name: "Olga Torre", role: "BUSINESS_ADMIN", businessId: BUSINESS } as User,
+    {
+      id: DRIVER_USER,
+      name: "João Motorista",
+      role: "BUSINESS_USER",
+      businessId: BUSINESS,
+      driverId: DRIVER_ID,
+    } as User,
+    {
+      id: OPERATOR,
+      name: "Olga Torre",
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+    } as User,
   );
 
   const chat = new InMemoryChatRepository();
@@ -111,7 +131,10 @@ function makeContext() {
   };
 }
 
-async function seed(context: ReturnType<typeof makeContext>, requiresAuthorization: boolean) {
+async function seed(
+  context: ReturnType<typeof makeContext>,
+  requiresAuthorization: boolean,
+) {
   const delivery = await context.deliveries.createDelivery({
     recipient_name: "Mercado Sol",
     city: "São Paulo",
@@ -157,7 +180,10 @@ describe("the occurrence's ticket on the twins", () => {
     expect(vi.mocked(sendSupportTicketEvent)).toHaveBeenCalledWith(
       BUSINESS,
       null,
-      expect.objectContaining({ type: "ticket.opened", alert: expect.objectContaining({ reason: "AUTHORIZATION" }) }),
+      expect.objectContaining({
+        type: "ticket.opened",
+        alert: expect.objectContaining({ reason: "AUTHORIZATION" }),
+      }),
       expect.anything(),
     );
 
@@ -234,15 +260,20 @@ describe("the occurrence's ticket on the twins", () => {
     });
 
     expect(
-      context.deliveries.occurrences.find((occurrence) => occurrence.id === reported.id)
-        ?.authorization_status,
+      context.deliveries.occurrences.find(
+        (occurrence) => occurrence.id === reported.id,
+      )?.authorization_status,
     ).toBe("SUPERSEDED");
     expect(context.tickets.tickets[0]).toMatchObject({ status: "OPEN" });
     expect(context.tickets.tickets[0].version).toBe(versionBefore + 1);
-    expect(context.tickets.events.map((event) => event.type)).toContain("AUTHORIZATION_SUPERSEDED");
+    expect(context.tickets.events.map((event) => event.type)).toContain(
+      "AUTHORIZATION_SUPERSEDED",
+    );
     // After the commit, to the tower (and the driver view).
     expect(
-      vi.mocked(sendSupportTicketEvent).mock.calls.map(([business, , event]) => [business, event.type]),
+      vi
+        .mocked(sendSupportTicketEvent)
+        .mock.calls.map(([business, , event]) => [business, event.type]),
     ).toContainEqual([BUSINESS, "ticket.authorization_changed"]);
   });
 

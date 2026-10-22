@@ -12,10 +12,7 @@ import {
 } from "./ai-answers";
 import { checklistFieldSpec } from "./ai-prompts";
 import type { ReadingKind } from "./image-reader";
-import type {
-  CriterionVerdict,
-  ProofCriteriaReading,
-} from "./proof-criteria";
+import type { CriterionVerdict, ProofCriteriaReading } from "./proof-criteria";
 
 import {
   AIAnalysisInputMap,
@@ -183,8 +180,7 @@ function buildAnalysisUnits<T extends AIAnalysisType>(
   const checklistInput = input as AIAnalysisInputMap["CHECKLIST"];
 
   const fieldNames = Object.keys(checklistInput.photosByField).sort(
-    (a, b) =>
-      Number(b === "current_mileage") - Number(a === "current_mileage"),
+    (a, b) => Number(b === "current_mileage") - Number(a === "current_mileage"),
   );
 
   const units: AnalysisUnitDescriptor[] = [];
@@ -328,7 +324,10 @@ function compareMileage(read: number, reported: number): MileageComparison {
  * as the verdict; null when nothing was read or nothing numeric informed.
  * The server's side of the device pre-check's agreement (design §P5.2).
  */
-function odometerReadingMatches(read: unknown, informed: unknown): boolean | null {
+function odometerReadingMatches(
+  read: unknown,
+  informed: unknown,
+): boolean | null {
   if (typeof read !== "number" || typeof informed !== "number") return null;
 
   return !compareMileage(read, informed).mismatch;
@@ -368,7 +367,8 @@ function evaluateOdometerReading(
       ...base,
       status: "fraud",
       readMileage: answer.valor_lido,
-      details: `Suspeita de fraude${reasons ? `: ${reasons}` : ""}. ${answer.observacao}`.trim(),
+      details:
+        `Suspeita de fraude${reasons ? `: ${reasons}` : ""}. ${answer.observacao}`.trim(),
     };
   }
 
@@ -379,7 +379,8 @@ function evaluateOdometerReading(
       ...base,
       status: "mismatch",
       readMileage: answer.valor_lido,
-      details: `Divergência: IA leu ${answer.valor_lido} km, informado ${reportedMileage} km (diferença de ${diff.toFixed(0)} km). ${answer.observacao}`.trim(),
+      details:
+        `Divergência: IA leu ${answer.valor_lido} km, informado ${reportedMileage} km (diferença de ${diff.toFixed(0)} km). ${answer.observacao}`.trim(),
     };
   }
 
@@ -400,7 +401,8 @@ function evaluateOdometerReading(
     ...base,
     status: "verified",
     readMileage: answer.valor_lido,
-    details: `Verificado: ${answer.valor_lido} km (informado: ${reportedMileage} km). ${answer.observacao}`.trim(),
+    details:
+      `Verificado: ${answer.valor_lido} km (informado: ${reportedMileage} km). ${answer.observacao}`.trim(),
   };
 }
 
@@ -467,7 +469,12 @@ function evaluateChecklistField(
     }
 
     if (typeof informed !== "number") {
-      return checklistResult("inconclusive", answer, answer.valor_lido, informed);
+      return checklistResult(
+        "inconclusive",
+        answer,
+        answer.valor_lido,
+        informed,
+      );
     }
 
     const { diff, mismatch } = compareMileage(answer.valor_lido, informed);
@@ -713,7 +720,10 @@ function readProofExtraction(
   if (receiptDate) {
     const lag = daysBetween(receiptDate, input.provenOn);
     dateVisible = lag >= 0 && lag <= RECEIPT_DATE_TOLERANCE_DAYS ? "yes" : "no";
-  } else if (answer.data_recebimento_lida && /\d/.test(answer.data_recebimento_lida)) {
+  } else if (
+    answer.data_recebimento_lida &&
+    /\d/.test(answer.data_recebimento_lida)
+  ) {
     // Something date-like that is not a day: a person has to look.
     dateVisible = "unknown";
   } else {
@@ -795,7 +805,8 @@ function restoreOdometerResult(
 
   return {
     status: result.status ?? "unreadable",
-    readMileage: typeof result.readMileage === "number" ? result.readMileage : null,
+    readMileage:
+      typeof result.readMileage === "number" ? result.readMileage : null,
     reportedMileage:
       typeof result.reportedMileage === "number"
         ? result.reportedMileage

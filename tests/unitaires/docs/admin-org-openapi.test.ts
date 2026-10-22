@@ -43,7 +43,10 @@ function operationsUnder(prefix: string): Array<[string, OpenApiOperation]> {
     .flatMap(([path, methods]) =>
       Object.entries(methods).map(
         ([method, operation]) =>
-          [`${method.toUpperCase()} ${path}`, operation] as [string, OpenApiOperation],
+          [`${method.toUpperCase()} ${path}`, operation] as [
+            string,
+            OpenApiOperation,
+          ],
       ),
     );
 }
@@ -93,10 +96,13 @@ describe("the Kanban refusals are documented as the API answers them", () => {
       const notFound = schemaOf(path, method, "404");
 
       expect(notFound, `${method} ${path}`).toContain("code");
-      expect(notFound, `${method} ${path}`).toMatch(/KANBAN_(COLUMN|CARD)_NOT_FOUND/);
-      expect(document.paths[path][method].description, `${method} ${path}`).toContain(
-        "outra empresa",
+      expect(notFound, `${method} ${path}`).toMatch(
+        /KANBAN_(COLUMN|CARD)_NOT_FOUND/,
       );
+      expect(
+        document.paths[path][method].description,
+        `${method} ${path}`,
+      ).toContain("outra empresa");
     }
   });
 
@@ -104,6 +110,8 @@ describe("the Kanban refusals are documented as the API answers them", () => {
     expect(schemaOf("/kanban/card/delete/{cardId}", "delete", "409")).toContain(
       "KANBAN_BOARD_CHANGED",
     );
-    expect(schemaOf("/kanban/cards/reorder", "post", "409")).toContain("KANBAN_BOARD_CHANGED");
+    expect(schemaOf("/kanban/cards/reorder", "post", "409")).toContain(
+      "KANBAN_BOARD_CHANGED",
+    );
   });
 });

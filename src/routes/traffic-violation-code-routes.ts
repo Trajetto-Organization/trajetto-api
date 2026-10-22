@@ -36,7 +36,9 @@ async function trafficViolationCodeRoutes(app: FastifyInstance) {
           "A tabela nacional de códigos de infração de trânsito, paginada, com busca livre e filtros por gravidade e tipo de infrator.",
         querystring: trafficViolationCodeSchemas.listTrafficViolationCode,
         response: {
-          200: ndjsonList(trafficViolationCodeResponses.trafficViolationCodeRow),
+          200: ndjsonList(
+            trafficViolationCodeResponses.trafficViolationCodeRow,
+          ),
           400: trafficViolationCodeResponses.error,
           500: trafficViolationCodeResponses.error,
         },
@@ -59,7 +61,9 @@ async function trafficViolationCodeRoutes(app: FastifyInstance) {
         querystring:
           trafficViolationCodeSchemas.searchTrafficViolationCodeCursor,
         response: {
-          200: ndjsonCursor(trafficViolationCodeResponses.trafficViolationCodeRow),
+          200: ndjsonCursor(
+            trafficViolationCodeResponses.trafficViolationCodeRow,
+          ),
           400: trafficViolationCodeResponses.error,
           500: trafficViolationCodeResponses.error,
         },

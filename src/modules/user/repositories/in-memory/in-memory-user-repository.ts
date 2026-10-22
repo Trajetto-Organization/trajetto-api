@@ -116,8 +116,13 @@ function withoutPassword<T extends { password?: unknown }>(
 }
 
 /** Postgres ILIKE '%term%' on a literal term: case-insensitive substring. */
-function containsInsensitive(value: string | null | undefined, term: string): boolean {
-  return (value ?? "").toLocaleLowerCase("pt-BR").includes(term.toLocaleLowerCase("pt-BR"));
+function containsInsensitive(
+  value: string | null | undefined,
+  term: string,
+): boolean {
+  return (value ?? "")
+    .toLocaleLowerCase("pt-BR")
+    .includes(term.toLocaleLowerCase("pt-BR"));
 }
 
 const time = (value: Date | null | undefined) =>
@@ -247,7 +252,10 @@ class InMemoryUserRepository implements IUserRepository {
     return row as unknown as ListUsersProps;
   }
 
-  private sortValue(user: StoredUser, key: UserSortKey): string | number | null {
+  private sortValue(
+    user: StoredUser,
+    key: UserSortKey,
+  ): string | number | null {
     switch (key) {
       case "created_at":
         return time(user.created_at);
@@ -266,7 +274,9 @@ class InMemoryUserRepository implements IUserRepository {
           ? (this.profiles.get(user.profileAccessId)?.name ?? null)
           : null;
       case "driverName":
-        return user.driverId ? (this.driverNames.get(user.driverId) ?? null) : null;
+        return user.driverId
+          ? (this.driverNames.get(user.driverId) ?? null)
+          : null;
     }
   }
 
@@ -303,7 +313,9 @@ class InMemoryUserRepository implements IUserRepository {
     const profileName = user.profileAccessId
       ? this.profiles.get(user.profileAccessId)?.name
       : undefined;
-    const driverName = user.driverId ? this.driverNames.get(user.driverId) : undefined;
+    const driverName = user.driverId
+      ? this.driverNames.get(user.driverId)
+      : undefined;
 
     return (
       containsInsensitive(user.id, term) ||
@@ -375,7 +387,8 @@ class InMemoryUserRepository implements IUserRepository {
         (access?.length !== 1 ||
           user.access_revoked === (access[0] === "revoked")) &&
         (twoFactor?.length !== 1 ||
-          (user.two_factor_enabled ?? false) === (twoFactor[0] === "enabled")) &&
+          (user.two_factor_enabled ?? false) ===
+            (twoFactor[0] === "enabled")) &&
         (!profileAccessIds?.length ||
           (user.profileAccessId !== null &&
             user.profileAccessId !== undefined &&
@@ -383,12 +396,17 @@ class InMemoryUserRepository implements IUserRepository {
     );
 
     const skip = (page - 1) * pageSize;
-    const pageRows = this.sorted(filtered, sort, order).slice(skip, skip + pageSize);
+    const pageRows = this.sorted(filtered, sort, order).slice(
+      skip,
+      skip + pageSize,
+    );
 
     const groups = this.groupsOf(base);
 
     const profileIds = new Set([
-      ...groups.flatMap((group) => (group.profileAccessId ? [group.profileAccessId] : [])),
+      ...groups.flatMap((group) =>
+        group.profileAccessId ? [group.profileAccessId] : [],
+      ),
       ...(profileAccessIds ?? []),
     ]);
 
@@ -397,7 +415,8 @@ class InMemoryUserRepository implements IUserRepository {
 
     for (const id of profileIds) {
       const profile = this.profiles.get(id);
-      if (profile && profile.businessId === businessId) profileNames.set(id, profile.name);
+      if (profile && profile.businessId === businessId)
+        profileNames.set(id, profile.name);
     }
 
     return {
@@ -428,7 +447,9 @@ class InMemoryUserRepository implements IUserRepository {
 
     if (
       typeof filteredData.email === "string" &&
-      this.user.some((user) => user.id !== userId && user.email === filteredData.email)
+      this.user.some(
+        (user) => user.id !== userId && user.email === filteredData.email,
+      )
     ) {
       throw uniqueViolation("email");
     }
@@ -459,7 +480,9 @@ class InMemoryUserRepository implements IUserRepository {
 
     user.session_version = (user.session_version ?? 0) + 1;
     this.endSessions(userId);
-    this.notifications = this.notifications.filter((row) => row.userId !== userId);
+    this.notifications = this.notifications.filter(
+      (row) => row.userId !== userId,
+    );
 
     // As the real one: what was not delivered yet goes; the ledger stays.
     this.notificationDeliveries = this.notificationDeliveries.filter(
@@ -480,7 +503,9 @@ class InMemoryUserRepository implements IUserRepository {
 
     // ON DELETE CASCADE of what the row owns.
     this.endSessions(userId);
-    this.notifications = this.notifications.filter((row) => row.userId !== userId);
+    this.notifications = this.notifications.filter(
+      (row) => row.userId !== userId,
+    );
     this.notificationDeliveries = this.notificationDeliveries.filter(
       (row) => row.userId !== userId,
     );
@@ -504,8 +529,9 @@ class InMemoryUserRepository implements IUserRepository {
     const wanted = email.toLocaleLowerCase("en-US");
 
     return (
-      this.user.find((user) => user.email.toLocaleLowerCase("en-US") === wanted) ??
-      null
+      this.user.find(
+        (user) => user.email.toLocaleLowerCase("en-US") === wanted,
+      ) ?? null
     );
   }
 
@@ -538,14 +564,18 @@ class InMemoryUserRepository implements IUserRepository {
     }
 
     if (user.business === undefined) {
-      const business = user.businessId ? this.businesses.get(user.businessId) : undefined;
+      const business = user.businessId
+        ? this.businesses.get(user.businessId)
+        : undefined;
 
       if (!user.businessId) relations.business = null;
       else if (business) relations.business = business;
     }
 
     if (user.driver === undefined) {
-      const driver = user.driverId ? this.drivers.get(user.driverId) : undefined;
+      const driver = user.driverId
+        ? this.drivers.get(user.driverId)
+        : undefined;
 
       if (!user.driverId) relations.driver = null;
       else if (driver) relations.driver = driver;
@@ -651,7 +681,8 @@ class InMemoryUserRepository implements IUserRepository {
   }
 
   async countUsersWithProfile(profileAccessId: string): Promise<number> {
-    return this.user.filter((user) => user.profileAccessId === profileAccessId).length;
+    return this.user.filter((user) => user.profileAccessId === profileAccessId)
+      .length;
   }
 
   /**
@@ -769,7 +800,9 @@ class InMemoryUserRepository implements IUserRepository {
     return this.sortedByCreation(
       this.user.filter(
         (user) =>
-          user.role === "MASTER" && user.id !== excludeUserId && !user.access_revoked,
+          user.role === "MASTER" &&
+          user.id !== excludeUserId &&
+          !user.access_revoked,
       ),
     );
   }

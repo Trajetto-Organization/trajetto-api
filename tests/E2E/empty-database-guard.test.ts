@@ -22,7 +22,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * database.
  */
 const tsx = resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
-const script = resolve(process.cwd(), "infra", "scripts", "wait-for-postgres.ts");
+const script = resolve(
+  process.cwd(),
+  "infra",
+  "scripts",
+  "wait-for-postgres.ts",
+);
 
 const emptyName = `trajetto_empty_${randomUUID().replace(/-/g, "")}`;
 
@@ -41,7 +46,10 @@ function admin(): PrismaClient {
   url.pathname = "/postgres";
   url.searchParams.delete("schema");
 
-  return new PrismaClient({ datasources: { db: { url: url.toString() } }, log: [] });
+  return new PrismaClient({
+    datasources: { db: { url: url.toString() } },
+    log: [],
+  });
 }
 
 beforeAll(async () => {
@@ -55,7 +63,9 @@ afterAll(async () => {
   const client = admin();
 
   try {
-    await client.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${emptyName}" WITH (FORCE)`);
+    await client.$executeRawUnsafe(
+      `DROP DATABASE IF EXISTS "${emptyName}" WITH (FORCE)`,
+    );
   } finally {
     await client.$disconnect();
   }
@@ -75,7 +85,10 @@ function boot(databaseUrl: string, env: Record<string, string> = {}) {
     timeout: 60_000,
   });
 
-  return { status: result.status, output: `${result.stdout}\n${result.stderr}` };
+  return {
+    status: result.status,
+    output: `${result.stdout}\n${result.stderr}`,
+  };
 }
 
 describe("the first boot step in production", () => {
@@ -101,7 +114,9 @@ describe("the first boot step in production", () => {
   });
 
   it("does not stand in the way outside production", () => {
-    const { status, output } = boot(urlFor(emptyName), { NODE_ENV: "development" });
+    const { status, output } = boot(urlFor(emptyName), {
+      NODE_ENV: "development",
+    });
 
     expect(status, output).toBe(0);
   });

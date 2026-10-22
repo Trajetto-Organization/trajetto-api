@@ -50,7 +50,10 @@ describe("the access refusal codes", () => {
           .split(/\r?\n/)
           .map((line, index) => ({ line, index }))
           .filter(({ line }) => CODE.test(line))
-          .map(({ index }) => `${relative(ROOT, file).split(sep).join("/")}:${index + 1}`),
+          .map(
+            ({ index }) =>
+              `${relative(ROOT, file).split(sep).join("/")}:${index + 1}`,
+          ),
       );
 
     expect(offenders).toEqual([]);

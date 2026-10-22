@@ -600,7 +600,10 @@ class UploadService {
       );
     }
 
-    if (size <= 0 || size > uploadConfig.getSizeLimit(uploadType, contentType)) {
+    if (
+      size <= 0 ||
+      size > uploadConfig.getSizeLimit(uploadType, contentType)
+    ) {
       throw new AppError(
         "Arquivo enviado excede o limite permitido.",
         400,

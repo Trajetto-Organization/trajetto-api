@@ -52,15 +52,28 @@ function makeContext() {
 
   fines.branches.set(BRANCH, { corporate_reason: "Matriz" } as never);
   fines.drivers.set(DRIVER, { name: "João", cpf: "12345678909" });
-  fines.vehicles.set(VEHICLE, { license_plate: "ABC1D23", description: "Caminhão" });
-  fines.codes.set(CODE, { code: "745", sub_code: 50, description: "Velocidade", gravity: "MEDIUM", points: 4 });
+  fines.vehicles.set(VEHICLE, {
+    license_plate: "ABC1D23",
+    description: "Caminhão",
+  });
+  fines.codes.set(CODE, {
+    code: "745",
+    sub_code: 50,
+    description: "Velocidade",
+    gravity: "MEDIUM",
+    points: 4,
+  });
 
   return {
     fines,
     businesses,
     codes,
     activities,
-    remove: new DeleteFineUseCase(users, fines, activities as unknown as NotificationService),
+    remove: new DeleteFineUseCase(
+      users,
+      fines,
+      activities as unknown as NotificationService,
+    ),
     exportFines: new ExportFineUseCase(users, businesses, fines),
     listCodes: new ListTrafficViolationCodeUseCase(users, codes),
     searchCodes: new SearchTrafficViolationCodeCursorUseCase(users, codes),
@@ -70,7 +83,11 @@ function makeContext() {
 function seedFine(
   fines: InMemoryFineRepository,
   businessId: string,
-  overrides: { due_date?: string; payment_date?: string | null; observation?: string } = {},
+  overrides: {
+    due_date?: string;
+    payment_date?: string | null;
+    observation?: string;
+  } = {},
 ) {
   return fines.createFine({
     violation_date: "2026-09-10T03:00:00.000Z",
@@ -104,7 +121,11 @@ describe("deleting a fine", () => {
     expect(deleted.id).toBe(fine.id);
     expect(context.fines.fines).toHaveLength(0);
     expect(context.activities.createActivityIfEnabled).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "delete", entityId: fine.id, businessId: A }),
+      expect.objectContaining({
+        action: "delete",
+        entityId: fine.id,
+        businessId: A,
+      }),
     );
   });
 
@@ -112,8 +133,12 @@ describe("deleting a fine", () => {
     const context = makeContext();
     const fine = await seedFine(context.fines, B);
 
-    const foreign = await context.remove.execute(fine.id, ADMIN_A, A).catch((error) => error);
-    const missing = await context.remove.execute(GHOST, ADMIN_A, A).catch((error) => error);
+    const foreign = await context.remove
+      .execute(fine.id, ADMIN_A, A)
+      .catch((error) => error);
+    const missing = await context.remove
+      .execute(GHOST, ADMIN_A, A)
+      .catch((error) => error);
 
     expect(foreign).toMatchObject({ statusCode: 404 });
     expect(missing).toMatchObject({ statusCode: 404, code: foreign.code });
@@ -124,7 +149,9 @@ describe("deleting a fine", () => {
     const context = makeContext();
     const fine = await seedFine(context.fines, B);
 
-    await expect(context.remove.execute(fine.id, ADMIN_A, B)).rejects.toMatchObject({
+    await expect(
+      context.remove.execute(fine.id, ADMIN_A, B),
+    ).rejects.toMatchObject({
       statusCode: 403,
       code: "TENANT_ACCESS_DENIED",
     });
@@ -135,11 +162,17 @@ describe("deleting a fine", () => {
     const context = makeContext();
     const fine = await seedFine(context.fines, A);
 
-    await expect(context.remove.execute(fine.id, GHOST, A)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(
+      context.remove.execute(fine.id, GHOST, A),
+    ).rejects.toMatchObject({ statusCode: 404 });
 
-    vi.spyOn(context.fines, "deleteFine").mockRejectedValueOnce(new Error("down"));
+    vi.spyOn(context.fines, "deleteFine").mockRejectedValueOnce(
+      new Error("down"),
+    );
 
-    await expect(context.remove.execute(fine.id, ADMIN_A, A)).rejects.toMatchObject({
+    await expect(
+      context.remove.execute(fine.id, ADMIN_A, A),
+    ).rejects.toMatchObject({
       statusCode: 500,
       message: expect.stringContaining("deletar a multa"),
     });
@@ -155,7 +188,10 @@ describe("exporting fines", () => {
     await seedFine(context.fines, A, { due_date: "2026-09-28T03:00:00.000Z" });
     await seedFine(context.fines, B);
 
-    const result = await context.exportFines.execute({ userId: ADMIN_A, now: NOW });
+    const result = await context.exportFines.execute({
+      userId: ADMIN_A,
+      now: NOW,
+    });
     const rows = await collect(result.iterator);
 
     expect(result.filename).toBe("relatorio-multas-2026-09-28");
@@ -165,7 +201,9 @@ describe("exporting fines", () => {
     const status = result.columns.find((column) => column.key === "status");
     const dueDate = result.columns.find((column) => column.key === "due_date");
     const paid = result.columns.find((column) => column.key === "payment_date");
-    const createdAt = result.columns.find((column) => column.key === "created_at");
+    const createdAt = result.columns.find(
+      (column) => column.key === "created_at",
+    );
 
     expect(status?.formatter?.(rows[0].status)).toBe("A vencer");
     expect(dueDate?.formatter?.(rows[0].due_date)).toBe("28/09/2026");
@@ -183,8 +221,13 @@ describe("exporting fines", () => {
     (company as { timezone?: string }).timezone = "America/Rio_Branco";
     await seedFine(context.fines, A);
 
-    const result = await context.exportFines.execute({ userId: ADMIN_A, now: NOW });
-    const createdAt = result.columns.find((column) => column.key === "created_at");
+    const result = await context.exportFines.execute({
+      userId: ADMIN_A,
+      now: NOW,
+    });
+    const createdAt = result.columns.find(
+      (column) => column.key === "created_at",
+    );
 
     expect(result.filename).toBe("relatorio-multas-2026-09-28");
     expect(createdAt?.formatter?.(NOW)).toContain("20:30");
@@ -192,19 +235,37 @@ describe("exporting fines", () => {
 
   it("applies the screen's filters and refuses an empty result with NO_FINES_TO_EXPORT", async () => {
     const context = makeContext();
-    await seedFine(context.fines, A, { payment_date: "2026-09-20T03:00:00.000Z" });
+    await seedFine(context.fines, A, {
+      payment_date: "2026-09-20T03:00:00.000Z",
+    });
     await seedFine(context.fines, A, { observation: "Recorrer" });
 
-    const paid = await context.exportFines.execute({ userId: ADMIN_A, statuses: ["PAID"], now: NOW });
+    const paid = await context.exportFines.execute({
+      userId: ADMIN_A,
+      statuses: ["PAID"],
+      now: NOW,
+    });
 
-    expect((await collect(paid.iterator)).map((row) => row.status)).toEqual(["PAID"]);
+    expect((await collect(paid.iterator)).map((row) => row.status)).toEqual([
+      "PAID",
+    ]);
 
-    const searched = await context.exportFines.execute({ userId: ADMIN_A, search: "recorrer", now: NOW });
+    const searched = await context.exportFines.execute({
+      userId: ADMIN_A,
+      search: "recorrer",
+      now: NOW,
+    });
 
-    expect((await collect(searched.iterator)).map((row) => row.observation)).toEqual(["Recorrer"]);
+    expect(
+      (await collect(searched.iterator)).map((row) => row.observation),
+    ).toEqual(["Recorrer"]);
 
     await expect(
-      context.exportFines.execute({ userId: ADMIN_A, statuses: ["OVERDUE"], now: NOW }),
+      context.exportFines.execute({
+        userId: ADMIN_A,
+        statuses: ["OVERDUE"],
+        now: NOW,
+      }),
     ).rejects.toMatchObject({ statusCode: 400, code: "NO_FINES_TO_EXPORT" });
   });
 
@@ -212,7 +273,9 @@ describe("exporting fines", () => {
     const context = makeContext();
     await seedFine(context.fines, B);
 
-    await expect(context.exportFines.execute({ userId: MASTER, now: NOW })).rejects.toMatchObject({
+    await expect(
+      context.exportFines.execute({ userId: MASTER, now: NOW }),
+    ).rejects.toMatchObject({
       statusCode: 400,
       code: "BUSINESS_NOT_IDENTIFIED",
     });
@@ -220,7 +283,11 @@ describe("exporting fines", () => {
       context.exportFines.execute({ userId: ADMIN_A, businessId: B, now: NOW }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
 
-    const master = await context.exportFines.execute({ userId: MASTER, businessId: B, now: NOW });
+    const master = await context.exportFines.execute({
+      userId: MASTER,
+      businessId: B,
+      now: NOW,
+    });
 
     expect(await collect(master.iterator)).toHaveLength(1);
   });
@@ -228,7 +295,9 @@ describe("exporting fines", () => {
   it("refuses an unknown user with 404", async () => {
     const context = makeContext();
 
-    await expect(context.exportFines.execute({ userId: GHOST, now: NOW })).rejects.toMatchObject({
+    await expect(
+      context.exportFines.execute({ userId: GHOST, now: NOW }),
+    ).rejects.toMatchObject({
       statusCode: 404,
     });
   });
@@ -245,10 +314,34 @@ describe("the traffic violation code table", () => {
     };
 
     return [
-      codes.add({ ...base, code: "501", sub_code: 0, description: "Dirigir sem habilitação", gravity: "VERY_SERIOUS" }),
-      codes.add({ ...base, code: "605", sub_code: 1, description: "Avançar o sinal vermelho", gravity: "VERY_SERIOUS" }),
-      codes.add({ ...base, code: "745", sub_code: 50, description: "Velocidade superior à máxima", gravity: "MEDIUM" }),
-      codes.add({ ...base, code: "746", sub_code: 30, description: "Velocidade muito superior", gravity: "SERIOUS" }),
+      codes.add({
+        ...base,
+        code: "501",
+        sub_code: 0,
+        description: "Dirigir sem habilitação",
+        gravity: "VERY_SERIOUS",
+      }),
+      codes.add({
+        ...base,
+        code: "605",
+        sub_code: 1,
+        description: "Avançar o sinal vermelho",
+        gravity: "VERY_SERIOUS",
+      }),
+      codes.add({
+        ...base,
+        code: "745",
+        sub_code: 50,
+        description: "Velocidade superior à máxima",
+        gravity: "MEDIUM",
+      }),
+      codes.add({
+        ...base,
+        code: "746",
+        sub_code: 30,
+        description: "Velocidade muito superior",
+        gravity: "SERIOUS",
+      }),
     ];
   }
 
@@ -261,11 +354,22 @@ describe("the traffic violation code table", () => {
     expect(page.total).toBe(4);
     expect(page.data.map((code) => code.code)).toEqual(["501", "605"]);
 
-    const serious = await context.listCodes.execute(ADMIN_A, 1, 10, undefined, "VERY_SERIOUS");
+    const serious = await context.listCodes.execute(
+      ADMIN_A,
+      1,
+      10,
+      undefined,
+      "VERY_SERIOUS",
+    );
 
     expect(serious.data.map((code) => code.code)).toEqual(["501", "605"]);
 
-    const searched = await context.listCodes.execute(ADMIN_A, 1, 10, "velocidade");
+    const searched = await context.listCodes.execute(
+      ADMIN_A,
+      1,
+      10,
+      "velocidade",
+    );
 
     expect(searched.data.map((code) => code.code)).toEqual(["745", "746"]);
   });
@@ -273,11 +377,17 @@ describe("the traffic violation code table", () => {
   it("refuses an unknown user, and turns a repository failure into a pt-BR 500", async () => {
     const context = makeContext();
 
-    await expect(context.listCodes.execute(GHOST, 1, 10)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(context.listCodes.execute(GHOST, 1, 10)).rejects.toMatchObject(
+      { statusCode: 404 },
+    );
 
-    vi.spyOn(context.codes, "listTrafficViolationCodes").mockRejectedValueOnce(new Error("down"));
+    vi.spyOn(context.codes, "listTrafficViolationCodes").mockRejectedValueOnce(
+      new Error("down"),
+    );
 
-    await expect(context.listCodes.execute(ADMIN_A, 1, 10)).rejects.toMatchObject({
+    await expect(
+      context.listCodes.execute(ADMIN_A, 1, 10),
+    ).rejects.toMatchObject({
       statusCode: 500,
       message: expect.stringContaining("códigos de infrações"),
     });
@@ -299,7 +409,11 @@ describe("the traffic violation code table", () => {
 
     expect(next.data.map((code) => code.fullCode)).toEqual(["746-30"]);
 
-    const unknown = await context.searchCodes.execute({ userId: ADMIN_A, limit: 10, cursor: GHOST });
+    const unknown = await context.searchCodes.execute({
+      userId: ADMIN_A,
+      limit: 10,
+      cursor: GHOST,
+    });
 
     expect(unknown.data).toEqual([]);
   });

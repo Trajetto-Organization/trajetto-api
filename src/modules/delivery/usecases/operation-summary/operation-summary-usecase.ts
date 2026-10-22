@@ -68,10 +68,7 @@ class OperationSummaryUseCase {
         throw error;
       }
 
-      throw new AppError(
-        "Não foi possível montar o resumo da operação!",
-        500,
-      );
+      throw new AppError("Não foi possível montar o resumo da operação!", 500);
     }
   }
 }

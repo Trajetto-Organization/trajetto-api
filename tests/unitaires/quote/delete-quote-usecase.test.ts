@@ -23,7 +23,11 @@ async function makeContext() {
 
   users.user.push(
     { id: MASTER, role: "MASTER", businessId: null } as User,
-    { id: ADMIN, role: "BUSINESS_ADMIN", businessId: "018f0000-0000-7000-8000-00000000000a" } as User,
+    {
+      id: ADMIN,
+      role: "BUSINESS_ADMIN",
+      businessId: "018f0000-0000-7000-8000-00000000000a",
+    } as User,
   );
 
   const quote = await quotes.createQuote({
@@ -51,26 +55,42 @@ describe("deleting a quote", () => {
   it("refuses a company user with PERMISSION_DENIED, the same for an existing or missing id", async () => {
     const { quotes, quote, remove } = await makeContext();
 
-    const existing = await remove.execute(quote.id, ADMIN).catch((error) => error);
+    const existing = await remove
+      .execute(quote.id, ADMIN)
+      .catch((error) => error);
     const missing = await remove.execute(GHOST, ADMIN).catch((error) => error);
 
-    expect(existing).toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
-    expect(missing).toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
+    expect(existing).toMatchObject({
+      statusCode: 403,
+      code: "PERMISSION_DENIED",
+    });
+    expect(missing).toMatchObject({
+      statusCode: 403,
+      code: "PERMISSION_DENIED",
+    });
     expect(quotes.quotes).toHaveLength(1);
   });
 
   it("answers a missing quote with 404 and an unknown user with 404", async () => {
     const { remove, quote } = await makeContext();
 
-    await expect(remove.execute(GHOST, MASTER)).rejects.toMatchObject({ statusCode: 404, code: "QUOTE_NOT_FOUND" });
-    await expect(remove.execute(quote.id, GHOST)).rejects.toMatchObject({ statusCode: 404, code: "USER_NOT_FOUND" });
+    await expect(remove.execute(GHOST, MASTER)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "QUOTE_NOT_FOUND",
+    });
+    await expect(remove.execute(quote.id, GHOST)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "USER_NOT_FOUND",
+    });
   });
 
   it("turns a repository failure into a 500 and keeps the quote", async () => {
     const { quotes, quote, remove } = await makeContext();
     vi.spyOn(quotes, "deleteQuote").mockRejectedValueOnce(new Error("down"));
 
-    await expect(remove.execute(quote.id, MASTER)).rejects.toMatchObject({ statusCode: 500 });
+    await expect(remove.execute(quote.id, MASTER)).rejects.toMatchObject({
+      statusCode: 500,
+    });
     expect(quotes.quotes).toHaveLength(1);
   });
 });

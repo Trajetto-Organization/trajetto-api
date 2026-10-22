@@ -237,7 +237,9 @@ describe("the nightly purge", () => {
 
     // Only failures are archived.
     expect(
-      await prisma.notificationDeadLetter.findUnique({ where: { id: oldDelivered } }),
+      await prisma.notificationDeadLetter.findUnique({
+        where: { id: oldDelivered },
+      }),
     ).toBeNull();
   });
 
@@ -251,13 +253,17 @@ describe("the nightly purge", () => {
     ).toBe(1);
 
     expect(
-      await prisma.notificationDeadLetter.findUnique({ where: { id: recentFailed } }),
+      await prisma.notificationDeadLetter.findUnique({
+        where: { id: recentFailed },
+      }),
     ).toBeNull();
   });
 
   it("and drops archived failures after 90 days", async () => {
     expect(
-      await prisma.notificationDeadLetter.findUnique({ where: { id: expiredArchive } }),
+      await prisma.notificationDeadLetter.findUnique({
+        where: { id: expiredArchive },
+      }),
     ).toBeNull();
   });
 

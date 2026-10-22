@@ -26,21 +26,37 @@ describe("assertNotOwnProfile", () => {
     }
 
     expect(caught).toBeInstanceOf(PermissionOwnProfileError);
-    expect(caught).toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
+    expect(caught).toMatchObject({
+      statusCode: 403,
+      code: "PERMISSION_DENIED",
+    });
   });
 
   it("lets them manage any other profile", () => {
     expect(() =>
-      assertNotOwnProfile({ role: "BUSINESS_USER", profileAccessId: OWN }, OTHER),
+      assertNotOwnProfile(
+        { role: "BUSINESS_USER", profileAccessId: OWN },
+        OTHER,
+      ),
     ).not.toThrow();
   });
 
   it("never refuses someone without a profile of their own", () => {
     // Administrators and the MASTER have no profile; a missing one on either
     // side is not a match.
-    expect(() => assertNotOwnProfile({ role: "BUSINESS_ADMIN", profileAccessId: null }, OWN)).not.toThrow();
+    expect(() =>
+      assertNotOwnProfile(
+        { role: "BUSINESS_ADMIN", profileAccessId: null },
+        OWN,
+      ),
+    ).not.toThrow();
     expect(() => assertNotOwnProfile({ role: "MASTER" }, OWN)).not.toThrow();
-    expect(() => assertNotOwnProfile({ role: "BUSINESS_USER", profileAccessId: null }, null)).not.toThrow();
+    expect(() =>
+      assertNotOwnProfile(
+        { role: "BUSINESS_USER", profileAccessId: null },
+        null,
+      ),
+    ).not.toThrow();
   });
 });
 
@@ -77,6 +93,9 @@ describe("bulkConfigurePermissionsSchema", () => {
       }).success,
     ).toBe(true);
 
-    expect(bulkConfigurePermissionsSchema.safeParse({ ...base, permissions: [] }).success).toBe(true);
+    expect(
+      bulkConfigurePermissionsSchema.safeParse({ ...base, permissions: [] })
+        .success,
+    ).toBe(true);
   });
 });

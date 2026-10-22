@@ -14,7 +14,8 @@ function labelledAnswers(
   storedFields: unknown,
   answers: unknown,
 ): Array<{ label: string; value: string }> {
-  if (!answers || typeof answers !== "object" || Array.isArray(answers)) return [];
+  if (!answers || typeof answers !== "object" || Array.isArray(answers))
+    return [];
 
   const given = answers as Record<string, string | number | boolean>;
   const fields = readFormFields(storedFields) ?? [];
@@ -28,7 +29,10 @@ function labelledAnswers(
 
   const orphans = Object.keys(given)
     .filter((key) => !fields.some((field) => field.key === key))
-    .map((key) => ({ label: key, value: formatOccurrenceAnswer(undefined, given[key]) }));
+    .map((key) => ({
+      label: key,
+      value: formatOccurrenceAnswer(undefined, given[key]),
+    }));
 
   return [...known, ...orphans];
 }

@@ -134,9 +134,7 @@ describe("saving a template the product cannot render", () => {
     ["{{#each destinatario}}x{{/each}}"],
     ["{{* decorador}}"],
   ])("refuses %s", async (fragment) => {
-    await expect(
-      save({ body: `${fragment} {{link}}` }),
-    ).rejects.toMatchObject({
+    await expect(save({ body: `${fragment} {{link}}` })).rejects.toMatchObject({
       statusCode: 400,
       code: "UNSUPPORTED_TEMPLATE_SYNTAX",
     });

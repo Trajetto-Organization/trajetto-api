@@ -23,8 +23,7 @@ class OptOutTrackingController {
     await recipients.optOut(token);
 
     return reply.status(200).send({
-      message:
-        "Pronto. Você não receberá mais mensagens sobre esta entrega.",
+      message: "Pronto. Você não receberá mais mensagens sobre esta entrega.",
     });
   }
 }

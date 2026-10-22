@@ -92,7 +92,9 @@ describe("a queue nobody is draining", () => {
   });
 
   it("stays silent while webhooks wait out a customer's six-hour backoff", () => {
-    expect(evaluateAlerts({ ...healthy(), webhookDueLagSec: null })).toEqual([]);
+    expect(evaluateAlerts({ ...healthy(), webhookDueLagSec: null })).toEqual(
+      [],
+    );
   });
 
   it("pages when due webhooks are not being taken", () => {
@@ -103,7 +105,9 @@ describe("a queue nobody is draining", () => {
   });
 
   it("pages when AI analyses due are not being taken", () => {
-    expect(evaluateAlerts({ ...healthy(), aiEligibleLagSec: 1_200 })).toHaveLength(1);
+    expect(
+      evaluateAlerts({ ...healthy(), aiEligibleLagSec: 1_200 }),
+    ).toHaveLength(1);
   });
 });
 
@@ -128,7 +132,10 @@ describe("a broken credential", () => {
     const reasons = evaluateAlerts({
       ...healthy(),
       deliveryFailures: [
-        { channel: "EMAIL", lastError: "[email smtp=EAUTH reply=535] Invalid login" },
+        {
+          channel: "EMAIL",
+          lastError: "[email smtp=EAUTH reply=535] Invalid login",
+        },
       ],
     });
 
@@ -166,7 +173,9 @@ describe("a broken credential", () => {
   });
 
   it("pages on an AI provider refusing our key", () => {
-    expect(evaluateAlerts({ ...healthy(), aiCredentialFailures: 1 })).toHaveLength(1);
+    expect(
+      evaluateAlerts({ ...healthy(), aiCredentialFailures: 1 }),
+    ).toHaveLength(1);
   });
 });
 
@@ -192,7 +201,12 @@ describe("the machinery behind the queues", () => {
     const reasons = evaluateAlerts({
       ...healthy(),
       cronJobs: [
-        { job: "novo-job", lastStatus: "FAILED", lastSucceededAt: null, staleRunning: 0 },
+        {
+          job: "novo-job",
+          lastStatus: "FAILED",
+          lastSucceededAt: null,
+          staleRunning: 0,
+        },
       ],
     });
 
@@ -209,7 +223,12 @@ describe("the machinery behind the queues", () => {
       evaluateAlerts({
         ...healthy(),
         cronJobs: [
-          { job: "novo-job", lastStatus: null, lastSucceededAt: null, staleRunning: 0 },
+          {
+            job: "novo-job",
+            lastStatus: null,
+            lastSucceededAt: null,
+            staleRunning: 0,
+          },
         ],
       }),
     ).toEqual([]);
@@ -245,7 +264,9 @@ describe("the machinery behind the queues", () => {
   it("pages on a stuck worker", () => {
     const reasons = evaluateAlerts({
       ...healthy(),
-      stuckWorkers: [{ replica: "api-2", worker: "notification-delivery-external" }],
+      stuckWorkers: [
+        { replica: "api-2", worker: "notification-delivery-external" },
+      ],
     });
 
     expect(reasons).toHaveLength(1);
@@ -291,21 +312,37 @@ describe("the proof signing certificate", () => {
   }
 
   it("raises nothing when none is configured, or signing is switched off", () => {
-    expect(evaluateAlerts(withCertificate({ state: "ABSENT", reason: null, notAfter: null }))).toEqual([]);
-    expect(evaluateAlerts(withCertificate({ state: "DISABLED", reason: null, notAfter: null }))).toEqual([]);
+    expect(
+      evaluateAlerts(
+        withCertificate({ state: "ABSENT", reason: null, notAfter: null }),
+      ),
+    ).toEqual([]);
+    expect(
+      evaluateAlerts(
+        withCertificate({ state: "DISABLED", reason: null, notAfter: null }),
+      ),
+    ).toEqual([]);
   });
 
   it("raises nothing for a certificate with more than 30 days left", () => {
     expect(
       evaluateAlerts(
-        withCertificate({ state: "READY", reason: null, notAfter: new Date(NOW.getTime() + 31 * DAY) }),
+        withCertificate({
+          state: "READY",
+          reason: null,
+          notAfter: new Date(NOW.getTime() + 31 * DAY),
+        }),
       ),
     ).toEqual([]);
   });
 
   it("warns 30 days before it expires", () => {
     const reasons = evaluateAlerts(
-      withCertificate({ state: "READY", reason: null, notAfter: new Date(NOW.getTime() + 20 * DAY) }),
+      withCertificate({
+        state: "READY",
+        reason: null,
+        notAfter: new Date(NOW.getTime() + 20 * DAY),
+      }),
     );
 
     expect(reasons).toHaveLength(1);
@@ -316,7 +353,11 @@ describe("the proof signing certificate", () => {
 
   it("is critical in the last 7 days", () => {
     const reasons = evaluateAlerts(
-      withCertificate({ state: "READY", reason: null, notAfter: new Date(NOW.getTime() + 3 * DAY) }),
+      withCertificate({
+        state: "READY",
+        reason: null,
+        notAfter: new Date(NOW.getTime() + 3 * DAY),
+      }),
     );
 
     expect(reasons).toHaveLength(1);
@@ -325,10 +366,18 @@ describe("the proof signing certificate", () => {
 
   it("pages when the configured certificate expired or cannot be opened", () => {
     const expired = evaluateAlerts(
-      withCertificate({ state: "EXPIRED", reason: null, notAfter: new Date(NOW.getTime() - DAY) }),
+      withCertificate({
+        state: "EXPIRED",
+        reason: null,
+        notAfter: new Date(NOW.getTime() - DAY),
+      }),
     );
     const invalid = evaluateAlerts(
-      withCertificate({ state: "INVALID", reason: "PFX_UNREADABLE", notAfter: null }),
+      withCertificate({
+        state: "INVALID",
+        reason: "PFX_UNREADABLE",
+        notAfter: null,
+      }),
     );
 
     expect(expired).toHaveLength(1);

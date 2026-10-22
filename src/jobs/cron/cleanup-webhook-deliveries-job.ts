@@ -87,7 +87,10 @@ const cleanupWebhookDeliveriesJob: CronJobDefinition = {
     });
 
     log.info(
-      { deleted: result.deleted, retentionDays: WEBHOOK_DELIVERY_RETENTION_DAYS },
+      {
+        deleted: result.deleted,
+        retentionDays: WEBHOOK_DELIVERY_RETENTION_DAYS,
+      },
       "settled webhook deliveries purged",
     );
 

@@ -134,7 +134,8 @@ class ResendWebhookDeliveryUseCase {
       );
     }
 
-    const windowStart = now.getTime() - REPLAY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const windowStart =
+      now.getTime() - REPLAY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
     if (original.created_at.getTime() < windowStart) {
       throw new AppError(
@@ -157,7 +158,10 @@ class ResendWebhookDeliveryUseCase {
     // Saved active again since the read above? Its release did not see
     // this row yet.
     if (held) {
-      await this.deliveries.releaseHeldIfEndpointBack(resent.id, original.endpointId);
+      await this.deliveries.releaseHeldIfEndpointBack(
+        resent.id,
+        original.endpointId,
+      );
     }
 
     return { id: resent.id, held };
@@ -190,7 +194,12 @@ class ListApiUsageUseCase {
   ) {}
 
   async execute(
-    request: { userId: string; businessId: string; days: number; apiKeyId?: string },
+    request: {
+      userId: string;
+      businessId: string;
+      days: number;
+      apiKeyId?: string;
+    },
     now: Date = new Date(),
   ): Promise<ApiUsageReport> {
     await scopedBusiness(this.users, request.userId, request.businessId);
@@ -246,7 +255,10 @@ class ListApiUsageUseCase {
       if (entry) entry.total += Number(row.count);
     }
 
-    const keys = new Map<string, { id: string; name: string; prefix: string }>();
+    const keys = new Map<
+      string,
+      { id: string; name: string; prefix: string }
+    >();
 
     for (const row of rows) {
       if (row.apiKey) keys.set(row.apiKey.id, row.apiKey);
@@ -257,7 +269,9 @@ class ListApiUsageUseCase {
 
     return {
       totals,
-      byRoute: [...byRoute.values()].sort((left, right) => volume(right) - volume(left)),
+      byRoute: [...byRoute.values()].sort(
+        (left, right) => volume(right) - volume(left),
+      ),
       byDay: [...byDay.values()],
       keys: [...keys.values()],
       timeZone,
@@ -265,5 +279,13 @@ class ListApiUsageUseCase {
   }
 }
 
-export { ListApiUsageUseCase, ListWebhookDeliveriesUseCase, ResendWebhookDeliveryUseCase };
-export type { ApiUsageReport, ListWebhookDeliveriesRequest, WebhookDeliveriesPage };
+export {
+  ListApiUsageUseCase,
+  ListWebhookDeliveriesUseCase,
+  ResendWebhookDeliveryUseCase,
+};
+export type {
+  ApiUsageReport,
+  ListWebhookDeliveriesRequest,
+  WebhookDeliveriesPage,
+};

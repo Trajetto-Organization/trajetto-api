@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 
@@ -22,7 +29,10 @@ const scratchTree = (editSrcDuringBatch: boolean) => {
   dir = mkdtempSync(join(tmpdir(), "cov-e2e-"));
   mkdirSync(join(dir, "infra", "scripts"), { recursive: true });
   for (const script of ["coverage-e2e.sh", "merge-coverage.mjs"]) {
-    copyFileSync(join(API, "infra", "scripts", script), join(dir, "infra", "scripts", script));
+    copyFileSync(
+      join(API, "infra", "scripts", script),
+      join(dir, "infra", "scripts", script),
+    );
   }
   mkdirSync(join(dir, "src"));
   writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
@@ -43,11 +53,19 @@ const scratchTree = (editSrcDuringBatch: boolean) => {
     { mode: 0o755 },
   );
 
-  return spawnSync("bash", [join(dir, "infra", "scripts", "coverage-e2e.sh"), "8"], {
-    encoding: "utf8",
-    // The copied merge script resolves istanbul from the API's node_modules.
-    env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, NODE_PATH: join(API, "node_modules") },
-  });
+  return spawnSync(
+    "bash",
+    [join(dir, "infra", "scripts", "coverage-e2e.sh"), "8"],
+    {
+      encoding: "utf8",
+      // The copied merge script resolves istanbul from the API's node_modules.
+      env: {
+        ...process.env,
+        PATH: `${bin}${delimiter}${process.env.PATH}`,
+        NODE_PATH: join(API, "node_modules"),
+      },
+    },
+  );
 };
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -66,6 +84,8 @@ describe("coverage-e2e.sh", () => {
 
     expect(result.stderr).not.toContain("src changed");
     expect(result.status, result.stderr).toBe(0);
-    expect(existsSync(join(dir, "coverage", "all", "coverage-summary.json"))).toBe(true);
+    expect(
+      existsSync(join(dir, "coverage", "all", "coverage-summary.json")),
+    ).toBe(true);
   });
 });

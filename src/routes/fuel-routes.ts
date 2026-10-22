@@ -211,7 +211,9 @@ async function fuelRoutes(app: FastifyInstance) {
       // Drivers hold fuel WRITE for their own refuelings; an export is the
       // back office reading the whole company. Refused by the guard with
       // PERMISSION_DENIED (decision 4.1).
-      preHandler: [verifyPermission("fuel_manage", "write", { allowDriver: false })],
+      preHandler: [
+        verifyPermission("fuel_manage", "write", { allowDriver: false }),
+      ],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["fuel"],

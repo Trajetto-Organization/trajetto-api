@@ -87,7 +87,11 @@ function byNewestFirst(a: ChatMessage, b: ChatMessage): number {
 function missingThread(): Prisma.PrismaClientKnownRequestError {
   return new Prisma.PrismaClientKnownRequestError(
     "Foreign key constraint violated on the foreign key",
-    { code: "P2003", clientVersion: "in-memory", meta: { field_name: "threadId" } },
+    {
+      code: "P2003",
+      clientVersion: "in-memory",
+      meta: { field_name: "threadId" },
+    },
   );
 }
 
@@ -185,7 +189,9 @@ class InMemoryChatRepository implements IChatRepository {
         message.deliveryId && delivery
           ? { id: message.deliveryId, ...delivery }
           : null,
-      route: route ? { id: route.id, code: route.code, name: route.name } : null,
+      route: route
+        ? { id: route.id, code: route.code, name: route.name }
+        : null,
     };
   }
 
@@ -320,7 +326,10 @@ class InMemoryChatRepository implements IChatRepository {
         },
         driverUser:
           driverUserId && driverUser
-            ? { id: driverUserId, last_seen_at: driverUser.last_seen_at ?? null }
+            ? {
+                id: driverUserId,
+                last_seen_at: driverUser.last_seen_at ?? null,
+              }
             : null,
         lastMessage: lastMessage
           ? {

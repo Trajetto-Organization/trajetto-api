@@ -109,7 +109,12 @@ beforeAll(async () => {
 
   const supplierId = await seedSupplier(prisma, CARRIER, "Oficina Alfa");
 
-  const admin = await seedUser(prisma, "Zélia Gestora", "BUSINESS_ADMIN", CARRIER);
+  const admin = await seedUser(
+    prisma,
+    "Zélia Gestora",
+    "BUSINESS_ADMIN",
+    CARRIER,
+  );
   tokens.admin = admin.token;
 
   tokens.readOnly = (
@@ -230,8 +235,16 @@ describe("GET /service-order/list-service-order — order", () => {
     expect(status).toBe(200);
     expect(meta.total).toBe(12);
     expect(descriptions(rows)).toEqual([
-      "OS-11", "OS-10", "OS-09", "OS-08", "OS-07",
-      "OS-06", "OS-05", "OS-04", "OS-03", "OS-02",
+      "OS-11",
+      "OS-10",
+      "OS-09",
+      "OS-08",
+      "OS-07",
+      "OS-06",
+      "OS-05",
+      "OS-04",
+      "OS-03",
+      "OS-02",
     ]);
   });
 
@@ -239,7 +252,11 @@ describe("GET /service-order/list-service-order — order", () => {
     const first = await list("sort=total_amount&order=asc");
     const second = await list("sort=total_amount&order=asc", tokens.admin, 2);
 
-    expect(descriptions(first.rows).slice(0, 3)).toEqual(["OS-00", "OS-01", "OS-02"]);
+    expect(descriptions(first.rows).slice(0, 3)).toEqual([
+      "OS-00",
+      "OS-01",
+      "OS-02",
+    ]);
     expect(descriptions(second.rows)).toEqual(["OS-10", "OS-11"]);
 
     const desc = await list("sort=total_amount&order=desc");
@@ -250,7 +267,9 @@ describe("GET /service-order/list-service-order — order", () => {
   it("sorts by plate with newest first inside a plate", async () => {
     const { rows } = await list("sort=vehicleLicensePlate&order=asc");
 
-    expect(rows.slice(0, 6).every((row) => row.vehicle.license_plate === "PQR1S11")).toBe(true);
+    expect(
+      rows.slice(0, 6).every((row) => row.vehicle.license_plate === "PQR1S11"),
+    ).toBe(true);
     expect(descriptions(rows).slice(0, 3)).toEqual(["OS-10", "OS-08", "OS-06"]);
   });
 
@@ -258,7 +277,12 @@ describe("GET /service-order/list-service-order — order", () => {
     const { rows } = await list("sort=completion_date&order=asc");
 
     // Four completed (0, 3, 6, 9) by date, then the open ones (NULLs last).
-    expect(descriptions(rows).slice(0, 4)).toEqual(["OS-00", "OS-03", "OS-06", "OS-09"]);
+    expect(descriptions(rows).slice(0, 4)).toEqual([
+      "OS-00",
+      "OS-03",
+      "OS-06",
+      "OS-09",
+    ]);
     expect(rows[4].completion_date).toBeNull();
   });
 
@@ -341,7 +365,11 @@ describe("GET /service-order/list-service-order — filters and cards", () => {
     const first = rows.find((row) => row.description === "OS-00") as Row;
     const second = rows.find((row) => row.description === "OS-01") as Row;
 
-    expect(first).toMatchObject({ parts_total: 230, parts_count: 2, total_amount: 100 });
+    expect(first).toMatchObject({
+      parts_total: 230,
+      parts_count: 2,
+      total_amount: 100,
+    });
     expect(second).toMatchObject({ parts_total: 0, accounts_payable_count: 1 });
   });
 });
@@ -355,7 +383,9 @@ describe("GET /service-order/list-service-order — walls", () => {
   });
 
   it("refuses a manager of another company naming this one", async () => {
-    expect((await list(`businessId=${CARRIER}`, tokens.otherAdmin)).status).toBe(403);
+    expect(
+      (await list(`businessId=${CARRIER}`, tokens.otherAdmin)).status,
+    ).toBe(403);
   });
 
   it("makes the master name the company, and then answers for it alone", async () => {

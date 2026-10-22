@@ -7,7 +7,11 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 
 import { socketClientEntry } from "./support/socket-client";
-import { freePort, startReplica, type Replica } from "./support/replica-process";
+import {
+  freePort,
+  startReplica,
+  type Replica,
+} from "./support/replica-process";
 
 /**
  * A revoked session, and the socket that did not hear about it.
@@ -179,7 +183,14 @@ async function sessionFor(
   });
 
   const token = sign(
-    { tokenType: "access", role, businessId, driverId: null, sessionVersion: 0, familyId },
+    {
+      tokenType: "access",
+      role,
+      businessId,
+      driverId: null,
+      sessionVersion: 0,
+      familyId,
+    },
     auth.secret_token,
     { subject: userId, expiresIn: "1h" },
   );
@@ -206,7 +217,8 @@ beforeAll(async () => {
   });
 
   for (const userId of USERS) {
-    if (userId !== MASTER) profiles[userId] = await seedProfile(`Despacho ${userId.slice(-2)}`);
+    if (userId !== MASTER)
+      profiles[userId] = await seedProfile(`Despacho ${userId.slice(-2)}`);
   }
 
   await prisma.user.createMany({
@@ -282,7 +294,11 @@ describe("a permission removed on another replica", () => {
 
     // It IS in the room, across replicas, before anything happens.
     const before = waitFor(socket, "driverPosition");
-    await one.run({ kind: "driverPosition", businessId: CARRIER, payload: position() });
+    await one.run({
+      kind: "driverPosition",
+      businessId: CARRIER,
+      payload: position(),
+    });
     expect(await before, "o despachante não estava ouvindo").not.toBeNull();
 
     // The admin's edit lands on replica 1; the dispatcher is on replica 2.
@@ -301,9 +317,16 @@ describe("a permission removed on another replica", () => {
     await sleep(1_500);
 
     const after = waitFor(socket, "driverPosition");
-    await one.run({ kind: "driverPosition", businessId: CARRIER, payload: position() });
+    await one.run({
+      kind: "driverPosition",
+      businessId: CARRIER,
+      payload: position(),
+    });
 
-    expect(await after, "voltou a ouvir a frota depois de perder a permissão").toBeNull();
+    expect(
+      await after,
+      "voltou a ouvir a frota depois de perder a permissão",
+    ).toBeNull();
 
     // Authorization changed, authentication did not: the connection stays.
     expect(socket.connected).toBe(true);
@@ -330,7 +353,11 @@ describe("a MASTER demoted with no event at all", () => {
     expect(await ended).toMatchObject({ reason: "user_updated" });
 
     const heard = waitFor(socket, "driverPosition");
-    await one.run({ kind: "driverPosition", businessId: CARRIER, payload: position() });
+    await one.run({
+      kind: "driverPosition",
+      businessId: CARRIER,
+      payload: position(),
+    });
 
     expect(await heard).toBeNull();
     expect(socket.connected).toBe(false);
@@ -339,9 +366,21 @@ describe("a MASTER demoted with no event at all", () => {
 
 describe("the periodic sweep, with nothing announced", () => {
   it("ends what the database already ended, adjusts rooms, and leaves the rest alone", async () => {
-    const familyRevoked = await sessionFor(FAMILY_REVOKED, "BUSINESS_USER", CARRIER);
-    const versionBumped = await sessionFor(VERSION_BUMPED, "BUSINESS_USER", CARRIER);
-    const permissionLost = await sessionFor(PERMISSION_LOST, "BUSINESS_USER", CARRIER);
+    const familyRevoked = await sessionFor(
+      FAMILY_REVOKED,
+      "BUSINESS_USER",
+      CARRIER,
+    );
+    const versionBumped = await sessionFor(
+      VERSION_BUMPED,
+      "BUSINESS_USER",
+      CARRIER,
+    );
+    const permissionLost = await sessionFor(
+      PERMISSION_LOST,
+      "BUSINESS_USER",
+      CARRIER,
+    );
     const untouched = await sessionFor(UNTOUCHED, "BUSINESS_USER", CARRIER);
 
     const revokedSocket = await connectTo(sweeper.port, familyRevoked.token);
@@ -353,7 +392,11 @@ describe("the periodic sweep, with nothing announced", () => {
 
     const revokedEnd = waitFor(revokedSocket, "securityAction", SWEEP_MS * 5);
     const bumpedEnd = waitFor(bumpedSocket, "securityAction", SWEEP_MS * 5);
-    const untouchedEnd = waitFor(untouchedSocket, "securityAction", SWEEP_MS * 5);
+    const untouchedEnd = waitFor(
+      untouchedSocket,
+      "securityAction",
+      SWEEP_MS * 5,
+    );
 
     // Logged out elsewhere; password changed; profile edited — all straight
     // in the database, the way a lost frame looks from here.
@@ -381,7 +424,11 @@ describe("the periodic sweep, with nothing announced", () => {
     const lostHears = waitFor(lostSocket, "driverPosition");
     const untouchedHears = waitFor(untouchedSocket, "driverPosition");
 
-    await one.run({ kind: "driverPosition", businessId: CARRIER, payload: position() });
+    await one.run({
+      kind: "driverPosition",
+      businessId: CARRIER,
+      payload: position(),
+    });
 
     expect(await lostHears).toBeNull();
     expect(lostSocket.connected).toBe(true);
@@ -408,6 +455,8 @@ describe("a revocation while Redis is down", () => {
 
     await sleep(1_500);
 
-    expect(socket.connected, "o socket revogado continuou conectado").toBe(false);
+    expect(socket.connected, "o socket revogado continuou conectado").toBe(
+      false,
+    );
   }, 60_000);
 });

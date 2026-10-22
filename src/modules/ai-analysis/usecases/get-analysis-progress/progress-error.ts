@@ -102,10 +102,5 @@ function isPausedReading(
   return error?.code === "AI_PROVIDER_PAUSED" || providerPaused;
 }
 
-export {
-  PAUSED_MESSAGE,
-  PROGRESS_ERROR_CODES,
-  isPausedReading,
-  progressError,
-};
+export { PAUSED_MESSAGE, PROGRESS_ERROR_CODES, isPausedReading, progressError };
 export type { ProgressError, ProgressErrorCode };

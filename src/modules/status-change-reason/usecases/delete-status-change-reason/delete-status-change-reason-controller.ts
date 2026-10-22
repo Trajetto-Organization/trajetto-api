@@ -21,9 +21,7 @@ class DeleteStatusChangeReasonController {
 
     await deleteStatusChangeReasonUseCase.execute(reasonId, businessId, id);
 
-    return reply
-      .status(200)
-      .send({ message: "Motivo excluído com sucesso!" });
+    return reply.status(200).send({ message: "Motivo excluído com sucesso!" });
   }
 }
 

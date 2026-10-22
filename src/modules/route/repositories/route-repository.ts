@@ -203,56 +203,56 @@ class RouteRepository implements IRouteRepository {
     const write = async (
       tx: Prisma.TransactionClient,
     ): Promise<RouteWithStops> => {
-        const created = await tx.route.create({
-          data: {
-            code: await this.nextCode(tx, data.businessId),
-            name: data.name ?? null,
-            scheduled_date: data.scheduled_date,
-            destination: data.destination ?? null,
-            planned_departure_at: data.planned_departure_at ?? null,
-            planned_arrival_at: data.planned_arrival_at ?? null,
-            businessId: data.businessId,
-            driverId: data.driverId,
-            vehicleId: data.vehicleId ?? null,
-            importId: data.importId ?? null,
-            client_submission_id: data.client_submission_id ?? null,
-            stops: {
-              create: data.deliveryIds.map((deliveryId, index) => ({
-                deliveryId,
-                sequence: (index + 1) * 10,
-              })),
-            },
+      const created = await tx.route.create({
+        data: {
+          code: await this.nextCode(tx, data.businessId),
+          name: data.name ?? null,
+          scheduled_date: data.scheduled_date,
+          destination: data.destination ?? null,
+          planned_departure_at: data.planned_departure_at ?? null,
+          planned_arrival_at: data.planned_arrival_at ?? null,
+          businessId: data.businessId,
+          driverId: data.driverId,
+          vehicleId: data.vehicleId ?? null,
+          importId: data.importId ?? null,
+          client_submission_id: data.client_submission_id ?? null,
+          stops: {
+            create: data.deliveryIds.map((deliveryId, index) => ({
+              deliveryId,
+              sequence: (index + 1) * 10,
+            })),
           },
-          include: routeInclude,
+        },
+        include: routeInclude,
+      });
+
+      // The route is PLANNED, so the deliveries are not on the road yet —
+      // but the panel has to show who they are destined for, and driverId is
+      // the column every existing screen reads. Mirroring starts here.
+      //
+      // The businessId in the `where` is not redundant with the use case's
+      // check: this is the one statement in the module that writes to a
+      // table the route does not own.
+      //
+      // PENDING in the `where` too: the use case checked it before the
+      // transaction, and a cancellation committing in between would leave an
+      // open stop for an address nobody will visit. The update waits for
+      // that cancellation's row lock and re-reads the row, so a short count
+      // is the cancellation having won — and the whole route rolls back.
+      if (data.deliveryIds.length > 0) {
+        const mirrored = await tx.delivery.updateMany({
+          where: {
+            id: { in: data.deliveryIds },
+            businessId: data.businessId,
+            status: "PENDING",
+          },
+          data: { driverId: data.driverId, vehicleId: data.vehicleId ?? null },
         });
 
-        // The route is PLANNED, so the deliveries are not on the road yet —
-        // but the panel has to show who they are destined for, and driverId is
-        // the column every existing screen reads. Mirroring starts here.
-        //
-        // The businessId in the `where` is not redundant with the use case's
-        // check: this is the one statement in the module that writes to a
-        // table the route does not own.
-        //
-        // PENDING in the `where` too: the use case checked it before the
-        // transaction, and a cancellation committing in between would leave an
-        // open stop for an address nobody will visit. The update waits for
-        // that cancellation's row lock and re-reads the row, so a short count
-        // is the cancellation having won — and the whole route rolls back.
-        if (data.deliveryIds.length > 0) {
-          const mirrored = await tx.delivery.updateMany({
-            where: {
-              id: { in: data.deliveryIds },
-              businessId: data.businessId,
-              status: "PENDING",
-            },
-            data: { driverId: data.driverId, vehicleId: data.vehicleId ?? null },
-          });
-
-          if (mirrored.count !== new Set(data.deliveryIds).size) {
-            throw new DeliveryNoLongerRoutableError();
-          }
+        if (mirrored.count !== new Set(data.deliveryIds).size) {
+          throw new DeliveryNoLongerRoutableError();
         }
+      }
 
       return created as unknown as RouteWithStops;
     };
@@ -312,7 +312,9 @@ class RouteRepository implements IRouteRepository {
       return { detached: 0, blocked: [], emptiedRoutes: [], bumped: [] };
     }
 
-    const run = async (client: Prisma.TransactionClient): Promise<DetachResult> => {
+    const run = async (
+      client: Prisma.TransactionClient,
+    ): Promise<DetachResult> => {
       const openStops = () =>
         client.routeStop.findMany({
           where: {
@@ -428,7 +430,9 @@ class RouteRepository implements IRouteRepository {
         ).map((stop) => stop.routeId),
       );
 
-      const emptiedIds = affected.filter((routeId) => !stillHolding.has(routeId));
+      const emptiedIds = affected.filter(
+        (routeId) => !stillHolding.has(routeId),
+      );
 
       // Read here, inside the caller's transaction, rather than by the caller
       // through another connection while this one holds the locks.
@@ -439,7 +443,12 @@ class RouteRepository implements IRouteRepository {
               where: { id: { in: emptiedIds }, businessId },
             })) as unknown as Route[]);
 
-      return { detached: detachedIds.length, blocked: [], emptiedRoutes, bumped };
+      return {
+        detached: detachedIds.length,
+        blocked: [],
+        emptiedRoutes,
+        bumped,
+      };
     };
 
     // A caller that handed over its transaction owns the commit boundary: the
@@ -752,7 +761,9 @@ class RouteRepository implements IRouteRepository {
         select: refSelect,
       });
 
-    const runningRoute = (owner: { driverId: string } | { vehicleId: string }) =>
+    const runningRoute = (
+      owner: { driverId: string } | { vehicleId: string },
+    ) =>
       this.prisma.route.findFirst({
         where: { businessId, ...owner, status: "IN_PROGRESS" },
         orderBy: RUNNING_ORDER,
@@ -812,7 +823,10 @@ class RouteRepository implements IRouteRepository {
     ]);
 
     const [vehicleRunningRoute, vehicleRoutesOnDay] = vehicleId
-      ? await Promise.all([runningRoute({ vehicleId }), routesOnDay({ vehicleId })])
+      ? await Promise.all([
+          runningRoute({ vehicleId }),
+          routesOnDay({ vehicleId }),
+        ])
       : [null, []];
 
     const withFleet = fleetFacts && vehicleId != null;
@@ -822,7 +836,12 @@ class RouteRepository implements IRouteRepository {
         where: { businessId, driverId, status: { in: ["ACTIVE", "IN_ROUTE"] } },
         orderBy: [{ created_at: "desc" }, { id: "desc" }],
         take: PREVIEW_LIMIT,
-        select: { id: true, license_plate: true, description: true, status: true },
+        select: {
+          id: true,
+          license_plate: true,
+          description: true,
+          status: true,
+        },
       }),
       // A count and the oldest date, never the rows: a truck parked in the
       // shop for months must not grow this read.
@@ -864,7 +883,8 @@ class RouteRepository implements IRouteRepository {
             description: vehicle.description,
             status: vehicle.status,
             responsible: vehicle.driver,
-            required_cnh_category: vehicle.vehicleType?.required_cnh_category ?? null,
+            required_cnh_category:
+              vehicle.vehicleType?.required_cnh_category ?? null,
             openServiceOrders: openOrders
               ? {
                   count: openOrders._count._all,
@@ -874,7 +894,9 @@ class RouteRepository implements IRouteRepository {
             lastChecklist: lastChecklist ?? null,
           }
         : null,
-      vehicleRunningRoute: vehicleRunningRoute ? toRef(vehicleRunningRoute) : null,
+      vehicleRunningRoute: vehicleRunningRoute
+        ? toRef(vehicleRunningRoute)
+        : null,
       vehicleRoutesOnDay: vehicleRoutesOnDay.map(toRef),
       routesEmptiedBySelection,
     };
@@ -912,7 +934,9 @@ class RouteRepository implements IRouteRepository {
       _count: { _all: true },
     });
 
-    const openBy = new Map(open.map((group) => [group.routeId, group._count._all]));
+    const openBy = new Map(
+      open.map((group) => [group.routeId, group._count._all]),
+    );
 
     return held
       .filter((group) => openBy.get(group.routeId) === group._count._all)
@@ -976,7 +1000,9 @@ class RouteRepository implements IRouteRepository {
 
     const vehicleIds = [
       ...new Set([
-        ...byVehicle.flatMap((group) => (group.vehicleId ? [group.vehicleId] : [])),
+        ...byVehicle.flatMap((group) =>
+          group.vehicleId ? [group.vehicleId] : [],
+        ),
         ...(filters.vehicleIds ?? []),
       ]),
     ];
@@ -1009,7 +1035,9 @@ class RouteRepository implements IRouteRepository {
             count: group._count._all,
           })),
           filters.vehicleIds,
-          new Map(vehicles.map((vehicle) => [vehicle.id, vehicle.license_plate])),
+          new Map(
+            vehicles.map((vehicle) => [vehicle.id, vehicle.license_plate]),
+          ),
         ),
       },
     );
@@ -1424,7 +1452,9 @@ class RouteRepository implements IRouteRepository {
     outerTx?: Prisma.TransactionClient,
     options: PlanWriteOptions = {},
   ): Promise<PlanStopsAdded> {
-    const run = async (tx: Prisma.TransactionClient): Promise<PlanStopsAdded> => {
+    const run = async (
+      tx: Prisma.TransactionClient,
+    ): Promise<PlanStopsAdded> => {
       // Locked, not merely read: see lockEditableRoute. A departure
       // committing in between is what the lock waits for, and what the
       // status re-read after it then refuses.
@@ -1580,7 +1610,12 @@ class RouteRepository implements IRouteRepository {
           deliveryId: stop.deliveryId,
           note: `Retirada da Rota ${route.code} antes da saída.`,
         })),
-        { type: "ROUTE_REMOVED", routeId, businessId, actorId: options.actorId },
+        {
+          type: "ROUTE_REMOVED",
+          routeId,
+          businessId,
+          actorId: options.actorId,
+        },
       );
 
       const remaining = await tx.routeStop.count({
@@ -1824,7 +1859,11 @@ class RouteRepository implements IRouteRepository {
     const [rows, total] = await Promise.all([
       this.prisma.delivery.findMany({
         where,
-        orderBy: [{ scheduled_date: { sort: "asc", nulls: "last" } }, { created_at: "asc" }, { id: "asc" }],
+        orderBy: [
+          { scheduled_date: { sort: "asc", nulls: "last" } },
+          { created_at: "asc" },
+          { id: "asc" },
+        ],
         skip: (props.page - 1) * props.pageSize,
         take: props.pageSize,
         select: UNROUTED_DELIVERY_SELECT,
@@ -1864,7 +1903,10 @@ class RouteRepository implements IRouteRepository {
 
     const shipperCounts = shippers
       .filter((row) => row.shipperId !== null)
-      .map((row) => ({ value: row.shipperId as string, count: row._count._all }));
+      .map((row) => ({
+        value: row.shipperId as string,
+        count: row._count._all,
+      }));
 
     // Names read through the tenant: an id is only ever named for its own
     // company.
@@ -1884,7 +1926,10 @@ class RouteRepository implements IRouteRepository {
       data: rows as unknown as UnroutedDeliveryRow[],
       total,
       facets: {
-        city: cities.map((row) => ({ value: row.city, count: row._count._all })),
+        city: cities.map((row) => ({
+          value: row.city,
+          count: row._count._all,
+        })),
         uf: ufs.map((row) => ({ value: row.uf, count: row._count._all })),
         kind: kinds.map((row) => ({ value: row.kind, count: row._count._all })),
         shipper: orderShipperFacet(shipperCounts, (id) => names.get(id)),
@@ -1908,7 +1953,9 @@ class RouteRepository implements IRouteRepository {
         delivery: { status: "IN_TRANSIT" },
       },
       orderBy: { sequence: "asc" },
-      select: { delivery: { select: routeInclude.stops.include.delivery.select } },
+      select: {
+        delivery: { select: routeInclude.stops.include.delivery.select },
+      },
     });
 
     return stops.map(
@@ -2179,14 +2226,28 @@ class RouteRepository implements IRouteRepository {
       data: { driverId: null, vehicleId: null },
     });
 
-    const [bump] = await this.bumpPlanVersions([open.routeId], businessId, client);
+    const [bump] = await this.bumpPlanVersions(
+      [open.routeId],
+      businessId,
+      client,
+    );
 
     if (!bump) return null;
 
     await this.recordPlanEvents(
       client,
-      [{ deliveryId, note: `Retirada da Rota ${bump.code}: a entrega foi encerrada.` }],
-      { type: "ROUTE_REMOVED", routeId: open.routeId, businessId, actorId: null },
+      [
+        {
+          deliveryId,
+          note: `Retirada da Rota ${bump.code}: a entrega foi encerrada.`,
+        },
+      ],
+      {
+        type: "ROUTE_REMOVED",
+        routeId: open.routeId,
+        businessId,
+        actorId: null,
+      },
     );
 
     return bump;
@@ -2228,7 +2289,9 @@ class RouteRepository implements IRouteRepository {
     // rather than failing.
     if (closed.count === 0) return null;
 
-    const route = await client.route.findUniqueOrThrow({ where: { id: routeId } });
+    const route = await client.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
 
     // The route ended by itself, so the truck came back by itself too.
     await this.syncVehicleStatus(client, route as unknown as Route);

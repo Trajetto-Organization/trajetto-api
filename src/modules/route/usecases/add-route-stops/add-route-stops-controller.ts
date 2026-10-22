@@ -3,7 +3,10 @@ import { container } from "tsyringe";
 
 import { AddRouteStopsUseCase } from "./add-route-stops-usecase";
 
-import { addRouteStopsSchema, routeIdParamSchema } from "@/schemas/route-schema";
+import {
+  addRouteStopsSchema,
+  routeIdParamSchema,
+} from "@/schemas/route-schema";
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 class AddRouteStopsController {

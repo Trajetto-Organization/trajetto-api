@@ -1,4 +1,12 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -171,7 +179,10 @@ async function seedBusiness(id: string, timezone: string): Promise<void> {
   });
 }
 
-async function seedVehicles(businessId: string, vehicles: VehicleSeed[]): Promise<void> {
+async function seedVehicles(
+  businessId: string,
+  vehicles: VehicleSeed[],
+): Promise<void> {
   const fuelType = await prisma.fuelType.create({
     data: { description: "Diesel", businessId },
   });
@@ -200,10 +211,12 @@ async function seedVehicles(businessId: string, vehicles: VehicleSeed[]): Promis
     twin.addVehicle({
       businessId,
       status: "ACTIVE",
-      last_maintenance_date: (vehicle.last_maintenance_date as Date | null) ?? null,
+      last_maintenance_date:
+        (vehicle.last_maintenance_date as Date | null) ?? null,
       maintenance_interval_months: vehicle.maintenance_interval_months,
       current_mileage: vehicle.current_mileage,
-      last_maintenance_mileage: (vehicle.last_maintenance_mileage as number | null) ?? null,
+      last_maintenance_mileage:
+        (vehicle.last_maintenance_mileage as number | null) ?? null,
       maintenance_interval_km: vehicle.maintenance_interval_km,
     });
   }
@@ -234,8 +247,12 @@ afterEach(() => {
 
 afterAll(async () => {
   await prisma.user.deleteMany({ where: { id: ADMIN } });
-  await prisma.vehicle.deleteMany({ where: { businessId: { in: [CARRIER, OTHER] } } });
-  await prisma.fuelType.deleteMany({ where: { businessId: { in: [CARRIER, OTHER] } } });
+  await prisma.vehicle.deleteMany({
+    where: { businessId: { in: [CARRIER, OTHER] } },
+  });
+  await prisma.fuelType.deleteMany({
+    where: { businessId: { in: [CARRIER, OTHER] } },
+  });
   await prisma.businessEntitlement.deleteMany({
     where: { businessId: { in: [CARRIER, OTHER] } },
   });
@@ -264,7 +281,10 @@ describe("the fleet maintenance card, in the company's day", () => {
   it("the database and the twin give the same answer for the same rows", async () => {
     const params = { today: TODAY, timeZone: MANAUS };
 
-    const database = await new DashboardRepository().getMaintenanceStats(params, CARRIER);
+    const database = await new DashboardRepository().getMaintenanceStats(
+      params,
+      CARRIER,
+    );
     const memory = await twin.getMaintenanceStats(params, CARRIER);
 
     expect(database).toEqual(EXPECTED);
@@ -276,7 +296,10 @@ describe("the fleet maintenance card, in the company's day", () => {
     // "A vencer" on 01/10 (4 late, 4 due).
     const params = { today: "2026-10-01", timeZone: MANAUS };
 
-    const database = await new DashboardRepository().getMaintenanceStats(params, CARRIER);
+    const database = await new DashboardRepository().getMaintenanceStats(
+      params,
+      CARRIER,
+    );
     const memory = await twin.getMaintenanceStats(params, CARRIER);
 
     // Late by 01/10: venceu ontem, vence hoje, vence amanhã, fim de mês, km.

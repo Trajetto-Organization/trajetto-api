@@ -46,8 +46,12 @@ describe("the business day of a company", () => {
 
     expect(businessDateKey(instant, SP)).toBe("2026-09-28");
     expect(businessDateKey(instant, MANAUS)).toBe("2026-09-27");
-    expect(businessDayRange(instant, MANAUS).start).toEqual(new Date("2026-09-27T04:00:00.000Z"));
-    expect(businessDayRange(instant, NORONHA).start).toEqual(new Date("2026-09-28T02:00:00.000Z"));
+    expect(businessDayRange(instant, MANAUS).start).toEqual(
+      new Date("2026-09-27T04:00:00.000Z"),
+    );
+    expect(businessDayRange(instant, NORONHA).start).toEqual(
+      new Date("2026-09-28T02:00:00.000Z"),
+    );
   });
 
   it("covers exactly 24 hours and contains the instant", () => {
@@ -88,18 +92,26 @@ describe("the business day of a company", () => {
 
   it("picks the earliest instant when a wall time happened twice (end of DST)", () => {
     // 2019-02-16: at 00:00 of the 17th São Paulo went back to 23:00 of the 16th.
-    expect(zonedWallTimeToUtc(SP, 2019, 2, 16, 23, 30)).toEqual(new Date("2019-02-17T01:30:00.000Z"));
+    expect(zonedWallTimeToUtc(SP, 2019, 2, 16, 23, 30)).toEqual(
+      new Date("2019-02-17T01:30:00.000Z"),
+    );
   });
 
   it("converts a wall-clock time to the UTC instant", () => {
-    expect(zonedWallTimeToUtc(SP, 2026, 9, 28, 8, 30)).toEqual(new Date("2026-09-28T11:30:00.000Z"));
+    expect(zonedWallTimeToUtc(SP, 2026, 9, 28, 8, 30)).toEqual(
+      new Date("2026-09-28T11:30:00.000Z"),
+    );
   });
 });
 
 describe("date-only values (@db.Date columns)", () => {
   it("are UTC midnight of the civil day, so they never shift with the viewer's zone", () => {
-    expect(dateOnlyFromKey("2026-09-17")).toEqual(new Date("2026-09-17T00:00:00.000Z"));
-    expect(dateOnlyKey(new Date("2026-09-17T00:00:00.000Z"))).toBe("2026-09-17");
+    expect(dateOnlyFromKey("2026-09-17")).toEqual(
+      new Date("2026-09-17T00:00:00.000Z"),
+    );
+    expect(dateOnlyKey(new Date("2026-09-17T00:00:00.000Z"))).toBe(
+      "2026-09-17",
+    );
   });
 
   it("refuse impossible or malformed days instead of rolling them over", () => {
@@ -111,7 +123,9 @@ describe("date-only values (@db.Date columns)", () => {
   it("gives today's date for the company at night in UTC", () => {
     const lateNightInSaoPaulo = new Date("2026-09-18T02:00:00.000Z"); // 23:00 on the 17th
 
-    expect(businessToday(SP, lateNightInSaoPaulo)).toEqual(new Date("2026-09-17T00:00:00.000Z"));
+    expect(businessToday(SP, lateNightInSaoPaulo)).toEqual(
+      new Date("2026-09-17T00:00:00.000Z"),
+    );
   });
 });
 
@@ -155,20 +169,34 @@ describe("chart buckets in the company's calendar", () => {
 
   it("names the month of the company's wall clock", () => {
     // 02:00 UTC on the 1st is still the 31st of the previous month in SP.
-    expect(businessMonthKey(new Date("2026-10-01T02:00:00.000Z"), SP)).toBe("2026-09");
-    expect(businessMonthKey(new Date("2026-10-01T04:00:00.000Z"), SP)).toBe("2026-10");
+    expect(businessMonthKey(new Date("2026-10-01T02:00:00.000Z"), SP)).toBe(
+      "2026-09",
+    );
+    expect(businessMonthKey(new Date("2026-10-01T04:00:00.000Z"), SP)).toBe(
+      "2026-10",
+    );
   });
 
   it("starts days and months at the company's midnight", () => {
-    expect(businessDayStart("2026-09-17", SP)).toEqual(new Date("2026-09-17T03:00:00.000Z"));
-    expect(businessDayStart("2026-09-17", RIO_BRANCO)).toEqual(new Date("2026-09-17T05:00:00.000Z"));
-    expect(businessMonthStart("2026-09", MANAUS)).toEqual(new Date("2026-09-01T04:00:00.000Z"));
+    expect(businessDayStart("2026-09-17", SP)).toEqual(
+      new Date("2026-09-17T03:00:00.000Z"),
+    );
+    expect(businessDayStart("2026-09-17", RIO_BRANCO)).toEqual(
+      new Date("2026-09-17T05:00:00.000Z"),
+    );
+    expect(businessMonthStart("2026-09", MANAUS)).toEqual(
+      new Date("2026-09-01T04:00:00.000Z"),
+    );
   });
 
   it("lists the last N days at 22:30 in São Paulo, a UTC runner's tomorrow", () => {
     // The old code built this window from the server's calendar: on a UTC
     // container at 22:30 BRT the last bucket was already the 28th.
-    const window = businessDayWindow(new Date("2026-09-28T01:30:00.000Z"), SP, 7);
+    const window = businessDayWindow(
+      new Date("2026-09-28T01:30:00.000Z"),
+      SP,
+      7,
+    );
 
     expect(window.keys).toEqual([
       "2026-09-21",
@@ -184,7 +212,11 @@ describe("chart buckets in the company's calendar", () => {
   });
 
   it("lists the last N months across a year boundary", () => {
-    const window = businessMonthWindow(new Date("2027-01-01T02:00:00.000Z"), SP, 6);
+    const window = businessMonthWindow(
+      new Date("2027-01-01T02:00:00.000Z"),
+      SP,
+      6,
+    );
 
     // Still December 2026 in São Paulo.
     expect(window.keys).toEqual([

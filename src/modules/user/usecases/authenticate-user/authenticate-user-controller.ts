@@ -106,7 +106,6 @@ class AuthenticateUserController {
         });
       }
 
-
       throw error;
     }
   }

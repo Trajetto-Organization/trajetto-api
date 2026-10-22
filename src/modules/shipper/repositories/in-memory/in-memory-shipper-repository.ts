@@ -6,7 +6,10 @@ import {
 } from "@/shared/in-memory/column-defaults";
 import { IShipperRepository } from "../IShipper-repository";
 
-import { requireIndex, uniqueViolation } from "@/shared/in-memory/prisma-errors";
+import {
+  requireIndex,
+  uniqueViolation,
+} from "@/shared/in-memory/prisma-errors";
 
 import { compareForOrder } from "@/shared/pagination/in-memory-order";
 import { isActiveFilter } from "@/shared/delivery/catalog-list";
@@ -106,7 +109,9 @@ class InMemoryShipperRepository implements IShipperRepository {
       value === undefined ? undefined : new Date(value);
 
     const rows = base
-      .filter((s) => isActive === undefined || (s.is_active !== false) === isActive)
+      .filter(
+        (s) => isActive === undefined || (s.is_active !== false) === isActive,
+      )
       .sort(
         (a, b) =>
           (key === "name"
@@ -120,7 +125,11 @@ class InMemoryShipperRepository implements IShipperRepository {
 
     for (const s of base) {
       const active = s.is_active !== false;
-      const group = groups.get(active) ?? { is_active: active, count: 0, withCnpj: 0 };
+      const group = groups.get(active) ?? {
+        is_active: active,
+        count: 0,
+        withCnpj: 0,
+      };
 
       group.count += 1;
       if (s.cnpj) group.withCnpj += 1;
@@ -159,7 +168,13 @@ class InMemoryShipperRepository implements IShipperRepository {
             (s.cnpj ?? "").includes(cnpjTerm)),
       )
       .sort((a, b) =>
-        a.name < b.name ? -1 : a.name > b.name ? 1 : (a.id ?? "") < (b.id ?? "") ? -1 : 1,
+        a.name < b.name
+          ? -1
+          : a.name > b.name
+            ? 1
+            : (a.id ?? "") < (b.id ?? "")
+              ? -1
+              : 1,
       );
 
     // Prisma's cursor: positioned on the cursor ROW, skip 1; an unknown
@@ -227,7 +242,11 @@ class InMemoryShipperRepository implements IShipperRepository {
 
   async deleteShipper(shipperId: string): Promise<Shipper> {
     // P2025 like Prisma; `splice(-1, 1)` used to delete the last shipper.
-    const index = requireIndex(this.shippers, (s) => s.id === shipperId, "delete");
+    const index = requireIndex(
+      this.shippers,
+      (s) => s.id === shipperId,
+      "delete",
+    );
     return this.shippers.splice(index, 1)[0];
   }
 

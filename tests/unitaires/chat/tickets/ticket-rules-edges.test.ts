@@ -23,7 +23,9 @@ describe("truncateSubject", () => {
     const exact = "a".repeat(TICKET_SUBJECT_MAX);
 
     expect(truncateSubject(exact)).toBe(exact);
-    expect(truncateSubject(`${exact}b`)).toBe(`${"a".repeat(TICKET_SUBJECT_MAX - 1)}…`);
+    expect(truncateSubject(`${exact}b`)).toBe(
+      `${"a".repeat(TICKET_SUBJECT_MAX - 1)}…`,
+    );
   });
 });
 
@@ -48,7 +50,11 @@ describe("waitingOn", () => {
 
 describe("routeLegacyMessage", () => {
   const input = (minutesAgo: number, extraMs = 0) => ({
-    recentStaffTicket: { id: "t1", status: "OPEN" as const, at: new Date(T.getTime() - minutesAgo * 60_000 - extraMs) },
+    recentStaffTicket: {
+      id: "t1",
+      status: "OPEN" as const,
+      at: new Date(T.getTime() - minutesAgo * 60_000 - extraMs),
+    },
     now: T,
     deliveryId: null,
     explicitRouteId: null,
@@ -58,7 +64,10 @@ describe("routeLegacyMessage", () => {
 
   it("is a reply for thirty minutes, to the millisecond", () => {
     expect(LEGACY_REPLY_WINDOW_MS).toBe(1_800_000);
-    expect(routeLegacyMessage(input(30))).toEqual({ target: "TICKET", ticketId: "t1" });
+    expect(routeLegacyMessage(input(30))).toEqual({
+      target: "TICKET",
+      ticketId: "t1",
+    });
     expect(routeLegacyMessage(input(30, 1))).toEqual({ target: "NEW_DRIVER" });
   });
 });

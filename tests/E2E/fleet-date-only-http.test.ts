@@ -8,7 +8,11 @@ import { container } from "tsyringe";
 import type { UploadService } from "@/shared/services/upload-service";
 import { businessDateKey, businessDayStart } from "@/shared/time/business-day";
 
-import { fakeJpeg, seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
+import {
+  fakeJpeg,
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
 import { seedCarrier, seedProfile, seedUser } from "./support/fleet-maint-seed";
 
 /**
@@ -41,7 +45,9 @@ let responsibleUserId = "";
 
 let today = "";
 
-async function storedPhoto(kind: "odometerPhotos" | "checklistPhotos"): Promise<string> {
+async function storedPhoto(
+  kind: "odometerPhotos" | "checklistPhotos",
+): Promise<string> {
   const key = `${kind}/${BUSINESS}/${Date.now()}-dia-${randomUUID()}.jpg`;
 
   await uploads.putObject(key, fakeJpeg(), "image/jpeg");
@@ -50,12 +56,24 @@ async function storedPhoto(kind: "odometerPhotos" | "checklistPhotos"): Promise<
   return key;
 }
 
-const send = (method: "POST" | "PATCH", url: string, payload: object, token = seed.managerToken) =>
-  app.inject({ method, url, headers: { authorization: `Bearer ${token}` }, payload });
+const send = (
+  method: "POST" | "PATCH",
+  url: string,
+  payload: object,
+  token = seed.managerToken,
+) =>
+  app.inject({
+    method,
+    url,
+    headers: { authorization: `Bearer ${token}` },
+    payload,
+  });
 
 /** A truck of its own per case, so each timeline stands alone. */
 async function truck(mileage: number): Promise<string> {
-  const base = await prisma.vehicle.findUniqueOrThrow({ where: { id: seed.vehicleId } });
+  const base = await prisma.vehicle.findUniqueOrThrow({
+    where: { id: seed.vehicleId },
+  });
   const created = await prisma.vehicle.create({
     data: {
       license_plate: randomUUID().slice(0, 7).toUpperCase(),
@@ -84,9 +102,14 @@ async function truck(mileage: number): Promise<string> {
 }
 
 const mileageOf = async (vehicleId: string) =>
-  (await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } })).current_mileage;
+  (await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } }))
+    .current_mileage;
 
-async function fueling(vehicleId: string, mileage: number, refueling_date: string) {
+async function fueling(
+  vehicleId: string,
+  mileage: number,
+  refueling_date: string,
+) {
   return send("POST", `/fuel/create-fuel/${BUSINESS}`, {
     current_mileage: mileage,
     liters_amount: 40,
@@ -102,12 +125,18 @@ async function fueling(vehicleId: string, mileage: number, refueling_date: strin
   });
 }
 
-async function checklist(vehicleId: string, mileage: number, checklist_date: string) {
+async function checklist(
+  vehicleId: string,
+  mileage: number,
+  checklist_date: string,
+) {
   const photos = await Promise.all(
-    ["current_mileage", "fuel_level_adequate", "tires_condition"].map(async (fieldName) => ({
-      key: await storedPhoto("checklistPhotos"),
-      fieldName,
-    })),
+    ["current_mileage", "fuel_level_adequate", "tires_condition"].map(
+      async (fieldName) => ({
+        key: await storedPhoto("checklistPhotos"),
+        fieldName,
+      }),
+    ),
   );
 
   const yes = Object.fromEntries(
@@ -144,18 +173,22 @@ async function checklist(vehicleId: string, mileage: number, checklist_date: str
     ].map((field) => [field, "good"]),
   );
 
-  return send("POST", `/vehicle-checklist/create-vehicle-checklist/${BUSINESS}`, {
-    vehicleId,
-    businessId: BUSINESS,
-    branchId: seed.branchId,
-    driverId: seed.driverId,
-    checklist_date,
-    current_mileage: mileage,
-    overall_condition: "approved",
-    ...yes,
-    ...good,
-    photos,
-  });
+  return send(
+    "POST",
+    `/vehicle-checklist/create-vehicle-checklist/${BUSINESS}`,
+    {
+      vehicleId,
+      businessId: BUSINESS,
+      branchId: seed.branchId,
+      driverId: seed.driverId,
+      checklist_date,
+      current_mileage: mileage,
+      overall_condition: "approved",
+      ...yes,
+      ...good,
+      photos,
+    },
+  );
 }
 
 const orderBody = (vehicleId: string, extra: Record<string, unknown> = {}) => ({
@@ -172,7 +205,10 @@ const orderBody = (vehicleId: string, extra: Record<string, unknown> = {}) => ({
 });
 
 beforeAll(async () => {
-  seed = await seedFleetDriver(prisma, { businessId: BUSINESS, cnpj: "55666777000515" });
+  seed = await seedFleetDriver(prisma, {
+    businessId: BUSINESS,
+    cnpj: "55666777000515",
+  });
 
   const fleetUser = await seedUser(prisma, "Frota", "BUSINESS_USER", BUSINESS, {
     profileAccessId: await seedProfile(prisma, BUSINESS, [
@@ -192,7 +228,9 @@ beforeAll(async () => {
   ).token;
 
   await seedCarrier(prisma, OTHER);
-  tokens.otherAdmin = (await seedUser(prisma, "Outra", "BUSINESS_ADMIN", OTHER)).token;
+  tokens.otherAdmin = (
+    await seedUser(prisma, "Outra", "BUSINESS_ADMIN", OTHER)
+  ).token;
 
   today = businessDateKey(new Date(), ZONE);
 
@@ -217,25 +255,39 @@ describe("POST /fuel/create-fuel with a bare day", () => {
 
     const fuel = await prisma.fuel.findFirstOrThrow({ where: { vehicleId } });
 
-    expect(fuel.refueling_date.toISOString()).toBe(businessDayStart(today, ZONE).toISOString());
+    expect(fuel.refueling_date.toISOString()).toBe(
+      businessDayStart(today, ZONE).toISOString(),
+    );
     expect(await mileageOf(vehicleId)).toBe(50_100);
   });
 
   it("is also accepted by the edit", async () => {
     const vehicleId = await truck(60_000);
-    const created = await fueling(vehicleId, 60_100, new Date(Date.now() - 60_000).toISOString());
+    const created = await fueling(
+      vehicleId,
+      60_100,
+      new Date(Date.now() - 60_000).toISOString(),
+    );
 
     expect(created.statusCode, created.body).toBe(201);
 
-    const edit = await send("PATCH", `/fuel/update-fuel/${created.json().id}/business/${BUSINESS}`, {
-      refueling_date: today,
-    });
+    const edit = await send(
+      "PATCH",
+      `/fuel/update-fuel/${created.json().id}/business/${BUSINESS}`,
+      {
+        refueling_date: today,
+      },
+    );
 
     expect(edit.statusCode, edit.body).toBe(200);
 
-    const fuel = await prisma.fuel.findUniqueOrThrow({ where: { id: created.json().id } });
+    const fuel = await prisma.fuel.findUniqueOrThrow({
+      where: { id: created.json().id },
+    });
 
-    expect(fuel.refueling_date.toISOString()).toBe(businessDayStart(today, ZONE).toISOString());
+    expect(fuel.refueling_date.toISOString()).toBe(
+      businessDayStart(today, ZONE).toISOString(),
+    );
   });
 
   it("refuses a day that does not exist", async () => {
@@ -259,7 +311,9 @@ describe("POST /vehicle-checklist/create-vehicle-checklist with a bare day", () 
         price_per_liter: 5,
         total_amount: 200,
         odometer_photo: `odometerPhotos/${BUSINESS}/cedo.webp`,
-        refueling_date: new Date(businessDayStart(today, ZONE).getTime() + 1_000),
+        refueling_date: new Date(
+          businessDayStart(today, ZONE).getTime() + 1_000,
+        ),
         businessId: BUSINESS,
         branchId: seed.branchId,
         vehicleId,
@@ -268,7 +322,10 @@ describe("POST /vehicle-checklist/create-vehicle-checklist with a bare day", () 
         created_from: "MOBILE_APP",
       },
     });
-    await prisma.vehicle.update({ where: { id: vehicleId }, data: { current_mileage: 80_100 } });
+    await prisma.vehicle.update({
+      where: { id: vehicleId },
+      data: { current_mileage: 80_100 },
+    });
 
     // Red before: placed at 00:00 UTC (yesterday evening in São Paulo), so
     // this morning's 80 100 was "a later day" and 80 200 was refused.
@@ -277,9 +334,13 @@ describe("POST /vehicle-checklist/create-vehicle-checklist with a bare day", () 
     expect(response.statusCode, response.body).toBe(201);
     expect(await mileageOf(vehicleId)).toBe(80_200);
 
-    const stored = await prisma.vehicleChecklist.findFirstOrThrow({ where: { vehicleId } });
+    const stored = await prisma.vehicleChecklist.findFirstOrThrow({
+      where: { vehicleId },
+    });
 
-    expect(stored.checklist_date.toISOString()).toBe(businessDayStart(today, ZONE).toISOString());
+    expect(stored.checklist_date.toISOString()).toBe(
+      businessDayStart(today, ZONE).toISOString(),
+    );
   });
 });
 
@@ -289,14 +350,22 @@ describe("POST /service-order/create-service-order", () => {
 
     // Red before: 400 (last_maintenance_mileage_at_service required) and,
     // with it, 500 for the bare day.
-    const response = await send("POST", `/service-order/create-service-order/${BUSINESS}`, orderBody(vehicleId));
+    const response = await send(
+      "POST",
+      `/service-order/create-service-order/${BUSINESS}`,
+      orderBody(vehicleId),
+    );
 
     expect(response.statusCode, response.body).toBe(201);
 
-    const order = await prisma.serviceOrder.findFirstOrThrow({ where: { vehicleId } });
+    const order = await prisma.serviceOrder.findFirstOrThrow({
+      where: { vehicleId },
+    });
 
     expect(order.last_maintenance_mileage_at_service).toBeNull();
-    expect(order.date.toISOString()).toBe(businessDayStart(today, ZONE).toISOString());
+    expect(order.date.toISOString()).toBe(
+      businessDayStart(today, ZONE).toISOString(),
+    );
   });
 
   it("creates it for a company user with write on service orders, and the edit takes a bare day", async () => {
@@ -310,7 +379,9 @@ describe("POST /service-order/create-service-order", () => {
 
     expect(created.statusCode, created.body).toBe(201);
 
-    const order = await prisma.serviceOrder.findFirstOrThrow({ where: { vehicleId } });
+    const order = await prisma.serviceOrder.findFirstOrThrow({
+      where: { vehicleId },
+    });
     const edit = await send(
       "PATCH",
       `/service-order/update-service-order/${order.id}/business/${BUSINESS}`,

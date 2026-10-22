@@ -40,8 +40,13 @@ function repositoryWith(
   return repository;
 }
 
-async function listedIds(repository: InMemoryDeliveryRepository): Promise<string[]> {
-  const rows = (await repository.listDriverDeliveries(BUSINESS, DRIVER)) as Array<{ id: string }>;
+async function listedIds(
+  repository: InMemoryDeliveryRepository,
+): Promise<string[]> {
+  const rows = (await repository.listDriverDeliveries(
+    BUSINESS,
+    DRIVER,
+  )) as Array<{ id: string }>;
 
   return rows.map((row) => row.id).sort();
 }
@@ -51,7 +56,11 @@ describe("the driver's list on the in-memory twin (D8)", () => {
     const repository = repositoryWith([
       { id: "a-transit-loose", status: "IN_TRANSIT" },
       { id: "b-pending-released", status: "PENDING", routeStatus: "RELEASED" },
-      { id: "c-pending-started", status: "PENDING", routeStatus: "IN_PROGRESS" },
+      {
+        id: "c-pending-started",
+        status: "PENDING",
+        routeStatus: "IN_PROGRESS",
+      },
     ]);
 
     expect(await listedIds(repository)).toEqual([
@@ -84,7 +93,10 @@ describe("the routes of the driver's list (design §6)", () => {
         { id: "a", stops: [{ route }] },
         { id: "b", stops: [{ route }] },
         { id: "c", stops: [] },
-        { id: "d", stops: [{ route: { id: "r2", code: 13, plan_version: 1 } }] },
+        {
+          id: "d",
+          stops: [{ route: { id: "r2", code: 13, plan_version: 1 } }],
+        },
       ]),
     ).toEqual([
       { id: "r1", code: 12, plan_version: 4 },

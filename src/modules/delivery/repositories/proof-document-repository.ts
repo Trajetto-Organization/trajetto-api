@@ -79,7 +79,11 @@ class ProofDocumentRepository implements IProofDocumentRepository {
             received_by: true,
             // The zone the page prints the moments in, the same as the PDF.
             business: {
-              select: { corporate_reason: true, fantasy_name: true, timezone: true },
+              select: {
+                corporate_reason: true,
+                fantasy_name: true,
+                timezone: true,
+              },
             },
           },
         },

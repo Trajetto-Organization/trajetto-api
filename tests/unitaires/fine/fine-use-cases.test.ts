@@ -209,8 +209,12 @@ describe("creating a fine", () => {
     );
 
     // Manaus midnight, not São Paulo's (03:00Z, still the 27th in Manaus).
-    expect(new Date(fine.violation_date).toISOString()).toBe("2026-09-28T04:00:00.000Z");
-    expect(new Date(fine.due_date).toISOString()).toBe("2026-10-28T04:00:00.000Z");
+    expect(new Date(fine.violation_date).toISOString()).toBe(
+      "2026-09-28T04:00:00.000Z",
+    );
+    expect(new Date(fine.due_date).toISOString()).toBe(
+      "2026-10-28T04:00:00.000Z",
+    );
     expect(new Date(fine.payment_date as Date).toISOString()).toBe(
       "2026-09-28T04:00:00.000Z",
     );
@@ -220,7 +224,10 @@ describe("creating a fine", () => {
     const ctx = context();
 
     await expect(
-      seedFine(ctx, { violation_date: day("2026-09-29"), due_date: day("2026-10-29") }),
+      seedFine(ctx, {
+        violation_date: day("2026-09-29"),
+        due_date: day("2026-10-29"),
+      }),
     ).rejects.toMatchObject({ code: "FINE_VIOLATION_DATE_IN_FUTURE" });
   });
 });
@@ -278,7 +285,9 @@ describe("editing a fine", () => {
       NOW,
     );
 
-    expect(new Date(updated.violation_date).toISOString()).toBe("2026-09-20T03:00:00.000Z");
+    expect(new Date(updated.violation_date).toISOString()).toBe(
+      "2026-09-20T03:00:00.000Z",
+    );
     expect(new Date(updated.payment_date as Date).toISOString()).toBe(
       "2026-09-21T03:00:00.000Z",
     );
@@ -289,7 +298,13 @@ describe("editing a fine", () => {
     const fine = await seedFine(ctx);
 
     await expect(
-      ctx.update.execute({ violation_date: "2026-09-29" }, fine.id, ADMIN_A, A, NOW),
+      ctx.update.execute(
+        { violation_date: "2026-09-29" },
+        fine.id,
+        ADMIN_A,
+        A,
+        NOW,
+      ),
     ).rejects.toMatchObject({ code: "FINE_VIOLATION_DATE_IN_FUTURE" });
   });
 
@@ -338,7 +353,13 @@ describe("listing fines", () => {
     const ctx = context();
 
     await expect(
-      ctx.list.execute({ userId: ADMIN_B, businessId: A, page: 1, pageSize: 10, now: NOW }),
+      ctx.list.execute({
+        userId: ADMIN_B,
+        businessId: A,
+        page: 1,
+        pageSize: 10,
+        now: NOW,
+      }),
     ).rejects.toMatchObject({ code: "TENANT_ACCESS_DENIED" });
   });
 
@@ -346,8 +367,14 @@ describe("listing fines", () => {
     const ctx = context();
 
     await seedFine(ctx, { payment_date: day("2026-09-12") });
-    await seedFine(ctx, { violation_date: day("2026-08-01"), due_date: day("2026-09-27") });
-    await seedFine(ctx, { violation_date: day("2026-08-01"), due_date: day("2026-09-28") });
+    await seedFine(ctx, {
+      violation_date: day("2026-08-01"),
+      due_date: day("2026-09-27"),
+    });
+    await seedFine(ctx, {
+      violation_date: day("2026-08-01"),
+      due_date: day("2026-09-28"),
+    });
 
     const result = await ctx.list.execute({
       userId: ADMIN_A,

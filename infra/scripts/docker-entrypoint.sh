@@ -34,7 +34,7 @@ esac
 node build/wait-for-postgres.js
 
 # Schema work runs on MIGRATION_DATABASE_URL when it is set. The runtime
-# DATABASE_URL carries statement_timeout and lock_timeout (compose), and
+# DATABASE_URL carries statement_timeout and lock_timeout (.env.example), and
 # neither may apply here: a CREATE INDEX or a backfill cancelled halfway is a
 # failed migration, and lock_timeout would cut short the wait on migrate's
 # advisory lock while another replica holds it during a start-first rollout.

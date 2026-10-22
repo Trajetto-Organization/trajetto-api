@@ -84,7 +84,10 @@ type DeliveryFacet = "status" | "shipperId" | "driverId";
  * the table while the other status counts stay whole.
  */
 function deliveryListWhere(
-  filters: DeliveryListFilters & { ids?: readonly string[]; matchedDriverIds?: readonly string[] },
+  filters: DeliveryListFilters & {
+    ids?: readonly string[];
+    matchedDriverIds?: readonly string[];
+  },
   { except }: { except?: DeliveryFacet } = {},
 ): Prisma.DeliveryWhereInput {
   const and: Prisma.DeliveryWhereInput[] = [];
@@ -101,7 +104,12 @@ function deliveryListWhere(
 
     and.push(
       driverIds.length
-        ? { OR: [{ id: { in: [...filters.ids] } }, { driverId: { in: [...driverIds] } }] }
+        ? {
+            OR: [
+              { id: { in: [...filters.ids] } },
+              { driverId: { in: [...driverIds] } },
+            ],
+          }
         : { id: { in: [...filters.ids] } },
     );
   }
@@ -139,7 +147,10 @@ function deliveryListWhere(
 
   // The tenant stays a top-level key: the (businessId, …) indexes serve
   // every read of the listing.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /**
@@ -155,7 +166,10 @@ function isTenantOnlyDeliveryList(
 ): boolean {
   return isDeepStrictEqual(
     deliveryListWhere(filters),
-    deliveryListWhere({ businessId: filters.businessId, scopeDriverId: filters.scopeDriverId }),
+    deliveryListWhere({
+      businessId: filters.businessId,
+      scopeDriverId: filters.scopeDriverId,
+    }),
   );
 }
 

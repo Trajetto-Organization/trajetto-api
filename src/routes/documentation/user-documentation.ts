@@ -28,7 +28,10 @@ import { updateUserPasswordSchema } from "@/schemas/update-user-password-schema"
 
 import { updateUserNameSchema } from "@/schemas/update-user-name-schema";
 
-import { listMasterUserSchema, listUserSchema } from "@/schemas/list-user-schema";
+import {
+  listMasterUserSchema,
+  listUserSchema,
+} from "@/schemas/list-user-schema";
 import { cursorPaginationByBusinessSchema } from "@/schemas/cursor-pagination-schema";
 import { searchMetaDoc } from "@/shared/pagination/list-meta";
 
@@ -61,12 +64,17 @@ const userRow = z.object({
   id: z.string(),
   name: z.string(),
   email: z.string(),
-  email_verified: isoDateTime.nullable().describe("Quando o e-mail foi confirmado."),
+  email_verified: isoDateTime
+    .nullable()
+    .describe("Quando o e-mail foi confirmado."),
   avatar: z.string().nullable(),
   role: z.nativeEnum(EnumUserRole),
   businessId: z.string().nullable(),
   profileAccessId: z.string().nullable(),
-  driverId: z.string().nullable().describe("Preenchido quando o usuário é o login de um motorista."),
+  driverId: z
+    .string()
+    .nullable()
+    .describe("Preenchido quando o usuário é o login de um motorista."),
   two_factor_enabled: z.boolean(),
   access_revoked: z.boolean(),
   session_version: z
@@ -80,7 +88,9 @@ const userRow = z.object({
   failed_login_at: isoDateTime.nullable(),
   login_locked_until: isoDateTime
     .nullable()
-    .describe("Até quando o login está bloqueado por senhas erradas; null quando livre."),
+    .describe(
+      "Até quando o login está bloqueado por senhas erradas; null quando livre.",
+    ),
   whatsapp_notifications_enabled: z.boolean(),
   whatsapp_phone: z.string().nullable(),
   email_notifications_enabled: z.boolean(),
@@ -156,7 +166,9 @@ const userListSearchMeta = searchMetaDoc(
     twoFactorTotal: z
       .number()
       .int()
-      .describe("Base do cartão de 2FA: a busca e os filtros, exceto o de 2FA."),
+      .describe(
+        "Base do cartão de 2FA: a busca e os filtros, exceto o de 2FA.",
+      ),
     emailVerified: z
       .number()
       .int()
@@ -254,7 +266,9 @@ const userResponses = {
     code: z.string().optional(),
     message: z.string().default("Internal server error"),
   }),
-  resourceNotFound: refusal("USER_NOT_FOUND: o usuário da sessão não existe mais."),
+  resourceNotFound: refusal(
+    "USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
 
   // Grouped errors by route
   createUserErrors: refusal(
@@ -430,7 +444,9 @@ const userResponses = {
     .object({
       message: z
         .string()
-        .default("Empresa não identificada. Selecione uma empresa para continuar."),
+        .default(
+          "Empresa não identificada. Selecione uma empresa para continuar.",
+        ),
     })
     .and(codedError)
     .describe(
@@ -470,13 +486,17 @@ const userResponses = {
   createMasterUserForbiddenErrors: refusal(
     "PERMISSION_DENIED: só um MASTER cria outro.",
   ),
-  createMasterUserConflictErrors: refusal("USER_ALREADY_EXISTS (e-mail em uso)."),
+  createMasterUserConflictErrors: refusal(
+    "USER_ALREADY_EXISTS (e-mail em uso).",
+  ),
 
   updateMasterUserErrors: refusal("VALIDATION_ERROR (corpo inválido)."),
   updateMasterUserNotFoundErrors: refusal(
     "USER_NOT_FOUND ou MASTER_USER_NOT_FOUND (o id não é de um usuário Master).",
   ),
-  updateMasterUserConflictErrors: refusal("USER_ALREADY_EXISTS (e-mail em uso)."),
+  updateMasterUserConflictErrors: refusal(
+    "USER_ALREADY_EXISTS (e-mail em uso).",
+  ),
   updateMasterUserForbiddenErrors: refusal(
     "PERMISSION_DENIED (alterar a si mesmo, ou quem pede não é MASTER).",
   ),
@@ -500,7 +520,9 @@ const userResponses = {
   avatarNotFound: refusal(
     "USER_AVATAR_NOT_FOUND (o usuário não tem avatar) ou USER_NOT_FOUND (o usuário da sessão não existe mais).",
   ),
-  forgotPasswordErrors: refusal("VALIDATION_ERROR: e-mail ausente ou inválido. A resposta de sucesso é a mesma exista a conta ou não."),
+  forgotPasswordErrors: refusal(
+    "VALIDATION_ERROR: e-mail ausente ou inválido. A resposta de sucesso é a mesma exista a conta ou não.",
+  ),
 };
 
 export { userSchemas, userResponses };

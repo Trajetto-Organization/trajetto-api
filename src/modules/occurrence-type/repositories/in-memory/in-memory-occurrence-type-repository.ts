@@ -32,7 +32,10 @@ import {
   DELIVERED_DEFAULT_TYPE_KEY,
 } from "@/shared/delivery/default-occurrence-types";
 import { OccurrenceTypeLastOfCategoryError } from "../../usecases/errors/occurrence-type-errors";
-import { requireIndex, uniqueViolation } from "@/shared/in-memory/prisma-errors";
+import {
+  requireIndex,
+  uniqueViolation,
+} from "@/shared/in-memory/prisma-errors";
 
 const byName = (a: { name: string }, b: { name: string }) =>
   a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
@@ -69,7 +72,8 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
       )
       .sort(
         (a, b) =>
-          new Date(a.created_at!).getTime() - new Date(b.created_at!).getTime() ||
+          new Date(a.created_at!).getTime() -
+            new Date(b.created_at!).getTime() ||
           (a.id! < b.id! ? -1 : a.id! > b.id! ? 1 : 0),
       )[0];
 
@@ -124,7 +128,10 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
       // DEFAULT now() / @updatedAt, as the INSERT gets them.
       created_at: now,
       updated_at: now,
-      ...withColumnDefaults(OCCURRENCE_TYPE_COLUMN_DEFAULTS, occurrenceTypeData),
+      ...withColumnDefaults(
+        OCCURRENCE_TYPE_COLUMN_DEFAULTS,
+        occurrenceTypeData,
+      ),
       description: occurrenceTypeData.description || null,
       // No form is SQL NULL in the column (DbNull), [] included.
       form_fields: occurrenceTypeData.form_fields?.length
@@ -171,7 +178,8 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
     const inCategories = categoryFilter(categories);
 
     const key = sort ?? OCCURRENCE_TYPE_SORT_FALLBACK.sort;
-    const direction = order ?? (sort ? "asc" : OCCURRENCE_TYPE_SORT_FALLBACK.order);
+    const direction =
+      order ?? (sort ? "asc" : OCCURRENCE_TYPE_SORT_FALLBACK.order);
 
     const time = (value: Date | string | undefined) =>
       value === undefined ? undefined : new Date(value);
@@ -181,7 +189,8 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
         (o) =>
           (isActive === undefined || (o.is_active !== false) === isActive) &&
           (blocks === undefined || (o.blocks_delivery === true) === blocks) &&
-          (needsPhoto === undefined || (o.requires_photo === true) === needsPhoto) &&
+          (needsPhoto === undefined ||
+            (o.requires_photo === true) === needsPhoto) &&
           (inCategories === undefined ||
             inCategories.includes(o.category ?? "NOT_DELIVERED")),
       )
@@ -239,13 +248,16 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
 
     for (const seed of DEFAULT_OCCURRENCE_TYPES) {
       const exists = this.occurrenceTypes.some(
-        (type) => type.businessId === businessId && type.system_key === seed.system_key,
+        (type) =>
+          type.businessId === businessId && type.system_key === seed.system_key,
       );
 
       if (exists) continue;
 
       const taken = (name: string) =>
-        this.occurrenceTypes.some((type) => type.businessId === businessId && type.name === name);
+        this.occurrenceTypes.some(
+          (type) => type.businessId === businessId && type.name === name,
+        );
 
       let name = seed.name;
 
@@ -278,7 +290,8 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
   ): Promise<OccurrenceType | null> {
     return (
       this.occurrenceTypes.find(
-        (type) => type.businessId === businessId && type.system_key === systemKey,
+        (type) =>
+          type.businessId === businessId && type.system_key === systemKey,
       ) ?? null
     );
   }
@@ -308,17 +321,19 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
   async listActiveOccurrenceTypes(
     businessId: string,
   ): Promise<ActiveOccurrenceType[]> {
-    return this.occurrenceTypes
-      .filter(
-        (type) =>
-          type.businessId === businessId &&
-          type.is_active &&
-          !type.is_system &&
-          (type.category ?? "NOT_DELIVERED") === "NOT_DELIVERED",
-      )
-      // orderBy name asc, like the query.
-      .sort(byName)
-      .map((type) => this.activeOf(type));
+    return (
+      this.occurrenceTypes
+        .filter(
+          (type) =>
+            type.businessId === businessId &&
+            type.is_active &&
+            !type.is_system &&
+            (type.category ?? "NOT_DELIVERED") === "NOT_DELIVERED",
+        )
+        // orderBy name asc, like the query.
+        .sort(byName)
+        .map((type) => this.activeOf(type))
+    );
   }
 
   async listActiveDeliveredTypes(
@@ -340,7 +355,9 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
       .sort((a, b) => Number(b.is_default) - Number(a.is_default));
   }
 
-  async listActivePauseTypes(businessId: string): Promise<PauseOccurrenceType[]> {
+  async listActivePauseTypes(
+    businessId: string,
+  ): Promise<PauseOccurrenceType[]> {
     return this.occurrenceTypes
       .filter(
         (type) =>
@@ -377,7 +394,10 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
     options?: { keepOneActiveOf?: "DELIVERED" | "PAUSE" },
   ): Promise<OccurrenceType> {
     // P2025 like Prisma's update; index -1 used to write `array[-1]`.
-    const index = requireIndex(this.occurrenceTypes, (o) => o.id === occurrenceTypeId);
+    const index = requireIndex(
+      this.occurrenceTypes,
+      (o) => o.id === occurrenceTypeId,
+    );
 
     const current = this.occurrenceTypes[index];
     const category = options?.keepOneActiveOf;

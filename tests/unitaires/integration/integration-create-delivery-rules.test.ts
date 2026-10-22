@@ -39,10 +39,18 @@ const body = {
 
 /** The draft the use case builds from a parsed body. */
 function draftOf(raw: unknown): DeliveryDraft {
-  const { shipper_id, shipper_cnpj: _cnpj, items, ...fields } =
-    parseIntegrationDeliveryBody(raw);
+  const {
+    shipper_id,
+    shipper_cnpj: _cnpj,
+    items,
+    ...fields
+  } = parseIntegrationDeliveryBody(raw);
 
-  return { ...fields, items: items?.map(itemAtColumnScale), shipperId: shipper_id ?? null };
+  return {
+    ...fields,
+    items: items?.map(itemAtColumnScale),
+    shipperId: shipper_id ?? null,
+  };
 }
 
 /**
@@ -71,7 +79,12 @@ const stored: StoredDelivery = {
   notes: null,
   // Stored in the reverse order, at the columns' scales (10,3) and (10,2).
   items: [
-    { description: "Açúcar", quantity: new Prisma.Decimal("2.000"), unit: null, unit_value: null },
+    {
+      description: "Açúcar",
+      quantity: new Prisma.Decimal("2.000"),
+      unit: null,
+      unit_value: null,
+    },
     {
       description: "Farinha",
       quantity: new Prisma.Decimal("1.001"),
@@ -87,14 +100,26 @@ describe("a retry of the same body", () => {
   });
 
   it("does not match once any field of the document differs", () => {
-    expect(isSameSubmission(draftOf({ ...body, city: "Campinas" }), stored)).toBe(false);
-    expect(isSameSubmission(draftOf({ ...body, scheduled_date: "2026-09-25" }), stored)).toBe(false);
-    expect(isSameSubmission(draftOf({ ...body, notes: "Portão 2" }), stored)).toBe(false);
+    expect(
+      isSameSubmission(draftOf({ ...body, city: "Campinas" }), stored),
+    ).toBe(false);
+    expect(
+      isSameSubmission(
+        draftOf({ ...body, scheduled_date: "2026-09-25" }),
+        stored,
+      ),
+    ).toBe(false);
+    expect(
+      isSameSubmission(draftOf({ ...body, notes: "Portão 2" }), stored),
+    ).toBe(false);
   });
 
   it("does not match a different list of items", () => {
     expect(
-      isSameSubmission(draftOf({ ...body, items: body.items.slice(0, 1) }), stored),
+      isSameSubmission(
+        draftOf({ ...body, items: body.items.slice(0, 1) }),
+        stored,
+      ),
     ).toBe(false);
 
     expect(
@@ -110,10 +135,15 @@ describe("a retry of the same body", () => {
 
   it("does not match another shipper, nor one that could not be found", () => {
     expect(
-      isSameSubmission({ ...draftOf(body), shipperId: "018f6000-0000-7000-8000-0000000000f2" }, stored),
+      isSameSubmission(
+        { ...draftOf(body), shipperId: "018f6000-0000-7000-8000-0000000000f2" },
+        stored,
+      ),
     ).toBe(false);
 
-    expect(isSameSubmission({ ...draftOf(body), shipperId: null }, stored)).toBe(false);
+    expect(
+      isSameSubmission({ ...draftOf(body), shipperId: null }, stored),
+    ).toBe(false);
   });
 });
 
@@ -140,15 +170,25 @@ describe("the item amounts the create writes", () => {
       const item: DraftItem =
         scale === 3
           ? itemAtColumnScale({ description: "Item", quantity: value })
-          : itemAtColumnScale({ description: "Item", quantity: 1, unit_value: value });
+          : itemAtColumnScale({
+              description: "Item",
+              quantity: 1,
+              unit_value: value,
+            });
 
-      expect(scale === 3 ? item.quantity : item.unit_value, String(value)).toBe(expected);
+      expect(scale === 3 ? item.quantity : item.unit_value, String(value)).toBe(
+        expected,
+      );
     }
   });
 
   it("are already at scale, so writing them again changes nothing", () => {
     for (const [value] of cases) {
-      const once = itemAtColumnScale({ description: "Item", quantity: value, unit_value: value });
+      const once = itemAtColumnScale({
+        description: "Item",
+        quantity: value,
+        unit_value: value,
+      });
 
       expect(itemAtColumnScale(once), String(value)).toEqual(once);
     }
@@ -160,7 +200,9 @@ describe("the item amounts the create writes", () => {
       quantity: 1,
     });
 
-    expect(itemAtColumnScale({ description: "Item", quantity: 2, unit_value: null })).toEqual({
+    expect(
+      itemAtColumnScale({ description: "Item", quantity: 2, unit_value: null }),
+    ).toEqual({
       description: "Item",
       quantity: 2,
       unit_value: null,
@@ -170,7 +212,13 @@ describe("the item amounts the create writes", () => {
   it("let an identical retry of such a body match the row it wrote", () => {
     const floats = {
       ...body,
-      items: [{ description: "Óleo", quantity: 1.0004999999999999, unit_value: 3 * 1.115 }],
+      items: [
+        {
+          description: "Óleo",
+          quantity: 1.0004999999999999,
+          unit_value: 3 * 1.115,
+        },
+      ],
     };
 
     const row: StoredDelivery = {
@@ -188,7 +236,11 @@ describe("the item amounts the create writes", () => {
     expect(isSameSubmission(draftOf(floats), row)).toBe(true);
 
     // And the comparison alone, on the raw floats, agrees with the write.
-    const { shipper_id: _id, shipper_cnpj: _cnpj, ...raw } = parseIntegrationDeliveryBody(floats);
+    const {
+      shipper_id: _id,
+      shipper_cnpj: _cnpj,
+      ...raw
+    } = parseIntegrationDeliveryBody(floats);
 
     expect(isSameSubmission({ ...raw, shipperId: SHIPPER }, row)).toBe(true);
   });
@@ -197,27 +249,44 @@ describe("the item amounts the create writes", () => {
 describe("the Idempotency-Key", () => {
   it("is required", () => {
     expect(() => readIntegrationIdempotencyKey({})).toThrow(
-      expect.objectContaining({ statusCode: 400, code: "IDEMPOTENCY_KEY_REQUIRED" }),
+      expect.objectContaining({
+        statusCode: 400,
+        code: "IDEMPOTENCY_KEY_REQUIRED",
+      }),
     );
 
-    expect(() => readIntegrationIdempotencyKey({ "idempotency-key": "" })).toThrow(
-      expect.objectContaining({ code: "IDEMPOTENCY_KEY_REQUIRED" }),
-    );
+    expect(() =>
+      readIntegrationIdempotencyKey({ "idempotency-key": "" }),
+    ).toThrow(expect.objectContaining({ code: "IDEMPOTENCY_KEY_REQUIRED" }));
   });
 
   it("accepts a UUID and a key derived from the ERP's own document", () => {
     const uuid = "0192f7f0-5c1e-7a3b-9d2e-4f6a8b0c1d2e";
 
-    expect(readIntegrationIdempotencyKey({ "idempotency-key": uuid })).toBe(uuid);
-    expect(readIntegrationIdempotencyKey({ "idempotency-key": "pedido-10452" })).toBe(
-      "pedido-10452",
+    expect(readIntegrationIdempotencyKey({ "idempotency-key": uuid })).toBe(
+      uuid,
     );
+    expect(
+      readIntegrationIdempotencyKey({ "idempotency-key": "pedido-10452" }),
+    ).toBe("pedido-10452");
   });
 
   it("refuses what is too short, too long, spaced or sent twice", () => {
-    for (const raw of ["curta", "x".repeat(129), "pedido 10452", "a1b2c3d4, a1b2c3d4", ["a1b2c3d4", "a1b2c3d4"]]) {
-      expect(() => readIntegrationIdempotencyKey({ "idempotency-key": raw }), String(raw)).toThrow(
-        expect.objectContaining({ statusCode: 400, code: "IDEMPOTENCY_KEY_INVALID" }),
+    for (const raw of [
+      "curta",
+      "x".repeat(129),
+      "pedido 10452",
+      "a1b2c3d4, a1b2c3d4",
+      ["a1b2c3d4", "a1b2c3d4"],
+    ]) {
+      expect(
+        () => readIntegrationIdempotencyKey({ "idempotency-key": raw }),
+        String(raw),
+      ).toThrow(
+        expect.objectContaining({
+          statusCode: 400,
+          code: "IDEMPOTENCY_KEY_INVALID",
+        }),
       );
     }
   });
@@ -239,7 +308,11 @@ describe("a refused body", () => {
   it("names the field of every problem, in Portuguese", () => {
     const { recipient_name: _name, ...withoutName } = body;
 
-    const issues = issuesOf({ ...withoutName, cep: "123", items: [{ quantity: 1 }] });
+    const issues = issuesOf({
+      ...withoutName,
+      cep: "123",
+      items: [{ quantity: 1 }],
+    });
 
     expect(issues).toEqual(
       expect.arrayContaining([
@@ -255,7 +328,11 @@ describe("a refused body", () => {
 
   it("says the manual create's sentence for the manual create's rule", () => {
     // The same zod rule, not a copy: the panel and the API refuse alike.
-    const manual = createDeliverySchema.safeParse({ ...body, shipperId: SHIPPER, uf: "S1" });
+    const manual = createDeliverySchema.safeParse({
+      ...body,
+      shipperId: SHIPPER,
+      uf: "S1",
+    });
 
     expect(manual.success).toBe(false);
 
@@ -273,16 +350,25 @@ describe("a refused body", () => {
   it("refuses a field that does not exist inside an item, too", () => {
     // `unitValue` was dropped and the item stored without its price.
     expect(
-      issuesOf({ ...body, items: [{ description: "Farinha", quantity: 1, unitValue: 99 }] }),
+      issuesOf({
+        ...body,
+        items: [{ description: "Farinha", quantity: 1, unitValue: 99 }],
+      }),
     ).toEqual([
       "items.0: campo não reconhecido: unitValue. Confira os nomes na documentação.",
     ]);
   });
 
   it("keeps the manual limit of items, with the manual sentence", () => {
-    const items = Array.from({ length: 201 }, (_, index) => ({ description: `Item ${index}` }));
+    const items = Array.from({ length: 201 }, (_, index) => ({
+      description: `Item ${index}`,
+    }));
 
-    const manual = createDeliverySchema.safeParse({ ...body, shipperId: SHIPPER, items });
+    const manual = createDeliverySchema.safeParse({
+      ...body,
+      shipperId: SHIPPER,
+      items,
+    });
 
     expect(manual.success).toBe(false);
 
@@ -290,7 +376,9 @@ describe("a refused body", () => {
 
     expect(sentence).toContain("200");
     expect(issuesOf({ ...body, items })).toEqual([`items: ${sentence}`]);
-    expect(() => parseIntegrationDeliveryBody({ ...body, items: items.slice(0, 200) })).not.toThrow();
+    expect(() =>
+      parseIntegrationDeliveryBody({ ...body, items: items.slice(0, 200) }),
+    ).not.toThrow();
   });
 
   it("wants the shipper by exactly one of id or CNPJ", () => {
@@ -304,9 +392,9 @@ describe("a refused body", () => {
       "shipper_id: informe o embarcador por shipper_id OU por shipper_cnpj, não pelos dois.",
     );
 
-    expect(issuesOf({ ...withoutShipper, shipper_cnpj: "12345678000100" })).toContain(
-      "shipper_cnpj: O CNPJ do embarcador não é válido.",
-    );
+    expect(
+      issuesOf({ ...withoutShipper, shipper_cnpj: "12345678000100" }),
+    ).toContain("shipper_cnpj: O CNPJ do embarcador não é válido.");
   });
 
   it("reads an empty shipper field as absent, as the manual create does", () => {
@@ -328,7 +416,9 @@ describe("a refused body", () => {
     expect(byCnpj.shipper_cnpj).toBe("12345678000195");
 
     // Both empty is no shipper at all; letters are still not a CNPJ.
-    expect(issuesOf({ ...withoutShipper, shipper_id: "", shipper_cnpj: "" })).toEqual([
+    expect(
+      issuesOf({ ...withoutShipper, shipper_id: "", shipper_cnpj: "" }),
+    ).toEqual([
       "shipper_id: informe o embarcador por shipper_id ou por shipper_cnpj.",
     ]);
 

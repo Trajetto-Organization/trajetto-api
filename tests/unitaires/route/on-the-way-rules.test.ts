@@ -17,31 +17,34 @@ import {
 
 describe("which stops can be marked", () => {
   it("only a pending stop of a route on the street", () => {
-    expect(onTheWayRefusal({ routeStatus: "IN_PROGRESS", stopStatus: "PENDING" })).toBeNull();
+    expect(
+      onTheWayRefusal({ routeStatus: "IN_PROGRESS", stopStatus: "PENDING" }),
+    ).toBeNull();
   });
 
   it.each(["PLANNED", "RELEASED", "COMPLETED", "CANCELLED"])(
     "refuses a route %s with ROUTE_NOT_IN_PROGRESS",
     (routeStatus) => {
-      expect(onTheWayRefusal({ routeStatus, stopStatus: "PENDING" })?.code).toBe(
-        "ROUTE_NOT_IN_PROGRESS",
-      );
+      expect(
+        onTheWayRefusal({ routeStatus, stopStatus: "PENDING" })?.code,
+      ).toBe("ROUTE_NOT_IN_PROGRESS");
     },
   );
 
   it.each(["ARRIVED", "COMPLETED", "FAILED", "CANCELLED"])(
     "refuses a stop %s with ROUTE_STOP_NOT_PENDING",
     (stopStatus) => {
-      expect(onTheWayRefusal({ routeStatus: "IN_PROGRESS", stopStatus })?.code).toBe(
-        "ROUTE_STOP_NOT_PENDING",
-      );
+      expect(
+        onTheWayRefusal({ routeStatus: "IN_PROGRESS", stopStatus })?.code,
+      ).toBe("ROUTE_STOP_NOT_PENDING");
     },
   );
 
   it("names the route first when both are wrong", () => {
-    expect(onTheWayRefusal({ routeStatus: "COMPLETED", stopStatus: "COMPLETED" })?.code).toBe(
-      "ROUTE_NOT_IN_PROGRESS",
-    );
+    expect(
+      onTheWayRefusal({ routeStatus: "COMPLETED", stopStatus: "COMPLETED" })
+        ?.code,
+    ).toBe("ROUTE_NOT_IN_PROGRESS");
   });
 });
 
@@ -62,7 +65,9 @@ describe("the instant a mark records", () => {
   it("is never before the departure", () => {
     const tap = new Date("2026-09-29T10:59:58.000Z");
 
-    expect(onTheWayInstant({ occurredAt: tap, startedAt, now })).toEqual(startedAt);
+    expect(onTheWayInstant({ occurredAt: tap, startedAt, now })).toEqual(
+      startedAt,
+    );
   });
 });
 
@@ -84,7 +89,9 @@ describe("when the customer is told", () => {
   const now = new Date("2026-09-29T15:00:00.000Z");
 
   it("on the first mark of the stop", () => {
-    expect(shouldNoticeCustomer({ previousOnTheWayAt: null, at: now, now })).toBe(true);
+    expect(
+      shouldNoticeCustomer({ previousOnTheWayAt: null, at: now, now }),
+    ).toBe(true);
   });
 
   it("never on a second mark of the same stop", () => {
@@ -101,13 +108,18 @@ describe("when the customer is told", () => {
     const stale = new Date(now.getTime() - CUSTOMER_NOTICE_MAX_AGE_MS - 1);
     const recent = new Date(now.getTime() - CUSTOMER_NOTICE_MAX_AGE_MS);
 
-    expect(shouldNoticeCustomer({ previousOnTheWayAt: null, at: stale, now })).toBe(false);
-    expect(shouldNoticeCustomer({ previousOnTheWayAt: null, at: recent, now })).toBe(true);
+    expect(
+      shouldNoticeCustomer({ previousOnTheWayAt: null, at: stale, now }),
+    ).toBe(false);
+    expect(
+      shouldNoticeCustomer({ previousOnTheWayAt: null, at: recent, now }),
+    ).toBe(true);
   });
 });
 
 describe("the stop that is 'a caminho' right now", () => {
-  const at = (hour: number) => new Date(`2026-09-29T${String(hour).padStart(2, "0")}:00:00.000Z`);
+  const at = (hour: number) =>
+    new Date(`2026-09-29T${String(hour).padStart(2, "0")}:00:00.000Z`);
 
   it("none before any mark", () => {
     expect(
@@ -142,8 +154,16 @@ describe("the stop that is 'a caminho' right now", () => {
   it("reads ISO strings as the screens receive them", () => {
     expect(
       currentOnTheWayStopId([
-        { id: "a", status: "PENDING", on_the_way_at: "2026-09-29T12:00:00.000Z" },
-        { id: "b", status: "PENDING", on_the_way_at: "2026-09-29T11:00:00.000Z" },
+        {
+          id: "a",
+          status: "PENDING",
+          on_the_way_at: "2026-09-29T12:00:00.000Z",
+        },
+        {
+          id: "b",
+          status: "PENDING",
+          on_the_way_at: "2026-09-29T11:00:00.000Z",
+        },
       ]),
     ).toBe("a");
   });

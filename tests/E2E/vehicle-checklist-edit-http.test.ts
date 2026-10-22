@@ -8,7 +8,10 @@ import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 import { businessDateKey, businessDayStart } from "@/shared/time/business-day";
 
-import { seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
+import {
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
 
 /**
  * Editing a checklist that already happened, over real HTTP (FLEET-FUEL-1,
@@ -78,13 +81,21 @@ async function seedToken(
     },
   });
 
-  return sign({ tokenType: "access", sessionVersion: 0, familyId }, auth.secret_token, {
-    subject: id,
-    expiresIn: "30m",
-  });
+  return sign(
+    { tokenType: "access", sessionVersion: 0, familyId },
+    auth.secret_token,
+    {
+      subject: id,
+      expiresIn: "30m",
+    },
+  );
 }
 
-const PHOTO_FIELDS = ["current_mileage", "fuel_level_adequate", "tires_condition"];
+const PHOTO_FIELDS = [
+  "current_mileage",
+  "fuel_level_adequate",
+  "tires_condition",
+];
 
 /** A checklist row as the app leaves it, with the photos the edit requires. */
 async function seedChecklist(input: {
@@ -145,7 +156,9 @@ const REQUIRED_PHOTOS = PHOTO_FIELDS.map((fieldName) => ({
   fieldName,
 }));
 
-function createBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function createBody(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     vehicleId: seed.vehicleId,
     businessId: CARRIER,
@@ -193,12 +206,15 @@ function create(body: Record<string, unknown>, token = seed.managerToken) {
 }
 
 async function vehicleMileage(vehicleId = seed.vehicleId): Promise<number> {
-  return (await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } })).current_mileage;
+  return (await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } }))
+    .current_mileage;
 }
 
 /** Another truck of the carrier, with its own odometer and history. */
 async function seedVehicle(mileage: number): Promise<string> {
-  const base = await prisma.vehicle.findUniqueOrThrow({ where: { id: seed.vehicleId } });
+  const base = await prisma.vehicle.findUniqueOrThrow({
+    where: { id: seed.vehicleId },
+  });
 
   const truck = await prisma.vehicle.create({
     data: {
@@ -328,7 +344,9 @@ describe("PATCH update-vehicle-checklist — a past checklist keeps its links", 
 
     expect(response.statusCode).toBe(200);
 
-    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: past } });
+    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: past },
+    });
 
     expect(stored.notes).toBe("Retrovisor trocado depois");
     expect(stored.driverId).toBe(formerDriverId);
@@ -336,7 +354,10 @@ describe("PATCH update-vehicle-checklist — a past checklist keeps its links", 
   });
 
   it("still refuses moving a checklist to an inactive driver or a closed branch", async () => {
-    const current = await seedChecklist({ mileage: 16_000, at: new Date(Date.now() - 20 * DAY) });
+    const current = await seedChecklist({
+      mileage: 16_000,
+      at: new Date(Date.now() - 20 * DAY),
+    });
 
     const toFormer = await patch(current, { driverId: formerDriverId });
 
@@ -348,14 +369,19 @@ describe("PATCH update-vehicle-checklist — a past checklist keeps its links", 
     expect(toClosed.statusCode).toBe(409);
     expect(toClosed.body).toContain("BRANCH_INACTIVE");
 
-    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: current } });
+    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: current },
+    });
 
     expect(stored.driverId).toBe(seed.driverId);
     expect(stored.branchId).toBe(seed.branchId);
   });
 
   it("refuses links of another company exactly like ids that exist nowhere", async () => {
-    const current = await seedChecklist({ mileage: 16_500, at: new Date(Date.now() - 19 * DAY) });
+    const current = await seedChecklist({
+      mileage: 16_500,
+      at: new Date(Date.now() - 19 * DAY),
+    });
 
     // Red before: "Este motorista/veículo/filial não pertence a esta empresa!"
     // for the foreign id, "não encontrado" for the random one, and no code.
@@ -375,7 +401,9 @@ describe("PATCH update-vehicle-checklist — a past checklist keeps its links", 
       expect(foreign.headers["x-error-code"], field).toBe(code);
     }
 
-    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: current } });
+    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: current },
+    });
 
     expect(stored.driverId).toBe(seed.driverId);
     expect(stored.vehicleId).toBe(seed.vehicleId);
@@ -391,9 +419,18 @@ describe("PATCH update-vehicle-checklist — correcting an older checklist's km"
   let typo = "";
 
   beforeAll(async () => {
-    await seedChecklist({ mileage: 17_000, at: new Date(Date.now() - 12 * DAY) });
-    typo = await seedChecklist({ mileage: 17_900, at: new Date(Date.now() - 10 * DAY) });
-    await seedChecklist({ mileage: 18_200, at: new Date(Date.now() - 8 * DAY) });
+    await seedChecklist({
+      mileage: 17_000,
+      at: new Date(Date.now() - 12 * DAY),
+    });
+    typo = await seedChecklist({
+      mileage: 17_900,
+      at: new Date(Date.now() - 10 * DAY),
+    });
+    await seedChecklist({
+      mileage: 18_200,
+      at: new Date(Date.now() - 8 * DAY),
+    });
   });
 
   it("accepts a reading between its neighbours and leaves the vehicle's odometer alone", async () => {
@@ -401,7 +438,9 @@ describe("PATCH update-vehicle-checklist — correcting an older checklist's km"
 
     expect(response.statusCode).toBe(200);
 
-    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: typo } });
+    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: typo },
+    });
 
     expect(stored.current_mileage).toBe(17_500);
     expect(await vehicleMileage()).toBe(20_000);
@@ -424,7 +463,9 @@ describe("PATCH update-vehicle-checklist — correcting an older checklist's km"
 
     expect(aboveAfter.statusCode).toBe(400);
 
-    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: typo } });
+    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: typo },
+    });
 
     expect(stored.current_mileage).toBe(17_100);
   });
@@ -438,17 +479,24 @@ describe("PATCH update-vehicle-checklist — correcting an older checklist's km"
 
     expect(response.statusCode, response.body).toBe(400);
     expect(response.json().code).toBe("VEHICLE_MILEAGE_OUT_OF_ORDER");
-    expect(response.headers["x-error-code"]).toBe("VEHICLE_MILEAGE_OUT_OF_ORDER");
+    expect(response.headers["x-error-code"]).toBe(
+      "VEHICLE_MILEAGE_OUT_OF_ORDER",
+    );
     expect(response.json().message).toContain("entre 17.000 km e 18.200 km");
 
-    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: typo } });
+    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: typo },
+    });
 
     expect(stored.current_mileage).toBe(17_100);
     expect(await vehicleMileage()).toBe(20_000);
   });
 
   it("moves the odometer when the newest reading passes it, and back down on its correction", async () => {
-    const newest = await seedChecklist({ mileage: 19_000, at: new Date(Date.now() - 2 * DAY) });
+    const newest = await seedChecklist({
+      mileage: 19_000,
+      at: new Date(Date.now() - 2 * DAY),
+    });
 
     const response = await patch(newest, { current_mileage: 20_500 });
 
@@ -474,7 +522,10 @@ describe("PATCH update-vehicle-checklist — correcting an older checklist's km"
 
 describe("PATCH update-vehicle-checklist — the date", () => {
   it("refuses a date after the company's today", async () => {
-    const current = await seedChecklist({ mileage: 16_700, at: new Date(Date.now() - 5 * DAY) });
+    const current = await seedChecklist({
+      mileage: 16_700,
+      at: new Date(Date.now() - 5 * DAY),
+    });
 
     // A day and a half ahead is tomorrow in every Brazilian zone.
     const response = await patch(current, {
@@ -486,16 +537,23 @@ describe("PATCH update-vehicle-checklist — the date", () => {
   });
 
   it("refuses a date-only tomorrow, which read as an instant was still today", async () => {
-    const current = await seedChecklist({ mileage: 16_750, at: new Date(Date.now() - 5 * DAY) });
+    const current = await seedChecklist({
+      mileage: 16_750,
+      at: new Date(Date.now() - 5 * DAY),
+    });
 
     // Red before: 00:00 UTC of tomorrow is this evening in São Paulo, so the
     // check passed, and every screen then showed tomorrow.
-    const response = await patch(current, { checklist_date: companyTomorrow() });
+    const response = await patch(current, {
+      checklist_date: companyTomorrow(),
+    });
 
     expect(response.statusCode, response.body).toBe(400);
     expect(response.json().code).toBe("CHECKLIST_DATE_IN_FUTURE");
 
-    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: current } });
+    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: current },
+    });
 
     expect(stored.checklist_date.getTime()).toBeLessThan(Date.now());
   });
@@ -505,14 +563,22 @@ describe("PATCH update-vehicle-checklist — the date", () => {
     // that resent the stored date (the web always does) was refused with
     // CHECKLIST_DATE_IN_FUTURE, though the date did not move.
     const storedDate = `${companyTomorrow()}T00:00:00.000Z`;
-    const ahead = await seedChecklist({ mileage: 16_800, at: new Date(storedDate) });
+    const ahead = await seedChecklist({
+      mileage: 16_800,
+      at: new Date(storedDate),
+    });
 
     try {
-      const response = await patch(ahead, { notes: "Pneu trocado", checklist_date: storedDate });
+      const response = await patch(ahead, {
+        notes: "Pneu trocado",
+        checklist_date: storedDate,
+      });
 
       expect(response.statusCode, response.body).toBe(200);
 
-      const stored = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: ahead } });
+      const stored = await prisma.vehicleChecklist.findUniqueOrThrow({
+        where: { id: ahead },
+      });
 
       expect(stored.notes).toBe("Pneu trocado");
 
@@ -532,14 +598,19 @@ describe("PATCH update-vehicle-checklist — the date", () => {
   it("stores a date-only value as that day instead of failing with a 500", async () => {
     // A reading that stays in order at the new date: between the 18 200 of
     // 8 days ago and the 20 100 of 2 days ago (the date move is checked).
-    const current = await seedChecklist({ mileage: 20_000, at: new Date(Date.now() - 5 * DAY) });
+    const current = await seedChecklist({
+      mileage: 20_000,
+      at: new Date(Date.now() - 5 * DAY),
+    });
 
     const day = new Date(Date.now() - 3 * DAY).toISOString().slice(0, 10);
     const response = await patch(current, { checklist_date: day });
 
     expect(response.statusCode, response.body).toBe(200);
 
-    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: current } });
+    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: current },
+    });
 
     // The day starts in the company's zone (decision 15.1), not at 00:00 UTC
     // — the evening before in Brazil.
@@ -551,9 +622,16 @@ describe("PATCH update-vehicle-checklist — the date", () => {
 
 describe("PATCH update-vehicle-checklist — who may edit", () => {
   it("refuses another company's manager, a read-only profile and the driver; 404 for a missing id", async () => {
-    const current = await seedChecklist({ mileage: 16_900, at: new Date(Date.now() - 4 * DAY) });
+    const current = await seedChecklist({
+      mileage: 16_900,
+      at: new Date(Date.now() - 4 * DAY),
+    });
 
-    const otherManager = await patch(current, { notes: "x" }, otherSeed.managerToken);
+    const otherManager = await patch(
+      current,
+      { notes: "x" },
+      otherSeed.managerToken,
+    );
 
     expect(otherManager.statusCode).toBe(403);
 
@@ -574,22 +652,35 @@ describe("PATCH update-vehicle-checklist — who may edit", () => {
     expect(missing.statusCode).toBe(404);
     expect(missing.json().code).toBe("VEHICLE_CHECKLIST_NOT_FOUND");
 
-    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id: current } });
+    const stored = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: current },
+    });
 
     expect(stored.notes).toBeNull();
   });
 
   it("lets the MASTER edit a company's checklist it names", async () => {
-    const current = await seedChecklist({ mileage: 16_950, at: new Date(Date.now() - 4 * DAY) });
+    const current = await seedChecklist({
+      mileage: 16_950,
+      at: new Date(Date.now() - 4 * DAY),
+    });
 
-    const response = await patch(current, { notes: "Revisado pela plataforma" }, masterToken);
+    const response = await patch(
+      current,
+      { notes: "Revisado pela plataforma" },
+      masterToken,
+    );
 
     expect(response.statusCode).toBe(200);
   });
 });
 
 describe("DELETE delete-vehicle-checklist", () => {
-  const remove = (checklistId: string, token = seed.managerToken, businessId = CARRIER) =>
+  const remove = (
+    checklistId: string,
+    token = seed.managerToken,
+    businessId = CARRIER,
+  ) =>
     app.inject({
       method: "DELETE",
       url: `/vehicle-checklist/delete-vehicle-checklist/${checklistId}/business/${businessId}`,
@@ -622,11 +713,16 @@ describe("DELETE delete-vehicle-checklist", () => {
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual((await remove(randomUUID())).json());
     expect(response.json().code).toBe("VEHICLE_CHECKLIST_NOT_FOUND");
-    expect(await prisma.vehicleChecklist.count({ where: { id: foreign.id } })).toBe(1);
+    expect(
+      await prisma.vehicleChecklist.count({ where: { id: foreign.id } }),
+    ).toBe(1);
   });
 
   it("refuses the driver as a permission, and deletes for the manager", async () => {
-    const current = await seedChecklist({ mileage: 16_990, at: new Date(Date.now() - 3 * DAY) });
+    const current = await seedChecklist({
+      mileage: 16_990,
+      at: new Date(Date.now() - 3 * DAY),
+    });
 
     const driver = await remove(current, seed.driverToken);
 
@@ -636,19 +732,25 @@ describe("DELETE delete-vehicle-checklist", () => {
     const readOnly = await remove(current, readOnlyToken);
 
     expect(readOnly.statusCode).toBe(403);
-    expect(await prisma.vehicleChecklist.count({ where: { id: current } })).toBe(1);
+    expect(
+      await prisma.vehicleChecklist.count({ where: { id: current } }),
+    ).toBe(1);
 
     const manager = await remove(current);
 
     expect(manager.statusCode).toBe(200);
-    expect(await prisma.vehicleChecklist.count({ where: { id: current } })).toBe(0);
+    expect(
+      await prisma.vehicleChecklist.count({ where: { id: current } }),
+    ).toBe(0);
   });
 });
 
 describe("POST create-vehicle-checklist — the date", () => {
   it("refuses a checklist dated after the company's today, with its code", async () => {
     const response = await create(
-      createBody({ checklist_date: new Date(Date.now() + 36 * HOUR).toISOString() }),
+      createBody({
+        checklist_date: new Date(Date.now() + 36 * HOUR).toISOString(),
+      }),
     );
 
     expect(response.statusCode, response.body).toBe(400);
@@ -658,7 +760,9 @@ describe("POST create-vehicle-checklist — the date", () => {
 
   it("refuses a date-only tomorrow", async () => {
     // Red before: accepted with 201 and shown as tomorrow.
-    const response = await create(createBody({ checklist_date: companyTomorrow() }));
+    const response = await create(
+      createBody({ checklist_date: companyTomorrow() }),
+    );
 
     expect(response.statusCode, response.body).toBe(400);
     expect(response.json().code).toBe("CHECKLIST_DATE_IN_FUTURE");
@@ -699,20 +803,39 @@ describe("PATCH update-vehicle-checklist — moving a checklist in time", () => 
   beforeAll(async () => {
     truckId = await seedVehicle(30_000);
 
-    await seedChecklist({ mileage: 27_000, at: daysAgo(12), vehicleId: truckId });
-    middle = await seedChecklist({ mileage: 27_900, at: daysAgo(10), vehicleId: truckId });
-    late = await seedChecklist({ mileage: 28_200, at: daysAgo(8), vehicleId: truckId });
-    newest = await seedChecklist({ mileage: 30_000, at: daysAgo(1), vehicleId: truckId });
+    await seedChecklist({
+      mileage: 27_000,
+      at: daysAgo(12),
+      vehicleId: truckId,
+    });
+    middle = await seedChecklist({
+      mileage: 27_900,
+      at: daysAgo(10),
+      vehicleId: truckId,
+    });
+    late = await seedChecklist({
+      mileage: 28_200,
+      at: daysAgo(8),
+      vehicleId: truckId,
+    });
+    newest = await seedChecklist({
+      mileage: 30_000,
+      at: daysAgo(1),
+      vehicleId: truckId,
+    });
   });
 
   const storedDate = async (id: string) =>
-    (await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id } })).checklist_date;
+    (await prisma.vehicleChecklist.findUniqueOrThrow({ where: { id } }))
+      .checklist_date;
 
   it("refuses a move that puts the reading out of order", async () => {
     // Red before: only a changed reading was checked; both moves returned 200.
     const before = await storedDate(late);
 
-    const tooEarly = await patch(late, { checklist_date: daysAgo(20).toISOString() });
+    const tooEarly = await patch(late, {
+      checklist_date: daysAgo(20).toISOString(),
+    });
 
     expect(tooEarly.statusCode, tooEarly.body).toBe(400);
     // Its own code and a sentence about the date's neighbours: the km was
@@ -722,25 +845,33 @@ describe("PATCH update-vehicle-checklist — moving a checklist in time", () => 
     expect(tooEarly.json().message).toContain("menor que 27.000 km");
     expect(await storedDate(late)).toEqual(before);
 
-    const newestTooEarly = await patch(newest, { checklist_date: daysAgo(9).toISOString() });
+    const newestTooEarly = await patch(newest, {
+      checklist_date: daysAgo(9).toISOString(),
+    });
 
     expect(newestTooEarly.statusCode, newestTooEarly.body).toBe(400);
   });
 
   it("accepts a move that keeps the order, the newest record's included", async () => {
     const moved = daysAgo(11);
-    const response = await patch(middle, { checklist_date: moved.toISOString() });
+    const response = await patch(middle, {
+      checklist_date: moved.toISOString(),
+    });
 
     expect(response.statusCode, response.body).toBe(200);
     expect(await storedDate(middle)).toEqual(moved);
 
     // Its reading equals the odometer, with nothing after it: the forward
     // rule alone would refuse it; a date move must not.
-    const newestMoved = await patch(newest, { checklist_date: daysAgo(2).toISOString() });
+    const newestMoved = await patch(newest, {
+      checklist_date: daysAgo(2).toISOString(),
+    });
 
     expect(newestMoved.statusCode, newestMoved.body).toBe(200);
 
-    const truck = await prisma.vehicle.findUniqueOrThrow({ where: { id: truckId } });
+    const truck = await prisma.vehicle.findUniqueOrThrow({
+      where: { id: truckId },
+    });
 
     expect(truck.current_mileage).toBe(30_000);
   });
@@ -762,7 +893,11 @@ describe("the odometer a checklist leaves", () => {
 
     await seedChecklist({ mileage: 38_000, at: daysAgo(10), vehicleId: truck });
     await seedChecklist({ mileage: 39_000, at: daysAgo(5), vehicleId: truck });
-    const typo = await seedChecklist({ mileage: 45_000, at: daysAgo(1), vehicleId: truck });
+    const typo = await seedChecklist({
+      mileage: 45_000,
+      at: daysAgo(1),
+      vehicleId: truck,
+    });
 
     // Red before: the vehicle stayed at 45 000, and every later record at the
     // real ~39 500 km was refused until a MASTER edited the vehicle.
@@ -774,7 +909,11 @@ describe("the odometer a checklist leaves", () => {
 
   it("leaves an odometer the deleted checklist did not set", async () => {
     const truck = await seedVehicle(50_000);
-    const older = await seedChecklist({ mileage: 49_000, at: daysAgo(3), vehicleId: truck });
+    const older = await seedChecklist({
+      mileage: 49_000,
+      at: daysAgo(3),
+      vehicleId: truck,
+    });
 
     expect((await remove(older)).statusCode).toBe(200);
     expect(await vehicleMileage(truck)).toBe(50_000);
@@ -784,11 +923,22 @@ describe("the odometer a checklist leaves", () => {
     const wrongTruck = await seedVehicle(60_000);
     const rightTruck = await seedVehicle(12_000);
 
-    await seedChecklist({ mileage: 58_000, at: daysAgo(6), vehicleId: wrongTruck });
-    const misplaced = await seedChecklist({ mileage: 60_000, at: daysAgo(2), vehicleId: wrongTruck });
+    await seedChecklist({
+      mileage: 58_000,
+      at: daysAgo(6),
+      vehicleId: wrongTruck,
+    });
+    const misplaced = await seedChecklist({
+      mileage: 60_000,
+      at: daysAgo(2),
+      vehicleId: wrongTruck,
+    });
 
     // Red before: the wrong truck kept 60 000.
-    const response = await patch(misplaced, { vehicleId: rightTruck, current_mileage: 12_400 });
+    const response = await patch(misplaced, {
+      vehicleId: rightTruck,
+      current_mileage: 12_400,
+    });
 
     expect(response.statusCode, response.body).toBe(200);
     expect(await vehicleMileage(wrongTruck)).toBe(58_000);
@@ -804,14 +954,20 @@ describe("the published document of the checklist routes", () => {
   // appended by the OpenAPI transform; pinned here so they stay published.
   const responsesOf = (path: string, method: string) => {
     const document = app.swagger() as {
-      paths: Record<string, Record<string, { responses?: Record<string, { description?: string }> }>>;
+      paths: Record<
+        string,
+        Record<string, { responses?: Record<string, { description?: string }> }>
+      >;
     };
 
     return document.paths[path][method].responses ?? {};
   };
 
   it("lists every code each status answers", () => {
-    const create = responsesOf("/vehicle-checklist/create-vehicle-checklist/{businessId}", "post");
+    const create = responsesOf(
+      "/vehicle-checklist/create-vehicle-checklist/{businessId}",
+      "post",
+    );
     const update = responsesOf(
       "/vehicle-checklist/update-vehicle-checklist/{checklistId}/business/{businessId}",
       "patch",
@@ -820,9 +976,16 @@ describe("the published document of the checklist routes", () => {
       "/vehicle-checklist/delete-vehicle-checklist/{checklistId}/business/{businessId}",
       "delete",
     );
-    const exported = responsesOf("/vehicle-checklist/export-vehicle-checklist", "get");
+    const exported = responsesOf(
+      "/vehicle-checklist/export-vehicle-checklist",
+      "get",
+    );
 
-    for (const code of ["TENANT_NOT_FOUND", "BRANCH_NOT_FOUND", "BUSINESS_NOT_FOUND"]) {
+    for (const code of [
+      "TENANT_NOT_FOUND",
+      "BRANCH_NOT_FOUND",
+      "BUSINESS_NOT_FOUND",
+    ]) {
       expect(create["404"]?.description, code).toContain(code);
     }
 
@@ -844,8 +1007,14 @@ describe("the published document of the checklist routes", () => {
       ["delete", remove],
       ["export", exported],
     ] as const) {
-      for (const code of ["PERMISSION_DENIED", "MODULE_NOT_ENABLED", "TENANT_ACCESS_DENIED"]) {
-        expect(responses["403"]?.description, `${route} ${code}`).toContain(code);
+      for (const code of [
+        "PERMISSION_DENIED",
+        "MODULE_NOT_ENABLED",
+        "TENANT_ACCESS_DENIED",
+      ]) {
+        expect(responses["403"]?.description, `${route} ${code}`).toContain(
+          code,
+        );
       }
     }
 
@@ -853,7 +1022,9 @@ describe("the published document of the checklist routes", () => {
     // (decision 4.1), and the document says so.
     expect(exported["403"]?.description).not.toContain("DRIVER_CANNOT_EXPORT");
     expect(exported["403"]?.description).toContain("Motoristas");
-    expect(update["400"]?.description).toContain("VEHICLE_MILEAGE_OUT_OF_ORDER");
+    expect(update["400"]?.description).toContain(
+      "VEHICLE_MILEAGE_OUT_OF_ORDER",
+    );
     expect(update["404"]?.description).toContain("VEHICLE_CHECKLIST_NOT_FOUND");
   });
 });

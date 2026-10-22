@@ -47,7 +47,10 @@ function attachRedisConnectionLog(client: Redis, label: string): void {
     // when it is an actual recovery.
     if (!down) return;
 
-    log.info({ client: label, suppressedErrors: suppressed }, "Redis reconnected");
+    log.info(
+      { client: label, suppressedErrors: suppressed },
+      "Redis reconnected",
+    );
 
     down = false;
     suppressed = 0;

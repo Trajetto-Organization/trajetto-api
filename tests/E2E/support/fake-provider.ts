@@ -1,4 +1,9 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 
 /**
@@ -46,12 +51,17 @@ class FakeProvider {
   private sequence = 0;
 
   /** Per kind; the default answers at once with a success. */
-  private behaviours = new Map<ProviderKind, (call: ProviderCall) => Behaviour>();
+  private behaviours = new Map<
+    ProviderKind,
+    (call: ProviderCall) => Behaviour
+  >();
 
   url = "";
 
   constructor() {
-    this.server = createServer((request, response) => this.handle(request, response));
+    this.server = createServer((request, response) =>
+      this.handle(request, response),
+    );
   }
 
   async listen(): Promise<string> {
@@ -101,7 +111,9 @@ class FakeProvider {
       seen.set(call.identity, (seen.get(call.identity) ?? 0) + 1);
     }
 
-    return [...seen].filter(([, count]) => count > 1).map(([identity]) => identity);
+    return [...seen]
+      .filter(([, count]) => count > 1)
+      .map(([identity]) => identity);
   }
 
   async waitFor(
@@ -112,7 +124,8 @@ class FakeProvider {
     const deadline = Date.now() + timeoutMs;
 
     while (!predicate()) {
-      if (Date.now() > deadline) throw new Error(`tempo esgotado esperando: ${what}`);
+      if (Date.now() > deadline)
+        throw new Error(`tempo esgotado esperando: ${what}`);
 
       await new Promise((done) => setTimeout(done, 50));
     }
@@ -152,7 +165,10 @@ class FakeProvider {
         headers: request.headers,
         body,
         at: Date.now(),
-        replica: typeof request.headers["x-replica-pid"] === "string" ? request.headers["x-replica-pid"] : null,
+        replica:
+          typeof request.headers["x-replica-pid"] === "string"
+            ? request.headers["x-replica-pid"]
+            : null,
       };
 
       // Recorded before any answer: "accepted" is the provider's fact, and it
@@ -177,8 +193,12 @@ class FakeProvider {
       }
 
       if (behaviour.kind === "status") {
-        response.writeHead(behaviour.status, { "content-type": "application/json" });
-        response.end(JSON.stringify(behaviour.body ?? { error: "fake failure" }));
+        response.writeHead(behaviour.status, {
+          "content-type": "application/json",
+        });
+        response.end(
+          JSON.stringify(behaviour.body ?? { error: "fake failure" }),
+        );
         return;
       }
 
@@ -186,7 +206,11 @@ class FakeProvider {
     });
   }
 
-  private answer(kind: ProviderKind, call: ProviderCall, response: ServerResponse): void {
+  private answer(
+    kind: ProviderKind,
+    call: ProviderCall,
+    response: ServerResponse,
+  ): void {
     this.sequence += 1;
 
     const json = (value: unknown) => {
@@ -196,13 +220,19 @@ class FakeProvider {
 
     switch (kind) {
       case "whatsapp":
-        json({ messaging_product: "whatsapp", messages: [{ id: `wamid.fake-${this.sequence}` }] });
+        json({
+          messaging_product: "whatsapp",
+          messages: [{ id: `wamid.fake-${this.sequence}` }],
+        });
         return;
       case "push": {
         const messages = Array.isArray(call.body) ? call.body : [];
 
         json({
-          data: messages.map((_, index) => ({ status: "ok", id: `ticket-${this.sequence}-${index}` })),
+          data: messages.map((_, index) => ({
+            status: "ok",
+            id: `ticket-${this.sequence}-${index}`,
+          })),
         });
         return;
       }
@@ -212,7 +242,18 @@ class FakeProvider {
       case "ocr":
         // An odometer that reads 1000: what the queued fuelings declare.
         json({
-          lines: [{ text: "001000", score: 0.99, box: [[0, 0], [10, 0], [10, 5], [0, 5]] }],
+          lines: [
+            {
+              text: "001000",
+              score: 0.99,
+              box: [
+                [0, 0],
+                [10, 0],
+                [10, 5],
+                [0, 5],
+              ],
+            },
+          ],
           engine: "fake",
           engineVersion: "0",
         });
@@ -249,7 +290,9 @@ function identityOf(
       // The delivery id Meta echoes back on every status callback.
       return String(record.biz_opaque_callback_data ?? "");
     case "push": {
-      const first = (Array.isArray(body) ? body[0] : {}) as { data?: { deliveryId?: string } };
+      const first = (Array.isArray(body) ? body[0] : {}) as {
+        data?: { deliveryId?: string };
+      };
 
       return String(first?.data?.deliveryId ?? "");
     }

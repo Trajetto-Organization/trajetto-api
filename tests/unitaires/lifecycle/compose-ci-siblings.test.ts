@@ -32,16 +32,26 @@ interface Case {
 const ALL: Case[] = [
   {
     file: "trajetto-api/.github/workflows/ci.yml",
-    siblings: { web: "trajetto-fleet-manager-ui", app: "trajetto-fleet-manager-mobile" },
+    siblings: { web: "trajetto-ui", app: "trajetto-mobile" },
   },
-  { file: "trajetto-ui/.github/workflows/ci.yml", siblings: { api: "trajetto-api" } },
-  { file: "trajetto-mobile/.github/workflows/ci.yml", siblings: { api: "trajetto-api" } },
-  { file: "trajetto-ui/.github/workflows/browser-suites.yml", siblings: { api: "trajetto-api" } },
+  {
+    file: "trajetto-ui/.github/workflows/ci.yml",
+    siblings: { api: "trajetto-api" },
+  },
+  {
+    file: "trajetto-mobile/.github/workflows/ci.yml",
+    siblings: { api: "trajetto-api" },
+  },
+  {
+    file: "trajetto-ui/.github/workflows/browser-suites.yml",
+    siblings: { api: "trajetto-api" },
+  },
 ];
 
 const CASES = ALL.filter((each) => existsSync(resolve(REPOS, each.file)));
 
-const read = (file: string) => readFileSync(resolve(REPOS, file), "utf8").replace(/\r\n/g, "\n");
+const read = (file: string) =>
+  readFileSync(resolve(REPOS, file), "utf8").replace(/\r\n/g, "\n");
 
 /** The `run: |` block of the step called `name`, dedented. */
 function runBlock(workflow: string, name: string): string {
@@ -73,75 +83,108 @@ for repo in $STUB_HAS_BRANCH; do
 done
 exit 2`;
 
-describe.skipIf(!bash || CASES.length === 0)("sibling checkouts in CI (TEST-CI-2)", () => {
-  let box: Sandbox;
+describe.skipIf(!bash || CASES.length === 0)(
+  "sibling checkouts in CI (TEST-CI-2)",
+  () => {
+    let box: Sandbox;
 
-  beforeEach(() => {
-    box = sandbox();
-    box.stub("git", GIT);
-  });
-
-  afterEach(() => box.dispose());
-
-  function pick(workflow: string, hasBranch: string[]) {
-    const script = box.file("pick.sh", runBlock(workflow, "Pick the sibling branches"));
-    const output = `${box.root}/github-output`;
-
-    writeFileSync(output, "");
-
-    const result = run("bash", script, [], {
-      bin: box.bin,
-      env: {
-        TOKEN: "read-token-never-printed",
-        BRANCH: "feat/entregas-chat-e-hardening-2026-09",
-        GITHUB_OUTPUT: output,
-        STUB_HAS_BRANCH: hasBranch.join(" "),
-      },
+    beforeEach(() => {
+      box = sandbox();
+      box.stub("git", GIT);
     });
 
-    return { ...result, outputs: readFileSync(output, "utf8") };
-  }
+    afterEach(() => box.dispose());
 
-  it.each(CASES)("$file checks out the same branch when the sibling has it", ({ file, siblings }) => {
-    const [[key, repo]] = Object.entries(siblings);
-    const result = pick(read(file), [repo]);
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.outputs).toContain(`${key}=feat/entregas-chat-e-hardening-2026-09\n`);
-  });
-
-  it.each(CASES)("$file falls back to the default branch when it does not", ({ file, siblings }) => {
-    const result = pick(read(file), []);
-
-    expect(result.status, result.stderr).toBe(0);
-
-    // An empty `ref:` is the checkout action's default branch.
-    for (const key of Object.keys(siblings)) expect(result.outputs).not.toContain(`${key}=`);
-  });
-
-  it.each(CASES)("$file authenticates the probe without printing the token", ({ file }) => {
-    const result = pick(read(file), []);
-    const encoded = Buffer.from("x-access-token:read-token-never-printed").toString("base64");
-
-    expect(box.calls("git").every((call) => call.includes(`AUTHORIZATION: basic ${encoded}`))).toBe(true);
-    expect(result.stdout + result.stderr).not.toContain("read-token-never-printed");
-    expect(result.stdout + result.stderr).not.toContain(encoded);
-  });
-
-  it.each(CASES)("$file feeds the choice to every sibling checkout", ({ file, siblings }) => {
-    const workflow = read(file);
-    const probe = workflow.indexOf("- name: Pick the sibling branches");
-
-    expect(probe).toBeGreaterThan(-1);
-    expect(workflow).toContain("BRANCH: ${{ github.head_ref || github.ref_name }}");
-
-    for (const [key, repo] of Object.entries(siblings)) {
-      const checkout = workflow.indexOf(`repository: Trajetto-Organization/${repo}\n`);
-
-      expect(checkout, repo).toBeGreaterThan(probe);
-      expect(workflow.slice(checkout).split("\n")[1].trim(), repo).toBe(
-        `ref: \${{ steps.refs.outputs.${key} }}`,
+    function pick(workflow: string, hasBranch: string[]) {
+      const script = box.file(
+        "pick.sh",
+        runBlock(workflow, "Pick the sibling branches"),
       );
+      const output = `${box.root}/github-output`;
+
+      writeFileSync(output, "");
+
+      const result = run("bash", script, [], {
+        bin: box.bin,
+        env: {
+          TOKEN: "read-token-never-printed",
+          BRANCH: "feat/entregas-chat-e-hardening-2026-09",
+          GITHUB_OUTPUT: output,
+          STUB_HAS_BRANCH: hasBranch.join(" "),
+        },
+      });
+
+      return { ...result, outputs: readFileSync(output, "utf8") };
     }
-  });
-});
+
+    it.each(CASES)(
+      "$file checks out the same branch when the sibling has it",
+      ({ file, siblings }) => {
+        const [[key, repo]] = Object.entries(siblings);
+        const result = pick(read(file), [repo]);
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toContain(
+          `${key}=feat/entregas-chat-e-hardening-2026-09\n`,
+        );
+      },
+    );
+
+    it.each(CASES)(
+      "$file falls back to the default branch when it does not",
+      ({ file, siblings }) => {
+        const result = pick(read(file), []);
+
+        expect(result.status, result.stderr).toBe(0);
+
+        // An empty `ref:` is the checkout action's default branch.
+        for (const key of Object.keys(siblings))
+          expect(result.outputs).not.toContain(`${key}=`);
+      },
+    );
+
+    it.each(CASES)(
+      "$file authenticates the probe without printing the token",
+      ({ file }) => {
+        const result = pick(read(file), []);
+        const encoded = Buffer.from(
+          "x-access-token:read-token-never-printed",
+        ).toString("base64");
+
+        expect(
+          box
+            .calls("git")
+            .every((call) => call.includes(`AUTHORIZATION: basic ${encoded}`)),
+        ).toBe(true);
+        expect(result.stdout + result.stderr).not.toContain(
+          "read-token-never-printed",
+        );
+        expect(result.stdout + result.stderr).not.toContain(encoded);
+      },
+    );
+
+    it.each(CASES)(
+      "$file feeds the choice to every sibling checkout",
+      ({ file, siblings }) => {
+        const workflow = read(file);
+        const probe = workflow.indexOf("- name: Pick the sibling branches");
+
+        expect(probe).toBeGreaterThan(-1);
+        expect(workflow).toContain(
+          "BRANCH: ${{ github.head_ref || github.ref_name }}",
+        );
+
+        for (const [key, repo] of Object.entries(siblings)) {
+          const checkout = workflow.indexOf(
+            `repository: Trajetto-Organization/${repo}\n`,
+          );
+
+          expect(checkout, repo).toBeGreaterThan(probe);
+          expect(workflow.slice(checkout).split("\n")[1].trim(), repo).toBe(
+            `ref: \${{ steps.refs.outputs.${key} }}`,
+          );
+        }
+      },
+    );
+  },
+);

@@ -20,7 +20,11 @@ const lists = [
 
 describe.each(lists)("%s", (_name, schema, rest) => {
   const parse = (query: Record<string, string>) =>
-    (schema as { safeParse: (value: unknown) => { success: boolean; data?: unknown } }).safeParse({
+    (
+      schema as {
+        safeParse: (value: unknown) => { success: boolean; data?: unknown };
+      }
+    ).safeParse({
       page: "1",
       pageSize: "10",
       ...rest,

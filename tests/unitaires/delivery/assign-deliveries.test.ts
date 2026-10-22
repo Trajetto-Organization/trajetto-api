@@ -80,7 +80,6 @@ function makeContext() {
 
   const activityLog: string[] = [];
 
-
   const notificationService = {
     createActivityIfEnabled: async (activity: { description: string }) => {
       activityLog.push(activity.description);
@@ -119,7 +118,7 @@ function makeContext() {
     driverRepository,
     vehicleRepository,
     notificationService,
-      webhookStub.asService(),
+    webhookStub.asService(),
   );
 
   const releaseRoute = new ReleaseRouteUseCase(
@@ -456,7 +455,9 @@ describe("what the answer says happened", () => {
     ).toBe("Rota 12 criada e liberada com 3 entregas.");
     expect(
       assignmentMessage({ outcome: "resent", routeCode: 12, assigned: 1 }),
-    ).toBe("Rota 12 já estava criada e liberada com 1 entrega; nada foi alterado.");
+    ).toBe(
+      "Rota 12 já estava criada e liberada com 1 entrega; nada foi alterado.",
+    );
     expect(
       assignmentMessage({ outcome: "replanned", routeCode: 12, assigned: 2 }),
     ).toBe("Rota 12 atualizada com o novo planejamento (2 entregas).");

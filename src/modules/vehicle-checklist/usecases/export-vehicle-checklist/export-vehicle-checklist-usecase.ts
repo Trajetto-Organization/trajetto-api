@@ -81,7 +81,8 @@ class ExportVehicleChecklistExcelUseCase {
 
     assertTenantAccess(findUser, resolvedBusinessId);
 
-    const findBusiness = await this.business.findBusinessById(resolvedBusinessId);
+    const findBusiness =
+      await this.business.findBusinessById(resolvedBusinessId);
 
     if (!findBusiness) throw new BusinessNotFoundError();
 

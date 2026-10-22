@@ -81,7 +81,10 @@ function outboxRecorder() {
   return {
     published,
     stub: {
-      publish: async (_tx: unknown, event: { payload: Record<string, unknown> }) => {
+      publish: async (
+        _tx: unknown,
+        event: { payload: Record<string, unknown> },
+      ) => {
         published.push(event);
       },
     } as unknown as OutboxService,
@@ -96,7 +99,12 @@ function world() {
   const outbox = outboxRecorder();
 
   const staff: Array<Partial<User>> = [
-    { id: MANAGER, name: "Gestora", role: "BUSINESS_ADMIN", businessId: BUSINESS },
+    {
+      id: MANAGER,
+      name: "Gestora",
+      role: "BUSINESS_ADMIN",
+      businessId: BUSINESS,
+    },
     { id: MASTER, name: "Suporte", role: "MASTER", businessId: null },
     {
       id: FOREIGN_MANAGER,
@@ -114,9 +122,26 @@ function world() {
     user?: { id: string; revoked?: boolean };
     branch?: { is_active: boolean };
   }> = [
-    { id: JOAO, name: "João", businessId: BUSINESS, status: "ACTIVE", user: { id: JOAO_USER } },
-    { id: MARIA, name: "Maria", businessId: BUSINESS, status: "ACTIVE", user: { id: MARIA_USER } },
-    { id: NO_APP, name: "Beto Sem App", businessId: BUSINESS, status: "ACTIVE" },
+    {
+      id: JOAO,
+      name: "João",
+      businessId: BUSINESS,
+      status: "ACTIVE",
+      user: { id: JOAO_USER },
+    },
+    {
+      id: MARIA,
+      name: "Maria",
+      businessId: BUSINESS,
+      status: "ACTIVE",
+      user: { id: MARIA_USER },
+    },
+    {
+      id: NO_APP,
+      name: "Beto Sem App",
+      businessId: BUSINESS,
+      status: "ACTIVE",
+    },
     {
       id: REVOKED,
       name: "Carla Bloqueada",
@@ -239,7 +264,11 @@ describe("a message tagged with its route (6.7)", () => {
     });
 
     expect(chat.messages[0].routeId).toBe(ROUTE_JOAO);
-    expect(data[0].route).toEqual({ id: ROUTE_JOAO, code: 12, name: "Rota 12" });
+    expect(data[0].route).toEqual({
+      id: ROUTE_JOAO,
+      code: 12,
+      name: "Rota 12",
+    });
   });
 
   it("takes the route that carries the delivery in the chip over the running one", async () => {
@@ -329,12 +358,22 @@ describe("a message tagged with its route (6.7)", () => {
   it("filters the history by route and by delivery, and refuses an anchor the filter hides", async () => {
     const { chat, users, drivers, send } = world();
 
-    await send.execute({ userId: MANAGER, driverIds: [JOAO], kind: "TEXT", body: "na rota 12" });
+    await send.execute({
+      userId: MANAGER,
+      driverIds: [JOAO],
+      kind: "TEXT",
+      body: "na rota 12",
+    });
 
     // He finished route 12; the next message is about no route.
     chat.routes.find((route) => route.id === ROUTE_JOAO)!.status = "COMPLETED";
 
-    await send.execute({ userId: MANAGER, driverIds: [JOAO], kind: "TEXT", body: "fora de rota" });
+    await send.execute({
+      userId: MANAGER,
+      driverIds: [JOAO],
+      kind: "TEXT",
+      body: "fora de rota",
+    });
 
     const list = new ListChatMessagesUseCase(users, chat, uploads, drivers);
 
@@ -347,7 +386,9 @@ describe("a message tagged with its route (6.7)", () => {
 
     expect(onRoute.data.map((message) => message.body)).toEqual(["na rota 12"]);
 
-    const outside = chat.messages.find((message) => message.body === "fora de rota")!;
+    const outside = chat.messages.find(
+      (message) => message.body === "fora de rota",
+    )!;
 
     await expect(
       list.execute({
@@ -373,14 +414,20 @@ describe("a mass notice (6.8)", () => {
       broadcastKey: KEY,
     });
 
-    expect(result.outcomes.map(({ driverId, status }) => [driverId, status])).toEqual([
+    expect(
+      result.outcomes.map(({ driverId, status }) => [driverId, status]),
+    ).toEqual([
       [JOAO, "SENT"],
       [NO_APP, "SKIPPED_NO_APP"],
       [REVOKED, "SKIPPED_NO_APP"],
       // Before: SENT, rung, and unable to log in to read it.
       [BRANCH_OFF, "SKIPPED_NO_APP"],
     ]);
-    expect(result.summary).toEqual({ sent: 1, alreadySent: 0, skippedNoApp: 3 });
+    expect(result.summary).toEqual({
+      sent: 1,
+      alreadySent: 0,
+      skippedNoApp: 3,
+    });
 
     // Before: three messages, three threads, and a toast saying "3 enviados".
     expect(chat.messages).toHaveLength(1);
@@ -413,7 +460,8 @@ describe("a mass notice (6.8)", () => {
   it("holds the fifty-recipient ceiling to distinct drivers, not to the raw list", () => {
     const distinct = Array.from(
       { length: 50 },
-      (_, index) => `018f0000-0000-7000-8000-${String(index).padStart(12, "0")}`,
+      (_, index) =>
+        `018f0000-0000-7000-8000-${String(index).padStart(12, "0")}`,
     );
 
     // Fifty drivers, one of them named twice: still fifty recipients. The
@@ -454,9 +502,9 @@ describe("a mass notice (6.8)", () => {
     expect(result.outcomes.map((outcome) => outcome.driverId).sort()).toEqual(
       [JOAO, MARIA].sort(),
     );
-    expect(new Set(chat.messages.map((message) => message.broadcast_id))).toEqual(
-      new Set([KEY]),
-    );
+    expect(
+      new Set(chat.messages.map((message) => message.broadcast_id)),
+    ).toEqual(new Set([KEY]));
 
     // Retried after a lost answer: nobody is rung twice.
     const again = await send.execute({
@@ -510,7 +558,10 @@ describe("a mass notice (6.8)", () => {
         businessId: BUSINESS,
         status: "ACTIVE",
       });
-      chat.userDirectory.set(`user-${index}`, { name: `M ${index}`, driverId: id });
+      chat.userDirectory.set(`user-${index}`, {
+        name: `M ${index}`,
+        driverId: id,
+      });
     }
 
     await expect(
@@ -593,7 +644,10 @@ describe("one recipient, one key", () => {
       clientSubmissionId: KEY,
     };
 
-    const [one, two] = await Promise.all([send.execute(request), send.execute(request)]);
+    const [one, two] = await Promise.all([
+      send.execute(request),
+      send.execute(request),
+    ]);
 
     expect(chat.messages).toHaveLength(1);
     expect(one.data[0].id).toBe(two.data[0].id);
@@ -678,17 +732,37 @@ describe("chat recipients", () => {
   it("filters by the app line and by name only, and pages by cursor", async () => {
     const { recipients } = listing();
 
-    const withApp = await recipients.execute({ userId: MANAGER, limit: 10, app: "WITH_APP" });
+    const withApp = await recipients.execute({
+      userId: MANAGER,
+      limit: 10,
+      app: "WITH_APP",
+    });
     expect(withApp.data.map((row) => row.id)).toEqual([JOAO, MARIA]);
 
-    const without = await recipients.execute({ userId: MANAGER, limit: 10, app: "WITHOUT_APP" });
-    expect(without.data.map((row) => row.id)).toEqual([NO_APP, REVOKED, BRANCH_OFF]);
+    const without = await recipients.execute({
+      userId: MANAGER,
+      limit: 10,
+      app: "WITHOUT_APP",
+    });
+    expect(without.data.map((row) => row.id)).toEqual([
+      NO_APP,
+      REVOKED,
+      BRANCH_OFF,
+    ]);
 
-    const byName = await recipients.execute({ userId: MANAGER, limit: 10, search: "mar" });
+    const byName = await recipients.execute({
+      userId: MANAGER,
+      limit: 10,
+      search: "mar",
+    });
     expect(byName.data.map((row) => row.id)).toEqual([MARIA]);
 
     // The CNH is registration data: no longer a search key here.
-    const byCnh = await recipients.execute({ userId: MANAGER, limit: 10, search: "cnh-mar" });
+    const byCnh = await recipients.execute({
+      userId: MANAGER,
+      limit: 10,
+      search: "cnh-mar",
+    });
     expect(byCnh.data).toEqual([]);
 
     const first = await recipients.execute({ userId: MANAGER, limit: 4 });

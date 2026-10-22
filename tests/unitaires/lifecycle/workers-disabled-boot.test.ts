@@ -83,9 +83,7 @@ describe("a replica with its workers switched off", () => {
   it("starts only what its own HTTP requests feed, and drains nothing", async () => {
     mutableEnv.WORKERS_ENABLED = false;
 
-    const { drainWorkerBacklog, initializeWorkers } = await import(
-      "@/workers"
-    );
+    const { drainWorkerBacklog, initializeWorkers } = await import("@/workers");
 
     await initializeWorkers();
     drainWorkerBacklog();
@@ -98,9 +96,7 @@ describe("a replica with its workers on (the default)", () => {
   it("starts everything, as before", async () => {
     mutableEnv.WORKERS_ENABLED = true;
 
-    const { drainWorkerBacklog, initializeWorkers } = await import(
-      "@/workers"
-    );
+    const { drainWorkerBacklog, initializeWorkers } = await import("@/workers");
 
     await initializeWorkers();
     drainWorkerBacklog();

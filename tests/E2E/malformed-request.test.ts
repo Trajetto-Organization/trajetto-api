@@ -143,7 +143,9 @@ afterAll(async () => {
 
   await prisma.permission.deleteMany({ where: { profileAccessId: profileId } });
   await prisma.profileAccess.deleteMany({ where: { id: profileId } });
-  await prisma.businessEntitlement.deleteMany({ where: { businessId: CARRIER } });
+  await prisma.businessEntitlement.deleteMany({
+    where: { businessId: CARRIER },
+  });
 
   await prisma.business.deleteMany({ where: { id: CARRIER } });
 

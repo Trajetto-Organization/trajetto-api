@@ -175,7 +175,14 @@ function occurrenceFeedWhere(
       // an empty `in` would match nothing, so an empty list drops its arm.
       const arms: Prisma.DeliveryOccurrenceWhereInput[] = [
         ...(matches.matchOccurrenceId
-          ? [{ id: { contains: escapeLikePattern(term), mode: "insensitive" as const } }]
+          ? [
+              {
+                id: {
+                  contains: escapeLikePattern(term),
+                  mode: "insensitive" as const,
+                },
+              },
+            ]
           : []),
         ...(matches.deliveryIds.length > 0
           ? [{ deliveryId: { in: matches.deliveryIds } }]
@@ -208,7 +215,10 @@ function occurrenceFeedWhere(
 
   // The tenant stays a top-level key: the (businessId, created_at) index
   // serves every read of the feed.
-  return { businessId: filters.businessId, ...(and.length > 0 && { AND: and }) };
+  return {
+    businessId: filters.businessId,
+    ...(and.length > 0 && { AND: and }),
+  };
 }
 
 /** Occurrences per type over the base (scope, search and status; no type facets). */
@@ -249,12 +259,16 @@ interface OccurrenceFeedSearchMeta {
  */
 function summarizeOccurrenceFeed(
   typeCounts: OccurrenceTypeCount[],
-  filters: Pick<OccurrenceFeedFilters, "severity" | "category" | "occurrenceTypeIds">,
+  filters: Pick<
+    OccurrenceFeedFilters,
+    "severity" | "category" | "occurrenceTypeIds"
+  >,
 ): { total: number; searchMeta: OccurrenceFeedSearchMeta } {
   const blocking = severityAsBlocking(filters.severity);
   const category = selectedCategory(filters.category);
 
-  const categoryOf = (type: OccurrenceTypeCount) => type.category ?? "NOT_DELIVERED";
+  const categoryOf = (type: OccurrenceTypeCount) =>
+    type.category ?? "NOT_DELIVERED";
 
   const selectedTypes = filters.occurrenceTypeIds?.length
     ? new Set(filters.occurrenceTypeIds)
@@ -276,10 +290,16 @@ function summarizeOccurrenceFeed(
     (type) => keptByType(type) && keptByCategory(type),
   );
 
-  const problems = cardTypes.filter((type) => categoryOf(type) === "NOT_DELIVERED");
+  const problems = cardTypes.filter(
+    (type) => categoryOf(type) === "NOT_DELIVERED",
+  );
 
-  const blockingCount = sumCounts(problems.filter((type) => type.blocks_delivery));
-  const informationalCount = sumCounts(problems.filter((type) => !type.blocks_delivery));
+  const blockingCount = sumCounts(
+    problems.filter((type) => type.blocks_delivery),
+  );
+  const informationalCount = sumCounts(
+    problems.filter((type) => !type.blocks_delivery),
+  );
   const deliveredCount = sumCounts(
     cardTypes.filter((type) => categoryOf(type) === "DELIVERED"),
   );
@@ -306,7 +326,8 @@ function summarizeOccurrenceFeed(
   return {
     total: sumCounts(
       typeCounts.filter(
-        (type) => keptByType(type) && keptBySeverity(type) && keptByCategory(type),
+        (type) =>
+          keptByType(type) && keptBySeverity(type) && keptByCategory(type),
       ),
     ),
     searchMeta: {
@@ -321,7 +342,9 @@ function summarizeOccurrenceFeed(
         ],
         category: OCCURRENCE_FEED_CATEGORIES.map((value) => ({
           value,
-          count: sumCounts(categoryBase.filter((type) => categoryOf(type) === value)),
+          count: sumCounts(
+            categoryBase.filter((type) => categoryOf(type) === value),
+          ),
         })),
         occurrenceTypeId: typeOptions,
       },

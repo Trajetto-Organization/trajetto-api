@@ -26,11 +26,9 @@ describe("isUnstorable", () => {
 
 describe("findUnstorableText", () => {
   it("names the field, inside objects and arrays", () => {
-    expect(findUnstorableText({ name: "ok", items: [{ description: "a\u0000b" }] })).toEqual([
-      "items",
-      0,
-      "description",
-    ]);
+    expect(
+      findUnstorableText({ name: "ok", items: [{ description: "a\u0000b" }] }),
+    ).toEqual(["items", 0, "description"]);
   });
 
   it("checks keys too", () => {
@@ -38,7 +36,9 @@ describe("findUnstorableText", () => {
   });
 
   it("passes clean values, numbers, nulls and buffers", () => {
-    expect(findUnstorableText({ a: 1, b: null, c: true, d: ["x", { e: "y" }] })).toBeNull();
+    expect(
+      findUnstorableText({ a: 1, b: null, c: true, d: ["x", { e: "y" }] }),
+    ).toBeNull();
     expect(findUnstorableText(Buffer.from([0, 0, 0]))).toBeNull();
     expect(findUnstorableText(undefined)).toBeNull();
   });
@@ -60,13 +60,16 @@ describe("findUnstorableText", () => {
 });
 
 describe("rejectUnstorableText", () => {
-  const request = (where: { params?: unknown; query?: unknown; body?: unknown }) =>
-    ({ params: {}, query: {}, body: undefined, ...where }) as never;
+  const request = (where: {
+    params?: unknown;
+    query?: unknown;
+    body?: unknown;
+  }) => ({ params: {}, query: {}, body: undefined, ...where }) as never;
 
   it("refuses with a validation error naming where it was found", async () => {
-    const error = await rejectUnstorableText(request({ query: { search: "a\u0000b" } })).catch(
-      (caught: unknown) => caught,
-    );
+    const error = await rejectUnstorableText(
+      request({ query: { search: "a\u0000b" } }),
+    ).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(ZodError);
     expect((error as ZodError).issues[0]).toMatchObject({
@@ -77,7 +80,9 @@ describe("rejectUnstorableText", () => {
 
   it("lets a clean request through", async () => {
     await expect(
-      rejectUnstorableText(request({ params: { id: "x" }, body: { name: "Ação" } })),
+      rejectUnstorableText(
+        request({ params: { id: "x" }, body: { name: "Ação" } }),
+      ),
     ).resolves.toBeUndefined();
   });
 });

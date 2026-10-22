@@ -30,7 +30,9 @@ interface ReplicaOptions {
   env?: Record<string, string>;
 }
 
-async function startPipelineReplica(options: ReplicaOptions): Promise<PipelineReplica> {
+async function startPipelineReplica(
+  options: ReplicaOptions,
+): Promise<PipelineReplica> {
   // node + tsx's own entry: on Windows `npx` is a .cmd, and spawning one
   // without a shell fails with EINVAL since Node 20.
   const child = spawn(
@@ -68,7 +70,9 @@ async function startPipelineReplica(options: ReplicaOptions): Promise<PipelineRe
   let log = "";
   let ready = false;
 
-  const exited = new Promise<number | null>((done) => child.once("exit", (code) => done(code)));
+  const exited = new Promise<number | null>((done) =>
+    child.once("exit", (code) => done(code)),
+  );
 
   child.stdout.on("data", (chunk) => {
     const text = String(chunk);

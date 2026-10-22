@@ -53,7 +53,10 @@ async function authorizationNoLongerWaiting(
   // Without the lookup there is nothing to say it stopped waiting.
   if (!repository) return null;
 
-  const waiting = await repository.isWaiting(payload.occurrenceId, payload.businessId);
+  const waiting = await repository.isWaiting(
+    payload.occurrenceId,
+    payload.businessId,
+  );
 
   return waiting
     ? null
@@ -66,7 +69,9 @@ function isDeliveryRequest(payload: { category?: string }): boolean {
 }
 
 /** "Motorista" when a driver asked; otherwise who filed it from the panel. */
-function reporterLabel(payload: DeliveryOccurrenceAuthorizationRequestedPayload): string {
+function reporterLabel(
+  payload: DeliveryOccurrenceAuthorizationRequestedPayload,
+): string {
   return payload.fromDriver === false ? "Registrado por" : "Motorista";
 }
 
@@ -102,10 +107,14 @@ function renderDeliveryOccurrenceWhatsApp(
 }
 
 /** "Rótulo: valor; Rótulo: valor", capped: a notice is not the report. */
-function answersLine(answers: Array<{ label: string; value: string }>): string | null {
+function answersLine(
+  answers: Array<{ label: string; value: string }>,
+): string | null {
   if (answers.length === 0) return null;
 
-  const line = answers.map(({ label, value }) => `${label}: ${value}`).join("; ");
+  const line = answers
+    .map(({ label, value }) => `${label}: ${value}`)
+    .join("; ");
 
   return line.length > 280 ? `${line.slice(0, 277)}...` : line;
 }
@@ -213,7 +222,9 @@ function renderAuthorizationDecidedPush(
   }
 
   return {
-    title: approved ? "✅ Ocorrência autorizada" : "⛔ Ocorrência não autorizada",
+    title: approved
+      ? "✅ Ocorrência autorizada"
+      : "⛔ Ocorrência não autorizada",
     body: endedAsFailure
       ? `${payload.occurrenceTypeName} — ${payload.recipientName}: entrega registrada como Insucesso.` +
         (payload.note ? ` ${payload.note}` : "")
@@ -286,7 +297,9 @@ const deliveryOccurrenceAuthorizationEscalatedPolicy: NotificationPolicyEntry<De
     async resolveRecipients(payload, deps) {
       if (await authorizationNoLongerWaiting(payload, deps)) return [];
 
-      return deps.userRepository.findBusinessAdminsByBusinessId(payload.businessId);
+      return deps.userRepository.findBusinessAdminsByBusinessId(
+        payload.businessId,
+      );
     },
 
     supersededReason: authorizationNoLongerWaiting,

@@ -99,8 +99,7 @@ function verifyWebhookSignature(props: {
 
   const now = props.now ?? new Date();
 
-  const tolerance =
-    props.toleranceSeconds ?? SIGNATURE_TOLERANCE_SECONDS;
+  const tolerance = props.toleranceSeconds ?? SIGNATURE_TOLERANCE_SECONDS;
 
   const ageSeconds = Math.abs(Math.floor(now.getTime() / 1000) - timestamp);
 

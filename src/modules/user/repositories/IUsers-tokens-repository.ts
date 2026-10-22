@@ -122,9 +122,7 @@ interface IUsersTokensRepository {
    * row and returns true, or finds nothing and returns false because someone
    * else got there first.
    */
-  consumeForgotPasswordVerificationToken: (
-    tokenId: string,
-  ) => Promise<boolean>;
+  consumeForgotPasswordVerificationToken: (tokenId: string) => Promise<boolean>;
 }
 
 export { IUsersTokensRepository };

@@ -222,11 +222,16 @@ function mergeResponse(
       ? {
           properties: {
             ...properties,
-            code: { ...((properties.code as JsonSchema) ?? {}), type: "string", description: codes },
+            code: {
+              ...((properties.code as JsonSchema) ?? {}),
+              type: "string",
+              description: codes,
+            },
           },
         }
       : {}),
-    [RESPONSE_DESCRIPTION]: own && !own.includes(extra) ? `${own} ${extra}` : own || extra,
+    [RESPONSE_DESCRIPTION]:
+      own && !own.includes(extra) ? `${own} ${extra}` : own || extra,
     headers: {
       ...(generated.headers as JsonSchema | undefined),
       ...(existing.headers as JsonSchema | undefined),
@@ -268,7 +273,10 @@ function describeRateLimit(rateLimit: unknown): string {
     return "Vale o limite global, contado por usuário (ou por endereço, antes do login).";
   }
 
-  const { max, timeWindow } = rateLimit as { max?: unknown; timeWindow?: unknown };
+  const { max, timeWindow } = rateLimit as {
+    max?: unknown;
+    timeWindow?: unknown;
+  };
 
   const amount =
     typeof max === "number" ? String(max) : "o teto configurado na credencial";
@@ -340,12 +348,15 @@ function openEnded(schema: unknown): void {
 }
 
 function ndjsonResponse(doc: NdjsonDoc, url: string): JsonSchema {
-  const item = toJsonSchema(doc.item.describe("Cada linha seguinte: um item."), url);
+  const item = toJsonSchema(
+    doc.item.describe("Cada linha seguinte: um item."),
+    url,
+  );
 
   openEnded(item);
 
   const lines = [
-    "Corpo `application/x-ndjson`: um JSON por linha, não um documento. A primeira linha é `{\"meta\": …}`; cada linha seguinte é um item. Leia linha a linha — `JSON.parse` no corpo inteiro falha. Com `Accept-Encoding: gzip`, vem comprimido.",
+    'Corpo `application/x-ndjson`: um JSON por linha, não um documento. A primeira linha é `{"meta": …}`; cada linha seguinte é um item. Leia linha a linha — `JSON.parse` no corpo inteiro falha. Com `Accept-Encoding: gzip`, vem comprimido.',
   ];
 
   if (doc.cursor) {
@@ -388,8 +399,11 @@ function withDocumentedInputs(
   schema: FastifySchema,
   route: RouteOptions,
 ): FastifySchema {
-  const documented = (route.config as { openapi?: { body?: unknown; headers?: unknown } } | undefined)
-    ?.openapi;
+  const documented = (
+    route.config as
+      | { openapi?: { body?: unknown; headers?: unknown } }
+      | undefined
+  )?.openapi;
 
   if (!schema || !documented) return schema;
 
@@ -414,7 +428,13 @@ function withDocumentedInputs(
  * keeping what the route says about it: its description, its headers and the
  * extra detail fields some refusals carry (a 409 that says who decided).
  */
-const HANDLER_FIELDS = new Set(["code", "message", "issues", "status", "requestId"]);
+const HANDLER_FIELDS = new Set([
+  "code",
+  "message",
+  "issues",
+  "status",
+  "requestId",
+]);
 
 const MESSAGE_PROPERTY: JsonSchema = {
   type: "string",
@@ -441,7 +461,9 @@ function codeDescriptionOf(response: JsonSchema): string | undefined {
 
   if (typeof code.description === "string") return code.description;
 
-  return Array.isArray(code.enum) ? `Um destes: ${code.enum.join(", ")}.` : undefined;
+  return Array.isArray(code.enum)
+    ? `Um destes: ${code.enum.join(", ")}.`
+    : undefined;
 }
 
 /** Detail fields a route's refusal carries beyond the handler's; all optional. */
@@ -458,9 +480,10 @@ function withHeaders(
   added: Record<string, JsonSchema>,
 ): JsonSchema {
   return Object.fromEntries(
-    Object.entries({ ...added, ...((response.headers as JsonSchema) ?? {}) }).map(
-      ([name, header]) => [name, { ...(header as JsonSchema) }],
-    ),
+    Object.entries({
+      ...added,
+      ...((response.headers as JsonSchema) ?? {}),
+    }).map(([name, header]) => [name, { ...(header as JsonSchema) }]),
   );
 }
 
@@ -523,14 +546,14 @@ function internalErrorSchema(response: JsonSchema): JsonSchema {
           "INTERNAL_ERROR, ou o código de uma falha conhecida e já registrada por nós.",
       },
       status: { type: "string", enum: ["error"] },
-      message:
-        (response.properties as Record<string, JsonSchema> | undefined)?.message?.description
-          ? (response.properties as Record<string, JsonSchema>).message
-          : {
-              type: "string",
-              description:
-                "`Internal server error` numa falha inesperada (sem detalhes dela); numa falha conhecida, a frase dela em português.",
-            },
+      message: (response.properties as Record<string, JsonSchema> | undefined)
+        ?.message?.description
+        ? (response.properties as Record<string, JsonSchema>).message
+        : {
+            type: "string",
+            description:
+              "`Internal server error` numa falha inesperada (sem detalhes dela); numa falha conhecida, a frase dela em português.",
+          },
       requestId: REQUEST_ID_PROPERTY,
     },
     required: ["code", "status", "message", "requestId"],
@@ -561,7 +584,8 @@ function unavailableSchema(response: JsonSchema): JsonSchema {
       message: MESSAGE_PROPERTY,
       requestId: {
         ...REQUEST_ID_PROPERTY,
-        description: "Só em SERVICE_UNAVAILABLE: o mesmo valor do cabeçalho `x-request-id`.",
+        description:
+          "Só em SERVICE_UNAVAILABLE: o mesmo valor do cabeçalho `x-request-id`.",
       },
     },
     required: ["code", "message", ...(requiresRequestId ? ["requestId"] : [])],
@@ -583,7 +607,9 @@ function isHandlerUnavailable(response: JsonSchema): boolean {
   return !properties || "code" in properties;
 }
 
-function canonicalizeErrorResponses(responses: Record<string, JsonSchema>): void {
+function canonicalizeErrorResponses(
+  responses: Record<string, JsonSchema>,
+): void {
   for (const [status, response] of Object.entries(responses)) {
     const code = Number(status);
 
@@ -616,13 +642,17 @@ function openapiTransform(input: TransformInput): {
     schema: withDocumentedInputs(input.schema, route),
     url,
   }) as {
-    schema: JsonSchema & { hide?: boolean; response?: Record<string, JsonSchema> };
+    schema: JsonSchema & {
+      hide?: boolean;
+      response?: Record<string, JsonSchema>;
+    };
     url: string;
   };
 
   const schema = result.schema;
 
-  if (!schema || schema.hide) return result as { schema: FastifySchema; url: string };
+  if (!schema || schema.hide)
+    return result as { schema: FastifySchema; url: string };
 
   // One spelling per section, whatever the route file wrote (api-tags.ts).
   if (Array.isArray(schema.tags)) {
@@ -695,9 +725,8 @@ function openapiTransform(input: TransformInput): {
   const masterCompanyLookup =
     modules.length > 0 &&
     (["params", "querystring", "body"] as const).some((part) => {
-      const properties = (schema[part] as JsonSchema | undefined)?.properties as
-        | JsonSchema
-        | undefined;
+      const properties = (schema[part] as JsonSchema | undefined)
+        ?.properties as JsonSchema | undefined;
 
       return Boolean(properties?.businessId);
     });
@@ -710,7 +739,9 @@ function openapiTransform(input: TransformInput): {
     notes.push(
       `Permissão exigida: ${permissions
         .map(accessLabel)
-        .join(", ")}. MASTER e BUSINESS_ADMIN passam sempre; o motorista, só nas permissões do app.`,
+        .join(
+          ", ",
+        )}. MASTER e BUSINESS_ADMIN passam sempre; o motorista, só nas permissões do app.`,
     );
   }
 
@@ -720,7 +751,9 @@ function openapiTransform(input: TransformInput): {
     notes.push(
       `Permissão exigida: ${alternatives
         .map((group) => `uma entre ${group.map(accessLabel).join(" ou ")}`)
-        .join("; e ")}. MASTER e BUSINESS_ADMIN passam sempre; o motorista, só nas permissões do app.`,
+        .join(
+          "; e ",
+        )}. MASTER e BUSINESS_ADMIN passam sempre; o motorista, só nas permissões do app.`,
     );
   }
 
@@ -764,7 +797,9 @@ function openapiTransform(input: TransformInput): {
 
     if (roles.length > 0) {
       forbiddenCodes.push("AUTH_ROLE_FORBIDDEN");
-      forbiddenReasons.push(`AUTH_ROLE_FORBIDDEN: rota só para ${roles.join(", ")}.`);
+      forbiddenReasons.push(
+        `AUTH_ROLE_FORBIDDEN: rota só para ${roles.join(", ")}.`,
+      );
     }
 
     if (permissions.length > 0 || alternatives.length > 0) {
@@ -794,7 +829,9 @@ function openapiTransform(input: TransformInput): {
 
     if (branchGate) {
       forbiddenCodes.push("BRANCH_INACTIVE");
-      forbiddenReasons.push("BRANCH_INACTIVE: a filial informada está desativada.");
+      forbiddenReasons.push(
+        "BRANCH_INACTIVE: a filial informada está desativada.",
+      );
     }
 
     mergeResponse(

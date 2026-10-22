@@ -15,11 +15,15 @@ import { readIntegrationIdempotencyKey } from "./integration-idempotency-key";
 const REPLAYED_HEADER = "idempotent-replayed";
 
 class CreateIntegrationDeliveryController {
-  handle = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  handle = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void> => {
     const key = request.apiKey;
 
     // ensureApiKey ran first; this only keeps the type honest.
-    if (!key) throw new AppError("Chave de API inválida.", 401, "INVALID_API_KEY");
+    if (!key)
+      throw new AppError("Chave de API inválida.", 401, "INVALID_API_KEY");
 
     // The key before the body: without it nothing below is safe to retry,
     // so it is the first thing an integrator should hear about.

@@ -131,8 +131,14 @@ describe("unit derivation", () => {
 
 describe("idempotency key", () => {
   it("is stable under key ordering", () => {
-    const inputA = { photosByField: { a: ["1"] }, checklistData: { x: 1, y: 2 } };
-    const inputB = { checklistData: { y: 2, x: 1 }, photosByField: { a: ["1"] } };
+    const inputA = {
+      photosByField: { a: ["1"] },
+      checklistData: { x: 1, y: 2 },
+    };
+    const inputB = {
+      checklistData: { y: 2, x: 1 },
+      photosByField: { a: ["1"] },
+    };
 
     expect(computeIdempotencyKey("CHECKLIST", "rec-1", inputA)).toBe(
       computeIdempotencyKey("CHECKLIST", "rec-1", inputB),
@@ -382,15 +388,23 @@ describe("checklist field evaluation", () => {
 });
 
 describe("a paid checklist reading compared again (AI-2, blind reading)", () => {
-  const bumpers = { condicao_observada: "bad", confianca: 0.9, observacao: "amassado" };
+  const bumpers = {
+    condicao_observada: "bad",
+    confianca: 0.9,
+    observacao: "amassado",
+  };
 
   it("follows the value the checklist holds now", () => {
-    expect(reassessChecklistField("bumpers_condition", bumpers, "good")).toMatchObject({
+    expect(
+      reassessChecklistField("bumpers_condition", bumpers, "good"),
+    ).toMatchObject({
       status: "contradicts",
       observed: "bad",
       informed: "good",
     });
-    expect(reassessChecklistField("bumpers_condition", bumpers, "bad")).toMatchObject({
+    expect(
+      reassessChecklistField("bumpers_condition", bumpers, "bad"),
+    ).toMatchObject({
       status: "confirmed",
       informed: "bad",
     });
@@ -406,9 +420,9 @@ describe("a paid checklist reading compared again (AI-2, blind reading)", () => 
       observacao: "",
     };
 
-    expect(reassessChecklistField("current_mileage", tampered, 1000)?.status).toBe(
-      "contradicts",
-    );
+    expect(
+      reassessChecklistField("current_mileage", tampered, 1000)?.status,
+    ).toBe("contradicts");
   });
 
   it("leaves alone an answer stored in a shape it does not read", () => {
@@ -441,8 +455,10 @@ describe("the receipt, compared in code (decision 6.9)", () => {
 
   it("says 'no' to another delivery's receipt", () => {
     expect(
-      readProofExtraction(proof({ numero_documento_lido: "112907" }), PROOF_INPUT)
-        .documentMatches,
+      readProofExtraction(
+        proof({ numero_documento_lido: "112907" }),
+        PROOF_INPUT,
+      ).documentMatches,
     ).toBe("no");
   });
 
@@ -487,8 +503,11 @@ describe("the receipt, compared in code (decision 6.9)", () => {
     expect(same.expected?.documentNumber).toBe("45118");
 
     expect(
-      readProofExtraction(proof({ numero_documento_lido: "112907" }), legacy, "45118")
-        .documentMatches,
+      readProofExtraction(
+        proof({ numero_documento_lido: "112907" }),
+        legacy,
+        "45118",
+      ).documentMatches,
     ).toBe("no");
 
     // The delivery's NF-e is not known (or was corrected since): not trusted.
@@ -511,15 +530,19 @@ describe("the receipt, compared in code (decision 6.9)", () => {
   // readily as the handwritten receiving date. "Any date" is not enough.
   it("refuses a date that is not the day of the delivery", () => {
     expect(
-      readProofExtraction(proof({ data_recebimento_lida: "25/09/2026" }), PROOF_INPUT)
-        .dateVisible,
+      readProofExtraction(
+        proof({ data_recebimento_lida: "25/09/2026" }),
+        PROOF_INPUT,
+      ).dateVisible,
     ).toBe("no");
   });
 
   it("accepts the day before (signed before midnight, registered after)", () => {
     expect(
-      readProofExtraction(proof({ data_recebimento_lida: "26/09/26" }), PROOF_INPUT)
-        .dateVisible,
+      readProofExtraction(
+        proof({ data_recebimento_lida: "26/09/26" }),
+        PROOF_INPUT,
+      ).dateVisible,
     ).toBe("yes");
   });
 
@@ -679,7 +702,9 @@ describe("units for a reader that covers only some kinds (ADR 0010 §5)", () => 
     const fuel = { odometerPhotoPath: "o.jpg", reportedMileage: 10 };
 
     expect(buildAnalysisUnits("FUEL_ODOMETER", fuel, ocr)).toHaveLength(1);
-    expect(buildAnalysisUnits("FUEL_ODOMETER", fuel, () => false)).toHaveLength(0);
+    expect(buildAnalysisUnits("FUEL_ODOMETER", fuel, () => false)).toHaveLength(
+      0,
+    );
 
     const proof: DeliveryProofAnalysisInput = {
       photoPath: "p.jpg",
@@ -691,12 +716,17 @@ describe("units for a reader that covers only some kinds (ADR 0010 §5)", () => 
     };
 
     expect(buildAnalysisUnits("DELIVERY_PROOF", proof, ocr)).toHaveLength(1);
-    expect(buildAnalysisUnits("DELIVERY_PROOF", proof, () => false)).toHaveLength(0);
+    expect(
+      buildAnalysisUnits("DELIVERY_PROOF", proof, () => false),
+    ).toHaveLength(0);
   });
 
   it("without a coverage every photo is a unit, as the pipeline rebuilds them", () => {
     const units = buildAnalysisUnits("CHECKLIST", {
-      photosByField: { tires_condition: ["t.jpg"], current_mileage: ["km.jpg"] },
+      photosByField: {
+        tires_condition: ["t.jpg"],
+        current_mileage: ["km.jpg"],
+      },
       checklistData: {},
     });
 
@@ -727,12 +757,18 @@ describe("a reader that does not judge the signature or the fraud (ADR 0010 §3)
 
   it("leaves the signature for a person even with the on-screen one", () => {
     const reading = readProofExtraction(
-      parseModelAnswer("proof", JSON.stringify({ ...clean, assinatura_avaliada: false })),
+      parseModelAnswer(
+        "proof",
+        JSON.stringify({ ...clean, assinatura_avaliada: false }),
+      ),
       input,
     );
 
     expect(reading.hasSignature).toBe("unknown");
-    expect(reading.extracted).toMatchObject({ digitalSignature: true, signatureAssessed: false });
+    expect(reading.extracted).toMatchObject({
+      digitalSignature: true,
+      signatureAssessed: false,
+    });
   });
 
   it("keeps the on-screen signature deciding for a reader that did look (a model)", () => {
@@ -747,7 +783,13 @@ describe("a reader that does not judge the signature or the fraud (ADR 0010 §3)
 
   it("says 'km confere', not 'Verificado', when fraud was not judged", () => {
     const result = evaluateOdometerReading(
-      odometer({ valor_lido: 84312, confianca: 1, legivel: true, observacao: "", fraude_avaliada: false }),
+      odometer({
+        valor_lido: 84312,
+        confianca: 1,
+        legivel: true,
+        observacao: "",
+        fraude_avaliada: false,
+      }),
       84312,
     );
 
@@ -759,7 +801,14 @@ describe("a reader that does not judge the signature or the fraud (ADR 0010 §3)
 
   it("keeps a restored result's 'fraud not judged' on a retry that reuses it", () => {
     const restored = restoreOdometerResult(
-      { status: "verified", readMileage: 10, reportedMileage: 10, confidence: 1, details: "x", fraudAssessed: false },
+      {
+        status: "verified",
+        readMileage: 10,
+        reportedMileage: 10,
+        confidence: 1,
+        details: "x",
+        fraudAssessed: false,
+      },
       10,
     );
 
@@ -768,7 +817,16 @@ describe("a reader that does not judge the signature or the fraud (ADR 0010 §3)
 
   it("results stored before 05/10/2026 count as judged", () => {
     expect(
-      parseModelAnswer("odometer", JSON.stringify({ valor_lido: 1, confianca: 1, legivel: true, sinais_fraude: false, observacao: "" })).fraude_avaliada,
+      parseModelAnswer(
+        "odometer",
+        JSON.stringify({
+          valor_lido: 1,
+          confianca: 1,
+          legivel: true,
+          sinais_fraude: false,
+          observacao: "",
+        }),
+      ).fraude_avaliada,
     ).toBe(true);
   });
 });

@@ -50,7 +50,9 @@ const MANAGER = "018fe900-0000-7000-8000-0000000000a1";
 
 const BUDGET = 2;
 
-async function peakOf<T>(run: () => Promise<T>): Promise<{ peak: number; result: T }> {
+async function peakOf<T>(
+  run: () => Promise<T>,
+): Promise<{ peak: number; result: T }> {
   pool.inFlight = 0;
   pool.peak = 0;
 
@@ -173,7 +175,10 @@ describe("the admin lists, at most two connections", () => {
       }),
     );
 
-    expect(peak, `a lista de filiais ocupou ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(
+      peak,
+      `a lista de filiais ocupou ${peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
     expect(result.data).toHaveLength(2);
   });
 
@@ -191,7 +196,10 @@ describe("the admin lists, at most two connections", () => {
       }),
     );
 
-    expect(peak, `a lista de empresas ocupou ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(
+      peak,
+      `a lista de empresas ocupou ${peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
     expect(result.topCities[0]).toMatchObject({ value: "São Paulo/SP" });
   });
 
@@ -207,7 +215,10 @@ describe("the admin lists, at most two connections", () => {
       }),
     );
 
-    expect(peak, `a lista de orçamentos ocupou ${peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(
+      peak,
+      `a lista de orçamentos ocupou ${peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
     expect(result.data).toHaveLength(1);
   });
 
@@ -225,9 +236,10 @@ describe("the admin lists, at most two connections", () => {
       }),
     );
 
-    expect(table.peak, `a tabela de atividades ocupou ${table.peak} conexões`).toBeLessThanOrEqual(
-      BUDGET,
-    );
+    expect(
+      table.peak,
+      `a tabela de atividades ocupou ${table.peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
     expect(table.result.total).toBe(2);
 
     const summary = await peakOf(() =>
@@ -238,20 +250,28 @@ describe("the admin lists, at most two connections", () => {
       }),
     );
 
-    expect(summary.peak, `o resumo de atividades ocupou ${summary.peak} conexões`).toBeLessThanOrEqual(
-      BUDGET,
-    );
+    expect(
+      summary.peak,
+      `o resumo de atividades ocupou ${summary.peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
     expect(summary.result).toMatchObject({ total: 3, created: 2, deleted: 1 });
   });
 
   it("the Kanban board: its cards in one query, not one per column", async () => {
     const repository = new KanbanRepository();
 
-    const board = await peakOf(() => repository.findColumnsByBusinessId(CARRIER, true, 1, 10));
+    const board = await peakOf(() =>
+      repository.findColumnsByBusinessId(CARRIER, true, 1, 10),
+    );
 
-    expect(board.peak, `o quadro ocupou ${board.peak} conexões`).toBeLessThanOrEqual(BUDGET);
+    expect(
+      board.peak,
+      `o quadro ocupou ${board.peak} conexões`,
+    ).toBeLessThanOrEqual(BUDGET);
     expect(board.result.total).toBe(5);
-    expect(board.result.data.map((column) => column.cards?.length)).toEqual([2, 2, 2, 2, 2]);
+    expect(board.result.data.map((column) => column.cards?.length)).toEqual([
+      2, 2, 2, 2, 2,
+    ]);
 
     // A column found by its title shows every card; the others only the matches.
     const searched = await peakOf(() =>
@@ -259,9 +279,12 @@ describe("the admin lists, at most two connections", () => {
     );
 
     expect(searched.peak).toBeLessThanOrEqual(BUDGET);
-    expect(searched.result.data.map((column) => [column.title, column.cards?.length])).toEqual([
-      ["Pátio", 2],
-    ]);
+    expect(
+      searched.result.data.map((column) => [
+        column.title,
+        column.cards?.length,
+      ]),
+    ).toEqual([["Pátio", 2]]);
 
     const cards = await peakOf(() =>
       repository.findColumnsByBusinessId(CARRIER, true, 1, 10, "pneus"),
@@ -270,15 +293,32 @@ describe("the admin lists, at most two connections", () => {
     expect(cards.peak).toBeLessThanOrEqual(BUDGET);
     expect(cards.result.total).toBe(5);
     expect(
-      cards.result.data.flatMap((column) => column.cards?.map((card) => card.title)),
-    ).toEqual(["Tarefa 0.0", "Tarefa 1.0", "Tarefa 2.0", "Tarefa 3.0", "Tarefa 4.0"]);
+      cards.result.data.flatMap((column) =>
+        column.cards?.map((card) => card.title),
+      ),
+    ).toEqual([
+      "Tarefa 0.0",
+      "Tarefa 1.0",
+      "Tarefa 2.0",
+      "Tarefa 3.0",
+      "Tarefa 4.0",
+    ]);
 
     // Someone without full Kanban read: only their own cards.
     const own = await peakOf(() =>
-      repository.findColumnsByBusinessId(CARRIER, true, 1, 10, undefined, MANAGER),
+      repository.findColumnsByBusinessId(
+        CARRIER,
+        true,
+        1,
+        10,
+        undefined,
+        MANAGER,
+      ),
     );
 
     expect(own.peak).toBeLessThanOrEqual(BUDGET);
-    expect(own.result.data.every((column) => column.cards?.length === 1)).toBe(true);
+    expect(own.result.data.every((column) => column.cards?.length === 1)).toBe(
+      true,
+    );
   });
 });

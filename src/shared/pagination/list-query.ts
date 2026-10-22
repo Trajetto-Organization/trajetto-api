@@ -118,7 +118,9 @@ function facetField<const V extends Keys>(values: V, description: string) {
 
       return list as V[number][];
     })
-    .describe(`${description} Um ou mais valores separados por vírgula: ${allowed}.`);
+    .describe(
+      `${description} Um ou mais valores separados por vírgula: ${allowed}.`,
+    );
 }
 
 const uuid = z.string().uuid();

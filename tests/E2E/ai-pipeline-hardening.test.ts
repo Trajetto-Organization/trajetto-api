@@ -1,5 +1,13 @@
 import "@/shared";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -20,8 +28,15 @@ import { buildProofAnalysisInput } from "@/shared/delivery/proof-analysis-input"
 import { OutboxService } from "@/shared/notifications/outbox-service";
 import { sendAIVerificationEvent } from "@/websocket";
 
-import { FakeProviderError, fakeVision, resetCircuit } from "./support/fake-vision";
-import { seedFleetDriver, type FleetDriverSeed } from "./support/fleet-driver-seed";
+import {
+  FakeProviderError,
+  fakeVision,
+  resetCircuit,
+} from "./support/fake-vision";
+import {
+  seedFleetDriver,
+  type FleetDriverSeed,
+} from "./support/fleet-driver-seed";
 import { seedProofCard } from "./support/proof-card-seed";
 
 /**
@@ -176,7 +191,11 @@ async function queueFuel() {
  * decision 6.9: the delivery's code as the expected document, no version.
  */
 async function queueProof(
-  options: { signature?: string | null; invoiceNumber?: string | null; legacyInput?: boolean } = {},
+  options: {
+    signature?: string | null;
+    invoiceNumber?: string | null;
+    legacyInput?: boolean;
+  } = {},
 ) {
   const photo = `deliveryPhotos/${FLEET}/${randomUUID()}.jpg`;
   const invoiceNumber =
@@ -201,7 +220,10 @@ async function queueProof(
     : buildProofAnalysisInput({
         photoPath: photo,
         signaturePath: options.signature ?? null,
-        delivery: { invoice_number: invoiceNumber, recipient_name: "Mercado Central" },
+        delivery: {
+          invoice_number: invoiceNumber,
+          recipient_name: "Mercado Central",
+        },
         provenAt: new Date("2026-09-27T15:00:00.000Z"),
         timeZone: "America/Sao_Paulo",
       });
@@ -338,12 +360,13 @@ describe("an answer that is not what was asked (AI-14)", () => {
     expect(row.units[0].status).toBe("RELEASED");
 
     // Paid calls keep their tokens on the trail.
-    expect(row.units[0].attempts.every((attempt) => attempt.inputTokens === 1)).toBe(
-      true,
-    );
+    expect(
+      row.units[0].attempts.every((attempt) => attempt.inputTokens === 1),
+    ).toBe(true);
 
     expect(
-      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } })).odometer_ai_status,
+      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } }))
+        .odometer_ai_status,
     ).toBe("error");
   });
 
@@ -357,7 +380,8 @@ describe("an answer that is not what was asked (AI-14)", () => {
     await pipeline.runCycle();
 
     expect(
-      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } })).odometer_ai_status,
+      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } }))
+        .odometer_ai_status,
     ).toBe("analyzing");
   });
 });
@@ -376,7 +400,10 @@ describe("a reading of a photo that was replaced (AI-4)", () => {
 
     await prisma.fuel.update({
       where: { id: fuelId },
-      data: { odometer_photo: "odometerPhotos/new.jpg", odometer_ai_status: "verified" },
+      data: {
+        odometer_photo: "odometerPhotos/new.jpg",
+        odometer_ai_status: "verified",
+      },
     });
 
     await pipeline.runCycle();
@@ -396,7 +423,8 @@ describe("a reading of a photo that was replaced (AI-4)", () => {
 
     // The newer verdict stands.
     expect(
-      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } })).odometer_ai_status,
+      (await prisma.fuel.findUniqueOrThrow({ where: { id: fuelId } }))
+        .odometer_ai_status,
     ).toBe("verified");
   });
 
@@ -426,7 +454,9 @@ describe("a reading of a photo that was replaced (AI-4)", () => {
     expect(fuel.odometer_ai_status).toBe("verified");
     expect(fuel.odometer_ai_reading).toBe(1000);
 
-    expect(emitted(fuelId).some((event) => event.step === "completed")).toBe(false);
+    expect(emitted(fuelId).some((event) => event.step === "completed")).toBe(
+      false,
+    );
   });
 
   it("keeps a checklist field whose photo changed out of the verdict", async () => {
@@ -508,7 +538,11 @@ describe("a reading of a photo that was replaced (AI-4)", () => {
       "bumpers_condition",
     ]);
     expect(settled.ai_verification_details).toMatchObject({
-      bumpers_condition: { status: "contradicts", observed: "bad", informed: "good" },
+      bumpers_condition: {
+        status: "contradicts",
+        observed: "bad",
+        informed: "good",
+      },
     });
     expect(settled.ai_verification_status).toBe("issues_found");
   });
@@ -555,8 +589,11 @@ describe("a reading of a photo that was replaced (AI-4)", () => {
       consumed: before.consumed,
     });
     expect(
-      (await prisma.deliveryProofAudit.findUniqueOrThrow({ where: { deliveryId } }))
-        .ai_suggestion,
+      (
+        await prisma.deliveryProofAudit.findUniqueOrThrow({
+          where: { deliveryId },
+        })
+      ).ai_suggestion,
     ).toBeNull();
 
     // The reopened card waits for its new photo's reading; the quota was
@@ -743,7 +780,10 @@ describe("an informed value corrected after a blind reading (AI-2)", () => {
 
     const refreshed = await refreshChecklistVerdict(checklist.id);
 
-    expect(refreshed).toMatchObject({ written: true, changed: ["bumpers_condition"] });
+    expect(refreshed).toMatchObject({
+      written: true,
+      changed: ["bumpers_condition"],
+    });
 
     const after = await prisma.vehicleChecklist.findUniqueOrThrow({
       where: { id: checklist.id },
@@ -751,8 +791,16 @@ describe("an informed value corrected after a blind reading (AI-2)", () => {
 
     expect(after.ai_verification_status).toBe("verified");
     expect(after.ai_verification_details).toMatchObject({
-      tires_condition: { status: "confirmed", observed: "good", informed: "good" },
-      bumpers_condition: { status: "confirmed", observed: "bad", informed: "bad" },
+      tires_condition: {
+        status: "confirmed",
+        observed: "good",
+        informed: "good",
+      },
+      bumpers_condition: {
+        status: "confirmed",
+        observed: "bad",
+        informed: "bad",
+      },
     });
 
     // Nothing read, nothing charged.
@@ -778,7 +826,9 @@ describe("an informed value corrected after a blind reading (AI-2)", () => {
       },
     });
 
-    expect(await refreshChecklistVerdict(checklist.id)).toMatchObject({ written: false });
+    expect(await refreshChecklistVerdict(checklist.id)).toMatchObject({
+      written: false,
+    });
   });
 
   // Red before: the edit re-requested analysis only for new photos, and the
@@ -801,7 +851,12 @@ describe("an informed value corrected after a blind reading (AI-2)", () => {
     // The manager agrees with the photo: the bumpers are bad. No new photo.
     await container
       .resolve(UpdateVehicleChecklistUseCase)
-      .execute({ bumpers_condition: "bad" } as never, manager.id, checklist.id, FLEET);
+      .execute(
+        { bumpers_condition: "bad" } as never,
+        manager.id,
+        checklist.id,
+        FLEET,
+      );
 
     const after = await prisma.vehicleChecklist.findUniqueOrThrow({
       where: { id: checklist.id },
@@ -809,7 +864,11 @@ describe("an informed value corrected after a blind reading (AI-2)", () => {
 
     expect(after.ai_verification_status).toBe("verified");
     expect(after.ai_verification_details).toMatchObject({
-      bumpers_condition: { status: "confirmed", observed: "bad", informed: "bad" },
+      bumpers_condition: {
+        status: "confirmed",
+        observed: "bad",
+        informed: "bad",
+      },
     });
 
     // Nothing read, nothing charged.
@@ -973,7 +1032,9 @@ describe("a receipt, transcribed and compared in code (decision 6.9)", () => {
   });
 
   it("does not bother the driver with a doubt the office settles", async () => {
-    pipeline.provider = fakeVision(() => proofText({ data_recebimento_lida: "27/0?" }));
+    pipeline.provider = fakeVision(() =>
+      proofText({ data_recebimento_lida: "27/0?" }),
+    );
 
     const { deliveryId } = await queueProof();
 
@@ -999,7 +1060,10 @@ describe("a receipt, transcribed and compared in code (decision 6.9)", () => {
   it("does not compare a request queued before 6.9 with the delivery's code", async () => {
     pipeline.provider = fakeVision(() => proofText());
 
-    const { deliveryId } = await queueProof({ invoiceNumber: null, legacyInput: true });
+    const { deliveryId } = await queueProof({
+      invoiceNumber: null,
+      legacyInput: true,
+    });
 
     await pipeline.runCycle();
 
@@ -1008,7 +1072,10 @@ describe("a receipt, transcribed and compared in code (decision 6.9)", () => {
     });
 
     expect(card.ai_suggestion).toMatchObject({
-      reading: { documentMatches: "not_applicable", expected: { documentNumber: null } },
+      reading: {
+        documentMatches: "not_applicable",
+        expected: { documentNumber: null },
+      },
       assessment: { suggestion: "looks_good" },
     });
 
@@ -1022,9 +1089,14 @@ describe("a receipt, transcribed and compared in code (decision 6.9)", () => {
   // Red before: every input without a version dropped its number, so the
   // card said "Sem número para conferir" for a delivery that has an NF-e.
   it("compares a request queued before 6.9 when its number is the delivery's NF-e", async () => {
-    pipeline.provider = fakeVision(() => proofText({ numero_documento_lido: "112907" }));
+    pipeline.provider = fakeVision(() =>
+      proofText({ numero_documento_lido: "112907" }),
+    );
 
-    const { deliveryId } = await queueProof({ invoiceNumber: "45118", legacyInput: true });
+    const { deliveryId } = await queueProof({
+      invoiceNumber: "45118",
+      legacyInput: true,
+    });
 
     await pipeline.runCycle();
 
@@ -1062,12 +1134,18 @@ describe("a receipt, transcribed and compared in code (decision 6.9)", () => {
     const failCardWriteOnce = (tx: object) =>
       new Proxy(tx, {
         get(target, property, receiver) {
-          if (property !== "$queryRaw") return Reflect.get(target, property, receiver);
+          if (property !== "$queryRaw")
+            return Reflect.get(target, property, receiver);
 
           return (strings: TemplateStringsArray, ...values: unknown[]) => {
-            if (!failed && strings.join("?").includes('UPDATE "delivery_proof_audit"')) {
+            if (
+              !failed &&
+              strings.join("?").includes('UPDATE "delivery_proof_audit"')
+            ) {
               failed = true;
-              return Promise.reject(new Error("connection reset while writing the card"));
+              return Promise.reject(
+                new Error("connection reset while writing the card"),
+              );
             }
 
             return (target as typeof database).$queryRaw(strings, ...values);
@@ -1075,16 +1153,18 @@ describe("a receipt, transcribed and compared in code (decision 6.9)", () => {
         },
       });
 
-    const spy = vi.spyOn(database, "$transaction").mockImplementation(((
-      work: unknown,
-      options?: unknown,
-    ) =>
-      typeof work === "function"
-        ? originalTransaction(
-            (tx: object) => (work as (client: object) => Promise<unknown>)(failCardWriteOnce(tx)),
-            options as never,
-          )
-        : originalTransaction(work as never, options as never)) as never);
+    const spy = vi
+      .spyOn(database, "$transaction")
+      .mockImplementation(((work: unknown, options?: unknown) =>
+        typeof work === "function"
+          ? originalTransaction(
+              (tx: object) =>
+                (work as (client: object) => Promise<unknown>)(
+                  failCardWriteOnce(tx),
+                ),
+              options as never,
+            )
+          : originalTransaction(work as never, options as never)) as never);
 
     try {
       await pipeline.runCycle();
@@ -1199,10 +1279,12 @@ describe("a provider that refuses service to everybody (AI-8)", () => {
       // failed the whole queue at once.
       expect(rows.every((row) => row.status === "PENDING")).toBe(true);
       expect(rows.every((row) => row.attempts === 0)).toBe(true);
-      expect(rows.every((row) => row.units[0].status === "RESERVED")).toBe(true);
-      expect(rows.some((row) => row.lastError?.startsWith("AI_PROVIDER_PAUSED"))).toBe(
+      expect(rows.every((row) => row.units[0].status === "RESERVED")).toBe(
         true,
       );
+      expect(
+        rows.some((row) => row.lastError?.startsWith("AI_PROVIDER_PAUSED")),
+      ).toBe(true);
       expect(await ledger()).toEqual(before);
 
       // The first refusal opened the circuit: the requests still due are not

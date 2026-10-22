@@ -71,7 +71,10 @@ class InMemoryPartRepository implements IPartRepository {
 
   private matches(
     part: Part,
-    filters: Omit<ListPartByBusinessIdProps, "page" | "pageSize" | "sort" | "order">,
+    filters: Omit<
+      ListPartByBusinessIdProps,
+      "page" | "pageSize" | "sort" | "order"
+    >,
     exceptSupplier = false,
   ): boolean {
     if (part.businessId !== filters.businessId) return false;
@@ -153,7 +156,10 @@ class InMemoryPartRepository implements IPartRepository {
       ).length,
     }));
 
-    const groups = new Map<string | null, { count: number; priceSum: number }>();
+    const groups = new Map<
+      string | null,
+      { count: number; priceSum: number }
+    >();
 
     for (const part of this.parts.filter((entry) =>
       this.matches(entry, filters, true),
@@ -182,7 +188,12 @@ class InMemoryPartRepository implements IPartRepository {
 
     for (const id of filters.supplierIds ?? []) {
       if (labelOf(id) !== undefined && !groups.has(id)) {
-        supplierCounts.push({ supplierId: id, label: labelOf(id), count: 0, priceSum: 0 });
+        supplierCounts.push({
+          supplierId: id,
+          label: labelOf(id),
+          count: 0,
+          priceSum: 0,
+        });
       }
     }
 
@@ -193,10 +204,13 @@ class InMemoryPartRepository implements IPartRepository {
     const index = this.parts.findIndex((part) => part.id === partId);
 
     if (index === -1) {
-      throw new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
-        code: "P2025",
-        clientVersion: "in-memory",
-      });
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Record to update not found.",
+        {
+          code: "P2025",
+          clientVersion: "in-memory",
+        },
+      );
     }
 
     // The real one keeps supplierId apart: null clears it, undefined keeps it.
@@ -227,10 +241,13 @@ class InMemoryPartRepository implements IPartRepository {
     const index = this.parts.findIndex((part) => part.id === partId);
 
     if (index === -1) {
-      throw new Prisma.PrismaClientKnownRequestError("Record to delete does not exist.", {
-        code: "P2025",
-        clientVersion: "in-memory",
-      });
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Record to delete does not exist.",
+        {
+          code: "P2025",
+          clientVersion: "in-memory",
+        },
+      );
     }
 
     // service_order_part.partId is ON DELETE RESTRICT: Postgres refuses a
@@ -299,7 +316,9 @@ class InMemoryPartRepository implements IPartRepository {
           (!term ||
             [
               part.description,
-              part.supplierId ? (this.supplierNames.get(part.supplierId) ?? "") : "",
+              part.supplierId
+                ? (this.supplierNames.get(part.supplierId) ?? "")
+                : "",
             ].some((text) => text.toLowerCase().includes(term))),
       )
       .sort(

@@ -74,19 +74,27 @@ const quoteResponses = {
       pending: z
         .number()
         .int()
-        .describe("Pendentes — com a busca e o filtro de frota, sem o de estágio."),
+        .describe(
+          "Pendentes — com a busca e o filtro de frota, sem o de estágio.",
+        ),
       contacted: z
         .number()
         .int()
-        .describe("Contatados — com a busca e o filtro de frota, sem o de estágio."),
+        .describe(
+          "Contatados — com a busca e o filtro de frota, sem o de estágio.",
+        ),
       closed: z
         .number()
         .int()
-        .describe("Fechados — com a busca e o filtro de frota, sem o de estágio."),
+        .describe(
+          "Fechados — com a busca e o filtro de frota, sem o de estágio.",
+        ),
       converted: z
         .number()
         .int()
-        .describe("Convertidos — com a busca e o filtro de frota, sem o de estágio."),
+        .describe(
+          "Convertidos — com a busca e o filtro de frota, sem o de estágio.",
+        ),
     },
     ["status", "fleet_size"],
   ),

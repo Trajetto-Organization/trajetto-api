@@ -13,11 +13,20 @@ import { OPERATION_COUNTER_TEXT } from "./operation-day-texts";
 const trendSeries = z.object({
   vehicles: z.number().optional().describe("Veículos cadastrados no período"),
   drivers: z.number().optional().describe("Motoristas cadastrados no período"),
-  businesses: z.number().optional().describe("Empresas cadastradas (só MASTER)"),
+  businesses: z
+    .number()
+    .optional()
+    .describe("Empresas cadastradas (só MASTER)"),
   branches: z.number().optional().describe("Filiais cadastradas no período"),
   parts: z.number().optional().describe("Peças cadastradas (Frotas)"),
-  suppliers: z.number().optional().describe("Fornecedores cadastrados (Frotas)"),
-  serviceOrders: z.number().optional().describe("Ordens de serviço abertas (Frotas)"),
+  suppliers: z
+    .number()
+    .optional()
+    .describe("Fornecedores cadastrados (Frotas)"),
+  serviceOrders: z
+    .number()
+    .optional()
+    .describe("Ordens de serviço abertas (Frotas)"),
   users: z.number().optional().describe("Usuários cadastrados no período"),
   fines: z.number().optional().describe("Multas registradas (Frotas)"),
   deliveries: z.number().optional().describe("Entregas criadas (Entregas)"),
@@ -33,7 +42,9 @@ const trendSeries = z.object({
  */
 const monthCount = (what: string) =>
   z.object({
-    currentMonth: z.number().describe(`${what} no mês atual, no calendário da empresa`),
+    currentMonth: z
+      .number()
+      .describe(`${what} no mês atual, no calendário da empresa`),
     lastMonth: z.number().describe(`${what} no mês anterior`),
     basis: z
       .enum(["total", "month_to_date"])
@@ -42,7 +53,9 @@ const monthCount = (what: string) =>
       ),
     value: z
       .number()
-      .describe("O número do cartão: o total atual (`total`) ou o criado no mês até agora (`month_to_date`)."),
+      .describe(
+        "O número do cartão: o total atual (`total`) ou o criado no mês até agora (`month_to_date`).",
+      ),
     previous: z
       .number()
       .describe(
@@ -82,7 +95,9 @@ const dashboardResponses = {
       })
       .describe("Zero quando o perfil não lê veículos."),
     activityTrends: z
-      .array(trendSeries.extend({ month: z.string().describe("Mês (ex.: Set)") }))
+      .array(
+        trendSeries.extend({ month: z.string().describe("Mês (ex.: Set)") }),
+      )
       .describe(
         "Seis meses do calendário da empresa (Business.timezone), o atual por último. Cada série só vem quando o perfil pode vê-la e a empresa contratou o módulo dela.",
       ),
@@ -93,7 +108,9 @@ const dashboardResponses = {
           .describe(
             "A vencer: próxima revisão entre hoje e hoje + 30 dias, ou nenhuma revisão registrada",
           ),
-        recent: z.number().describe("Em dia: próxima revisão depois de hoje + 30 dias"),
+        recent: z
+          .number()
+          .describe("Em dia: próxima revisão depois de hoje + 30 dias"),
         overdue: z
           .number()
           .describe(
@@ -107,10 +124,14 @@ const dashboardResponses = {
       .object({
         unassigned: z
           .number()
-          .describe("Pendentes sem motorista, de qualquer data (o que ainda deve rota)"),
+          .describe(
+            "Pendentes sem motorista, de qualquer data (o que ainda deve rota)",
+          ),
         designated: z.number().describe(OPERATION_COUNTER_TEXT.designated),
         inRoute: z.number().describe(OPERATION_COUNTER_TEXT.inRoute),
-        deliveredToday: z.number().describe(OPERATION_COUNTER_TEXT.deliveredToday),
+        deliveredToday: z
+          .number()
+          .describe(OPERATION_COUNTER_TEXT.deliveredToday),
         failedToday: z.number().describe(OPERATION_COUNTER_TEXT.failedToday),
         occurrencesToday: z
           .number()
@@ -127,13 +148,12 @@ const dashboardResponses = {
         id: z.string().describe("ID da atividade"),
         type: z.string().describe("Tipo da atividade"),
         action: z.string().describe("Ação registrada"),
-        entityId: z.string().describe("ID do registro a que a atividade se refere"),
+        entityId: z
+          .string()
+          .describe("ID do registro a que a atividade se refere"),
         description: z.string().describe("Descrição da atividade"),
         status: z.string().describe("Situação exibida na atividade"),
-        performedBy: z
-          .string()
-          .nullable()
-          .describe("Quem realizou a ação"),
+        performedBy: z.string().nullable().describe("Quem realizou a ação"),
         businessId: z.string().nullable().describe("ID da empresa"),
         tenantName: z
           .string()

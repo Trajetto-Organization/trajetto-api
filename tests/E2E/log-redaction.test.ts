@@ -82,7 +82,10 @@ beforeAll(async () => {
   });
 
   await app.inject({ method: "GET", url: `/public/track/${TRACK_TOKEN}` });
-  await app.inject({ method: "GET", url: `/public/verify-proof/${PROOF_TOKEN}` });
+  await app.inject({
+    method: "GET",
+    url: `/public/verify-proof/${PROOF_TOKEN}`,
+  });
 
   await app.inject({
     method: "GET",

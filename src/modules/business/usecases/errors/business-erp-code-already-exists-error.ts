@@ -6,7 +6,11 @@ import { AppError } from "@/shared/errors/AppError";
  */
 class BusinessErpCodeAlreadyExistsError extends AppError {
   constructor() {
-    super("Já existe uma empresa com este código ERP.", 409, "BUSINESS_ERP_CODE_TAKEN");
+    super(
+      "Já existe uma empresa com este código ERP.",
+      409,
+      "BUSINESS_ERP_CODE_TAKEN",
+    );
   }
 }
 

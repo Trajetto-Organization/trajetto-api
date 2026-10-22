@@ -71,10 +71,11 @@ beforeEach(() => {
 
 describe("shippers", () => {
   it("announces create, update and delete, each after the write", async () => {
-    const created = await new CreateShipperUseCase(users, businesses, shippers).execute(
-      { name: "Embarcador Norte", businessId: BUSINESS },
-      ADMIN,
-    );
+    const created = await new CreateShipperUseCase(
+      users,
+      businesses,
+      shippers,
+    ).execute({ name: "Embarcador Norte", businessId: BUSINESS }, ADMIN);
 
     expect(catalogChanged).toHaveBeenLastCalledWith(BUSINESS, "shipper");
 
@@ -100,11 +101,17 @@ describe("shippers", () => {
   it("announces nothing when the write is refused", async () => {
     const useCase = new CreateShipperUseCase(users, businesses, shippers);
 
-    await useCase.execute({ name: "Embarcador Norte", businessId: BUSINESS }, ADMIN);
+    await useCase.execute(
+      { name: "Embarcador Norte", businessId: BUSINESS },
+      ADMIN,
+    );
     catalogChanged.mockReset();
 
     await expect(
-      useCase.execute({ name: "Embarcador Norte", businessId: BUSINESS }, ADMIN),
+      useCase.execute(
+        { name: "Embarcador Norte", businessId: BUSINESS },
+        ADMIN,
+      ),
     ).rejects.toThrow("Já existe um embarcador com este nome");
 
     expect(catalogChanged).not.toHaveBeenCalled();
@@ -128,8 +135,10 @@ describe("shippers", () => {
 
   it("validates the CNPJ check digits", () => {
     expect(
-      createShipperSchema.safeParse({ name: "Matriz", cnpj: "11.222.333/0001-81" })
-        .success,
+      createShipperSchema.safeParse({
+        name: "Matriz",
+        cnpj: "11.222.333/0001-81",
+      }).success,
     ).toBe(true);
 
     const wrong = createShipperSchema.safeParse({
@@ -140,7 +149,9 @@ describe("shippers", () => {
     expect(wrong.success).toBe(false);
 
     if (!wrong.success) {
-      expect(wrong.error.issues[0].message).toBe("O CNPJ informado não é válido.");
+      expect(wrong.error.issues[0].message).toBe(
+        "O CNPJ informado não é válido.",
+      );
     }
 
     expect(

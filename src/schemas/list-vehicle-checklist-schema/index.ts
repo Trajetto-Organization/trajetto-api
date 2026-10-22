@@ -37,6 +37,8 @@ const listVehicleChecklistSchema = listPagesSchema.extend({
   ...sortFields(CHECKLIST_SORT_KEYS, CHECKLIST_SORT_FALLBACK),
 });
 
-const exportVehicleChecklistSchema = exportReports.extend(checklistFilterFields);
+const exportVehicleChecklistSchema = exportReports.extend(
+  checklistFilterFields,
+);
 
 export { listVehicleChecklistSchema, exportVehicleChecklistSchema };

@@ -17,11 +17,14 @@ class UploadAvatarController {
     // Parsed by hand, so the shared lock is applied by hand: no edit body
     // names a company (decision 16.100), with the same 400 as the others.
     if (body.businessId !== undefined) {
-      return reply.header("x-error-code", "VALIDATION_ERROR").status(400).send({
-        code: "VALIDATION_ERROR",
-        message: TENANT_MOVE_REFUSED,
-        issues: [TENANT_MOVE_REFUSED],
-      });
+      return reply
+        .header("x-error-code", "VALIDATION_ERROR")
+        .status(400)
+        .send({
+          code: "VALIDATION_ERROR",
+          message: TENANT_MOVE_REFUSED,
+          issues: [TENANT_MOVE_REFUSED],
+        });
     }
     const parsed = presignedPhotoSchema.safeParse(body.photo);
 

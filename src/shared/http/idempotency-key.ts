@@ -12,7 +12,9 @@ import { submissionKeyOf } from "./submission-key";
  * an API older than this web — simply ignores it: the create works exactly as
  * before, only without the guard.
  */
-function idempotencyKeyOf(headers: Record<string, unknown>): string | undefined {
+function idempotencyKeyOf(
+  headers: Record<string, unknown>,
+): string | undefined {
   return submissionKeyOf(undefined, headers["idempotency-key"]);
 }
 

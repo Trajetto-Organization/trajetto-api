@@ -18,7 +18,9 @@ describe("the provider metrics window", () => {
     const metrics = createProviderMetrics();
     const snapshot = metrics.snapshot();
 
-    expect(snapshot.channels.map((c) => c.channel)).toEqual([...PROVIDER_CHANNELS]);
+    expect(snapshot.channels.map((c) => c.channel)).toEqual([
+      ...PROVIDER_CHANNELS,
+    ]);
 
     for (const channel of snapshot.channels) {
       expect(channel.calls).toBe(0);
@@ -30,9 +32,12 @@ describe("the provider metrics window", () => {
   it("computes the error rate and the percentiles of the window", () => {
     const metrics = createProviderMetrics();
 
-    for (let i = 1; i <= 20; i += 1) metrics.record("WHATSAPP", i * 10, i % 4 !== 0, "http_500");
+    for (let i = 1; i <= 20; i += 1)
+      metrics.record("WHATSAPP", i * 10, i % 4 !== 0, "http_500");
 
-    const whatsapp = metrics.snapshot().channels.find((c) => c.channel === "WHATSAPP")!;
+    const whatsapp = metrics
+      .snapshot()
+      .channels.find((c) => c.channel === "WHATSAPP")!;
 
     expect(whatsapp.calls).toBe(20);
     expect(whatsapp.errors).toBe(5);
@@ -45,13 +50,18 @@ describe("the provider metrics window", () => {
 
   it("forgets calls older than the window but keeps the totals", () => {
     let clock = 0;
-    const metrics = createProviderMetrics({ windowMs: 60_000, now: () => clock });
+    const metrics = createProviderMetrics({
+      windowMs: 60_000,
+      now: () => clock,
+    });
 
     metrics.record("EMAIL", 50, false, "eauth");
     clock = 120_000;
     metrics.record("EMAIL", 70, true);
 
-    const email = metrics.snapshot().channels.find((c) => c.channel === "EMAIL")!;
+    const email = metrics
+      .snapshot()
+      .channels.find((c) => c.channel === "EMAIL")!;
 
     expect(email.calls).toBe(1);
     expect(email.errors).toBe(0);
@@ -94,16 +104,26 @@ describe("observing a provider call", () => {
 
   it("records a throw and rethrows it untouched", async () => {
     const metrics = createProviderMetrics();
-    const failure = Object.assign(new Error("Invalid login: 535 for user@x.com"), {
-      code: "EAUTH",
-      responseCode: 535,
-    });
+    const failure = Object.assign(
+      new Error("Invalid login: 535 for user@x.com"),
+      {
+        code: "EAUTH",
+        responseCode: 535,
+      },
+    );
 
     await expect(
-      observeProviderCall("EMAIL", async () => Promise.reject(failure), undefined, metrics),
+      observeProviderCall(
+        "EMAIL",
+        async () => Promise.reject(failure),
+        undefined,
+        metrics,
+      ),
     ).rejects.toBe(failure);
 
-    const email = metrics.snapshot().channels.find((c) => c.channel === "EMAIL")!;
+    const email = metrics
+      .snapshot()
+      .channels.find((c) => c.channel === "EMAIL")!;
 
     expect(email.errors).toBe(1);
     // The kind, never the message with the address.
@@ -117,8 +137,14 @@ describe("the error kind", () => {
     [Object.assign(new Error("x"), { name: "TimeoutError" }), "timeout"],
     [Object.assign(new Error("x"), { httpStatus: 403 }), "http_403"],
     [Object.assign(new Error("x"), { code: "ECONNREFUSED" }), "econnrefused"],
-    [Object.assign(new Error("x"), { cause: { code: "ENOTFOUND" } }), "enotfound"],
-    [Object.assign(new Error("x"), { code: "has spaces and a token abc" }), "error"],
+    [
+      Object.assign(new Error("x"), { cause: { code: "ENOTFOUND" } }),
+      "enotfound",
+    ],
+    [
+      Object.assign(new Error("x"), { code: "has spaces and a token abc" }),
+      "error",
+    ],
     ["a string", "error"],
   ])("names %s as %s", (error, kind) => {
     expect(providerErrorKind(error)).toBe(kind);

@@ -136,7 +136,10 @@ describe("the public verification link", () => {
           invoice_number: "12345",
           delivered_at: generatedAt,
           received_by: "Maria Souza",
-          business: { corporate_reason: "Transportes Silva Ltda", fantasy_name: null },
+          business: {
+            corporate_reason: "Transportes Silva Ltda",
+            fantasy_name: null,
+          },
         },
       }),
     } as unknown as IProofDocumentRepository;

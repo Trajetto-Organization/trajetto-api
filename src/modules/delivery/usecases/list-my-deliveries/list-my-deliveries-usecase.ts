@@ -69,7 +69,8 @@ function routesOf(deliveries: unknown[]): MyDeliveriesRoute[] {
     if (!Array.isArray(stops)) continue;
 
     for (const stop of stops) {
-      const route = (stop as { route?: Partial<MyDeliveriesRoute> | null }).route;
+      const route = (stop as { route?: Partial<MyDeliveriesRoute> | null })
+        .route;
 
       if (
         route &&
@@ -78,7 +79,11 @@ function routesOf(deliveries: unknown[]): MyDeliveriesRoute[] {
         typeof route.plan_version === "number" &&
         !routes.has(route.id)
       ) {
-        routes.set(route.id, { id: route.id, code: route.code, plan_version: route.plan_version });
+        routes.set(route.id, {
+          id: route.id,
+          code: route.code,
+          plan_version: route.plan_version,
+        });
       }
     }
   }
@@ -129,7 +134,8 @@ class ListMyDeliveriesUseCase {
       this.occurrenceType.listActiveOccurrenceTypes(businessId),
     ]);
 
-    let deliveredTypes = await this.occurrenceType.listActiveDeliveredTypes(businessId);
+    let deliveredTypes =
+      await this.occurrenceType.listActiveDeliveredTypes(businessId);
     let pauseTypes = await this.occurrenceType.listActivePauseTypes(businessId);
 
     // The catalogue keeps one active type of each (LAST_OF_CATEGORY): none
@@ -137,11 +143,17 @@ class ListMyDeliveriesUseCase {
     if (deliveredTypes.length === 0 || pauseTypes.length === 0) {
       await this.occurrenceType.ensureDefaultTypes(businessId);
 
-      deliveredTypes = await this.occurrenceType.listActiveDeliveredTypes(businessId);
+      deliveredTypes =
+        await this.occurrenceType.listActiveDeliveredTypes(businessId);
       pauseTypes = await this.occurrenceType.listActivePauseTypes(businessId);
     }
 
-    const journey = await journeyAt(this.pauses, businessId, findUser.driverId, now);
+    const journey = await journeyAt(
+      this.pauses,
+      businessId,
+      findUser.driverId,
+      now,
+    );
 
     return {
       deliveries,

@@ -35,7 +35,10 @@ function countDeviceAgreement(
 }
 
 /** A snapshot, for /health/metrics. */
-function deviceAgreementTotals(): Record<DeviceAgreementKind, DeviceAgreementCounts> {
+function deviceAgreementTotals(): Record<
+  DeviceAgreementKind,
+  DeviceAgreementCounts
+> {
   return {
     proof: { ...totals.proof },
     fuel_odometer: { ...totals.fuel_odometer },

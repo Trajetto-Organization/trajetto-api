@@ -21,7 +21,10 @@ import {
   BUSINESS_COLUMN_DEFAULTS,
   withColumnDefaults,
 } from "@/shared/in-memory/column-defaults";
-import { assertUniqueValue, requireIndex } from "@/shared/in-memory/prisma-errors";
+import {
+  assertUniqueValue,
+  requireIndex,
+} from "@/shared/in-memory/prisma-errors";
 import { afterCursor } from "@/shared/in-memory/cursor";
 
 import {
@@ -47,7 +50,12 @@ const BUSINESS_NULLS: Partial<Record<BusinessSortKey, NullsPlacement>> = {
 const createdAtOf = (business: Business) => new Date(business.created_at ?? 0);
 
 /** The columns Business declares @unique (case-sensitive, NULLs allowed). */
-const UNIQUE_COLUMNS = ["corporate_reason", "cnpj", "erp_code", "email"] as const;
+const UNIQUE_COLUMNS = [
+  "corporate_reason",
+  "cnpj",
+  "erp_code",
+  "email",
+] as const;
 
 class InMemoryBusinessRepository implements IBusinessRepository {
   public business: Business[] = [];
@@ -92,7 +100,10 @@ class InMemoryBusinessRepository implements IBusinessRepository {
     filters: BusinessListFilters,
     { withFacets }: { withFacets: boolean },
   ): boolean {
-    if (filters.ownBusinessId !== undefined && business.id !== filters.ownBusinessId) {
+    if (
+      filters.ownBusinessId !== undefined &&
+      business.id !== filters.ownBusinessId
+    ) {
       return false;
     }
 
@@ -103,7 +114,10 @@ class InMemoryBusinessRepository implements IBusinessRepository {
         if ((business.is_active ?? true) !== wanted) return false;
       }
 
-      if (filters.ufs?.length && !(filters.ufs as string[]).includes(business.uf)) {
+      if (
+        filters.ufs?.length &&
+        !(filters.ufs as string[]).includes(business.uf)
+      ) {
         return false;
       }
     }
@@ -172,10 +186,13 @@ class InMemoryBusinessRepository implements IBusinessRepository {
     };
 
     const resolvedSort = sort ?? BUSINESS_SORT_FALLBACK.sort;
-    const resolvedOrder = order ?? (sort ? "asc" : BUSINESS_SORT_FALLBACK.order);
+    const resolvedOrder =
+      order ?? (sort ? "asc" : BUSINESS_SORT_FALLBACK.order);
 
     const filtered = this.business
-      .filter((business) => this.matches(business, filters, { withFacets: true }))
+      .filter((business) =>
+        this.matches(business, filters, { withFacets: true }),
+      )
       .sort(this.compare(resolvedSort, resolvedOrder));
 
     const groups = new Map<string, BusinessGroupCount>();
@@ -199,11 +216,18 @@ class InMemoryBusinessRepository implements IBusinessRepository {
     }
 
     // GROUP BY city, uf ORDER BY count desc, city, uf LIMIT 3.
-    const places = new Map<string, { city: string; uf: string; count: number }>();
+    const places = new Map<
+      string,
+      { city: string; uf: string; count: number }
+    >();
 
     for (const business of filtered) {
       const key = `${business.city}|${business.uf}`;
-      const place = places.get(key) ?? { city: business.city, uf: business.uf, count: 0 };
+      const place = places.get(key) ?? {
+        city: business.city,
+        uf: business.uf,
+        count: 0,
+      };
 
       place.count += 1;
       places.set(key, place);
@@ -217,15 +241,19 @@ class InMemoryBusinessRepository implements IBusinessRepository {
           compareForOrder(a.uf, b.uf, "asc"),
       )
       .slice(0, TOP_PLACES)
-      .map((place) => ({ value: cityLabel(place.city, place.uf), count: place.count }));
+      .map((place) => ({
+        value: cityLabel(place.city, place.uf),
+        count: place.count,
+      }));
 
     const start = (page - 1) * pageSize;
 
     return {
       // The twin has no vehicle table: no registered fleet.
-      data: filtered
-        .slice(start, start + pageSize)
-        .map((business) => ({ ...business, vehicle_count: business.vehicle_count ?? 0 })),
+      data: filtered.slice(start, start + pageSize).map((business) => ({
+        ...business,
+        vehicle_count: business.vehicle_count ?? 0,
+      })),
       groups: Array.from(groups.values()),
       topCities,
     };
@@ -277,7 +305,11 @@ class InMemoryBusinessRepository implements IBusinessRepository {
   }
 
   async deleteBusiness(businessId: string): Promise<Business> {
-    const index = requireIndex(this.business, (b) => b.id === businessId, "delete");
+    const index = requireIndex(
+      this.business,
+      (b) => b.id === businessId,
+      "delete",
+    );
 
     const deletedBusiness = this.business.splice(index, 1)[0];
     return deletedBusiness;
@@ -380,7 +412,9 @@ class InMemoryBusinessRepository implements IBusinessRepository {
   }: SearchBusinessWithCursorProps): Promise<CursorPaginatedBusiness> {
     // Newest first with the id as tiebreaker, like the repository.
     const createdAt = (business: Business) =>
-      new Date((business as { created_at?: Date | string }).created_at ?? 0).getTime();
+      new Date(
+        (business as { created_at?: Date | string }).created_at ?? 0,
+      ).getTime();
 
     const newestFirst = (a: Business, b: Business) =>
       createdAt(b) - createdAt(a) || compareForOrder(a.id, b.id, "desc");

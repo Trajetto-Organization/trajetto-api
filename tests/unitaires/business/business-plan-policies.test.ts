@@ -126,9 +126,9 @@ describe("business plan notification policies", () => {
   });
 
   it("carries the change to WhatsApp for whoever configured a number", () => {
-    expect(businessModuleChangedPolicy.renderWhatsApp!(modulePayload)).toContain(
-      "Entregas",
-    );
+    expect(
+      businessModuleChangedPolicy.renderWhatsApp!(modulePayload),
+    ).toContain("Entregas");
 
     expect(businessLimitChangedPolicy.renderWhatsApp!(limitPayload)).toContain(
       "34",

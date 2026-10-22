@@ -30,7 +30,9 @@ interface IServiceOrderPartRepository {
   ) => Promise<ServiceOrderPart | null>;
   calculateServiceOrderTotal: (serviceOrderId: string) => Promise<number>;
   /** The order's typed total and the sum of its parts, after a change. */
-  serviceOrderTotals: (serviceOrderId: string) => Promise<ServiceOrderTotals | null>;
+  serviceOrderTotals: (
+    serviceOrderId: string,
+  ) => Promise<ServiceOrderTotals | null>;
 }
 
 export { IServiceOrderPartRepository };

@@ -7,7 +7,11 @@
  * turn an absent key into NULL (that erased the ERP code and the complement
  * on every PATCH that omitted them). Shared by the repository and its twin.
  */
-const OPTIONAL_TEXT_COLUMNS = ["fantasy_name", "complement", "erp_code"] as const;
+const OPTIONAL_TEXT_COLUMNS = [
+  "fantasy_name",
+  "complement",
+  "erp_code",
+] as const;
 
 type OptionalTextColumn = (typeof OPTIONAL_TEXT_COLUMNS)[number];
 

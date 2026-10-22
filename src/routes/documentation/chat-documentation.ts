@@ -51,7 +51,9 @@ const chatMessageEntity = z.object({
   attachment_url: z
     .string()
     .nullable()
-    .describe("URL assinada de vida curta da foto ou do áudio; a chave de storage nunca sai."),
+    .describe(
+      "URL assinada de vida curta da foto ou do áudio; a chave de storage nunca sai.",
+    ),
   duration_ms: z.number().nullable().describe("Duração do áudio."),
   deliveryId: z.string().nullable(),
   routeId: z
@@ -67,7 +69,9 @@ const chatMessageEntity = z.object({
   ticketId: z
     .string()
     .nullable()
-    .describe("O atendimento (ticket) da mensagem (decisão 14.5); null só em aviso em massa."),
+    .describe(
+      "O atendimento (ticket) da mensagem (decisão 14.5); null só em aviso em massa.",
+    ),
   senderId: z.string(),
   created_at: isoDateTime,
   sender: chatPerson,
@@ -76,7 +80,11 @@ const chatMessageEntity = z.object({
     .nullable()
     .describe("A entrega citada na mensagem, já resolvida."),
   route: z
-    .object({ id: z.string(), code: z.number().int(), name: z.string().nullable() })
+    .object({
+      id: z.string(),
+      code: z.number().int(),
+      name: z.string().nullable(),
+    })
     .nullable()
     .describe("A rota da mensagem, já resolvida; null fora de rota."),
 });
@@ -102,7 +110,9 @@ const chatRecipient = z.object({
     ),
 });
 
-const chatCursor = z.object({ created_at: z.string(), id: z.string() }).nullable();
+const chatCursor = z
+  .object({ created_at: z.string(), id: z.string() })
+  .nullable();
 
 const chatDocumented = {
   message: chatMessageEntity,
@@ -142,58 +152,69 @@ const chatResponses = {
     z.object({
       data: z.array(chatDocumented.threadEntry),
       total: z.number(),
-      totalUnread: z.number().describe("Em todas as conversas do escopo, não só na página."),
+      totalUnread: z
+        .number()
+        .describe("Em todas as conversas do escopo, não só na página."),
     }),
   ),
-  messageList: documentedAs(z.object({
-    threadId: z.string().nullable(),
-    data: z.array(z.unknown()),
-    nextCursor: chatCursorEntity,
+  messageList: documentedAs(
+    z.object({
+      threadId: z.string().nullable(),
+      data: z.array(z.unknown()),
+      nextCursor: chatCursorEntity,
 
-    // Only a window centred on an old message has anything newer; paging
-    // back from the end never does.
-    previousCursor: chatCursorEntity,
-    hasNewer: z.boolean(),
+      // Only a window centred on an old message has anything newer; paging
+      // back from the end never does.
+      previousCursor: chatCursorEntity,
+      hasNewer: z.boolean(),
 
-    counterpartLastReadAt: z.unknown(),
-    counterpartDeliveredAt: z.unknown(),
+      counterpartLastReadAt: z.unknown(),
+      counterpartDeliveredAt: z.unknown(),
 
-    // Null means the driver genuinely has no app account — the one fact the
-    // panel used to guess from a thread list that may not have loaded him.
-    driverUser: z.unknown(),
+      // Null means the driver genuinely has no app account — the one fact the
+      // panel used to guess from a thread list that may not have loaded him.
+      driverUser: z.unknown(),
 
-    // Decision 14.5: the tickets cited on the page (subject separators).
-    tickets: z.array(z.unknown()),
-    counterpartTicketReadAt: z.unknown(),
-  }), z.object({
-    threadId: z
-      .string()
-      .nullable()
-      .describe("Null quando o motorista ainda não tem conversa: um chat vazio e válido."),
-    data: z.array(chatDocumented.message).describe("Mais nova primeiro."),
-    nextCursor: chatCursor.describe("Para mensagens mais antigas."),
-    previousCursor: chatCursor.describe("Para mensagens mais novas; null no fim da conversa."),
-    hasNewer: z.boolean(),
-    counterpartLastReadAt: isoDateTime
-      .nullable()
-      .describe("Até onde o OUTRO lado leu: o duplo check azul."),
-    counterpartDeliveredAt: isoDateTime
-      .nullable()
-      .describe("Até onde o aparelho do motorista recebeu (só para a base): o duplo check cinza."),
-    driverUser: z
-      .object({ id: z.string(), last_seen_at: isoDateTime.nullable() })
-      .nullable(),
-    tickets: z
-      .array(z.union([ticketSummary, driverTicketViewShape]))
-      .describe(
-        "Os atendimentos das mensagens desta página, para os separadores de assunto. O motorista recebe a visão reduzida (sem atendente).",
+      // Decision 14.5: the tickets cited on the page (subject separators).
+      tickets: z.array(z.unknown()),
+      counterpartTicketReadAt: z.unknown(),
+    }),
+    z.object({
+      threadId: z
+        .string()
+        .nullable()
+        .describe(
+          "Null quando o motorista ainda não tem conversa: um chat vazio e válido.",
+        ),
+      data: z.array(chatDocumented.message).describe("Mais nova primeiro."),
+      nextCursor: chatCursor.describe("Para mensagens mais antigas."),
+      previousCursor: chatCursor.describe(
+        "Para mensagens mais novas; null no fim da conversa.",
       ),
-    counterpartTicketReadAt: z
-      .record(z.string(), isoDateTime)
-      .describe(
-        "Até onde o OUTRO lado leu cada atendimento citado na página (ler um atendimento move só o cursor dele). Uma mensagem está lida quando counterpartLastReadAt OU o cursor do atendimento dela a cobre. Atendimento que o outro lado nunca leu fica de fora.",
-      ),
-  })),
+      hasNewer: z.boolean(),
+      counterpartLastReadAt: isoDateTime
+        .nullable()
+        .describe("Até onde o OUTRO lado leu: o duplo check azul."),
+      counterpartDeliveredAt: isoDateTime
+        .nullable()
+        .describe(
+          "Até onde o aparelho do motorista recebeu (só para a base): o duplo check cinza.",
+        ),
+      driverUser: z
+        .object({ id: z.string(), last_seen_at: isoDateTime.nullable() })
+        .nullable(),
+      tickets: z
+        .array(z.union([ticketSummary, driverTicketViewShape]))
+        .describe(
+          "Os atendimentos das mensagens desta página, para os separadores de assunto. O motorista recebe a visão reduzida (sem atendente).",
+        ),
+      counterpartTicketReadAt: z
+        .record(z.string(), isoDateTime)
+        .describe(
+          "Até onde o OUTRO lado leu cada atendimento citado na página (ler um atendimento move só o cursor dele). Uma mensagem está lida quando counterpartLastReadAt OU o cursor do atendimento dela a cobre. Atendimento que o outro lado nunca leu fica de fora.",
+        ),
+    }),
+  ),
   messageSent: documentedAs(
     z.object({
       message: z.string().default("Mensagem enviada!"),
@@ -216,7 +237,9 @@ const chatResponses = {
                 version: z.number().int(),
               })
               .nullable()
-              .describe("O atendimento em que a mensagem caiu; null num aviso em massa."),
+              .describe(
+                "O atendimento em que a mensagem caiu; null num aviso em massa.",
+              ),
             senderSide: z
               .enum(["DRIVER", "STAFF"])
               .describe("Quem escreveu: o motorista ou a central."),
@@ -243,7 +266,9 @@ const chatResponses = {
       audience: z.unknown(),
     }),
     z.object({
-      data: z.array(chatRecipient).describe("Motoristas ativos, em ordem alfabética."),
+      data: z
+        .array(chatRecipient)
+        .describe("Motoristas ativos, em ordem alfabética."),
       nextCursor: z
         .string()
         .nullable()
@@ -292,7 +317,9 @@ const chatResponses = {
       attachment_url: z
         .string()
         .nullable()
-        .describe("URL assinada de vida curta; null quando a mensagem não tem anexo."),
+        .describe(
+          "URL assinada de vida curta; null quando a mensagem não tem anexo.",
+        ),
     }),
   ),
   // The handler's own shape: a narrower schema would strip `code`.

@@ -2,7 +2,15 @@ import { createRequire } from "node:module";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 /**
  * What a connection costs BEFORE Socket.IO's own middleware runs.
@@ -34,7 +42,9 @@ const limiter = vi.hoisted(() => {
 
 vi.mock("@/shared/socket/handshake-rate-limit", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@/shared/socket/handshake-rate-limit")>();
+    await importOriginal<
+      typeof import("@/shared/socket/handshake-rate-limit")
+    >();
 
   return {
     ...actual,

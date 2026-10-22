@@ -131,12 +131,7 @@ describe("the edit form", () => {
 
   it("refuses “Em rota” as an actual change", async () => {
     await expect(
-      context.update.execute(
-        { status: "IN_ROUTE" },
-        VEHICLE,
-        BUSINESS,
-        ADMIN,
-      ),
+      context.update.execute({ status: "IN_ROUTE" }, VEHICLE, BUSINESS, ADMIN),
     ).rejects.toMatchObject({
       statusCode: 400,
       code: "VEHICLE_STATUS_DERIVED",

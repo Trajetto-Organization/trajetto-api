@@ -22,7 +22,11 @@ const schemas = [
 
 describe.each(schemas)("the %s coordinates", (_name, schema, base) => {
   it.each([null, ""])("reads %j as no position, not 0", (empty) => {
-    const parsed = schema.safeParse({ ...base, latitude: empty, longitude: empty });
+    const parsed = schema.safeParse({
+      ...base,
+      latitude: empty,
+      longitude: empty,
+    });
 
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
@@ -31,7 +35,11 @@ describe.each(schemas)("the %s coordinates", (_name, schema, base) => {
   });
 
   it("still coerces a numeric string from a form body", () => {
-    const parsed = schema.safeParse({ ...base, latitude: "-23.5", longitude: "-46.6" });
+    const parsed = schema.safeParse({
+      ...base,
+      latitude: "-23.5",
+      longitude: "-46.6",
+    });
 
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;

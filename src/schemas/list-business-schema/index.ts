@@ -15,7 +15,10 @@ import {
  */
 const listBusinessSchema = listPagesSchema.extend({
   ...sortFields(BUSINESS_SORT_KEYS, BUSINESS_SORT_FALLBACK),
-  status: facetField(BUSINESS_STATUSES, "Situação da empresa (active = ativa, inactive = inativa)."),
+  status: facetField(
+    BUSINESS_STATUSES,
+    "Situação da empresa (active = ativa, inactive = inativa).",
+  ),
   uf: facetField(BRAZILIAN_UFS, "Estado (UF) do endereço da empresa."),
 });
 

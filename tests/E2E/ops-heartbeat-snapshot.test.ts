@@ -87,7 +87,9 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
-  await prisma.domainOutboxEvent.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.domainOutboxEvent.deleteMany({
+    where: { businessId: BUSINESS },
+  });
   await prisma.user.deleteMany({ where: { id: USER } });
   await prisma.business.deleteMany({ where: { id: BUSINESS } });
   await prisma.$disconnect();

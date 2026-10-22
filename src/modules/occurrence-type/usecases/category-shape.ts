@@ -18,7 +18,8 @@ function categoryShapeOf(
   const pick = <K extends keyof OccurrenceType>(key: K) =>
     changes[key] !== undefined ? changes[key] : current[key];
 
-  const fields = form !== undefined ? form : readFormFields(current.form_fields);
+  const fields =
+    form !== undefined ? form : readFormFields(current.form_fields);
 
   return {
     category: pick("category") ?? "NOT_DELIVERED",

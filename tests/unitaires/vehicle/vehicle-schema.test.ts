@@ -35,7 +35,13 @@ const valid = {
   fuelTypeId: "018f0000-0000-7000-8000-0000000000f1",
 };
 
-function issuesOf(result: { success: boolean; error?: { issues: Array<{ path: (string | number)[]; message: string }> } }, field: string) {
+function issuesOf(
+  result: {
+    success: boolean;
+    error?: { issues: Array<{ path: (string | number)[]; message: string }> };
+  },
+  field: string,
+) {
   return result.success
     ? []
     : (result.error?.issues ?? []).filter((issue) => issue.path[0] === field);
@@ -44,13 +50,18 @@ function issuesOf(result: { success: boolean; error?: { issues: Array<{ path: (s
 describe("the update schema is the create schema made partial", () => {
   it("accepts editing a one-axle vehicle", () => {
     // Red before: update demanded at least two axles.
-    expect(updateVehicleSchema.safeParse({ number_of_axles: 1 }).success).toBe(true);
+    expect(updateVehicleSchema.safeParse({ number_of_axles: 1 }).success).toBe(
+      true,
+    );
   });
 
   it("refuses fractional months on update, like on create", () => {
     // Red before: update accepted 1.5 and Prisma refused it with a 500.
     expect(
-      issuesOf(updateVehicleSchema.safeParse({ maintenance_interval_months: 1.5 }), "maintenance_interval_months"),
+      issuesOf(
+        updateVehicleSchema.safeParse({ maintenance_interval_months: 1.5 }),
+        "maintenance_interval_months",
+      ),
     ).toHaveLength(1);
   });
 
@@ -80,25 +91,36 @@ describe("the registration", () => {
   });
 
   it("accepts km/l with two decimals and refuses three", () => {
-    expect(createVehicleSchema.safeParse({ ...valid, km_per_liter: 3.75 }).success).toBe(true);
     expect(
-      issuesOf(createVehicleSchema.safeParse({ ...valid, km_per_liter: 3.755 }), "km_per_liter"),
+      createVehicleSchema.safeParse({ ...valid, km_per_liter: 3.75 }).success,
+    ).toBe(true);
+    expect(
+      issuesOf(
+        createVehicleSchema.safeParse({ ...valid, km_per_liter: 3.755 }),
+        "km_per_liter",
+      ),
     ).toHaveLength(1);
   });
 
   it("stores the plate in capitals", () => {
     // Red before: "abc1d23" reached the case-sensitive unique index as typed.
-    expect(createVehicleSchema.parse({ ...valid, license_plate: "abc1d23" }).license_plate).toBe(
-      "ABC1D23",
-    );
+    expect(
+      createVehicleSchema.parse({ ...valid, license_plate: "abc1d23" })
+        .license_plate,
+    ).toBe("ABC1D23");
   });
 
   it("refuses a fleet identifier longer than 50 characters", () => {
     // Red before: no ceiling at all.
     expect(
-      issuesOf(createVehicleSchema.safeParse({ ...valid, fleet_id: "x".repeat(51) }), "fleet_id"),
+      issuesOf(
+        createVehicleSchema.safeParse({ ...valid, fleet_id: "x".repeat(51) }),
+        "fleet_id",
+      ),
     ).toHaveLength(1);
-    expect(createVehicleSchema.safeParse({ ...valid, fleet_id: "" }).success).toBe(true);
+    expect(
+      createVehicleSchema.safeParse({ ...valid, fleet_id: "" }).success,
+    ).toBe(true);
   });
 
   it("refuses a manufacturing year in the future and a model two years ahead", () => {
@@ -115,7 +137,10 @@ describe("the registration", () => {
 
     expect(
       issuesOf(
-        createVehicleSchema.safeParse({ ...valid, model_year: `${THIS_YEAR + 2}-01-01` }),
+        createVehicleSchema.safeParse({
+          ...valid,
+          model_year: `${THIS_YEAR + 2}-01-01`,
+        }),
         "model_year",
       ).length,
     ).toBeGreaterThan(0);

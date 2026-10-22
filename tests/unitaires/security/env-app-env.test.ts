@@ -49,11 +49,16 @@ describe("APP_ENV", () => {
   });
 
   it("keeps staging under every production guard", () => {
-    const parsed = parse({ ...production, APP_ENV: "staging", UPLOAD_STORAGE_TYPE: "local" });
+    const parsed = parse({
+      ...production,
+      APP_ENV: "staging",
+      UPLOAD_STORAGE_TYPE: "local",
+    });
 
     expect(parsed.success).toBe(false);
     expect(
-      !parsed.success && parsed.error.issues.map((issue) => issue.path.join(".")),
+      !parsed.success &&
+        parsed.error.issues.map((issue) => issue.path.join(".")),
     ).toContain("UPLOAD_STORAGE_TYPE");
   });
 
@@ -64,7 +69,8 @@ describe("APP_ENV", () => {
 
       expect(parsed.success).toBe(false);
       expect(
-        !parsed.success && parsed.error.issues.map((issue) => issue.path.join(".")),
+        !parsed.success &&
+          parsed.error.issues.map((issue) => issue.path.join(".")),
       ).toEqual(["APP_ENV"]);
     },
   );
@@ -91,7 +97,11 @@ describe("APP_ENV", () => {
   it("lets a local run of the production image call itself development", () => {
     // The load harness runs the real image on a laptop: neither staging nor
     // production, and nothing there should be mistaken for either.
-    const parsed = parse({ ...production, APP_ENV: "development", RATE_LIMIT_TRUSTED_PROXY: "xff" });
+    const parsed = parse({
+      ...production,
+      APP_ENV: "development",
+      RATE_LIMIT_TRUSTED_PROXY: "xff",
+    });
 
     expect(parsed.success && parsed.data.APP_ENV).toBe("development");
   });

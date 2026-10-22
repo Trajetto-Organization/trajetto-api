@@ -1,6 +1,9 @@
 import { AppError } from "@/shared/errors/AppError";
 import { businessDateKey, resolveTimeZone } from "@/shared/time/business-day";
-import { pickedDateFromInput, pickedDayKey } from "@/shared/vehicle/record-dates";
+import {
+  pickedDateFromInput,
+  pickedDayKey,
+} from "@/shared/vehicle/record-dates";
 
 /**
  * A checklist dated after the company's today (decision 1.2).
@@ -34,7 +37,11 @@ function assertChecklistNotInTheFuture(
   business: { timezone?: string | null },
   now: Date = new Date(),
 ): void {
-  if (checklistDate === undefined || checklistDate === null || checklistDate === "") {
+  if (
+    checklistDate === undefined ||
+    checklistDate === null ||
+    checklistDate === ""
+  ) {
     return;
   }
 
@@ -60,7 +67,11 @@ function assertChecklistNotInTheFuture(
  */
 function changedChecklistLinks(
   current: { vehicleId: string; driverId: string; branchId: string },
-  next: { vehicleId?: string | null; driverId?: string | null; branchId?: string | null },
+  next: {
+    vehicleId?: string | null;
+    driverId?: string | null;
+    branchId?: string | null;
+  },
 ): { vehicle: boolean; driver: boolean; branch: boolean } {
   const differs = (value: string | null | undefined, original: string) =>
     typeof value === "string" && value !== "" && value !== original;
@@ -106,7 +117,10 @@ function withChecklistDate<T extends { checklist_date?: Date | string | null }>(
 
   const picked = pickedDateFromInput(data.checklist_date, timeZone);
 
-  return { ...data, checklist_date: picked instanceof Date ? picked : new Date(picked) };
+  return {
+    ...data,
+    checklist_date: picked instanceof Date ? picked : new Date(picked),
+  };
 }
 
 export {

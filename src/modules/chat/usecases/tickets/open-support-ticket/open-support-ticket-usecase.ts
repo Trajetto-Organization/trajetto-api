@@ -111,15 +111,22 @@ class OpenSupportTicketUseCase {
     private sendMessage: SendChatMessageUseCase,
   ) {}
 
-  async execute(request: OpenSupportTicketRequest): Promise<OpenSupportTicketResponse> {
-    const scope = await resolveTicketScope(this.user, request.userId, request.businessId);
+  async execute(
+    request: OpenSupportTicketRequest,
+  ): Promise<OpenSupportTicketResponse> {
+    const scope = await resolveTicketScope(
+      this.user,
+      request.userId,
+      request.businessId,
+    );
 
     assertNotMaster(scope);
 
     // Creating a ticket allocates a number and rings a phone: never twice.
     if (!request.idempotencyKey) throw new IdempotencyKeyRequiredError();
 
-    if (request.deliveryId && request.routeId) throw new SupportTicketContextConflictError();
+    if (request.deliveryId && request.routeId)
+      throw new SupportTicketContextConflictError();
 
     const byDriver = Boolean(scope.driverId);
 
@@ -129,10 +136,14 @@ class OpenSupportTicketUseCase {
       }
 
       if (request.occurrenceId) {
-        throw permissionDenied("Somente a central abre o atendimento de uma ocorrência.");
+        throw permissionDenied(
+          "Somente a central abre o atendimento de uma ocorrência.",
+        );
       }
     } else if (!isTicketOperator(scope)) {
-      throw permissionDenied("Seu perfil de acesso permite apenas a leitura desta seção.");
+      throw permissionDenied(
+        "Seu perfil de acesso permite apenas a leitura desta seção.",
+      );
     }
 
     let driverId = scope.driverId ?? request.driverId;
@@ -141,7 +152,9 @@ class OpenSupportTicketUseCase {
     // in the conversation of the delivery's driver, so the panel need not
     // know him. A delivery of another company reads as missing.
     if (!driverId && request.deliveryId) {
-      const ofDelivery = await this.delivery.findDeliveryById(request.deliveryId);
+      const ofDelivery = await this.delivery.findDeliveryById(
+        request.deliveryId,
+      );
 
       if (!ofDelivery || ofDelivery.businessId !== scope.businessId) {
         throw new ChatDeliveryNotFoundError();
@@ -159,11 +172,18 @@ class OpenSupportTicketUseCase {
     }
 
     if (!driverId) {
-      throw new AppError("Informe o motorista do atendimento.", 400, "SUPPORT_TICKET_DRIVER_REQUIRED");
+      throw new AppError(
+        "Informe o motorista do atendimento.",
+        400,
+        "SUPPORT_TICKET_DRIVER_REQUIRED",
+      );
     }
 
     // A retried create answers the ticket the first attempt opened.
-    const replay = await this.tickets.findBySubmissionId(request.idempotencyKey, scope.businessId);
+    const replay = await this.tickets.findBySubmissionId(
+      request.idempotencyKey,
+      scope.businessId,
+    );
 
     if (replay) {
       // A key is not a credential: someone else's ticket is a conflict.
@@ -198,7 +218,9 @@ class OpenSupportTicketUseCase {
 
     try {
       if (request.deliveryId) {
-        const findDelivery = await this.delivery.findDeliveryById(request.deliveryId);
+        const findDelivery = await this.delivery.findDeliveryById(
+          request.deliveryId,
+        );
 
         // The delivery must be of the company and held by this driver: the
         // ticket lives in the driver's conversation.
@@ -243,7 +265,11 @@ class OpenSupportTicketUseCase {
       } else if (request.routeId) {
         const route = await this.chat.findRoute(request.routeId);
 
-        if (!route || route.businessId !== scope.businessId || route.driverId !== driverId) {
+        if (
+          !route ||
+          route.businessId !== scope.businessId ||
+          route.driverId !== driverId
+        ) {
           throw new ChatRouteNotFoundError();
         }
 
@@ -259,9 +285,9 @@ class OpenSupportTicketUseCase {
         );
       } else if (byDriver) {
         // "Novo assunto" during a route is about that route (design §3.2).
-        const running = (await this.chat.findRunningRoutes(scope.businessId, [driverId])).get(
-          driverId,
-        );
+        const running = (
+          await this.chat.findRunningRoutes(scope.businessId, [driverId])
+        ).get(driverId);
 
         resolution = running
           ? held(
@@ -285,7 +311,8 @@ class OpenSupportTicketUseCase {
               created: true,
             };
       } else {
-        if (!request.subject?.trim()) throw new SupportTicketSubjectRequiredError();
+        if (!request.subject?.trim())
+          throw new SupportTicketSubjectRequiredError();
 
         resolution = {
           ticket: await createDriverTicket(deps, {
@@ -303,7 +330,10 @@ class OpenSupportTicketUseCase {
 
       // The same key committed by a twin request between the check above
       // and this insert: answer the twin's ticket.
-      const twin = await this.tickets.findBySubmissionId(request.idempotencyKey, scope.businessId);
+      const twin = await this.tickets.findBySubmissionId(
+        request.idempotencyKey,
+        scope.businessId,
+      );
 
       if (!twin) {
         throw new AppError(
@@ -334,7 +364,13 @@ class OpenSupportTicketUseCase {
       });
     }
 
-    return this.answer(resolution.ticket, resolution.created, request, scope.user.id, byDriver);
+    return this.answer(
+      resolution.ticket,
+      resolution.created,
+      request,
+      scope.user.id,
+      byDriver,
+    );
   }
 
   /** "Abrir atendimento" on an occurrence without one (design §6.3). */
@@ -347,7 +383,10 @@ class OpenSupportTicketUseCase {
     opened: OpenedBy;
     key: string;
   }): Promise<{ ticket: SupportTicket; created: boolean }> {
-    const existing = await this.tickets.findByOccurrence(input.occurrenceId, input.businessId);
+    const existing = await this.tickets.findByOccurrence(
+      input.occurrenceId,
+      input.businessId,
+    );
 
     if (existing) return { ticket: existing, created: false };
 
@@ -366,7 +405,10 @@ class OpenSupportTicketUseCase {
         {
           businessId: input.businessId,
           driverId: input.driverId,
-          subject: occurrenceTicketSubject(occurrence.occurrenceType.name, input.recipientName),
+          subject: occurrenceTicketSubject(
+            occurrence.occurrenceType.name,
+            input.recipientName,
+          ),
           opened: input.opened,
           clientSubmissionId: input.key,
           occurrence: { id: input.occurrenceId, deliveryId: input.deliveryId },
@@ -377,7 +419,10 @@ class OpenSupportTicketUseCase {
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
 
-      const winner = await this.tickets.findByOccurrence(input.occurrenceId, input.businessId);
+      const winner = await this.tickets.findByOccurrence(
+        input.occurrenceId,
+        input.businessId,
+      );
 
       if (!winner) throw error;
 
@@ -406,7 +451,8 @@ class OpenSupportTicketUseCase {
         body: request.message.body,
         attachmentKey: request.message.attachmentKey,
         durationMs: request.message.durationMs,
-        clientSubmissionId: request.message.clientSubmissionId ?? request.idempotencyKey,
+        clientSubmissionId:
+          request.message.clientSubmissionId ?? request.idempotencyKey,
       });
 
       message = sent.data[0] ?? null;
@@ -418,7 +464,9 @@ class OpenSupportTicketUseCase {
 
     return {
       // The driver never sees who handles his ticket inside the company.
-      data: forDriver ? (driverTicketView(summary) as unknown as TicketSummary) : summary,
+      data: forDriver
+        ? (driverTicketView(summary) as unknown as TicketSummary)
+        : summary,
       created,
       message,
     };

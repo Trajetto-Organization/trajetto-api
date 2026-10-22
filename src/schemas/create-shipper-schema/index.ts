@@ -92,21 +92,13 @@ const shipperEmailSchema = z.preprocess(
  * issuer's legal name. Optional; an empty field means none, and the PDF then
  * prints the shipper's name.
  */
-const shipperCorporateReasonSchema = z.preprocess(
-  (val) => {
-    if (typeof val !== "string") return val;
+const shipperCorporateReasonSchema = z.preprocess((val) => {
+  if (typeof val !== "string") return val;
 
-    const trimmed = val.trim();
+  const trimmed = val.trim();
 
-    return trimmed === "" ? null : trimmed;
-  },
-  z
-    .string()
-    .max(150, "A razão social deve ter no máximo 150 caracteres.")
-    .nullable()
-    .optional()
-    .describe("Razão social do embarcador, impressa no comprovante. Opcional."),
-);
+  return trimmed === "" ? null : trimmed;
+}, z.string().max(150, "A razão social deve ter no máximo 150 caracteres.").nullable().optional().describe("Razão social do embarcador, impressa no comprovante. Opcional."));
 
 const createShipperSchema = z.object({
   name: shipperNameSchema,

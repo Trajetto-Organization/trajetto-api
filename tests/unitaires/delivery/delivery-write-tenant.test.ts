@@ -183,7 +183,9 @@ function nfe(accessKey: string): string {
 
 describe("CreateDeliveryUseCase", () => {
   it("refuses an admin of another company creating inside this one (403)", async () => {
-    await expect(createUseCase().execute(deliveryOf(ALFA), BETA_ADMIN)).rejects.toMatchObject(DENIED);
+    await expect(
+      createUseCase().execute(deliveryOf(ALFA), BETA_ADMIN),
+    ).rejects.toMatchObject(DENIED);
 
     expect(deliveries.deliveries).toHaveLength(0);
   });
@@ -216,8 +218,12 @@ describe("UpdateDeliveryUseCase", () => {
   it("lets the MASTER and the company's own admin edit", async () => {
     const id = await seedAlfaDelivery();
 
-    await expect(edit(MASTER, id)).resolves.toMatchObject({ street: "Rua Dois" });
-    await expect(edit(ALFA_ADMIN, id)).resolves.toMatchObject({ street: "Rua Dois" });
+    await expect(edit(MASTER, id)).resolves.toMatchObject({
+      street: "Rua Dois",
+    });
+    await expect(edit(ALFA_ADMIN, id)).resolves.toMatchObject({
+      street: "Rua Dois",
+    });
   });
 });
 
@@ -242,7 +248,9 @@ describe("UpdateDeliveryStatusUseCase", () => {
   it("lets the MASTER change the status", async () => {
     const id = await seedAlfaDelivery();
 
-    await expect(cancel(MASTER, id)).resolves.toMatchObject({ status: "CANCELLED" });
+    await expect(cancel(MASTER, id)).resolves.toMatchObject({
+      status: "CANCELLED",
+    });
   });
 });
 
@@ -280,7 +288,14 @@ describe("AssignDeliveriesUseCase", () => {
     const unreachable = {} as never;
 
     await expect(
-      new AssignDeliveriesUseCase(users, routes, unreachable, unreachable, unreachable, unreachable).execute({
+      new AssignDeliveriesUseCase(
+        users,
+        routes,
+        unreachable,
+        unreachable,
+        unreachable,
+        unreachable,
+      ).execute({
         userId: BETA_ADMIN,
         businessId: ALFA,
         deliveryIds: [id],

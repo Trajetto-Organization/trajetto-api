@@ -14,7 +14,8 @@ import { quotaPeriodFor } from "@/shared/ai/ai-period";
 import { computeIdempotencyKey } from "@/shared/ai/ai-rules";
 
 /** The period key of now, in the seeded companies' (default) zone. */
-const periodStartFor = (instant: Date) => quotaPeriodFor(instant, null).periodStart;
+const periodStartFor = (instant: Date) =>
+  quotaPeriodFor(instant, null).periodStart;
 
 /**
  * "Verificar novamente" on an analysis that failed (IDEMP-09).
@@ -118,7 +119,9 @@ async function failedFuelAnalysis(
   return { input, idempotencyKey, requestId: request.id, periodId: period.id };
 }
 
-const pipeline = AIAnalysisPipelineService.getInstance() as unknown as { provider: unknown };
+const pipeline = AIAnalysisPipelineService.getInstance() as unknown as {
+  provider: unknown;
+};
 let savedProvider: unknown;
 
 beforeAll(async () => {
@@ -165,7 +168,9 @@ describe("reviving the same failed analysis from several places at once", () => 
     await held;
 
     expect(outcomes.filter((outcome) => outcome === "queued")).toHaveLength(1);
-    expect(outcomes.filter((outcome) => outcome === "already_running")).toHaveLength(2);
+    expect(
+      outcomes.filter((outcome) => outcome === "already_running"),
+    ).toHaveLength(2);
 
     const period = await prisma.aIUsagePeriod.findUniqueOrThrow({
       where: { id: periodId },
@@ -185,7 +190,9 @@ describe("reviving a failed analysis with the quota spent", () => {
       { consumedUnits: 2 },
     );
 
-    expect(await service.createRequest(input, idempotencyKey, 1)).toBe("denied");
+    expect(await service.createRequest(input, idempotencyKey, 1)).toBe(
+      "denied",
+    );
 
     const request = await prisma.aIAnalysisRequest.findUniqueOrThrow({
       where: { id: requestId },
@@ -209,14 +216,23 @@ describe("reviving last month's failed analysis", () => {
       Date.UTC(thisMonth.getUTCFullYear(), thisMonth.getUTCMonth() - 1, 1),
     );
 
-    const { input, idempotencyKey, requestId, periodId: oldPeriodId } =
-      await failedFuelAnalysis(businessId, lastMonth);
+    const {
+      input,
+      idempotencyKey,
+      requestId,
+      periodId: oldPeriodId,
+    } = await failedFuelAnalysis(businessId, lastMonth);
 
-    expect(await service.createRequest(input, idempotencyKey, 1)).toBe("queued");
+    expect(await service.createRequest(input, idempotencyKey, 1)).toBe(
+      "queued",
+    );
 
     const current = await prisma.aIUsagePeriod.findUniqueOrThrow({
       where: {
-        businessId_periodStart: { businessId, periodStart: periodStartFor(now) },
+        businessId_periodStart: {
+          businessId,
+          periodStart: periodStartFor(now),
+        },
       },
     });
 

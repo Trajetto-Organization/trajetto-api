@@ -99,10 +99,18 @@ describe("the maintenance cost series", () => {
 
     const current = overview.maintenanceCosts.at(-1);
 
-    expect(current).toEqual({ month: expect.any(String), internal: 130, external: 40 });
+    expect(current).toEqual({
+      month: expect.any(String),
+      internal: 130,
+      external: 40,
+    });
 
     for (const point of overview.maintenanceCosts) {
-      expect(Object.keys(point).sort()).toEqual(["external", "internal", "month"]);
+      expect(Object.keys(point).sort()).toEqual([
+        "external",
+        "internal",
+        "month",
+      ]);
     }
   });
 
@@ -110,13 +118,20 @@ describe("the maintenance cost series", () => {
     const trends = await get("/dashboard/trends?period=7d");
 
     const total = (key: "internal" | "external") =>
-      trends.maintenanceCosts.reduce((sum: number, point: any) => sum + point[key], 0);
+      trends.maintenanceCosts.reduce(
+        (sum: number, point: any) => sum + point[key],
+        0,
+      );
 
     expect(total("internal")).toBe(130);
     expect(total("external")).toBe(40);
 
     for (const point of trends.maintenanceCosts) {
-      expect(Object.keys(point).sort()).toEqual(["date", "external", "internal"]);
+      expect(Object.keys(point).sort()).toEqual([
+        "date",
+        "external",
+        "internal",
+      ]);
     }
   });
 });

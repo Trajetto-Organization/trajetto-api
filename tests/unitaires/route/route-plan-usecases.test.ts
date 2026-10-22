@@ -72,7 +72,10 @@ function makeContext() {
 
   const notificationService = {
     createActivityIfEnabled: async (activity: RecordedActivity) => {
-      activities.push({ description: activity.description, status: activity.status });
+      activities.push({
+        description: activity.description,
+        status: activity.status,
+      });
     },
   } as unknown as NotificationService;
 
@@ -108,8 +111,18 @@ function makeContext() {
   );
 
   driverRepository.drivers.push(
-    { id: DRIVER, name: "João", status: "ACTIVE", businessId: BUSINESS } as Driver,
-    { id: OTHER_DRIVER, name: "Maria", status: "ACTIVE", businessId: BUSINESS } as Driver,
+    {
+      id: DRIVER,
+      name: "João",
+      status: "ACTIVE",
+      businessId: BUSINESS,
+    } as Driver,
+    {
+      id: OTHER_DRIVER,
+      name: "Maria",
+      status: "ACTIVE",
+      businessId: BUSINESS,
+    } as Driver,
     {
       id: FOREIGN_DRIVER,
       name: "De fora",
@@ -269,7 +282,9 @@ describe("planning a route's window (create)", () => {
     });
 
     expect(route.destination).toBe("CD Cajamar");
-    expect(route.planned_departure_at?.toISOString()).toBe("2026-09-18T01:30:00.000Z");
+    expect(route.planned_departure_at?.toISOString()).toBe(
+      "2026-09-18T01:30:00.000Z",
+    );
   });
 
   it("refuses a departure that is another day in the company's zone", async () => {
@@ -306,7 +321,8 @@ describe("planning a route's window (create)", () => {
       }),
     ).rejects.toMatchObject({
       code: "ROUTE_PLAN_INVALID",
-      message: "O retorno previsto deve ser igual ou posterior à saída prevista.",
+      message:
+        "O retorno previsto deve ser igual ou posterior à saída prevista.",
     });
   });
 });
@@ -327,8 +343,9 @@ describe("editing a route's window (update)", () => {
 
     // The driver module's row committed INACTIVE after the use case's own
     // read: the twin's rows are what the locked re-read sees.
-    context.routeRepository.drivers = context.routeRepository.drivers.map((entry) =>
-      entry.id === OTHER_DRIVER ? { ...entry, status: "INACTIVE" } : entry,
+    context.routeRepository.drivers = context.routeRepository.drivers.map(
+      (entry) =>
+        entry.id === OTHER_DRIVER ? { ...entry, status: "INACTIVE" } : entry,
     );
 
     await expect(
@@ -341,7 +358,8 @@ describe("editing a route's window (update)", () => {
     ).rejects.toMatchObject({ statusCode: 400, code: "ROUTE_DRIVER_INACTIVE" });
 
     expect(
-      context.routeRepository.routes.find((entry) => entry.id === route.id)?.driverId,
+      context.routeRepository.routes.find((entry) => entry.id === route.id)
+        ?.driverId,
     ).toBe(DRIVER);
   });
 
@@ -367,7 +385,8 @@ describe("editing a route's window (update)", () => {
         planned_arrival_at: new Date("2026-09-17T10:00:00.000Z"),
       }),
     ).rejects.toMatchObject({
-      message: "O retorno previsto deve ser igual ou posterior à saída prevista.",
+      message:
+        "O retorno previsto deve ser igual ou posterior à saída prevista.",
     });
 
     // Moving the day WITH the departure is fine.
@@ -456,7 +475,9 @@ describe("the activity status the route writes (FLEET-ACT-1)", () => {
       deliveryIds: [first, second],
     });
 
-    const stops = context.routeRepository.stops.filter((stop) => stop.routeId === route.id);
+    const stops = context.routeRepository.stops.filter(
+      (stop) => stop.routeId === route.id,
+    );
 
     await context.reorder.execute({
       userId: DISPATCHER,
@@ -534,7 +555,9 @@ describe("the batch assignment's plan", () => {
 
     const { routeId } = await assign();
 
-    const route = context.routeRepository.routes.find((entry) => entry.id === routeId)!;
+    const route = context.routeRepository.routes.find(
+      (entry) => entry.id === routeId,
+    )!;
 
     expect(route.scheduled_date.toISOString()).toBe("2026-09-17T00:00:00.000Z");
     expect(route.name).toBe("Designação 17/09 23:30");
@@ -549,13 +572,19 @@ describe("the batch assignment's plan", () => {
       planned_arrival_at: new Date("2026-09-20T21:00:00.000Z"),
     });
 
-    const route = context.routeRepository.routes.find((entry) => entry.id === routeId)!;
+    const route = context.routeRepository.routes.find(
+      (entry) => entry.id === routeId,
+    )!;
 
     expect(route.status).toBe("RELEASED");
     expect(route.scheduled_date.toISOString()).toBe("2026-09-20T00:00:00.000Z");
     expect(route.destination).toBe("Zona Leste");
-    expect(route.planned_departure_at?.toISOString()).toBe("2026-09-20T11:00:00.000Z");
-    expect(route.planned_arrival_at?.toISOString()).toBe("2026-09-20T21:00:00.000Z");
+    expect(route.planned_departure_at?.toISOString()).toBe(
+      "2026-09-20T11:00:00.000Z",
+    );
+    expect(route.planned_arrival_at?.toISOString()).toBe(
+      "2026-09-20T21:00:00.000Z",
+    );
   });
 
   it("refuses a departure off the route's day before touching anything", async () => {
@@ -612,8 +641,12 @@ describe("the batch assignment's plan", () => {
 
     expect(route.status).toBe("RELEASED");
     expect(route.destination).toBe("CD Cajamar");
-    expect(route.planned_departure_at?.toISOString()).toBe("2026-09-20T12:30:00.000Z");
-    expect(route.planned_arrival_at?.toISOString()).toBe("2026-09-20T20:00:00.000Z");
+    expect(route.planned_departure_at?.toISOString()).toBe(
+      "2026-09-20T12:30:00.000Z",
+    );
+    expect(route.planned_arrival_at?.toISOString()).toBe(
+      "2026-09-20T20:00:00.000Z",
+    );
     expect(context.activities[context.activities.length - 1]).toEqual({
       description: "Rota 1 editada",
       status: "Liberada",
@@ -643,7 +676,10 @@ describe("the batch assignment's plan", () => {
 
     // Moving the day alone leaves the stored departure on another day.
     await expect(
-      context.assign.execute({ ...asked, scheduled_date: new Date("2026-09-21T00:00:00.000Z") }),
+      context.assign.execute({
+        ...asked,
+        scheduled_date: new Date("2026-09-21T00:00:00.000Z"),
+      }),
     ).rejects.toMatchObject({ code: "ROUTE_PLAN_INVALID" });
 
     expect(context.routeRepository.routes[0].scheduled_date.toISOString()).toBe(
@@ -707,7 +743,11 @@ describe("one route on the street per driver (FLEET-ASSIGN-3)", () => {
   it("keeps the resend of the running route a success", async () => {
     const first = await releasedRoute(VEHICLE);
 
-    await context.start.execute({ userId: DRIVER_USER, businessId: BUSINESS, routeId: first.id });
+    await context.start.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      routeId: first.id,
+    });
 
     const again = await context.start.execute({
       userId: DRIVER_USER,
@@ -722,7 +762,11 @@ describe("one route on the street per driver (FLEET-ASSIGN-3)", () => {
     const first = await releasedRoute(VEHICLE);
     const second = await releasedRoute(OTHER_VEHICLE);
 
-    await context.start.execute({ userId: DRIVER_USER, businessId: BUSINESS, routeId: first.id });
+    await context.start.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      routeId: first.id,
+    });
 
     await context.cancel.execute({
       userId: DISPATCHER,
@@ -742,7 +786,11 @@ describe("one route on the street per driver (FLEET-ASSIGN-3)", () => {
 });
 
 describe("which route is 'the' driver's route on a tie", () => {
-  const seedRoute = (id: string, status: Route["status"], createdAt: string): Route => {
+  const seedRoute = (
+    id: string,
+    status: Route["status"],
+    createdAt: string,
+  ): Route => {
     const route = {
       id,
       code: context.routeRepository.routes.length + 1,
@@ -777,11 +825,12 @@ describe("which route is 'the' driver's route on a tie", () => {
     seedRoute("b-newer", "IN_PROGRESS", "2026-09-17T10:00:00.000Z");
     seedRoute("a-older", "IN_PROGRESS", "2026-09-17T09:00:00.000Z");
 
-    expect((await context.routeRepository.findDriverRoute(BUSINESS, DRIVER))?.id).toBe(
-      "a-older",
-    );
     expect(
-      (await context.routeRepository.findActiveRouteForDriver(BUSINESS, DRIVER))?.id,
+      (await context.routeRepository.findDriverRoute(BUSINESS, DRIVER))?.id,
+    ).toBe("a-older");
+    expect(
+      (await context.routeRepository.findActiveRouteForDriver(BUSINESS, DRIVER))
+        ?.id,
     ).toBe("a-older");
   });
 
@@ -789,9 +838,9 @@ describe("which route is 'the' driver's route on a tie", () => {
     seedRoute("released", "RELEASED", "2026-09-17T08:00:00.000Z");
     seedRoute("running", "IN_PROGRESS", "2026-09-17T09:00:00.000Z");
 
-    expect((await context.routeRepository.findDriverRoute(BUSINESS, DRIVER))?.id).toBe(
-      "running",
-    );
+    expect(
+      (await context.routeRepository.findDriverRoute(BUSINESS, DRIVER))?.id,
+    ).toBe("running");
   });
 });
 
@@ -805,9 +854,9 @@ describe("the assignment preview (FLEET-ASSIGN-2)", () => {
     });
 
     expect(result.suggestedVehicleId).toBe(VEHICLE);
-    expect(result.responsibleVehicles.map((vehicle) => vehicle.license_plate)).toEqual([
-      "ABC1D23",
-    ]);
+    expect(
+      result.responsibleVehicles.map((vehicle) => vehicle.license_plate),
+    ).toEqual(["ABC1D23"]);
     expect(result.scheduled_date).toBe("2026-09-17");
     expect(result.warnings).toEqual([]);
   });
@@ -821,7 +870,10 @@ describe("the assignment preview (FLEET-ASSIGN-2)", () => {
       scheduled_date: DAY_17,
     });
 
-    expect(result.vehicle?.responsible).toEqual({ id: OTHER_DRIVER, name: "Maria" });
+    expect(result.vehicle?.responsible).toEqual({
+      id: OTHER_DRIVER,
+      name: "Maria",
+    });
     expect(result.warnings.map((warning) => warning.code)).toEqual([
       "VEHICLE_OTHER_RESPONSIBLE",
     ]);
@@ -840,9 +892,14 @@ describe("the assignment preview (FLEET-ASSIGN-2)", () => {
       deliveryIds: [delivery],
     });
 
-    await context.release.execute({ userId: DISPATCHER, businessId: BUSINESS, routeId: running.id });
-    context.routeRepository.routes.find((route) => route.id === running.id)!.status =
-      "IN_PROGRESS";
+    await context.release.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      routeId: running.id,
+    });
+    context.routeRepository.routes.find(
+      (route) => route.id === running.id,
+    )!.status = "IN_PROGRESS";
 
     // João already has a planned route that day.
     const planned = await context.create.execute({
@@ -903,7 +960,10 @@ describe("the assignment preview (FLEET-ASSIGN-2)", () => {
         businessId: BUSINESS,
         driverId: DRIVER,
       }),
-    ).rejects.toMatchObject({ statusCode: 403, code: "DRIVER_CANNOT_MANAGE_DELIVERIES" });
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      code: "DRIVER_CANNOT_MANAGE_DELIVERIES",
+    });
   });
 
   it("does not warn about the released route the selection empties", async () => {
@@ -919,7 +979,9 @@ describe("the assignment preview (FLEET-ASSIGN-2)", () => {
       scheduled_date: DAY_17,
     });
 
-    const code = context.routeRepository.routes.find((route) => route.id === routeId)!.code;
+    const code = context.routeRepository.routes.find(
+      (route) => route.id === routeId,
+    )!.code;
 
     // Without the selection the route is a real booking of the day.
     const plain = await context.preview.execute({
@@ -949,19 +1011,24 @@ describe("the assignment preview (FLEET-ASSIGN-2)", () => {
   });
 
   it("passes the fleet's facts to the warnings and keeps them off the answer (8.5)", async () => {
-    const driver = context.routeRepository.drivers.find((entry) => entry.id === DRIVER)!;
+    const driver = context.routeRepository.drivers.find(
+      (entry) => entry.id === DRIVER,
+    )!;
 
     driver.cnh_category = "B";
     driver.cnh_expires_at = new Date("2026-09-01T00:00:00.000Z");
 
-    Object.assign(context.routeRepository.vehicles.find((entry) => entry.id === VEHICLE)!, {
-      required_cnh_category: "C",
-      open_service_orders: [new Date("2026-09-10T15:00:00.000Z")],
-      last_checklist: {
-        overall_condition: "rejected",
-        checklist_date: new Date("2026-09-16T15:00:00.000Z"),
+    Object.assign(
+      context.routeRepository.vehicles.find((entry) => entry.id === VEHICLE)!,
+      {
+        required_cnh_category: "C",
+        open_service_orders: [new Date("2026-09-10T15:00:00.000Z")],
+        last_checklist: {
+          overall_condition: "rejected",
+          checklist_date: new Date("2026-09-16T15:00:00.000Z"),
+        },
       },
-    });
+    );
 
     context.routeRepository.timeZones[BUSINESS] = "America/Manaus";
 
@@ -997,7 +1064,11 @@ describe("the assignment preview (FLEET-ASSIGN-2)", () => {
     ]);
 
     // Only what the choice needs leaves the API (decision 4.7).
-    expect(result.driver).toEqual({ id: DRIVER, name: "João", status: "ACTIVE" });
+    expect(result.driver).toEqual({
+      id: DRIVER,
+      name: "João",
+      status: "ACTIVE",
+    });
     expect(Object.keys(result.vehicle ?? {}).sort()).toEqual([
       "description",
       "id",

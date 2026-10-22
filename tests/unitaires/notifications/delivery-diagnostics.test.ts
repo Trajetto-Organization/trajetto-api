@@ -19,11 +19,14 @@ import {
 describe("the provider detail in lastError", () => {
   it("prefixes Meta's HTTP status and error code", () => {
     expect(
-      formatDeliveryError("Error validating access token: Session has expired", {
-        provider: "whatsapp",
-        httpStatus: 401,
-        errorCode: 190,
-      }),
+      formatDeliveryError(
+        "Error validating access token: Session has expired",
+        {
+          provider: "whatsapp",
+          httpStatus: 401,
+          errorCode: 190,
+        },
+      ),
     ).toBe(
       "[whatsapp http=401 code=190] Error validating access token: Session has expired",
     );
@@ -36,7 +39,9 @@ describe("the provider detail in lastError", () => {
         smtpCode: "EAUTH",
         smtpReply: 535,
       }),
-    ).toBe("[email smtp=EAUTH reply=535] Falha ao enviar e-mail: Invalid login");
+    ).toBe(
+      "[email smtp=EAUTH reply=535] Falha ao enviar e-mail: Invalid login",
+    );
   });
 
   it("names the provider even when it gave no code", () => {
@@ -88,7 +93,9 @@ describe("reading the detail off a thrown error", () => {
   });
 
   it("has nothing to say about an error that carries no detail", () => {
-    expect(providerDetailOf(new Error("boom"), NotificationChannel.EMAIL)).toBeUndefined();
+    expect(
+      providerDetailOf(new Error("boom"), NotificationChannel.EMAIL),
+    ).toBeUndefined();
     expect(providerDetailOf("boom", NotificationChannel.PUSH)).toBeUndefined();
   });
 });
@@ -143,7 +150,11 @@ describe("the channels an event left out, and why", () => {
   it("says a preference turned a channel off", () => {
     expect(
       suppressedChannels(
-        { ...everything, emailNotificationsEnabled: false, whatsappNotificationsEnabled: false },
+        {
+          ...everything,
+          emailNotificationsEnabled: false,
+          whatsappNotificationsEnabled: false,
+        },
         content,
       ),
     ).toEqual([
@@ -155,18 +166,25 @@ describe("the channels an event left out, and why", () => {
   it("tells a missing phone apart from a WhatsApp preference", () => {
     expect(
       suppressedChannels({ ...everything, hasWhatsAppPhone: false }, content),
-    ).toEqual([{ channel: NotificationChannel.WHATSAPP, reason: "no_contact" }]);
+    ).toEqual([
+      { channel: NotificationChannel.WHATSAPP, reason: "no_contact" },
+    ]);
   });
 
   it("says push had no device to go to", () => {
     expect(
       suppressedChannels(everything, { ...content, hasPushDevice: false }),
-    ).toEqual([{ channel: NotificationChannel.PUSH, reason: "no_push_device" }]);
+    ).toEqual([
+      { channel: NotificationChannel.PUSH, reason: "no_push_device" },
+    ]);
   });
 
   it("puts in-app and its push down to the in-app preference", () => {
     expect(
-      suppressedChannels({ ...everything, activityNotificationsEnabled: false }, content),
+      suppressedChannels(
+        { ...everything, activityNotificationsEnabled: false },
+        content,
+      ),
     ).toEqual([
       { channel: NotificationChannel.IN_APP, reason: "preference_off" },
       { channel: NotificationChannel.PUSH, reason: "preference_off" },

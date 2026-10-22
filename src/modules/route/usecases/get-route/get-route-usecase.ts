@@ -83,7 +83,12 @@ class GetRouteUseCase {
 
     // The driver's app reads its own route; it has no map to feed.
     if (findUser.driverId) {
-      return { route: findRoute, progress, driverPosition: null, visitedPoints: [] };
+      return {
+        route: findRoute,
+        progress,
+        driverPosition: null,
+        visitedPoints: [],
+      };
     }
 
     const [last, visitedPoints] = await Promise.all([

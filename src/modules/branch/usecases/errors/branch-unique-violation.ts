@@ -27,9 +27,12 @@ function branchUniqueViolation(error: unknown): BranchConflict | null {
   }
 
   const target = error.meta?.target;
-  const fields = Array.isArray(target) ? target.join(",") : String(target ?? "");
+  const fields = Array.isArray(target)
+    ? target.join(",")
+    : String(target ?? "");
 
-  if (fields.includes("corporate_reason")) return new BranchNameAlreadyExistsError();
+  if (fields.includes("corporate_reason"))
+    return new BranchNameAlreadyExistsError();
   if (fields.includes("email")) return new BranchEmailAlreadyExistsError();
   if (fields.includes("erp_code")) return new BranchErpCodeAlreadyExistsError();
   if (fields.includes("cnpj")) return new BranchCnpjAlreadyExistsError();

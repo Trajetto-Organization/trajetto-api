@@ -37,7 +37,11 @@ describe("failed authentications by address", () => {
     const { client } = redisDouble();
     const guard = createIntegrationRateGuard(client as never);
 
-    for (let failure = 1; failure < MAX_API_KEY_AUTH_FAILURES_PER_MINUTE; failure += 1) {
+    for (
+      let failure = 1;
+      failure < MAX_API_KEY_AUTH_FAILURES_PER_MINUTE;
+      failure += 1
+    ) {
       await guard.recordAuthFailure("ip:203.0.113.7");
     }
 
@@ -52,7 +56,11 @@ describe("failed authentications by address", () => {
     const { client } = redisDouble();
     const guard = createIntegrationRateGuard(client as never);
 
-    for (let failure = 0; failure < MAX_API_KEY_AUTH_FAILURES_PER_MINUTE; failure += 1) {
+    for (
+      let failure = 0;
+      failure < MAX_API_KEY_AUTH_FAILURES_PER_MINUTE;
+      failure += 1
+    ) {
       await guard.recordAuthFailure("ip:203.0.113.7");
     }
 
@@ -101,13 +109,19 @@ describe("without Redis", () => {
   it("fails open: nothing is blocked, nothing throws", async () => {
     const guard = createIntegrationRateGuard(broken as never);
 
-    await expect(guard.recordAuthFailure("ip:1.2.3.4")).resolves.toBeUndefined();
+    await expect(
+      guard.recordAuthFailure("ip:1.2.3.4"),
+    ).resolves.toBeUndefined();
     expect(await guard.authFailuresBlocked("ip:1.2.3.4")).toBe(false);
     expect(await guard.allowBusiness("business-1", 0)).toBe(true);
   });
 
   it("the default guard refuses nothing", async () => {
-    expect(await unlimitedIntegrationRateGuard.authFailuresBlocked("x")).toBe(false);
-    expect(await unlimitedIntegrationRateGuard.allowBusiness("x", 0)).toBe(true);
+    expect(await unlimitedIntegrationRateGuard.authFailuresBlocked("x")).toBe(
+      false,
+    );
+    expect(await unlimitedIntegrationRateGuard.allowBusiness("x", 0)).toBe(
+      true,
+    );
   });
 });

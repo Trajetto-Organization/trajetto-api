@@ -5,7 +5,8 @@
  * token; a false negative writes somebody's mailbox to stdout and to the
  * database.
  */
-const EMAIL_IN_TEXT = /[^\s<>"'(),;:@[\]]+@[^\s<>"'(),;:@[\]]+\.[^\s<>"'(),;:@[\]]+/g;
+const EMAIL_IN_TEXT =
+  /[^\s<>"'(),;:@[\]]+@[^\s<>"'(),;:@[\]]+\.[^\s<>"'(),;:@[\]]+/g;
 
 /**
  * `ana.cliente@exemplo.com.br` → `a***@exemplo.com.br`.

@@ -11,7 +11,10 @@ import type { NotificationService } from "@/shared/services/notification-service
 import type { OutboxService } from "@/shared/notifications/outbox-service";
 
 import type { User } from "@/modules/user/dtos/user-dto";
-import type { CreateDeliveryProps, Delivery } from "@/modules/delivery/dtos/delivery-dto";
+import type {
+  CreateDeliveryProps,
+  Delivery,
+} from "@/modules/delivery/dtos/delivery-dto";
 
 import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
 
@@ -379,7 +382,6 @@ describe("what the override leaves behind", () => {
     expect(context.deliveryRepository.events).toEqual([]);
   });
 });
-
 
 describe("telling the driver their day changed", () => {
   /**

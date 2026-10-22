@@ -67,7 +67,11 @@ class GetUserUseCase {
             .catch(() => null)
         : null;
 
-    return sessionPrecheckFlag({ aiAnalysisLimit, providerConfigured, remaining });
+    return sessionPrecheckFlag({
+      aiAnalysisLimit,
+      providerConfigured,
+      remaining,
+    });
   }
 }
 

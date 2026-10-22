@@ -57,7 +57,10 @@ describe("a catalog list asked by a user who no longer exists", () => {
     [
       "the occurrence types tab",
       () =>
-        new ListOccurrenceTypeUseCase(users, new InMemoryOccurrenceTypeRepository()).execute({
+        new ListOccurrenceTypeUseCase(
+          users,
+          new InMemoryOccurrenceTypeRepository(),
+        ).execute({
           userId: GONE,
           businessId: BUSINESS,
           ...PAGE,
@@ -89,7 +92,11 @@ describe("the shipper picker asked by a MASTER for a company that does not exist
   it("answers 404 TENANT_NOT_FOUND, the route guard's code", async () => {
     const users = new InMemoryUserRepository();
 
-    users.user.push({ id: MASTER, role: "MASTER", businessId: null } as unknown as User);
+    users.user.push({
+      id: MASTER,
+      role: "MASTER",
+      businessId: null,
+    } as unknown as User);
 
     const picker = new SearchShipperCursorUseCase(
       users,
