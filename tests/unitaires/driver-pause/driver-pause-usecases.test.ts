@@ -368,6 +368,44 @@ describe("ending a pause", () => {
     ).toBe("404 PAUSE_NOT_FOUND");
   });
 
+  it("answers a resend whose twin closed the pause between its two reads as a replay", async () => {
+    await startAna(1);
+
+    const request = {
+      businessId: COMPANY,
+      driverId: ANA,
+      startSubmissionId: key(1),
+      endSubmissionId: key(101),
+      endedAt: null,
+      now: NOW,
+    };
+
+    const closed = await end.execute(request);
+
+    // The resend's lookup by end key ran just before the twin's write landed;
+    // its read by start key then sees the pause already closed by that key.
+    const findByEndSubmission = repo.findByEndSubmission.bind(repo);
+    let firstLookup = true;
+    repo.findByEndSubmission = async (...args) => {
+      if (firstLookup) {
+        firstLookup = false;
+        return null;
+      }
+      return findByEndSubmission(...args);
+    };
+
+    expect(await end.execute(request)).toMatchObject({
+      pause: closed.pause,
+      replayed: true,
+    });
+
+    // Another key on the same closed pause is still a real conflict.
+    firstLookup = true;
+    expect(
+      await codeOf(end.execute({ ...request, endSubmissionId: key(102) })),
+    ).toBe("409 PAUSE_ALREADY_ENDED");
+  });
+
   it("refuses a second end with another key, and an end key reused on another pause", async () => {
     await startAna(1);
     await end.execute({

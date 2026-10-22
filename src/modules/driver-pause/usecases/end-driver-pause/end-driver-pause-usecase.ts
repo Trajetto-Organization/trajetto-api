@@ -151,7 +151,14 @@ class EndDriverPauseUseCase {
 
     if (pause.driverId !== driverId) throw new SubmissionOwnerMismatchError();
 
-    if (pause.ended_at) throw new PauseAlreadyEndedError();
+    if (pause.ended_at) {
+      // A racing resend may have closed it after our lookup by end key and
+      // before this read: the same key is this answer, another is a conflict.
+      if (pause.end_submission_id === endSubmissionId)
+        return this.replay(pause, request, driverId);
+
+      throw new PauseAlreadyEndedError();
+    }
 
     const result = await this.pauses.closePause({
       pauseId: pause.id,

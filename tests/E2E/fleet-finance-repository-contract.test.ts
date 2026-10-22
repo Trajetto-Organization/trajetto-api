@@ -482,7 +482,10 @@ describe.each(bills)("the %s accounts payable repository", (_label, repo) => {
     expect(docs((await list({ search: "conta later" })).data)).toEqual([
       "LATER",
     ]);
-    expect(docs((await list({ search: "400" })).data)).toEqual(["PARTIAL"]);
+    // Written the Brazilian way: a bare "400" also matches any bill whose
+    // random uuid holds those digits (the id is searched on purpose), so it
+    // would make this case flaky. A comma never appears in an id.
+    expect(docs((await list({ search: "400,00" })).data)).toEqual(["PARTIAL"]);
   });
 
   it("gives the responsible only their own bills in the self-scoped search", async () => {
