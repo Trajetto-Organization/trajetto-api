@@ -219,9 +219,20 @@ describe.each(REPLICA_COUNTS)(
           include: { units: true },
         });
 
+        // Read once, on the first attempt; anything else names its reason
+        // (lastError), so a red run says why without the replicas' logs.
+        expect(requests).toHaveLength(20);
         expect(
-          requests.map((request) => `${request.status}:${request.attempts}`),
-        ).toEqual(Array(20).fill("COMPLETED:1"));
+          requests
+            .filter(
+              (request) =>
+                request.status !== "COMPLETED" || request.attempts !== 1,
+            )
+            .map(
+              (request) =>
+                `${request.id}:${request.status}:${request.attempts}:${request.lastError}`,
+            ),
+        ).toEqual([]);
         expect(
           requests.flatMap((request) =>
             request.units.map((unit) => unit.status),

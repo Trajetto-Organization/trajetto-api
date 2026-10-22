@@ -352,24 +352,32 @@ async function queueFuelReadings(
       },
     });
 
-    const request = await prisma.aIAnalysisRequest.create({
-      data: {
-        idempotencyKey: randomUUID(),
-        type: "FUEL_ODOMETER",
-        recordId: fuel.id,
-        businessId: fleet.businessId,
-        periodId,
-        requestedById: fleet.driverUserId,
-        input: { odometerPhotoPath: photo, reportedMileage: 1000 },
-      },
-    });
+    // One transaction, as AIAnalysisService.createRequest commits it. The
+    // replicas are already sweeping: a request committed on its own is
+    // claimable before its unit exists, and the claimer settles it FAILED
+    // ("Request has no analysis unit") — a state production never writes.
+    const request = await prisma.$transaction(async (tx) => {
+      const created = await tx.aIAnalysisRequest.create({
+        data: {
+          idempotencyKey: randomUUID(),
+          type: "FUEL_ODOMETER",
+          recordId: fuel.id,
+          businessId: fleet.businessId,
+          periodId,
+          requestedById: fleet.driverUserId,
+          input: { odometerPhotoPath: photo, reportedMileage: 1000 },
+        },
+      });
 
-    await prisma.aIAnalysisUnit.create({
-      data: { requestId: request.id, unitKey: "odometer" },
-    });
-    await prisma.aIUsagePeriod.update({
-      where: { id: periodId },
-      data: { reservedUnits: { increment: 1 } },
+      await tx.aIAnalysisUnit.create({
+        data: { requestId: created.id, unitKey: "odometer" },
+      });
+      await tx.aIUsagePeriod.update({
+        where: { id: periodId },
+        data: { reservedUnits: { increment: 1 } },
+      });
+
+      return created;
     });
 
     queued.push({ requestId: request.id, fuelId: fuel.id });
