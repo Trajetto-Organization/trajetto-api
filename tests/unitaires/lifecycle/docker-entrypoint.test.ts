@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync } from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -51,10 +51,14 @@ beforeEach(() => {
   );
   box.file("build/server.js", nodeStub("server", "STUB_SERVER_EXIT"));
 
-  box.file(
+  // Executable, as in node_modules: Linux refuses to run it otherwise (126),
+  // while Git for Windows' sh ignores the mode and hid the difference.
+  const prisma = box.file(
     "node_modules/.bin/prisma",
     `#!/bin/sh\nprintf '%s\\n' "prisma $* DATABASE_URL=$DATABASE_URL" >> "$STUB_LOG"\nexit "\${STUB_PRISMA_EXIT:-0}"\n`,
   );
+
+  chmodSync(prisma, 0o755);
 });
 
 afterEach(() => box.dispose());
