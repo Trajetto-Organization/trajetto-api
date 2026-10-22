@@ -50,6 +50,12 @@ beforeAll(async () => {
 }, 60_000);
 
 beforeEach(async () => {
+  // Each case starts its own replica. One left over from an earlier case
+  // keeps sweeping, and it claims rows queued before the case sets the
+  // fake's behaviour: they were delivered on the first try under the reset
+  // fake, and the endpoint never reached 20 failures in a row.
+  await Promise.allSettled(replicas.splice(0).map((replica) => replica.kill()));
+
   fake.reset();
 
   await prisma.webhookDelivery.deleteMany({});

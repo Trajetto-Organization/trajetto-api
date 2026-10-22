@@ -103,6 +103,12 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(async () => {
+  // A replica a case left running (the one that recovered the work) keeps
+  // sweeping into the next case: it claims that case's rows under the slow
+  // fake, and they show up as PROCESSING or as an attempt the case never
+  // made. Every case starts the replicas it means to have.
+  await Promise.allSettled(replicas.splice(0).map((started) => started.kill()));
+
   fake.reset();
 
   await prisma.webhookDelivery.deleteMany({});

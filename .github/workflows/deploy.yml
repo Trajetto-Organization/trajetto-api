@@ -144,6 +144,23 @@ jobs:
           timeout 60 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
           timeout 60 bash -c 'until nc -z localhost 6379; do sleep 1; done'
 
+      # tests/E2E/health-metrics.test.ts needs the test Postgres OFF the
+      # default max_connections (100): a panel hard-coding 100 would pass
+      # against a default server. A service container takes no command (no
+      # `-c max_connections=...`), so the setting goes in with ALTER SYSTEM
+      # and a restart of that container. 200 also leaves headroom for the
+      # E2E files running in parallel, each with its own pool.
+      - name: Take the test Postgres off the default max_connections
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" psql -U postgres -c "ALTER SYSTEM SET max_connections = 200"
+          docker restart "$POSTGRES_CONTAINER"
+          timeout 60 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
+          configured="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -tAc "SHOW max_connections")"
+          echo "max_connections=$configured"
+          test "$configured" = 200
+
       - name: Create tmp directory
         run: mkdir -p src/tmp
 

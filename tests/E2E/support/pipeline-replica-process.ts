@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { resolve } from "node:path";
 
 /**
  * Starts `pipeline-replica.ts` as a process of its own — one API replica
@@ -33,14 +32,16 @@ interface ReplicaOptions {
 async function startPipelineReplica(
   options: ReplicaOptions,
 ): Promise<PipelineReplica> {
-  // node + tsx's own entry: on Windows `npx` is a .cmd, and spawning one
-  // without a shell fails with EINVAL since Node 20.
+  // node with tsx as a loader, in ONE process. Not `npx tsx` (on Windows
+  // `npx` is a .cmd, and spawning one without a shell fails with EINVAL since
+  // Node 20), and not tsx's cli.mjs either: the cli runs the script in a
+  // child process of its own and only relays SIGINT/SIGTERM. A SIGKILL can't
+  // be relayed, so `kill()` took down the cli and left the replica running
+  // as an orphan on Linux — it kept its lease, answered the held calls and
+  // recorded them, and the "crash" never happened.
   const child = spawn(
     process.execPath,
-    [
-      resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"),
-      "tests/E2E/support/pipeline-replica.ts",
-    ],
+    ["--import", "tsx", "tests/E2E/support/pipeline-replica.ts"],
     {
       cwd: process.cwd(),
       env: {

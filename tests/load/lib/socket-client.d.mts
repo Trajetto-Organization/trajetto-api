@@ -8,7 +8,7 @@ interface SocketClientEntryOptions {
   exists?: (path: string) => boolean;
 }
 
-/** The file URL of socket.io-client's ESM build, from the web repository. */
+/** The file URL of socket.io-client's ESM build: the API's own devDependency first. */
 export function socketClientEntry(options?: SocketClientEntryOptions): string;
 
 /** The client's `io`, from wherever socketClientEntry found it. */

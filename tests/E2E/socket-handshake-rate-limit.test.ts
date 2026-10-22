@@ -45,10 +45,8 @@ let redis: Redis;
 let io: typeof import("@/websocket");
 
 /**
- * The client lives in the web repository: the API is a server and has none.
- *
- * A test-only dependency in the production package is a dependency somebody
- * eventually imports in production.
+ * The client is a devDependency of the API (never a production one, so it
+ * stays out of the image), resolved by tests/E2E/support/socket-client.ts.
  */
 async function connect(): Promise<{ disconnect: () => void }> {
   const entry = socketClientEntry();

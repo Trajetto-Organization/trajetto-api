@@ -221,12 +221,33 @@ describe("the socket client the cross-replica script uses (LOAD-3)", () => {
     expect(script).not.toContain("trajetto-fleet-manager-ui/node_modules");
   });
 
+  const own = pathToFileURL(
+    resolve(
+      root,
+      "node_modules",
+      "socket.io-client",
+      "build",
+      "esm",
+      "index.js",
+    ),
+  ).href;
+
+  it("takes the API's own devDependency first, so CI needs no web checkout", async () => {
+    const { socketClientEntry } = await load();
+
+    expect(socketClientEntry({ env: {}, root, exists: () => true })).toBe(own);
+  });
+
   it("finds the web by its current folder name first, the old one second", async () => {
     const { socketClientEntry } = await load();
 
-    expect(socketClientEntry({ env: {}, root, exists: () => true })).toBe(
-      entry("trajetto-ui"),
-    );
+    expect(
+      socketClientEntry({
+        env: {},
+        root,
+        exists: (path) => path.includes("trajetto-ui"),
+      }),
+    ).toBe(entry("trajetto-ui"));
     expect(
       socketClientEntry({
         env: {},
@@ -249,30 +270,33 @@ describe("the socket client the cross-replica script uses (LOAD-3)", () => {
     ).toBe(pathToFileURL(override).href);
   });
 
-  it("says what to install when neither is there", async () => {
+  it("says what to install when none is there", async () => {
     const { socketClientEntry } = await load();
 
     expect(() =>
       socketClientEntry({ env: {}, root, exists: () => false }),
-    ).toThrow(/instale as dependências de \.\.\/trajetto-ui/);
+    ).toThrow(
+      /yarn install.*nesta API.*instale as dependências de \.\.\/trajetto-ui/,
+    );
   });
 
-  const sibling = resolve(
-    ROOT,
-    "..",
-    "trajetto-ui",
-    "node_modules",
-    "socket.io-client",
-  );
+  it("is a devDependency of the API, never a production one", () => {
+    const manifest = JSON.parse(read(ROOT, "package.json")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
 
-  it.skipIf(!existsSync(sibling))(
-    "loads the real client from the web checkout next door",
-    async () => {
-      const { loadSocketClient } = await load();
+    expect(manifest.devDependencies?.["socket.io-client"]).toMatch(
+      /^\d+\.\d+\.\d+$/,
+    );
+    expect(manifest.dependencies?.["socket.io-client"]).toBeUndefined();
+  });
 
-      expect(typeof (await loadSocketClient())).toBe("function");
-    },
-  );
+  it("loads the real client from the API's own node_modules", async () => {
+    const { loadSocketClient } = await load();
+
+    expect(typeof (await loadSocketClient())).toBe("function");
+  });
 });
 
 describe("the harness files", () => {
