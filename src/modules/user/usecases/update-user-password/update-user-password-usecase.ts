@@ -10,9 +10,9 @@ import { UserUpdateUserPasswordNotMatchError } from "../errors/user-update-user-
 import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 
 import { AppError } from "@/shared/errors/AppError";
-import { env } from "@/env";
 import { sendSecurityEventToUser } from "@/websocket";
 import { logger } from "@/shared/logging/logger";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const log = logger.child({ component: "user" });
 
@@ -24,8 +24,6 @@ interface UpdateUserPasswordProps {
 
 @injectable()
 class UpdateUserPasswordUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -83,7 +81,7 @@ class UpdateUserPasswordUseCase {
         templateName: "user-password-updated.hbs",
         moduleName: "user",
         additionalVariablesProperties: {
-          logo: this.cloudinaryLogo,
+          logo: emailLogoUrl(),
         },
       });
     } catch (error) {

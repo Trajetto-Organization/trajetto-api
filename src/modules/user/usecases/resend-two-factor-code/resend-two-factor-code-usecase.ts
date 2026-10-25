@@ -3,7 +3,7 @@ import { inject, injectable } from "tsyringe";
 import crypto from "node:crypto";
 
 import { hashOneTimeCode } from "@/shared/security/one-time-code";
-import { mayUseTwoFactorStep } from "../../services/two-factor-challenge";
+import { isTwoFactorChallengeFor } from "../../services/two-factor-challenge";
 
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
 import { IUserRepository } from "../../repositories/IUser-repository";
@@ -11,7 +11,7 @@ import { IUserRepository } from "../../repositories/IUser-repository";
 import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { logger } from "@/shared/logging/logger";
 
-import { env } from "@/env";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const log = logger.child({ component: "user" });
 
@@ -40,8 +40,6 @@ const CODE_LIFETIME_MS = 15 * 60 * 1000;
 
 @injectable()
 class ResendTwoFactorCodeUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -62,7 +60,7 @@ class ResendTwoFactorCodeUseCase {
     // A code only for whoever just proved this account's password (WEB-07):
     // otherwise the e-mail alone was enough to have codes issued and guess
     // them. Same neutral answer, so the refusal says nothing either.
-    if (!mayUseTwoFactorStep(challenge, findUser)) return NEUTRAL_ANSWER;
+    if (!isTwoFactorChallengeFor(challenge, findUser)) return NEUTRAL_ANSWER;
 
     const existingTwoFactorTokenByEmail =
       await this.usersTokens.findTwoFactorTokenByEmail(findUser.email);
@@ -127,7 +125,7 @@ class ResendTwoFactorCodeUseCase {
       moduleName: "user",
       additionalVariablesProperties: {
         token: twoFactorToken,
-        logo: this.cloudinaryLogo,
+        logo: emailLogoUrl(),
       },
     }).catch((error) =>
       // The provider's error is already redacted (no address), and the code

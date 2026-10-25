@@ -28,6 +28,7 @@ import {
   PasswordLinkUnavailableError,
   issuePasswordSetupLink,
 } from "../../services/password-setup-link";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const log = logger.child({ component: "user" });
 
@@ -47,7 +48,6 @@ interface ChangeSummary {
 
 @injectable()
 class UpdateMasterUserUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
   private http_request = env.HTTP_REQUEST;
 
   constructor(
@@ -135,7 +135,7 @@ class UpdateMasterUserUseCase {
             oldEmail: before.email,
             newEmail: updatedMaster.email,
           }),
-          logo: this.cloudinaryLogo,
+          logo: emailLogoUrl(),
         },
       });
     } catch (error) {
@@ -186,7 +186,7 @@ class UpdateMasterUserUseCase {
       additionalVariablesProperties: {
         url,
         performingUserName,
-        logo: this.cloudinaryLogo,
+        logo: emailLogoUrl(),
       },
     }).catch((error) =>
       log.error(

@@ -23,26 +23,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * the API is public and the app calls it directly. The fix is in the API:
  * a password login with two-factor on returns a short-lived signed challenge,
  * and the code is accepted — and resent — only next to a challenge for the
- * same account.
- *
- * Old app binaries do not send it. Enforcement is therefore behind
- * TWO_FACTOR_CHALLENGE_REQUIRED (default off), to be switched on once the app
- * and the web that send it are out.
+ * same account. Always: there is no switch to accept a request without it.
  */
-let enforce = false;
-
-vi.mock("@/env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/env")>();
-
-  return {
-    env: new Proxy(actual.env, {
-      get: (target, key) =>
-        key === "TWO_FACTOR_CHALLENGE_REQUIRED"
-          ? enforce
-          : target[key as keyof typeof target],
-    }),
-  };
-});
 
 const codes: Array<{ email: string; token: string }> = [];
 
@@ -116,7 +98,6 @@ async function passwordStep(email: string) {
 }
 
 beforeEach(async () => {
-  enforce = false;
   codes.length = 0;
 
   users = new InMemoryUserRepository();
@@ -157,11 +138,7 @@ describe("the password step", () => {
   });
 });
 
-describe("with the challenge enforced", () => {
-  beforeEach(() => {
-    enforce = true;
-  });
-
+describe("the two-factor step", () => {
   it("no code is sent to someone who only knows the e-mail", async () => {
     const answer = await resend.execute(VICTIM);
 
@@ -228,25 +205,6 @@ describe("with the challenge enforced", () => {
     codes.length = 0;
 
     await resend.execute(VICTIM, challenge);
-
-    expect(codes.map((entry) => entry.email)).toEqual([VICTIM]);
-  });
-});
-
-describe("with the challenge not enforced (today's default)", () => {
-  it("an app build that never heard of it still logs in", async () => {
-    const { code } = await passwordStep(VICTIM);
-
-    const session = await verification.execute({
-      email: VICTIM,
-      twoFactorCode: code,
-    });
-
-    expect(session.token).toBeTruthy();
-  });
-
-  it("and can still ask for another code", async () => {
-    await resend.execute(VICTIM);
 
     expect(codes.map((entry) => entry.email)).toEqual([VICTIM]);
   });
@@ -346,11 +304,8 @@ describe("over HTTP", () => {
     await app.close();
   });
 
-  it("an old client's body, without the challenge, is still accepted", async () => {
-    const execute = vi
-      .fn()
-      .mockResolvedValue({ twoFactorVerificationMessage: "ok" });
-    vi.spyOn(container, "resolve").mockReturnValue({ execute } as never);
+  it("a resend without the challenge gets the neutral answer and no code", async () => {
+    vi.spyOn(container, "resolve").mockReturnValue(resend as never);
 
     const app = await appWith(
       "/user/resend-two-factor-code",
@@ -364,7 +319,33 @@ describe("over HTTP", () => {
       payload: { email: VICTIM },
     });
 
+    // The same answer as any other refusal: a missing challenge is not told
+    // apart from a wrong one, nor from an unknown address.
     expect(response.statusCode).toBe(200);
+    expect(response.json().message).toMatch(/Se esta conta/);
+    expect(codes).toEqual([]);
+
+    await app.close();
+  });
+
+  it("a verification without the challenge is refused like a wrong code", async () => {
+    const { code } = await passwordStep(VICTIM);
+    vi.spyOn(container, "resolve").mockReturnValue(verification as never);
+
+    const app = await appWith(
+      "/user/two-factor-verification",
+      new TwoFactorVerificationController().handle,
+      userSchemas.twoFactorUser,
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/user/two-factor-verification",
+      payload: { email: VICTIM, code },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe("AUTH_2FA_CODE_INVALID");
 
     await app.close();
   });

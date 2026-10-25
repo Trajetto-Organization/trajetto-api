@@ -5,7 +5,6 @@ import { v7 as uuidV7 } from "uuid";
 
 import auth from "@/config/auth";
 import { hmacVerifyKey } from "@/shared/security/jwt-verify-key";
-import { env } from "@/env";
 
 /**
  * Proof that the password step happened, for the two-factor step (WEB-07).
@@ -28,9 +27,8 @@ import { env } from "@/env";
  * Captcha on the web forms would not have closed this: the API is public and
  * the app calls it directly.
  *
- * Enforcement waits for TWO_FACTOR_CHALLENGE_REQUIRED: app builds from before
- * this cannot send the challenge, and refusing them would lock their users
- * with two-factor out of the app until they update.
+ * Always enforced: a request without the challenge is refused like one with
+ * a wrong challenge.
  */
 const CHALLENGE_TYPE = "two-factor-challenge";
 
@@ -109,23 +107,4 @@ function isTwoFactorChallengeFor(
   }
 }
 
-/**
- * Whether this request may use the two-factor step for `user`.
- *
- * With enforcement off, a request that proves nothing is let through as
- * before — it is what every app build from before the challenge sends.
- */
-function mayUseTwoFactorStep(
-  challenge: string | undefined,
-  user: ChallengedUser,
-): boolean {
-  if (isTwoFactorChallengeFor(challenge, user)) return true;
-
-  return !env.TWO_FACTOR_CHALLENGE_REQUIRED;
-}
-
-export {
-  isTwoFactorChallengeFor,
-  issueTwoFactorChallenge,
-  mayUseTwoFactorStep,
-};
+export { isTwoFactorChallengeFor, issueTwoFactorChallenge };

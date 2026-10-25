@@ -20,7 +20,7 @@ import { BranchHasChildrenError } from "../errors/branch-has-children-error";
 import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
 
-import { env } from "@/env";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const dependencyLabels: Record<string, string> = {
   vehicles: "veículo(s)",
@@ -36,8 +36,6 @@ const CODE_EXPIRATION_MINUTES = 5;
 
 @injectable()
 class RequestBranchDeletionUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -115,7 +113,7 @@ class RequestBranchDeletionUseCase {
           branchName: findBranch.corporate_reason,
           branchCnpj: findBranch.cnpj,
           businessName: findBusiness.corporate_reason,
-          logo: this.cloudinaryLogo,
+          logo: emailLogoUrl(),
         },
       });
 

@@ -34,7 +34,6 @@ import { sendTransactionalMail } from "@/shared/services/transactional-mail-serv
 import { logger } from "@/shared/logging/logger";
 import { refreshDeliveryRooms, sendSecurityEventToUser } from "@/websocket";
 
-import { env } from "@/env";
 import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 import {
@@ -48,13 +47,12 @@ import { announceDriverLoginChange } from "../../services/driver-login-catalog";
 import { describeChanges, planUserUpdate } from "./user-update-plan";
 
 import database from "@/../infra/database";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const log = logger.child({ component: "user" });
 
 @injectable()
 class UpdateUserUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
   private allowedUpdate: Record<UserRole, UserRole[]> = {
     BUSINESS_USER: ["BUSINESS_USER"],
     BUSINESS_ADMIN: ["BUSINESS_USER", "BUSINESS_ADMIN"],
@@ -361,7 +359,7 @@ class UpdateUserUseCase {
           templateName: "user-updated-successfully.hbs",
           moduleName: "user",
           additionalVariablesProperties: {
-            logo: this.cloudinaryLogo,
+            logo: emailLogoUrl(),
           },
         }).catch((error) =>
           log.error(
@@ -394,7 +392,7 @@ class UpdateUserUseCase {
         additionalVariablesProperties: {
           url,
           performingUserName,
-          logo: this.cloudinaryLogo,
+          logo: emailLogoUrl(),
         },
       });
     } catch (error) {

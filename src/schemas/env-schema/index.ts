@@ -53,7 +53,7 @@ const envSchema = z
     API_HTTP_REQUEST: z.string().optional(),
     JWT_SECRET: z.string(),
     JWT_SECRET_REFRESH_TOKEN: z.string(),
-    CLOUDINARY_LOGO_IMAGE: z.string().optional(),
+
     // Meta WhatsApp Cloud API. Optional so environments without WhatsApp
     // still boot: the provider reports itself unconfigured and sends fail
     // with a clear error instead of blocking startup.
@@ -121,6 +121,7 @@ const envSchema = z
     R2_BUCKET_NAME: z.string().optional(),
     R2_ACCESS_KEY_ID: z.string().optional(),
     R2_SECRET_ACCESS_KEY: z.string().optional(),
+
     // An S3-compatible endpoint instead of the account's R2 one (path-style
     // addressing). For a local MinIO in the upload E2E; unset in production.
     R2_ENDPOINT: z.string().url().optional(),
@@ -234,6 +235,7 @@ const envSchema = z
       (value) => (value === "" ? undefined : value),
       z.string().optional(),
     ),
+
     /** Budget for ALL tiles of one map, fetched in parallel. */
     PROOF_MAP_TIMEOUT_MS: z.preprocess(
       (value) => (value === "" ? undefined : value),
@@ -366,11 +368,8 @@ const envSchema = z
      * Cloudflare Turnstile, verified by the API on the public quote form
      * (src/shared/security/turnstile.ts). The same secret the web holds.
      *
-     * With the secret set, a token the web forwards is verified at Cloudflare.
-     * A request WITHOUT a token is refused only once TURNSTILE_REQUIRED is
-     * on — off by default because the web deployed before this change checks
-     * the token itself and does not forward it (tokens are single-use). Switch
-     * it on after the web that forwards the token is live.
+     * With the secret set, a request without a token is refused and the token
+     * the web forwards is verified at Cloudflare. Without it, Turnstile is off.
      */
     //
     // Empty counts as absent, like the secrets below.
@@ -378,12 +377,6 @@ const envSchema = z
       (value) => (value === "" ? undefined : value),
       z.string().optional(),
     ),
-    TURNSTILE_REQUIRED: z
-      .preprocess(
-        (value) => (value === "" ? undefined : value),
-        z.enum(["true", "false"]).default("false"),
-      )
-      .transform((value) => value === "true"),
 
     /**
      * Where the client address of anonymous routes comes from: the rate-limit
@@ -496,23 +489,6 @@ const envSchema = z
         .regex(/^[A-Za-z0-9._:-]+$/)
         .default("socket.io"),
     ),
-
-    /**
-     * Whether a two-factor code must come with the challenge the password
-     * step returned (src/modules/user/services/two-factor-challenge.ts).
-     *
-     * Without it, the code is a first factor: anyone with an e-mail could ask
-     * for codes and guess them. Off by default only because app builds from
-     * before the challenge cannot send it and would lose 2FA login; switch it
-     * on once the web and the app that send it are out (the API logs each
-     * 2FA request that arrives without one).
-     */
-    TWO_FACTOR_CHALLENGE_REQUIRED: z
-      .preprocess(
-        (value) => (value === "" ? undefined : value),
-        z.enum(["true", "false"]).default("false"),
-      )
-      .transform((value) => value === "true"),
 
     /**
      * Key (32 bytes base64, `openssl rand -base64 32`) that encrypts webhook

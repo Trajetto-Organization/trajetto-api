@@ -24,9 +24,9 @@ import { AppError } from "@/shared/errors/AppError";
 import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { logger } from "@/shared/logging/logger";
 import { resolveTimeZone } from "@/shared/time/business-day";
-import { env } from "@/env";
 
 import database from "@/../infra/database";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const log = logger.child({ component: "business" });
 
@@ -38,8 +38,6 @@ const roleLabels: Record<string, string> = {
 
 @injectable()
 class DeleteBusinessUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -208,7 +206,7 @@ class DeleteBusinessUseCase {
             performedByEmail: params.deleterEmail,
             performedByRole: params.deleterRole,
             deletedAt,
-            logo: this.cloudinaryLogo,
+            logo: emailLogoUrl(),
           },
         }),
       ),

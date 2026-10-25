@@ -15,11 +15,10 @@ vi.mock("@/shared/logging/logger", async (importOriginal) =>
  * API answered anyone who posted to it directly — which is exactly what a bot
  * does. The API now verifies the token the web forwards.
  *
- * Two switches, for a rollout that never breaks the web that is live:
- *   - with the secret set, a token that IS sent is verified;
- *   - with TURNSTILE_REQUIRED on, a request WITHOUT one is refused. Off by
- *     default, because the web deployed today verifies locally and does not
- *     forward its (single-use) token.
+ * One switch, the secret:
+ *   - without it, Turnstile is off and every request passes;
+ *   - with it, a request WITHOUT a token is refused and one WITH a token is
+ *     verified at Cloudflare. The web forwards its (single-use) token.
  */
 const SITEVERIFY = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
@@ -54,58 +53,31 @@ describe("with no secret configured", () => {
     const { verifyTurnstileToken } = await load();
 
     await expect(
-      verifyTurnstileToken("token", { secret: undefined, required: false }),
+      verifyTurnstileToken("token", { secret: undefined }),
     ).resolves.toBeUndefined();
 
     expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it("refuses when enforcement is on, instead of silently skipping", async () => {
-    const fetch = answer({ success: true });
-    vi.stubGlobal("fetch", fetch);
-
-    const { verifyTurnstileToken } = await load();
-
-    await expect(
-      verifyTurnstileToken("token", { secret: undefined, required: true }),
-    ).rejects.toMatchObject({ statusCode: 503, code: "TURNSTILE_UNAVAILABLE" });
-
-    expect(fetch).not.toHaveBeenCalled();
-
-    // The misconfiguration is named in the log, not just answered.
-    expect(logged("error")).toHaveLength(1);
-    expect(logged("error")[0]).toMatchObject({ component: "turnstile" });
   });
 });
 
 describe("with the secret configured", () => {
   const secret = "0x-test-secret";
 
-  it("accepts a request with no token while enforcement is off (web still live)", async () => {
-    const fetch = answer({ success: true });
-    vi.stubGlobal("fetch", fetch);
+  it.each([undefined, null, ""])(
+    "refuses a request with no token (%j) without calling Cloudflare",
+    async (token) => {
+      const fetch = answer({ success: true });
+      vi.stubGlobal("fetch", fetch);
 
-    const { verifyTurnstileToken } = await load();
+      const { verifyTurnstileToken } = await load();
 
-    await expect(
-      verifyTurnstileToken(undefined, { secret, required: false }),
-    ).resolves.toBeUndefined();
+      await expect(
+        verifyTurnstileToken(token, { secret }),
+      ).rejects.toMatchObject({ statusCode: 400, code: "TURNSTILE_REQUIRED" });
 
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it("refuses a request with no token once enforcement is on", async () => {
-    const fetch = answer({ success: true });
-    vi.stubGlobal("fetch", fetch);
-
-    const { verifyTurnstileToken } = await load();
-
-    await expect(
-      verifyTurnstileToken(undefined, { secret, required: true }),
-    ).rejects.toMatchObject({ statusCode: 400, code: "TURNSTILE_REQUIRED" });
-
-    expect(fetch).not.toHaveBeenCalled();
-  });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 
   it("verifies a token it was given, with the secret, at Cloudflare", async () => {
     const fetch = answer({ success: true });
@@ -114,7 +86,7 @@ describe("with the secret configured", () => {
     const { verifyTurnstileToken } = await load();
 
     await expect(
-      verifyTurnstileToken("the-token", { secret, required: false }),
+      verifyTurnstileToken("the-token", { secret }),
     ).resolves.toBeUndefined();
 
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -130,7 +102,7 @@ describe("with the secret configured", () => {
     expect(body.get("response")).toBe("the-token");
   });
 
-  it("refuses a token Cloudflare rejects, even with enforcement off", async () => {
+  it("refuses a token Cloudflare rejects", async () => {
     vi.stubGlobal(
       "fetch",
       answer({ success: false, "error-codes": ["invalid-input-response"] }),
@@ -139,7 +111,7 @@ describe("with the secret configured", () => {
     const { verifyTurnstileToken } = await load();
 
     await expect(
-      verifyTurnstileToken("forged", { secret, required: false }),
+      verifyTurnstileToken("forged", { secret }),
     ).rejects.toMatchObject({ statusCode: 400, code: "TURNSTILE_FAILED" });
 
     // Why Cloudflare refused it, and never the token itself.
@@ -160,7 +132,7 @@ describe("with the secret configured", () => {
     const { verifyTurnstileToken } = await load();
 
     await expect(
-      verifyTurnstileToken("the-token", { secret, required: false }),
+      verifyTurnstileToken("the-token", { secret }),
     ).rejects.toMatchObject({ statusCode: 503, code: "TURNSTILE_UNAVAILABLE" });
   });
 
@@ -170,7 +142,7 @@ describe("with the secret configured", () => {
     const { verifyTurnstileToken } = await load();
 
     await expect(
-      verifyTurnstileToken("the-token", { secret, required: false }),
+      verifyTurnstileToken("the-token", { secret }),
     ).rejects.toMatchObject({ statusCode: 503, code: "TURNSTILE_UNAVAILABLE" });
   });
 });

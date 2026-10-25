@@ -26,12 +26,12 @@ import {
   issuePasswordSetupLink,
   unusablePassword,
 } from "../../services/password-setup-link";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const log = logger.child({ component: "user" });
 
 @injectable()
 class CreateMasterUserUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
   private http_request = env.HTTP_REQUEST;
 
   constructor(
@@ -77,7 +77,7 @@ class CreateMasterUserUseCase {
           additionalVariablesProperties: {
             email: masterCreated.email,
             url: setupUrl,
-            logo: this.cloudinaryLogo,
+            logo: emailLogoUrl(),
           },
         }),
         sendTransactionalMail({
@@ -88,7 +88,7 @@ class CreateMasterUserUseCase {
           moduleName: "user",
           additionalVariablesProperties: {
             url: `${this.http_request}/new-verification?token=${token}`,
-            logo: this.cloudinaryLogo,
+            logo: emailLogoUrl(),
           },
         }),
       ]);

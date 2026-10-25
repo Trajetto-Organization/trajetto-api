@@ -47,6 +47,7 @@ vi.mock("@/shared/logging/logger", async (importOriginal) =>
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+import { issueTwoFactorChallenge } from "@/modules/user/services/two-factor-challenge";
 import { ResendTwoFactorCodeUseCase } from "@/modules/user/usecases/resend-two-factor-code/resend-two-factor-code-usecase";
 
 import { clearLogged, logged } from "../../support/log-capture";
@@ -67,6 +68,8 @@ function within<T>(promise: Promise<T>, ms = 200) {
   ]);
 }
 
+let challenge: string;
+
 beforeEach(async () => {
   mailBehaviour = "ok";
   mailed.length = 0;
@@ -85,6 +88,9 @@ beforeEach(async () => {
 
   users.user.find((row) => row.id === user.id)!.two_factor_enabled = true;
 
+  // The password step's proof, without which no code is resent.
+  challenge = issueTwoFactorChallenge(user);
+
   useCase = new ResendTwoFactorCodeUseCase(users, tokens);
 });
 
@@ -93,14 +99,14 @@ describe("an account with two-factor on", () => {
     mailBehaviour = "hang";
 
     const neutral = await useCase.execute("ninguem@exemplo.com.br");
-    const answer = await within(useCase.execute(WITH_2FA));
+    const answer = await within(useCase.execute(WITH_2FA, challenge));
 
     expect(answer).toEqual(neutral);
     expect(mailed).toEqual([WITH_2FA]);
   });
 
   it("does not spend a bcrypt on the new code", async () => {
-    await useCase.execute(WITH_2FA);
+    await useCase.execute(WITH_2FA, challenge);
 
     expect(hashSecret).not.toHaveBeenCalled();
     expect(tokens.twoFactorTokens).toHaveLength(1);
@@ -111,7 +117,7 @@ describe("an account with two-factor on", () => {
     clearLogged();
 
     const neutral = await useCase.execute("ninguem@exemplo.com.br");
-    const answer = await within(useCase.execute(WITH_2FA));
+    const answer = await within(useCase.execute(WITH_2FA, challenge));
 
     expect(answer).toEqual(neutral);
 

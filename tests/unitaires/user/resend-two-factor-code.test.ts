@@ -12,6 +12,7 @@ vi.mock("@/shared/services/transactional-mail-service", () => ({
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+import { issueTwoFactorChallenge } from "@/modules/user/services/two-factor-challenge";
 import { ResendTwoFactorCodeUseCase } from "@/modules/user/usecases/resend-two-factor-code/resend-two-factor-code-usecase";
 
 /**
@@ -43,6 +44,13 @@ async function account(email: string, twoFactor: boolean) {
   return user;
 }
 
+/** The password step's proof for `email`, as a real client would send it. */
+function challengeFor(email: string) {
+  const user = users.user.find((row) => row.email === email);
+
+  return user ? issueTwoFactorChallenge(user) : undefined;
+}
+
 beforeEach(() => {
   sent.length = 0;
   users = new InMemoryUserRepository();
@@ -61,7 +69,7 @@ describe("the answer", () => {
         "sem-2fa@exemplo.com.br",
         "com-2fa@exemplo.com.br",
       ].map((email) =>
-        useCase.execute(email).then(
+        useCase.execute(email, challengeFor(email)).then(
           (result) => JSON.stringify(result),
           (error: Error) => `threw ${error.constructor.name}: ${error.message}`,
         ),
@@ -75,9 +83,13 @@ describe("the answer", () => {
     await account("sem-2fa@exemplo.com.br", false);
     await account("com-2fa@exemplo.com.br", true);
 
-    await useCase.execute("ninguem@exemplo.com.br").catch(() => undefined);
-    await useCase.execute("sem-2fa@exemplo.com.br").catch(() => undefined);
-    await useCase.execute("com-2fa@exemplo.com.br");
+    for (const email of [
+      "ninguem@exemplo.com.br",
+      "sem-2fa@exemplo.com.br",
+      "com-2fa@exemplo.com.br",
+    ]) {
+      await useCase.execute(email, challengeFor(email)).catch(() => undefined);
+    }
 
     expect(sent).toEqual(["com-2fa@exemplo.com.br"]);
   });
@@ -88,7 +100,10 @@ describe("a victim chosen by someone else", () => {
     await account("vitima@exemplo.com.br", true);
 
     for (let call = 0; call < 10; call += 1) {
-      await useCase.execute("vitima@exemplo.com.br");
+      await useCase.execute(
+        "vitima@exemplo.com.br",
+        challengeFor("vitima@exemplo.com.br"),
+      );
     }
 
     expect(sent).toHaveLength(1);

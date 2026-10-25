@@ -144,7 +144,7 @@ describe("a login with two-factor", () => {
   it("issues a code that the verification step accepts", async () => {
     await account({ twoFactor: true });
 
-    await useCase.execute({ email: EMAIL, password: PASSWORD });
+    const login = await useCase.execute({ email: EMAIL, password: PASSWORD });
 
     const verification = new TwoFactorVerificationUseCase(
       users as never,
@@ -155,6 +155,7 @@ describe("a login with two-factor", () => {
     const session = await verification.execute({
       email: EMAIL,
       twoFactorCode: mails[0].token!,
+      challenge: login.twoFactorChallenge,
     });
 
     expect(session.token).toBeTruthy();
@@ -186,7 +187,7 @@ describe("a code left pending by an account that turned two-factor off", () => {
      * itself — a code is a second factor, never a way in on its own.
      */
     await account({ twoFactor: true });
-    await useCase.execute({ email: EMAIL, password: PASSWORD });
+    const login = await useCase.execute({ email: EMAIL, password: PASSWORD });
 
     users.user[0].two_factor_enabled = false;
 
@@ -197,7 +198,11 @@ describe("a code left pending by an account that turned two-factor off", () => {
     );
 
     await expect(
-      verification.execute({ email: EMAIL, twoFactorCode: mails[0].token! }),
+      verification.execute({
+        email: EMAIL,
+        twoFactorCode: mails[0].token!,
+        challenge: login.twoFactorChallenge,
+      }),
     ).rejects.toBeInstanceOf(UserInvalidTwoFactorCodeError);
   });
 });

@@ -1,7 +1,7 @@
 import { inject, injectable } from "tsyringe";
 
 import { verifyOneTimeCode } from "@/shared/security/one-time-code";
-import { mayUseTwoFactorStep } from "../../services/two-factor-challenge";
+import { isTwoFactorChallengeFor } from "../../services/two-factor-challenge";
 
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
@@ -72,7 +72,7 @@ class TwoFactorVerificationUseCase {
     // Only next to proof that THIS account's password was just verified
     // (WEB-07). Checked before the attempt counter on purpose: a caller
     // without the password must not be able to burn the owner's guesses.
-    if (!mayUseTwoFactorStep(challenge, user)) {
+    if (!isTwoFactorChallengeFor(challenge, user)) {
       throw new UserInvalidTwoFactorCodeError();
     }
 

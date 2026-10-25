@@ -58,6 +58,7 @@ import {
   recordAcceptedOutcome,
   recordDeadline,
 } from "@/shared/resilience/record-accepted-outcome";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 /**
  * The interval is a background sweep, not the primary trigger: publishing an
@@ -1419,7 +1420,7 @@ class NotificationPipelineService {
         title: rendered.title,
         message: rendered.message,
         link: rendered.link || `${env.HTTP_REQUEST}/notifications`,
-        logo: env.CLOUDINARY_LOGO_IMAGE,
+        logo: emailLogoUrl(),
       },
     });
   }
@@ -1669,7 +1670,7 @@ class NotificationPipelineService {
         title: rendered.subject,
         message: rendered.body,
         link: rendered.link,
-        logo: env.CLOUDINARY_LOGO_IMAGE,
+        logo: emailLogoUrl(),
       },
     });
   }

@@ -9,13 +9,13 @@ import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-reposit
 import { AppError } from "@/shared/errors/AppError";
 import { logger } from "@/shared/logging/logger";
 import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const log = logger.child({ component: "user" });
 
 @injectable()
 class SendForgotPasswordMailUseCase {
   private http_request = env.HTTP_REQUEST;
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
 
   constructor(
     @inject("UserRepository")
@@ -74,7 +74,7 @@ class SendForgotPasswordMailUseCase {
       moduleName: "user",
       additionalVariablesProperties: {
         url: `${this.http_request}/forgot/password?token=${token}`,
-        logo: this.cloudinaryLogo,
+        logo: emailLogoUrl(),
       },
     }).catch((error) =>
       // The provider's error is already redacted (no address); the user id

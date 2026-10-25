@@ -17,14 +17,12 @@ import { BusinessHasChildrenError } from "@/modules/business/usecases/errors/bus
 import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
 
-import { env } from "@/env";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const CODE_EXPIRATION_MINUTES = 5;
 
 @injectable()
 class RequestBusinessDeletionUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -99,7 +97,7 @@ class RequestBusinessDeletionUseCase {
           code,
           businessName: existingBusiness.corporate_reason,
           businessCnpj: existingBusiness.cnpj,
-          logo: this.cloudinaryLogo,
+          logo: emailLogoUrl(),
         },
       });
 

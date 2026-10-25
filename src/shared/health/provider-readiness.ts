@@ -167,6 +167,13 @@ function failureKind(error: unknown): "timeout" | "network" {
     : "network";
 }
 
+/** The system code under fetch's "fetch failed" (ENOTFOUND, ECONNREFUSED…). */
+function networkCode(error: unknown): string {
+  const cause = (error as { cause?: { code?: unknown } } | null)?.cause;
+
+  return typeof cause?.code === "string" ? cause.code : "erro de rede";
+}
+
 async function timed<T>(
   run: () => Promise<T>,
 ): Promise<{ value: T; ms: number }> {
@@ -701,13 +708,38 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
   const url = env.AI_LOCAL_URL!.replace(/\/+$/, "");
   const timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
 
+  // Host and port only (the URL never carries credentials, but a typo could):
+  // which name the API tried is what tells a wrong App Name from a down service.
+  let host = url;
+
   try {
-    const { value: response, ms } = await timed(() =>
+    host = new URL(url).host;
+  } catch {
+    // Left as typed; the schema already requires a URL.
+  }
+
+  let response: Response;
+  let ms: number;
+
+  try {
+    ({ value: response, ms } = await timed(() =>
       deps.fetch(`${url}/health`, {
         method: "GET",
         signal: AbortSignal.timeout(timeoutMs),
       }),
-    );
+    ));
+  } catch (error) {
+    return base("ai_ocr", label, {
+      status: "error",
+      reachable: false,
+      message:
+        failureKind(error) === "timeout"
+          ? `O serviço em ${host} não respondeu em ${timeoutMs / 1000}s.`
+          : `Sem rota até ${host} (${networkCode(error)}): confira se a Application trajetto-ai está de pé e se AI_LOCAL_URL usa o App Name dela (http://<App Name>:8080), não o Name.`,
+    });
+  }
+
+  try {
     const body = (await readJson(response)) as {
       ok?: boolean;
       engine?: string;
@@ -772,13 +804,15 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
       details,
     });
   } catch (error) {
+    // /health answered, so the route exists: what failed is the token check.
     return base("ai_ocr", label, {
       status: "error",
-      reachable: false,
+      reachable: true,
+      latency_ms: ms,
       message:
         failureKind(error) === "timeout"
-          ? `O serviço não respondeu em ${timeoutMs / 1000}s.`
-          : "Sem rota até o serviço (o contêiner trajetto-ai está de pé e na rede backend?).",
+          ? `O serviço em ${host} respondeu /health, mas a conferência do token não respondeu em ${timeoutMs / 1000}s.`
+          : `O serviço em ${host} respondeu /health, mas a conferência do token falhou (${networkCode(error)}).`,
     });
   }
 }

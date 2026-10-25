@@ -35,7 +35,7 @@ async function quoteRoutes(app: FastifyInstance) {
         summary: "Envia um pedido de orçamento (site)",
         description:
           "Pedido de orçamento do site, com os dados da empresa e o tamanho da frota. " +
-          "Envie o token do Cloudflare Turnstile em `turnstileToken`: com o segredo configurado, a API confere o token (400 TURNSTILE_FAILED) e, com a exigência ligada, recusa o pedido sem ele (400 TURNSTILE_REQUIRED). " +
+          "Envie o token do Cloudflare Turnstile em `turnstileToken`: com o Turnstile configurado na API, o token é obrigatório: sem ele, 400 TURNSTILE_REQUIRED; recusado pela Cloudflare, 400 TURNSTILE_FAILED. Sem o Turnstile configurado, o token é ignorado. " +
           "O e-mail de confirmação não repete nada do que a pessoa digitou e sai no máximo uma vez por dia para cada endereço.",
         body: quoteSchemas.createQuote,
         response: {

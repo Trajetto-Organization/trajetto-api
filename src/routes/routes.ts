@@ -59,6 +59,7 @@ import { diagnosticsRoutes } from "./diagnostics-routes";
 import { driverPauseRoutes } from "./driver-pause-routes";
 
 import { retiredRoutes } from "./retired-routes";
+import { assetRoutes } from "./asset-routes";
 
 async function routes(app: FastifyInstance) {
   app.register(dashboardRoutes, { prefix: "/dashboard" });
@@ -101,6 +102,7 @@ async function routes(app: FastifyInstance) {
   app.register(integrationRoutes, { prefix: "/integration/v1" });
   app.register(integrationAdminRoutes, { prefix: "/integrations" });
   app.register(healthRoutes);
+  app.register(assetRoutes, { prefix: "/assets" });
 
   // Endpoints removed by a release, answered 410 instead of 404 while old
   // web tabs and app builds still call them. Full paths, so no prefix.

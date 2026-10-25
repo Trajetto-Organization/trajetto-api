@@ -44,6 +44,7 @@ vi.mock("@/shared/logging/logger", async (importOriginal) =>
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { SendForgotPasswordMailUseCase } from "@/modules/user/usecases/send-forgot-password-mail/send-forgot-password-mail-usecase";
+import { issueTwoFactorChallenge } from "@/modules/user/services/two-factor-challenge";
 import { ResendTwoFactorCodeUseCase } from "@/modules/user/usecases/resend-two-factor-code/resend-two-factor-code-usecase";
 
 import { clearLogged, logged } from "../../support/log-capture";
@@ -60,6 +61,8 @@ function loggedText() {
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+let challenge: string;
+
 beforeEach(async () => {
   clearLogged();
 
@@ -75,6 +78,9 @@ beforeEach(async () => {
   } as never);
 
   users.user.find((row) => row.id === user.id)!.two_factor_enabled = true;
+
+  // The password step's proof, without which no code is resent.
+  challenge = issueTwoFactorChallenge(user);
 });
 
 describe("a provider failure after the answer", () => {
@@ -90,7 +96,10 @@ describe("a provider failure after the answer", () => {
   });
 
   it("on the 2FA resend is logged with the SMTP reply, not the address", async () => {
-    await new ResendTwoFactorCodeUseCase(users, tokens).execute(RECIPIENT);
+    await new ResendTwoFactorCodeUseCase(users, tokens).execute(
+      RECIPIENT,
+      challenge,
+    );
     await settle();
 
     const text = loggedText();

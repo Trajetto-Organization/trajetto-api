@@ -373,26 +373,26 @@ environment `staging` e outra no `production`, cada uma no projeto
 
 ### 7.1 O que muda entre staging e produção
 
-| Item                                                                                                   | Staging                                                                                     | Produção                                                                        |
-| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| environment do Dokploy                                                                                 | `staging`                                                                                   | `production`                                                                    |
-| sufixo dos App Names                                                                                   | `-staging`                                                                                  | `-production`                                                                   |
-| tag das imagens (`trajetto-api`, `trajetto-ai`, `trajetto-backup`)                                     | `:staging`                                                                                  | `:stable` (crie antes: [seção 8](#8-primeiro-deploy-na-ordem-com-conferências)) |
-| domínio da API                                                                                         | `trajettoapi-staging.thorsolucoes.com.br`                                                   | `trajettoapi.thorsolucoes.com.br`                                               |
-| `APP_ENV`                                                                                              | `staging`                                                                                   | `production`                                                                    |
-| `HTTP_REQUEST` / `API_HTTP_REQUEST`                                                                    | `https://staging.intrajetto.com` / `https://trajettoapi-staging.thorsolucoes.com.br`        | `https://www.intrajetto.com` / `https://trajettoapi.thorsolucoes.com.br`        |
-| `AI_LOCAL_URL`                                                                                         | `http://trajetto-ai-staging:8080`                                                           | `http://trajetto-ai-production:8080`                                            |
-| segredos (senhas do Postgres e do Redis, `JWT_*`, token da IA, `WEBHOOK_SECRETS_KEY`, `DOCS_PASSWORD`) | **próprios**                                                                                | **outros**; nunca compartilhe entre ambientes                                   |
-| `R2_*`                                                                                                 | bucket de staging (CORS para a web de staging)                                              | bucket de produção                                                              |
-| `BACKUP_*`                                                                                             | bucket de backup de staging (staging prova o caminho do backup)                             | bucket de backup de produção                                                    |
-| `META_WHATSAPP_*`, `RESEND_*`                                                                          | **de teste** (número de teste da Meta; domínio de teste)                                    | reais                                                                           |
-| `RUN_MIGRATIONS_ON_BOOT`                                                                               | `true` (staging migra no boot)                                                              | `true` até ligar o job; depois `false` ([seção 15](#15-migrations))             |
-| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                       | `true` **só** no primeiro boot                                                              | `false` (`true` só numa instalação nova sem dados a restaurar, uma vez)         |
-| IA                                                                                                     | opcional: sem a Application `trajetto-ai`, use `AI_PROVIDER=none` na API (economiza ~1 GiB) | `trajetto-ai` com `AI_PROVIDER=local`                                           |
-| `PROOF_SIGNING_*`                                                                                      | vazio (comprovantes saem sem assinatura e dizem isso)                                       | o certificado A1 (e-CNPJ)                                                       |
-| réplicas da API                                                                                        | 2 (ou 1 para economizar RAM)                                                                | 2                                                                               |
-| environment do GitHub                                                                                  | `staging` (sem revisores)                                                                   | `production` (revisores obrigatórios)                                           |
-| `SWARM_API_SERVICE` (GitHub)                                                                           | `trajetto-api-staging`                                                                      | `trajetto-api-production`                                                       |
+| Item                                                                                                   | Staging                                                                                                                               | Produção                                                                        |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| environment do Dokploy                                                                                 | `staging`                                                                                                                             | `production`                                                                    |
+| sufixo dos App Names                                                                                   | `-staging`                                                                                                                            | `-production`                                                                   |
+| tag das imagens (`trajetto-api`, `trajetto-ai`, `trajetto-backup`)                                     | `:staging`                                                                                                                            | `:stable` (crie antes: [seção 8](#8-primeiro-deploy-na-ordem-com-conferências)) |
+| domínio da API                                                                                         | `trajettoapi-staging.thorsolucoes.com.br`                                                                                             | `trajettoapi.thorsolucoes.com.br`                                               |
+| `APP_ENV`                                                                                              | `staging`                                                                                                                             | `production`                                                                    |
+| `HTTP_REQUEST` / `API_HTTP_REQUEST`                                                                    | `https://staging.intrajetto.com` / `https://trajettoapi-staging.thorsolucoes.com.br`                                                  | `https://www.intrajetto.com` / `https://trajettoapi.thorsolucoes.com.br`        |
+| `AI_LOCAL_URL`                                                                                         | `http://trajetto-ai-staging:8080`                                                                                                     | `http://trajetto-ai-production:8080`                                            |
+| segredos (senhas do Postgres e do Redis, `JWT_*`, token da IA, `WEBHOOK_SECRETS_KEY`, `DOCS_PASSWORD`) | **próprios**                                                                                                                          | **outros**; nunca compartilhe entre ambientes                                   |
+| `R2_*`                                                                                                 | bucket de staging (CORS para a web de staging)                                                                                        | bucket de produção                                                              |
+| `BACKUP_*`                                                                                             | bucket de backup de staging (staging prova o caminho do backup)                                                                       | bucket de backup de produção                                                    |
+| `META_WHATSAPP_*`, `RESEND_*`                                                                          | **de teste** (número de teste da Meta; domínio de teste)                                                                              | reais                                                                           |
+| `RUN_MIGRATIONS_ON_BOOT`                                                                               | `true` (staging migra no boot)                                                                                                        | `true` até ligar o job; depois `false` ([seção 15](#15-migrations))             |
+| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                       | `true` **só** no primeiro boot                                                                                                        | `false` (`true` só numa instalação nova sem dados a restaurar, uma vez)         |
+| IA                                                                                                     | opcional: sem a Application `trajetto-ai`, use `AI_PROVIDER=none` na API (economiza ~1 GiB)                                           | `trajetto-ai` com `AI_PROVIDER=local`                                           |
+| `PROOF_SIGNING_*`                                                                                      | o certificado **de teste** ([seção 7.11](#711-certificado-do-comprovante-a1-icp-brasil)), ou vazio (sem assinatura, e o PDF diz isso) | o certificado A1 (e-CNPJ)                                                       |
+| réplicas da API                                                                                        | 2 (ou 1 para economizar RAM)                                                                                                          | 2                                                                               |
+| environment do GitHub                                                                                  | `staging` (sem revisores)                                                                                                             | `production` (revisores obrigatórios)                                           |
+| `SWARM_API_SERVICE` (GitHub)                                                                           | `trajetto-api-staging`                                                                                                                | `trajetto-api-production`                                                       |
 
 ### 7.2 Nomes: Name e App Name
 
@@ -622,7 +622,6 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
    JWT_SECRET_REFRESH_TOKEN=<openssl rand -base64 48, outro valor>
    MASTER_USER_EMAIL=<e-mail da equipe>
    MASTER_USER_INITIAL_PASSWORD=<senha forte>
-   CLOUDINARY_LOGO_IMAGE=<URL do logo dos e-mails>
 
    RATE_LIMIT_TRUSTED_PROXY=cloudflare
    RATE_LIMIT_FORWARDER_SECRET=<o MESMO valor da web deste ambiente>
@@ -655,11 +654,11 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
    Mais, quando forem usadas: `META_WHATSAPP_CUSTOMER_TEMPLATE_NAME`,
    `META_WHATSAPP_BUSINESS_ACCOUNT_ID`, `META_WHATSAPP_APP_SECRET`,
    `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `RESEND_WEBHOOK_SECRET`,
-   `TURNSTILE_SECRET_KEY`/`TURNSTILE_REQUIRED`, `RATE_LIMIT_EDGE_SECRET`, o
+   `TURNSTILE_SECRET_KEY` (definida, o formulário de orçamento exige o token
+   do Turnstile), `RATE_LIMIT_EDGE_SECRET`, o
    certificado do comprovante (`PROOF_SIGNING_*`), mapa e geocoder
    (`PROOF_MAP_*`, `REVERSE_GEOCODER_*`), `MIN_MOBILE_CONTRACT`,
-   `MOBILE_STORE_URL`, `TWO_FACTOR_CHALLENGE_REQUIRED`,
-   `ACTIVITY_RETENTION_DAYS`.
+   `MOBILE_STORE_URL`, `ACTIVITY_RETENTION_DAYS`.
 
    Cuidados:
 
@@ -674,6 +673,11 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
    - Não ponha aspas nem espaços em volta do `=`.
    - `PORT` e `NODE_ENV` não se definem: a imagem já traz `3333` e
      `production`.
+   - `API_HTTP_REQUEST` é a URL **pública** da API (a mesma do _Domains_): o
+     logo dos e-mails é montado a partir dela
+     (`<API_HTTP_REQUEST>/assets/trajetto-logo.png`, servido pela própria API)
+     e buscado pelo cliente de e-mail, de fora. Endereço interno ou errado deixa
+     o logo quebrado; vazia, os e-mails saem sem logo.
 
 4. Aba _Domains_ → **Add Domain**:
 
@@ -858,6 +862,110 @@ Applications e do **App Name** da API.
 A chave de API do Dokploy (`DOKPLOY_API_KEY`) é uma só para o painel inteiro:
 _Settings → Profile → API/CLI → Generate_ (o nome do menu varia entre
 versões). Copie na hora: o Dokploy não mostra de novo.
+
+### 7.11 Certificado do comprovante (A1 ICP-Brasil)
+
+O comprovante de entrega em PDF pode sair **assinado** com um certificado
+ICP-Brasil A1 (e-CNPJ), o que lhe dá validade jurídica (MP 2.200-2/2001). O
+certificado é **opcional**: sem ele o PDF sai inteiro (fotos, assinatura do
+recebedor, GPS, QR, código de verificação) e diz "sem assinatura digital
+ICP-Brasil", o que é verdade. O estado aparece em _Sistema → Provedores
+externos_ ("Certificado do comprovante") e em `/health/metrics`
+(`proof_signing`).
+
+**De onde vem cada valor.** Só o arquivo `.pfx` vem de uma certificadora; o
+resto é texto do próprio sistema. O Trajetto nunca se conecta ao ICP: a API
+assina cada PDF no servidor, com a chave que está dentro do `.pfx`, e quem
+abre o PDF (Adobe, validar.iti.gov.br) confere se o certificado foi emitido
+dentro da cadeia ICP-Brasil.
+
+| Variável                     | O que é                                                         | Staging                               | Produção                                               |
+| ---------------------------- | --------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------ |
+| `PROOF_SIGNING_PFX_BASE64`   | o `.pfx` (certificado + chave privada) em base64, numa linha só | o certificado **de teste** (abaixo)   | o A1 **real**, entregue pela certificadora             |
+| `PROOF_SIGNING_PFX_PASSWORD` | a senha que protege o `.pfx`                                    | a do certificado de teste             | a que **você escolhe** ao baixar o A1 na certificadora |
+| `PROOF_SIGNER_LOCATION`      | onde foi assinado (gravado na assinatura)                       | ex. `Rio de Janeiro, RJ`              | o mesmo                                                |
+| `PROOF_SIGNER_CONTACT`       | contato gravado na assinatura (uma caixa que alguém lê)         | ex. `contato@intrajetto.com`          | o mesmo                                                |
+| `PROOF_ISSUER_LEGAL_NAME`    | quem gerou um comprovante **sem** assinatura                    | `Trajetto`                            | a razão social                                         |
+| `PROOF_ISSUER_CNPJ`          | o CNPJ desses comprovantes; vazio = omitido                     | vazio (a API recusa um CNPJ inválido) | o CNPJ                                                 |
+
+Com o certificado carregado, o signatário que aparece vem do **próprio
+certificado** (o CN do e-CNPJ, "RAZAO SOCIAL:CNPJ"), não dessas variáveis. Use
+`PROOF_SIGNING_PFX_BASE64` **ou** `PROOF_SIGNING_PFX_PATH` (arquivo montado em
+_Advanced → Volumes_), nunca os dois.
+
+#### Staging: certificado de teste
+
+O A1 só é emitido para um CNPJ e é pago. Para provar em staging que a
+assinatura funciona, gere um certificado de teste. A API aceita qualquer
+`.pfx` com chave RSA, uso de assinatura, validade em curso e emissor
+`O=ICP-Brasil`: ela **não** confere a cadeia até a raiz do ITI. É o mesmo tipo
+de certificado que os testes automáticos geram
+(`tests/support/test-signing-certificate.ts`).
+
+No Git Bash, numa pasta **fora** dos repositórios (o `.pfx` contém a chave
+privada e nunca vai para o git):
+
+```bash
+mkdir -p ~/certificados-trajetto && cd ~/certificados-trajetto
+
+# 1. Chave e certificado, válidos por 1 ano, que dizem no nome que são de teste.
+#    Sem MSYS_NO_PATHCONV, o Git Bash trata "/C=BR/..." como caminho.
+MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes \
+  -keyout teste.key -out teste.crt \
+  -subj "/C=BR/O=ICP-Brasil/OU=TESTE - NAO E UM CERTIFICADO REAL/CN=TRAJETTO TESTE STAGING" \
+  -addext "keyUsage=critical,digitalSignature,nonRepudiation"
+
+# 2. O .pfx com senha. As três opções do fim usam o formato que o node-forge
+#    abre; o padrão do OpenSSL 3 (PBES2/AES) pode não abrir (PFX_UNREADABLE).
+SENHA=$(openssl rand -hex 24)
+openssl pkcs12 -export -inkey teste.key -in teste.crt \
+  -out trajetto-staging-teste.pfx -passout "pass:$SENHA" \
+  -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
+
+# 3. Base64 numa linha só, a senha num arquivo, e a chave solta apagada.
+base64 -w0 trajetto-staging-teste.pfx > pfx-base64.txt
+printf '%s' "$SENHA" > senha.txt && unset SENHA
+rm teste.key teste.crt
+```
+
+Cole o conteúdo de `pfx-base64.txt` em `PROOF_SIGNING_PFX_BASE64` e o de
+`senha.txt` em `PROOF_SIGNING_PFX_PASSWORD` no _Environment_ da
+`trajetto-api` de staging, com as outras variáveis da tabela; **Save** e
+**Deploy**. Em _Provedores externos_ → **Atualizar**, o certificado aparece
+pronto, com a validade.
+
+O PDF sai assinado, mas Adobe e validar.iti.gov.br dizem "origem
+desconhecida" ou "inválida": nenhuma autoridade emitiu esse certificado. O
+texto do PDF ainda afirma a validade ICP-Brasil, que só é verdadeira com o A1
+real. Por isso o certificado de teste **nunca** vai para produção, e um
+comprovante de staging não serve como documento. Renove-o com os mesmos
+comandos antes de 1 ano.
+
+#### Produção: o A1 real
+
+1. Com o CNPJ aberto, compre um **e-CNPJ A1** numa certificadora credenciada
+   (Certisign, Serasa Experian, Valid, Soluti etc.). Precisa ser o A1, em
+   arquivo: o A3, em token ou cartão, não serve para um servidor. A compra
+   pede os documentos da empresa (CNPJ, contrato social, documento do
+   representante legal) e uma validação por vídeo ou presencial. Vale 1 ano.
+2. Na emissão, a certificadora pede que você **escolha a senha** e entrega o
+   `.pfx`. Se ela instalar no navegador ou no Windows, exporte **com a chave
+   privada**.
+3. Rode `base64 -w0 <arquivo>.pfx > pfx-base64.txt` e troque, na
+   `trajetto-api` de produção, `PROOF_SIGNING_PFX_BASE64` e
+   `PROOF_SIGNING_PFX_PASSWORD`; ponha `PROOF_ISSUER_LEGAL_NAME` e
+   `PROOF_ISSUER_CNPJ` reais. **Save**, **Deploy**, _Provedores externos_ →
+   **Atualizar**.
+4. Confira um comprovante novo no validar.iti.gov.br: deve dizer "aprovado".
+5. **Renovação**: o alerta "Certificado ICP do comprovante vence em" avisa
+   antes do vencimento ([seção 20](#20-alertas-e-monitoramento)). Renove o A1,
+   troque as duas variáveis e faça **Deploy**. Vencido, os comprovantes voltam
+   a sair sem assinatura (e dizem isso); a API não cai.
+
+Estados que o painel pode mostrar: `PFX_UNREADABLE` (senha errada, arquivo
+corrompido ou formato que o node-forge não abre), `NOT_ICP_BRASIL` (emissor
+sem `O=ICP-Brasil`), `KEY_CERTIFICATE_MISMATCH`, `KEY_USAGE`, `NOT_YET_VALID`
+e vencido.
 
 ## 8. Primeiro deploy, na ordem, com conferências
 
@@ -2114,11 +2222,11 @@ _classic_ `read:packages`, informado no provider Docker de cada Application.
 
 | Valor                             | API (Environment das Applications do projeto `trajetto-api`)                                                                                    | Web (Environment da Application)                                                         | App (ambiente EAS)                                                                    |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| URL pública da API                | o host na aba _Domains_ da Application `trajetto-api` e `API_HTTP_REQUEST` (a URL)                                                              | `HTTP_REQUEST` (chamadas do servidor da web) e `PUBLIC_API_URL` (chamadas do navegador)  | `EXPO_PUBLIC_API_URL`                                                                 |
+| URL pública da API                | o host na aba _Domains_ da Application `trajetto-api` e `API_HTTP_REQUEST` (a URL; dela sai o logo dos e-mails)                                 | `HTTP_REQUEST` (chamadas do servidor da web) e `PUBLIC_API_URL` (chamadas do navegador)  | `EXPO_PUBLIC_API_URL`                                                                 |
 | Socket.IO                         | o mesmo host da API, com WebSocket liberado na borda                                                                                            | `PUBLIC_SOCKET_URL` (vazia = `PUBLIC_API_URL`)                                           | o socket usa `EXPO_PUBLIC_API_URL`                                                    |
 | Origem da web                     | `HTTP_REQUEST` = a origem da web do ambiente (única origem do CORS e do Socket.IO, base dos links)                                              | `METADATA_BASE`                                                                          | `EXPO_PUBLIC_WEB_APPLICATION_URL` (links de Privacidade e Termos)                     |
 | Limite de tentativas por IP       | `RATE_LIMIT_FORWARDER_SECRET`                                                                                                                   | `RATE_LIMIT_FORWARDER_SECRET`, **o mesmo valor**                                         | —                                                                                     |
-| Captcha (Turnstile)               | `TURNSTILE_SECRET_KEY` (o mesmo widget da web) e `TURNSTILE_REQUIRED`                                                                           | `TURNSTILE_SITE_KEY` e `TURNSTILE_SECRET_KEY`                                            | —                                                                                     |
+| Captcha (Turnstile)               | `TURNSTILE_SECRET_KEY` (o mesmo widget da web; definida, exige o token)                                                                         | `TURNSTILE_SITE_KEY` e `TURNSTILE_SECRET_KEY`                                            | —                                                                                     |
 | Fotos no R2                       | `R2_*` (um bucket por ambiente)                                                                                                                 | `CSP_STORAGE_ORIGINS` libera a origem do bucket; o CORS do bucket libera a origem da web | envia direto à URL pré-assinada que a API devolve (sem configuração)                  |
 | IA (leitura de fotos)             | `AI_LOCAL_TOKEN` na `trajetto-api` = `AI_TOKEN` na `trajetto-ai` (o mesmo valor, um por ambiente) e `AI_LOCAL_URL=http://<App Name da IA>:8080` | nenhuma variável: a IA chega pela API                                                    | nenhuma variável                                                                      |
 | Push (FCM)                        | nenhuma: a API chama a Expo Push API                                                                                                            | —                                                                                        | `GOOGLE_SERVICES_JSON` (arquivo secreto no EAS) e a chave FCM V1 em `eas credentials` |

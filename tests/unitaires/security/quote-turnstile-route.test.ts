@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
 
 /**
- * POST /quote/create-quote, with Turnstile configured and enforced, through
+ * POST /quote/create-quote, with Turnstile configured (the secret set), through
  * the real app.
  *
  * The helper's own rules live in turnstile.test.ts. What this file pins is the
@@ -38,7 +38,6 @@ const QUOTE = {
 beforeAll(async () => {
   // Read once, when `@/env` is first imported — so before the app is.
   process.env.TURNSTILE_SECRET_KEY = "0x-test-secret";
-  process.env.TURNSTILE_REQUIRED = "true";
 
   const realFetch = globalThis.fetch;
 
@@ -58,11 +57,10 @@ afterAll(async () => {
   vi.unstubAllGlobals();
 
   delete process.env.TURNSTILE_SECRET_KEY;
-  delete process.env.TURNSTILE_REQUIRED;
 });
 
 describe("a quote posted straight to the API", () => {
-  it("is refused without a token once enforcement is on", async () => {
+  it("is refused without a token", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/quote/create-quote",

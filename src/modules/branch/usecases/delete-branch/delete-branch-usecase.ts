@@ -28,7 +28,7 @@ import { sendTransactionalMail } from "@/shared/services/transactional-mail-serv
 
 import { AppError } from "@/shared/errors/AppError";
 import { logger } from "@/shared/logging/logger";
-import { env } from "@/env";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const log = logger.child({ component: "branch" });
 
@@ -50,8 +50,6 @@ const roleLabels: Record<string, string> = {
 
 @injectable()
 class DeleteBranchUseCase {
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
-
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
@@ -222,7 +220,7 @@ class DeleteBranchUseCase {
             performedByEmail: params.deleterEmail,
             performedByRole: params.deleterRole,
             deletedAt,
-            logo: this.cloudinaryLogo,
+            logo: emailLogoUrl(),
           },
         }),
       ),

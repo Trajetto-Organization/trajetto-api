@@ -13,7 +13,6 @@ const SITEVERIFY_TIMEOUT_MS = 5_000;
 
 interface TurnstileOptions {
   secret?: string;
-  required?: boolean;
 }
 
 const challengeFailed = (code: "TURNSTILE_REQUIRED" | "TURNSTILE_FAILED") =>
@@ -37,33 +36,19 @@ let warnedUnconfigured = false;
  * this is the check. Tokens are single-use, which is why the web must NOT
  * verify it first: the second siteverify of the same token fails.
  *
- * Rollout switches (see the env schema):
- *   - secret unset: nothing to verify with; the request passes (dev, tests,
- *     and production until the secret is configured — logged once);
- *   - secret set: a token that arrives is always verified, and a bad one is
- *     refused even while enforcement is off;
- *   - TURNSTILE_REQUIRED: a request with no token is refused. Off until the
- *     web that forwards the token is live, so the web deployed today keeps
- *     working.
+ * TURNSTILE_SECRET_KEY is the only switch:
+ *   - unset: Turnstile is off and the request passes (dev, tests, and
+ *     production until the secret is configured — logged once);
+ *   - set: a request without a token is refused (400 TURNSTILE_REQUIRED) and
+ *     a token that arrives is verified at Cloudflare.
  *
  * Fails closed: Cloudflare unreachable is a 503, never a pass.
  */
 async function verifyTurnstileToken(
   token: string | null | undefined,
-  {
-    secret = env.TURNSTILE_SECRET_KEY,
-    required = env.TURNSTILE_REQUIRED,
-  }: TurnstileOptions = {},
+  { secret = env.TURNSTILE_SECRET_KEY }: TurnstileOptions = {},
 ): Promise<void> {
   if (!secret) {
-    if (required) {
-      // Enforcement on with nothing to enforce it with is a misconfiguration,
-      // and passing every request would hide it.
-      log.error("TURNSTILE_REQUIRED is on but TURNSTILE_SECRET_KEY is not set");
-
-      throw challengeUnavailable();
-    }
-
     if (env.NODE_ENV === "production" && !warnedUnconfigured) {
       warnedUnconfigured = true;
 
@@ -75,11 +60,7 @@ async function verifyTurnstileToken(
     return;
   }
 
-  if (!token) {
-    if (required) throw challengeFailed("TURNSTILE_REQUIRED");
-
-    return;
-  }
+  if (!token) throw challengeFailed("TURNSTILE_REQUIRED");
 
   let outcome: { success?: unknown; "error-codes"?: unknown };
 

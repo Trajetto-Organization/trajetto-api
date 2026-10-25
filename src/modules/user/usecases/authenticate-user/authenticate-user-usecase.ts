@@ -33,6 +33,7 @@ import {
 import { isLoginLocked } from "@/shared/security/login-lockout-rules";
 import { hashOneTimeCode } from "@/shared/security/one-time-code";
 import { issueTwoFactorChallenge } from "../../services/two-factor-challenge";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 /**
  * What an unknown e-mail's password is compared against.
@@ -49,7 +50,6 @@ const DUMMY_PASSWORD_HASH =
 @injectable()
 class AuthenticateUserUseCase {
   private http_request = env.HTTP_REQUEST;
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
 
   constructor(
     @inject("UserRepository")
@@ -87,7 +87,7 @@ class AuthenticateUserUseCase {
         moduleName: "user",
         additionalVariablesProperties: {
           url: `${this.http_request}/new-verification?token=${tokenVerification}`,
-          logo: this.cloudinaryLogo,
+          logo: emailLogoUrl(),
         },
       });
 
@@ -148,7 +148,7 @@ class AuthenticateUserUseCase {
         moduleName: "user",
         additionalVariablesProperties: {
           token: twoFactorToken,
-          logo: this.cloudinaryLogo,
+          logo: emailLogoUrl(),
         },
       });
 

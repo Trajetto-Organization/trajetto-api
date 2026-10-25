@@ -178,9 +178,9 @@ const createQuoteSchema = z.object({
   ),
 
   // The Cloudflare Turnstile token the web's widget produced, forwarded for
-  // the API to verify (src/shared/security/turnstile.ts). Optional so the web
-  // deployed before this field existed keeps working; TURNSTILE_REQUIRED is
-  // what makes it mandatory. Not stored.
+  // the API to verify (src/shared/security/turnstile.ts). Optional in the
+  // schema because Turnstile is off without TURNSTILE_SECRET_KEY (dev, tests);
+  // with the secret set, the check refuses a request without it. Not stored.
   turnstileToken: z.string().max(2048).optional(),
 });
 

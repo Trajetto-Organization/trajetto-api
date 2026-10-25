@@ -343,6 +343,38 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
     expect(result.message).toContain("AI_LOCAL_TOKEN");
   });
 
+  // "No route" used to cover every network failure, so a wrong App Name, a
+  // stopped service and a dropped connection all read the same on the panel.
+  it("an unreachable OCR service names the host it tried and the network error", async () => {
+    const result = await checkAiOcr(deps({}));
+
+    expect(result.status).toBe("error");
+    expect(result.reachable).toBe(false);
+    expect(result.message).toContain("trajetto-ai:8080");
+    expect(result.message).toContain("ENOTFOUND");
+    expect(result.message).toContain("App Name");
+    expect(result.message).not.toContain(SECRETS.AI_LOCAL_TOKEN);
+  });
+
+  it("an OCR service that answers /health but drops the token check says which step failed", async () => {
+    const result = await checkAiOcr(
+      deps({
+        "http://trajetto-ai:8080/health":
+          HEALTHY["http://trajetto-ai:8080/health"],
+        "http://trajetto-ai:8080/v1/read": () => {
+          throw Object.assign(new TypeError("fetch failed"), {
+            cause: { code: "ECONNRESET" },
+          });
+        },
+      }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.reachable).toBe(true);
+    expect(result.message).toContain("/health");
+    expect(result.message).toContain("ECONNRESET");
+  });
+
   it("the OCR service warming up is a warning", async () => {
     const result = await checkAiOcr(
       deps({

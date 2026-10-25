@@ -42,13 +42,13 @@ import {
   issuePasswordSetupLink,
   unusablePassword,
 } from "../../services/password-setup-link";
+import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
 
 const log = logger.child({ component: "user" });
 
 @injectable()
 class CreateUserUseCase {
   private http_request = env.HTTP_REQUEST;
-  private cloudinaryLogo = env.CLOUDINARY_LOGO_IMAGE;
 
   private allowedRoles: Record<UserRole, UserRole[]> = {
     BUSINESS_USER: ["BUSINESS_USER"],
@@ -113,7 +113,7 @@ class CreateUserUseCase {
           moduleName: "user",
           additionalVariablesProperties: {
             url: `${this.http_request}/new-verification?token=${token}`,
-            logo: this.cloudinaryLogo,
+            logo: emailLogoUrl(),
           },
         }),
         sendTransactionalMail({
@@ -125,7 +125,7 @@ class CreateUserUseCase {
           additionalVariablesProperties: {
             email: userCreated.email,
             url: setupUrl,
-            logo: this.cloudinaryLogo,
+            logo: emailLogoUrl(),
           },
         }),
       ]);

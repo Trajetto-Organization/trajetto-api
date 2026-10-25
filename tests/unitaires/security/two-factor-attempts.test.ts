@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { hash } from "bcrypt";
 
+import { issueTwoFactorChallenge } from "@/modules/user/services/two-factor-challenge";
 import { TwoFactorVerificationUseCase } from "@/modules/user/usecases/two-factor-verification/two-factor-verification-usecase";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
@@ -59,8 +60,12 @@ beforeEach(async () => {
   );
 });
 
+// The password step's proof, which every verification must carry.
+const challenge = () =>
+  issueTwoFactorChallenge({ id: "user-1", email: EMAIL, session_version: 0 });
+
 const guess = (twoFactorCode: string) =>
-  useCase.execute({ twoFactorCode, email: EMAIL });
+  useCase.execute({ twoFactorCode, email: EMAIL, challenge: challenge() });
 
 describe("getting the code wrong", () => {
   it("is refused, and counts", async () => {

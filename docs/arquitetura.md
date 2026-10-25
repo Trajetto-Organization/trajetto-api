@@ -407,7 +407,7 @@ OpenStreetMap são recusados.
 - **Push**: pela Expo, para o app Android; o cron `check-push-receipts`
   desativa aparelhos mortos.
 - **Turnstile**: o formulário público de orçamento é verificado pela própria
-  API (`TURNSTILE_SECRET_KEY`, `TURNSTILE_REQUIRED`).
+  API; com `TURNSTILE_SECRET_KEY` definida, pedido sem token é recusado.
 
 ## Conexão com o Postgres
 
