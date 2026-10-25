@@ -62,6 +62,11 @@ const OPEN_BY_DESIGN: Array<{ pattern: RegExp; reason: string }> = [
       "Meta's status callback: the POST is authenticated by X-Hub-Signature-256 (401 without it), the GET handshake by the verify token (403); 404 while unconfigured",
   },
   {
+    pattern: /^(GET|HEAD) \/assets\/trajetto-logo\.png$/,
+    reason:
+      "the logo the e-mails load from mail clients, which send no token; the one file served, no listing (asset-routes.ts)",
+  },
+  {
     pattern: /^POST \/webhooks\/resend$/,
     reason:
       "Resend's delivery/bounce/complaint events: authenticated by the Svix signature (401 without it); 404 while RESEND_WEBHOOK_SECRET is unset",
