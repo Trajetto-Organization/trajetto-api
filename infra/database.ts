@@ -1,5 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 
+import { withPoolReset } from "../src/shared/resilience/database-pool-reset";
+
 /**
  * How long an interactive transaction may wait for a connection, and run.
  *
@@ -17,11 +19,32 @@ import { PrismaClient } from "@prisma/client";
  */
 const TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 15_000 } as const;
 
+/**
+ * Logged when Postgres closed a connection and the pool is being replaced.
+ * Imported on that path only: scripts load this module without the app's
+ * environment, and a log line must never be the reason a query fails.
+ */
+function logPoolReset(error: unknown): void {
+  import("../src/shared/logging/logger")
+    .then(({ logger }) =>
+      logger.warn(
+        { component: "database", err: error },
+        "Postgres closed a connection: replacing the connection pool",
+      ),
+    )
+    .catch(() => {});
+}
+
 const prismaClientSingleton = () => {
-  return new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["query"] : [],
-    transactionOptions: TRANSACTION_OPTIONS,
-  });
+  // See withPoolReset: without it, a connection Postgres closed could stay in
+  // the pool for good and every request answer 503 until a restart.
+  return withPoolReset(
+    new PrismaClient({
+      log: process.env.NODE_ENV === "development" ? ["query"] : [],
+      transactionOptions: TRANSACTION_OPTIONS,
+    }),
+    logPoolReset,
+  );
 };
 
 type PrismaClientSingleton = ReturnType<typeof prismaClientSingleton>;

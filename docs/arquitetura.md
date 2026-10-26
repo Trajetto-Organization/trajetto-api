@@ -435,6 +435,19 @@ não faz a réplica parecer fora do ar; depois de um "não", a probe fecha a con
 (`$disconnect()`) e a próxima abre outra no mesmo client (um client novo por
 "não" retinha ~2,3 MB de memória nativa cada).
 
+**Conexão fechada pelo Postgres troca o pool inteiro**: no Prisma 6.1 uma
+conexão do pool só é marcada como quebrada quando falha um statement que ela
+já tinha preparado. Preparar um statement novo numa conexão cujo backend
+morreu (restart, failover, `pg_terminate_backend`) falha com P1017 e devolve a
+conexão ao pool como saudável — e ela voltava a ser entregue para sempre, com
+503 em toda requisição até reiniciar a réplica (falha do CI em
+`tests/E2E/database-reconnect.test.ts`, `503 × 25`). O client de
+`infra/database.ts` passa por `withPoolReset`
+(`src/shared/resilience/database-pool-reset.ts`): o primeiro P1017 faz um
+`$disconnect()` (uma vez por rajada) e a query seguinte abre conexões novas.
+Custo: uma transação interativa aberta numa conexão saudável da mesma réplica
+naquele instante se perde.
+
 **Limite conhecido**: no Prisma 6.1, `socket_timeout` limita a execução de um
 statement já preparado; preparar um statement novo numa conexão cujo par
 morreu espera o kernel (`net.ipv4.tcp_retries2=15` ≈ 15 min). O caso comum (o

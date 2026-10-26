@@ -119,16 +119,19 @@ async function terminateEveryOtherBackend(): Promise<number> {
  * not do is keep failing.
  */
 async function untilOk(
-  call: () => Promise<{ statusCode: number }>,
+  call: () => Promise<{ statusCode: number; body: string }>,
   attempts = 25,
 ): Promise<number[]> {
   const statuses: number[] = [];
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const { statusCode } = await call();
+    const { statusCode, body } = await call();
     statuses.push(statusCode);
 
     if (statusCode === 200) return statuses;
+
+    // What a failed run needs to be diagnosed from the CI log alone.
+    console.warn(`database-reconnect: ${statusCode} ${body.slice(0, 300)}`);
 
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
@@ -168,8 +171,57 @@ describe("a database that dropped every connection the API held", () => {
       expect(last(statuses), `respostas: ${statuses.join(", ")}`).toBe(200);
     },
   );
+
+  /**
+   * The case that failed in CI with `503 × 25`. Prisma 6.1 marks a pooled
+   * connection broken only when a statement ALREADY prepared on it fails;
+   * preparing a new one on a dead connection fails with P1017 and hands the
+   * connection back to the pool as healthy. A dead connection asked only for
+   * statements it never prepared was reused forever — every request a 503
+   * until the process restarted, while liveness stayed green.
+   *
+   * A fresh SQL text per attempt makes every attempt a statement no
+   * connection prepared, so the outcome does not depend on which connection
+   * the pool happens to hand out: without the pool reset in infra/database
+   * this fails every time.
+   */
+  it(
+    "recovers even when no dead connection had the next statement prepared",
+    { timeout: 30_000 },
+    async () => {
+      const { default: database } = await import("@/../infra/database");
+
+      await database.$queryRaw`SELECT 1`;
+
+      expect(await terminateEveryOtherBackend()).toBeGreaterThan(0);
+
+      const outcomes: string[] = [];
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        try {
+          await database.$queryRawUnsafe(
+            `SELECT ${attempt}::int AS attempt -- ${randomUUID()}`,
+          );
+          outcomes.push("ok");
+          break;
+        } catch (error) {
+          outcomes.push(describeFailure(error));
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+
+      expect(last(outcomes), `tentativas: ${outcomes.join(" | ")}`).toBe("ok");
+    },
+  );
 });
 
-function last(statuses: number[]): number | undefined {
-  return statuses[statuses.length - 1];
+function describeFailure(error: unknown): string {
+  const code = (error as { code?: unknown }).code;
+  const message = error instanceof Error ? error.message.trim() : "";
+
+  return `${String(code ?? "?")} ${message.split("\n").pop() ?? ""}`;
+}
+
+function last<T>(values: T[]): T | undefined {
+  return values[values.length - 1];
 }
