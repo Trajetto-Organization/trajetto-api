@@ -1036,6 +1036,32 @@ describe("the trail's day is the company's day", () => {
     return zonedWallTimeToUtc(ZONE, year, month, date, hour, minute);
   }
 
+  /**
+   * The UTC-day partitions these points land in. The job keeps yesterday (UTC)
+   * onward, and a company's day reaches further back: between 00:00 and 03:00
+   * UTC, São Paulo's yesterday is the day BEFORE the UTC yesterday, and this
+   * fresh database has no partition for it (production does: partitions are
+   * created a week ahead, so a day's partition exists before its points).
+   */
+  async function ensurePartitionsFor(points: Date[]): Promise<void> {
+    const { partitionName } = await import(
+      "@/jobs/cron/driver-position-partitions-job"
+    );
+    const days = new Set(
+      points.map((point) => point.toISOString().slice(0, 10)),
+    );
+
+    for (const day of days) {
+      const from = new Date(`${day}T00:00:00.000Z`);
+      const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
+
+      await prisma.$executeRawUnsafe(
+        `CREATE TABLE IF NOT EXISTS "${partitionName(from)}" PARTITION OF "driver_position"
+           FOR VALUES FROM ('${from.toISOString()}') TO ('${to.toISOString()}')`,
+      );
+    }
+  }
+
   async function seedBothEndsOfTheDay(dayKey: string): Promise<void> {
     const points = [
       companyWallTime(dayKey, 8, 0),
@@ -1044,6 +1070,8 @@ describe("the trail's day is the company's day", () => {
       companyWallTime(dayKey, 0, -1),
       companyWallTime(dayKey, 24, 0),
     ];
+
+    await ensurePartitionsFor(points);
 
     await prisma.driverPosition.createMany({
       data: points.map((recorded_at, index) => ({
@@ -1118,6 +1146,10 @@ describe("the trail's day is the company's day", () => {
 
     const at = (hour: number, minute: number) =>
       zonedWallTimeToUtc(RIO_BRANCO, year, month, date, hour, minute);
+
+    // Between 00:00 and 05:00 UTC, Rio Branco's day starts before the UTC
+    // yesterday the job keeps.
+    await ensurePartitionsFor([at(0, 30), at(23, 30), at(0, -1), at(24, 0)]);
 
     await prisma.driverPosition.createMany({
       data: [at(0, 30), at(23, 30), at(0, -1), at(24, 0)].map(
