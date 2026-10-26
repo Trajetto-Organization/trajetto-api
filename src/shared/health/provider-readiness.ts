@@ -167,11 +167,21 @@ function failureKind(error: unknown): "timeout" | "network" {
     : "network";
 }
 
-/** The system code under fetch's "fetch failed" (ENOTFOUND, ECONNREFUSED…). */
+/**
+ * The system code under fetch's "fetch failed" (ENOTFOUND, ECONNREFUSED…),
+ * with the cause's own words when it has them: a bare UND_ERR_INVALID_ARG
+ * does not say which argument was refused. No fetch error message carries a
+ * header value, so the token never reaches the panel through this.
+ */
 function networkCode(error: unknown): string {
-  const cause = (error as { cause?: { code?: unknown } } | null)?.cause;
+  const cause = (
+    error as { cause?: { code?: unknown; message?: unknown } } | null
+  )?.cause;
+  const code = typeof cause?.code === "string" ? cause.code : "erro de rede";
+  const detail =
+    typeof cause?.message === "string" ? cause.message.slice(0, 160) : "";
 
-  return typeof cause?.code === "string" ? cause.code : "erro de rede";
+  return detail && detail !== code ? `${code}: ${detail}` : code;
 }
 
 async function timed<T>(
@@ -769,14 +779,13 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
     // The token: the service checks it before anything else, so an empty
     // request with an unknown profile answers 401 for a wrong token and 400
     // for a right one, without reading a photo or taking the slot.
+    // No hand-written Content-Length: fetch sets it for the empty body, as it
+    // does for the readings (local-ocr-reader.ts), which work.
     const tokenProbe = await deps.fetch(
       `${url}/v1/read?profile=readiness-probe`,
       {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.AI_LOCAL_TOKEN}`,
-          "Content-Length": "0",
-        },
+        headers: { Authorization: `Bearer ${env.AI_LOCAL_TOKEN}` },
         signal: AbortSignal.timeout(timeoutMs),
       },
     );

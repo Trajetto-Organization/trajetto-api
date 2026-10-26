@@ -375,6 +375,52 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
     expect(result.message).toContain("ECONNRESET");
   });
 
+  // Staging showed only "UND_ERR_INVALID_ARG": the code alone did not say
+  // which argument undici refused. The message carries the cause's own text
+  // (never the token, which no fetch error message contains).
+  it("a refused token check names the error's own words, not only its code", async () => {
+    const result = await checkAiOcr(
+      deps({
+        "http://trajetto-ai:8080/health":
+          HEALTHY["http://trajetto-ai:8080/health"],
+        "http://trajetto-ai:8080/v1/read": () => {
+          throw Object.assign(new TypeError("fetch failed"), {
+            cause: {
+              code: "UND_ERR_INVALID_ARG",
+              message: "invalid content-length header",
+            },
+          });
+        },
+      }),
+    );
+
+    expect(result.message).toContain("UND_ERR_INVALID_ARG");
+    expect(result.message).toContain("invalid content-length header");
+    expect(result.message).not.toContain(SECRETS.AI_LOCAL_TOKEN);
+  });
+
+  // The token check is shaped like a real reading: fetch sets the length of
+  // an empty body itself. A hand-written Content-Length was the one thing the
+  // probe did that the working readings do not.
+  it("checks the token without a hand-written Content-Length", async () => {
+    let sent: Headers | null = null;
+
+    await checkAiOcr(
+      deps({
+        ...HEALTHY,
+        "http://trajetto-ai:8080/v1/read": (_url, init) => {
+          sent = new Headers(init?.headers);
+
+          return json(400, { error: "unknown_profile" });
+        },
+      }),
+    );
+
+    expect(sent).not.toBeNull();
+    expect(sent!.has("content-length")).toBe(false);
+    expect(sent!.get("authorization")).toBe(`Bearer ${SECRETS.AI_LOCAL_TOKEN}`);
+  });
+
   it("the OCR service warming up is a warning", async () => {
     const result = await checkAiOcr(
       deps({
