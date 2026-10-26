@@ -3,8 +3,9 @@
 Back-end do Trajetto: a API HTTP, o tempo real (Socket.IO) e os processos de
 fundo (filas e crons) que atendem o painel web (`trajetto-ui`), o aplicativo do
 motorista (`trajetto-mobile`) e os sistemas dos clientes que se integram pela
-API pública. Inclui também o serviço de IA local (`infra/ai-ocr`) e o serviço
-de backup (`infra/backup`), publicados como imagens próprias.
+API pública. Inclui também o serviço de IA local (`infra/ai-ocr`), publicado
+como imagem própria. O backup do banco é o do próprio Dokploy (aba _Backups_
+do Database PostgreSQL, diário, para o Cloudflare R2).
 
 > Software proprietário. Leia [Licença](#licença) antes de copiar qualquer coisa
 > deste repositório.
@@ -42,11 +43,11 @@ dois módulos vendidos separadamente por empresa:
 
 Três projetos formam o produto:
 
-| Repositório no GitHub (pasta local)                               | O que é                                                           | Tecnologia                                          | Onde roda                                                                                              |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `Trajetto-Organization/trajetto-api` (este, pasta `trajetto-api`) | API, tempo real, filas, crons, IA local, backup                   | Node.js 22, Fastify, Prisma, PostgreSQL 16, Redis 7 | Dokploy: Applications `trajetto-api`, `trajetto-ai` e `trajetto-backup` e Databases PostgreSQL e Redis |
-| `Trajetto-Organization/trajetto-ui` (pasta `trajetto-ui`)         | painel web (`/dashboard`, `/admin`), site público, portal `/docs` | Next.js 14 (App Router)                             | Dokploy, Application `trajetto-ui`                                                                     |
-| `Trajetto-Organization/trajetto-mobile` (pasta `trajetto-mobile`) | aplicativo de campo do motorista, só Android                      | Expo / React Native                                 | EAS (APK interno e Play Store)                                                                         |
+| Repositório no GitHub (pasta local)                               | O que é                                                           | Tecnologia                                          | Onde roda                                                                                                     |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `Trajetto-Organization/trajetto-api` (este, pasta `trajetto-api`) | API, tempo real, filas, crons, IA local                           | Node.js 22, Fastify, Prisma, PostgreSQL 16, Redis 7 | Dokploy: Applications `trajetto-api` e `trajetto-ai` e Databases PostgreSQL (com o backup do Dokploy) e Redis |
+| `Trajetto-Organization/trajetto-ui` (pasta `trajetto-ui`)         | painel web (`/dashboard`, `/admin`), site público, portal `/docs` | Next.js 14 (App Router)                             | Dokploy, Application `trajetto-ui`                                                                            |
+| `Trajetto-Organization/trajetto-mobile` (pasta `trajetto-mobile`) | aplicativo de campo do motorista, só Android                      | Expo / React Native                                 | EAS (APK interno e Play Store)                                                                                |
 
 ## Documentação deste repositório
 
@@ -174,7 +175,7 @@ faltando ou inválido derruba o processo com a lista do que corrigir.
 
 - **desenvolvimento:** `.env` na raiz (o único arquivo lido);
 - **staging e produção:** a aba _Environment_ de cada Application no Dokploy
-  (`trajetto-api`, `trajetto-ai`, `trajetto-backup`);
+  (`trajetto-api`, `trajetto-ai`);
 - **CI:** os environments `staging` e `production` e as variáveis do
   repositório no GitHub.
 
@@ -250,10 +251,10 @@ requisição e de resposta, incluindo 400/401/403/404/409/429.
 
 ```
 branch de trabalho ─push─▶ ci.yml (lint, typecheck, unitários + cobertura, audit, gitleaks, IA)
-staging ─push─▶ deploy.yml: validação completa (+ E2E) ─▶ build ÚNICO das 3 imagens (GHCR sha-<sha>)
-                            ─▶ tag `staging` por digest ─▶ Dokploy staging (IA → API → backup) ─▶ convergência
+staging ─push─▶ deploy.yml: validação completa (+ E2E) ─▶ build ÚNICO das 2 imagens (GHCR sha-<sha>)
+                            ─▶ tag `staging` por digest ─▶ Dokploy staging (IA → API) ─▶ convergência
 PR staging → main ─▶ a mesma validação + "o head do PR tem imagem de staging?"
-merge em main ─▶ promoção (sem build): migrations ─▶ tag `stable` por digest ─▶ Dokploy produção (IA → API → backup)
+merge em main ─▶ promoção (sem build): migrations ─▶ tag `stable` por digest ─▶ Dokploy produção (IA → API)
                  ─▶ convergência ─▶ release        [aprovação do environment production]
 Run workflow ─▶ a mesma promoção com uma tag antiga (rollback)
 ```
@@ -261,13 +262,15 @@ Run workflow ─▶ a mesma promoção com uma tag antiga (rollback)
 - **Uma imagem para os dois ambientes**, construída uma vez em `staging` e
   promovida por digest; staging e produção mudam só o Environment das
   Applications no Dokploy.
-- Imagens: `trajetto-api`, `trajetto-ai` e `trajetto-backup` em
+- Imagens: `trajetto-api` e `trajetto-ai` em
   `ghcr.io/trajetto-organization/`.
 - **Dokploy**: em cada environment (`staging` e `production`), o projeto
-  `trajetto-api` tem três Applications com provider Docker, puxando as
-  imagens do GHCR — `trajetto-api` (2 réplicas, com domínio), `trajetto-ai` e
-  `trajetto-backup` (sem domínio) — e dois Databases do Dokploy, PostgreSQL e
-  Redis. Tudo atrás do Traefik do Dokploy e da Cloudflare. Sem Compose.
+  `trajetto-api` tem duas Applications com provider Docker, puxando as
+  imagens do GHCR — `trajetto-api` (2 réplicas, com domínio) e `trajetto-ai`
+  (sem domínio) — e dois Databases do Dokploy, PostgreSQL e Redis.
+- **Backup do banco**: só o do próprio Dokploy (aba _Backups_ do Database
+  PostgreSQL): uma cópia por dia para o Cloudflare R2, 30 cópias guardadas.
+  Não há serviço de backup no repositório. Tudo atrás do Traefik do Dokploy e da Cloudflare. Sem Compose.
 - O pipeline chama a API do Dokploy (`application.deploy`) uma vez por
   Application, com os ids nos secrets do environment do GitHub.
 - Enquanto o Dokploy não estiver configurado, os jobs movem as tags e pulam o
@@ -280,7 +283,7 @@ O passo a passo completo (servidor, Dokploy, GitHub, IA, banco, migrations,
 rollback, backup, alertas e o checklist do primeiro deploy) está em
 [`docs/deploy.md`](./docs/deploy.md). A seção "Os três repositórios juntos"
 dele (igual nos três repositórios) traz a ordem do primeiro deploy (banco e
-Redis → IA → API → backup → web → app), a ordem de cada release e os valores que
+Redis → IA → API → backup do banco → web → app), a ordem de cada release e os valores que
 precisam casar entre a API, a web e o app.
 
 ## Operação e saúde

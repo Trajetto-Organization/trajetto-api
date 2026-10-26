@@ -11,8 +11,7 @@ O back-end do **Trajetto**, um SaaS B2B multiempresa para transportadoras com
 dois módulos contratados por empresa: **Frotas** (`FLEET`) e **Entregas**
 (`DELIVERIES`). Aqui vivem a API HTTP (Fastify), o tempo real (Socket.IO com
 adapter Redis), os workers e crons (filas no Postgres), o serviço de IA local
-(`infra/ai-ocr`, Python, OCR em CPU), o serviço de backup (`infra/backup`) e a
-infraestrutura de deploy (`.github/workflows/`, `.github/scripts/`,
+(`infra/ai-ocr`, Python, OCR em CPU) e a infraestrutura de deploy (`.github/workflows/`, `.github/scripts/`,
 `infra/scripts/`). Atende o painel web (pasta `trajetto-ui`, GitHub
 `Trajetto-Organization/trajetto-ui`), o app Android do motorista (pasta
 `trajetto-mobile`, GitHub `Trajetto-Organization/trajetto-mobile`) e os ERPs
@@ -56,9 +55,8 @@ src/jobs/cron/                crons (index.ts registra)
 src/workers/index.ts          pipelines de notificação e IA, dispatcher de webhooks
 prisma/schema.prisma          modelo de dados; prisma/migrations/ (SQL, expandir/contrair)
 prisma/vitest-environment-prisma/  ambiente de teste: um banco por arquivo E2E
-infra/scripts/                entrypoint da imagem, migrations como job, verify-rollout, backup/restore, seeds, guard de bootstrap
+infra/scripts/                entrypoint da imagem, migrations como job, verify-rollout, backup/restore manuais, seeds, guard de bootstrap
 infra/ai-ocr/                 serviço trajetto-ai (server.py, Dockerfile com stage test, requisitos com hash, modelos)
-infra/backup/                 serviço trajetto-backup (pg_dump → age → R2)
 infra/traefik/                referência da configuração estática do Traefik do Dokploy
 tests/unitaires/              unitários (por domínio + contract/, lifecycle/, security/, quality/…)
 tests/E2E/                    E2E contra Postgres e Redis reais
@@ -193,8 +191,8 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   commit** (nunca squash/rebase).
 - `ci.yml` valida as branches de trabalho. `deploy.yml`: push em `staging`
   roda a validação completa (audit, lint, typecheck, unitários com piso, E2E,
-  pytest da IA, gitleaks), constrói **uma vez** as imagens `trajetto-api`,
-  `trajetto-ai` e `trajetto-backup` (`sha-<sha>`, SBOM, proveniência, Trivy),
+  pytest da IA, gitleaks), constrói **uma vez** as imagens `trajetto-api` e
+  `trajetto-ai` (`sha-<sha>`, SBOM, proveniência, Trivy),
   move `staging` por digest e faz o deploy do staging no Dokploy; PR para
   `main` revalida e exige a imagem de staging do head; o merge em `main`
   **promove** o mesmo digest para `stable` (migrations como job opcional,
@@ -204,12 +202,15 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   aviso.
 - Staging e produção rodam no Dokploy (Docker Swarm), sem Compose nem
   template: em cada environment, o projeto `trajetto-api` tem as Applications
-  `trajetto-api` (2 réplicas, com domínio), `trajetto-ai` e `trajetto-backup`
-  (provider Docker, imagem do GHCR, sem domínio) e os Databases PostgreSQL e
-  Redis do Dokploy, todos na rede `dokploy-network` (um serviço acha o outro
+  `trajetto-api` (2 réplicas, com domínio) e `trajetto-ai` (provider Docker,
+  imagem do GHCR, sem domínio) e os Databases PostgreSQL e Redis do Dokploy, todos na rede `dokploy-network` (um serviço acha o outro
   pelo App Name). Imagem, variáveis, domínio, réplicas, limites e healthcheck
   são configurados no painel; o passo a passo e as lacunas em relação ao
   antigo compose estão em `docs/deploy.md`.
+- Backup do banco: **só** o Backup do próprio Database PostgreSQL no Dokploy
+  (aba _Backups_, destino S3 no Cloudflare R2, diário, 30 cópias). Não há
+  serviço nem imagem de backup no repositório; `infra/scripts/backup-postgres.sh`
+  e `restore-postgres.sh` são só para dump manual e ensaio.
 - As garantias do pipeline são guardadas por testes em
   `tests/unitaires/lifecycle/` (`promote-workflow`, `release-migrations`,
   `compose-rollout-verify`, `supply-chain`, `secrets-hygiene`,
@@ -218,10 +219,10 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   de ajustar o teste.
 - O deploy chama a API do Dokploy por `.github/scripts/dokploy-deploy.mjs`
   (`application.deploy` com a chave de API e o id de cada Application, na
-  ordem IA → API → backup); a web usa o webhook da Application dela, num
+  ordem IA → API); a web usa o webhook da Application dela, num
   script próprio.
 - Entre repositórios: a ordem do primeiro deploy (bancos → IA → API → backup
-  → web → app), a ordem de cada release (**API → web → app**) e os valores que
+  do banco → web → app), a ordem de cada release (**API → web → app**) e os valores que
   precisam casar com a web e o app (`HTTP_REQUEST` = origem da web,
   `RATE_LIMIT_FORWARDER_SECRET`, `TURNSTILE_SECRET_KEY`, R2) estão em
   `docs/deploy.md`, seção "Os três repositórios juntos", igual nos três

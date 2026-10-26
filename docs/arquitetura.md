@@ -74,9 +74,11 @@ por mês.
 Saídas para fora: Meta (WhatsApp Cloud API), Resend (e-mail), Expo (push), os
 endpoints de webhook dos clientes, o provedor de tiles e de geocodificação do
 comprovante, e o heartbeat de monitoramento. Em staging e produção cada caixa
-do desenho é um serviço próprio do Dokploy (Docker Swarm): a API, a IA e o
-backup como Applications que puxam a imagem do GHCR, o PostgreSQL e o Redis
-como Databases do Dokploy, todos na rede `dokploy-network`. A topologia
+do desenho é um serviço próprio do Dokploy (Docker Swarm): a API e a IA como
+Applications que puxam a imagem do GHCR, o PostgreSQL e o Redis como
+Databases do Dokploy, todos na rede `dokploy-network`. O backup do banco é o
+Backup do próprio Database PostgreSQL no Dokploy, diário, para o Cloudflare R2
+([`deploy.md`](./deploy.md#18-backup-e-restauração)). A topologia
 (nomes, réplicas, limites) está em [`deploy.md`](./deploy.md#4-a-topologia-no-servidor).
 
 ## Estrutura do código
@@ -103,10 +105,9 @@ src/
 infra/
   database.ts          o PrismaClient compartilhado
   cache/               conexão Redis
-  scripts/             entrypoint da imagem, migrations como job, conferência do rollout, backup/restore,
+  scripts/             entrypoint da imagem, migrations como job, conferência do rollout, backup/restore manuais,
                        seeds, guard de bootstrap, cobertura E2E
   ai-ocr/              o serviço de IA (Python): server.py, Dockerfile, requisitos com hash, modelos, pytest
-  backup/              o serviço de backup (pg_dump → age → R2)
   traefik/             referência da configuração estática do Traefik do Dokploy
 prisma/
   schema.prisma        o modelo de dados (multiempresa: quase todo modelo tem businessId)
@@ -301,7 +302,8 @@ perdidos.
 | `cleanup-webhook-deliveries`         | 04:20         | remove entregas de webhook resolvidas fora da janela de reenvio                                                 |
 | `cleanup-orphan-uploads`             | 04:50         | conta (ou remove, com `UPLOAD_ORPHAN_GC=delete`) objetos do bucket sem linha                                    |
 
-O backup noturno (02:30) roda antes do primeiro job que apaga dados.
+O backup diário do Dokploy (03:00 UTC, aba _Backups_ do Database) roda antes do
+primeiro job que apaga dados.
 
 ## Redis e tempo real
 

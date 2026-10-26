@@ -15,9 +15,10 @@
 #   NOT point-in-time recovery. That needs WAL archiving, which is a change to
 #        the production service, and is tracked as a follow-up.
 #
-# The SCHEDULED, off-host, encrypted backup is infra/backup (the
-# trajetto-backup service). This script is for a manual dump before a risky
-# operation, and for drills.
+# The SCHEDULED, off-host backup is Dokploy's own Database backup (the
+# PostgreSQL database's Backups tab, uploading to Cloudflare R2): see
+# docs/deploy.md (Backup e restauração). This script is for a manual dump
+# before a risky operation, and for drills.
 #
 # Usage:
 #   ./infra/scripts/backup-postgres.sh [output-directory]
@@ -31,8 +32,9 @@
 # hours — one snapshot holding back vacuum on every hot table the whole time:
 #   BACKUP_EXCLUDE_TRAIL=true  keep the trail's schema, leave its rows out
 #   BACKUP_TRAIL_ONLY=true     dump ONLY the trail, into <db>-trail-<stamp>.dump
-# Default: everything, until the owner decides whether the trail belongs in
-# the nightly backup (docs/deploy.md (Backup e restauração)).
+# Default: everything — the same scope as Dokploy's daily backup, which always
+# dumps the whole database. These two knobs belong to this script only; they
+# are not Application variables.
 #
 set -euo pipefail
 

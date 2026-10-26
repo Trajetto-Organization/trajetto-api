@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 #
-# Restores a dump produced by backup-postgres.sh into a throwaway database.
+# Restores a CUSTOM-FORMAT dump (pg_dump -Fc, the kind backup-postgres.sh
+# writes) into a throwaway database.
+#
+# The primary restore of the scheduled backup is Dokploy's own (the
+# PostgreSQL database's Backups tab, restore action). This drill is the manual
+# path: a Dokploy backup file downloaded from R2 is gzipped (`gunzip` it
+# first) and is fed here only if it is a custom-format archive — when
+# pg_restore says it is a text-format dump, it is plain SQL and goes through
+# `psql` instead (docs/deploy.md, Backup e restauração).
 #
 # A backup nobody has restored is a hypothesis, not a backup. This script
 # exists so that restoring is something the team has actually done, on a
@@ -34,8 +42,8 @@ fi
 # that refused only when the variable said "allow" — a guard that guarded
 # nothing, removed rather than kept as false comfort.)
 
-# A dump copied from the backup bucket or another host is checked against the
-# checksum written next to it, before anything is started. A damaged copy
+# A dump copied from another host is checked against the checksum written
+# next to it (when there is one), before anything is started. A damaged copy
 # fails here in a second instead of halfway through a restore.
 if [ -f "${DUMP_FILE}.sha256" ]; then
   echo "Verifying ${DUMP_FILE}.sha256..."

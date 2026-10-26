@@ -676,8 +676,7 @@ describe("the API deploy jobs wait for convergence", () => {
       steps.find((step) => step.name === "Wait for the rollout to converge")
         ?.text ?? "";
 
-    // After the API's own deploy (the backup Application's deploy may sit in
-    // between: it does not touch the API service).
+    // After the API's own deploy.
     expect(names.indexOf(deploy)).toBeGreaterThan(-1);
     expect(names.indexOf("Wait for the rollout to converge")).toBeGreaterThan(
       names.indexOf(deploy),

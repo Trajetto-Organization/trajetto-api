@@ -119,13 +119,10 @@ describe("the build (once, on staging)", () => {
       (m) => m[1].trim(),
     );
 
-    // The API, the backup sidecar and the AI service (ADR 0010).
-    expect(metadata).toEqual([
-      "type=sha,prefix=sha-",
-      "type=sha,prefix=sha-",
-      "type=sha,prefix=sha-",
-    ]);
-    expect(build.match(/flavor: latest=false/g)).toHaveLength(3);
+    // The API and the AI service (ADR 0010). Database backups are Dokploy's
+    // own, so there is no backup image.
+    expect(metadata).toEqual(["type=sha,prefix=sha-", "type=sha,prefix=sha-"]);
+    expect(build.match(/flavor: latest=false/g)).toHaveLength(2);
   });
 });
 
@@ -306,8 +303,12 @@ describe("the deploy target (DEPLOY-1)", () => {
     }
   });
 
-  it("deploys one Dokploy Application per service: AI, then API, then backup", () => {
+  it("deploys one Dokploy Application per service: AI, then API", () => {
     expect(workflow).not.toMatch(/compose.deploy|DOKPLOY_COMPOSE_ID/);
+    // Backups are Dokploy's Database backups: no backup service ships here.
+    expect(workflow).not.toMatch(
+      /trajetto-backup|DOKPLOY_BACKUP_APPLICATION_ID/,
+    );
 
     for (const [job, where] of [
       ["deploy-staging", "staging"],
@@ -318,25 +319,20 @@ describe("the deploy target (DEPLOY-1)", () => {
         `- name: Deploy the AI service to ${where} (Dokploy)`,
       );
       const api = text.indexOf(`- name: Deploy to ${where} (Dokploy)`);
-      const backup = text.indexOf(
-        `- name: Deploy the backup service to ${where} (Dokploy)`,
-      );
+      const apiStep = text.slice(api, text.indexOf("- name:", api + 1));
 
       expect(ai, job).toBeGreaterThan(-1);
       expect(ai, job).toBeLessThan(api);
-      expect(api, job).toBeLessThan(backup);
       expect(text, job).toContain(
         "DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_AI_APPLICATION_ID }}",
       );
       expect(text, job).toContain(
         "DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}",
       );
-      expect(text, job).toContain(
-        "DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_BACKUP_APPLICATION_ID }}",
-      );
-      // The AI and backup may not exist yet; the API may not be skipped.
+      // The AI may not exist yet; the API may not be skipped.
       expect(text.slice(ai, api), job).toContain('DOKPLOY_OPTIONAL: "true"');
-      expect(text.slice(api, backup), job).not.toContain("DOKPLOY_OPTIONAL");
+      expect(apiStep, job).toContain("DOKPLOY_APP_LABEL: trajetto-api");
+      expect(apiStep, job).not.toContain("DOKPLOY_OPTIONAL");
     }
   });
 
@@ -361,9 +357,6 @@ describe("the deploy target (DEPLOY-1)", () => {
 
     expect(staging).toContain(
       '"ghcr.io/trajetto-organization/trajetto-api@${API_DIGEST}"',
-    );
-    expect(staging).toContain(
-      '"ghcr.io/trajetto-organization/trajetto-backup@${BACKUP_DIGEST}"',
     );
     expect(staging).toContain(
       '"ghcr.io/trajetto-organization/trajetto-ai@${AI_DIGEST}"',

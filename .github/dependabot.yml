@@ -50,7 +50,6 @@ updates:
     target-branch: staging
     directories:
       - "/"
-      - "/infra/backup"
       - "/infra/ai-ocr"
     schedule:
       interval: weekly
@@ -59,8 +58,6 @@ updates:
       timezone: America/Sao_Paulo
     ignore:
       - dependency-name: node
-        update-types: [version-update:semver-major]
-      - dependency-name: postgres
         update-types: [version-update:semver-major]
       # The AI image's wheels are hashed for cp312: a new Python line is a
       # rebuild of requirements.txt, not a digest bump.

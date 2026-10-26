@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 /**
  * The deploy step of the API pipeline (staging and production): one call per
- * Dokploy Application (the API, the AI OCR service and the backup, each a
+ * Dokploy Application (the API and the AI OCR service, each a
  * Docker-provider Application on a GHCR tag). The web deploys its own
  * Application through a webhook script (trajetto-ui/.github/scripts/).
  *

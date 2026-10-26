@@ -4,10 +4,11 @@
  * waits for the outcome.
  *
  * Every service runs as its own Dokploy Application pointed at a GHCR tag
- * (`:staging` or `:stable`): the API, the AI OCR service and the backup.
+ * (`:staging` or `:stable`): the API and the AI OCR service. Database backups
+ * are Dokploy's own Database backups, not an Application deployed here.
  * Dokploy runs each one as a Swarm service behind its Traefik, which is why
  * the stack is not a Compose app (docs/deploy.md). deploy.yml calls this
- * script once per Application: AI first, then the API, then the backup.
+ * script once per Application: AI first, then the API.
  *
  * What `done` means: Dokploy pulled the Application's tag again and updated
  * the Swarm service, and the manager ACCEPTED the new spec. The rollout
@@ -27,7 +28,7 @@
  *   DOKPLOY_APPLICATION_ID   the Application to deploy (from its URL in the panel)
  *   DOKPLOY_APP_LABEL        the service's name in messages (default "a Application")
  *   DOKPLOY_OPTIONAL         `true`: no application id is a notice, not an error
- *                            (the AI and backup Applications may not exist yet)
+ *                            (the AI Application may not exist yet)
  *   DOKPLOY_WAIT             `false` only triggers, without following (default true)
  *   DOKPLOY_TIMEOUT_SECONDS  how long to follow the deployment (default 900)
  *   DOKPLOY_POLL_SECONDS     interval between checks (default 10)

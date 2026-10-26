@@ -77,8 +77,8 @@ tests/load/fixtures/
 
 # Certificates and private keys. The proof-signing A1 certificate reaches the
 # API only as PROOF_SIGNING_PFX_BASE64 (docs/variaveis-de-ambiente.md); the
-# .pfx kept around while preparing that value, an age identity of the backup
-# or an SSH deploy key must never be committed.
+# .pfx kept around while preparing that value, an age identity or an SSH
+# deploy key must never be committed.
 *.pfx
 *.p12
 *.pem

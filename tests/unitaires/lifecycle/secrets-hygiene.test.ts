@@ -42,7 +42,7 @@ describe("the .gitignore", () => {
     "gcp-service-account-prod.json",
     "certificado-a1.pfx",
     "certs/proof-signing.p12",
-    "infra/backup/backup-identity.txt",
+    "infra/scripts/age-identity.txt",
     "deploy.key",
     "src/tmp/avatar.jpg",
   ])("keeps %s out", (path) => {

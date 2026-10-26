@@ -237,7 +237,6 @@ jobs:
     # The digests just pushed: staging is moved to exactly these bytes.
     outputs:
       api_digest: ${{ steps.build.outputs.digest }}
-      backup_digest: ${{ steps.build-backup.outputs.digest }}
       ai_digest: ${{ steps.build-ai.outputs.digest }}
 
     steps:
@@ -287,31 +286,6 @@ jobs:
       - name: Image digest
         run: echo ${{ steps.build.outputs.digest }}
 
-      # The backup sidecar (infra/backup), tagged like the API — `sha-<sha>`
-      # only — so staging and the promote move both images together. Its own
-      # cache scope: sharing the API's would evict one with the other.
-      - name: Extract metadata (backup)
-        id: meta-backup
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
-        with:
-          images: ghcr.io/trajetto-organization/trajetto-backup
-          flavor: latest=false
-          tags: |
-            type=sha,prefix=sha-
-
-      - name: Build and push the backup image
-        id: build-backup
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
-        with:
-          context: ./infra/backup
-          push: true
-          tags: ${{ steps.meta-backup.outputs.tags }}
-          labels: ${{ steps.meta-backup.outputs.labels }}
-          cache-from: type=gha,scope=backup
-          cache-to: type=gha,mode=max,scope=backup
-          sbom: true
-          provenance: mode=max
-
       # The OCR service of the AI readings (infra/ai-ocr, ADR 0010), tagged
       # like the API — `sha-<sha>` only — and moved with it to staging and
       # stable. Its pytest suite already ran in the `ai-ocr` job (`--target
@@ -357,11 +331,10 @@ jobs:
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           API_IMAGE: ghcr.io/trajetto-organization/trajetto-api@${{ steps.build.outputs.digest }}
-          BACKUP_IMAGE: ghcr.io/trajetto-organization/trajetto-backup@${{ steps.build-backup.outputs.digest }}
           AI_IMAGE: ghcr.io/trajetto-organization/trajetto-ai@${{ steps.build-ai.outputs.digest }}
           EXIT_CODE: ${{ vars.IMAGE_SCAN_ENFORCE == 'true' && '1' || '0' }}
         run: |
-          for image in "$API_IMAGE" "$BACKUP_IMAGE" "$AI_IMAGE"; do
+          for image in "$API_IMAGE" "$AI_IMAGE"; do
             docker run --rm -e TRIVY_USERNAME -e TRIVY_PASSWORD \
               aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
               image --scanners vuln --severity CRITICAL --ignore-unfixed \
@@ -372,7 +345,7 @@ jobs:
         env:
           API_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          echo "Imagens publicadas: trajetto-api, trajetto-backup e trajetto-ai em sha-${GITHUB_SHA::7}." >> "$GITHUB_STEP_SUMMARY"
+          echo "Imagens publicadas: trajetto-api e trajetto-ai em sha-${GITHUB_SHA::7}." >> "$GITHUB_STEP_SUMMARY"
           echo "trajetto-api@${API_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
 
   # Staging redeploys on its own, with no approval: that is the whole point of
@@ -397,7 +370,7 @@ jobs:
 
     # One staging deploy at a time: two Dokploy calls on the same app would
     # each follow the other's deployment, and two tag moves could interleave.
-    # Never cancelled midway (it would leave the API and backup tags apart).
+    # Never cancelled midway (it would leave the API and AI tags apart).
     concurrency:
       group: deploy-staging
       cancel-in-progress: false
@@ -440,15 +413,11 @@ jobs:
         if: steps.head.outputs.current == 'true'
         env:
           API_DIGEST: ${{ needs.build-and-push.outputs.api_digest }}
-          BACKUP_DIGEST: ${{ needs.build-and-push.outputs.backup_digest }}
           AI_DIGEST: ${{ needs.build-and-push.outputs.ai_digest }}
         run: |
           docker buildx imagetools create \
             --tag ghcr.io/trajetto-organization/trajetto-api:staging \
             "ghcr.io/trajetto-organization/trajetto-api@${API_DIGEST}"
-          docker buildx imagetools create \
-            --tag ghcr.io/trajetto-organization/trajetto-backup:staging \
-            "ghcr.io/trajetto-organization/trajetto-backup@${BACKUP_DIGEST}"
           docker buildx imagetools create \
             --tag ghcr.io/trajetto-organization/trajetto-ai:staging \
             "ghcr.io/trajetto-organization/trajetto-ai@${AI_DIGEST}"
@@ -481,9 +450,11 @@ jobs:
           fi
 
       # One Dokploy Application per service, each on its `:staging` tag. The
-      # AI goes first (the API calls it), the backup last. `done` in Dokploy =
-      # the Swarm manager ACCEPTED the new spec; the API's rollout is checked
-      # after. The AI and backup ids are optional: not created yet = a notice.
+      # AI goes first (the API calls it). `done` in Dokploy = the Swarm
+      # manager ACCEPTED the new spec; the API's rollout is checked after.
+      # The AI id is optional: not created yet = a notice. Database backups
+      # are Dokploy's own (docs/deploy.md, "Backup e restauração"), not a
+      # service this pipeline deploys.
       - name: Deploy the AI service to staging (Dokploy)
         if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
         env:
@@ -501,16 +472,6 @@ jobs:
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
           DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
           DOKPLOY_APP_LABEL: trajetto-api
-        run: node .github/scripts/dokploy-deploy.mjs
-
-      - name: Deploy the backup service to staging (Dokploy)
-        if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
-        env:
-          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
-          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_BACKUP_APPLICATION_ID }}
-          DOKPLOY_APP_LABEL: trajetto-backup
-          DOKPLOY_OPTIONAL: "true"
         run: node .github/scripts/dokploy-deploy.mjs
 
       # The same check as the promote (see there): staging is where a build
@@ -581,12 +542,12 @@ jobs:
           tag="sha-${HEAD_SHA::7}"
           for attempt in $(seq 1 60); do
             missing=""
-            for image in trajetto-api trajetto-backup trajetto-ai; do
+            for image in trajetto-api trajetto-ai; do
               docker buildx imagetools inspect "ghcr.io/trajetto-organization/${image}:${tag}" > /dev/null 2>&1 \
                 || missing="$missing ${image}"
             done
             if [ -z "$missing" ]; then
-              echo "${tag} existe para as três imagens: o merge promove exatamente este build." >> "$GITHUB_STEP_SUMMARY"
+              echo "${tag} existe para as duas imagens: o merge promove exatamente este build." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             echo "tentativa ${attempt}/60: ainda sem${missing}:${tag}"
@@ -812,22 +773,6 @@ jobs:
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
           echo "trajetto-api:stable → ${IMAGE_TAG} (${digest})" >> "$GITHUB_STEP_SUMMARY"
 
-      # The backup sidecar moves with the API. Builds older than the sidecar
-      # have no trajetto-backup image: a rollback to one of them keeps the
-      # backup where it is instead of failing the promote.
-      - name: Promote the backup image to stable
-        env:
-          IMAGE_TAG: ${{ steps.target.outputs.tag }}
-        run: |
-          image="ghcr.io/trajetto-organization/trajetto-backup:${IMAGE_TAG}"
-          if docker buildx imagetools inspect "$image" > /dev/null 2>&1; then
-            docker buildx imagetools create \
-              --tag ghcr.io/trajetto-organization/trajetto-backup:stable "$image"
-            echo "trajetto-backup:stable → ${IMAGE_TAG}" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning::${image} não existe (build anterior ao serviço de backup); trajetto-backup:stable não mudou."
-          fi
-
       # The AI service moves with the API too (ADR 0010). A build older than
       # the service has no trajetto-ai image: a rollback to it keeps the AI
       # where it is instead of failing the promote.
@@ -892,16 +837,6 @@ jobs:
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
           DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
           DOKPLOY_APP_LABEL: trajetto-api
-        run: node .github/scripts/dokploy-deploy.mjs
-
-      - name: Deploy the backup service to production (Dokploy)
-        if: steps.dokploy.outputs.enabled == 'true'
-        env:
-          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
-          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_BACKUP_APPLICATION_ID }}
-          DOKPLOY_APP_LABEL: trajetto-backup
-          DOKPLOY_OPTIONAL: "true"
         run: node .github/scripts/dokploy-deploy.mjs
 
       # The proof the promote shipped. Swarm rolls a failing image back on its

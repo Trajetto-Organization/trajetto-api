@@ -34,7 +34,7 @@ describe("Dependabot", () => {
     expect(config).toMatch(/package-ecosystem: npm/);
     expect(config).toMatch(/package-ecosystem: github-actions/);
     expect(config).toMatch(/package-ecosystem: docker/);
-    expect(config).toMatch(/"\/infra\/backup"/);
+    expect(config).toMatch(/"\/infra\/ai-ocr"/);
   });
 });
 
@@ -149,7 +149,7 @@ describe("the images", () => {
     ).toEqual(["FROM alpine AS tools", "FROM node:22@sha256:ab AS base"]);
   });
 
-  it.each(["Dockerfile", "infra/backup/Dockerfile"])(
+  it.each(["Dockerfile", "infra/ai-ocr/Dockerfile"])(
     "%s pins every base image by digest",
     (path) => {
       const bases = baseImages(read(path));

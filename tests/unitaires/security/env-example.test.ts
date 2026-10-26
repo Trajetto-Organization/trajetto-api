@@ -116,14 +116,11 @@ function expandedByExample(): Set<string> {
   );
 }
 
-/** Names a shell script of the image or the backup sidecar reads. */
+/** Names a shell script of the image reads. */
 function readByScripts(): Set<string> {
   const names = new Set<string>();
 
-  for (const file of [
-    ...files("infra/scripts", /\.sh$/),
-    ...files("infra/backup", /\.sh$/),
-  ]) {
+  for (const file of files("infra/scripts", /\.sh$/)) {
     for (const match of read(file).matchAll(
       new RegExp(`\\$\\{?(${NAME})`, "g"),
     )) {
