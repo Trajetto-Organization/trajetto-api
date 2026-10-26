@@ -96,11 +96,13 @@ jobs:
           TOKEN: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
           BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
+          # The empty extraheader first: this repository's own checkout persisted
+          # one, and two Authorization headers get a 400 (read as "no branch").
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
           for pair in web:trajetto-ui app:trajetto-mobile; do
             key=${pair%%:*}
             repo=${pair#*:}
-            if git -c "http.https://github.com/.extraheader=$auth" ls-remote --exit-code --heads \
+            if git -c "http.https://github.com/.extraheader=" -c "http.https://github.com/.extraheader=$auth" ls-remote --exit-code --heads \
               "https://github.com/Trajetto-Organization/${repo}.git" "refs/heads/${BRANCH}" > /dev/null; then
               echo "${key}=${BRANCH}" >> "$GITHUB_OUTPUT"
               echo "${repo}: branch ${BRANCH}"

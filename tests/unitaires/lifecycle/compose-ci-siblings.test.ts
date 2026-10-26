@@ -163,6 +163,26 @@ describe.skipIf(!bash || CASES.length === 0)(
       },
     );
 
+    // The workflow's own checkout persists an Authorization extraheader in the
+    // repository's git config; adding ours on top sent two, GitHub answered
+    // 400 "Duplicate header", and the probe fell back to the default branch
+    // as if the sibling had no such branch. An empty value resets the list.
+    it.each(CASES)(
+      "$file clears the inherited Authorization header before sending its own",
+      ({ file }) => {
+        pick(read(file), []);
+
+        const reset = "http.https://github.com/.extraheader=";
+        const calls = box.calls("git");
+
+        expect(calls.length).toBeGreaterThan(0);
+
+        for (const call of calls) {
+          expect(call).toContain(`${reset} -c ${reset}AUTHORIZATION: basic `);
+        }
+      },
+    );
+
     it.each(CASES)(
       "$file feeds the choice to every sibling checkout",
       ({ file, siblings }) => {
