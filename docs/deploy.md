@@ -2236,7 +2236,7 @@ _classic_ `read:packages`, informado no provider Docker de cada Application.
 |                        | Staging                                                                           | Produção                                                           |
 | ---------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Web                    | `https://staging.intrajetto.com`                                                  | `https://www.intrajetto.com` (o apex `intrajetto.com` redireciona) |
-| API (REST e Socket.IO) | `https://trajettoapi-staging.thorsolucoes.com.br`                                 | `https://trajettoapi.thorsolucoes.com.br`                          |
+| API (REST e Socket.IO) | `https://api-staging.intrajetto.com`                                              | a definir, ex. `https://api.intrajetto.com`                        |
 | Serviço de IA          | sem endereço público: `http://trajetto-ai-staging:8080` na rede `dokploy-network` | sem endereço público: `http://trajetto-ai-production:8080`         |
 
 ### O que precisa casar entre os repositórios
@@ -2292,7 +2292,8 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    `HTTP_REQUEST` da API de staging igual à origem da web de staging. Depois,
    `DOKPLOY_STAGING_WEBHOOK_URL` e `METADATA_BASE_STAGING` no environment
    `staging` da web.
-6. **App de staging** (manual do app): ambiente EAS `staging` com
+6. **App de staging** (manual do app): ambiente EAS `preview` (o EAS não
+   tem ambiente `staging`; o perfil `staging` lê o `preview`) com
    `EXPO_PUBLIC_API_URL` = API de staging e
    `EXPO_PUBLIC_WEB_APPLICATION_URL` = web de staging; `EXPO_TOKEN` no
    GitHub; um push em `staging` gera o APK de staging.
