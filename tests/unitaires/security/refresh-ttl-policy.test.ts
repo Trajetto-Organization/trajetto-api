@@ -171,6 +171,21 @@ describe("the database row and the JWT", () => {
     // from a separate clock read, so the two never agreed exactly.
     expect(row.expires_in.getTime()).toBe(exp * 1000);
   });
+
+  it("are issued at the instant the expiry was counted from", async () => {
+    // `exp` came from one clock read and `iat` from the one jsonwebtoken
+    // takes inside `sign`. A login at x.999 s put them in different seconds
+    // and the token idled 604 799 s instead of seven days (the E2E caught it
+    // in CI on 27/10/2026).
+    // A clock that moves a second per read: any second read of it shows.
+    let clock = new Date("2026-09-24T08:00:00.999Z").getTime();
+    vi.spyOn(Date, "now").mockImplementation(() => (clock += 1000));
+
+    const token = await login("mobile");
+    const { exp, iat } = decode(token) as { exp: number; iat: number };
+
+    expect(exp - iat).toBe((7 * DAY) / 1000);
+  });
 });
 
 describe("a refresh token whose row expired but was never spent", () => {

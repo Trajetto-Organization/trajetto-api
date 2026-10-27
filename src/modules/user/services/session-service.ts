@@ -94,6 +94,7 @@ function issueSessionTokenPair(
       driverId: user.driverId ?? null,
       sessionVersion,
       familyId,
+      iat: nowSeconds,
     },
     auth.secret_token,
     {
@@ -111,6 +112,10 @@ function issueSessionTokenPair(
       familyId,
       sessionClient: client,
       familyStartedAt: bornAt,
+      // `iat` from the same clock read as `exp`: left to jsonwebtoken, it
+      // read the clock again inside `sign`, and a login at x.999 s issued a
+      // token that idled a second short of its policy.
+      iat: nowSeconds,
       exp: refreshExpiresAt,
     },
     auth.secret_refresh_token,
