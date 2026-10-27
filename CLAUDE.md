@@ -219,8 +219,9 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   de ajustar o teste.
 - O deploy chama a API do Dokploy por `.github/scripts/dokploy-deploy.mjs`
   (`application.deploy` com a chave de API e o id de cada Application, na
-  ordem IA → API); a web usa o webhook da Application dela, num
-  script próprio.
+  ordem IA → API); a web usa o mesmo script, numa cópia
+  idêntica (um teste da web compara as duas), e repete até 3 vezes um
+  deploy que termina em erro.
 - Entre repositórios: a ordem do primeiro deploy (bancos → IA → API → backup
   do banco → web → app), a ordem de cada release (**API → web → app**) e os valores que
   precisam casar com a web e o app (`HTTP_REQUEST` = origem da web,

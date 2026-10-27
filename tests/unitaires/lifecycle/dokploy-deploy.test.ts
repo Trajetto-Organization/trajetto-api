@@ -8,8 +8,8 @@ import { afterEach, describe, expect, it } from "vitest";
 /**
  * The deploy step of the API pipeline (staging and production): one call per
  * Dokploy Application (the API and the AI OCR service, each a
- * Docker-provider Application on a GHCR tag). The web deploys its own
- * Application through a webhook script (trajetto-ui/.github/scripts/).
+ * Docker-provider Application on a GHCR tag). The web runs the same script
+ * for its own Application (trajetto-ui/.github/scripts/, kept identical).
  *
  * It was a `curl` to a Portainer webhook, which answers the moment it queues
  * the redeploy: a stack that never converged still finished the run green.
@@ -51,15 +51,20 @@ afterEach(async () => {
 /**
  * A Dokploy whose deployment list is `history` until the deploy call, and
  * then walks through `after` one poll at a time (the last one repeats).
+ * With `retries`, the Nth extra deploy call walks through `retries[N]`, and
+ * the deployments of earlier calls stay in the list with their last state.
  */
 async function fakeDokploy(options: {
   history?: Deployment[];
   after?: Deployment[][];
+  retries?: Deployment[][][];
   deployStatus?: number;
 }): Promise<Fake> {
   const calls: Fake["calls"] = [];
   let deployed = false;
+  let deploys = 0;
   let polls = 0;
+  const walks = () => [options.after ?? [], ...(options.retries ?? [])];
 
   server = createServer((request: IncomingMessage, response) => {
     let body = "";
@@ -86,6 +91,10 @@ async function fakeDokploy(options: {
       if (path.startsWith("/api/application.deploy")) {
         response.statusCode = options.deployStatus ?? 200;
         deployed = response.statusCode === 200;
+        if (deployed) {
+          deploys += 1;
+          polls = 0;
+        }
         response.end(
           response.statusCode === 200
             ? "true"
@@ -96,17 +105,24 @@ async function fakeDokploy(options: {
 
       if (path.startsWith("/api/deployment.all?")) {
         const history = options.history ?? [];
-        const after = options.after ?? [];
+        const all = walks();
+        const after = all[Math.min(deploys, all.length) - 1] ?? [];
+        // Earlier attempts, newest first, as Dokploy lists them.
+        const earlier = all
+          .slice(0, Math.max(deploys - 1, 0))
+          .map((walk) => walk[walk.length - 1] ?? [])
+          .reverse()
+          .flat();
 
         if (!deployed || after.length === 0) {
-          response.end(JSON.stringify(history));
+          response.end(JSON.stringify([...earlier, ...history]));
           return;
         }
 
         const step = after[Math.min(polls, after.length - 1)];
 
         polls += 1;
-        response.end(JSON.stringify([...step, ...history]));
+        response.end(JSON.stringify([...step, ...earlier, ...history]));
         return;
       }
 
@@ -136,6 +152,7 @@ function deploy(env: Record<string, string>) {
           : {}),
         DOKPLOY_POLL_SECONDS: "0.01",
         DOKPLOY_TIMEOUT_SECONDS: "2",
+        DOKPLOY_RETRY_SECONDS: "0",
         ...env,
       },
     });
@@ -195,19 +212,78 @@ describe("the Dokploy deploy step", () => {
     expect(result.output).toMatch(/ainda estava 'running'/);
   });
 
-  it.each(["error", "cancelled"])(
-    "fails the run when the deployment ends in %s",
-    async (status) => {
-      const fake = await fakeDokploy({
-        after: [[{ deploymentId: "new", status }]],
-      });
+  it("deploys again when a deployment fails, and succeeds when a retry is done", async () => {
+    // The staging web deploy of 27/10/2026 failed in Dokploy after 5 s: the
+    // image pull from GHCR died with "connection reset by peer" (the VPS's
+    // IPv6 route). The same deploy clicked by hand minutes later worked.
+    const fake = await fakeDokploy({
+      history: [{ deploymentId: "old", status: "done" }],
+      after: [[{ deploymentId: "first", status: "error" }]],
+      retries: [
+        [
+          [{ deploymentId: "second", status: "running" }],
+          [{ deploymentId: "second", status: "done" }],
+        ],
+      ],
+    });
 
-      const result = await deploy(valid(fake));
+    const result = await deploy(valid(fake));
 
-      expect(result.status).toBe(1);
-      expect(result.output).toContain(`'${status}'`);
-    },
-  );
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toMatch(
+      /::warning::.*first.*'error'.*tentativa 2 de 3/,
+    );
+    expect(result.output).toContain("second");
+    expect(
+      fake.calls.filter((call) => call.path === "/api/application.deploy"),
+    ).toHaveLength(2);
+  });
+
+  it("does not take a failed attempt's deployment for the retry's", async () => {
+    // Retry 2 never shows up: the list still holds attempt 1's `error`,
+    // which must not be read as the retry ending.
+    const fake = await fakeDokploy({
+      after: [[{ deploymentId: "first", status: "error" }]],
+      retries: [[[]]],
+    });
+
+    const result = await deploy({ ...valid(fake), DOKPLOY_ATTEMPTS: "2" });
+
+    expect(result.status).toBe(1);
+    expect(result.output).toMatch(/não criou o deployment/);
+  });
+
+  it("fails after the last attempt ends in error", async () => {
+    const failed = (id: string) => [[{ deploymentId: id, status: "error" }]];
+    const fake = await fakeDokploy({
+      after: failed("a1"),
+      retries: [failed("a2"), failed("a3")],
+    });
+
+    const result = await deploy(valid(fake));
+
+    expect(result.status).toBe(1);
+    expect(result.output).toMatch(
+      /a3 de .* terminou em 'error' .* 3 tentativas/,
+    );
+    expect(
+      fake.calls.filter((call) => call.path === "/api/application.deploy"),
+    ).toHaveLength(3);
+  });
+
+  it("does not retry a deployment someone cancelled", async () => {
+    const fake = await fakeDokploy({
+      after: [[{ deploymentId: "new", status: "cancelled" }]],
+    });
+
+    const result = await deploy(valid(fake));
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("'cancelled'");
+    expect(
+      fake.calls.filter((call) => call.path === "/api/application.deploy"),
+    ).toHaveLength(1);
+  });
 
   it("fails when Dokploy refuses the deploy, and does not wait for it", async () => {
     const fake = await fakeDokploy({ deployStatus: 404 });

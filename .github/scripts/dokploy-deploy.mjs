@@ -4,11 +4,12 @@
  * waits for the outcome.
  *
  * Every service runs as its own Dokploy Application pointed at a GHCR tag
- * (`:staging` or `:stable`): the API and the AI OCR service. Database backups
- * are Dokploy's own Database backups, not an Application deployed here.
- * Dokploy runs each one as a Swarm service behind its Traefik, which is why
- * the stack is not a Compose app (docs/deploy.md). deploy.yml calls this
- * script once per Application: AI first, then the API.
+ * (`:staging` or `:stable`): the API and the AI OCR service here, the web in
+ * trajetto-ui, which keeps an identical copy of this file (a test there
+ * compares them). Database backups are Dokploy's own Database backups, not an
+ * Application deployed here. Dokploy runs each one as a Swarm service behind
+ * its Traefik, which is why the stack is not a Compose app (docs/deploy.md).
+ * deploy.yml calls this script once per Application.
  *
  * What `done` means: Dokploy pulled the Application's tag again and updated
  * the Swarm service, and the manager ACCEPTED the new spec. The rollout
@@ -22,6 +23,13 @@
  * pull, a wrong key or application id. It follows the deployment Dokploy
  * created for THIS call and fails when that one fails.
  *
+ * A deployment that ends in `error` is triggered again, up to
+ * DOKPLOY_ATTEMPTS times: the failure seen in practice is the image pull
+ * from GHCR dying midway ("connection reset by peer" on the VPS's IPv6
+ * route, 27/10/2026), which the next pull gets through. A wrong image or
+ * registry login fails every attempt the same way, so the run still fails.
+ * A `cancelled` deployment was stopped by a person and is not retried.
+ *
  * Environment:
  *   DOKPLOY_URL              https base URL of the Dokploy panel
  *   DOKPLOY_API_KEY          API key (Dokploy > Settings > Profile > API/CLI)
@@ -30,8 +38,10 @@
  *   DOKPLOY_OPTIONAL         `true`: no application id is a notice, not an error
  *                            (the AI Application may not exist yet)
  *   DOKPLOY_WAIT             `false` only triggers, without following (default true)
- *   DOKPLOY_TIMEOUT_SECONDS  how long to follow the deployment (default 900)
+ *   DOKPLOY_TIMEOUT_SECONDS  how long to follow each attempt (default 900)
  *   DOKPLOY_POLL_SECONDS     interval between checks (default 10)
+ *   DOKPLOY_ATTEMPTS         deploys tried while they end in error (default 3)
+ *   DOKPLOY_RETRY_SECONDS    pause before deploying again (default 20)
  *
  * The key is sent only as the `x-api-key` header and never printed.
  */
@@ -103,6 +113,8 @@ const APPLICATION_ID = env.DOKPLOY_APPLICATION_ID;
 const WAIT = env.DOKPLOY_WAIT !== "false";
 const TIMEOUT_MS = Number(env.DOKPLOY_TIMEOUT_SECONDS || 900) * 1000;
 const POLL_MS = Number(env.DOKPLOY_POLL_SECONDS || 10) * 1000;
+const ATTEMPTS = Math.max(1, Math.floor(Number(env.DOKPLOY_ATTEMPTS || 3)));
+const RETRY_MS = Number(env.DOKPLOY_RETRY_SECONDS ?? 20) * 1000;
 
 const headers = {
   "x-api-key": env.DOKPLOY_API_KEY,
@@ -156,10 +168,15 @@ async function deployments() {
   return list;
 }
 
-async function main() {
+/**
+ * Triggers one deploy and follows the deployment it creates. Returns
+ * "done" or "error"; any other outcome fails the run here.
+ */
+async function attempt(number) {
   // The deployments that already exist: the one this call creates is the one
   // that is NOT here. Comparing clocks with the server would race, and taking
-  // "the latest" would read the previous deploy's `done` as this one's.
+  // "the latest" would read the previous deploy's `done` (or a failed
+  // attempt's `error`) as this one's.
   let before = null;
 
   if (WAIT) {
@@ -184,7 +201,7 @@ async function main() {
     console.log(
       "::warning::Deploy disparado no Dokploy sem acompanhar o resultado (DOKPLOY_WAIT=false). Confira no painel.",
     );
-    return;
+    return "done";
   }
 
   const deadline = Date.now() + TIMEOUT_MS;
@@ -210,14 +227,27 @@ async function main() {
 
     if (current.status === "done") {
       summary(
-        `Dokploy: deployment ${current.deploymentId} de ${LABEL} concluído (spec aceita pelo Swarm; a convergência da API é conferida depois).`,
+        `Dokploy: deployment ${current.deploymentId} de ${LABEL} concluído${number > 1 ? ` na tentativa ${number}` : ""} (spec aceita pelo Swarm).`,
       );
-      return;
+      return "done";
     }
 
-    if (current.status === "error" || current.status === "cancelled") {
+    if (current.status === "cancelled") {
       fail(
-        `O deployment ${current.deploymentId} de ${LABEL} terminou em '${current.status}' no Dokploy. O log está no painel, em Deployments da Application.`,
+        `O deployment ${current.deploymentId} de ${LABEL} terminou em 'cancelled' no Dokploy (cancelado no painel; não é repetido).`,
+      );
+    }
+
+    if (current.status === "error") {
+      if (number < ATTEMPTS) {
+        console.log(
+          `::warning::O deployment ${current.deploymentId} de ${LABEL} terminou em 'error' no Dokploy (o motivo comum é o download da imagem cair no meio). Disparando de novo: tentativa ${number + 1} de ${ATTEMPTS}.`,
+        );
+        return "error";
+      }
+
+      fail(
+        `O deployment ${current.deploymentId} de ${LABEL} terminou em 'error' no Dokploy, depois de ${ATTEMPTS} tentativas. O log está no painel, em Deployments da Application.`,
       );
     }
   }
@@ -227,6 +257,13 @@ async function main() {
       ? `O deployment ${current.deploymentId} ainda estava '${current.status}' após ${TIMEOUT_MS / 1000}s. Acompanhe no painel do Dokploy.`
       : `O Dokploy não criou o deployment em ${TIMEOUT_MS / 1000}s. Confira a fila no painel.`,
   );
+}
+
+async function main() {
+  for (let number = 1; number <= ATTEMPTS; number += 1) {
+    if ((await attempt(number)) === "done") return;
+    await sleep(RETRY_MS);
+  }
 }
 
 await main();
