@@ -13,6 +13,11 @@ import { describe, expect, it } from "vitest";
  * runtime starts with ./docker-entrypoint.sh and node, and the migrations
  * run the same script (`migrate`), so no package manager is needed there;
  * bcrypt 6 ships prebuilt binaries (musl included) with no node-pre-gyp.
+ *
+ * The next run stopped on the AI image (infra/ai-ocr): certifi 2026.7.22
+ * (GHSA-6q48-6c7w-9gw2, compromised emSign roots) and Pillow 12.3.0 (four
+ * CRITICAL decoder CVEs, fixed in 13.0.0) — and that service decodes the
+ * photos users upload.
  */
 const root = process.cwd();
 const read = (file: string) =>
@@ -62,5 +67,31 @@ describe("the image the scanner reads", () => {
     }
 
     expect(lock).not.toMatch(/^"?@mapbox\/node-pre-gyp@/m);
+  });
+
+  it("pins the AI image's Python packages at or above their fixes", () => {
+    const pins = Object.fromEntries(
+      [
+        ...read("infra/ai-ocr/requirements.txt").matchAll(
+          /^([A-Za-z0-9_.-]+)==([\d.]+) --hash=sha256:[0-9a-f]{64}$/gm,
+        ),
+      ].map(([, name, version]) => [name.toLowerCase(), version]),
+    );
+    const atLeast = (version: string, floor: string) => {
+      const a = version.split(".").map(Number);
+      const b = floor.split(".").map(Number);
+      for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+        if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+      }
+      return true;
+    };
+
+    for (const [name, floor] of [
+      ["pillow", "13.0.0"],
+      ["certifi", "2026.10.18"],
+    ]) {
+      expect(pins[name], name).toBeDefined();
+      expect(atLeast(pins[name], floor), `${name} ${pins[name]}`).toBe(true);
+    }
   });
 });
