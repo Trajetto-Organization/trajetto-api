@@ -64,11 +64,16 @@ async function fetchTile(
   signal: AbortSignal,
   fetcher: TileFetch,
   userAgent: string,
+  referer: string | undefined,
 ): Promise<Buffer | null> {
   try {
     const response = await fetcher(url, {
       signal,
-      headers: { "user-agent": userAgent, accept: "image/png,image/jpeg" },
+      headers: {
+        "user-agent": userAgent,
+        accept: "image/png,image/jpeg",
+        ...(referer ? { referer } : {}),
+      },
     });
 
     if (response.status !== 200) return null;
@@ -101,6 +106,12 @@ async function fetchProofMap(
     attribution: string | undefined;
     timeoutMs: number;
     userAgent: string;
+    /**
+     * The web's origin. A provider key restricted to "allowed origins"
+     * (MapTiler's, shared with the web's map) refuses a request with no
+     * Origin or Referer, and a server sends neither on its own.
+     */
+    referer?: string;
     fetcher?: TileFetch;
   },
 ): Promise<ProofMapImage | null> {
@@ -123,6 +134,7 @@ async function fetchProofMap(
         signal,
         fetcher,
         options.userAgent,
+        options.referer,
       ),
     ),
   );

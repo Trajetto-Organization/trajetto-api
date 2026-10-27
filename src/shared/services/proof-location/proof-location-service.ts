@@ -27,6 +27,7 @@ interface ProofLocationConfig {
     template: string | undefined;
     attribution: string | undefined;
     timeoutMs: number;
+    referer?: string;
   };
   fetcher?: GeocodeFetch & TileFetch;
 }
@@ -47,6 +48,19 @@ function userAgent(): string {
   );
 }
 
+/**
+ * The web origin of this environment, as a Referer for the map tiles: the
+ * MapTiler key is shared with the web's map and restricted to the web's
+ * origins, so the API asks as the site it renders proofs for.
+ */
+function webReferer(): string | undefined {
+  try {
+    return `${new URL(env.HTTP_REQUEST).origin}/`;
+  } catch {
+    return undefined;
+  }
+}
+
 function configFromEnv(): ProofLocationConfig {
   return {
     geocoder: {
@@ -60,6 +74,7 @@ function configFromEnv(): ProofLocationConfig {
       template: env.PROOF_MAP_TILE_URL,
       attribution: env.PROOF_MAP_TILE_ATTRIBUTION,
       timeoutMs: env.PROOF_MAP_TIMEOUT_MS,
+      referer: webReferer(),
     },
   };
 }
@@ -152,6 +167,7 @@ class ProofLocationService {
       attribution: this.config.map.attribution,
       timeoutMs: this.config.map.timeoutMs,
       userAgent: this.config.geocoder.userAgent,
+      referer: this.config.map.referer,
       fetcher: this.config.fetcher,
     });
   }

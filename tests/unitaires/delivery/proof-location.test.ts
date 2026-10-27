@@ -10,6 +10,7 @@ import {
 } from "@/shared/services/proof-location/map-tiles";
 import {
   ProofLocationService,
+  proofLocationConfigFromEnv,
   type ProofLocationConfig,
 } from "@/shared/services/proof-location/proof-location-service";
 import {
@@ -24,6 +25,7 @@ import {
   tileViewport,
 } from "@/shared/services/proof-location/web-mercator";
 import type { ProofDocumentSource } from "@/shared/delivery/proof-document";
+import { env } from "@/env";
 import { envSchema } from "@/schemas/env-schema";
 import { definedEnv } from "@/schemas/env-schema/defined-env";
 
@@ -218,6 +220,66 @@ describe("the map is all or nothing", () => {
     );
 
     expect(map).toBeNull();
+  });
+
+  it("sends the web's origin as Referer, so a key restricted to the site's origins serves the server too", async () => {
+    // One MapTiler key (the free plan has one) serves the web's map and this
+    // static map, restricted by "Allowed HTTP Origins". A request without
+    // Origin or Referer got 403 on 27/10/2026, and every proof went out
+    // without its map.
+    const seen: Array<Record<string, string>> = [];
+    const recording: TileFetch = async (_, init) => {
+      seen.push(init.headers);
+      return response(200, tinyPng(), "image/png");
+    };
+
+    const map = await fetchProofMap(-20.35, -40.3, {
+      ...options(recording),
+      referer: "https://www.intrajetto.com/",
+    });
+
+    expect(map).not.toBeNull();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const headers of seen) {
+      expect(headers.referer).toBe("https://www.intrajetto.com/");
+    }
+
+    seen.length = 0;
+    await fetchProofMap(-20.35, -40.3, options(recording));
+    for (const headers of seen) expect(headers).not.toHaveProperty("referer");
+  });
+
+  it("takes the Referer from the web origin of the environment (HTTP_REQUEST)", async () => {
+    const config = proofLocationConfigFromEnv();
+
+    expect(config.map.referer).toBe(`${new URL(env.HTTP_REQUEST).origin}/`);
+
+    const seen: Array<Record<string, string>> = [];
+    const located = new ProofLocationService({
+      ...config,
+      map: {
+        template: "https://tiles.example/{z}/{x}/{y}.png",
+        attribution: "© OpenStreetMap",
+        timeoutMs: 1000,
+        referer: "https://staging.intrajetto.com/",
+      },
+      fetcher: (async (
+        _: string,
+        init: { headers: Record<string, string> },
+      ) => {
+        seen.push(init.headers);
+        return response(200, tinyPng(), "image/png");
+      }) as unknown as ProofLocationConfig["fetcher"],
+    });
+
+    expect(
+      await located.map({ latitude: -20.35, longitude: -40.3 }),
+    ).not.toBeNull();
+    expect(
+      seen.every(
+        (headers) => headers.referer === "https://staging.intrajetto.com/",
+      ),
+    ).toBe(true);
   });
 
   it("is not even attempted without a template or an attribution", async () => {
