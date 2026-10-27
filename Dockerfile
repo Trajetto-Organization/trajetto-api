@@ -120,11 +120,14 @@ COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-x
 COPY --from=builder --chown=nodejs:nodejs /app/infra/scripts/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN sed -i "s/\r$//" ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 
-RUN mkdir -p /home/nodejs/.cache/yarn /home/nodejs/.yarn \
-    && chown -R nodejs:nodejs /home/nodejs/.cache /home/nodejs/.yarn
-
-ENV YARN_CACHE_FOLDER=/home/nodejs/.cache/yarn
-ENV YARN_GLOBAL_FOLDER=/home/nodejs/.yarn
+# No package manager at run time: the container starts with
+# ./docker-entrypoint.sh and node, and the release migrations run the same
+# script (`migrate`). The Node image ships npm, corepack and yarn, and the
+# image scan flagged npm's bundled `tar` (CVE-2026-59873, 27/10/2026); they
+# are code nothing here needs, so they leave the image.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+    /opt/yarn-v* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 USER nodejs
 
