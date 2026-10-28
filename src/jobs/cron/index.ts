@@ -12,6 +12,7 @@ import { cleanupWebhookDeliveriesJob } from "./cleanup-webhook-deliveries-job";
 import { cleanupApiUsageJob } from "./cleanup-api-usage-job";
 import { opsHeartbeatJob } from "./ops-heartbeat-job";
 import { reconcileProofAnalysisJob } from "./reconcile-proof-analysis-job";
+import { reconcileRecordAnalysisJob } from "./reconcile-record-analysis-job";
 import { closeAbandonedImportsJob } from "./close-abandoned-imports-job";
 import { escalateOccurrenceAuthorizationsJob } from "./escalate-occurrence-authorizations-job";
 import { repairUnticketedMessagesJob } from "./repair-unticketed-messages-job";
@@ -57,6 +58,10 @@ function registerCronJobs(): void {
   // Every 10 minutes: a proof's AI reading whose post-commit request was
   // lost is asked for again (IDEMP-08).
   scheduler.registerJob(reconcileProofAnalysisJob);
+
+  // Every 10 minutes (offset by 5): the same, for a fuelling's odometer and a
+  // checklist's photos — both asked for after their commit, fire-and-forget.
+  scheduler.registerJob(reconcileRecordAnalysisJob);
 
   // Every 5 minutes: an upload left IN_PROGRESS by a dead process is closed
   // so the undo can take it back (IDEMP-10).

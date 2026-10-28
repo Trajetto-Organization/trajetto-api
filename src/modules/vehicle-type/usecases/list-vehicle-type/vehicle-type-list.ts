@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
+import { idSearchConditions } from "@/shared/pagination/id-search";
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import type { SortOrder, SortSpec } from "@/shared/pagination/list-query";
 import {
@@ -51,9 +52,6 @@ interface VehicleTypeListFilters {
   search?: string;
 }
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 function vehicleTypeListWhere(
   filters: VehicleTypeListFilters,
 ): Prisma.VehicleTypeWhereInput {
@@ -64,7 +62,8 @@ function vehicleTypeListWhere(
   return {
     businessId: filters.businessId,
     ...buildSearchOr<Prisma.VehicleTypeWhereInput>([
-      ...(UUID_PATTERN.test(term) ? [{ id: term }] : []),
+      // The id shown (tail) or copied (whole): shared/pagination/id-search.
+      ...idSearchConditions(term),
       { description: { contains: term, mode: "insensitive" } },
       ...(/^\d+$/.test(term) && Number(term) <= 1000
         ? [{ number_of_axles: Number(term) }]

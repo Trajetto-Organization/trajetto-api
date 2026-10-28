@@ -211,6 +211,7 @@ describe("GetDashboardOverviewUseCase", () => {
       pending: 0,
       recent: 0,
       overdue: 0,
+      unrecorded: 0,
     });
   });
 

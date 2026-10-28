@@ -325,11 +325,25 @@ const businessResponses = {
         .describe("Nº de veículos contratados (0 = não configurado)."),
       vehicle_count: z
         .number()
-        .describe("Veículos ativos (ocupando vaga do plano)."),
+        .describe(
+          "Veículos que ocupam vaga do plano: todos menos os INACTIVE (ACTIVE, BLOCKED e IN_ROUTE). Pode passar de `vehicle_limit` quando o limite foi reduzido abaixo da frota.",
+        ),
       vehicle_inactive_count: z
         .number()
         .describe("Veículos inativos (histórico preservado, sem ocupar vaga)."),
-      vehicle_limit_enabled: z.boolean(),
+      vehicle_limit_enabled: z
+        .boolean()
+        .describe("Se há limite configurado (`vehicle_limit` > 0)."),
+      vehicle_status_counts: z
+        .object({
+          ACTIVE: z.number().describe("Ativos (ocupam vaga)"),
+          BLOCKED: z.number().describe("Bloqueados (ocupam vaga)"),
+          IN_ROUTE: z.number().describe("Em rota (ocupam vaga)"),
+          INACTIVE: z.number().describe("Inativos (não ocupam vaga)"),
+        })
+        .describe(
+          "Veículos da empresa por situação, na mesma contagem de `vehicle_count` e `vehicle_inactive_count`; a soma é o total cadastrado.",
+        ),
     }),
   }),
   entitlementUpdated: z.object({

@@ -146,9 +146,9 @@ model Business {
   // lives in AIUsagePeriod — one ledger row per month, nothing is ever reset.
   ai_analysis_limit Int @default(0)
 
-  // Contracted fleet size (managed by master; 0 = not configured). Billing
-  // baseline per vehicle — becomes the enforcement input when entitlements
-  // land; until then it is registration data only.
+  // Contracted fleet size (managed by master; 0 = not configured). Enforced:
+  // every non-INACTIVE vehicle occupies a slot, and creating or reactivating
+  // one beyond it is refused (VEHICLE_LIMIT_REACHED, see entitlement-rules).
   vehicle_limit Int @default(0)
 
   // The legacy AI quota counter, replaced by AIUsagePeriod. It stays in the

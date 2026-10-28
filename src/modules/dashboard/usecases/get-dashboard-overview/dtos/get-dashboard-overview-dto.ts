@@ -67,6 +67,8 @@ interface DashboardOverviewResponse {
     pending: number;
     recent: number;
     overdue: number;
+    /** Inside `pending`: vehicles with no last maintenance date recorded. */
+    unrecorded: number;
   };
 
   /**

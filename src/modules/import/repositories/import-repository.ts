@@ -67,6 +67,53 @@ const ABANDONED_ROW: ImportReport["rows"][number] = {
     "rota. Estorne esta importação e envie o arquivo de novo.",
 };
 
+/**
+ * The same, for one that died before it created anything (still reading the
+ * file, say): there is nothing to undo, and "estorne" sent the operator to
+ * reverse an empty upload.
+ */
+const ABANDONED_EMPTY_ROW: ImportReport["rows"][number] = {
+  line: 1,
+  outcome: "invalid",
+  recipient_name: null,
+  reference: null,
+  message:
+    "Importação interrompida: o servidor parou antes de terminar o arquivo " +
+    "e nenhuma entrega foi criada. Envie o arquivo de novo.",
+};
+
+/**
+ * An upload handed back by a replica shutting down before it reached its
+ * rows (import-queue.ts): it was waiting its turn or still reading the file,
+ * and nothing was created.
+ */
+const NOT_STARTED_ROW: ImportReport["rows"][number] = {
+  line: 1,
+  outcome: "invalid",
+  recipient_name: null,
+  reference: null,
+  message:
+    "Importação não iniciada: o servidor reiniciou antes de processar o " +
+    "arquivo e nenhuma entrega foi criada. Envie o arquivo de novo.",
+};
+
+/**
+ * An upload handed back by a replica shutting down after it reached its
+ * rows, when it did not stop at a row boundary in time to write its own
+ * report. Even at zero deliveries counted: the row it is stuck on may still
+ * commit after the count, and the undo is what takes that one back.
+ */
+const SHUTDOWN_ROW: ImportReport["rows"][number] = {
+  line: 1,
+  outcome: "invalid",
+  recipient_name: null,
+  reference: null,
+  message:
+    "Importação interrompida pelo reinício do servidor antes de terminar o " +
+    "arquivo. As entregas criadas até ali pertencem a esta importação e " +
+    "podem não ter rota. Estorne esta importação e envie o arquivo de novo.",
+};
+
 /** Every column of an upload but its report (Prisma 6.1 has no `omit`). */
 const IMPORT_SUMMARY_COLUMNS = {
   id: true,
@@ -150,40 +197,89 @@ class ImportRepository implements IImportRepository {
     let closed = 0;
 
     for (const entry of stale) {
-      // What it did create, counted from the rows themselves: the report the
-      // dead process was holding in memory died with it.
-      const imported = await this.prisma.delivery.count({
-        where: { importId: entry.id, businessId: entry.businessId },
-      });
-
-      const report: ImportReport = {
-        ...EMPTY_REPORT,
-        imported,
-        invalid: 1,
-        rows: [ABANDONED_ROW],
-      };
-
       // The staleness is re-checked in the write: an upload whose heartbeat
       // came back between the read and here is alive, and is left alone.
-      const done = await this.prisma.import.updateMany({
-        where: {
-          id: entry.id,
-          status: "IN_PROGRESS",
-          updated_at: { lt: staleBefore },
-        },
-        data: {
-          status: "COMPLETED",
-          imported,
-          duplicated: 0,
-          invalid: 1,
-          report: report as unknown as Prisma.InputJsonValue,
-        },
-      });
-
-      closed += done.count;
+      if (
+        await this.closeAsInterrupted(entry.id, entry.businessId, {
+          staleBefore,
+          // Its process is gone: the count is final, and zero is nothing
+          // to undo.
+          row: (imported) =>
+            imported === 0 ? ABANDONED_EMPTY_ROW : ABANDONED_ROW,
+        })
+      ) {
+        closed += 1;
+      }
     }
 
     return closed;
+  }
+
+  async closeInterruptedImport(
+    importId: string,
+    businessId: string,
+    stage: "not-started" | "stopped",
+  ): Promise<boolean> {
+    return this.closeAsInterrupted(importId, businessId, {
+      // "Nothing was created" only when it is true and will stay true: the
+      // upload never reached its rows (its stop signal ends it before the
+      // first one) and none are counted. A "not-started" upload that somehow
+      // created rows is reported as the interrupted one it really is, and a
+      // "stopped" one keeps SHUTDOWN_ROW even at zero (see there).
+      row: (imported) =>
+        stage === "not-started" && imported === 0
+          ? NOT_STARTED_ROW
+          : SHUTDOWN_ROW,
+    });
+  }
+
+  /**
+   * The one way an upload that will not finish is closed — by the sweep
+   * after a crash, or by the shutdown hand-back — so both read the same:
+   * COMPLETED, the deliveries it did create counted from the rows themselves
+   * (the report a dead or stopping process held in memory is gone), and one
+   * line saying why. Only while still IN_PROGRESS, and only when the
+   * heartbeat is older than `staleBefore` if given. Answers whether it closed.
+   */
+  private async closeAsInterrupted(
+    importId: string,
+    businessId: string,
+    {
+      staleBefore,
+      row,
+    }: {
+      staleBefore?: Date;
+      row: (imported: number) => ImportReport["rows"][number];
+    },
+  ): Promise<boolean> {
+    const imported = await this.prisma.delivery.count({
+      where: { importId, businessId },
+    });
+
+    const report: ImportReport = {
+      ...EMPTY_REPORT,
+      imported,
+      invalid: 1,
+      rows: [row(imported)],
+    };
+
+    const done = await this.prisma.import.updateMany({
+      where: {
+        id: importId,
+        businessId,
+        status: "IN_PROGRESS",
+        ...(staleBefore && { updated_at: { lt: staleBefore } }),
+      },
+      data: {
+        status: "COMPLETED",
+        imported,
+        duplicated: 0,
+        invalid: 1,
+        report: report as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    return done.count === 1;
   }
 
   async findImportById(
@@ -365,17 +461,27 @@ class ImportRepository implements IImportRepository {
     } catch (error) {
       // The lease goes, the progress stays: the committed batches are
       // counted on the record, and the retry resumes at once instead of
-      // waiting for the heartbeat to go stale. Only OUR lease: a run that
-      // lost it to another must not release the other's.
-      await this.prisma.import
-        .updateMany({
-          where: { id: importId, businessId, reversal_started_at: lease },
-          data: { reversal_started_at: null },
-        })
-        .catch(() => undefined);
+      // waiting for the heartbeat to go stale.
+      await this.releaseReversal(importId, businessId, lease).catch(
+        () => undefined,
+      );
 
       throw error;
     }
+  }
+
+  async releaseReversal(
+    importId: string,
+    businessId: string,
+    lease: Date,
+  ): Promise<void> {
+    // Only OUR lease: a run that lost it to another must not release the
+    // other's. A run still going on this lease fails its next batch, which
+    // re-checks the lease before it deletes anything.
+    await this.prisma.import.updateMany({
+      where: { id: importId, businessId, reversal_started_at: lease },
+      data: { reversal_started_at: null },
+    });
   }
 
   /**

@@ -21,9 +21,7 @@ import {
   type VehicleTypeSortKey,
 } from "../../usecases/list-vehicle-type/vehicle-type-list";
 import type { SortOrder } from "@/shared/pagination/list-query";
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { matchesIdSearch } from "@/shared/pagination/id-search";
 
 type Comparable = string | number | null | undefined;
 
@@ -112,7 +110,7 @@ class InMemoryVehicleTypeRepository implements IVehicleTypeRepository {
       if (!term) return true;
 
       return (
-        (UUID_PATTERN.test(term) && vehicleType.id.toLowerCase() === term) ||
+        matchesIdSearch(vehicleType.id, term) ||
         vehicleType.description.toLowerCase().includes(term) ||
         (/^\d+$/.test(term) &&
           Number(term) <= 1000 &&

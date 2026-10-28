@@ -66,15 +66,25 @@ describe("the workflows", () => {
 
   it("publish the images with an SBOM and provenance", () => {
     const deploy = read(".github/workflows/deploy.yml");
-    const builds = deploy.split("uses: docker/build-push-action@").slice(1);
+    const builds = deploy
+      .split("uses: docker/build-push-action@")
+      .slice(1)
+      .map((build) => build.slice(0, build.search(/\n\s*- name:|\n {2}\w/)));
+    const pushed = builds.filter((step) => /push: true/.test(step));
 
-    expect(builds.length).toBeGreaterThan(0);
+    expect(pushed.length).toBeGreaterThan(0);
 
-    for (const build of builds) {
-      const step = build.slice(0, build.search(/\n\s*- name:|\n {2}\w/));
-
+    for (const step of pushed) {
       expect(step).toMatch(/sbom: true/);
       expect(step).toMatch(/provenance: mode=(?:max|min)/);
+    }
+
+    // Any other build is a smoke test's: loaded into the runner, never
+    // published, so it carries no attestations (the classic image store
+    // cannot load them).
+    for (const step of builds.filter((build) => !pushed.includes(build))) {
+      expect(step).toMatch(/push: false/);
+      expect(step).toMatch(/load: true/);
     }
   });
 

@@ -36,14 +36,38 @@ WORKDIR /app
 # likely to change first, each file bind-mounted instead of COPY'd: copying
 # them all up front would put every layer behind the most edited file. A
 # bump re-ships its own layer and the ones after it, never the ones before.
+#
+# Three of those RUNs also delete, in the SAME layer, what the wheel ships
+# and the service never imports (a later RUN would only hide the files:
+# layers are additive, and every pull would still carry them). Checked on
+# 28/10/2026 against server.py, fetch_models.py and every installed package:
+# - opencv: the Haar cascade XMLs (cv2/data/*.xml, 9.8 MB). The OCR uses no
+#   cascade; cv2/data/__init__.py stays, so `cv2.data` still imports.
+# - onnxruntime: tools/, transformers/ and quantization/ (7.7 MB), model
+#   conversion and tuning scripts. onnxruntime/__init__.py reaches
+#   transformers/ only from print_debug_info() on a CUDA build.
+# - numpy: its test suites (13.8 MB). numpy.testing imports one helper from
+#   them (numpy/_core/tests/_natype.py), which stays; the RUN imports
+#   numpy.testing to prove it.
+# Measured: 536 → 501 MB unpacked, 203 → 196 MB compressed. The `test`
+# stage below runs pytest and both engines on this same base, and CI starts
+# the runtime image before pushing it (deploy.yml, "Smoke test the AI image").
 RUN --mount=type=bind,source=requirements-opencv.txt,target=/tmp/requirements.txt \
-    pip install --require-hashes --no-deps -r /tmp/requirements.txt
+    pip install --require-hashes --no-deps -r /tmp/requirements.txt \
+    && site="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" \
+    && rm -f "$site"/cv2/data/*.xml
 RUN --mount=type=bind,source=requirements-onnxruntime.txt,target=/tmp/requirements.txt \
-    pip install --require-hashes --no-deps -r /tmp/requirements.txt
+    pip install --require-hashes --no-deps -r /tmp/requirements.txt \
+    && site="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" \
+    && rm -rf "$site/onnxruntime/tools" "$site/onnxruntime/transformers" "$site/onnxruntime/quantization"
 RUN --mount=type=bind,source=requirements-rapidocr.txt,target=/tmp/requirements.txt \
     pip install --require-hashes --no-deps -r /tmp/requirements.txt
 RUN --mount=type=bind,source=requirements-numpy.txt,target=/tmp/requirements.txt \
-    pip install --require-hashes --no-deps -r /tmp/requirements.txt
+    pip install --require-hashes --no-deps -r /tmp/requirements.txt \
+    && site="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" \
+    && find "$site/numpy" -path '*/tests/*' ! -path '*/numpy/_core/tests/_natype.py' -delete \
+    && find "$site/numpy" -type d -name tests -empty -delete \
+    && python -c 'import numpy.testing'
 RUN --mount=type=bind,source=requirements.txt,target=/tmp/requirements.txt \
     pip install --require-hashes --no-deps -r /tmp/requirements.txt
 

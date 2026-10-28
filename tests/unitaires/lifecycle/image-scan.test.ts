@@ -26,21 +26,55 @@ const read = (file: string) =>
 const dockerfile = read("Dockerfile");
 const runner = dockerfile.slice(dockerfile.indexOf("FROM base AS runner"));
 
+/** The instructions between two markers, comments dropped. */
+const code = (from: string, to?: string) =>
+  dockerfile
+    .slice(
+      dockerfile.indexOf(from),
+      to === undefined ? undefined : dockerfile.indexOf(to),
+    )
+    .split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n");
+
 describe("the image the scanner reads", () => {
+  // The runner used to start from the Node image and `rm -rf` its npm,
+  // corepack and yarn: hidden from the scanner, still in every pull (layers
+  // are additive). Its base is now Alpine plus the node binary alone.
   it("ships no package manager in the runtime stage", () => {
+    const binary = code("FROM node AS node-binary", "FROM alpine:");
+    const base = code("FROM alpine:", "FROM node AS deps");
+    const runtime = `${base}\n${code("FROM base AS runner")}`;
+
+    expect(base).toMatch(/^FROM alpine:[\d.]+@sha256:[0-9a-f]{64} AS base$/m);
+    expect(runner).toMatch(/^FROM base AS runner$/m);
+    expect(base.match(/^COPY .*$/gm)).toEqual([
+      "COPY --link --from=node-binary /out/ /",
+    ]);
+    // The one file that stage reads from the Node image (copied, and the
+    // reference for its directories' mtime); the rest is under /out.
+    expect(binary.match(/(?<![\w/])\/usr\/[\w/]+/g)).toEqual([
+      "/usr/local/bin/node",
+      "/usr/local/bin/node",
+    ]);
+
     for (const path of [
-      "/usr/local/lib/node_modules/npm",
-      "/usr/local/lib/node_modules/corepack",
-      "/opt/yarn-v",
+      "/usr/local/lib/node_modules",
+      "/usr/local/bin/npm",
+      "corepack",
+      "/opt/yarn",
     ]) {
-      expect(runner, path).toContain(path);
+      expect(runtime, path).not.toContain(path);
     }
 
-    expect(runner).toMatch(
-      /RUN rm -rf[^\n]*\/usr\/local\/lib\/node_modules\/npm/,
-    );
     // Nothing left for a package manager to use.
     expect(runner).not.toMatch(/YARN_CACHE_FOLDER|YARN_GLOBAL_FOLDER/);
+  });
+
+  it("takes the fixed OpenSSL from Alpine at build time", () => {
+    expect(code("FROM alpine:", "FROM node AS deps")).toMatch(
+      /apk upgrade --no-cache[^\n]*libcrypto3[^\n]*libssl3/,
+    );
   });
 
   it("starts and migrates without a package manager", () => {

@@ -176,6 +176,12 @@ class ReverseImportUseCase {
             "background import reversal stopped; it can be resumed",
           ),
         ),
+      // The replica is shutting down (import-queue.ts): the lease goes now,
+      // so the record reads INTERRUPTED and asking again — on any replica —
+      // resumes at once instead of after REVERSAL_STALE_AFTER_MS. A run still
+      // going on this lease fails its next batch, which re-checks it.
+      abandon: () =>
+        this.importRepository.releaseReversal(importId, businessId, lease),
     });
 
     return {

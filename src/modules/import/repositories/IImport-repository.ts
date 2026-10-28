@@ -61,6 +61,21 @@ interface IImportRepository {
    */
   closeAbandonedImports: (staleBefore: Date, limit?: number) => Promise<number>;
 
+  /**
+   * Closes one upload a replica shutting down hands back (import-queue.ts),
+   * right away instead of after the sweep's staleness window: the same
+   * COMPLETED report the sweep writes, with the deliveries counted from the
+   * rows and the line saying it never reached its rows ("not-started": it
+   * was waiting or still reading the file, nothing was created) or was
+   * stopped in them ("stopped"). Only while IN_PROGRESS; answers whether it
+   * closed.
+   */
+  closeInterruptedImport: (
+    importId: string,
+    businessId: string,
+    stage: "not-started" | "stopped",
+  ) => Promise<boolean>;
+
   findImportById: (
     importId: string,
     businessId: string,
@@ -114,6 +129,18 @@ interface IImportRepository {
 
   /** The lease's heartbeat while the run waits its turn in the queue. */
   touchReversal: (
+    importId: string,
+    businessId: string,
+    lease: Date,
+  ) => Promise<void>;
+
+  /**
+   * Drops the undo's lease, if it is still `lease`, keeping the progress: the
+   * record reads INTERRUPTED and asking again resumes at once. What a failed
+   * run does, and what a replica shutting down does for an undo it will not
+   * finish.
+   */
+  releaseReversal: (
     importId: string,
     businessId: string,
     lease: Date,

@@ -1,5 +1,7 @@
-# Node.js
+# Node.js (a pattern without **/ matches the context root only)
 node_modules
+**/node_modules
+node_modules.bak/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -67,7 +69,7 @@ coverage/
 
 # Logs
 logs
-*.log
+**/*.log
 
 # Runtime data
 pids
@@ -110,6 +112,30 @@ setupTests.ts
 # CI/CD
 .github/
 .gitlab-ci.yml
+
+# What CI, the editor and the release read, and the build never does: out
+# of the context, editing one no longer invalidates `COPY . .` and reruns
+# `yarn build`. tsconfig.json and tsup.config.ts stay (tsup reads them).
+.gitleaks.toml
+.gitleaksignore
+audit-ci.jsonc
+.releaserc
+.prettierrc
+.prettierignore
+.editorconfig
+.gitattributes
+stryker.config.mjs
+vite.config.mts
+vitest.mutation.config.mts
+
+# Mutation testing (yarn test:mutation): Stryker's sandbox and reports
+.stryker-tmp/
+reports/
+
+# The AI benchmark and the proof-asset generator, run by hand from the
+# repository (their output, src/shared/services/proof-assets.generated.ts, is
+# committed). infra/scripts is NOT this: the build compiles and copies it.
+scripts/
 
 # Terraform
 *.tfstate

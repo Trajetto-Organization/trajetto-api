@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { errorResponse } from "./common-responses";
+import { codedRefusal, errorResponse } from "./common-responses";
 
 import { EnumUserRole } from "@/modules/user/dtos/user-dto";
 import { createUserSchema } from "@/schemas/create-user-schema";
@@ -253,8 +253,9 @@ const userResponses = {
       ),
     expiresIn: z.number().describe("Segundos até o ticket expirar (30)."),
   }),
-  socketTicketUnavailable: refusal(
+  socketTicketUnavailable: codedRefusal(
     "SOCKET_TICKET_UNAVAILABLE: o tempo real está indisponível (Redis fora); tente de novo após o Retry-After.",
+    ["SOCKET_TICKET_UNAVAILABLE"],
   ),
   // Token missing, malformed (VALIDATION_ERROR, with `issues`), unknown or
   // expired. `code` and `issues` are listed so the serializer keeps them.

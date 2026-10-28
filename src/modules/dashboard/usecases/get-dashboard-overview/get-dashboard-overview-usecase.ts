@@ -266,7 +266,7 @@ class GetDashboardOverviewUseCase {
               { today: businessDateKey(now, timeZone), timeZone },
               businessId,
             )
-          : { pending: 0, recent: 0, overdue: 0 },
+          : { pending: 0, recent: 0, overdue: 0, unrecorded: 0 },
       async () =>
         readsVehicles
           ? this.dashboardRepository.countVehiclesByType(businessId)

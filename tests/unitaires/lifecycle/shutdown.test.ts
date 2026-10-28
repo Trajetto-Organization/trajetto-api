@@ -87,6 +87,9 @@ describe("graceful shutdown sequence", () => {
       {
         markDraining: () => calls.push("drain"),
         drainMs: 12_000,
+        drainImports: async () => {
+          calls.push("imports");
+        },
         closeRealtime: () => calls.push("realtime"),
         closeHttp: async () => {
           calls.push("http");
@@ -105,12 +108,86 @@ describe("graceful shutdown sequence", () => {
 
     expect(calls).toEqual([
       "drain",
+      "imports",
       "wait:12000",
       "realtime",
       "http",
       "workers",
       "redis",
     ]);
+  });
+
+  it("starts the import queue's drain with readiness, and waits for it before the workers", async () => {
+    const calls: string[] = [];
+
+    let finishImports!: () => void;
+    const importsDone = new Promise<void>((resolve) => {
+      finishImports = resolve;
+    });
+
+    const shutdown = runShutdown(
+      {
+        markDraining: () => calls.push("drain"),
+        drainMs: 12_000,
+        drainImports: async () => {
+          calls.push("imports:start");
+          await importsDone;
+          calls.push("imports:done");
+        },
+        closeRealtime: () => calls.push("realtime"),
+        closeHttp: async () => {
+          calls.push("http");
+        },
+        stopWorkers: async () => {
+          calls.push("workers");
+        },
+        closeRedis: async () => {
+          calls.push("redis");
+        },
+      },
+      async (ms) => {
+        calls.push(`wait:${ms}`);
+      },
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // The running upload still has the drain window: HTTP is closed, the
+    // workers are not stopped yet.
+    expect(calls).toEqual([
+      "drain",
+      "imports:start",
+      "wait:12000",
+      "realtime",
+      "http",
+    ]);
+
+    finishImports();
+    await shutdown;
+
+    expect(calls.slice(5)).toEqual(["imports:done", "workers", "redis"]);
+  });
+
+  it("still stops the workers when the import drain fails", async () => {
+    const calls: string[] = [];
+
+    await runShutdown({
+      markDraining: () => undefined,
+      drainMs: 0,
+      drainImports: async () => {
+        throw new Error("database unavailable");
+      },
+      closeRealtime: () => undefined,
+      closeHttp: async () => undefined,
+      stopWorkers: async () => {
+        calls.push("workers");
+      },
+      closeRedis: async () => {
+        calls.push("redis");
+      },
+    });
+
+    expect(calls).toEqual(["workers", "redis"]);
   });
 
   it("does not wait when there is nothing polling readiness", async () => {
@@ -120,6 +197,7 @@ describe("graceful shutdown sequence", () => {
       {
         markDraining: () => undefined,
         drainMs: 0,
+        drainImports: async () => undefined,
         closeRealtime: () => undefined,
         closeHttp: async () => undefined,
         stopWorkers: async () => undefined,
@@ -156,6 +234,7 @@ describe("closing the HTTP server with websockets open", () => {
     await runShutdown({
       markDraining: () => undefined,
       drainMs: 0,
+      drainImports: async () => undefined,
       closeRealtime: () => io.engine.close(),
       closeHttp: () => app.close(),
       stopWorkers: async () => undefined,

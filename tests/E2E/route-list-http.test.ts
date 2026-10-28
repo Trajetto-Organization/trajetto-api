@@ -713,3 +713,55 @@ describe("the walls around the board", () => {
     ]);
   });
 });
+
+describe("search by the id the board shows (spec §5)", () => {
+  // The web shows each route's id compact (its last twelve characters) and
+  // copies it whole from the row menu. The board's search read the name, the
+  // destination, the driver and the number, never the id: neither form found
+  // the row it came from.
+  const TAIL_4 = TIE_4.slice(-12);
+  const FOREIGN_SAME_TAIL = `018fe201-0000-7000-8000-${TAIL_4}`;
+
+  beforeAll(async () => {
+    // Another company's route whose id ends the same way.
+    await prisma.route.create({
+      data: {
+        id: FOREIGN_SAME_TAIL,
+        code: 4,
+        status: "PLANNED",
+        scheduled_date: new Date("2026-09-10"),
+        businessId: OTHER,
+        driverId: FOREIGN_DRIVER,
+        vehicleId: FOREIGN_TRUCK,
+      },
+    });
+  });
+
+  it("finds a route by the tail the table shows", async () => {
+    const { rows, meta } = await board(`search=${TAIL_4}`);
+
+    expect(rows.map((row) => row.id)).toEqual([TIE_4]);
+    expect(meta.total).toBe(1);
+  });
+
+  it("finds a route by the whole id Copiar ID copies, in any case", async () => {
+    expect(
+      (await board(`search=${TIE_4}`)).rows.map((row) => row.code),
+    ).toEqual([4]);
+    expect(
+      (await board(`search=${TIE_4.toUpperCase()}`)).rows.map(
+        (row) => row.code,
+      ),
+    ).toEqual([4]);
+  });
+
+  it("never reaches another company's route with the same tail", async () => {
+    const { rows } = await board(`search=${FOREIGN_SAME_TAIL}`);
+
+    expect(rows).toEqual([]);
+    // The other company's own board finds it, by the same tail.
+    const theirs = await board(`search=${TAIL_4}`, tokens.otherAdmin);
+
+    expect(theirs.rows.map((row) => row.id)).toEqual([FOREIGN_SAME_TAIL]);
+  });
+});

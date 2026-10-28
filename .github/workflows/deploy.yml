@@ -289,6 +289,125 @@ jobs:
           tags: |
             type=sha,prefix=sha-
 
+      # The API image runs BEFORE it is pushed (§14/§19: smoke test of the
+      # final image; the `test` job runs the source, never the image).
+      # Built into the runner's Docker only — no push, no attestations (the
+      # classic image store cannot load them) — and the push step below gets
+      # the same build back from this builder's cache: same context, file
+      # and build args, every layer CACHED.
+      - name: Build the API image for the smoke test
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: trajetto-api:smoke
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Liveness touches no dependency, but the process never gets there
+      # without Postgres: docker-entrypoint.sh waits for it and migrates
+      # before the server starts. So the image runs against a throwaway
+      # Postgres and Redis on an internal network — no route out, so the
+      # Prisma CLI must find its engines in the image instead of downloading
+      # them — the two ways a deploy runs it:
+      # - `migrate`, the release step: every migration on an empty database,
+      #   then the seeds, strictly (Prisma queries, bcrypt, ExcelJS reading
+      #   the infraction table);
+      # - the default command (staging migrates on boot): it must pass its
+      #   own HEALTHCHECK, report this commit on /health/liveness and be
+      #   ready (/health/readiness reaches the database).
+      # Every value is random or a placeholder, lives only in these
+      # containers and goes through an env file, never a command line. A
+      # failure stops the job here: nothing reaches GHCR, and staging keeps
+      # the build it runs.
+      - name: Smoke test the API image
+        env:
+          IMAGE: trajetto-api:smoke
+          # The majors production and the `test` job run, pinned by digest.
+          POSTGRES_IMAGE: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+          REDIS_IMAGE: redis:7-alpine@sha256:6ba19c50b56777f5c11c58eff8ddb69d0d5f27ba131cffb63f180ccfd43c66af
+        run: |
+          net="api-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          envfile="${RUNNER_TEMP}/api-smoke.env"
+          log="${RUNNER_TEMP}/api-smoke-migrate.log"
+          pg=""
+          redis=""
+          cid=""
+          cleanup() {
+            for container in "$cid" "$pg" "$redis"; do
+              [ -z "$container" ] || docker rm -f "$container" > /dev/null 2>&1 || true
+            done
+            docker network rm "$net" > /dev/null 2>&1 || true
+            rm -f "$envfile" "$log"
+          }
+          trap cleanup EXIT
+
+          fail() {
+            echo "::error::Smoke test da imagem trajetto-api: $1. Nada foi publicado no GHCR, e a staging segue com o build que já roda."
+            if [ -n "$cid" ]; then docker logs "$cid" 2>&1 | tail -n 100; fi
+            exit 1
+          }
+
+          # TURNSTILE_SECRET_KEY is Cloudflare's public always-pass test
+          # key; R2 is a placeholder the boot never reaches.
+          (
+            umask 077
+            {
+              echo "DATABASE_URL=postgresql://postgres@postgres:5432/trajetto?schema=public"
+              echo "REDIS_URL=redis://redis:6379"
+              echo "ALLOW_EMPTY_DATABASE_BOOTSTRAP=true"
+              echo "APP_ENV=staging"
+              echo "HTTP_REQUEST=http://localhost:3000"
+              echo "JWT_SECRET=$(openssl rand -base64 48)"
+              echo "JWT_SECRET_REFRESH_TOKEN=$(openssl rand -base64 48)"
+              echo "MASTER_USER_EMAIL=smoke@trajetto.invalid"
+              echo "MASTER_USER_INITIAL_PASSWORD=$(openssl rand -hex 24)"
+              echo "TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA"
+              echo "RATE_LIMIT_TRUSTED_PROXY=none"
+              echo "UPLOAD_STORAGE_TYPE=r2"
+              echo "R2_ACCOUNT_ID=smoke"
+              echo "R2_BUCKET_NAME=smoke"
+              echo "R2_ACCESS_KEY_ID=smoke"
+              echo "R2_SECRET_ACCESS_KEY=smoke"
+            } > "$envfile"
+          )
+
+          docker network create --internal "$net" > /dev/null
+          pg=$(docker run -d --network "$net" --network-alias postgres \
+            -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=trajetto "$POSTGRES_IMAGE")
+          redis=$(docker run -d --network "$net" --network-alias redis "$REDIS_IMAGE")
+
+          # The entrypoint waits for Postgres itself (wait-for-postgres).
+          if ! docker run --rm --network "$net" --env-file "$envfile" \
+            "$IMAGE" ./docker-entrypoint.sh migrate > "$log" 2>&1; then
+            tail -n 100 "$log"
+            fail "a etapa de release (./docker-entrypoint.sh migrate) falhou num banco vazio"
+          fi
+
+          cid=$(docker run -d --network "$net" --env-file "$envfile" \
+            --health-interval 2s --health-start-period 120s "$IMAGE")
+
+          state=""
+          for _ in $(seq 1 75); do
+            state=$(docker inspect --format '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}sem-healthcheck{{end}}' "$cid")
+            [ "$state" = "running/starting" ] || break
+            sleep 2
+          done
+          [ "$state" = "running/healthy" ] || fail "o container não ficou saudável (${state})"
+
+          commit=$(docker exec "$cid" node -e \
+            "fetch('http://127.0.0.1:3333/health/liveness').then((r) => r.json()).then((b) => console.log(b.commit))") \
+            || fail "/health/liveness não respondeu"
+          [ "$commit" = "$GITHUB_SHA" ] || fail "/health/liveness informou o commit '${commit}', não ${GITHUB_SHA}"
+          docker exec "$cid" wget -q -O /dev/null http://127.0.0.1:3333/health/readiness \
+            || fail "/health/readiness não respondeu 200 (banco)"
+
+          echo "trajetto-api: smoke test OK (migrations do zero e seeds no modo migrate, boot saudável e pronto sem rede externa, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build and push Docker image
         id: build
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
@@ -365,6 +484,70 @@ jobs:
           tags: |
             type=sha,prefix=sha-
             type=raw,value=src-${{ steps.ai-source.outputs.tree }}
+
+      # The runtime image runs BEFORE it is pushed (§14/§19: smoke test of
+      # the final image; the `ai-ocr` job's pytest ran the `test` stage, not
+      # this one). Built into the runner's Docker only — no push, no
+      # attestations (the classic image store cannot load them) — and the
+      # push step below gets the same build back from this builder's cache:
+      # same context, target and build args, every layer CACHED. A reused
+      # image skips both: it passed this when it was built.
+      - name: Build the AI image for the smoke test
+        if: steps.ai-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/ai-ocr
+          target: runtime
+          push: false
+          load: true
+          tags: trajetto-ai:smoke
+          labels: ${{ steps.meta-ai.outputs.labels }}
+          cache-from: type=gha,scope=ai
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Started the way the hardened deploy runs it (read-only root, tmpfs
+      # /tmp) and with no network: the models are in the image and the boot
+      # must not fetch anything. The token is random and lives only in this
+      # container (the server refuses to start without 32+ characters). It
+      # must pass its OWN HEALTHCHECK — /health answers 200 only after both
+      # profiles loaded and read warmup.jpg — with Docker's timings
+      # shortened, and report this commit. A failure stops the job here: the
+      # AI image never reaches GHCR and deploy-staging does not run, so
+      # staging keeps the build it runs. (The API image above is already in
+      # GHCR as `sha-<sha>` by then, but never gets its `staged-<sha>`.)
+      - name: Smoke test the AI image
+        if: steps.ai-source.outputs.build == 'true'
+        env:
+          IMAGE: trajetto-ai:smoke
+        run: |
+          AI_TOKEN=$(openssl rand -hex 32)
+          export AI_TOKEN
+          cid=$(docker run -d --network none --read-only --tmpfs /tmp \
+            --health-interval 2s --health-start-period 120s \
+            -e AI_TOKEN "$IMAGE")
+          trap 'docker rm -f "$cid" > /dev/null 2>&1 || true' EXIT
+
+          fail() {
+            echo "::error::Smoke test da imagem trajetto-ai: $1. A imagem da IA não foi publicada no GHCR, e a staging segue com o build que já roda."
+            docker logs "$cid" 2>&1 | tail -n 100
+            exit 1
+          }
+
+          state=""
+          for _ in $(seq 1 75); do
+            state=$(docker inspect --format '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}sem-healthcheck{{end}}' "$cid")
+            [ "$state" = "running/starting" ] || break
+            sleep 2
+          done
+          [ "$state" = "running/healthy" ] || fail "o container não ficou saudável (${state})"
+
+          commit=$(docker exec "$cid" python -c \
+            "import json, urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3))['commit'])") \
+            || fail "/health não respondeu"
+          [ "$commit" = "$GITHUB_SHA" ] || fail "/health informou o commit '${commit}', não ${GITHUB_SHA}"
+
+          echo "trajetto-ai: smoke test OK (healthy sem rede, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build and push the AI image
         id: build-ai

@@ -21,6 +21,7 @@ import {
   CursorPaginatedVehicle,
   VehicleChoice,
   VehicleUsageCounts,
+  VehicleStatusCounts,
 } from "../../dtos/vehicle-dto";
 
 import {
@@ -38,15 +39,13 @@ import {
 } from "../../usecases/list-vehicle/vehicle-list";
 import type { SortOrder } from "@/shared/pagination/list-query";
 import { compareExportKeys } from "@/shared/pagination/export-keyset";
+import { matchesIdSearch } from "@/shared/pagination/id-search";
 
 /** A route as the twin sees it: the route twin's rows fit this shape. */
 type RouteRow = VehicleAssignment & { businessId: string };
 
 /** enum VehicleStatus, in declaration order (schema.prisma). */
 const VEHICLE_STATUS_ORDER = ["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"];
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Comparable = string | number | Date | null | undefined;
 
@@ -216,9 +215,7 @@ class InMemoryVehicleRepository implements IVehicleRepository {
 
     if (!term) return true;
 
-    if (UUID_PATTERN.test(term) && vehicle.id.toLowerCase() === term) {
-      return true;
-    }
+    if (matchesIdSearch(vehicle.id, term)) return true;
 
     return [
       vehicle.description,
@@ -649,18 +646,23 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     };
   }
 
-  async countActiveVehiclesByBusinessId(businessId: string): Promise<number> {
-    return this.vehicles.filter(
-      (vehicle) =>
-        vehicle.businessId === businessId && vehicle.status !== "INACTIVE",
-    ).length;
-  }
+  async countVehiclesByStatusForBusiness(
+    businessId: string,
+  ): Promise<VehicleStatusCounts> {
+    const fleet = this.vehicles.filter(
+      (vehicle) => vehicle.businessId === businessId,
+    );
 
-  async countInactiveVehiclesByBusinessId(businessId: string): Promise<number> {
-    return this.vehicles.filter(
-      (vehicle) =>
-        vehicle.businessId === businessId && vehicle.status === "INACTIVE",
-    ).length;
+    // The same shape the database's groupBy gives: no group for an absent
+    // status, filled with zero by tallyStatuses.
+    return tallyStatuses(
+      VEHICLE_STATUSES.map((status) => ({
+        status,
+        _count: {
+          _all: fleet.filter((vehicle) => vehicle.status === status).length,
+        },
+      })).filter((group) => group._count._all > 0),
+    );
   }
 }
 

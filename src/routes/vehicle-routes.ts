@@ -82,7 +82,7 @@ async function vehicleRoutes(app: FastifyInstance) {
         tags: ["vehicle"],
         summary: "Lista os veículos da empresa",
         description:
-          "Frota de UMA empresa, paginada: o MASTER informa `businessId`; os demais veem a própria. Ordena no servidor (`sort`/`order`) e filtra por status e filial (um ou mais valores separados por vírgula), além da busca livre (ID, descrição, placa, marca, modelo, RENAVAM, identificador da frota, motorista, tipo ou filial). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões por status e as opções dos filtros com as contagens. Motoristas não usam esta rota.",
+          "Frota de UMA empresa, paginada: o MASTER informa `businessId`; os demais veem a própria. Ordena no servidor (`sort`/`order`) e filtra por status e filial (um ou mais valores separados por vírgula), além da busca livre (ID, descrição, placa, marca, modelo, RENAVAM, identificador da frota, motorista, tipo ou filial). O ID vale inteiro ou só o final que a tabela mostra (pelo menos 8 caracteres hexadecimais). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões por status e as opções dos filtros com as contagens. Motoristas não usam esta rota.",
         querystring: vehicleSchemas.listVehicle,
         response: {
           200: ndjsonList(

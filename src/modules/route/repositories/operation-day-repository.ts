@@ -129,6 +129,15 @@ class OperationDayRepository implements IOperationDayRepository {
    * status it sat in today's Pendentes, with tomorrow's driver, and today's
    * failure vanished. One that was put back on a route of the same day is
    * that day's open work again and counts as such.
+   *
+   * Every arm already holds the delivery row, so it carries the driver and
+   * the status the count groups by, and the tenant filter. The count used to
+   * join "active" back to "delivery": a plan built with the values bound
+   * (the first five executions per connection) estimates IN_TRANSIT of a big
+   * tenant from its whole history (thousands of rows for 167), so it hashed
+   * all of the company's deliveries to keep 200 — 37 ms against 2 ms on the
+   * load fixture. In one statement an id always comes with the same driver
+   * and status, so the UNION still keeps each document once.
    */
   async countDayDeliveries(
     businessId: string,
@@ -166,15 +175,18 @@ class OperationDayRepository implements IOperationDayRepository {
         -- The day's routes bring their open stops, and what a route OF the
         -- day resolved and stayed resolved. What a route still running from
         -- an earlier day resolved yesterday is yesterday's work.
-        SELECT ds."deliveryId" AS "id"
+        SELECT d."id", d."driverId", d."status"
         FROM "day_stop" ds
         JOIN "delivery" d ON d."id" = ds."deliveryId"
-        WHERE ds."status" IN ('PENDING', 'ARRIVED')
-          OR (ds."of_day" AND d."status" IN ('DELIVERED', 'FAILED', 'CANCELLED'))
+        WHERE d."businessId" = ${businessId}
+          AND (
+            ds."status" IN ('PENDING', 'ARRIVED')
+            OR (ds."of_day" AND d."status" IN ('DELIVERED', 'FAILED', 'CANCELLED'))
+          )
 
         UNION
 
-        SELECT d."id"
+        SELECT d."id", d."driverId", d."status"
         FROM "delivery" d
         WHERE ${day.isToday}::boolean
           AND d."businessId" = ${businessId}
@@ -182,7 +194,7 @@ class OperationDayRepository implements IOperationDayRepository {
 
         UNION
 
-        SELECT d."id"
+        SELECT d."id", d."driverId", d."status"
         FROM "delivery" d
         WHERE d."businessId" = ${businessId}
           AND d."status" = 'DELIVERED'
@@ -191,10 +203,12 @@ class OperationDayRepository implements IOperationDayRepository {
 
         UNION
 
-        SELECT f."id"
+        SELECT f."id", f."driverId", f."status"
         FROM (
           SELECT
             d."id",
+            d."driverId",
+            d."status",
             COALESCE(
               GREATEST(
                 (
@@ -234,10 +248,11 @@ class OperationDayRepository implements IOperationDayRepository {
 
         UNION
 
-        SELECT e."deliveryId"
+        SELECT d."id", d."driverId", d."status"
         FROM "delivery_event" e
         JOIN "delivery" d ON d."id" = e."deliveryId" AND d."status" = 'CANCELLED'
         WHERE e."businessId" = ${businessId}
+          AND d."businessId" = ${businessId}
           AND e."type" = 'STATUS_CHANGE'
           AND e."status_to" = 'CANCELLED'
           AND e."created_at" >= ${utc(day.start)}
@@ -264,11 +279,9 @@ class OperationDayRepository implements IOperationDayRepository {
       )
       SELECT c."driverId", c."status", sum(c."total")::int AS "total"
       FROM (
-        SELECT d."driverId", d."status"::text AS "status", count(*)::int AS "total"
-        FROM "delivery" d
-        JOIN "active" a ON a."id" = d."id"
-        WHERE d."businessId" = ${businessId}
-        GROUP BY d."driverId", d."status"
+        SELECT a."driverId", a."status"::text AS "status", count(*)::int AS "total"
+        FROM "active" a
+        GROUP BY a."driverId", a."status"
 
         UNION ALL
 

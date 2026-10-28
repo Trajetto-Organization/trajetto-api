@@ -1255,8 +1255,21 @@ class NotificationPipelineService {
     const { deliveredAny, invalidTokens, tickets } = await sendExpoPushMessages(
       devices.map((device) => device.token),
       // The delivery id rides along: the app can tell a repeated tray message
-      // apart, and support can trace one back.
-      { ...content, data: { ...content.data, deliveryId: delivery.id } },
+      // apart, and support can trace one back. It is also the collapse key,
+      // so a redelivery of this same row replaces the tray message instead
+      // of showing it twice (push-provider.ts).
+      {
+        ...content,
+        data: { ...content.data, deliveryId: delivery.id },
+        collapseKey: delivery.id,
+      },
+      // Collapsing in transit is iPhone-only: on Android it would cap what
+      // FCM keeps for an offline phone at four messages.
+      new Set(
+        devices
+          .filter((device) => device.platform === "ios")
+          .map((device) => device.token),
+      ),
     );
 
     if (invalidTokens.length > 0) {

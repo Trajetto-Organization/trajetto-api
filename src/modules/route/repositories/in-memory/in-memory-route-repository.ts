@@ -14,6 +14,7 @@ import {
   ROUTE_STOP_COLUMN_DEFAULTS,
 } from "@/shared/in-memory/column-defaults";
 import { asDateColumn } from "@/shared/in-memory/date-column";
+import { matchesIdSearch } from "@/shared/pagination/id-search";
 import {
   compareForOrder,
   type NullsPlacement,
@@ -1060,6 +1061,7 @@ class InMemoryRouteRepository implements IRouteRepository {
     // Only a mirrored driver has a name to match, as only a real driver row
     // has one in Postgres: the display placeholder must never match a search.
     const matchesSearch = (route: Route): boolean =>
+      matchesIdSearch(route.id, term) ||
       (route.name ?? "").toLowerCase().includes(term) ||
       (route.destination ?? "").toLowerCase().includes(term) ||
       (this.driverName(route.businessId, route.driverId) ?? "")

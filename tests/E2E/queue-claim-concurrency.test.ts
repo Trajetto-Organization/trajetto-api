@@ -12,6 +12,22 @@ import {
   fanOutWebhookEvent,
 } from "@/shared/integration/webhook-dispatch-service";
 
+import { FAKE_USAGE, fakeAnalyzer } from "./support/fake-vision";
+import { seedProofCard } from "./support/proof-card-seed";
+
+/** A receipt, transcribed: nothing wrong with it (decision 6.9). */
+const PROOF_ANSWER = {
+  e_canhoto: "sim",
+  numero_documento_lido: null,
+  data_recebimento_lida: null,
+  tem_assinatura: "sim",
+  nome_recebedor_lido: null,
+  legivel: "sim",
+  qualidade_foto: 0.9,
+  confianca: 0.9,
+  observacao: "ok",
+};
+
 /**
  * "Postgres is the only queue" rests on one clause: every claim is an UPDATE
  * over a `FOR UPDATE SKIP LOCKED` subselect. Two replicas draining the same
@@ -555,6 +571,126 @@ describe("ai_analysis_request", () => {
       } finally {
         await release();
       }
+    },
+  );
+
+  // The one queue the parallel drain did not cover (tests/load/README.md):
+  // three replicas on one backlog must read each photo once and spend each
+  // reserved unit of quota once.
+  it(
+    "is drained by three replicas at once with every photo read and charged once",
+    { timeout: 90_000 },
+    async () => {
+      const REQUESTS = 24;
+
+      const period = await prisma.aIUsagePeriod.upsert({
+        where: {
+          businessId_periodStart: {
+            businessId: CARRIER,
+            periodStart: new Date("2026-08-01"),
+          },
+        },
+        create: {
+          businessId: CARRIER,
+          periodStart: new Date("2026-08-01"),
+          reservedUnits: REQUESTS,
+        },
+        update: { reservedUnits: REQUESTS, consumedUnits: 0 },
+      });
+
+      const photos: string[] = [];
+
+      for (let index = 0; index < REQUESTS; index += 1) {
+        const photoPath = `deliveryProof/${CARRIER}/paralelo-${index}-${randomUUID()}.jpg`;
+
+        const request = await prisma.aIAnalysisRequest.create({
+          data: {
+            idempotencyKey: randomUUID(),
+            type: "DELIVERY_PROOF",
+            // The receipt's card: the pipeline reads only a photo that is
+            // still the delivery's proof (AI-4).
+            recordId: await seedProofCard(prisma, {
+              businessId: CARRIER,
+              photoPath,
+            }),
+            businessId: CARRIER,
+            periodId: period.id,
+            requestedById: RECIPIENT,
+            input: {
+              photoPath,
+              signaturePath: null,
+              expectedDocument: null,
+              expectedRecipient: "Mercado Central",
+              provenOn: "2026-08-15",
+            },
+          },
+        });
+
+        await prisma.aIAnalysisUnit.create({
+          data: { requestId: request.id, unitKey: "proof" },
+        });
+
+        photos.push(photoPath);
+      }
+
+      const reads: string[] = [];
+
+      const { AIAnalysisPipelineService } = await import(
+        "@/shared/ai/ai-analysis-pipeline-service"
+      );
+
+      // A replica each, with the same fake reader: slow enough that the three
+      // claim while the others are mid-batch.
+      const replicas = [0, 1, 2].map(() => {
+        const replica = new (AIAnalysisPipelineService as unknown as new () => {
+          runCycle(): Promise<void>;
+          provider: unknown;
+        })();
+
+        replica.provider = fakeAnalyzer({
+          analyzeDeliveryProof: async (photoPath: string) => {
+            reads.push(photoPath);
+            await new Promise((resolve) => setTimeout(resolve, 25));
+
+            return { parsed: PROOF_ANSWER, usage: FAKE_USAGE };
+          },
+        });
+
+        return replica;
+      });
+
+      await Promise.all(replicas.map((replica) => replica.runCycle()));
+
+      const duplicates = reads.filter(
+        (photo, index) => reads.indexOf(photo) !== index,
+      );
+
+      expect(duplicates, "a mesma foto foi lida mais de uma vez").toEqual([]);
+      expect([...reads].sort()).toEqual([...photos].sort());
+
+      const rows = await prisma.aIAnalysisRequest.findMany({
+        where: { periodId: period.id },
+        include: { units: true },
+      });
+
+      expect(
+        rows
+          .filter(
+            (row) =>
+              row.status !== "COMPLETED" ||
+              row.attempts !== 1 ||
+              row.units.some((unit) => unit.status !== "CONSUMED"),
+          )
+          .map((row) => `${row.id}:${row.status}:${row.attempts}`),
+      ).toEqual([]);
+
+      // The quota moved once per unit: nothing left reserved, nothing
+      // charged twice.
+      expect(
+        await prisma.aIUsagePeriod.findUniqueOrThrow({
+          where: { id: period.id },
+        }),
+      ).toMatchObject({ reservedUnits: 0, consumedUnits: REQUESTS });
     },
   );
 });

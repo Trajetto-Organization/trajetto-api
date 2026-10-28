@@ -87,6 +87,19 @@ Princípios que não mudam:
   | `ghcr.io/trajetto-organization/trajetto-api` | `Dockerfile`                                | a API (HTTP, Socket.IO, workers, crons) | `trajetto-api`         |
   | `ghcr.io/trajetto-organization/trajetto-ai`  | `infra/ai-ocr/Dockerfile` (stage `runtime`) | o OCR local das leituras de IA          | `trajetto-ai`          |
 
+  A imagem da API roda em Alpine com só o binário do `node` da imagem
+  oficial (sem npm, yarn, corepack nem os headers de C) e só os pacotes que
+  os binários usam (`libstdc++`, `libssl3`, `ca-certificates`, `dumb-init`).
+  O estágio `prod-deps` tira do `node_modules` o que nada carrega em execução
+  (sourcemaps, typings, READMEs, `@types`, o bundle de navegador do ExcelJS)
+  e a segunda cópia do query engine do Prisma: a CLI (`migrate deploy` no
+  boot e na etapa de release, `migrate resolve` à mão) usa a do cliente, por
+  `PRISMA_QUERY_ENGINE_LIBRARY`. As camadas vão da mais estável para a menos
+  estável: um commit só de código reenvia só `build/` (~1 MB comprimido).
+  Medido em 28/10/2026, mesmas fontes: 115 → 88 MB comprimidos (o que o
+  registry transfere), 417 → 285 MB descompactados, 533 → 373 MB no
+  `docker images`.
+
 - **Tags**:
 
   | Tag                                                 | Quem cria/move                                                                     | Muda?                                                                            |
@@ -200,6 +213,15 @@ staging?".
 | `staging-image`      | só no PR (nome do check: _The PR head was built on staging_): espera (até 45 min) o marcador `staged-<head do PR>` das duas imagens, no mesmo digest de `sha-<head do PR>`. Sem ele o merge promoveria um build que o staging não rodou.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `promote-production` | environment `production` (revisores obrigatórios = aprovação); um por vez (`concurrency: promote-production`); só a partir de `main`. Resolve o build (2º pai do merge commit; fast-forward = o próprio commit; _Run workflow_ = a tag digitada), valida o formato (`sha-<hex>` ou `main-<hex>`), confere que a imagem existe no GHCR e, num merge, que tem o marcador `staged-<7>` no mesmo digest (o rollback por _Run workflow_ é isento), compara com o que o staging roda (só informa), roda as migrations como job se `MIGRATIONS_VIA_JOB=true`, move `stable` das duas imagens por digest (a IA só se o build tiver essa imagem), pede o deploy das Applications de produção na mesma ordem (se configurado) e espera a convergência da API (SSH por padrão; `ROLLOUT_VERIFY=http` usa a liveness pública).                                                               |
 | `release`            | depois da promoção, só no push em `main`: `semantic-release` cria a tag, o `CHANGELOG.md` (commit com `[skip ci]`) e o GitHub Release.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+
+Antes do push, o `build-and-push` carrega a imagem da API no runner e roda um
+smoke test contra um Postgres e um Redis descartáveis, numa rede interna sem
+saída para a internet (a CLI do Prisma não pode baixar engine): o modo
+`migrate` (a etapa de release) aplica todas as migrations num banco vazio e
+roda os seeds; depois o comando padrão sobe e precisa passar no próprio
+HEALTHCHECK, responder este commit em `/health/liveness` e 200 em
+`/health/readiness`. Se falhar, nada vai para o GHCR. O push seguinte publica
+o mesmo build, do cache do builder.
 
 Permissões: o workflow inteiro tem `contents: read`; só `build-and-push`,
 `deploy-staging` e `promote-production` pedem `packages: write`;
@@ -517,8 +539,10 @@ a credencial: o deployment da Application termina em `error` com
    Image `redis:7-alpine`.
 3. **Create** e **Deploy**. _External Port_ vazio.
 4. **Sem persistência e com teto de memória** (era o comando do compose): o
-   Redis só guarda contadores do rate limit e o pub/sub do Socket.IO (ADR
-   0002); um snapshot só traria de volta chaves que deviam ter expirado, e o
+   Redis só guarda chaves curtas que expiram sozinhas (contadores do rate
+   limit, tickets de socket, o intervalo do "esqueci minha senha" e fotos de
+   5–60 s das leituras do MASTER) e o pub/sub do Socket.IO
+   ([ADR 0002](./adr/0002-redis-descartavel.md)); um snapshot só traria de volta chaves que deviam ter expirado, e o
    padrão `noeviction` de um Redis cheio desliga todo limitador de uma vez. Em
    _Advanced_, no campo de comando personalizado (_Command_ ou _Run Command_,
    conforme a versão), ponha **numa linha só**:
@@ -1058,6 +1082,11 @@ decide o que a foto diz é a API (ADR 0010; ver
 ([seção 7.6](#76-trajetto-ai-application)). A imagem `trajetto-ai` é
 construída no job `build-and-push` (do stage `runtime`, depois de o pytest
 passar no stage `test`) e promovida junto com a API (`staging` e `stable`).
+Antes do push, essa mesma imagem sobe no runner sem rede, com a raiz só
+leitura e um token descartável: precisa passar no próprio HEALTHCHECK (os
+dois perfis carregados e a leitura do `warmup.jpg`) e informar o commit em
+`/health`; se falhar, ela não vai para o GHCR e a staging não é atualizada
+(a imagem da API, publicada antes no mesmo job, fica sem o `staged-<sha>`).
 O pipeline faz o deploy dela **antes** da API, e só quando o digest muda
 ([seção 3](#como-o-pipeline-fala-com-o-dokploy)): um push que não mexe em
 `infra/ai-ocr` reaproveita a imagem anterior e não reinicia a IA.
@@ -1211,8 +1240,9 @@ lacuna (os defaults funcionam; só não estão dimensionados). Confira depois:
 Redis>:6379`.
 - **Nada durável**: o comando personalizado da [seção 7.5](#75-redis-database)
   desliga RDB/AOF e põe o teto de 256 MB com `allkeys-lru`. Só guarda
-  contadores de rate limit e o pub/sub do Socket.IO (ADR 0002); não precisa de
-  backup nem de restore.
+  chaves curtas que expiram sozinhas e o pub/sub do Socket.IO
+  ([ADR 0002](./adr/0002-redis-descartavel.md)); não precisa de backup nem de
+  restore.
 - **Trocar a senha**: nova senha no Database (e no comando, se personalizado)
   e no `REDIS_URL` da API; **Deploy** do Redis e logo em seguida da API.
   Entre os dois, a API segue em modo degradado (rate limit local, tempo real
@@ -1947,6 +1977,12 @@ trajetto-api-production=N`, que o próximo deploy desfaz) e refaça o
   balanceamento soltar a réplica → fecha tempo real, HTTP, workers e Redis,
   com teto de 35 s (o _Stop Grace Period_ é 40 s; sem ele, ver a lacuna da
   [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora)).
+  Desde o SIGTERM, a fila de importação recusa planilhas novas (429
+  `IMPORT_BUSY`), fecha na hora as que esperavam ("não iniciada: envie de
+  novo"), dá até 15 s à que está rodando e depois a para entre duas linhas,
+  com o relatório até ali (mais 5 s para ela parar e 2 s para gravar o que a
+  fila fechou: até 22 s); tudo antes dos workers (ADR
+  [0001](./adr/0001-filas-e-mensageria.md)).
 
 ### Separar os workers do HTTP (só por gatilho medido)
 
@@ -2101,10 +2137,34 @@ Meta (`GET /{phone_number_id}` e os templates, com
 `META_WHATSAPP_BUSINESS_ACCOUNT_ID`), Expo, R2 (`HeadBucket`; `local` em
 produção é erro), trajetto-ai (`/health` e um `POST /v1/read` vazio), o
 certificado e o heartbeat. `not_configured` traz `missing_env` com os nomes que
-faltam. As sondas rodam em paralelo, com 2,5 s cada (o número da Meta junto
-com os templates, o `/health` da IA junto com a conferência do token); o
-relatório vale 30 s e é compartilhado pelas réplicas pelo Redis (`cached`
-diz se veio da foto); `refresh=true` sonda de novo no máximo a cada 5 s.
+faltam. As sondas rodam em paralelo (o número da Meta junto com os
+templates, o `/health` da IA junto com a conferência do token). Cada
+tentativa tem até 3,5 s, o que cobre o reenvio de DNS do musl (2,5 s) mais
+o handshake; depois de uma falha que pode passar sozinha (tempo esgotado,
+rede, HTTP 5xx, resposta cortada ou ilegível) há no máximo mais uma, dentro
+de 5 s por provedor. O cliente S3 da sonda tem `maxAttempts: 1`: quem decide
+a repetição é a sonda. Uma recusa definitiva (chave, bucket, domínio) nunca é
+repetida nem atenuada, e duas falhas seguidas continuam `error`. Cada
+provedor diz `attempts`, `transient` (o veredito depende de uma condição
+passageira: falha de uma tentativa, 429 ou resposta lenta, acima de 2 s) e
+`failure_kind`. O relatório vale 30 s, ou 5 s quando algum provedor está
+`transient`, e é compartilhado pelas réplicas pelo Redis (`cached` diz se
+veio da foto); `refresh=true` sonda de novo no máximo a cada 5 s. Na web, a
+aba Sistema mostra "Instável" para um `warning` transitório e, depois de um
+resultado transitório, relê sozinha uma única vez.
+
+Cada tentativa que falha vira uma linha `warn` com
+`component=provider-readiness` e `msg="provider probe attempt failed"`, com
+`provider`, `attempt`, `kind`, `code` (EAI_AGAIN, ECONNRESET,
+UND_ERR_SOCKET… ou `timeout`), `http_status`, `phase` (`response`: DNS, TCP,
+TLS e cabeçalhos; `body`: corpo da resposta), `elapsed_ms` e `will_retry`;
+uma repetição que deu certo vira `info` com
+`msg="provider probe recovered on retry"`. Nenhuma URL, host ou chave vai
+para essas linhas. Para achar a causa de um "Com erro" que some sozinho:
+`docker service logs <App Name> 2>&1 | grep "provider probe"`. `EAI_AGAIN`
+ou um `timeout` em `phase=response` perto de 2,5–3,5 s apontam DNS;
+`ECONNRESET`/`UND_ERR_SOCKET` apontam a conexão; `http_status` 5xx, o
+provedor.
 
 Fase 2 (fora do repositório, quando houver pilha de métricas): 5xx acima de
 2 % e p95 acima de 1,5 s por rota e picos de 429 (métricas do Traefik); disco
@@ -2137,7 +2197,8 @@ bcrypt/node-pre-gyp (só na instalação; sai com bcrypt 6).
 
 **Ligar o scan de imagem de verdade**: quando foi adicionado, a base
 `node:22.21.1-alpine` tinha CRITICALs corrigíveis (OpenSSL em
-libssl3/libcrypto3 e o `tar` do npm embutido). Suba a base (PR do
+libssl3/libcrypto3 e o `tar` do npm embutido; desde 28/10/2026 o runtime
+da API é Alpine com só o binário do `node`, sem npm). Suba a base (PR do
 Dependabot), confira no passo "Scan the images" que não sobrou CRITICAL
 corrigível e ponha `IMAGE_SCAN_ENFORCE=true`.
 

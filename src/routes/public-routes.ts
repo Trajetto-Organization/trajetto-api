@@ -46,7 +46,7 @@ async function publicRoutes(app: FastifyInstance) {
         tags: ["public"],
         summary: "Confere um comprovante de entrega pelo código impresso",
         description:
-          "Página pública do QR do comprovante. Não exige login: o código de verificação é a autorização. Responde se os bytes que estão no armazenamento AGORA ainda batem com o hash gravado quando o documento foi gerado — que é a razão de alguém escanear o código. `intact: false` com `storedSha256: null` significa arquivo ausente, não adulterado; os dois casos são diferentes e a página os distingue. O resumo é estreito de propósito: um link vazado mostra que UM comprovante é legítimo, não vira uma janela para a operação da transportadora.",
+          "Página pública do QR do comprovante. Não exige login: o código de verificação é a autorização. Responde se os bytes que estão no armazenamento AGORA ainda batem com o hash gravado quando o documento foi gerado — que é a razão de alguém escanear o código. `intact: false` com `storedSha256: null` significa arquivo ausente, não adulterado; os dois casos são diferentes e a página os distingue. Armazenamento que não respondeu não é arquivo ausente: responde 503 STORAGE_UNAVAILABLE com `retry-after`, e a conferência é repetida depois. O resumo é estreito de propósito: um link vazado mostra que UM comprovante é legítimo, não vira uma janela para a operação da transportadora.",
         params: proofDocumentSchemas.verifyProofParams,
         response: {
           200: proofDocumentResponses.proofVerification,
@@ -54,6 +54,7 @@ async function publicRoutes(app: FastifyInstance) {
           404: proofDocumentResponses.genericError,
           429: proofDocumentResponses.genericError,
           500: proofDocumentResponses.internalServerError,
+          503: proofDocumentResponses.verifyProofUnavailable,
         },
       },
     },

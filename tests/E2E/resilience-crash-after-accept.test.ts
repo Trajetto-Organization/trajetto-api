@@ -40,9 +40,12 @@ import {
  *  - webhook: posted again with the SAME X-Trajetto-Event-Id — the receiver
  *    deduplicates (documented contract, ADR 0006);
  *  - WhatsApp and push: posted again. Meta and Expo offer no key, so the
- *    recipient may see it twice; the copies carry the same delivery id
- *    (biz_opaque_callback_data / data.deliveryId), which is what the
+ *    recipient may see a WhatsApp twice; the copies carry the same delivery
+ *    id (biz_opaque_callback_data / data.deliveryId), which is what the
  *    provider-receipt ledger counts (ADR 0003, OUTBOX-07). At-least-once.
+ *    A push also carries that id as its `tag` (and `collapseId` on an
+ *    iPhone), so the device replaces the first copy with the second instead
+ *    of showing both.
  *  - AI (local OCR): read again — the local service costs nothing per call —
  *    and the photo's unit and the company's quota are spent exactly once.
  *
@@ -207,6 +210,26 @@ describe("a send the provider accepted, and the replica died before recording it
           ...fake.callsOf("email"),
         ].map((call) => call.idempotencyKey),
       ).toEqual([email.id, email.id]);
+
+      // Expo honours no key, but the tray does: both copies carry the
+      // delivery id as tag, so the second replaces the first on the device.
+      // The seeded phone is an Android: no collapseId, which FCM would turn
+      // into a collapse_key and cap at four per offline phone.
+      const [push] = await rowsOf("PUSH");
+
+      const pushMessages = [
+        ...firstRound.filter((call) => call.kind === "push"),
+        ...fake.callsOf("push"),
+      ].flatMap(
+        (call) => call.body as Array<{ tag?: string; collapseId?: string }>,
+      );
+
+      expect(pushMessages.length).toBeGreaterThanOrEqual(2);
+      expect([
+        ...new Set(
+          pushMessages.map((message) => `${message.tag}|${message.collapseId}`),
+        ),
+      ]).toEqual([`${push.id}|undefined`]);
     },
   );
 

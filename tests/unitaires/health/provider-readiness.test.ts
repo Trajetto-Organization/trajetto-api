@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  PROBE_ATTEMPT_TIMEOUT_MS,
+  PROBE_BUDGET_MS,
+  PROBE_RETRY_DELAY_MS,
+  READINESS_CACHE_MS,
+  READINESS_TRANSIENT_CACHE_MS,
   checkAiOcr,
   checkEmail,
   checkHeartbeat,
@@ -9,6 +14,9 @@ import {
   checkPush,
   checkStorage,
   checkWhatsApp,
+  readinessCache,
+  readinessTtl,
+  type ProviderReadinessReport,
   type ReadinessDeps,
   type ReadinessEnv,
 } from "@/shared/health/provider-readiness";
@@ -91,6 +99,8 @@ function deps(
     heartbeat: () => null,
     now: () => new Date("2026-10-07T12:00:00.000Z"),
     timeoutMs: 200,
+    retryDelayMs: 5,
+    log: { warn: () => undefined, info: () => undefined },
     ...overrides,
   };
 }
@@ -274,6 +284,31 @@ describe("WhatsApp (Meta)", () => {
 
     expect(result.details["template:trajetto_cliente"]).toBe("MISSING");
     expect(result.status).toBe("error");
+  });
+
+  it("never reads a template list that arrived cut or malformed as 'does not exist'", async () => {
+    for (const answer of [
+      () =>
+        new Response('{"data":[{"name":"trajetto_cli', {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      () => json(200, { error: { code: 1 } }),
+      () => json(200, null),
+    ]) {
+      const result = await checkWhatsApp(
+        deps({
+          ...HEALTHY,
+          "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
+            answer,
+        }),
+      );
+
+      expect(result.details["template:trajetto_cliente"]).toBe("UNKNOWN");
+      expect(result.status).toBe("warning");
+      expect(result.message).not.toContain("não existe");
+      expect(result.warnings.join(" ")).toContain("trajetto_cliente");
+    }
   });
 
   it("cannot judge the templates without the business account id, and says which variable", async () => {
@@ -560,5 +595,884 @@ describe("independent probes of one provider", () => {
 
     expect(report).toMatchObject({ status: "error", reachable: false });
     expect(report.message).toContain("ENOTFOUND");
+  });
+});
+
+/**
+ * §12: R2 and Resend sometimes read "Com erro" and were fine on the next
+ * refresh. One failed attempt (a lost DNS packet, a reset, a 5xx, a body cut
+ * short) used to be the verdict, pinned for 30 s on every replica. Now a
+ * failure that may clear by itself gets ONE more attempt inside the
+ * provider's budget, a recovered or slow answer is "warning" + transient,
+ * two failures in a row stay "error", and a definitive answer is never
+ * repeated nor softened.
+ */
+describe("transient failures, retry and budget", () => {
+  /** Production timings (3.5 s per attempt, 5 s per provider). */
+  const PRODUCTION_TIMING: Partial<ReadinessDeps> = {
+    timeoutMs: undefined,
+    budgetMs: undefined,
+    retryDelayMs: undefined,
+    slowMs: undefined,
+  };
+
+  const VERIFIED = () =>
+    json(200, { data: [{ name: "intrajetto.com", status: "verified" }] });
+
+  function useFakeClock() {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "performance", "Date"],
+    });
+  }
+
+  function after(ms: number, answer: () => Response): Promise<Response> {
+    return new Promise((resolve) => setTimeout(() => resolve(answer()), ms));
+  }
+
+  const never = () => new Promise<Response>(() => {});
+
+  /** A 200 whose body starts and never ends. */
+  function stalledBody(): Response {
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"data":['));
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  function resetError(code = "ECONNRESET") {
+    return Object.assign(new TypeError("fetch failed"), { cause: { code } });
+  }
+
+  /** Answers each call with the next answer; the last one repeats. */
+  function sequence(...answers: Array<() => Response | Promise<Response>>) {
+    let call = 0;
+
+    return vi.fn(() => {
+      const answer = answers[Math.min(call, answers.length - 1)];
+
+      call += 1;
+
+      return answer();
+    });
+  }
+
+  function recordingLog() {
+    const warn = vi.fn();
+    const info = vi.fn();
+
+    return { log: { warn, info }, warn, info };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("e-mail (Resend)", () => {
+    it("is unstable, not an error, when it answers after a lost DNS packet (2.6 s)", async () => {
+      useFakeClock();
+
+      const pending = checkEmail(
+        deps(
+          { "https://api.resend.com/domains": () => after(2_600, VERIFIED) },
+          PRODUCTION_TIMING,
+        ),
+      );
+
+      await vi.advanceTimersByTimeAsync(2_600);
+      const result = await pending;
+
+      expect(result).toMatchObject({
+        status: "warning",
+        transient: true,
+        attempts: 1,
+        failure_kind: null,
+        latency_ms: 2_600,
+      });
+      expect(result.warnings.join(" ")).toContain("Respondeu em 2,6 s");
+    });
+
+    it("recovers on the second attempt after a reset, and logs the cause code", async () => {
+      const route = sequence(() => {
+        throw resetError();
+      }, VERIFIED);
+      const { log, warn, info } = recordingLog();
+
+      const result = await checkEmail(
+        deps({ "https://api.resend.com/domains": route }, { log }),
+      );
+
+      expect(route).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({
+        status: "warning",
+        transient: true,
+        attempts: 2,
+        failure_kind: "network",
+        reachable: true,
+      });
+      expect(result.warnings).toContain(
+        "A 1ª tentativa falhou (falha de rede); a 2ª respondeu.",
+      );
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "email",
+          attempt: 1,
+          kind: "network",
+          code: "ECONNRESET",
+          phase: "response",
+          will_retry: true,
+        }),
+        "provider probe attempt failed",
+      );
+      expect(info).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "email", attempts: 2 }),
+        "provider probe recovered on retry",
+      );
+    });
+
+    it("retries a timeout inside the budget and recovers", async () => {
+      useFakeClock();
+
+      const startedAt: number[] = [];
+      const route = sequence(
+        () => {
+          startedAt.push(performance.now());
+
+          return never();
+        },
+        () => {
+          startedAt.push(performance.now());
+
+          return VERIFIED();
+        },
+      );
+
+      const begin = performance.now();
+      const pending = checkEmail(
+        deps({ "https://api.resend.com/domains": route }, PRODUCTION_TIMING),
+      );
+
+      await vi.advanceTimersByTimeAsync(PROBE_BUDGET_MS);
+      const result = await pending;
+
+      expect(result).toMatchObject({
+        status: "warning",
+        transient: true,
+        attempts: 2,
+        failure_kind: "timeout",
+      });
+      // The second attempt starts after the first one's deadline and the pause.
+      expect(startedAt.map((at) => at - begin)).toEqual([
+        0,
+        PROBE_ATTEMPT_TIMEOUT_MS + PROBE_RETRY_DELAY_MS,
+      ]);
+    });
+
+    it("is an error after two timeouts, within the provider's 5 s budget", async () => {
+      useFakeClock();
+
+      const route = vi.fn(never);
+      let settled = false;
+      const begin = performance.now();
+      const pending = checkEmail(
+        deps({ "https://api.resend.com/domains": route }, PRODUCTION_TIMING),
+      ).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(PROBE_BUDGET_MS - 1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+
+      expect(performance.now() - begin).toBe(PROBE_BUDGET_MS);
+      expect(route).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({
+        status: "error",
+        reachable: false,
+        transient: true,
+        attempts: 2,
+        failure_kind: "timeout",
+        latency_ms: null,
+      });
+      expect(result.message).toBe(
+        "O Resend não respondeu (2 tentativas de até 3,5 s).",
+      );
+    });
+
+    it("never reads a body that stalls as 'domain missing', and recovers", async () => {
+      useFakeClock();
+
+      const pending = checkEmail(
+        deps(
+          {
+            "https://api.resend.com/domains": sequence(stalledBody, VERIFIED),
+          },
+          PRODUCTION_TIMING,
+        ),
+      );
+
+      await vi.advanceTimersByTimeAsync(PROBE_BUDGET_MS);
+      const result = await pending;
+
+      expect(result).toMatchObject({
+        status: "warning",
+        transient: true,
+        attempts: 2,
+        failure_kind: "timeout",
+      });
+      expect(JSON.stringify(result)).not.toContain("não está na conta");
+    });
+
+    it("says the answer was cut when the body stalls twice", async () => {
+      useFakeClock();
+
+      const pending = checkEmail(
+        deps(
+          { "https://api.resend.com/domains": stalledBody },
+          PRODUCTION_TIMING,
+        ),
+      );
+
+      await vi.advanceTimersByTimeAsync(PROBE_BUDGET_MS);
+      const result = await pending;
+
+      expect(result).toMatchObject({
+        status: "error",
+        reachable: true,
+        transient: true,
+        failure_kind: "timeout",
+      });
+      expect(result.message).toContain("começou a responder, mas não terminou");
+      expect(result.message).not.toContain("não está na conta");
+    });
+
+    it("treats a malformed or incomplete list as a failed attempt, never as 'domain missing'", async () => {
+      for (const malformed of [
+        () =>
+          new Response("<html>502 Bad Gateway</html>", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          }),
+        () => new Response('{"data":[{"name":"intra', { status: 200 }),
+        () => json(200, { object: "list" }),
+      ]) {
+        const route = vi.fn(malformed);
+        const result = await checkEmail(
+          deps({ "https://api.resend.com/domains": route }),
+        );
+
+        expect(route).toHaveBeenCalledTimes(2);
+        expect(result).toMatchObject({
+          status: "error",
+          reachable: true,
+          transient: true,
+          attempts: 2,
+          failure_kind: "invalid_response",
+        });
+        expect(result.message).toContain("respondeu de forma incompleta");
+        expect(result.message).not.toContain("não está na conta");
+      }
+    });
+
+    it("retries a 5xx once: recovered is unstable, twice is an error with the status", async () => {
+      const recovered = await checkEmail(
+        deps({
+          "https://api.resend.com/domains": sequence(
+            () => json(503, {}),
+            VERIFIED,
+          ),
+        }),
+      );
+
+      expect(recovered).toMatchObject({
+        status: "warning",
+        transient: true,
+        attempts: 2,
+        failure_kind: "http_5xx",
+      });
+
+      const down = await checkEmail(
+        deps({ "https://api.resend.com/domains": () => json(503, {}) }),
+      );
+
+      expect(down).toMatchObject({
+        status: "error",
+        reachable: true,
+        transient: true,
+        attempts: 2,
+        failure_kind: "http_5xx",
+      });
+      expect(down.details.http_status).toBe(503);
+      expect(down.message).toContain("HTTP 503");
+    });
+
+    it("does not repeat a rate-limited call: a 429 is a transient warning", async () => {
+      const route = vi.fn(() => json(429, { name: "rate_limit_exceeded" }));
+      const result = await checkEmail(
+        deps({ "https://api.resend.com/domains": route }),
+      );
+
+      expect(route).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
+        status: "warning",
+        transient: true,
+        attempts: 1,
+        failure_kind: "throttled",
+      });
+    });
+
+    it("asks once and keeps a definitive answer: refused key, domain missing", async () => {
+      for (const answer of [
+        () => json(401, { name: "validation_error" }),
+        () => json(403, {}),
+        () => json(200, { data: [{ name: "outro.com", status: "verified" }] }),
+      ]) {
+        const route = vi.fn(answer);
+        const result = await checkEmail(
+          deps({ "https://api.resend.com/domains": route }),
+        );
+
+        expect(route).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({
+          status: "error",
+          transient: false,
+          attempts: 1,
+          failure_kind: null,
+        });
+      }
+    });
+
+    it("keeps a definitive refusal an error even when it came on the second attempt", async () => {
+      const result = await checkEmail(
+        deps({
+          "https://api.resend.com/domains": sequence(
+            () => {
+              throw resetError();
+            },
+            () => json(401, { name: "validation_error" }),
+          ),
+        }),
+      );
+
+      expect(result).toMatchObject({
+        status: "error",
+        transient: false,
+        attempts: 2,
+      });
+      expect(result.message).toContain("RESEND_SECRET_KEY");
+    });
+  });
+
+  describe("storage (R2)", () => {
+    function s3Error(status: number) {
+      return Object.assign(new Error("UnknownError"), {
+        name: "Unknown",
+        $metadata: { httpStatusCode: status },
+      });
+    }
+
+    it("retries a 5xx once: recovered is unstable", async () => {
+      let calls = 0;
+      const result = await checkStorage(
+        deps(HEALTHY, {
+          headBucket: async () => {
+            calls += 1;
+
+            if (calls === 1) throw s3Error(503);
+          },
+        }),
+      );
+
+      expect(calls).toBe(2);
+      expect(result).toMatchObject({
+        status: "warning",
+        transient: true,
+        attempts: 2,
+        failure_kind: "http_5xx",
+      });
+    });
+
+    it("a 5xx twice is the R2 answering an error, not 'no route'", async () => {
+      const result = await checkStorage(
+        deps(HEALTHY, {
+          headBucket: async () => {
+            throw s3Error(503);
+          },
+        }),
+      );
+
+      expect(result).toMatchObject({
+        status: "error",
+        reachable: true,
+        transient: true,
+        attempts: 2,
+        failure_kind: "http_5xx",
+      });
+      expect(result.details.http_status).toBe(503);
+      expect(result.message).toContain("HTTP 503");
+      expect(result.message).not.toContain("Sem rota");
+    });
+
+    it("asks once for a refused credential or a missing bucket", async () => {
+      for (const status of [401, 403, 404]) {
+        const headBucket = vi.fn(async () => {
+          throw s3Error(status);
+        });
+        const result = await checkStorage(deps(HEALTHY, { headBucket }));
+
+        expect(headBucket).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({
+          status: "error",
+          reachable: true,
+          transient: false,
+          attempts: 1,
+        });
+        expect(result.details.http_status).toBe(status);
+      }
+    });
+
+    it("names the network code when there is no route, without the host", async () => {
+      const result = await checkStorage(
+        deps(HEALTHY, {
+          headBucket: async () => {
+            throw Object.assign(
+              new Error("getaddrinfo EAI_AGAIN acc.r2.cloudflarestorage.com"),
+              { code: "EAI_AGAIN" },
+            );
+          },
+        }),
+      );
+
+      expect(result).toMatchObject({
+        status: "error",
+        reachable: false,
+        transient: true,
+        attempts: 2,
+        failure_kind: "network",
+      });
+      expect(result.message).toContain("EAI_AGAIN");
+      expect(result.message).not.toContain("cloudflarestorage");
+    });
+
+    it("holds its deadline when the SDK ignores the abort, and aborts every attempt", async () => {
+      useFakeClock();
+
+      const signals: AbortSignal[] = [];
+      const pending = checkStorage(
+        deps(HEALTHY, {
+          ...PRODUCTION_TIMING,
+          headBucket: (signal) => {
+            signals.push(signal);
+
+            return new Promise<void>(() => {});
+          },
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(PROBE_BUDGET_MS);
+      const result = await pending;
+
+      expect(signals).toHaveLength(2);
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      expect(result).toMatchObject({
+        status: "error",
+        reachable: false,
+        failure_kind: "timeout",
+        attempts: 2,
+      });
+      expect(result.message).toBe(
+        "O R2 não respondeu (2 tentativas de até 3,5 s).",
+      );
+    });
+
+    it("reads the SDK's abort (AbortError caused by a TimeoutError) as a timeout", async () => {
+      const result = await checkStorage(
+        deps(HEALTHY, {
+          timeoutMs: 20,
+          headBucket: (signal) =>
+            new Promise<void>((_resolve, reject) => {
+              signal.addEventListener("abort", () =>
+                reject(
+                  Object.assign(new Error("Request aborted"), {
+                    name: "AbortError",
+                    cause: { name: "TimeoutError" },
+                  }),
+                ),
+              );
+            }),
+        }),
+      );
+
+      expect(result).toMatchObject({
+        status: "error",
+        failure_kind: "timeout",
+        attempts: 2,
+      });
+    });
+  });
+
+  /**
+   * The token check was one attempt while /health had two: in the DNS blip
+   * /health recovered from, the token check had already failed and OCR
+   * still read "Com erro". And a 5xx in front of the service read as
+   * "token aceito".
+   */
+  describe("OCR token check", () => {
+    const HEALTH = {
+      "http://trajetto-ai:8080/health":
+        HEALTHY["http://trajetto-ai:8080/health"],
+    };
+
+    it("retries a reset once and recovers: unstable, not an error", async () => {
+      const route = sequence(
+        () => {
+          throw resetError();
+        },
+        () => json(400, { error: "unknown_profile" }),
+      );
+      const { log, warn } = recordingLog();
+
+      const result = await checkAiOcr(
+        deps({ ...HEALTH, "http://trajetto-ai:8080/v1/read": route }, { log }),
+      );
+
+      expect(route).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({
+        status: "warning",
+        transient: true,
+        failure_kind: "network",
+        message: "Serviço pronto e token aceito.",
+      });
+      expect(result.warnings).toContain(
+        "A 1ª conferência do token falhou (falha de rede); a 2ª respondeu.",
+      );
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "ai_ocr",
+          kind: "network",
+          code: "ECONNRESET",
+          will_retry: true,
+        }),
+        "provider probe attempt failed",
+      );
+    });
+
+    it("retries a timeout inside the budget and recovers", async () => {
+      useFakeClock();
+
+      const route = sequence(never, () => json(400, {}));
+      const pending = checkAiOcr(
+        deps(
+          { ...HEALTH, "http://trajetto-ai:8080/v1/read": route },
+          PRODUCTION_TIMING,
+        ),
+      );
+
+      await vi.advanceTimersByTimeAsync(PROBE_BUDGET_MS);
+      const result = await pending;
+
+      expect(route).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({
+        status: "warning",
+        transient: true,
+        failure_kind: "timeout",
+      });
+    });
+
+    it("is an error after two failed attempts, transient, naming the cause", async () => {
+      const route = vi.fn(() => {
+        throw resetError();
+      });
+
+      const result = await checkAiOcr(
+        deps({ ...HEALTH, "http://trajetto-ai:8080/v1/read": route }),
+      );
+
+      expect(route).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({
+        status: "error",
+        reachable: true,
+        transient: true,
+        failure_kind: "network",
+      });
+      expect(result.message).toContain("2 tentativas");
+      expect(result.message).toContain("ECONNRESET");
+    });
+
+    it("never reads a 5xx as an accepted token: retried, then an error with the status", async () => {
+      const recovered = await checkAiOcr(
+        deps({
+          ...HEALTH,
+          "http://trajetto-ai:8080/v1/read": sequence(
+            () => json(502, {}),
+            () => json(400, {}),
+          ),
+        }),
+      );
+
+      expect(recovered).toMatchObject({
+        status: "warning",
+        transient: true,
+        failure_kind: "http_5xx",
+      });
+
+      const down = await checkAiOcr(
+        deps({
+          ...HEALTH,
+          "http://trajetto-ai:8080/v1/read": () => json(502, {}),
+        }),
+      );
+
+      expect(down).toMatchObject({
+        status: "error",
+        transient: true,
+        failure_kind: "http_5xx",
+      });
+      expect(down.details.http_status).toBe(502);
+      expect(down.message).toContain("HTTP 502");
+      expect(down.message).not.toContain("token aceito");
+    });
+
+    it("does not repeat a rate-limited check: a 429 is a transient warning", async () => {
+      const route = vi.fn(() => json(429, {}));
+
+      const result = await checkAiOcr(
+        deps({ ...HEALTH, "http://trajetto-ai:8080/v1/read": route }),
+      );
+
+      expect(route).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
+        status: "warning",
+        transient: true,
+        failure_kind: "throttled",
+      });
+    });
+
+    it("asks once for a refused token, and keeps it an error even after a retry", async () => {
+      const once = vi.fn(() => json(401, { error: "unauthorized" }));
+
+      const refused = await checkAiOcr(
+        deps({ ...HEALTH, "http://trajetto-ai:8080/v1/read": once }),
+      );
+
+      expect(once).toHaveBeenCalledTimes(1);
+      expect(refused).toMatchObject({ status: "error", transient: false });
+      expect(refused.message).toContain("AI_LOCAL_TOKEN");
+
+      const afterReset = await checkAiOcr(
+        deps({
+          ...HEALTH,
+          "http://trajetto-ai:8080/v1/read": sequence(
+            () => {
+              throw resetError();
+            },
+            () => json(401, { error: "unauthorized" }),
+          ),
+        }),
+      );
+
+      expect(afterReset).toMatchObject({ status: "error", transient: false });
+      expect(afterReset.message).toContain("AI_LOCAL_TOKEN");
+    });
+  });
+
+  describe("the whole report", () => {
+    it("stays bounded by one provider's budget when every provider hangs", async () => {
+      useFakeClock();
+
+      const hang = () => never();
+      const begin = performance.now();
+      const pending = checkProviders(
+        deps(
+          {
+            "https://api.resend.com": hang,
+            "https://graph.facebook.com": hang,
+            "https://exp.host": hang,
+            "http://trajetto-ai:8080": hang,
+          },
+          {
+            ...PRODUCTION_TIMING,
+            headBucket: () => new Promise<void>(() => {}),
+          },
+        ),
+      );
+
+      await vi.advanceTimersByTimeAsync(PROBE_BUDGET_MS);
+      const report = await pending;
+
+      expect(performance.now() - begin).toBe(PROBE_BUDGET_MS);
+
+      const byKey = Object.fromEntries(report.providers.map((p) => [p.key, p]));
+
+      for (const key of ["email", "whatsapp", "push", "storage", "ai_ocr"]) {
+        expect(byKey[key]).toMatchObject({ status: "error", transient: true });
+      }
+      // Nothing probed, nothing transient.
+      expect(byKey.proof_certificate).toMatchObject({
+        attempts: 0,
+        transient: false,
+        failure_kind: null,
+      });
+    });
+
+    it("only reads: no send, at most two calls per provider URL", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      const failing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), method: init?.method ?? "GET" });
+
+        return json(500, {});
+      }) as typeof fetch;
+      let heads = 0;
+
+      await checkProviders(
+        deps(
+          {},
+          {
+            fetch: failing,
+            headBucket: async () => {
+              heads += 1;
+              throw Object.assign(new Error("x"), {
+                $metadata: { httpStatusCode: 500 },
+              });
+            },
+          },
+        ),
+      );
+
+      const perUrl = new Map<string, number>();
+
+      for (const call of calls) {
+        perUrl.set(call.url, (perUrl.get(call.url) ?? 0) + 1);
+
+        if (call.method !== "GET") {
+          // The receipts query for a nil id and the OCR token check refused
+          // with 400/401: neither sends anything.
+          expect(
+            call.url.endsWith("/push/getReceipts") ||
+              call.url.includes("/v1/read?profile=readiness-probe"),
+          ).toBe(true);
+        }
+      }
+
+      expect(Math.max(...perUrl.values())).toBeLessThanOrEqual(2);
+      expect(heads).toBe(2);
+    });
+
+    it("never logs a credential, a URL or a host", async () => {
+      const { log, warn } = recordingLog();
+
+      await checkProviders(
+        deps(
+          {},
+          {
+            log,
+            headBucket: async () => {
+              throw Object.assign(
+                new Error("getaddrinfo ENOTFOUND acc.r2.cloudflarestorage.com"),
+                { code: "ENOTFOUND", hostname: "acc.r2.cloudflarestorage.com" },
+              );
+            },
+          },
+        ),
+      );
+
+      expect(warn).toHaveBeenCalled();
+
+      const logged = JSON.stringify(warn.mock.calls);
+
+      for (const secret of Object.values(SECRETS))
+        expect(logged).not.toContain(secret);
+      expect(logged).not.toContain("cloudflarestorage");
+      expect(logged).not.toContain("://");
+      expect(logged).not.toContain("trajetto-ai");
+    });
+  });
+
+  describe("how long a report is served", () => {
+    function report(transient: boolean): ProviderReadinessReport {
+      return {
+        checked_at: "2026-10-07T12:00:00.000Z",
+        providers: [
+          {
+            key: "email",
+            label: "E-mail (Resend)",
+            status: transient ? "error" : "ok",
+            configured: true,
+            reachable: !transient,
+            latency_ms: transient ? null : 120,
+            missing_env: [],
+            message: "",
+            warnings: [],
+            details: {},
+            attempts: transient ? 2 : 1,
+            transient,
+            failure_kind: transient ? "timeout" : null,
+          },
+        ],
+      };
+    }
+
+    it("is 5 s when some provider is transient, 30 s otherwise", () => {
+      expect(readinessTtl(report(true))).toBe(READINESS_TRANSIENT_CACHE_MS);
+      expect(readinessTtl(report(false))).toBe(READINESS_CACHE_MS);
+
+      // A copy from a replica that predates the field reads as clean.
+      const older = report(false) as {
+        providers: Array<Partial<ProviderReadinessReport["providers"][0]>>;
+      };
+
+      delete older.providers[0].transient;
+      expect(readinessTtl(older as ProviderReadinessReport)).toBe(
+        READINESS_CACHE_MS,
+      );
+    });
+
+    it("probes again after 5 s when the last round caught a blip, then keeps the clean one 30 s", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+
+      let resendDown = true;
+      const routes: Record<string, Route> = {
+        ...HEALTHY,
+        "https://api.resend.com/domains": () =>
+          resendDown ? json(503, {}) : VERIFIED(),
+      };
+      const cache = readinessCache(() => deps(routes), null);
+      const email = (value: ProviderReadinessReport) =>
+        value.providers.find((p) => p.key === "email");
+
+      const first = await cache.read();
+
+      expect(first.cached).toBe(false);
+      expect(email(first.value)).toMatchObject({
+        status: "error",
+        transient: true,
+      });
+
+      resendDown = false;
+
+      vi.advanceTimersByTime(READINESS_TRANSIENT_CACHE_MS - 1);
+      const stillCached = await cache.read();
+
+      expect(stillCached.cached).toBe(true);
+      expect(email(stillCached.value)?.status).toBe("error");
+
+      vi.advanceTimersByTime(1);
+      const recovered = await cache.read();
+
+      expect(recovered.cached).toBe(false);
+      expect(email(recovered.value)).toMatchObject({
+        status: "ok",
+        transient: false,
+      });
+
+      vi.advanceTimersByTime(READINESS_CACHE_MS - 1);
+      expect((await cache.read()).cached).toBe(true);
+    });
   });
 });

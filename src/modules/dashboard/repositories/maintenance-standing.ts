@@ -94,10 +94,18 @@ function tallyMaintenance(
   today: string,
   timeZone: string,
 ): MaintenanceStatsResult {
-  const stats: MaintenanceStatsResult = { pending: 0, recent: 0, overdue: 0 };
+  const stats: MaintenanceStatsResult = {
+    pending: 0,
+    recent: 0,
+    overdue: 0,
+    unrecorded: 0,
+  };
 
   for (const vehicle of vehicles) {
     stats[maintenanceStanding(vehicle, today, timeZone)] += 1;
+
+    // A sub-count of "pending", not a fourth standing.
+    if (!vehicle.last_maintenance_date) stats.unrecorded += 1;
   }
 
   return stats;

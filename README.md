@@ -1,5 +1,22 @@
 # Trajetto — API
 
+<p align="center">
+  <img alt="Node.js 22" src="https://img.shields.io/badge/Node.js-22-5FA04E?style=for-the-badge&logo=nodedotjs&logoColor=white" />
+  <img alt="TypeScript 5.7" src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
+  <img alt="Fastify 5.2" src="https://img.shields.io/badge/Fastify-5.2-000000?style=for-the-badge&logo=fastify&logoColor=white" />
+  <img alt="Prisma 6.1" src="https://img.shields.io/badge/Prisma-6.1-2D3748?style=for-the-badge&logo=prisma&logoColor=white" />
+  <img alt="PostgreSQL 16" src="https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" />
+  <img alt="Redis 7" src="https://img.shields.io/badge/Redis-7-FF4438?style=for-the-badge&logo=redis&logoColor=white" />
+  <img alt="Socket.IO 4.8" src="https://img.shields.io/badge/Socket.IO-4.8-010101?style=for-the-badge&logo=socketdotio&logoColor=white" />
+  <img alt="Zod 3.25" src="https://img.shields.io/badge/Zod-3.25-3E67B1?style=for-the-badge&logo=zod&logoColor=white" />
+  <img alt="Vitest 1.6" src="https://img.shields.io/badge/Vitest-1.6-6E9F18?style=for-the-badge&logo=vitest&logoColor=white" />
+  <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" />
+  <img alt="ONNX Runtime 1.30" src="https://img.shields.io/badge/ONNX_Runtime-1.30-005CED?style=for-the-badge&logo=onnx&logoColor=white" />
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
+  <img alt="GitHub Actions" src="https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white" />
+  <img alt="Cloudflare R2" src="https://img.shields.io/badge/Cloudflare_R2-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" />
+</p>
+
 Back-end do Trajetto: a API HTTP, o tempo real (Socket.IO) e os processos de
 fundo (filas e crons) que atendem o painel web (`trajetto-ui`), o aplicativo do
 motorista (`trajetto-mobile`) e os sistemas dos clientes que se integram pela
@@ -24,6 +41,7 @@ como imagem própria.
 - [Integrações](#integrações)
 - [Padrões para escrever código](#padrões-para-escrever-código)
 - [Testes](#testes)
+- [Depuração](#depuração)
 - [Documentação das rotas](#documentação-das-rotas)
 - [Build, imagem e deploy](#build-imagem-e-deploy)
 - [Desenvolvimento, staging e produção](#desenvolvimento-staging-e-produção)
@@ -74,7 +92,9 @@ ou desabilitam o que a API vai recusar.
 
 | Documento                                                          | Para quê                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`docs/arquitetura.md`](./docs/arquitetura.md)                     | o mapa navegável da plataforma, a estrutura do código, a anatomia de um módulo e como criar uma feature, processos, filas, tempo real, IA, comprovante, regras de migration, compatibilidade com o app, unicidade por empresa, ADRs                                        |
+| [`docs/arquitetura.md`](./docs/arquitetura.md)                     | o mapa navegável da plataforma, a estrutura do código, a anatomia de um módulo e como criar uma feature, processos, filas, tempo real, IA, comprovante, regras de migration, compatibilidade com o app, unicidade por empresa, o resumo dos ADRs                           |
+| [`docs/arquitetura-tour.md`](./docs/arquitetura-tour.md)           | o tour pela arquitetura, passo a passo: o mesmo mapa em onze passos (requisição, sessão, tenant, arquivos, filas, notificações, tempo real, IA, importações, deploy e saúde), com ◀ Anterior · Índice · Próximo ▶                                                        |
+| [`docs/adr/`](./docs/adr/README.md)                                | as decisões de arquitetura (ADRs), uma por arquivo, com o índice                                                                                                                                                                                                           |
 | [`docs/deploy.md`](./docs/deploy.md)                               | o caminho até a produção: branches, workflows, GHCR, Dokploy do zero (cada Application e Database, clique a clique, staging e produção), IA, Postgres e Redis, borda, migrations, rollback, backup e restore, alertas, cadeia de suprimentos, checklist do primeiro deploy |
 | [`docs/variaveis-de-ambiente.md`](./docs/variaveis-de-ambiente.md) | cada variável: para que serve, obrigatoriedade, segredo, formato, valor em dev/staging/produção e onde mora                                                                                                                                                                |
 | [`docs/testes.md`](./docs/testes.md)                               | as suítes, como rodar, o que cada uma prova, cobertura, mutação e as regras para escrever testes                                                                                                                                                                           |
@@ -91,7 +111,7 @@ flowchart LR
   erp["ERP do cliente"] --> api
   api["trajetto-api ×2<br/>HTTP + Socket.IO + workers + crons"]
   api --> pg[("PostgreSQL 16<br/>dados + filas")]
-  api --> rd[("Redis 7<br/>rate limit, pub/sub, tickets")]
+  api --> rd[("Redis 7<br/>rate limit, pub/sub,<br/>chaves curtas")]
   api --> ai["trajetto-ai<br/>OCR local"]
   api --> r2[("R2<br/>URLs pré-assinadas")]
   api --> prov["Resend · Meta · Expo Push<br/>webhooks dos clientes"]
@@ -107,11 +127,15 @@ O mapa completo, com Cloudflare, Traefik, Dokploy, GHCR, EAS, a tabela de
 relações conferidas no código e os fluxos (sessão, upload, filas, tempo real e
 deploy) em blocos que se expandem, está em
 [`docs/arquitetura.md` → Visão de componentes](./docs/arquitetura.md#visão-de-componentes).
+Para avançar por ele em ordem, um assunto por vez, use o
+[Tour pela arquitetura, passo a passo](./docs/arquitetura-tour.md).
 
 - **Postgres é a fila**: outbox transacional e filas em tabelas com
   `FOR UPDATE SKIP LOCKED` e lease; não há broker.
-- **Redis é descartável**: rate limit, o pub/sub do Socket.IO entre réplicas e
-  os tickets de socket de 30 s. Não há cache no Redis.
+- **Redis é descartável**: rate limit, o pub/sub do Socket.IO entre réplicas,
+  os tickets de socket de 30 s, o intervalo de 60 s do "esqueci minha senha" e
+  fotos curtas (5–60 s) das leituras da plataforma que só o MASTER vê. Nenhum
+  dado de empresa fica em cache, e sem Redis a API segue funcionando.
 - **IA local**: o serviço `trajetto-ai` (RapidOCR em CPU) só transcreve; a API
   decide. Nenhum provedor externo.
 - **Arquivos** nunca passam pela API: o cliente envia ao R2 por URL
@@ -129,7 +153,7 @@ Versões fixadas no `package.json` (sem `^`) e no `yarn.lock`.
 | Fastify + `fastify-type-provider-zod`         | 5.2.0 / 4.0.2                                        | HTTP rápido com schema por rota; o mesmo schema valida a entrada e gera o OpenAPI (`@fastify/swagger` 9.4.2)              |
 | Prisma (`prisma`, `@prisma/client`)           | 6.1.0                                                | acesso tipado ao Postgres e migrations SQL versionadas (expandir/contrair)                                                |
 | PostgreSQL                                    | 16                                                   | dados de todas as empresas **e** as filas (outbox, notificações, webhooks, IA) e os leases dos crons                      |
-| Redis via `ioredis`                           | 7 / 5.10.1                                           | rate limit, pub/sub do adapter do Socket.IO e tickets de socket; descartável                                              |
+| Redis via `ioredis`                           | 7 / 5.10.1                                           | rate limit, pub/sub do Socket.IO, tickets de socket, intervalo do "esqueci minha senha", fotos do MASTER; descartável     |
 | Socket.IO + `@socket.io/redis-adapter`        | 4.8.3 / 8.3.0                                        | tempo real para a web e o app, entre réplicas                                                                             |
 | tsyringe                                      | 4.8.0                                                | injeção de dependência: o usecase recebe o repositório pela interface, e o teste troca pelo gêmeo in-memory               |
 | zod                                           | 3.25.1                                               | validação de entrada (`src/schemas/`) e do ambiente no boot (`src/schemas/env-schema/`)                                   |
@@ -241,7 +265,10 @@ O modelo comentado é o `.env.example`; a referência completa, com o valor de
 cada ambiente, é [`docs/variaveis-de-ambiente.md`](./docs/variaveis-de-ambiente.md).
 A validação acontece no boot (`src/schemas/env-schema/index.ts`): valor
 faltando ou inválido derruba o processo com a lista do que corrigir. Vazio
-conta como ausente.
+conta como ausente. `DATABASE_URL`, `MIGRATION_DATABASE_URL`,
+`RUN_MIGRATIONS_ON_BOOT` e `ALLOW_EMPTY_DATABASE_BOOTSTRAP` ficam fora desse
+schema: quem as lê é o Prisma e o entrypoint da imagem
+(`infra/scripts/docker-entrypoint.sh`).
 
 | Onde               | O que vai lá                                                                                       |
 | ------------------ | -------------------------------------------------------------------------------------------------- |
@@ -381,9 +408,11 @@ Cada uma aparece em `GET /health/providers` (só MASTER) sem enviar nada.
   foi gravado.
 - **Idempotência**: escritas do app e da API pública aceitam
   `Idempotency-Key` ou `client_submission_id`.
-- **Cache**: não há camada de cache na API nem no Redis (ADR 0002). As
-  listagens do painel são NDJSON com offset e uma linha final `meta`; os
-  seletores usam cursor. Quem cacheia é a web, no servidor Next, com tags.
+- **Cache**: nenhum dado de empresa fica em cache na API nem no Redis. A
+  única exceção são as fotos de 5–60 s das leituras da plataforma que só o
+  MASTER vê (`src/shared/cache/snapshot-cache.ts`,
+  [ADR 0002](./docs/adr/0002-redis-descartavel.md)). As listagens do painel
+  são NDJSON com offset e uma linha final `meta`; os seletores usam cursor.
 - **Uploads**: o cliente pede `POST /uploads/presign/:businessId` (ou
   `/uploads/avatar/presign`), envia o arquivo por PUT direto ao R2 e manda só a
   chave; a API confere dono, tamanho e existência. Em desenvolvimento,
@@ -411,14 +440,104 @@ Cada uma aparece em `GET /health/providers` (só MASTER) sem enviar nada.
 | Contrato com a IA real                     | `tests/ai-local`     | `AI_LOCAL_E2E=1 npx vitest run tests/ai-local` | Docker                                                 |
 | Carga                                      | `tests/load`         | `tests/load/README.md`                         | Docker e k6                                            |
 | Mutação                                    | `stryker.config.mjs` | `yarn test:mutation`                           | Postgres e Redis de teste                              |
+| Documentação, tour e badges                | `tests/unitaires`    | `npx vitest run tests/unitaires/docs`          | nada (lê os arquivos; roda no `yarn test`)             |
 
 O E2E cria e apaga um banco por arquivo no servidor de `TEST_DATABASE_URL` (ou
 `DATABASE_URL`): aponte para um Postgres **descartável**, nunca o de
-desenvolvimento. Um arquivo só: `npx vitest run tests/E2E/<arquivo>.test.ts`.
+desenvolvimento. Um arquivo só:
+
+```bash
+DATABASE_URL="postgresql://<usuário>:<senha>@127.0.0.1:<porta>/<banco>?schema=public" \
+REDIS_URL="redis://127.0.0.1:<porta>" \
+npx vitest run tests/E2E/<arquivo>.test.ts
+```
+
+Um unitário só: `npx vitest run tests/unitaires/<arquivo>.test.ts`.
 No Windows, rode no máximo 8 arquivos E2E por vez (o engine do Prisma pode cair
 com um _napi panic_). As suítes de navegador da web e o E2E do app usam o seed
 de `tests/load/`. Tudo — o que cada suíte prova, cobertura, mutação e as
 regras para escrever testes — em [`docs/testes.md`](./docs/testes.md).
+
+## Depuração
+
+### Depurador do Node
+
+```bash
+# O mesmo servidor do `yarn dev:server`, com o inspetor em 127.0.0.1:9229
+npx tsx watch --inspect src/server.ts
+
+# Parar antes da primeira linha, para depurar o boot
+npx tsx --inspect-brk src/server.ts
+
+# Um arquivo de teste, num processo só, parado no começo
+npx vitest run tests/unitaires/<arquivo>.test.ts --inspect-brk --no-file-parallelism
+```
+
+- O `tsx` 4.19.2 repassa `--inspect` ao processo que roda o servidor.
+  **Não** use `NODE_OPTIONS=--inspect`: o processo do próprio `tsx` pega a
+  porta antes, e o servidor sobe sem inspetor ("address already in use").
+  Nem `yarn dev:server --inspect`: o Yarn põe a flag depois de
+  `src/server.ts`, e ela chega ao servidor como argumento, não ao Node.
+- **VS Code**: _Run and Debug → Attach to Node Process_, ou esta
+  configuração num `.vscode/launch.json` local (a pasta está no
+  `.gitignore`). `"restart": true` reconecta quando o `tsx watch` reinicia o
+  servidor depois de uma edição.
+
+  ```json
+  {
+    "type": "node",
+    "request": "attach",
+    "name": "API (tsx watch)",
+    "port": 9229,
+    "restart": true,
+    "skipFiles": ["<node_internals>/**"]
+  }
+  ```
+
+- **Chrome**: `chrome://inspect` → _Open dedicated DevTools for Node_.
+
+### Logs e id de correlação
+
+- Os logs são JSON (pino), uma linha por pedido. `LOG_LEVEL` aceita `fatal`,
+  `error`, `warn`, `info` (padrão), `debug`, `trace` e `silent`; `debug`
+  acrescenta as linhas de conexão e desconexão de cada socket. Em
+  desenvolvimento: `LOG_LEVEL=debug yarn dev:server`.
+- Todo pedido ganha um id (uuid v7), devolvido no cabeçalho `x-request-id` de
+  **toda** resposta, inclusive das recusas, e gravado como `reqId` em cada
+  linha de log do pedido. Um `x-request-id` bem formado enviado pelo cliente
+  (8 a 64 letras, dígitos, `-` ou `_`) é mantido. O 500 traz o mesmo valor em
+  `requestId`. Na web, o relay devolve o cabeçalho ao navegador: copie-o da
+  aba _Network_ do DevTools e procure nos logs da API.
+- O id também vai para o outbox como id de correlação: em
+  `GET /health/dead-letter`, o `correlationId` de uma entrega que falhou leva
+  ao pedido que a publicou.
+- Credenciais saem censuradas por nome (`src/shared/logging/logger.ts`), e o
+  log mostra o padrão da rota, não a URL crua: token de link e URL assinada
+  não aparecem.
+
+### Saúde: o que cada estado quer dizer
+
+Sem autenticação, para conferir uma réplica:
+
+```bash
+curl -s http://localhost:3333/health/liveness   # {"status":"alive","version":"dev","commit":null}
+curl -s http://localhost:3333/health/readiness  # {"status":"ready","ready":true}
+curl -s http://localhost:3333/health            # banco e Redis, com a latência
+```
+
+| Rota                                | Estados                                                                                                                                                                                                                                                                                                                                                                             | O que fazer                                                                                                                                                                |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health/liveness`              | `alive` (200), com `version` e `commit` do build (`dev` e `null` em desenvolvimento). Não toca dependência nenhuma                                                                                                                                                                                                                                                                  | sem resposta, o processo travou e o Swarm o reinicia; um `commit` antigo depois de um deploy quer dizer que a réplica nova não subiu                                       |
+| `GET /health/readiness`             | `ready` (200); `not ready` (503: o banco não respondeu em até 3 s, numa conexão própria); `draining` (503: a réplica recebeu SIGTERM e está saindo do balanceamento). O Redis fica de fora de propósito                                                                                                                                                                             | `not ready`: confira `DATABASE_URL` e o Postgres; `draining` é normal durante um deploy                                                                                    |
+| `GET /health`                       | `healthy`; `degraded` (200: o Redis caiu e a API serve sem rate limit e sem tempo real entre réplicas); `unhealthy` (503: o banco caiu)                                                                                                                                                                                                                                             | `degraded`: confira `REDIS_URL` e o Redis; a causa vai para o log (`health probe failed`), nunca para a resposta                                                           |
+| `GET /health/providers` (MASTER)    | por provedor: `ok`; `warning` (funciona com ressalva; com `transient: true`, instabilidade passageira); `error` (configurado e quebrado); `not_configured` (faltam as variáveis de `missing_env`); `disabled` (desligado de propósito ou fora de produção). `attempts` e `failure_kind` (`timeout`, `network`, `http_5xx`, `throttled`, `invalid_response`) dizem o que a sonda viu | leia `message`; `refresh=true` sonda de novo (no máximo a cada 5 s); as linhas `provider probe attempt failed` do log trazem o código de rede (`EAI_AGAIN`, `ECONNRESET`…) |
+| `GET /health/metrics` (MASTER)      | números, não estados: filas e atraso do outbox, workers, crons, pool, sockets, Redis, certificado                                                                                                                                                                                                                                                                                   | backlog que só cresce aponta a fila parada; `runtime.prisma_pool.waiting` acima de 0 é pool esgotado                                                                       |
+| `GET /health/dead-letter*` (MASTER) | o que esgotou as tentativas                                                                                                                                                                                                                                                                                                                                                         | leia `lastError`; reenvie por id (`POST /health/dead-letter/replay` e `POST /health/dead-letter/events/replay`)                                                            |
+
+A aba Sistema do `/admin` mostra os mesmos provedores com nomes de estado em
+português (Operacional, Instável, Atenção, Com erro, Não configurado,
+Desligado e Não verificado). O caminho de um pedido, da borda ao banco, está
+no [passo 1 do tour](./docs/arquitetura-tour.md#passo-1-de-11--o-caminho-de-uma-requisição).
 
 ## Documentação das rotas
 
@@ -501,13 +620,15 @@ da web.
 
 | Rota                                                                                       | Para quê                                                                                        |
 | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `GET /health/liveness`                                                                     | o processo está vivo (sonda do Swarm)                                                           |
+| `GET /health`                                                                              | banco e Redis: `healthy`, `degraded` (Redis fora, 200) ou `unhealthy` (banco fora, 503)         |
+| `GET /health/liveness`                                                                     | o processo está vivo (sonda do Swarm), com o commit do build                                    |
 | `GET /health/readiness`                                                                    | pode receber tráfego (sonda dos monitores; vira 503 durante o desligamento)                     |
 | `GET /health/metrics`                                                                      | filas, workers, crons, pool, provedores, sockets, Redis, certificado do comprovante (só MASTER) |
 | `GET /health/providers`                                                                    | prontidão de cada provedor, sem enviar nada (só MASTER)                                         |
-| `GET /health/dead-letter`, `/health/dead-letter/events`, `POST /health/dead-letter/replay` | o que esgotou as tentativas, e o reenvio                                                        |
+| `GET /health/dead-letter`, `/health/dead-letter/events`, `POST /health/dead-letter/replay` | o que esgotou as tentativas, e o reenvio por id (eventos: `POST …/events/replay`); só MASTER    |
 
-A aba "Sistema" do `/admin` na web mostra esses números. O heartbeat de
+O que cada estado quer dizer está em [Depuração](#depuração). A aba
+"Sistema" do `/admin` na web mostra esses números. O heartbeat de
 operações avisa o monitor externo a cada minuto; o silêncio dele é o alerta
 ([`docs/deploy.md`](./docs/deploy.md#20-alertas-e-monitoramento)). Os logs são
 JSON (pino), uma linha por requisição com `reqId`, `userId`, `businessId` e a
@@ -531,19 +652,29 @@ versão do cliente, sem segredo e sem URL assinada.
 | PDF do comprovante sem assinatura                 | certificado ausente, vencido ou senha errada                                  | veja o estado em `/health/metrics` e o log do boot                                                                                          |
 | E2E cai com _napi panic_ no Windows               | muitos arquivos E2E na mesma execução                                         | rode em lotes de até 8 arquivos                                                                                                             |
 | Boot de produção recusa banco vazio               | Database novo sem migrations                                                  | instalação nova: `ALLOW_EMPTY_DATABASE_BOOTSTRAP=true` uma única vez; com dados, restaure o dump (`docs/deploy.md`, "Backup e restauração") |
+| Depurador não conecta (porta 9229 ocupada)        | `NODE_OPTIONS=--inspect` com o `tsx`, ou outro processo na porta              | `npx tsx watch --inspect src/server.ts` (veja [Depuração](#depuração)); outra porta: `--inspect=9230`                                       |
+| Usuário relata um erro com `requestId`            | o `requestId` é o `x-request-id` do pedido                                    | procure o valor nos logs: toda linha do pedido tem o mesmo `reqId`                                                                          |
 | Promoção falha com "não existe" no GHCR           | o commit não passou pelo staging, ou o merge foi squash/rebase                | leve o commit a `staging`, espere o verde e faça merge commit                                                                               |
 | Deploy "pulado" no resumo do run                  | o environment do GitHub ainda não tem os secrets do Dokploy                   | `docs/deploy.md`, "Configurar o GitHub"                                                                                                     |
 
 ## Decisões e limites conhecidos
 
-- **Sem broker** (ADR 0001): Postgres é a fila; broker só por gatilho medido em
-  `/health/metrics`.
-- **Redis descartável** (ADR 0002): sem cache, sessão, lock nem fila nele.
-- **Workers no mesmo processo** (ADR 0004), separáveis com a mesma imagem
-  (`WORKERS_ENABLED=false`) só por gatilho medido.
-- **Tempo real _at-most-once_** (ADR 0007): a verdade está no banco.
-- **IA sem provedor externo** (ADR 0010): `AI_PROVIDER=anthropic` impede o
-  boot.
+- **Sem broker** ([ADR 0001](./docs/adr/0001-filas-e-mensageria.md)): Postgres
+  é a fila; broker só por gatilho medido em `/health/metrics`.
+- **Redis descartável** ([ADR 0002](./docs/adr/0002-redis-descartavel.md)):
+  sem sessão, lock nem fila nele; cache só das fotos curtas de plataforma do
+  MASTER.
+- **Workers no mesmo processo**
+  ([ADR 0004](./docs/adr/0004-workers-no-mesmo-processo.md)), separáveis com a
+  mesma imagem (`WORKERS_ENABLED=false`) só por gatilho medido.
+- **Tempo real _at-most-once_**
+  ([ADR 0007](./docs/adr/0007-tempo-real-at-most-once.md)): a verdade está no
+  banco.
+- **IA sem provedor externo** ([ADR 0010](./docs/adr/0010-ia-local.md)):
+  `AI_PROVIDER=anthropic` impede o boot.
+- **Prisma 6.1 por enquanto** ([ADR 0011](./docs/adr/0011-orm-prisma-6-7-8.md)):
+  o 7.10.1 passou nos gates na segunda tentativa e entra numa publicação
+  separada; o 8 ainda não saiu; o 6 sai do suporte de segurança em 19/11/2026.
 - **Sem Turnstile na API**, exceto no formulário público: exigir no login
   quebraria o app.
 - **Sem Compose nem template no Dokploy** para staging e produção; o
@@ -552,9 +683,9 @@ versão do cliente, sem segredo e sem URL assinada.
   está a definir (previsto `api.intrajetto.com`).
 - **Adaptador multipart temporário** para o binário antigo do app (remover
   quando a linha de contrato antigo ficar 14 dias sem aparecer).
-- O resumo de cada ADR está em
-  [`docs/arquitetura.md`](./docs/arquitetura.md#decisões-adrs); o texto
-  integral dos ADRs não está versionado neste repositório.
+- Cada ADR tem o seu arquivo em [`docs/adr/`](./docs/adr/README.md), com o
+  índice; o resumo também está em
+  [`docs/arquitetura.md`](./docs/arquitetura.md#decisões-adrs).
 
 ## Licença
 

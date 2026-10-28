@@ -27,6 +27,7 @@ import {
 } from "../../dtos/vehicle-checklist-dto";
 
 import type { SortOrder } from "@/shared/pagination/list-query";
+import { matchesIdSearch } from "@/shared/pagination/id-search";
 import {
   CHECKLIST_CONDITIONS,
   CHECKLIST_SORT_FALLBACK,
@@ -36,9 +37,6 @@ import {
   type ChecklistSortKey,
   type NamedCount,
 } from "../../usecases/list-vehicle-checklist/checklist-list";
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Comparable = string | number | null | undefined;
 
@@ -366,9 +364,7 @@ class InMemoryVehicleChecklistRepository
 
     if (!term) return true;
 
-    if (UUID_PATTERN.test(term) && checklist.id.toLowerCase() === term) {
-      return true;
-    }
+    if (matchesIdSearch(checklist.id, term)) return true;
 
     const vehicle = this.vehicleInfo[checklist.vehicleId];
 

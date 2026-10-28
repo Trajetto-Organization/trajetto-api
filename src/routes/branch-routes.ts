@@ -19,6 +19,7 @@ import {
   branchResponses,
   branchSchemas,
 } from "./documentation/branch-documentation";
+import { authBusyResponse } from "./documentation/common-responses";
 import {
   ndjsonCursor,
   ndjsonList,
@@ -162,6 +163,7 @@ async function branchRoutes(app: FastifyInstance) {
           404: branchResponses.branchOrBusinessNotFound,
           409: branchResponses.branchInUse,
           500: branchResponses.internalServerError,
+          503: authBusyResponse,
         },
       },
     },
@@ -188,6 +190,7 @@ async function branchRoutes(app: FastifyInstance) {
           404: branchResponses.branchOrBusinessNotFound,
           409: branchResponses.branchDeletionConflict,
           500: branchResponses.internalServerError,
+          503: authBusyResponse,
         },
       },
     },

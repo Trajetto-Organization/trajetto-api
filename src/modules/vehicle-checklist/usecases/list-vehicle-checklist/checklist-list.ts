@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
+import { idSearchConditions } from "@/shared/pagination/id-search";
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import type { FacetCount } from "@/shared/pagination/list-meta";
 import type { SortOrder, SortSpec } from "@/shared/pagination/list-query";
@@ -67,9 +68,6 @@ interface ChecklistListFilters {
 
 type ChecklistFacet = "condition" | "branch" | "vehicle";
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** The listing's `where`, optionally without one facet (disjunctive counts). */
 function checklistListWhere(
   filters: ChecklistListFilters,
@@ -96,7 +94,8 @@ function checklistListWhere(
   if (term) {
     and.push(
       buildSearchOr<Prisma.VehicleChecklistWhereInput>([
-        ...(UUID_PATTERN.test(term) ? [{ id: term }] : []),
+        // The id shown (tail) or copied (whole): shared/pagination/id-search.
+        ...idSearchConditions(term),
         { notes: { contains: term, mode: "insensitive" } },
         { vehicle: { description: { contains: term, mode: "insensitive" } } },
         { vehicle: { license_plate: { contains: term, mode: "insensitive" } } },

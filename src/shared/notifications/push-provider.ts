@@ -41,6 +41,28 @@ interface PushContent {
   title: string;
   body: string;
   data: Record<string, unknown>;
+
+  /**
+   * One id per logical message: a second send under the same key replaces
+   * the first instead of adding a twin to the tray. The pipeline passes the
+   * notification delivery id, which is unique per (event, recipient,
+   * channel), so only copies of the SAME delivery collapse — a redelivery
+   * after a crash between Expo's accept and our UPDATE, or a dead-letter
+   * replay. Expo does not deduplicate on its own.
+   *
+   * Sent as `tag` to every device (Android: replaces a notification already
+   * displayed; iOS ignores it) and as `collapseId` to iPhones only (APNs
+   * apns-collapse-id: replaces the displayed one) — docs.expo.dev, "Message
+   * request format".
+   *
+   * Never `collapseId` on Android: Expo maps it to FCM's collapse_key, and
+   * FCM stores at most four collapse keys per device while it is offline,
+   * dropping the rest with no say in which (firebase.google.com, "Collapsible
+   * and non-collapsible messages"). A key per delivery would turn every push
+   * collapsible: a driver out of signal who is sent five notifications would
+   * get four. Without it they stay non-collapsible (up to 100 stored).
+   */
+  collapseKey?: string;
 }
 
 interface PushSendResult {
@@ -61,6 +83,9 @@ interface PushSendResult {
 async function sendExpoPushMessages(
   tokens: string[],
   content: PushContent,
+
+  /** Which of `tokens` are iPhones: only they get `collapseId` (above). */
+  iosTokens: ReadonlySet<string> = new Set(),
 ): Promise<PushSendResult> {
   const messages = tokens.map((token) => ({
     to: token,
@@ -70,6 +95,10 @@ async function sendExpoPushMessages(
     sound: "default",
     channelId: "default",
     priority: "high",
+    ...(content.collapseKey ? { tag: content.collapseKey } : {}),
+    ...(content.collapseKey && iosTokens.has(token)
+      ? { collapseId: content.collapseKey }
+      : {}),
   }));
 
   // Timed per call for /health/metrics (latency and error rate per channel).

@@ -163,10 +163,14 @@ const DRIVER_OWN: Record<string, string> = {
 
 /**
  * MASTER-only platform operations whose ids are not a company's rows (the
- * dead-letter replay takes notification job ids of every company). Their
- * body still refuses a businessId; there is no company reference to probe.
+ * dead-letter replays take notification delivery ids and outbox event ids of
+ * every company). Their body still refuses a businessId; there is no company
+ * reference to probe.
  */
-const PLATFORM_EDITS = new Set(["POST /health/dead-letter/replay"]);
+const PLATFORM_EDITS = new Set([
+  "POST /health/dead-letter/replay",
+  "POST /health/dead-letter/events/replay",
+]);
 
 /** Edits with no body at all: nothing in them can name a company. */
 const NO_BODY = [

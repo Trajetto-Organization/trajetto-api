@@ -121,6 +121,15 @@ const CARRIER_VEHICLES: VehicleSeed[] = [
     ...quiet,
   },
   {
+    // No date means no next revision to compare: the mileage is not read.
+    label: "sem registro, km muito acima do intervalo",
+    last_maintenance_date: null,
+    maintenance_interval_months: 6,
+    current_mileage: 50000,
+    last_maintenance_mileage: null,
+    maintenance_interval_km: 10000,
+  },
+  {
     // 31/08 + 1 month is 30/09, the end of September, not 01/10.
     label: "fim de mês",
     last_maintenance_date: manaus(8, 31, 12),
@@ -149,8 +158,9 @@ const OTHER_VEHICLES: VehicleSeed[] = [
 
 const EXPECTED = {
   overdue: 2, // venceu ontem; atrasada pelo km
-  pending: 5, // vence hoje; vence amanhã; vence em 30 dias; sem registro; fim de mês
+  pending: 6, // vence hoje; vence amanhã; vence em 30 dias; os dois sem registro; fim de mês
   recent: 2, // vence em 31 dias; em dia
+  unrecorded: 2, // inside pending: the two without a record
 };
 
 const twin = new InMemoryDashboardRepository();
@@ -303,8 +313,13 @@ describe("the fleet maintenance card, in the company's day", () => {
     const memory = await twin.getMaintenanceStats(params, CARRIER);
 
     // Late by 01/10: venceu ontem, vence hoje, vence amanhã, fim de mês, km.
-    // Within 30 days (up to 31/10): 30 and 31 days, plus the unrecorded one.
-    expect(database).toEqual({ overdue: 5, pending: 3, recent: 1 });
+    // Within 30 days (up to 31/10): 30 and 31 days, plus the two unrecorded.
+    expect(database).toEqual({
+      overdue: 5,
+      pending: 4,
+      recent: 1,
+      unrecorded: 2,
+    });
     expect(memory).toEqual(database);
   });
 
@@ -316,6 +331,7 @@ describe("the fleet maintenance card, in the company's day", () => {
         overdue: 2,
         pending: 0,
         recent: 0,
+        unrecorded: 0,
       });
 
       expect(await repository.countVehiclesByStatus(OTHER)).toEqual({

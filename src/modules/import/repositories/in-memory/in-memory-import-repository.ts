@@ -152,37 +152,72 @@ class InMemoryImportRepository implements IImportRepository {
       )
       .slice(0, limit);
 
+    // The same choice as the real one: zero created is nothing to undo.
     for (const entry of stale) {
-      const imported = this.deliveries.filter(
-        (delivery) =>
-          delivery.importId === entry.id &&
-          delivery.businessId === entry.businessId,
-      ).length;
-
-      entry.status = "COMPLETED";
-      entry.imported = imported;
-      entry.duplicated = 0;
-      entry.invalid = 1;
-      entry.report = {
-        imported,
-        duplicated: 0,
-        invalid: 1,
-        unknownHeaders: [],
-        rows: [
-          {
-            line: 1,
-            outcome: "invalid",
-            recipient_name: null,
-            reference: null,
-            message:
-              "Importação interrompida: o servidor parou antes de terminar o arquivo.",
-          },
-        ],
-        routes: [],
-      };
+      this.closeAsInterrupted(
+        entry,
+        this.importedBy(entry) === 0
+          ? "Importação interrompida: o servidor parou antes de terminar o arquivo e nenhuma entrega foi criada. Envie o arquivo de novo."
+          : "Importação interrompida: o servidor parou antes de terminar o arquivo. Estorne esta importação e envie o arquivo de novo.",
+      );
     }
 
     return stale.length;
+  }
+
+  async closeInterruptedImport(
+    importId: string,
+    businessId: string,
+    stage: "not-started" | "stopped",
+  ): Promise<boolean> {
+    const found = this.findRecord(importId, businessId);
+
+    if (found?.status !== "IN_PROGRESS") return false;
+
+    const imported = this.importedBy(found);
+
+    // The same choice as the real one: "nothing was created" only when true.
+    this.closeAsInterrupted(
+      found,
+      stage === "not-started" && imported === 0
+        ? "Importação não iniciada: o servidor reiniciou antes de processar o arquivo e nenhuma entrega foi criada. Envie o arquivo de novo."
+        : "Importação interrompida pelo reinício do servidor antes de terminar o arquivo. Estorne esta importação e envie o arquivo de novo.",
+    );
+
+    return true;
+  }
+
+  private importedBy(entry: ImportRecord): number {
+    return this.deliveries.filter(
+      (delivery) =>
+        delivery.importId === entry.id &&
+        delivery.businessId === entry.businessId,
+    ).length;
+  }
+
+  private closeAsInterrupted(entry: ImportRecord, message: string): void {
+    const imported = this.importedBy(entry);
+
+    entry.status = "COMPLETED";
+    entry.imported = imported;
+    entry.duplicated = 0;
+    entry.invalid = 1;
+    entry.report = {
+      imported,
+      duplicated: 0,
+      invalid: 1,
+      unknownHeaders: [],
+      rows: [
+        {
+          line: 1,
+          outcome: "invalid",
+          recipient_name: null,
+          reference: null,
+          message,
+        },
+      ],
+      routes: [],
+    };
   }
 
   async findImportById(
@@ -355,12 +390,20 @@ class InMemoryImportRepository implements IImportRepository {
       }
     } catch (error) {
       // Like the real one: our lease goes, the progress stays.
-      const record = this.findRecord(importId, businessId);
-
-      if (record && sameLease(record, lease)) record.reversal_started_at = null;
+      await this.releaseReversal(importId, businessId, lease);
 
       throw error;
     }
+  }
+
+  async releaseReversal(
+    importId: string,
+    businessId: string,
+    lease: Date,
+  ): Promise<void> {
+    const record = this.findRecord(importId, businessId);
+
+    if (record && sameLease(record, lease)) record.reversal_started_at = null;
   }
 
   private findRecord(importId: string, businessId: string) {

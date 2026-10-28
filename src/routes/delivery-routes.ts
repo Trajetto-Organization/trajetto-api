@@ -735,7 +735,7 @@ async function deliveryRoutes(app: FastifyInstance) {
           429: errorResponse,
           500: proofDocumentResponses.internalServerError,
           503: errorResponse.describe(
-            "A fila de geração está cheia ou a geração passou do tempo (PROOF_RENDER_BUSY, PROOF_RENDER_TIMEOUT, PROOF_RENDER_UNAVAILABLE), ou a assinatura ICP-Brasil falhou com o certificado válido (PROOF_SIGNING_FAILED; nada foi gravado); tente de novo em instantes.",
+            "A fila de geração está cheia ou a geração passou do tempo (PROOF_RENDER_BUSY, PROOF_RENDER_TIMEOUT, PROOF_RENDER_UNAVAILABLE), ou a assinatura ICP-Brasil falhou com o certificado válido (PROOF_SIGNING_FAILED; nada foi gravado), ou o armazenamento de arquivos não respondeu ao ler a foto ou a assinatura, ou ao gravar o PDF (STORAGE_UNAVAILABLE; nada foi gravado); tente de novo em instantes.",
           ),
         },
       },

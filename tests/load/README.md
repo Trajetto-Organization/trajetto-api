@@ -441,9 +441,10 @@ todas as linhas viravam FAILED sem nenhum POST. O script
 `tests/E2E/queue-claim-concurrency.test.ts`, no vitest, para as quatro filas
 (webhook_delivery, domain_outbox_event, notification_delivery e
 ai_analysis_request): uma transação segura linhas como uma réplica no meio do
-claim e o claim precisa pulá-las sem esperar. Nas três primeiras, várias
-instâncias também drenam o mesmo backlog com cada linha entregue exatamente uma
-vez; a ai_analysis_request ainda não tem esse dreno paralelo. Tirar o `SKIP LOCKED`
+claim e o claim precisa pulá-las sem esperar. Nas quatro, várias instâncias
+também drenam o mesmo backlog com cada linha entregue exatamente uma vez — na
+ai_analysis_request, cada foto lida uma vez e cada unidade de quota consumida
+uma vez (desde 28/10/2026). Tirar o `SKIP LOCKED`
 de qualquer claim reprova o arquivo. A falha aqui seria silenciosa do nosso
 lado — o banco ficaria consistente e o CLIENTE é que receberia o mesmo evento
 duas vezes.

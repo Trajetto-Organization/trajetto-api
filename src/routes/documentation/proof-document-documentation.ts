@@ -12,7 +12,7 @@ import {
   verifyProofParamsSchema,
 } from "@/schemas/proof-document-schema";
 
-import { errorResponse } from "./common-responses";
+import { codedRefusal, errorResponse } from "./common-responses";
 
 const isoDateTime = z.union([z.string(), z.date()]);
 
@@ -240,7 +240,17 @@ const proofDocumentResponses = {
    * message-template routes that still send `{ message }`.
    */
   proofDocumentError: errorResponse.describe(
-    "Recusa com `code` estável. 400: VALIDATION_ERROR; 403: PERMISSION_DENIED (inclui `regenerate=true` sem escrita em `delivery_manage`), MODULE_NOT_ENABLED, TENANT_ACCESS_DENIED, TENANT_INACTIVE (`regenerate=true` numa empresa desativada); 404: DELIVERY_NOT_FOUND (inexistente, de outra empresa ou, para o motorista, de outro motorista), USER_NOT_FOUND (o usuário da sessão deixou de existir); 409: DELIVERY_NOT_SETTLED (a entrega ainda não terminou); 503: PROOF_RENDER_BUSY, PROOF_RENDER_TIMEOUT, PROOF_RENDER_UNAVAILABLE, PROOF_SIGNING_FAILED (a assinatura falhou com o certificado válido; nada foi gravado, tente de novo).",
+    "Recusa com `code` estável. 400: VALIDATION_ERROR; 403: PERMISSION_DENIED (inclui `regenerate=true` sem escrita em `delivery_manage`), MODULE_NOT_ENABLED, TENANT_ACCESS_DENIED, TENANT_INACTIVE (`regenerate=true` numa empresa desativada); 404: DELIVERY_NOT_FOUND (inexistente, de outra empresa ou, para o motorista, de outro motorista), USER_NOT_FOUND (o usuário da sessão deixou de existir); 409: DELIVERY_NOT_SETTLED (a entrega ainda não terminou); 503: PROOF_RENDER_BUSY, PROOF_RENDER_TIMEOUT, PROOF_RENDER_UNAVAILABLE, PROOF_SIGNING_FAILED (a assinatura falhou com o certificado válido; nada foi gravado, tente de novo), STORAGE_UNAVAILABLE (o armazenamento não respondeu ao ler a foto ou a assinatura, ou ao gravar o PDF; nada foi gravado, tente de novo).",
+  ),
+
+  /**
+   * GET /public/verify-proof: storage that did not answer is a 503 to retry,
+   * never `intact: false` (UploadService.readObject); the database being
+   * down is the error handler's 503.
+   */
+  verifyProofUnavailable: codedRefusal(
+    "Não foi possível conferir agora. STORAGE_UNAVAILABLE: o armazenamento não respondeu ao ler o arquivo — o documento pode estar íntegro, e isso nunca é respondido como `intact: false`. SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o `retry-after` e repita.",
+    ["STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE"],
   ),
 
   internalServerError: z.object({

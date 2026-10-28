@@ -314,7 +314,7 @@ const listRoutesSchema = listPagesSchema.extend({
     .string()
     .optional()
     .describe(
-      "Nome da rota, destino, nome do motorista ou código (“12”, “Rota 12”, “#12”). Números longos, como uma chave de NF-e, não são lidos como código.",
+      "Nome da rota, destino, nome do motorista, código (“12”, “Rota 12”, “#12”) ou ID da rota (inteiro ou só o final que a tabela mostra, com pelo menos 8 caracteres hexadecimais). Números longos, como uma chave de NF-e, não são lidos como código.",
     ),
 });
 

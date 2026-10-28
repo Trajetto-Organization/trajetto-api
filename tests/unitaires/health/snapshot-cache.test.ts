@@ -180,6 +180,140 @@ describe("a snapshot cache", () => {
     });
   });
 
+  /**
+   * §12: a report that caught a passing failure must not be pinned as long
+   * as a clean one, on every replica: the TTL is decided by the value.
+   */
+  describe("with a TTL decided by the value", () => {
+    const ttlOf = (value: string) => (value === "blip" ? 5_000 : 30_000);
+
+    it("serves a bad value briefly and a good one for the long TTL", async () => {
+      const time = clock();
+      const compute = vi
+        .fn<[], Promise<string>>()
+        .mockResolvedValueOnce("blip")
+        .mockResolvedValue("healthy");
+      const cache = new SnapshotCache({
+        name: "test",
+        ttlMs: ttlOf,
+        compute,
+        now: time.now,
+      });
+
+      expect(await cache.read()).toMatchObject({ value: "blip" });
+
+      time.advance(4_999);
+      expect(await cache.read()).toMatchObject({
+        value: "blip",
+        cached: true,
+      });
+
+      time.advance(1);
+      expect(await cache.read()).toMatchObject({
+        value: "healthy",
+        cached: false,
+      });
+
+      time.advance(29_999);
+      expect(await cache.read()).toMatchObject({
+        value: "healthy",
+        cached: true,
+      });
+      expect(compute).toHaveBeenCalledTimes(2);
+    });
+
+    it("writes each copy to the shared store with its own TTL", async () => {
+      const writes: Array<{ value: string; ttlMs: number }> = [];
+      const store: SnapshotStore = {
+        read: async () => null,
+        write: async (_key, value, ttlMs) => {
+          writes.push({ value, ttlMs });
+        },
+      };
+      const time = clock();
+      const cache = new SnapshotCache({
+        name: "test",
+        ttlMs: ttlOf,
+        compute: vi
+          .fn<[], Promise<string>>()
+          .mockResolvedValueOnce("blip")
+          .mockResolvedValue("healthy"),
+        store,
+        now: time.now,
+      });
+
+      await cache.read();
+      time.advance(5_000);
+      await cache.read();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(writes.map((write) => write.ttlMs)).toEqual([5_000, 30_000]);
+      expect(JSON.parse(writes[0].value)).toMatchObject({
+        ttlMs: 5_000,
+        value: "blip",
+      });
+    });
+
+    it("honours the TTL another replica stored, and judges an older copy by its value", async () => {
+      const time = clock();
+      const store = memoryStore();
+      const key = `snapshot:${env.APP_ENV}:test`;
+      const compute = vi.fn(async () => "fresh");
+      const cache = () =>
+        new SnapshotCache({
+          name: "test",
+          ttlMs: ttlOf,
+          compute,
+          store,
+          now: time.now,
+        });
+
+      // Written by a replica that knew the TTL.
+      store.entries.set(
+        key,
+        JSON.stringify({ at: time.now(), ttlMs: 5_000, value: "healthy" }),
+      );
+      time.advance(5_000);
+      expect(await cache().read()).toMatchObject({
+        value: "fresh",
+        cached: false,
+      });
+
+      // Written before the TTL travelled with the copy (a rolling deploy).
+      store.entries.set(key, JSON.stringify({ at: time.now(), value: "blip" }));
+      time.advance(4_999);
+      expect(await cache().read()).toMatchObject({
+        value: "blip",
+        cached: true,
+      });
+      time.advance(1);
+      expect(await cache().read()).toMatchObject({
+        value: "fresh",
+        cached: false,
+      });
+    });
+
+    it("still shares one computation between concurrent readers", async () => {
+      let finish: (value: string) => void = () => {};
+      const compute = vi.fn(
+        () => new Promise<string>((resolve) => (finish = resolve)),
+      );
+      const cache = new SnapshotCache({ name: "test", ttlMs: ttlOf, compute });
+
+      const readers = Promise.all([cache.read(), cache.read(), cache.read()]);
+
+      await new Promise((resolve) => setImmediate(resolve));
+      finish("blip");
+
+      expect((await readers).map((answer) => answer.value)).toEqual([
+        "blip",
+        "blip",
+        "blip",
+      ]);
+      expect(compute).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("caches nothing when the computation fails", async () => {
     const compute = vi
       .fn<[], Promise<string>>()

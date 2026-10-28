@@ -16,6 +16,7 @@ import {
   shutdownWorkers,
 } from "./workers";
 
+import { importQueue } from "./modules/import/services/import-queue";
 import { markDraining } from "./shared/lifecycle/draining";
 import { runShutdown } from "./shared/lifecycle/shutdown";
 import { runStartup } from "./shared/lifecycle/startup";
@@ -65,6 +66,18 @@ const SHUTDOWN_TIMEOUT_MS = 35_000;
  */
 const DRAIN_MS = env.NODE_ENV === "production" ? 12_000 : 0;
 
+/**
+ * How long the running spreadsheet upload may keep going after SIGTERM
+ * before the import queue asks it to stop at its next row (then up to
+ * IMPORT_STOP_GRACE_MS, 5 s, to close its record, and
+ * IMPORT_HANDBACK_WRITE_MS, 2 s, for the hand-back writes). Counted from
+ * SIGTERM and overlapping the drain, so the whole import step ends by 22 s,
+ * leaving the workers their deadline (10 s; 12 s for the webhook
+ * dispatcher) inside the 35 s ceiling. Zero outside production, like
+ * DRAIN_MS.
+ */
+const IMPORT_DRAIN_GRACE_MS = env.NODE_ENV === "production" ? 15_000 : 0;
+
 async function gracefulShutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -90,6 +103,7 @@ async function gracefulShutdown() {
     await runShutdown({
       markDraining,
       drainMs: DRAIN_MS,
+      drainImports: () => importQueue.drain({ graceMs: IMPORT_DRAIN_GRACE_MS }),
       closeRealtime: closeRealtimeConnections,
       closeHttp: () => app.close(),
       stopWorkers: shutdownWorkers,

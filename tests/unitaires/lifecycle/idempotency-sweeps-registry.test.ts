@@ -38,6 +38,8 @@ describe("the idempotency sweeps", () => {
   it.each([
     // A proof's AI reading whose post-commit request was lost (IDEMP-08).
     "reconcile-proof-analysis",
+    // The same for a fuelling's odometer and a checklist's photos.
+    "reconcile-record-analysis",
     // An upload left IN_PROGRESS by a process that died (IDEMP-10).
     "close-abandoned-imports",
   ])("%s is scheduled", (name) => {

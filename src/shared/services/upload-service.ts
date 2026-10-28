@@ -138,22 +138,106 @@ const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
   "audio/aac": "aac",
 };
 
+/**
+ * Per-attempt bounds of the R2 client.
+ *
+ * The client used to be built with none, and in @smithy/node-http-handler
+ * 4.x every timeout defaults to 0 — "wait forever". An R2 that accepted the
+ * connection and never answered held the HeadObject of an upload
+ * confirmation, and the HTTP request around it, for as long as the socket
+ * lived.
+ *
+ * `requestTimeout` alone is not a bound: in this handler it only logs a
+ * warning unless `throwOnRequestTimeout` is set (dist-cjs setRequestTimeout),
+ * which is why it is set below. `socketTimeout` covers a body that stalls
+ * after the headers arrived.
+ */
+const R2_CLIENT_TIMEOUTS = {
+  /** TCP and TLS handshake. */
+  connectionTimeoutMs: 5_000,
+
+  /** From the request's start to the response headers, per attempt. */
+  requestTimeoutMs: 15_000,
+
+  /** Silence in either direction, per attempt (a body that stopped). */
+  socketTimeoutMs: 15_000,
+
+  /**
+   * The SDK default, written down so it is a decision: one try and two
+   * retries on a timeout, a 5xx or throttling. The deadlines below cap the
+   * total, retries included.
+   */
+  maxAttempts: 3,
+};
+
+type R2ClientTimeouts = typeof R2_CLIENT_TIMEOUTS;
+
+/**
+ * Whole-operation deadlines, every attempt and the body included, passed as
+ * an AbortSignal: the per-attempt bounds above multiply by the attempts, and
+ * a slow trickle of bytes never trips an idle timeout.
+ */
+const R2_DEADLINES_MS = {
+  /** HeadObject on the request path: confirming each presigned upload. */
+  head: 10_000,
+
+  /** A body in or out: the proof PDF, the photos embedded into it. */
+  transfer: 30_000,
+
+  /** Deletes and listings, from cleanups and the orphan collector. */
+  housekeeping: 30_000,
+};
+
+type R2Deadlines = typeof R2_DEADLINES_MS;
+
+/**
+ * The R2 client with its bounds. Presigning is unaffected: getSignedUrl signs
+ * locally with the credentials and the endpoint, and never touches the
+ * request handler.
+ */
+function createR2Client(
+  r2: {
+    accessKeyId: string;
+    secretAccessKey: string;
+    endpoint?: string;
+    forcePathStyle?: boolean;
+  },
+  timeouts: R2ClientTimeouts = R2_CLIENT_TIMEOUTS,
+): S3Client {
+  return new S3Client({
+    credentials: {
+      accessKeyId: r2.accessKeyId,
+      secretAccessKey: r2.secretAccessKey,
+    },
+    endpoint: r2.endpoint,
+    forcePathStyle: r2.forcePathStyle,
+    region: "auto",
+    maxAttempts: timeouts.maxAttempts,
+    requestHandler: {
+      connectionTimeout: timeouts.connectionTimeoutMs,
+      requestTimeout: timeouts.requestTimeoutMs,
+      throwOnRequestTimeout: true,
+      socketTimeout: timeouts.socketTimeoutMs,
+    },
+  });
+}
+
 @injectable()
 class UploadService {
   private s3?: S3Client;
 
+  /** Instance-level so a test can shorten them; production uses the table. */
+  private deadlines: R2Deadlines = R2_DEADLINES_MS;
+
   constructor() {
     if (uploadConfig.storage.type === "r2") {
-      this.s3 = new S3Client({
-        credentials: {
-          accessKeyId: uploadConfig.r2.accessKeyId,
-          secretAccessKey: uploadConfig.r2.secretAccessKey,
-        },
-        endpoint: uploadConfig.r2.endpoint,
-        forcePathStyle: uploadConfig.r2.forcePathStyle,
-        region: "auto",
-      });
+      this.s3 = createR2Client(uploadConfig.r2);
     }
+  }
+
+  /** One deadline over the whole call (see R2_DEADLINES_MS). */
+  private within(operation: keyof R2Deadlines): { abortSignal: AbortSignal } {
+    return { abortSignal: AbortSignal.timeout(this.deadlines[operation]) };
   }
 
   /**
@@ -186,6 +270,7 @@ class UploadService {
             Bucket: uploadConfig.r2.bucket,
             Key: normalizedFilePath,
           }),
+          this.within("housekeeping"),
         );
 
         return true;
@@ -251,6 +336,7 @@ class UploadService {
           StartAfter: startAfter,
           MaxKeys: maxKeys,
         }),
+        this.within("housekeeping"),
       );
 
       return (page.Contents ?? [])
@@ -592,6 +678,10 @@ class UploadService {
           Bucket: uploadConfig.r2.bucket,
           Key: key,
         }),
+        // On the request path: storage that does not answer becomes a 503 in
+        // seconds instead of a request held open. An abort carries no 404,
+        // so it lands on storageUnavailable below.
+        this.within("head"),
       );
     } catch (error) {
       throw isObjectMissing(error)
@@ -701,14 +791,30 @@ class UploadService {
         throw new AppError("R2 não foi configurado corretamente", 500);
       }
 
-      await this.s3.send(
-        new PutObjectCommand({
-          Bucket: uploadConfig.r2.bucket,
-          Key: normalizedKey,
-          Body: body,
-          ContentType: contentType,
-        }),
-      );
+      try {
+        await this.s3.send(
+          new PutObjectCommand({
+            Bucket: uploadConfig.r2.bucket,
+            Key: normalizedKey,
+            Body: body,
+            ContentType: contentType,
+          }),
+          this.within("transfer"),
+        );
+      } catch (error) {
+        // The deadline's AbortError, a timeout, a 5xx: the same 503 (with
+        // Retry-After) the read and the confirmation answer, instead of a
+        // bare 500 "Internal server error" logged as a bug.
+        log.warn(
+          {
+            key: normalizedKey,
+            error: error instanceof Error ? error.name : String(error),
+          },
+          "storage object could not be written",
+        );
+
+        throw storageUnavailable();
+      }
 
       return;
     }
@@ -730,21 +836,31 @@ class UploadService {
    * photo was purged is still a proof — the document says the photo is
    * missing, which is a true and useful thing to print, and refusing to build
    * the whole document over it would leave the customer with nothing.
+   *
+   * Only when it is GONE. Storage that did not answer (a timeout, a 5xx)
+   * throws STORAGE_UNAVAILABLE (503), for the reason isObjectMissing gives:
+   * read as null, a slow R2 printed "photo missing" into a proof PDF that is
+   * then stored for good, and made /verificar answer `intact: false` (the
+   * page's "Arquivo indisponível") for a document sitting whole in the
+   * bucket. A 503 is retried; a stored PDF cannot be taken back.
    */
   async readObject(key: string): Promise<Buffer | null> {
     const normalizedKey = this.extractFilePath(key);
 
-    try {
-      if (uploadConfig.storage.type === "r2") {
-        if (!this.s3) {
-          throw new AppError("R2 não foi configurado corretamente", 500);
-        }
+    if (uploadConfig.storage.type === "r2") {
+      if (!this.s3) {
+        throw new AppError("R2 não foi configurado corretamente", 500);
+      }
 
+      try {
         const result = await this.s3.send(
           new GetObjectCommand({
             Bucket: uploadConfig.r2.bucket,
             Key: normalizedKey,
           }),
+          // Also bounds the body read below: the abort destroys the request
+          // the body streams from.
+          this.within("transfer"),
         );
 
         const body = result.Body as
@@ -754,13 +870,29 @@ class UploadService {
         if (!body?.transformToByteArray) return null;
 
         return Buffer.from(await body.transformToByteArray());
-      }
+      } catch (error) {
+        if (isObjectMissing(error)) return null;
 
+        log.warn(
+          {
+            key: normalizedKey,
+            error: error instanceof Error ? error.name : String(error),
+          },
+          "storage object could not be read",
+        );
+
+        throw storageUnavailable();
+      }
+    }
+
+    try {
       return await fs.promises.readFile(
         path.join(uploadConfig.storage.localPath, normalizedKey),
       );
-    } catch {
-      return null;
+    } catch (error) {
+      if (isLocalFileMissing(error)) return null;
+
+      throw storageUnavailable();
     }
   }
 
@@ -821,4 +953,4 @@ class UploadService {
   }
 }
 
-export { UploadService };
+export { R2_CLIENT_TIMEOUTS, R2_DEADLINES_MS, UploadService, createR2Client };

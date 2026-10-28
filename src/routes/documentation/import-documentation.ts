@@ -7,6 +7,13 @@ import {
 } from "@/schemas/import-spreadsheet-schema";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
+import {
+  IMPORTS_RUNNING_PER_REPLICA,
+  IMPORTS_WAITING_PER_REPLICA,
+  IMPORT_RETRY_AFTER_SECONDS,
+} from "@/modules/import/services/import-queue";
+
+import { codedRefusal } from "./common-responses";
 
 /**
  * Prisma hands back Date objects and the zod serializer validates what the
@@ -221,6 +228,17 @@ const importResponses = {
       "IMPORT_NOT_FOUND (a importação não existe ou é de outra empresa — a mesma resposta), USER_NOT_FOUND (o usuário da sessão não existe mais) ou TENANT_NOT_FOUND (a empresa informada não existe).",
     ),
   codedError: z.object({ code: z.string(), message: z.string() }),
+
+  // The import queue's refusal (import-queue.ts `reserve`): a full replica,
+  // or one draining for a restart. Taken before anything is written.
+  importBusy: codedRefusal(
+    `IMPORT_BUSY: a fila de importações deste servidor não aceita mais trabalho agora — está cheia (${IMPORTS_RUNNING_PER_REPLICA} em processamento e até ${IMPORTS_WAITING_PER_REPLICA} aguardando, contando planilhas e estornos grandes) ou o servidor está reiniciando. Recusado antes de qualquer gravação. Espere o \`retry-after\` (${IMPORT_RETRY_AFTER_SECONDS} s) e repita o mesmo pedido.`,
+    ["IMPORT_BUSY"],
+  ),
+  reverseImportConflict: codedRefusal(
+    "IMPORT_ALREADY_REVERSED: o estorno desta importação já terminou (não removeria nada). IMPORT_IN_PROGRESS: a importação ainda está sendo processada; espere `status` sair de IN_PROGRESS para estorná-la.",
+    ["IMPORT_ALREADY_REVERSED", "IMPORT_IN_PROGRESS"],
+  ),
   internalServerError: z.object({
     message: z.string().default("Internal server error"),
   }),

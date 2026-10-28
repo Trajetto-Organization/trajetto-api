@@ -9,6 +9,7 @@ import {
   redisSnapshotStore,
   type SnapshotStore,
 } from "@/shared/cache/snapshot-cache";
+import { logger } from "@/shared/logging/logger";
 import { senderDomain } from "@/shared/providers/mail-provider/message-id";
 import { TEMPLATE_LANGUAGE } from "@/shared/providers/whatsapp-provider/implementations/meta-cloud-api-provider";
 import {
@@ -49,6 +50,17 @@ type ProviderKey =
 
 type DetailValue = string | number | boolean | null;
 
+/**
+ * Why a probe attempt failed, when the failure says nothing definitive about
+ * the provider: it may clear by itself on the next attempt.
+ */
+type ProbeFailureKind =
+  | "timeout"
+  | "network"
+  | "http_5xx"
+  | "throttled"
+  | "invalid_response";
+
 interface ProviderReadiness {
   key: ProviderKey;
   label: string;
@@ -68,6 +80,21 @@ interface ProviderReadiness {
   message: string;
   warnings: string[];
   details: Record<string, DetailValue>;
+
+  /** Probe attempts made (0: nothing was probed). */
+  attempts: number;
+
+  /**
+   * The verdict rests on a passing condition: an attempt failed by timeout,
+   * network, 5xx, 429 or an unreadable answer, or the answer was slow. Such
+   * a report is cached for seconds, not 30 s, and the next probe may differ.
+   * A definitive answer (a refused key, a missing bucket or domain) is never
+   * transient.
+   */
+  transient: boolean;
+
+  /** What the last failed attempt hit; null when no attempt failed. */
+  failure_kind: ProbeFailureKind | null;
 }
 
 interface ProviderReadinessReport {
@@ -108,6 +135,12 @@ interface ProofHealthLike {
   days_left: number | null;
 }
 
+/** Where the failed attempts go: structured fields, never a URL or a token. */
+interface ProbeLog {
+  warn(fields: Record<string, unknown>, message: string): void;
+  info(fields: Record<string, unknown>, message: string): void;
+}
+
 interface ReadinessDeps {
   env: ReadinessEnv;
   fetch: typeof fetch;
@@ -117,18 +150,54 @@ interface ReadinessDeps {
   proofHealth: () => ProofHealthLike;
   heartbeat: () => HeartbeatOutcome | null;
   now?: () => Date;
+
+  /** Deadline of each attempt (PROBE_ATTEMPT_TIMEOUT_MS). */
   timeoutMs?: number;
+
+  /** All the attempts of one provider (PROBE_BUDGET_MS). */
+  budgetMs?: number;
+
+  /** Pause before the second attempt (PROBE_RETRY_DELAY_MS). */
+  retryDelayMs?: number;
+
+  /** An answer at least this slow is degraded (PROBE_SLOW_MS). */
+  slowMs?: number;
+  log?: ProbeLog;
 }
 
 /**
- * A probe slower than this counts as unreachable; the page waits for all.
+ * Each attempt of a probe gets this long for DNS, TCP, TLS, the headers and
+ * the body.
  *
- * 2.5 s, not 5: every provider answers a healthy probe in well under a
- * second, and the Sistema screen waited for the slowest one — with the
- * templates and the OCR token checked one after the other, a single provider
- * having a bad minute held the page for 10–15 s.
+ * 3.5 s, not 2.5: the API runs on Alpine, whose resolver (musl) resends a
+ * lost DNS query after timeout / attempts = 5 s / 2 = 2.5 s. With 2.5 s per
+ * probe, one dropped UDP packet was a guaranteed "não respondeu", the
+ * "Com erro" that cleared on the next refresh. 3.5 s leaves room for that
+ * resend plus a handshake, and still lets a second attempt fit the budget.
  */
-const PROBE_TIMEOUT_MS = 2_500;
+const PROBE_ATTEMPT_TIMEOUT_MS = 3_500;
+
+/**
+ * Every attempt of one provider fits in this. The providers run side by
+ * side, so it is also about what the Sistema screen waits for when a provider
+ * is down (the web's relay gives up at 10 s).
+ */
+const PROBE_BUDGET_MS = 5_000;
+
+/** A second attempt is only started with at least this much budget left. */
+const PROBE_MIN_RETRY_MS = 1_000;
+
+/** Pause before the second attempt, so a reset is not retried in the same instant. */
+const PROBE_RETRY_DELAY_MS = 200;
+
+/** One attempt and, for a failure that may clear by itself, one more. */
+const PROBE_MAX_ATTEMPTS = 2;
+
+/**
+ * Answered, but this slowly: degraded. Every provider answers a healthy
+ * probe in well under a second.
+ */
+const PROBE_SLOW_MS = 2_000;
 
 /** A certificate this close to its end is a warning (the alert's 30 days). */
 const CERTIFICATE_WARN_DAYS = 30;
@@ -136,9 +205,11 @@ const CERTIFICATE_WARN_DAYS = 30;
 /** A heartbeat older than this on the replica that answered says nothing. */
 const HEARTBEAT_FRESH_MS = 5 * 60 * 1000;
 
-/** "2,5 s": the panel reads pt-BR, and 2.5 s is no longer a whole number. */
+const log: ProbeLog = logger.child({ component: "provider-readiness" });
+
+/** "3,5 s", "2,4 s": the panel reads pt-BR, to a tenth of a second. */
 function seconds(ms: number): string {
-  return `${(ms / 1000).toLocaleString("pt-BR")} s`;
+  return `${(ms / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} s`;
 }
 
 function missing(
@@ -164,6 +235,9 @@ function base(
     message: "",
     warnings: [],
     details: {},
+    attempts: 0,
+    transient: false,
+    failure_kind: null,
     ...fields,
   };
 }
@@ -202,17 +276,390 @@ function networkCode(error: unknown): string {
   return detail && detail !== code ? `${code}: ${detail}` : code;
 }
 
-async function timed<T>(
-  run: () => Promise<T>,
-): Promise<{ value: T; ms: number }> {
-  const startedAt = performance.now();
-  const value = await run();
-
-  return { value, ms: Math.round(performance.now() - startedAt) };
-}
-
 async function readJson(response: Response): Promise<unknown> {
   return response.json().catch(() => null);
+}
+
+// ---------------------------------------------------------------------------
+// Probe attempts
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown inside an attempt for an answer that settles nothing yet: a 5xx, a
+ * 429, a body that does not parse. A definitive answer (401, 403, 404, a
+ * parsed list) is returned, never thrown.
+ */
+class ProbeFailure extends Error {
+  constructor(
+    readonly kind: ProbeFailureKind,
+    readonly httpStatus: number | null = null,
+  ) {
+    super(kind);
+    this.name = "ProbeFailure";
+  }
+}
+
+/** Repeating a call the provider rate-limited only adds to its limit. */
+const RETRYABLE: ReadonlySet<ProbeFailureKind> = new Set([
+  "timeout",
+  "network",
+  "http_5xx",
+  "invalid_response",
+]);
+
+/**
+ * Where an attempt was when it failed: waiting for the answer (DNS, TCP,
+ * TLS, headers) or reading its body.
+ */
+type ProbePhase = "response" | "body";
+
+interface AttemptFailure {
+  kind: ProbeFailureKind;
+
+  /** System or SDK code (EAI_AGAIN, ECONNRESET, UND_ERR_SOCKET…). */
+  code: string | null;
+  http_status: number | null;
+  phase: ProbePhase;
+  elapsed_ms: number;
+
+  /** The code with the cause's own words, for the panel only (never logged). */
+  detail: string | null;
+}
+
+interface ProbeOutcome<T> {
+  /** The attempt that got an answer; absent when every attempt failed. */
+  answer?: { value: T; ms: number };
+  attempts: number;
+  failures: AttemptFailure[];
+}
+
+interface ProbeAttempt {
+  signal: AbortSignal;
+
+  /** The headers arrived: the latency stops here, and a failure is the body's. */
+  answered(): void;
+}
+
+interface ProbePolicy {
+  attemptTimeoutMs: number;
+  budgetMs: number;
+  retryDelayMs: number;
+  minRetryMs: number;
+  slowMs: number;
+}
+
+function probePolicy(deps: ReadinessDeps): ProbePolicy {
+  const attemptTimeoutMs = deps.timeoutMs ?? PROBE_ATTEMPT_TIMEOUT_MS;
+
+  return {
+    attemptTimeoutMs,
+    budgetMs: deps.budgetMs ?? PROBE_BUDGET_MS,
+    retryDelayMs: deps.retryDelayMs ?? PROBE_RETRY_DELAY_MS,
+    // Scaled down with a test's millisecond deadlines.
+    minRetryMs: Math.min(PROBE_MIN_RETRY_MS, attemptTimeoutMs),
+    slowMs: deps.slowMs ?? PROBE_SLOW_MS,
+  };
+}
+
+/** The code under a failure: fetch puts it on the cause, node and the SDK on the error. */
+function errorCode(error: unknown): string | null {
+  const own = error as {
+    code?: unknown;
+    name?: unknown;
+    cause?: { code?: unknown };
+  } | null;
+
+  if (typeof own?.cause?.code === "string") return own.cause.code;
+  if (typeof own?.code === "string") return own.code;
+
+  return typeof own?.name === "string" &&
+    !["Error", "TypeError"].includes(own.name)
+    ? own.name
+    : null;
+}
+
+function classifyFailure(
+  error: unknown,
+  timedOut: boolean,
+): Pick<AttemptFailure, "kind" | "code" | "http_status" | "detail"> {
+  if (error instanceof ProbeFailure) {
+    return {
+      kind: error.kind,
+      code: null,
+      http_status: error.httpStatus,
+      detail: null,
+    };
+  }
+
+  // The SDK reports our abort as an AbortError whose cause is a TimeoutError.
+  if (timedOut || failureKind(error) === "timeout") {
+    return {
+      kind: "timeout",
+      code: "timeout",
+      http_status: null,
+      detail: null,
+    };
+  }
+
+  return {
+    kind: "network",
+    code: errorCode(error),
+    http_status: null,
+    detail: networkCode(error),
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Runs one provider's probe: an attempt with its own deadline and, when it
+ * failed in a way that may clear by itself (timeout, network, 5xx, an
+ * unreadable answer), ONE more inside the provider's budget. A definitive
+ * answer is never repeated. Every failed attempt is logged with its cause.
+ *
+ * Only for read-only probes (a GET that lists, a HEAD, a refused request):
+ * never wrap a send in this, a retried send is a duplicated message.
+ */
+async function probeAttempts<T>(
+  provider: ProviderKey,
+  deps: ReadinessDeps,
+  run: (attempt: ProbeAttempt) => Promise<T>,
+): Promise<ProbeOutcome<T>> {
+  const policy = probePolicy(deps);
+  const sink = deps.log ?? log;
+  const startedAt = performance.now();
+  const failures: AttemptFailure[] = [];
+
+  for (let attempt = 1; ; attempt += 1) {
+    const remaining = policy.budgetMs - (performance.now() - startedAt);
+    const deadline = Math.max(1, Math.min(policy.attemptTimeoutMs, remaining));
+    const controller = new AbortController();
+    const state: { phase: ProbePhase; answeredAt: number | null } = {
+      phase: "response",
+      answeredAt: null,
+    };
+    const attemptStartedAt = performance.now();
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      const value = await new Promise<T>((resolve, reject) => {
+        timer = setTimeout(() => {
+          const reason = new DOMException(
+            `probe attempt exceeded ${deadline} ms`,
+            "TimeoutError",
+          );
+
+          timedOut = true;
+          controller.abort(reason);
+          // The call may not honour the signal (a stalled body, an SDK
+          // retrying on its own): the deadline holds anyway.
+          reject(reason);
+        }, deadline);
+
+        run({
+          signal: controller.signal,
+          answered: () => {
+            state.phase = "body";
+            state.answeredAt ??= performance.now();
+          },
+        }).then(resolve, reject);
+      });
+      const ms = Math.round(
+        (state.answeredAt ?? performance.now()) - attemptStartedAt,
+      );
+
+      if (failures.length > 0) {
+        sink.info(
+          { provider, attempts: attempt, latency_ms: ms },
+          "provider probe recovered on retry",
+        );
+      }
+
+      return { answer: { value, ms }, attempts: attempt, failures };
+    } catch (error) {
+      const failure: AttemptFailure = {
+        ...classifyFailure(error, timedOut),
+        phase: state.phase,
+        elapsed_ms: Math.round(performance.now() - attemptStartedAt),
+      };
+      const left =
+        policy.budgetMs - (performance.now() - startedAt) - policy.retryDelayMs;
+      const retry =
+        attempt < PROBE_MAX_ATTEMPTS &&
+        RETRYABLE.has(failure.kind) &&
+        left >= policy.minRetryMs;
+
+      failures.push(failure);
+
+      // Codes and timings only: no URL (R2's host carries the account id),
+      // no header, no message that could quote either.
+      sink.warn(
+        {
+          provider,
+          attempt,
+          kind: failure.kind,
+          code: failure.code,
+          http_status: failure.http_status,
+          phase: failure.phase,
+          elapsed_ms: failure.elapsed_ms,
+          will_retry: retry,
+        },
+        "provider probe attempt failed",
+      );
+
+      if (!retry) return { attempts: attempt, failures };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    await delay(policy.retryDelayMs);
+  }
+}
+
+/** The body of an answer the probe needs whole: unreadable is a failure, not "empty". */
+async function readStrictJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ProbeFailure("invalid_response", response.status);
+  }
+}
+
+/** Lets go of a body the probe does not read, so the connection is freed. */
+function release(response: Response): void {
+  void response.body?.cancel().catch(() => undefined);
+}
+
+/** A 5xx or a 429 settles nothing about the provider: the attempt failed. */
+function throwIfPassing(response: Response, except: number[] = []): void {
+  if (except.includes(response.status)) return;
+
+  if (response.status >= 500) {
+    release(response);
+    throw new ProbeFailure("http_5xx", response.status);
+  }
+
+  if (response.status === 429) {
+    release(response);
+    throw new ProbeFailure("throttled", response.status);
+  }
+}
+
+const FAILURE_TEXT: Record<ProbeFailureKind, string> = {
+  timeout: "tempo esgotado",
+  network: "falha de rede",
+  http_5xx: "erro do provedor",
+  throttled: "limite de chamadas",
+  invalid_response: "resposta incompleta",
+};
+
+function lastFailure(outcome: ProbeOutcome<unknown>): AttemptFailure {
+  return outcome.failures[outcome.failures.length - 1];
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** What every attempt failing says, in pt-BR; `subject` reads "o Resend", "a Expo". */
+function failureMessage(
+  subject: string,
+  outcome: ProbeOutcome<unknown>,
+  policy: ProbePolicy,
+): string {
+  const failure = lastFailure(outcome);
+  const tries =
+    outcome.attempts === 1 ? "1 tentativa" : `${outcome.attempts} tentativas`;
+  const Subject = capitalize(subject);
+
+  switch (failure.kind) {
+    case "timeout":
+      return failure.phase === "body"
+        ? `${Subject} começou a responder, mas não terminou (${tries} de até ${seconds(policy.attemptTimeoutMs)}).`
+        : `${Subject} não respondeu (${tries} de até ${seconds(policy.attemptTimeoutMs)}).`;
+    case "network":
+      return `Sem rota até ${subject} (${failure.code ?? "erro de rede"}) em ${tries}: rede ou DNS.`;
+    case "http_5xx":
+      return `${Subject} respondeu HTTP ${failure.http_status} em ${tries}: instabilidade do lado do provedor.`;
+    case "throttled":
+      return `${Subject} limitou as chamadas (HTTP ${failure.http_status ?? 429}): a conferência fica para a próxima verificação.`;
+    case "invalid_response":
+      return `${Subject} respondeu de forma incompleta em ${tries}: a resposta não pôde ser lida.`;
+  }
+}
+
+/**
+ * A provider no attempt got an answer from. Two failures in a row (or one
+ * with no budget left for another) is an error: transient says the next
+ * probe may clear it, never that it is fine. A 429 alone is a warning: the
+ * provider is there, only busy.
+ */
+function unanswered(
+  key: ProviderKey,
+  label: string,
+  subject: string,
+  outcome: ProbeOutcome<unknown>,
+  deps: ReadinessDeps,
+  fields: Partial<ProviderReadiness> = {},
+): ProviderReadiness {
+  const failure = lastFailure(outcome);
+
+  return base(key, label, {
+    status: failure.kind === "throttled" ? "warning" : "error",
+    // A status or a started body is an answer, even an unusable one.
+    reachable: failure.http_status !== null || failure.phase === "body",
+    message: failureMessage(subject, outcome, probePolicy(deps)),
+    ...fields,
+    attempts: outcome.attempts,
+    transient: true,
+    failure_kind: failure.kind,
+    details: {
+      ...fields.details,
+      ...(failure.http_status !== null
+        ? { http_status: failure.http_status }
+        : {}),
+    },
+  });
+}
+
+/**
+ * A provider that answered, with how it took to get there: an answer only on
+ * the second attempt, or a slow one, is degraded (transient) and says so in
+ * its warnings. A definitive error stands whatever it took to get it.
+ */
+function answeredProbe(
+  readiness: ProviderReadiness,
+  outcome: ProbeOutcome<unknown>,
+  deps: ReadinessDeps,
+): ProviderReadiness {
+  const failure = outcome.failures[outcome.failures.length - 1] ?? null;
+  const ms = outcome.answer?.ms ?? null;
+  const notes: string[] = [];
+
+  if (failure) {
+    notes.push(
+      `A ${outcome.attempts - 1}ª tentativa falhou (${FAILURE_TEXT[failure.kind]}); a ${outcome.attempts}ª respondeu.`,
+    );
+  }
+
+  if (ms !== null && ms >= probePolicy(deps).slowMs) {
+    notes.push(`Respondeu em ${seconds(ms)}, bem acima do normal.`);
+  }
+
+  return settle({
+    ...readiness,
+    latency_ms: readiness.latency_ms ?? ms,
+    attempts: outcome.attempts,
+    failure_kind: failure?.kind ?? readiness.failure_kind,
+    transient:
+      readiness.transient || (readiness.status !== "error" && notes.length > 0),
+    warnings: [...readiness.warnings, ...notes],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -250,106 +697,143 @@ async function checkEmail(deps: ReadinessDeps): Promise<ProviderReadiness> {
   }
 
   const domain = senderDomain(env.RESEND_FROM_EMAIL);
-  const timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
 
-  try {
-    const { value: response, ms } = await timed(() =>
-      deps.fetch("https://api.resend.com/domains", {
+  // The body is read inside the attempt: a list that stalls or arrives cut
+  // is a failed attempt, never an empty list (which would read "your domain
+  // is not in the account").
+  const outcome = await probeAttempts(
+    "email",
+    deps,
+    async ({ signal, answered }) => {
+      const response = await deps.fetch("https://api.resend.com/domains", {
         method: "GET",
         headers: { Authorization: `Bearer ${env.RESEND_SECRET_KEY}` },
-        signal: AbortSignal.timeout(timeoutMs),
-      }),
-    );
-    const body = (await readJson(response)) as {
-      name?: string;
-      data?: Array<{ name?: string; status?: string }>;
-    } | null;
+        signal,
+      });
 
-    if (response.ok) {
-      const entry = body?.data?.find((item) => item.name === domain);
+      throwIfPassing(response);
+      answered();
 
-      if (!entry) {
-        return settle(
-          base("email", label, {
-            status: "error",
-            reachable: true,
-            latency_ms: ms,
-            message: `O domínio do remetente (${domain}) não está na conta do Resend: os envios serão recusados.`,
-            warnings,
-            details: { sender_domain: domain, domain_status: null },
-          }),
-        );
+      if (response.ok) {
+        const body = (await readStrictJson(response)) as {
+          data?: unknown;
+        } | null;
+
+        if (!Array.isArray(body?.data)) {
+          throw new ProbeFailure("invalid_response", response.status);
+        }
+
+        return {
+          status: response.status,
+          name: null,
+          domains: body.data as Array<{ name?: unknown; status?: unknown }>,
+        };
       }
 
-      const verified = entry.status === "verified";
+      if (response.status === 401) {
+        // The body tells a sending-only key (valid) from a wrong one.
+        const body = (await readStrictJson(response)) as {
+          name?: unknown;
+        } | null;
 
-      return settle(
-        base("email", label, {
-          status: verified ? "ok" : "error",
-          reachable: true,
-          latency_ms: ms,
-          message: verified
-            ? `Chave aceita e domínio ${domain} verificado.`
-            : `Domínio ${domain} com status "${entry.status ?? "desconhecido"}" no Resend: verifique o DNS (SPF/DKIM).`,
-          warnings,
-          details: {
-            sender_domain: domain,
-            domain_status: entry.status ?? null,
-          },
-        }),
-      );
-    }
+        return {
+          status: response.status,
+          name: typeof body?.name === "string" ? body.name : null,
+          domains: null,
+        };
+      }
 
-    // A sending-only key cannot list domains, and that is the recommended
-    // key: valid, just not able to say more.
-    if (response.status === 401 && body?.name === "restricted_api_key") {
-      return settle(
-        base("email", label, {
-          reachable: true,
-          latency_ms: ms,
-          message:
-            "Chave aceita (restrita a envio): a verificação do domínio não pode ser lida com ela.",
-          warnings,
-          details: { sender_domain: domain, domain_status: null },
-        }),
-      );
-    }
+      release(response);
 
-    if (response.status === 401 || response.status === 403) {
-      return settle(
-        base("email", label, {
-          status: "error",
-          reachable: true,
-          latency_ms: ms,
-          message: `O Resend recusou a chave (HTTP ${response.status}): gere outra e troque RESEND_SECRET_KEY.`,
-          warnings,
-          details: { sender_domain: domain, http_status: response.status },
-        }),
-      );
-    }
+      return { status: response.status, name: null, domains: null };
+    },
+  );
 
-    return settle(
-      base("email", label, {
-        status: "warning",
-        reachable: true,
-        latency_ms: ms,
-        message: `O Resend respondeu HTTP ${response.status}; a chave não pôde ser conferida agora.`,
-        warnings,
-        details: { sender_domain: domain, http_status: response.status },
-      }),
-    );
-  } catch (error) {
-    return base("email", label, {
-      status: "error",
-      reachable: false,
-      message:
-        failureKind(error) === "timeout"
-          ? `O Resend não respondeu em ${seconds(timeoutMs)}.`
-          : "Sem rota até o Resend (rede ou DNS).",
+  if (!outcome.answer) {
+    return unanswered("email", label, "o Resend", outcome, deps, {
       warnings,
       details: { sender_domain: domain },
     });
   }
+
+  const { status, name, domains } = outcome.answer.value;
+
+  if (domains) {
+    const entry = domains.find((item) => item?.name === domain);
+
+    if (!entry) {
+      return answeredProbe(
+        base("email", label, {
+          status: "error",
+          reachable: true,
+          message: `O domínio do remetente (${domain}) não está na conta do Resend: os envios serão recusados.`,
+          warnings,
+          details: { sender_domain: domain, domain_status: null },
+        }),
+        outcome,
+        deps,
+      );
+    }
+
+    const domainStatus = typeof entry.status === "string" ? entry.status : null;
+    const verified = domainStatus === "verified";
+
+    return answeredProbe(
+      base("email", label, {
+        status: verified ? "ok" : "error",
+        reachable: true,
+        message: verified
+          ? `Chave aceita e domínio ${domain} verificado.`
+          : `Domínio ${domain} com status "${domainStatus ?? "desconhecido"}" no Resend: verifique o DNS (SPF/DKIM).`,
+        warnings,
+        details: { sender_domain: domain, domain_status: domainStatus },
+      }),
+      outcome,
+      deps,
+    );
+  }
+
+  // A sending-only key cannot list domains, and that is the recommended
+  // key: valid, just not able to say more.
+  if (status === 401 && name === "restricted_api_key") {
+    return answeredProbe(
+      base("email", label, {
+        reachable: true,
+        message:
+          "Chave aceita (restrita a envio): a verificação do domínio não pode ser lida com ela.",
+        warnings,
+        details: { sender_domain: domain, domain_status: null },
+      }),
+      outcome,
+      deps,
+    );
+  }
+
+  if (status === 401 || status === 403) {
+    return answeredProbe(
+      base("email", label, {
+        status: "error",
+        reachable: true,
+        message: `O Resend recusou a chave (HTTP ${status}): gere outra e troque RESEND_SECRET_KEY.`,
+        warnings,
+        details: { sender_domain: domain, http_status: status },
+      }),
+      outcome,
+      deps,
+    );
+  }
+
+  return answeredProbe(
+    base("email", label, {
+      status: "warning",
+      reachable: true,
+      message: `O Resend respondeu HTTP ${status}; a chave não pôde ser conferida agora.`,
+      warnings,
+      details: { sender_domain: domain, http_status: status },
+    }),
+    outcome,
+    deps,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -425,7 +909,7 @@ async function checkTemplate(
     const response = await deps.fetch(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${env.META_WHATSAPP_ACCESS_TOKEN}` },
-      signal: AbortSignal.timeout(deps.timeoutMs ?? PROBE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(probePolicy(deps).attemptTimeoutMs),
     });
     const body = (await readJson(response)) as
       | ({
@@ -445,7 +929,19 @@ async function checkTemplate(
       };
     }
 
-    const matches = (body?.data ?? []).filter((item) => item.name === name);
+    // A list that stalled, arrived cut or came without `data` says nothing
+    // about the template: never "does not exist" (an error) from it.
+    if (!Array.isArray(body?.data)) {
+      return {
+        details: { [key]: "UNKNOWN" },
+        problems: [],
+        warnings: [
+          `A lista de templates veio incompleta e o template ${name} não pôde ser conferido agora.`,
+        ],
+      };
+    }
+
+    const matches = body.data.filter((item) => item.name === name);
     const entry =
       matches.find((item) => item.language === TEMPLATE_LANGUAGE) ?? matches[0];
 
@@ -517,7 +1013,6 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
     });
   }
 
-  const timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
   const templates = [
     ...new Set(
       [
@@ -532,9 +1027,11 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
   // is only used when the number answered; checkTemplates never throws.
   const templatesCheck = checkTemplates(deps, templates);
 
-  try {
-    const { value: response, ms } = await timed(() =>
-      deps.fetch(
+  const outcome = await probeAttempts(
+    "whatsapp",
+    deps,
+    async ({ signal, answered }) => {
+      const response = await deps.fetch(
         `https://graph.facebook.com/${env.META_WHATSAPP_API_VERSION}/${env.META_WHATSAPP_PHONE_NUMBER_ID}` +
           "?fields=display_phone_number,verified_name,quality_rating",
         {
@@ -542,73 +1039,81 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
           headers: {
             Authorization: `Bearer ${env.META_WHATSAPP_ACCESS_TOKEN}`,
           },
-          signal: AbortSignal.timeout(timeoutMs),
+          signal,
         },
-      ),
-    );
-    const body = (await readJson(response)) as
-      | ({
-          display_phone_number?: string;
-          verified_name?: string;
-          quality_rating?: string;
-        } & MetaError)
-      | null;
-
-    if (!response.ok) {
-      const code = body?.error?.code ?? null;
-      const credential = response.status === 401 || code === 190;
-
-      return base("whatsapp", label, {
-        status: "error",
-        reachable: true,
-        latency_ms: ms,
-        message: credential
-          ? "A Meta recusou o token (código 190): gere um token de usuário do sistema e troque META_WHATSAPP_ACCESS_TOKEN."
-          : `A Meta respondeu HTTP ${response.status}${code ? ` (código ${code})` : ""} ao ler o número: confira META_WHATSAPP_PHONE_NUMBER_ID.`,
-        warnings: webhookWarnings,
-        details: { http_status: response.status, meta_code: code },
-      });
-    }
-
-    const checked = await templatesCheck;
-    const quality = body?.quality_rating ?? null;
-    const warnings = [...checked.warnings, ...webhookWarnings];
-
-    if (quality === "RED") {
-      warnings.push(
-        "Qualidade do número em RED na Meta: risco de limite de envio.",
       );
-    }
 
-    return settle(
-      base("whatsapp", label, {
-        status: checked.problems.length > 0 ? "error" : "ok",
-        reachable: true,
-        latency_ms: ms,
-        message:
-          checked.problems.length > 0
-            ? checked.problems.join(" ")
-            : "Token aceito e número encontrado na Meta.",
-        warnings,
-        details: {
-          display_phone_number: body?.display_phone_number ?? null,
-          verified_name: body?.verified_name ?? null,
-          quality_rating: quality,
-          ...checked.details,
-        },
-      }),
-    );
-  } catch (error) {
-    return base("whatsapp", label, {
-      status: "error",
-      reachable: false,
-      message:
-        failureKind(error) === "timeout"
-          ? `A Meta não respondeu em ${seconds(timeoutMs)}.`
-          : "Sem rota até a Meta (rede ou DNS).",
+      throwIfPassing(response);
+      answered();
+
+      const body = (await readJson(response)) as
+        | ({
+            display_phone_number?: string;
+            verified_name?: string;
+            quality_rating?: string;
+          } & MetaError)
+        | null;
+
+      return { ok: response.ok, status: response.status, body };
+    },
+  );
+
+  if (!outcome.answer) {
+    return unanswered("whatsapp", label, "a Meta", outcome, deps, {
       warnings: webhookWarnings,
     });
   }
+
+  const { ok, status, body } = outcome.answer.value;
+
+  if (!ok) {
+    const code = body?.error?.code ?? null;
+    const credential = status === 401 || code === 190;
+
+    return answeredProbe(
+      base("whatsapp", label, {
+        status: "error",
+        reachable: true,
+        message: credential
+          ? "A Meta recusou o token (código 190): gere um token de usuário do sistema e troque META_WHATSAPP_ACCESS_TOKEN."
+          : `A Meta respondeu HTTP ${status}${code ? ` (código ${code})` : ""} ao ler o número: confira META_WHATSAPP_PHONE_NUMBER_ID.`,
+        warnings: webhookWarnings,
+        details: { http_status: status, meta_code: code },
+      }),
+      outcome,
+      deps,
+    );
+  }
+
+  const checked = await templatesCheck;
+  const quality = body?.quality_rating ?? null;
+  const warnings = [...checked.warnings, ...webhookWarnings];
+
+  if (quality === "RED") {
+    warnings.push(
+      "Qualidade do número em RED na Meta: risco de limite de envio.",
+    );
+  }
+
+  return answeredProbe(
+    base("whatsapp", label, {
+      status: checked.problems.length > 0 ? "error" : "ok",
+      reachable: true,
+      message:
+        checked.problems.length > 0
+          ? checked.problems.join(" ")
+          : "Token aceito e número encontrado na Meta.",
+      warnings,
+      details: {
+        display_phone_number: body?.display_phone_number ?? null,
+        verified_name: body?.verified_name ?? null,
+        quality_rating: quality,
+        ...checked.details,
+      },
+    }),
+    outcome,
+    deps,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -617,44 +1122,57 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
 
 async function checkPush(deps: ReadinessDeps): Promise<ProviderReadiness> {
   const label = "Push (Expo → FCM)";
-  const timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
 
   // The FCM service account lives in the EAS project, not here: the API
   // only reaches Expo. A receipts query for an id that does not exist proves
-  // the route without sending anything.
-  try {
-    const { value: response, ms } = await timed(() =>
-      deps.fetch("https://exp.host/--/api/v2/push/getReceipts", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
+  // the route without sending anything, so it is safe to repeat.
+  const outcome = await probeAttempts(
+    "push",
+    deps,
+    async ({ signal, answered }) => {
+      const response = await deps.fetch(
+        "https://exp.host/--/api/v2/push/getReceipts",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            ids: ["00000000-0000-0000-0000-000000000000"],
+          }),
+          signal,
         },
-        body: JSON.stringify({ ids: ["00000000-0000-0000-0000-000000000000"] }),
-        signal: AbortSignal.timeout(timeoutMs),
-      }),
-    );
+      );
 
-    return base("push", label, {
-      status: response.ok ? "ok" : "error",
-      reachable: true,
-      latency_ms: ms,
-      message: response.ok
-        ? "Serviço de push da Expo acessível. A credencial do FCM fica no projeto EAS: um erro nela aparece nos recibos (InvalidCredentials)."
-        : `A Expo respondeu HTTP ${response.status}.`,
-      details: { fcm_credentials: "eas" },
-    });
-  } catch (error) {
-    return base("push", label, {
-      status: "error",
-      reachable: false,
-      message:
-        failureKind(error) === "timeout"
-          ? `A Expo não respondeu em ${seconds(timeoutMs)}.`
-          : "Sem rota até a Expo (rede ou DNS).",
+      throwIfPassing(response);
+      answered();
+      release(response);
+
+      return { ok: response.ok, status: response.status };
+    },
+  );
+
+  if (!outcome.answer) {
+    return unanswered("push", label, "a Expo", outcome, deps, {
       details: { fcm_credentials: "eas" },
     });
   }
+
+  const { ok, status } = outcome.answer.value;
+
+  return answeredProbe(
+    base("push", label, {
+      status: ok ? "ok" : "error",
+      reachable: true,
+      message: ok
+        ? "Serviço de push da Expo acessível. A credencial do FCM fica no projeto EAS: um erro nela aparece nos recibos (InvalidCredentials)."
+        : `A Expo respondeu HTTP ${status}.`,
+      details: { fcm_credentials: "eas" },
+    }),
+    outcome,
+    deps,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -695,60 +1213,66 @@ async function checkStorage(deps: ReadinessDeps): Promise<ProviderReadiness> {
     });
   }
 
-  const timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
+  const bucket = { storage: "r2", bucket: env.R2_BUCKET_NAME ?? null };
 
-  try {
-    const { ms } = await timed(() =>
-      deps.headBucket(AbortSignal.timeout(timeoutMs)),
-    );
+  const outcome = await probeAttempts("storage", deps, async ({ signal }) => {
+    try {
+      await deps.headBucket(signal);
 
-    return base("storage", label, {
-      reachable: true,
-      latency_ms: ms,
-      message: "Bucket acessível com a credencial configurada.",
-      details: { storage: "r2", bucket: env.R2_BUCKET_NAME ?? null },
-    });
-  } catch (error) {
-    const status = (error as { $metadata?: { httpStatusCode?: number } } | null)
-      ?.$metadata?.httpStatusCode;
+      return { httpStatus: null as number | null };
+    } catch (error) {
+      const status = (
+        error as { $metadata?: { httpStatusCode?: unknown } } | null
+      )?.$metadata?.httpStatusCode;
 
-    if (status === 403 || status === 401) {
-      return base("storage", label, {
-        status: "error",
-        reachable: true,
-        message: `O R2 recusou a credencial (HTTP ${status}): confira R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY e a permissão no bucket.`,
-        details: {
-          storage: "r2",
-          bucket: env.R2_BUCKET_NAME ?? null,
-          http_status: status,
-        },
-      });
+      // No status (DNS, reset, our own deadline): the attempt classifies it.
+      if (typeof status !== "number" || signal.aborted) throw error;
+
+      // A 5xx is the R2 answering that it cannot answer now: the route is
+      // fine, and the next attempt may get the bucket.
+      if (status >= 500) throw new ProbeFailure("http_5xx", status);
+      if (status === 429) throw new ProbeFailure("throttled", status);
+
+      // Any other status is the bucket's definitive answer.
+      return { httpStatus: status };
     }
+  });
 
-    if (status === 404) {
-      return base("storage", label, {
-        status: "error",
-        reachable: true,
-        message:
-          "O bucket não existe nesta conta: confira R2_BUCKET_NAME e R2_ACCOUNT_ID.",
-        details: {
-          storage: "r2",
-          bucket: env.R2_BUCKET_NAME ?? null,
-          http_status: status,
-        },
-      });
-    }
-
-    return base("storage", label, {
-      status: "error",
-      reachable: false,
-      message:
-        failureKind(error) === "timeout"
-          ? `O R2 não respondeu em ${seconds(timeoutMs)}.`
-          : "Sem rota até o R2 (rede ou DNS).",
-      details: { storage: "r2", bucket: env.R2_BUCKET_NAME ?? null },
+  if (!outcome.answer) {
+    return unanswered("storage", label, "o R2", outcome, deps, {
+      details: bucket,
     });
   }
+
+  const status = outcome.answer.value.httpStatus;
+
+  if (status === null) {
+    return answeredProbe(
+      base("storage", label, {
+        reachable: true,
+        message: "Bucket acessível com a credencial configurada.",
+        details: bucket,
+      }),
+      outcome,
+      deps,
+    );
+  }
+
+  return answeredProbe(
+    base("storage", label, {
+      status: "error",
+      reachable: true,
+      message:
+        status === 401 || status === 403
+          ? `O R2 recusou a credencial (HTTP ${status}): confira R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY e a permissão no bucket.`
+          : status === 404
+            ? "O bucket não existe nesta conta: confira R2_BUCKET_NAME e R2_ACCOUNT_ID."
+            : `O R2 respondeu HTTP ${status} ao consultar o bucket: confira R2_ENDPOINT e R2_BUCKET_NAME.`,
+      details: { ...bucket, http_status: status },
+    }),
+    outcome,
+    deps,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -781,7 +1305,7 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
   }
 
   const url = env.AI_LOCAL_URL!.replace(/\/+$/, "");
-  const timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
+  const timeoutMs = probePolicy(deps).attemptTimeoutMs;
 
   // Host and port only (the URL never carries credentials, but a typo could):
   // which name the API tried is what tells a wrong App Name from a down service.
@@ -797,111 +1321,185 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
    * The token check starts with /health instead of after it: the two are
    * independent requests, and in sequence the page waited for both timeouts
    * when the service was slow. Its outcome is only read once /health
-   * answered, and it is settled here so a failure never goes unhandled.
+   * answered; probeAttempts never rejects, so a failure never goes
+   * unhandled.
    *
    * The service checks the token before anything else, so an empty request
    * with an unknown profile answers 401 for a wrong token and 400 for a
    * right one, without reading a photo or taking the slot. No hand-written
    * Content-Length: fetch sets it for the empty body, as it does for the
    * readings (local-ocr-reader.ts), which work.
+   *
+   * The same retry rule as every probe: a timeout, a reset or a 5xx gets one
+   * more attempt inside the budget, and the 401 or the 400 is taken as it
+   * came. A single attempt here left OCR red on the DNS blip /health had
+   * just recovered from. Repeating it is safe: it is refused before
+   * anything is read, never a reading.
    */
-  const tokenProbe = deps
-    .fetch(`${url}/v1/read?profile=readiness-probe`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${env.AI_LOCAL_TOKEN}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-    .then(
-      (answer) => ({ ok: true as const, answer }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
+  const tokenProbe = probeAttempts(
+    "ai_ocr",
+    deps,
+    async ({ signal, answered }) => {
+      const response = await deps.fetch(
+        `${url}/v1/read?profile=readiness-probe`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${env.AI_LOCAL_TOKEN}` },
+          signal,
+        },
+      );
 
-  let response: Response;
-  let ms: number;
+      // A 5xx in front of the service said nothing about the token, and
+      // used to read as "token aceito".
+      throwIfPassing(response);
+      answered();
 
-  try {
-    ({ value: response, ms } = await timed(() =>
-      deps.fetch(`${url}/health`, {
+      // Only the status answers; the body is let go.
+      release(response);
+
+      return response.status;
+    },
+  );
+
+  // 503 is the service saying it is warming its models: an answer, not a
+  // failure to retry.
+  const outcome = await probeAttempts(
+    "ai_ocr",
+    deps,
+    async ({ signal, answered }) => {
+      const response = await deps.fetch(`${url}/health`, {
         method: "GET",
-        signal: AbortSignal.timeout(timeoutMs),
-      }),
-    ));
-  } catch (error) {
-    return base("ai_ocr", label, {
-      status: "error",
-      reachable: false,
-      message:
-        failureKind(error) === "timeout"
-          ? `O serviço em ${host} não respondeu em ${seconds(timeoutMs)}.`
-          : `Sem rota até ${host} (${networkCode(error)}): confira se a Application trajetto-ai está de pé e se AI_LOCAL_URL usa o App Name dela (http://<App Name>:8080), não o Name.`,
+        signal,
+      });
+
+      throwIfPassing(response, [503]);
+      answered();
+
+      const body = (await readJson(response)) as {
+        ok?: boolean;
+        engine?: string;
+        engineVersion?: string;
+        error?: string;
+      } | null;
+
+      return { ok: response.ok, status: response.status, body };
+    },
+  );
+
+  if (!outcome.answer) {
+    const failure = lastFailure(outcome);
+
+    return unanswered("ai_ocr", label, `o serviço em ${host}`, outcome, deps, {
+      ...(failure.kind === "network"
+        ? {
+            message: `Sem rota até ${host} (${failure.detail ?? failure.code ?? "erro de rede"}): confira se a Application trajetto-ai está de pé e se AI_LOCAL_URL usa o App Name dela (http://<App Name>:8080), não o Name.`,
+          }
+        : {}),
     });
   }
 
-  try {
-    const body = (await readJson(response)) as {
-      ok?: boolean;
-      engine?: string;
-      engineVersion?: string;
-      error?: string;
-    } | null;
+  const { ok, status, body } = outcome.answer.value;
 
-    if (response.status === 503) {
-      return base("ai_ocr", label, {
+  if (status === 503) {
+    return answeredProbe(
+      base("ai_ocr", label, {
         status: "warning",
         reachable: true,
-        latency_ms: ms,
+        // Warming up passes by itself: the report is re-read in seconds.
+        transient: true,
         message:
           "O serviço está aquecendo os modelos; as leituras esperam na fila.",
-      });
-    }
+      }),
+      outcome,
+      deps,
+    );
+  }
 
-    if (!response.ok) {
-      return base("ai_ocr", label, {
+  if (!ok) {
+    return answeredProbe(
+      base("ai_ocr", label, {
         status: "error",
         reachable: true,
-        latency_ms: ms,
-        message: `O serviço respondeu HTTP ${response.status} em /health.`,
-      });
-    }
+        message: `O serviço respondeu HTTP ${status} em /health.`,
+      }),
+      outcome,
+      deps,
+    );
+  }
 
-    const token = await tokenProbe;
+  const details = {
+    engine: body?.engine ?? null,
+    engine_version: body?.engineVersion ?? null,
+  };
+  const token = await tokenProbe;
 
-    if (!token.ok) throw token.error;
+  if (!token.answer) {
+    // /health answered, so the route exists: what failed is the token
+    // check, every attempt of its own. A 429 alone is a warning, as
+    // everywhere: the service is there, only busy.
+    const failure = lastFailure(token);
+    const tries =
+      token.attempts === 1 ? "1 tentativa" : `${token.attempts} tentativas`;
+    const answeredHealth = `O serviço em ${host} respondeu /health, mas a conferência do token`;
 
-    const details = {
-      engine: body?.engine ?? null,
-      engine_version: body?.engineVersion ?? null,
-    };
+    return answeredProbe(
+      base("ai_ocr", label, {
+        status: failure.kind === "throttled" ? "warning" : "error",
+        reachable: true,
+        transient: true,
+        failure_kind: failure.kind,
+        message:
+          failure.kind === "timeout"
+            ? `${answeredHealth} não respondeu (${tries} de até ${seconds(timeoutMs)}).`
+            : failure.kind === "throttled"
+              ? `${answeredHealth} foi limitada (HTTP ${failure.http_status ?? 429}): fica para a próxima verificação.`
+              : failure.kind === "http_5xx"
+                ? `${answeredHealth} recebeu HTTP ${failure.http_status} em ${tries}.`
+                : `${answeredHealth} falhou em ${tries} (${failure.detail ?? failure.code ?? "erro de rede"}).`,
+        details: {
+          ...(failure.http_status !== null
+            ? { http_status: failure.http_status }
+            : {}),
+        },
+      }),
+      outcome,
+      deps,
+    );
+  }
 
-    if (token.answer.status === 401) {
-      return base("ai_ocr", label, {
+  if (token.answer.value === 401) {
+    return answeredProbe(
+      base("ai_ocr", label, {
         status: "error",
         reachable: true,
-        latency_ms: ms,
         message:
           "O serviço recusou o token: AI_LOCAL_TOKEN tem de ser o mesmo AI_TOKEN do trajetto-ai.",
         details,
-      });
-    }
+      }),
+      outcome,
+      deps,
+    );
+  }
 
-    return base("ai_ocr", label, {
+  // Accepted only on a retry: unstable, like any probe that recovered.
+  const tokenRetry = token.failures[token.failures.length - 1];
+
+  return answeredProbe(
+    base("ai_ocr", label, {
       reachable: true,
-      latency_ms: ms,
       message: "Serviço pronto e token aceito.",
       details,
-    });
-  } catch (error) {
-    // /health answered, so the route exists: what failed is the token check.
-    return base("ai_ocr", label, {
-      status: "error",
-      reachable: true,
-      latency_ms: ms,
-      message:
-        failureKind(error) === "timeout"
-          ? `O serviço em ${host} respondeu /health, mas a conferência do token não respondeu em ${seconds(timeoutMs)}.`
-          : `O serviço em ${host} respondeu /health, mas a conferência do token falhou (${networkCode(error)}).`,
-    });
-  }
+      ...(tokenRetry && {
+        transient: true,
+        failure_kind: tokenRetry.kind,
+        warnings: [
+          `A ${token.attempts - 1}ª conferência do token falhou (${FAILURE_TEXT[tokenRetry.kind]}); a ${token.attempts}ª respondeu.`,
+        ],
+      }),
+    }),
+    outcome,
+    deps,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,6 +1650,10 @@ function productionDeps(): ReadinessDeps {
     env,
     fetch: (input, init) => fetch(input, init),
     headBucket: async (signal) => {
+      // One HEAD per attempt: the probe owns the retry policy. With the
+      // SDK's default (3 attempts) a 5xx cost three HEADs, and a request we
+      // had already aborted was retried twice more (its cause is a
+      // TimeoutError, which the SDK counts as transient).
       storageClient ??= new S3Client({
         credentials: {
           accessKeyId: uploadConfig.r2.accessKeyId,
@@ -1060,6 +1662,7 @@ function productionDeps(): ReadinessDeps {
         endpoint: uploadConfig.r2.endpoint,
         forcePathStyle: uploadConfig.r2.forcePathStyle,
         region: "auto",
+        maxAttempts: 1,
       });
 
       await storageClient.send(
@@ -1085,10 +1688,25 @@ function productionDeps(): ReadinessDeps {
 const READINESS_CACHE_MS = 30 * 1000;
 
 /**
+ * A report in which some provider is transient (a failed or slow attempt)
+ * is served this long instead: a blip is not pinned on every replica's
+ * screen for 30 s, and the next read probes again. Single-flight per replica
+ * keeps that to one round of probes per interval.
+ */
+const READINESS_TRANSIENT_CACHE_MS = 5 * 1000;
+
+/**
  * `refresh=true` probes again only once the report is this old: the button
  * pressed in a loop is one round of probes per interval, not one per click.
  */
 const READINESS_REFRESH_MIN_MS = 5 * 1000;
+
+/** How long a report is served, decided by what it says. */
+function readinessTtl(report: ProviderReadinessReport): number {
+  return report.providers.some((provider) => provider.transient === true)
+    ? READINESS_TRANSIENT_CACHE_MS
+    : READINESS_CACHE_MS;
+}
 
 function readinessCache(
   deps: () => ReadinessDeps,
@@ -1096,7 +1714,7 @@ function readinessCache(
 ): SnapshotCache<ProviderReadinessReport> {
   return new SnapshotCache({
     name: "provider-readiness",
-    ttlMs: READINESS_CACHE_MS,
+    ttlMs: readinessTtl,
     minRefreshMs: READINESS_REFRESH_MIN_MS,
     compute: () => checkProviders(deps()),
     store,
@@ -1126,9 +1744,16 @@ function resetProviderReadinessCache(): void {
 }
 
 export {
-  PROBE_TIMEOUT_MS,
+  PROBE_ATTEMPT_TIMEOUT_MS,
+  PROBE_BUDGET_MS,
+  PROBE_MAX_ATTEMPTS,
+  PROBE_RETRY_DELAY_MS,
+  PROBE_SLOW_MS,
   READINESS_CACHE_MS,
   READINESS_REFRESH_MIN_MS,
+  READINESS_TRANSIENT_CACHE_MS,
+  readinessCache,
+  readinessTtl,
   checkAiOcr,
   checkEmail,
   checkHeartbeat,
@@ -1141,6 +1766,8 @@ export {
   resetProviderReadinessCache,
 };
 export type {
+  ProbeFailureKind,
+  ProbeLog,
   ProviderKey,
   ProviderReadiness,
   ProviderReadinessReport,

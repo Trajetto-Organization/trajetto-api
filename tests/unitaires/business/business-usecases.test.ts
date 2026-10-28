@@ -887,9 +887,14 @@ describe("the company's AI usage and limits", () => {
 describe("the company's plan (modules)", () => {
   let alfaId: string;
   let betaId: string;
+  // One grouped count (ACTIVE + BLOCKED + IN_ROUTE occupy a slot).
   const vehicles = {
-    countActiveVehiclesByBusinessId: vi.fn(async () => 7),
-    countInactiveVehiclesByBusinessId: vi.fn(async () => 2),
+    countVehiclesByStatusForBusiness: vi.fn(async () => ({
+      ACTIVE: 4,
+      BLOCKED: 2,
+      IN_ROUTE: 1,
+      INACTIVE: 2,
+    })),
   };
 
   beforeEach(async () => {
@@ -929,7 +934,18 @@ describe("the company's plan (modules)", () => {
       vehicle_count: 7,
       vehicle_inactive_count: 2,
       vehicle_limit_enabled: true,
+      vehicle_status_counts: {
+        ACTIVE: 4,
+        BLOCKED: 2,
+        IN_ROUTE: 1,
+        INACTIVE: 2,
+      },
     });
+
+    // The company's own fleet, in one read.
+    expect(vehicles.countVehiclesByStatusForBusiness).toHaveBeenCalledWith(
+      alfaId,
+    );
   });
 
   it("refuses another company's plan to an admin with the route's 403 TENANT_ACCESS_DENIED", async () => {
@@ -944,6 +960,8 @@ describe("the company's plan (modules)", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 403, code: "TENANT_ACCESS_DENIED" });
     expect(entitlements.getBusinessEntitlements).not.toHaveBeenCalled();
+    // Nor is the other company's fleet counted.
+    expect(vehicles.countVehiclesByStatusForBusiness).not.toHaveBeenCalled();
   });
 
   it("refuses a plain user of the company with 403 AUTH_ROLE_FORBIDDEN, like the route", async () => {

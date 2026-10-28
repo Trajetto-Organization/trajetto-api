@@ -255,7 +255,7 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   e como gerar).
 - Não introduza broker, cache no Redis nem provedor externo de IA: são
   decisões registradas (ADRs 0001, 0002, 0010). A única exceção ao cache é
-  `src/shared/cache/snapshot-cache.ts`: fotos curtas (30–60 s), que falham
+  `src/shared/cache/snapshot-cache.ts`: fotos curtas (5–60 s), que falham
   aberto, de leituras **da plataforma** que só o MASTER vê; nunca dado de
   empresa.
 - Não exija Turnstile na API (quebraria o login do app); não ponha `TZ` no

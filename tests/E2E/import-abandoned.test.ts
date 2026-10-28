@@ -110,6 +110,7 @@ describe("the abandoned-import sweep", () => {
     expect(closed.status).toBe("COMPLETED");
     expect(closed.imported).toBe(2);
     expect(JSON.stringify(closed.report)).toContain("interrompida");
+    expect(JSON.stringify(closed.report)).toContain("Estorne");
 
     await expect(
       imports.reverseImport(dead.id, CARRIER),
@@ -122,6 +123,24 @@ describe("the abandoned-import sweep", () => {
         where: { businessId: CARRIER, importId: dead.id },
       }),
     ).toBe(0);
+  });
+
+  // It told the operator to undo an upload that had created nothing.
+  it("tells an upload that died before creating anything to send the file again, not to undo it", async () => {
+    const empty = await openUpload(20, 0);
+
+    await closeAbandonedImportsJob.handler();
+
+    const closed = await prisma.import.findUniqueOrThrow({
+      where: { id: empty.id },
+    });
+    const report = JSON.stringify(closed.report);
+
+    expect(closed.status).toBe("COMPLETED");
+    expect(closed.imported).toBe(0);
+    expect(report).toContain("nenhuma entrega foi criada");
+    expect(report).toContain("Envie o arquivo de novo");
+    expect(report).not.toContain("Estorne");
   });
 
   it("finds the stale uploads through the partial index, not the history", async () => {
@@ -177,5 +196,55 @@ describe("the abandoned-import sweep", () => {
     });
 
     expect(finished.status).toBe("REVERSED");
+  });
+});
+
+/**
+ * The same close, written by a replica shutting down (import-queue.ts)
+ * instead of after the sweep's 15 minutes.
+ */
+describe("the shutdown hand-back", () => {
+  async function closedReport(importId: string): Promise<string> {
+    const closed = await prisma.import.findUniqueOrThrow({
+      where: { id: importId },
+    });
+
+    expect(closed.status).toBe("COMPLETED");
+
+    return JSON.stringify(closed.report);
+  }
+
+  it("says nothing was created for an upload that never reached its rows", async () => {
+    const waiting = await openUpload(0, 0);
+
+    await expect(
+      imports.closeInterruptedImport(waiting.id, CARRIER, "not-started"),
+    ).resolves.toBe(true);
+
+    const report = await closedReport(waiting.id);
+
+    expect(report).toContain("nenhuma entrega foi criada");
+    expect(report).not.toContain("Estorne");
+  });
+
+  // Stuck in a row: that row may still commit after the count, and the undo
+  // is what would take it back.
+  it("keeps the undo for an upload stopped in its rows, even at zero counted", async () => {
+    const stopped = await openUpload(0, 0);
+
+    await imports.closeInterruptedImport(stopped.id, CARRIER, "stopped");
+
+    expect(await closedReport(stopped.id)).toContain("Estorne");
+  });
+
+  it("never says nothing was created over deliveries that exist", async () => {
+    const waiting = await openUpload(0, 1);
+
+    await imports.closeInterruptedImport(waiting.id, CARRIER, "not-started");
+
+    const report = await closedReport(waiting.id);
+
+    expect(report).not.toContain("nenhuma entrega foi criada");
+    expect(report).toContain("Estorne");
   });
 });

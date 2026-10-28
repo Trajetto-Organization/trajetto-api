@@ -71,7 +71,7 @@ async function vehicleTypeRoutes(app: FastifyInstance) {
         tags: ["vehicle-type"],
         summary: "Lista os tipos de veículo da empresa",
         description:
-          "Tipos de veículo de UMA empresa, paginados: o MASTER informa `businessId`; os demais veem a própria. Ordena no servidor (`sort`/`order`) e busca por ID, nome ou número de eixos. Cada linha traz em `_count.vehicles` quantos veículos usam o tipo; a linha `meta.searchMeta` traz os cartões da tela sobre toda a busca (não só a página): total de tipos, veículos cadastrados, tipos sem veículos e o tipo mais usado.",
+          "Tipos de veículo de UMA empresa, paginados: o MASTER informa `businessId`; os demais veem a própria. Ordena no servidor (`sort`/`order`) e busca por ID, nome ou número de eixos. O ID vale inteiro ou só o final que a tabela mostra (pelo menos 8 caracteres hexadecimais). Cada linha traz em `_count.vehicles` quantos veículos usam o tipo; a linha `meta.searchMeta` traz os cartões da tela sobre toda a busca (não só a página): total de tipos, veículos cadastrados, tipos sem veículos e o tipo mais usado.",
         querystring: vehicleTypeSchemas.listVehicleType,
         response: {
           200: ndjsonList(

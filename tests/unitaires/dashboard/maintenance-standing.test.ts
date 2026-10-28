@@ -108,13 +108,46 @@ describe("where a vehicle stands on the company's today", () => {
     ).toBe("pending");
   });
 
-  it("tallies a fleet into the card's three numbers", () => {
+  // The edge the card's help has to say out loud: with no date there is no
+  // next revision to compare, so the mileage is not looked at.
+  it("is 'A vencer' with no record even when the mileage is far past", () => {
+    expect(
+      maintenanceStanding(
+        vehicle({
+          last_maintenance_date: null,
+          current_mileage: 50000,
+          last_maintenance_mileage: null,
+          maintenance_interval_km: 10000,
+        }),
+        today,
+        SP,
+      ),
+    ).toBe("pending");
+  });
+
+  it("tallies a fleet into the card's three numbers, and the unrecorded inside 'A vencer'", () => {
     expect(
       tallyMaintenance(
         [lastOn(3, 27), lastOn(3, 26), lastOn(4, 28), vehicle({})],
         today,
         SP,
       ),
-    ).toEqual({ overdue: 1, pending: 2, recent: 1 });
+    ).toEqual({ overdue: 1, pending: 2, recent: 1, unrecorded: 1 });
+  });
+
+  it("counts every unrecorded vehicle in 'A vencer', never as a fourth standing", () => {
+    const stats = tallyMaintenance(
+      [
+        vehicle({}),
+        vehicle({ current_mileage: 90000, last_maintenance_mileage: null }),
+        lastOn(3, 26),
+      ],
+      today,
+      SP,
+    );
+
+    expect(stats).toEqual({ overdue: 1, pending: 2, recent: 0, unrecorded: 2 });
+    expect(stats.overdue + stats.pending + stats.recent).toBe(3);
+    expect(stats.unrecorded).toBeLessThanOrEqual(stats.pending);
   });
 });

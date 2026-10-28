@@ -417,7 +417,12 @@ class DashboardRepository implements IDashboardRepository {
     const horizon = Prisma.sql`(${params.today}::date + ${DUE_SOON_DAYS}::int)`;
 
     const [row] = await this.prisma.$queryRaw<
-      Array<{ pending: number; recent: number; overdue: number }>
+      Array<{
+        pending: number;
+        recent: number;
+        overdue: number;
+        unrecorded: number;
+      }>
     >(Prisma.sql`
       WITH standing AS (
         SELECT
@@ -446,7 +451,9 @@ class DashboardRepository implements IDashboardRepository {
         )::int AS pending,
         count(*) FILTER (
           WHERE NOT unrecorded AND NOT km_due AND due_day > ${horizon}
-        )::int AS recent
+        )::int AS recent,
+        -- Inside "pending" above: how many of those only lack the record.
+        count(*) FILTER (WHERE unrecorded)::int AS unrecorded
       FROM standing
     `);
 
@@ -454,6 +461,7 @@ class DashboardRepository implements IDashboardRepository {
       pending: row?.pending ?? 0,
       recent: row?.recent ?? 0,
       overdue: row?.overdue ?? 0,
+      unrecorded: row?.unrecorded ?? 0,
     };
   }
 

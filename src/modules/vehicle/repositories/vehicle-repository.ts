@@ -13,6 +13,7 @@ import {
   SearchVehicleWithCursorProps,
   CursorPaginatedVehicle,
   VehicleUsageCounts,
+  VehicleStatusCounts,
 } from "../dtos/vehicle-dto";
 import { tallyStatuses } from "@/shared/vehicle/vehicle-rules";
 
@@ -510,12 +511,22 @@ class VehicleRepository implements IVehicleRepository {
     };
   }
 
-  // A contracted slot is occupied by every non-INACTIVE vehicle —
-  // inactivating frees the slot (see occupiesFleetSlot in entitlement-rules).
-  async countActiveVehiclesByBusinessId(businessId: string): Promise<number> {
-    return this.prisma.vehicle.count({
-      where: { businessId, status: { not: "INACTIVE" } },
+  /**
+   * The plan's fleet in ONE grouped count, scoped to the company: a
+   * contracted slot is occupied by every non-INACTIVE vehicle (see
+   * occupiesFleetSlot in entitlement-rules), and the breakdown by status
+   * comes from the same rows. It replaces two counts that ran side by side.
+   */
+  async countVehiclesByStatusForBusiness(
+    businessId: string,
+  ): Promise<VehicleStatusCounts> {
+    const groups = await this.prisma.vehicle.groupBy({
+      by: ["status"],
+      where: { businessId },
+      _count: { _all: true },
     });
+
+    return tallyStatuses(groups);
   }
 
   /**
@@ -564,12 +575,6 @@ class VehicleRepository implements IVehicleRepository {
       const vehicle = await tx.vehicle.create({ data: vehicleData });
 
       return { vehicle, activeCount };
-    });
-  }
-
-  async countInactiveVehiclesByBusinessId(businessId: string): Promise<number> {
-    return this.prisma.vehicle.count({
-      where: { businessId, status: "INACTIVE" },
     });
   }
 }

@@ -13,7 +13,9 @@ const log = logger.child({ component: "snapshot-cache" });
  * or company in it, so whatever goes in is served to every MASTER who asks.
  *
  * Three layers, each fail-open:
- *  - this replica's copy, for `ttlMs`;
+ *  - this replica's copy, for `ttlMs` (a number, or decided by the value:
+ *    the TTL is resolved once, when the copy is computed, and travels with
+ *    it to Redis);
  *  - Redis, so the replica the next request lands on does not pay the read
  *    again (Traefik round-robins, no sticky cookie). Disposable like the
  *    rest of Redis here (ADR 0002): bounded by a short deadline, and an
@@ -97,7 +99,13 @@ interface SnapshotRead<T> {
 interface SnapshotCacheOptions<T> {
   /** Names the snapshot in the shared store; platform-level, never a tenant. */
   name: string;
-  ttlMs: number;
+
+  /**
+   * How long a copy is served. A function decides it from the value itself:
+   * a report that caught a passing failure is worth a few seconds, not as
+   * long as a clean one (provider-readiness.ts).
+   */
+  ttlMs: number | ((value: T) => number);
 
   /**
    * How to compute it; or given to each `read`, when what computes it lives
@@ -113,10 +121,17 @@ interface SnapshotCacheOptions<T> {
   now?: () => number;
 }
 
-class SnapshotCache<T> {
-  private local: { at: number; value: T } | null = null;
+/** A computed copy and how long it is served (resolved when it was computed). */
+interface SnapshotEntry<T> {
+  at: number;
+  ttlMs: number;
+  value: T;
+}
 
-  private computing: Promise<{ at: number; value: T }> | null = null;
+class SnapshotCache<T> {
+  private local: SnapshotEntry<T> | null = null;
+
+  private computing: Promise<SnapshotEntry<T>> | null = null;
 
   private readonly key: string;
 
@@ -129,6 +144,12 @@ class SnapshotCache<T> {
     return (this.options.now ?? Date.now)();
   }
 
+  private ttlOf(value: T): number {
+    const { ttlMs } = this.options;
+
+    return typeof ttlMs === "function" ? ttlMs(value) : ttlMs;
+  }
+
   async read({
     refresh = false,
     compute = this.options.compute,
@@ -139,24 +160,26 @@ class SnapshotCache<T> {
       throw new Error(`snapshot "${this.options.name}" has nothing to compute`);
     }
 
-    const { ttlMs, minRefreshMs = 0 } = this.options;
+    const { minRefreshMs = 0 } = this.options;
     const local = this.local;
 
     if (local) {
       const age = this.now() - local.at;
 
-      if (age < (refresh ? minRefreshMs : ttlMs)) {
-        return { ...local, cached: true };
+      // A refresh waits for the shorter of the two: a copy already expired
+      // (a short-lived one) is never served to the button that asked anew.
+      if (age < (refresh ? Math.min(minRefreshMs, local.ttlMs) : local.ttlMs)) {
+        return { value: local.value, at: local.at, cached: true };
       }
     }
 
     if (!refresh) {
       const shared = await this.readShared();
 
-      if (shared && this.now() - shared.at < ttlMs) {
+      if (shared && this.now() - shared.at < shared.ttlMs) {
         if (!this.local || this.local.at < shared.at) this.local = shared;
 
-        return { ...shared, cached: true };
+        return { value: shared.value, at: shared.at, cached: true };
       }
     }
 
@@ -164,7 +187,9 @@ class SnapshotCache<T> {
       this.computing = null;
     });
 
-    return { ...(await this.computing), cached: false };
+    const entry = await this.computing;
+
+    return { value: entry.value, at: entry.at, cached: false };
   }
 
   /** Forgets this replica's copy (tests; the shared one expires by itself). */
@@ -173,17 +198,30 @@ class SnapshotCache<T> {
     this.computing = null;
   }
 
-  private async readShared(): Promise<{ at: number; value: T } | null> {
+  private async readShared(): Promise<SnapshotEntry<T> | null> {
     const raw = await this.options.store?.read(this.key);
 
     if (!raw) return null;
 
     try {
-      const parsed = JSON.parse(raw) as { at?: unknown; value?: unknown };
+      const parsed = JSON.parse(raw) as {
+        at?: unknown;
+        ttlMs?: unknown;
+        value?: unknown;
+      };
 
-      return typeof parsed.at === "number" && "value" in parsed
-        ? { at: parsed.at, value: parsed.value as T }
-        : null;
+      if (typeof parsed.at !== "number" || !("value" in parsed)) return null;
+
+      const value = parsed.value as T;
+
+      // A copy written before the TTL travelled with it (a rolling deploy)
+      // gets the one its value deserves here.
+      return {
+        at: parsed.at,
+        ttlMs:
+          typeof parsed.ttlMs === "number" ? parsed.ttlMs : this.ttlOf(value),
+        value,
+      };
     } catch {
       return null;
     }
@@ -191,9 +229,9 @@ class SnapshotCache<T> {
 
   private async computeAndShare(
     compute: () => Promise<T>,
-  ): Promise<{ at: number; value: T }> {
+  ): Promise<SnapshotEntry<T>> {
     const value = await compute();
-    const entry = { at: this.now(), value };
+    const entry = { at: this.now(), ttlMs: this.ttlOf(value), value };
 
     this.local = entry;
 
@@ -203,7 +241,7 @@ class SnapshotCache<T> {
     void this.options.store?.write(
       this.key,
       JSON.stringify(entry),
-      this.options.ttlMs,
+      entry.ttlMs,
     );
 
     return entry;

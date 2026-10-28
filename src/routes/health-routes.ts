@@ -358,9 +358,11 @@ async function healthRoutes(app: FastifyInstance) {
    * Provider readiness (contract §32/§33): which providers this deployment
    * has configured and whether they answer — Resend and its domain, Meta and
    * each template's approval, Expo, R2, the OCR service and its token, the
-   * proof certificate and the heartbeat. Read-only probes, side by side with
-   * a 2.5 s ceiling each, cached 30 s and shared by the replicas (Redis,
-   * fail-open) so a refreshing screen never turns into calls to Meta.
+   * proof certificate and the heartbeat. Read-only probes, side by side: an
+   * attempt of 3.5 s and, after a failure that may clear by itself, one more
+   * inside 5 s per provider. Cached 30 s (5 s when some provider is
+   * transient) and shared by the replicas (Redis, fail-open) so a refreshing
+   * screen never turns into calls to Meta.
    *
    * MASTER-only: it describes the shared infrastructure. Variable NAMES and
    * states only; no value, no internal host, no heartbeat URL.
@@ -375,7 +377,7 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Prontidão dos provedores externos",
         description:
-          "Diz, sem expor segredos, quais provedores estão configurados e respondendo: e-mail (Resend, com o domínio do remetente), WhatsApp (Meta, com o status de cada template), push (Expo → FCM), armazenamento (R2), leitura de fotos (trajetto-ai, com o token), certificado ICP do comprovante e heartbeat do alerta externo. Lista os nomes das variáveis que faltam. As sondas são só de leitura, rodam em paralelo com limite de 2,5 s cada e ficam em cache por 30 s, compartilhado entre as réplicas (`cached` diz se a resposta veio do cache); `refresh=true` sonda de novo, no máximo uma vez a cada 5 s. Só MASTER.",
+          "Diz, sem expor segredos, quais provedores estão configurados e respondendo: e-mail (Resend, com o domínio do remetente), WhatsApp (Meta, com o status de cada template), push (Expo → FCM), armazenamento (R2), leitura de fotos (trajetto-ai, com o token), certificado ICP do comprovante e heartbeat do alerta externo. Lista os nomes das variáveis que faltam. As sondas são só de leitura e rodam em paralelo: cada tentativa tem até 3,5 s e, depois de uma falha que pode passar sozinha (tempo esgotado, rede, HTTP 5xx, resposta incompleta), há no máximo mais uma, dentro de 5 s por provedor; `attempts`, `transient` e `failure_kind` dizem como o veredito foi obtido. Uma recusa definitiva (chave, bucket, domínio) nunca é repetida nem atenuada. O relatório fica em cache por 30 s (5 s quando algum provedor está transitório), compartilhado entre as réplicas (`cached` diz se a resposta veio do cache); `refresh=true` sonda de novo, no máximo uma vez a cada 5 s. Só MASTER.",
         querystring: healthSchemas.providersQuery,
         response: {
           200: healthResponses.providerReadiness,
@@ -588,8 +590,11 @@ async function healthRoutes(app: FastifyInstance) {
    * is left alone, so a double click cannot send twice.
    *
    * E-mail is safe to replay within 24 hours of the first send (the delivery
-   * id is Resend's idempotency key). WhatsApp and push are not: a delivery
-   * marked FAILED after an ambiguous timeout may have arrived.
+   * id is Resend's idempotency key). WhatsApp is not: a delivery marked
+   * FAILED after an ambiguous timeout may have arrived. A push that did
+   * arrive is replaced on the device, not doubled: the delivery id goes as
+   * its `tag` to every device and as `collapseId` to iPhones only
+   * (push-provider.ts).
    */
   app.post(
     "/health/dead-letter/replay",
@@ -602,10 +607,11 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Reenvia notificações que falharam",
         description:
-          "Devolve os envios FAILED indicados para PENDING, com as tentativas zeradas, e acorda o pipeline. Envios em qualquer outro estado são ignorados. Só MASTER. Reenviar WhatsApp ou push pode duplicar uma mensagem que falhou num timeout ambíguo; o e-mail é deduplicado pelo provedor por 24 horas.",
+          "Devolve os envios FAILED indicados para PENDING, com as tentativas zeradas, e acorda o pipeline. Envios em qualquer outro estado são ignorados. Só MASTER. Reenviar WhatsApp pode duplicar uma mensagem que falhou num timeout ambíguo; o e-mail é deduplicado pelo provedor por 24 horas, e o push leva o id do envio como `tag` em todo aparelho (e como `collapseId` só no iPhone), então a cópia substitui a anterior no aparelho.",
         body: healthSchemas.deadLetterReplayBody,
         response: {
           200: healthResponses.deadLetterReplay,
+          400: healthResponses.deadLetterReplayInvalid,
         },
       },
     },
@@ -624,6 +630,75 @@ async function healthRoutes(app: FastifyInstance) {
           lastError: `Reenfileirada manualmente em ${new Date().toISOString()} por ${request.user.id}`,
         },
       });
+
+      NotificationPipelineService.getInstance().wake();
+
+      return reply.status(200).send({ requeued: result.count });
+    },
+  );
+
+  /**
+   * Expands FAILED outbox events again — the other half of the dead letter,
+   * which until now only had a listing (OUTBOX-15). An event that ran out of
+   * expansions (a database outage longer than the retry schedule, a policy
+   * bug fixed since) had no way back but SQL on production.
+   *
+   * Safe to repeat: the expansion is idempotent — createMany skipDuplicates
+   * over the (event, user, channel) and (event, external recipient, channel)
+   * unique keys, and a fenced PUBLISHED mark — so a replayed event creates
+   * only the deliveries it never created, and an event that went anywhere
+   * but FAILED in the meantime is not touched (a double click moves nothing
+   * twice). The deliveries it does create are ordinary rows: each keeps its
+   * own channel's dedupe (Resend key, delivery-id unique, push tag).
+   *
+   * Explicit ids, MASTER only, rate limited like the delivery replay. The
+   * durable audit trail is the warn log line below — who, which ids, how
+   * many moved. The row's lastError says who and when only until the next
+   * expansion, which overwrites it on a failure and clears it on PUBLISHED.
+   */
+  app.post(
+    "/health/dead-letter/events/replay",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyUserRole(["MASTER"])],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["health"],
+        summary: "Reprocessa eventos do outbox que falharam",
+        description:
+          "Devolve os eventos FAILED indicados (de GET /health/dead-letter/events) para PENDING, com as tentativas zeradas, e acorda o pipeline para expandi-los de novo. Eventos em qualquer outro estado são ignorados, então repetir o pedido não reprocessa nada duas vezes. A expansão é idempotente: só cria os envios que o evento ainda não tinha criado. Até 100 ids por pedido e 10 pedidos por minuto por usuário. O registro durável de quem pediu é a linha de log de aviso `failed outbox events requeued by hand` (usuário, ids e quantos voltaram); o `lastError` do evento mostra quem e quando só até a próxima expansão, que o substitui numa falha e o limpa quando o evento é publicado. Só MASTER: abrange todas as empresas.",
+        body: healthSchemas.deadLetterEventsReplayBody,
+        response: {
+          200: healthResponses.deadLetterEventsReplay,
+          400: healthResponses.deadLetterEventsReplayInvalid,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { eventIds } = request.body as z.infer<
+        typeof healthSchemas.deadLetterEventsReplayBody
+      >;
+
+      const result = await database.domainOutboxEvent.updateMany({
+        where: { id: { in: eventIds }, status: "FAILED" },
+        data: {
+          status: "PENDING",
+          attempts: 0,
+          availableAt: new Date(),
+          leaseExpiresAt: null,
+          lastError: `Reenfileirado manualmente em ${new Date().toISOString()} por ${request.user.id}`,
+        },
+      });
+
+      request.log.warn(
+        {
+          userId: request.user.id,
+          eventIds,
+          requeued: result.count,
+        },
+        "failed outbox events requeued by hand",
+      );
 
       NotificationPipelineService.getInstance().wake();
 

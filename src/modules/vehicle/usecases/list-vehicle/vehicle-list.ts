@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
+import { idSearchConditions } from "@/shared/pagination/id-search";
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import type { FacetCount } from "@/shared/pagination/list-meta";
 import type { SortOrder, SortSpec } from "@/shared/pagination/list-query";
@@ -75,9 +76,6 @@ interface VehicleListFilters {
 
 type VehicleFacet = "status" | "branch";
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * The listing's `where`, optionally without one facet: a number broken down
  * by a facet is counted with every OTHER filter applied (the disjunctive rule
@@ -102,9 +100,10 @@ function vehicleListWhere(
   if (term) {
     and.push(
       buildSearchOr<Prisma.VehicleWhereInput>([
-        // The id is copiable from the row menu, so pasting it must find the
-        // row — by equality: `contains` on the key cannot use its index.
-        ...(UUID_PATTERN.test(term) ? [{ id: term }] : []),
+        // The id the table shows (its tail) or the row menu copies (whole)
+        // finds the row: equality for a whole UUID, `endsWith` for a tail,
+        // nothing for any other term (shared/pagination/id-search).
+        ...idSearchConditions(term),
         { description: { contains: term, mode: "insensitive" } },
         { license_plate: { contains: term, mode: "insensitive" } },
         { brand: { contains: term, mode: "insensitive" } },

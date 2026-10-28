@@ -105,6 +105,13 @@ interface MaintenanceStatsResult {
   pending: number;
   recent: number;
   overdue: number;
+
+  /**
+   * Vehicles with no last maintenance date. Already inside `pending` (the
+   * rule puts them in "A vencer"); counted apart so the card can say how
+   * many of its "A vencer" only lack the record.
+   */
+  unrecorded: number;
 }
 
 interface VehicleTypeCountItem {

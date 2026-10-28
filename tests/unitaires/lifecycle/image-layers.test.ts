@@ -69,16 +69,17 @@ describe("the AI image's pip layers", () => {
     "requirements.txt",
   ];
 
+  const install = (file: string) =>
+    `RUN --mount=type=bind,source=${file},target=/tmp/requirements.txt pip install --require-hashes --no-deps -r /tmp/requirements.txt`;
+
   it("install one requirements file per layer, in the order they change, hashes required", () => {
     const installs = stage(ai, "base").filter((line) =>
       /pip install/.test(line),
     );
 
-    expect(installs).toEqual(
-      LAYERS.map(
-        (file) =>
-          `RUN --mount=type=bind,source=${file},target=/tmp/requirements.txt pip install --require-hashes --no-deps -r /tmp/requirements.txt`,
-      ),
+    // Each RUN may go on (`&& …`) to prune that same layer, nothing else.
+    expect(installs.map((line) => line.split(" && ")[0])).toEqual(
+      LAYERS.map(install),
     );
     // Bind-mounted, never COPY'd up front: one COPY of every file would put
     // each layer behind the most edited file.
@@ -86,6 +87,38 @@ describe("the AI image's pip layers", () => {
       stage(ai, "base").some((line) => /^COPY .*requirements/.test(line)),
     ).toBe(false);
     expect([...runtimeFiles].sort()).toEqual([...LAYERS].sort());
+  });
+
+  // Wheels ship test suites, cascades and tooling the OCR never imports
+  // (§14, measured on 28/10/2026: 1,444 files, ~31 MB). Deleted in the SAME
+  // RUN as their install: a later RUN would only hide them, and every pull
+  // would still carry them.
+  it("prune what the service never imports, inside the RUN that installed it", () => {
+    const base = stage(ai, "base");
+    const run = (file: string) =>
+      base.find((line) => line.startsWith(install(file))) ?? "";
+    const site =
+      'site="$(python -c \'import sysconfig; print(sysconfig.get_path("purelib"))\')"';
+
+    expect(run("requirements-opencv.txt")).toBe(
+      `${install("requirements-opencv.txt")} && ${site} && rm -f "$site"/cv2/data/*.xml`,
+    );
+    expect(run("requirements-onnxruntime.txt")).toBe(
+      `${install("requirements-onnxruntime.txt")} && ${site} && rm -rf "$site/onnxruntime/tools" "$site/onnxruntime/transformers" "$site/onnxruntime/quantization"`,
+    );
+    // numpy.testing imports numpy/_core/tests/_natype.py: kept, and the
+    // import is tried in the same RUN.
+    expect(run("requirements-numpy.txt")).toBe(
+      `${install("requirements-numpy.txt")} && ${site} && find "$site/numpy" -path '*/tests/*' ! -path '*/numpy/_core/tests/_natype.py' -delete && find "$site/numpy" -type d -name tests -empty -delete && python -c 'import numpy.testing'`,
+    );
+    expect(run("requirements-rapidocr.txt")).toBe(
+      install("requirements-rapidocr.txt"),
+    );
+    expect(run("requirements.txt")).toBe(install("requirements.txt"));
+    // No RUN of its own that deletes: it would reclaim nothing.
+    expect(
+      base.filter((line) => /^RUN /.test(line) && !/pip install/.test(line)),
+    ).toEqual([]);
   });
 
   it("pin and hash every package, each in exactly one layer", () => {
@@ -206,5 +239,156 @@ describe("the API image's build stage", () => {
       "COPY prisma/schema.prisma ./prisma/schema.prisma",
     );
     expect(builder.indexOf("RUN yarn build")).toBeGreaterThan(source);
+  });
+
+  // index.d.ts alone is ~7 MB, and tsup does not type-check.
+  it("drops the generated typings right after generating, before the source", () => {
+    const builder = stage(api, "builder");
+    const generate = builder.indexOf("RUN yarn prisma generate");
+
+    expect(builder[generate + 1]).toBe(
+      "RUN find node_modules/.prisma -name '*.d.ts' -delete",
+    );
+    expect(generate + 1).toBeLessThan(builder.indexOf("COPY . ."));
+  });
+});
+
+/**
+ * The API runtime (§14, measured on 28/10/2026 with the same sources: 115 →
+ * 88 MB compressed, 417 → 285 MB unpacked).
+ *
+ * - Alpine plus the node binary: the Node image's npm, corepack, yarn and C
+ *   headers no longer ride along under a whiteout, and only what the
+ *   binaries link against is installed.
+ * - That binary comes as a tree whose directories carry its own mtime, so
+ *   the ~46 MB layer is the same blob in every build, cached or not.
+ * - prod-deps drops what nothing loads (maps, typings, READMEs, @types, the
+ *   exceljs browser bundle) and the CLI's copy of the query engine; the CLI
+ *   takes the client's through PRISMA_QUERY_ENGINE_LIBRARY.
+ * - The runner copies the most stable first: a source-only commit re-ships
+ *   build/ alone (~1 MB compressed), never node_modules.
+ *
+ * The image itself runs before the push (deploy.yml, "Smoke test the API
+ * image"): migrations from an empty database, the seeds and the boot.
+ */
+const schema = read("prisma/schema.prisma");
+
+/** The query engine file of the musl entry of `binaryTargets`. */
+const muslEngine = (() => {
+  const targets = /binaryTargets\s*=\s*\[([^\]]*)\]/.exec(schema)?.[1] ?? "";
+  const musl = /"(linux-musl[^"]*)"/.exec(targets)?.[1];
+
+  expect(musl, "binaryTargets com linux-musl").toBeDefined();
+
+  return `libquery_engine-${musl}.so.node`;
+})();
+
+describe("the API image's runtime base", () => {
+  it("is the Alpine minor the node binary was built for", () => {
+    const node =
+      /^FROM node:[\d.]+-alpine(\d+\.\d+)@sha256:[0-9a-f]{64} AS node$/m.exec(
+        api,
+      )?.[1];
+    const alpine =
+      /^FROM alpine:(\d+\.\d+)\.\d+@sha256:[0-9a-f]{64} AS base$/m.exec(
+        api,
+      )?.[1];
+
+    expect(node, "FROM node:<versão>-alpine<minor>@sha256:… AS node").toMatch(
+      /^\d+\.\d+$/,
+    );
+    expect(alpine).toBe(node);
+  });
+
+  it("takes only the node binary from the Node image, as a reproducible tree", () => {
+    const all = instructions(api);
+
+    expect(all.filter((line) => /^FROM /.test(line))).toEqual([
+      expect.stringMatching(/^FROM node:\S+ AS node$/),
+      "FROM node AS node-binary",
+      expect.stringMatching(/^FROM alpine:\S+ AS base$/),
+      "FROM node AS deps",
+      "FROM node AS builder",
+      "FROM node AS prod-deps",
+      "FROM base AS runner",
+    ]);
+    // Its directories take the binary's mtime: stamped with the build's
+    // time, every uncached build made a new blob of the same binary.
+    expect(stage(api, "node-binary").slice(1)).toEqual([
+      "RUN mkdir -p /out/usr/local/bin && cp -p /usr/local/bin/node /out/usr/local/bin/node && touch -h -r /usr/local/bin/node /out/usr/local/bin /out/usr/local /out/usr",
+    ]);
+    expect(all.filter((line) => /--from=node/.test(line))).toEqual([
+      "COPY --link --from=node-binary /out/ /",
+    ]);
+  });
+
+  it("installs only what node, bcrypt and the Prisma engines link against", () => {
+    const base = stage(api, "base");
+
+    expect(base).toContain(
+      "RUN apk upgrade --no-cache libcrypto3 libssl3 && apk add --no-cache ca-certificates dumb-init libssl3 libstdc++",
+    );
+    // Nothing here is linked against glibc, nothing calls procps, and
+    // Prisma finds libssl.so.3 without the openssl binary (measured).
+    expect(instructions(api).join("\n")).not.toMatch(
+      /libc6-compat|gcompat|procps|apk add[^\n]* openssl\b/,
+    );
+
+    const runner = stage(api, "runner");
+
+    expect(runner).toContain("USER nodejs");
+    expect(runner).toContain('ENTRYPOINT ["dumb-init", "--"]');
+  });
+});
+
+describe("the API image's node_modules", () => {
+  it("prune what nothing loads at run time, in the stage that is not shipped", () => {
+    const prodDeps = stage(api, "prod-deps");
+
+    expect(prodDeps[prodDeps.length - 1]).toBe(
+      "RUN find node_modules -type f \\( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -iname '*.md' -o -iname '*.markdown' \\) -delete && " +
+        "rm -rf node_modules/@types node_modules/exceljs/dist && " +
+        `rm node_modules/@prisma/engines/${muslEngine}`,
+    );
+    // Nothing deletes in the runner: a later layer would only hide files.
+    expect(
+      stage(api, "runner").filter((line) => /^RUN .*\brm\b/.test(line)),
+    ).toEqual([]);
+  });
+
+  it("hand the Prisma CLI the client's engine, named after the musl binaryTarget", () => {
+    const runner = stage(api, "runner");
+
+    expect(runner).toContain(
+      `ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/${muslEngine}`,
+    );
+    // Declared before the first COPY: a constant, so no layer changes with it.
+    expect(
+      runner.findIndex((line) =>
+        line.startsWith("ENV PRISMA_QUERY_ENGINE_LIBRARY="),
+      ),
+    ).toBeLessThan(runner.findIndex((line) => /^COPY /.test(line)));
+  });
+
+  it("copy the most stable first, and build/ last", () => {
+    const runner = stage(api, "runner");
+
+    expect(runner.filter((line) => /^COPY /.test(line))).toEqual([
+      "COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules",
+      "COPY --from=builder --chown=nodejs:nodejs /app/node_modules/.prisma ./node_modules/.prisma",
+      "COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-xlsx.xlsx ./tabela-codigo-infracoes-renainf-xlsx.xlsx",
+      "COPY --from=builder --chown=nodejs:nodejs /app/infra/scripts/docker-entrypoint.sh ./docker-entrypoint.sh",
+      "COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json",
+      "COPY --from=builder --chown=nodejs:nodejs /app/prisma ./prisma",
+      "COPY --from=builder --chown=nodejs:nodejs /app/build/src/modules ./src/modules",
+      "COPY --from=builder --chown=nodejs:nodejs /app/build ./build",
+    ]);
+    // The entrypoint's RUN sits before the layers a commit changes, so it
+    // stays cached (a re-run makes a new blob: the file's mtime).
+    expect(runner.findIndex((line) => line.startsWith("RUN sed"))).toBeLessThan(
+      runner.indexOf(
+        "COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json",
+      ),
+    );
   });
 });

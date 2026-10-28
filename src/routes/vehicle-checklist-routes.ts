@@ -105,7 +105,7 @@ async function vehicleChecklistRoutes(app: FastifyInstance) {
         tags: ["vehicle-checklist"],
         summary: "Lista os checklists da empresa",
         description:
-          "Checklists de UMA empresa, paginados: o MASTER informa `businessId`; os demais veem a própria, e o motorista só os dele. Ordena no servidor (`sort`/`order`) e filtra por condição geral, filial e veículo (um ou mais valores separados por vírgula), além da busca livre (ID, observações, veículo, motorista ou filial). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões por condição e as opções dos filtros com as contagens.",
+          "Checklists de UMA empresa, paginados: o MASTER informa `businessId`; os demais veem a própria, e o motorista só os dele. Ordena no servidor (`sort`/`order`) e filtra por condição geral, filial e veículo (um ou mais valores separados por vírgula), além da busca livre (ID, observações, veículo, motorista ou filial). O ID vale inteiro ou só o final que a tabela mostra (pelo menos 8 caracteres hexadecimais). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões por condição e as opções dos filtros com as contagens.",
         querystring: vehicleChecklistSchemas.listVehicleChecklist,
         response: {
           200: ndjsonList(

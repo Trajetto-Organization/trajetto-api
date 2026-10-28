@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
+import { codedRefusal } from "./common-responses";
+
 /**
  * Mirrors the Prisma `NotificationChannel` enum. The OpenAPI contract has to
  * spell the values out, so they are repeated here instead of derived — the
@@ -177,6 +179,26 @@ const providerReadiness = z.object({
     .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
     .describe(
       "Estado sem segredo: domínio do remetente, status de cada template (template:<nome>), validade do certificado…",
+    ),
+  attempts: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      "Tentativas da sonda (0 quando nada foi sondado). No máximo 2: a segunda só depois de uma falha que pode passar sozinha (tempo esgotado, rede, HTTP 5xx, resposta incompleta).",
+    ),
+  transient: z
+    .boolean()
+    .optional()
+    .describe(
+      "O veredito depende de uma condição passageira: uma tentativa falhou por tempo, rede, 5xx, 429 ou resposta incompleta, ou a resposta veio lenta. Com status warning é instabilidade; com error são falhas seguidas que a próxima verificação pode desfazer. Um relatório com algum provedor transitório fica em cache por 5 s, não 30. Uma recusa definitiva (chave, bucket, domínio) nunca é transitória.",
+    ),
+  failure_kind: z
+    .enum(["timeout", "network", "http_5xx", "throttled", "invalid_response"])
+    .nullable()
+    .optional()
+    .describe(
+      "O que a última tentativa que falhou encontrou: timeout (sem resposta no prazo), network (rede ou DNS), http_5xx (o provedor respondeu erro interno), throttled (HTTP 429), invalid_response (resposta cortada ou ilegível). null quando nenhuma tentativa falhou.",
     ),
 });
 
@@ -577,9 +599,16 @@ const healthResponses = {
     cached: z
       .boolean()
       .describe(
-        "A leitura veio do cache de 30 s desta réplica (use refresh=true para sondar de novo).",
+        "true: o relatório veio de uma cópia em cache, a desta réplica ou a compartilhada pelas réplicas no Redis (sem Redis, cada réplica guarda a sua). A cópia vale 30 s, ou 5 s quando algum provedor está transitório. false: as sondas rodaram agora. refresh=true sonda de novo, no máximo uma vez a cada 5 s.",
       ),
-    providers: z.array(providerReadiness),
+    // The report is shared through Redis, so during a rolling deploy a copy
+    // written by the previous version (without the attempt fields) can be
+    // served; required fields would fail its serialisation.
+    providers: z
+      .array(providerReadiness)
+      .describe(
+        "Um item por provedor. `attempts`, `transient` e `failure_kind` só faltam num relatório guardado em cache por uma versão anterior da API, durante uma atualização.",
+      ),
   }),
   deadLetter: z.object({
     data: z.array(
@@ -637,9 +666,24 @@ const healthResponses = {
     requeued: z
       .number()
       .describe(
-        "How many of the given deliveries were FAILED and went back to the queue.",
+        "Quantos dos envios indicados estavam FAILED e voltaram para a fila.",
       ),
   }),
+  deadLetterEventsReplay: z.object({
+    requeued: z
+      .number()
+      .describe(
+        "Quantos dos eventos indicados estavam FAILED e voltaram para a fila do outbox.",
+      ),
+  }),
+  deadLetterReplayInvalid: codedRefusal(
+    "VALIDATION_ERROR (com `issues`): `deliveryIds` ausente, vazio, com mais de 500 itens ou com um id que não é UUID, ou `businessId` enviado. MALFORMED_REQUEST: o corpo não é um JSON válido. Nada voltou para a fila.",
+    ["VALIDATION_ERROR", "MALFORMED_REQUEST"],
+  ),
+  deadLetterEventsReplayInvalid: codedRefusal(
+    "VALIDATION_ERROR (com `issues`): `eventIds` ausente, vazio, com mais de 100 itens ou com um id que não é UUID, ou `businessId` enviado. MALFORMED_REQUEST: o corpo não é um JSON válido. Nada voltou para a fila.",
+    ["VALIDATION_ERROR", "MALFORMED_REQUEST"],
+  ),
   deadLetterEvents: z.object({
     data: z.array(
       z.object({
@@ -677,7 +721,17 @@ const healthSchemas = {
       .min(1, "Informe ao menos uma entrega.")
       .max(500, "No máximo 500 entregas por vez.")
       .describe(
-        "FAILED notification_delivery ids to send again. Ids of deliveries in any other state are ignored.",
+        "IDs de notification_delivery em FAILED (os de GET /health/dead-letter) para enviar de novo. Envios em qualquer outro estado são ignorados.",
+      ),
+  }),
+  deadLetterEventsReplayBody: z.object({
+    ...tenantLockedShape,
+    eventIds: z
+      .array(z.string().uuid("ID de evento inválido."))
+      .min(1, "Informe ao menos um evento.")
+      .max(100, "No máximo 100 eventos por vez.")
+      .describe(
+        "IDs de domain_outbox_event em FAILED (os de GET /health/dead-letter/events) para expandir de novo. Eventos em qualquer outro estado são ignorados.",
       ),
   }),
   /**
@@ -715,7 +769,7 @@ const healthSchemas = {
       .optional()
       .transform((value) => value === "true")
       .describe(
-        "true: ignora o cache de 30 s e sonda os provedores de novo (no máximo uma vez a cada 5 s; antes disso responde o relatório que já existe).",
+        "true: ignora o cache (30 s, ou 5 s com provedor transitório) e sonda os provedores de novo (no máximo uma vez a cada 5 s; antes disso responde o relatório que já existe).",
       ),
   }),
   deadLetterEventsQuery: z.object({

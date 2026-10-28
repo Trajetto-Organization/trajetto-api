@@ -81,6 +81,17 @@ interface ImportDeliverySpreadsheetRequest {
  */
 const HEARTBEAT_EVERY_ROWS = 25;
 
+/**
+ * The import queue asked the running upload to stop: the replica is shutting
+ * down (import-queue.ts). Thrown between two rows, caught by `process`.
+ */
+class ImportStoppedError extends Error {
+  constructor() {
+    super("import stopped: the replica is shutting down");
+    this.name = "ImportStoppedError";
+  }
+}
+
 /** What an upload has decided so far — readable when it is interrupted. */
 interface ImportProgress {
   rows: ImportRowResult[];
@@ -204,10 +215,15 @@ class ImportDeliverySpreadsheetUseCase {
 
     const { businessId } = request;
 
+    // Whether the run got past reading the file. Before that nothing can be
+    // written once it was asked to stop (the first row checks the signal);
+    // from then on a row's commit may still land after a hand-back's count.
+    let reachedRows = false;
+
     ticket.submit({
       importId: record.id,
       heartbeat: () => this.importRepository.touchImport(record.id, businessId),
-      run: async () => {
+      run: async (signal) => {
         let parsed: ReturnType<typeof parseDeliverySpreadsheet>;
 
         try {
@@ -220,7 +236,20 @@ class ImportDeliverySpreadsheetUseCase {
           return;
         }
 
-        await this.process(record, parsed, { ...request, timeZone });
+        reachedRows = true;
+
+        await this.process(record, parsed, { ...request, timeZone }, signal);
+      },
+      // The replica is shutting down (import-queue.ts): closed now, with
+      // the deliveries counted from the rows, instead of after the sweep. A
+      // big workbook still being read when the stop grace ran out created
+      // nothing, and its report says so instead of "estorne".
+      abandon: async (stage) => {
+        await this.importRepository.closeInterruptedImport(
+          record.id,
+          businessId,
+          stage === "waiting" || !reachedRows ? "not-started" : "stopped",
+        );
       },
     });
 
@@ -315,7 +344,10 @@ class ImportDeliverySpreadsheetUseCase {
     });
   }
 
-  /** The rows of an opened record, closing it whatever happens. */
+  /**
+   * The rows of an opened record, closing it whatever happens. `signal`
+   * (the import queue's, on shutdown) stops it at the next row.
+   */
   private async process(
     record: ImportRecord,
     parsed: ReturnType<typeof parseDeliverySpreadsheet>,
@@ -326,24 +358,41 @@ class ImportDeliverySpreadsheetUseCase {
       filename,
       timeZone,
     }: ImportDeliverySpreadsheetRequest & { timeZone: string },
+    signal?: AbortSignal,
   ): Promise<ImportRecord> {
     const progress: ImportProgress = { rows: [], line: null };
 
     try {
-      return await this.importRows(record, parsed, progress, {
-        userId,
-        businessId,
-        shipperId,
-        filename,
-        timeZone,
-      });
+      return await this.importRows(
+        record,
+        parsed,
+        progress,
+        {
+          userId,
+          businessId,
+          shipperId,
+          filename,
+          timeZone,
+        },
+        signal,
+      );
     } catch (error) {
       // A failure the process survives — a pool timeout on a lookup, the
       // database dropping the connection — used to leave the upload
       // IN_PROGRESS for good, and the undo refuses a running upload: the rows
       // it had created could never be taken back (IDEMP-10). It is closed
       // here with what it did, and the line it stopped at.
-      await this.closeInterrupted(record.id, businessId, parsed, progress);
+      await this.closeInterrupted(
+        record.id,
+        businessId,
+        parsed,
+        progress,
+        error instanceof ImportStoppedError ? "shutdown" : "failure",
+      );
+
+      // Stopping on shutdown is not a failure to log as one: the record
+      // already says what happened.
+      if (error instanceof ImportStoppedError) return record;
 
       throw error;
     }
@@ -402,6 +451,7 @@ class ImportDeliverySpreadsheetUseCase {
       filename,
       timeZone,
     }: Omit<ImportDeliverySpreadsheetRequest, "content"> & { timeZone: string },
+    signal?: AbortSignal,
   ): Promise<ImportRecord> {
     const rows = progress.rows;
 
@@ -419,6 +469,11 @@ class ImportDeliverySpreadsheetUseCase {
 
     for (const [index, row] of parsed.rows.entries()) {
       progress.line = row.line;
+
+      // The replica is shutting down: stop between two rows — each row is
+      // its own commit, so everything before this line is whole — and let
+      // `process` close the record from here.
+      if (signal?.aborted) throw new ImportStoppedError();
 
       // The heartbeat: what tells a long upload that is alive from one whose
       // process died, for the close-abandoned-imports sweep.
@@ -640,7 +695,21 @@ class ImportDeliverySpreadsheetUseCase {
     businessId: string,
     parsed: ReturnType<typeof parseDeliverySpreadsheet>,
     progress: ImportProgress,
+    cause: "failure" | "shutdown" = "failure",
   ): Promise<void> {
+    // What stopped it, in the operator's words: a deploy is not a fault.
+    const stoppedBy =
+      cause === "shutdown"
+        ? "pelo reinício do servidor"
+        : "por uma falha do servidor";
+
+    // Stopped by the shutdown between two rows before any was created (it
+    // finished reading the file only after it was asked to stop): nothing
+    // to undo. Only for the shutdown, whose stop never lands mid-row.
+    const nothingCreated =
+      cause === "shutdown" &&
+      !progress.rows.some((row) => row.outcome === "imported");
+
     const interruption: ImportRowResult =
       progress.line !== null
         ? {
@@ -648,10 +717,13 @@ class ImportDeliverySpreadsheetUseCase {
             outcome: "invalid",
             recipient_name: null,
             reference: null,
-            message:
-              "Importação interrompida por uma falha do servidor nesta linha: " +
-              "ela e as seguintes não foram processadas. Estorne esta " +
-              "importação e envie o arquivo de novo.",
+            message: nothingCreated
+              ? `Importação interrompida ${stoppedBy} nesta linha: ela e ` +
+                "as seguintes não foram processadas e nenhuma entrega foi " +
+                "criada. Envie o arquivo de novo."
+              : `Importação interrompida ${stoppedBy} nesta linha: ` +
+                "ela e as seguintes não foram processadas. Estorne esta " +
+                "importação e envie o arquivo de novo.",
           }
         : {
             // Every row was decided; the routes were being built. Line 1,
@@ -661,7 +733,7 @@ class ImportDeliverySpreadsheetUseCase {
             recipient_name: null,
             reference: null,
             message:
-              "Importação interrompida por uma falha do servidor ao montar as " +
+              `Importação interrompida ${stoppedBy} ao montar as ` +
               "rotas: as entregas foram criadas, mas podem ter ficado sem " +
               "rota. Estorne esta importação e envie o arquivo de novo.",
           };

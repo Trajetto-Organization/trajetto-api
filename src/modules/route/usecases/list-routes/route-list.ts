@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
+import { idSearchConditions } from "@/shared/pagination/id-search";
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import {
   routeCodeFromSearch,
@@ -126,6 +127,9 @@ function routeListWhere(
 
     and.push(
       buildSearchOr<Prisma.RouteWhereInput>([
+        // The id the board shows (its tail) or copies (whole): see
+        // shared/pagination/id-search. Nothing for a term not shaped like one.
+        ...idSearchConditions(term),
         { name: { contains: term, mode: "insensitive" } },
         { destination: { contains: term, mode: "insensitive" } },
         { driver: { name: { contains: term, mode: "insensitive" } } },

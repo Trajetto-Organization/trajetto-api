@@ -10,6 +10,7 @@ import {
   SearchVehicleWithCursorProps,
   CursorPaginatedVehicle,
   VehicleUsageCounts,
+  VehicleStatusCounts,
 } from "../dtos/vehicle-dto";
 
 import type { VehicleListFilters } from "../usecases/list-vehicle/vehicle-list";
@@ -127,8 +128,14 @@ interface IVehicleRepository {
   /** What still references the vehicle, counted, not loaded (FLEET-VEH-10). */
   countVehicleUsage: (vehicleId: string) => Promise<VehicleUsageCounts>;
 
-  countActiveVehiclesByBusinessId: (businessId: string) => Promise<number>;
-  countInactiveVehiclesByBusinessId: (businessId: string) => Promise<number>;
+  /**
+   * The company's whole fleet by status, in one grouped count: what the
+   * plan's slots read (every status but INACTIVE occupies one, see
+   * occupiesFleetSlot) and the card's breakdown, from the same rows.
+   */
+  countVehiclesByStatusForBusiness: (
+    businessId: string,
+  ) => Promise<VehicleStatusCounts>;
 }
 
 export { IVehicleRepository };

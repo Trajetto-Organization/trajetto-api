@@ -69,6 +69,13 @@ antigo da `main` (Mermaid renderizado pelo GitHub):
 - **Expandir:** os fluxos principais (sessão, upload, filas, tempo real e
   deploy) ficam recolhidos em [Fluxos em detalhe](#fluxos-em-detalhe); abra o
   que precisar.
+- **Avançar passo a passo:** o
+  [Tour pela arquitetura](./arquitetura-tour.md) redesenha este mapa em onze
+  passos (o caminho de uma requisição, sessão, tenant, arquivos, filas,
+  notificações, tempo real, IA, importações, deploy e saúde), acende só as
+  peças de cada um e tem links ◀ Anterior · Índice · Próximo ▶. O passo 1 é a
+  versão de hoje do diagrama "Fluxo de Dados" do README da `main` antiga, cuja
+  "Email Queue" era o RabbitMQ.
 
 Cada relação foi conferida no código (o arquivo está na tabela). Linha cheia é
 chamada síncrona; tracejada é assíncrona ou de volta (callback, push, backup).
@@ -89,7 +96,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets de socket")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -119,7 +126,7 @@ flowchart LR
   nav -->|"PUT pré-assinado"| r2
   app -->|"PUT pré-assinado"| r2
   api -->|"Prisma, SKIP LOCKED + lease"| pg
-  api -->|"contadores, pub/sub, tickets"| rd
+  api -->|"chaves curtas que expiram"| rd
   api -->|"POST /v1/read"| ai
   api -->|"pré-assina, confere, lê"| r2
   api -->|"SMTP"| resend
@@ -180,7 +187,7 @@ flowchart LR
 | Monitor externo                | dead man's switch                                                                           | o cron `ops-heartbeat` avisa `HEALTHCHECK_PING_URL` a cada minuto (`src/jobs/cron/ops-heartbeat-job.ts`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | [`deploy.md`, seção 20](./deploy.md#20-alertas-e-monitoramento)                     |
 | GitHub Actions, GHCR e Dokploy | uma imagem por serviço, promovida por digest                                                | `deploy.yml` constrói `sha-<sha>`, move `staging` e depois `stable` e chama `application.deploy` (`.github/scripts/dokploy-deploy.mjs`); cada serviço é uma Application (provider Docker) ou um Database do Dokploy, nunca Compose                                                                                                                                                                                                                                                                                                                                                                         | [`deploy.md`](./deploy.md)                                                          |
 | EAS                            | build e OTA do app                                                                          | o `deploy.yml` do app publica OTA e, se o lado nativo mudou, APK/AAB; promove o commit, não o artefato                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `trajetto-mobile/docs/deploy.md`                                                    |
-| ~~RabbitMQ~~                   | **legado, removido em 09/2026**                                                             | servia só o e-mail; hoje o e-mail sai pelo pipeline de notificações (e o transacional com segredo, como 2FA e senha, por `src/shared/services/transactional-mail-service.ts`). A imagem antiga da `main` ainda exige `RABBITMQ_URL`                                                                                                                                                                                                                                                                                                                                                                        | [Postgres é a fila](#postgres-é-a-fila)                                             |
+| ~~RabbitMQ~~                   | **legado, removido em 09/2026**                                                             | servia três filas na `main` antiga: e-mail (`emailQueue`), WhatsApp pela Evolution API (`whatsappQueue`) e verificação de fotos pela Anthropic (`aiVerificationQueue`). Hoje o e-mail e o WhatsApp (Meta) saem pelo pipeline de notificações (o e-mail transacional com segredo, como 2FA e senha, por `src/shared/services/transactional-mail-service.ts`), e a leitura de fotos pela fila `ai_analysis_request` até o `trajetto-ai`, tudo em tabelas do Postgres ([ADR 0001](./adr/0001-filas-e-mensageria.md)). A imagem antiga da `main` ainda exige `RABBITMQ_URL`                                    | [Postgres é a fila](#postgres-é-a-fila)                                             |
 
 ### Fluxos em detalhe
 
@@ -263,9 +270,11 @@ flowchart LR
   class rmq legacy
 ```
 
-O evento só existe se o dado foi gravado (ADR 0003). Retentativa com backoff,
-dead letter com reenvio e idempotência dos efeitos externos (ADRs 0005 e
-0006). Os crons usam um lease no Postgres por horário, então várias réplicas
+O evento só existe se o dado foi gravado
+([ADR 0003](./adr/0003-outbox-transacional.md)). Retentativa com backoff,
+dead letter com reenvio e idempotência dos efeitos externos
+([ADRs 0005](./adr/0005-retentativa-backoff-dead-letter.md) e
+[0006](./adr/0006-idempotencia-de-efeitos-externos.md)). Os crons usam um lease no Postgres por horário, então várias réplicas
 não repetem um job.
 
 </details>
@@ -296,7 +305,8 @@ sequenceDiagram
   A1-->>M: evento da sala do usuário
 ```
 
-A entrega é _at-most-once_ (ADR 0007): a verdade está no banco, e as telas
+A entrega é _at-most-once_ ([ADR 0007](./adr/0007-tempo-real-at-most-once.md)):
+a verdade está no banco, e as telas
 refazem a consulta ao reconectar. Sem Redis, o tempo real entre réplicas
 degrada e o resto da API continua.
 
@@ -447,8 +457,10 @@ o Node é filho direto do `dumb-init`, então o SIGTERM do deploy chega a ele.
 
 O desligamento é ordenado (`src/shared/lifecycle/shutdown.ts`): a readiness
 passa a 503, a réplica espera 12 s para sair do balanceamento do serviço,
-fecha o tempo real, o HTTP, os workers e o Redis, com teto de 35 s (abaixo dos
-40 s do _Stop Grace Period_ da Application no Dokploy).
+fecha o tempo real e o HTTP, espera a fila de importações drenar, e então
+fecha os workers e o Redis, com teto de 35 s (abaixo dos 40 s do _Stop Grace
+Period_ da Application no Dokploy). O dreno das importações começa no
+primeiro instante do SIGTERM (ver [Arquivos](#arquivos)).
 
 Separar workers do HTTP é possível com a mesma imagem (`WORKERS_ENABLED=false`
 nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
@@ -522,11 +534,16 @@ nas réplicas HTTP e uma Application `worker`), só por gatilho medido:
 Não há broker (o RabbitMQ saiu em 09/2026). As filas são tabelas
 (`domain_outbox_event`, `notification_delivery`, `webhook_delivery`,
 `ai_analysis_request`) lidas com `FOR UPDATE SKIP LOCKED` e lease. O evento
-nasce na mesma transação do dado (outbox transacional, ADR 0003), então nada é
-anunciado sem ter sido gravado. Retentativa com backoff e dead letter
-(`/health/dead-letter`, com replay) seguem a política do ADR 0005; efeitos
-externos levam chave de idempotência (ADR 0006). Os gatilhos para um dia
-adotar broker estão no ADR 0001 (só por medição).
+nasce na mesma transação do dado (outbox transacional,
+[ADR 0003](./adr/0003-outbox-transacional.md)), então nada é anunciado sem ter
+sido gravado. Retentativa com backoff e dead letter (`/health/dead-letter` e
+`/health/dead-letter/events`, cada um com o seu replay) seguem a política do
+[ADR 0005](./adr/0005-retentativa-backoff-dead-letter.md); efeitos externos
+levam chave de idempotência
+([ADR 0006](./adr/0006-idempotencia-de-efeitos-externos.md)). A `main` antiga
+usava RabbitMQ para e-mail, WhatsApp e verificação por IA; a revisão de
+28/10/2026 e os gatilhos para um dia adotar broker (só por medição) estão no
+[ADR 0001](./adr/0001-filas-e-mensageria.md).
 
 ## Crons
 
@@ -535,28 +552,31 @@ Registrados em `src/jobs/cron/index.ts`. Horário em UTC (o contêiner não tem
 execução por horário com várias réplicas, e um catch-up refaz jobs diários
 perdidos.
 
-| Job                                  | Quando (UTC)  | O que faz                                                                                                       |
-| ------------------------------------ | ------------- | --------------------------------------------------------------------------------------------------------------- |
-| `ops-heartbeat`                      | a cada minuto | avalia as regras de operação e avisa o monitor externo (`HEALTHCHECK_PING_URL`)                                 |
-| `escalate-occurrence-authorizations` | a cada minuto | pedido de autorização sem resposta da torre em 10 min vai aos administradores, uma vez                          |
-| `repair-unticketed-messages`         | a cada minuto | arquiva em ticket a mensagem gravada sem ticket por uma imagem antiga                                           |
-| `close-abandoned-imports`            | a cada 5 min  | fecha importação que ficou `IN_PROGRESS` num processo que morreu                                                |
-| `reconcile-proof-analysis`           | a cada 10 min | pede de novo a leitura de IA de um comprovante cujo pedido se perdeu                                            |
-| `check-push-receipts`                | a cada 15 min | lê os recibos da Expo e desativa aparelhos mortos                                                               |
-| `cleanup-expired-refresh-tokens`     | 03:17         | remove refresh tokens vencidos                                                                                  |
-| `cleanup-notification-pipeline`      | 03:30         | limpa entregas de notificação antigas                                                                           |
-| `cleanup-ai-pipeline`                | 03:45         | limpa pedidos de IA antigos                                                                                     |
-| `cleanup-user-history`               | 04:00         | limpa histórico antigo do usuário (a trilha de auditoria só com `ACTIVITY_RETENTION_DAYS`, nunca abaixo de 365) |
-| `driver-position-partitions`         | 04:10         | cria e remove partições diárias de `driver_position` (90 dias)                                                  |
-| `cleanup-webhook-deliveries`         | 04:20         | remove entregas de webhook resolvidas fora da janela de reenvio                                                 |
-| `cleanup-orphan-uploads`             | 04:50         | conta (ou remove, com `UPLOAD_ORPHAN_GC=delete`) objetos do bucket sem linha                                    |
+| Job                                  | Quando (UTC)              | O que faz                                                                                                                              |
+| ------------------------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `ops-heartbeat`                      | a cada minuto             | avalia as regras de operação e avisa o monitor externo (`HEALTHCHECK_PING_URL`)                                                        |
+| `escalate-occurrence-authorizations` | a cada minuto             | pedido de autorização sem resposta da torre em 10 min vai aos administradores, uma vez                                                 |
+| `repair-unticketed-messages`         | a cada minuto             | arquiva em ticket a mensagem gravada sem ticket por uma imagem antiga                                                                  |
+| `close-abandoned-imports`            | a cada 5 min              | fecha importação que ficou `IN_PROGRESS` num processo que morreu                                                                       |
+| `reconcile-proof-analysis`           | a cada 10 min             | pede de novo a leitura de IA de um comprovante cujo pedido se perdeu                                                                   |
+| `reconcile-record-analysis`          | a cada 10 min (:05, :15…) | o mesmo para abastecimentos e checklists `pending` sem pedido e com foto legível, de 10 min a 2 dias, sem gastar quota com o histórico |
+| `check-push-receipts`                | a cada 15 min             | lê os recibos da Expo e desativa aparelhos mortos                                                                                      |
+| `cleanup-expired-refresh-tokens`     | 03:17                     | remove refresh tokens vencidos                                                                                                         |
+| `cleanup-notification-pipeline`      | 03:30                     | limpa entregas de notificação antigas                                                                                                  |
+| `cleanup-ai-pipeline`                | 03:45                     | limpa pedidos de IA antigos                                                                                                            |
+| `cleanup-user-history`               | 04:00                     | limpa histórico antigo do usuário (a trilha de auditoria só com `ACTIVITY_RETENTION_DAYS`, nunca abaixo de 365)                        |
+| `driver-position-partitions`         | 04:10                     | cria e remove partições diárias de `driver_position` (90 dias)                                                                         |
+| `cleanup-webhook-deliveries`         | 04:20                     | remove entregas de webhook resolvidas fora da janela de reenvio                                                                        |
+| `cleanup-api-usage`                  | 04:35                     | remove contadores diários de uso da API pública com mais de 400 dias                                                                   |
+| `cleanup-orphan-uploads`             | 04:50                     | conta (ou remove, com `UPLOAD_ORPHAN_GC=delete`) objetos do bucket sem linha                                                           |
 
 O backup diário do Dokploy (03:00 UTC, aba _Backups_ do Database) roda antes do
 primeiro job que apaga dados.
 
 ## Redis e tempo real
 
-**Redis** (ADR 0002) tem três usos, e nenhum é fonte de verdade:
+**Redis** ([ADR 0002](./adr/0002-redis-descartavel.md)) tem cinco usos, e
+nenhum é fonte de verdade:
 
 - contadores de rate limit (HTTP, handshake do socket e falhas de chave da
   API pública), que falham aberto;
@@ -572,7 +592,8 @@ primeiro job que apaga dados.
   vale 30 s e abre um socket só; o Redis guarda só o hash. Sem Redis, a web
   não abre socket novo, e o resto funciona.
 - as fotos curtas de leituras **da plataforma** que só o MASTER vê
-  (`src/shared/cache/snapshot-cache.ts`): a prontidão dos provedores (30 s) e
+  (`src/shared/cache/snapshot-cache.ts`): a prontidão dos provedores (30 s, ou 5 s
+  quando algum provedor está transitório: o TTL vem do conteúdo) e
   os números do dashboard global do MASTER (60 s). A réplica que recebe o
   próximo pedido serve a foto em vez de chamar a Meta ou contar a plataforma
   de novo. Nunca dado de empresa nem de pessoa (o feed de atividades do
@@ -584,7 +605,8 @@ Não há sessão, lock nem fila no Redis, e cache só o descrito acima. Se ele
 cair, o tempo real entre réplicas degrada e o resto funciona. Em produção ele
 não persiste nada.
 
-**Tempo real** (ADR 0007): Socket.IO só com WebSocket, salas por usuário,
+**Tempo real** ([ADR 0007](./adr/0007-tempo-real-at-most-once.md)): Socket.IO
+só com WebSocket, salas por usuário,
 sessão, empresa (`business:<id>`) e operação (`operations:<id>`). A
 autorização é relida do banco a cada inscrição e revalidada periodicamente
 (`SOCKET_REVALIDATE_MS`, 3 min com jitter). A entrega é _at-most-once_: a
@@ -593,7 +615,8 @@ catálogo emitem `catalogChanged` `{ businessId, entity }` depois do commit, e
 a web invalida a lista daquela entidade. `SOCKET_ADAPTER_KEY` separa os canais
 de dois ambientes que dividam um Redis (Pub/Sub ignora o número do banco).
 
-**Escala horizontal** (ADR 0008): N réplicas idênticas atrás do Traefik, sem
+**Escala horizontal** ([ADR 0008](./adr/0008-escala-horizontal.md)): N
+réplicas idênticas atrás do Traefik, sem
 cookie sticky; o estado está no Postgres; os crons e as filas não duplicam
 trabalho; o adapter Redis leva os eventos. Provado em
 `tests/E2E/multi-replica-events.test.ts` e no harness de carga
@@ -607,7 +630,19 @@ a chave para a API, que confere dono, tamanho e existência. A leitura também �
 por URL assinada de curta duração (`UPLOAD_SIGNED_URL_TTL_SECONDS`). Em
 desenvolvimento, `UPLOAD_STORAGE_TYPE=local` grava em `./tmp`; produção recusa
 `local`. Um coletor noturno conta (ou apaga) objetos de 30 a 33 dias que
-nenhuma linha referencia; na dúvida, guarda (ADR 0006).
+nenhuma linha referencia; na dúvida, guarda
+([ADR 0006](./adr/0006-idempotencia-de-efeitos-externos.md)).
+
+O cliente S3 da API (`createR2Client` em
+`src/shared/services/upload-service.ts`) tem prazos desde 28/10/2026: 5 s para
+conectar, 15 s por tentativa (com `throwOnRequestTimeout`, sem o qual o
+`@smithy/node-http-handler` só registrava um aviso), até 3 tentativas e um
+teto por operação que soma todas elas (10 s no `HeadObject`, 30 s para enviar
+ou baixar um corpo e para limpezas). Um R2 que não responde vira
+`503 STORAGE_UNAVAILABLE`, e `readObject` distingue o objeto que falta (`null`)
+do armazenamento que não respondeu (503): antes, um R2 lento imprimia "foto
+ausente" num PDF de comprovante guardado para sempre. A pré-assinatura não
+muda (é local).
 
 Existe um adaptador multipart temporário para abastecimento e checklist (o
 binário antigo do app); ver [compatibilidade](#compatibilidade-com-o-app-do-motorista).
@@ -620,9 +655,21 @@ fila por réplica (`src/modules/import/services/import-queue.ts`) que roda uma
 importação por vez e deixa até três esperando (`429 IMPORT_BUSY` com
 `retry-after` além disso). O cliente acompanha por
 `GET /import/get-import/:importId/business/:businessId` até `status` sair de
-`IN_PROGRESS`. Nada da fila sobrevive ao processo: a importação que morre
-junto com a réplica fica sem batimento e o cron `close-abandoned-imports` a
-fecha com o que ela fez; as que esperam na fila mantêm o batimento. Uma
+`IN_PROGRESS`. No SIGTERM, a fila drena desde o primeiro instante
+(`ImportQueue.drain`, chamado por `src/shared/lifecycle/shutdown.ts`): recusa
+planilhas novas com `429 IMPORT_BUSY`, fecha na hora as que esperavam
+("não iniciada: envie o arquivo de novo", sem nenhuma entrega), dá até 15 s
+à que está rodando (em produção) e depois pede que ela pare entre duas
+linhas, com o relatório até ali; se ela não parar em 5 s, a fila a fecha
+contando as entregas como a varredura conta, e espera no máximo 2 s por essas
+gravações (o que não couber fica para a varredura). Quando é certo que nenhuma
+entrega foi criada (ainda lia o arquivo, ou parou sem criar nenhuma), o
+relatório manda enviar o arquivo de novo em vez de estornar. Um estorno na
+espera tem o lease liberado e retoma no próximo pedido. Tudo termina antes dos
+workers, em até 22 s contados do SIGTERM. Uma
+réplica que morre sem SIGTERM (OOM, SIGKILL, perda do nó) deixa a importação
+sem batimento, e o cron `close-abandoned-imports` a fecha com o que ela fez;
+as que esperam na fila mantêm o batimento. Uma
 planilha de 20 mil linhas levava mais que os 100 s da borda, e o operador via
 erro enquanto as entregas continuavam sendo criadas. A listagem
 (`list-imports`) traz só os contadores; o relatório linha a linha vem do
@@ -656,7 +703,8 @@ de deixar o navegador esperando.
 
 A leitura automática do canhoto (número da NF e data de recebimento) e do
 odômetro roda no serviço próprio `trajetto-ai` (`infra/ai-ocr`): RapidOCR
-sobre ONNX Runtime, em CPU, sem provedor externo (ADR 0010, decisão 14.1 — o
+sobre ONNX Runtime, em CPU, sem provedor externo
+([ADR 0010](./adr/0010-ia-local.md), decisão 14.1 — o
 provedor Anthropic foi removido e `AI_PROVIDER=anthropic` impede o boot).
 
 - O serviço **só transcreve**: `POST /v1/read` com a foto e o perfil, bearer
@@ -710,7 +758,8 @@ carimbo do tempo RFC 3161 (perfil AD-RT)**: exige uma ACT credenciada na
 ICP-Brasil (serviço pago); até lá a hora da assinatura é a declarada pelo
 servidor, que é o que o AD-RB é. O título do PDF segue o tipo do registro:
 `SERVICE_ORDER` sai como "Comprovante de Ordem de Serviço". O link público
-`/verificar/<token>` da web confere o documento (ADR 0009): o token é uma
+`/verificar/<token>` da web confere o documento
+([ADR 0009](./adr/0009-comprovante-publico-por-token.md)): o token é uma
 capacidade sem login e expira em `PROOF_VERIFICATION_TTL_DAYS` (1825 dias).
 Mapa estático (`PROOF_MAP_TILE_URL`) e geocodificação reversa
 (`REVERSE_GEOCODER_URL`) são opcionais; em produção os servidores públicos do
@@ -792,6 +841,13 @@ IPVS esquecendo um fluxo ocioso) já é coberto por
 (~100 s) só na API exigiria um sysctl por contêiner, que a Application do
 Dokploy não expõe; no host inteiro (`sysctl -w net.ipv4.tcp_retries2=8` e
 `/etc/sysctl.d/`) vale para tudo, inclusive o Postgres — decisão a medir antes.
+
+**Versão do Prisma**: a API está no Prisma 6.1. A primeira tentativa do
+7.10.1 não passou nos gates (um orçamento de statements estourado e p95 pior
+além do ruído); a segunda, com a sessão e as leituras quentes reescritas,
+passou, e o 7.10.1 entra numa publicação separada. O 8 ainda não saiu, e o 6
+recebe patches de segurança até 19/11/2026. Medições:
+[ADR 0011](./adr/0011-orm-prisma-6-7-8.md).
 
 ## Migrations: expandir e contrair
 
@@ -908,13 +964,14 @@ Regras de implementação que vieram dessa análise:
 
 ## Saúde e observabilidade
 
-| Rota                                                                                       | Para quê                                                                                                                                                                                                                                                                                                                                     |
-| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /health/liveness`                                                                     | o processo está vivo (não toca dependências; é a sonda do Swarm)                                                                                                                                                                                                                                                                             |
-| `GET /health/readiness`                                                                    | pode receber tráfego (a sonda dos monitores externos; 503 no desligamento)                                                                                                                                                                                                                                                                   |
-| `GET /health/metrics` (MASTER)                                                             | conexões do Postgres, filas e atraso do outbox, backlog de IA e de notificações, workers e crons de cada réplica, partições, provedores (latência e erro), sockets, Redis, pool, contratos antigos do app ainda em uso, estado do certificado. Quatro consultas em sequência (as filas são uma só), servidas de uma foto de 10 s por réplica |
-| `GET /health/providers` (MASTER)                                                           | prontidão de Resend, Meta, Expo, R2, trajetto-ai, certificado e heartbeat, sem enviar nada. Sondas em paralelo (2,5 s cada), foto de 30 s compartilhada pelas réplicas; `refresh=true` no máximo a cada 5 s                                                                                                                                  |
-| `GET /health/dead-letter`, `/health/dead-letter/events`, `POST /health/dead-letter/replay` | o que esgotou as tentativas, e o reenvio                                                                                                                                                                                                                                                                                                     |
+| Rota                                                                                                                                          | Para quê                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`                                                                                                                                 | banco e Redis com a latência: `healthy`; `degraded` (Redis fora, ainda 200); `unhealthy` (banco fora, 503)                                                                                                                                                                                                                                   |
+| `GET /health/liveness`                                                                                                                        | o processo está vivo (`alive`, com `version` e `commit` do build); não toca dependências; é a sonda do Swarm                                                                                                                                                                                                                                 |
+| `GET /health/readiness`                                                                                                                       | pode receber tráfego: `ready`, `not ready` (banco inacessível, 503) ou `draining` (desligando, 503); conexão própria, sem o Redis; a sonda dos monitores externos                                                                                                                                                                            |
+| `GET /health/metrics` (MASTER)                                                                                                                | conexões do Postgres, filas e atraso do outbox, backlog de IA e de notificações, workers e crons de cada réplica, partições, provedores (latência e erro), sockets, Redis, pool, contratos antigos do app ainda em uso, estado do certificado. Quatro consultas em sequência (as filas são uma só), servidas de uma foto de 10 s por réplica |
+| `GET /health/providers` (MASTER)                                                                                                              | prontidão de Resend, Meta, Expo, R2, trajetto-ai, certificado e heartbeat, sem enviar nada. Sondas em paralelo (3,5 s por tentativa; uma segunda só depois de falha passageira, dentro de 5 s por provedor), foto de 30 s (5 s com provedor `transient`) compartilhada pelas réplicas; `refresh=true` no máximo a cada 5 s                   |
+| `GET /health/dead-letter`, `/health/dead-letter/events`, `POST /health/dead-letter/replay`, `POST /health/dead-letter/events/replay` (MASTER) | o que esgotou as tentativas, e o reenvio por id (entregas e, desde 28/10/2026, eventos do outbox)                                                                                                                                                                                                                                            |
 
 A aba _Sistema_ do `/admin` na web mostra esses números. O heartbeat de
 operações (cron `ops-heartbeat`) empurra o estado para um monitor externo a
@@ -923,25 +980,30 @@ cada minuto; regras, limiares e o que fazer em cada alerta estão em
 
 ## Decisões (ADRs)
 
-Os ADRs e o documento de decisões da fase final vivem na pasta `docs/` da raiz
-do workspace (fora de qualquer repositório). O resumo do que cada um fixou,
-para quem só tem este repositório:
+Os ADRs ficam em [`docs/adr/`](./adr/README.md), um arquivo por decisão, com
+o índice. Os textos de 0002 a 0010 ficavam na pasta `docs/` da raiz do
+workspace, que não é versionada e está vazia; foram reconstruídos em
+28/10/2026 a partir deste documento, sem decisão nova. As decisões numeradas
+da fase final que não viraram ADR seguem resumidas aqui. A decisão sobre o
+Next.js 14 da web está em
+[`trajetto-ui/docs/arquitetura.md`](https://github.com/Trajetto-Organization/trajetto-ui/blob/staging/docs/arquitetura.md#nextjs-14-versão-e-avisos-de-segurança).
 
-| ADR / decisão | O que fixou                                                                                                                                                                                     |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ADR 0001      | Postgres como fila única; broker só por gatilho medido                                                                                                                                          |
-| ADR 0002      | Redis descartável: só rate limit (fail-open) e pub/sub do Socket.IO; os tickets de socket de 30 s e as fotos de 30–60 s das leituras da plataforma do MASTER vieram depois, também descartáveis |
-| ADR 0003      | outbox transacional: o evento nasce na transação do dado                                                                                                                                        |
-| ADR 0004      | workers no mesmo processo da API, separáveis por flag com a mesma imagem                                                                                                                        |
-| ADR 0005      | política de retentativa, backoff e dead letter                                                                                                                                                  |
-| ADR 0006      | idempotência de efeitos externos; na dúvida, guardar o objeto                                                                                                                                   |
-| ADR 0007      | tempo real distribuído at-most-once; a verdade está no banco                                                                                                                                    |
-| ADR 0008      | escala horizontal com réplicas idênticas                                                                                                                                                        |
-| ADR 0009      | comprovante público por token com prazo                                                                                                                                                         |
-| ADR 0010      | IA local (OCR em CPU, serviço `trajetto-ai`); o provedor externo saiu                                                                                                                           |
-| Decisão 8.1   | unicidade por empresa (tabela acima)                                                                                                                                                            |
-| Decisão 12.2  | uma imagem por serviço, promovida por digest de staging para produção; staging não fala com cliente real                                                                                        |
-| Decisão 13.1  | cobertura medida honestamente, com piso no CI                                                                                                                                                   |
-| Decisão 13.5  | teste de mutação nas regras críticas                                                                                                                                                            |
-| Decisão 14.1  | leitura de fotos sem provedor externo                                                                                                                                                           |
-| Decisão 14.8  | comprovante assinado com o A1 ICP-Brasil                                                                                                                                                        |
+| ADR / decisão                                              | O que fixou                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [ADR 0001](./adr/0001-filas-e-mensageria.md)               | Postgres como fila única; broker só por gatilho medido                                                                                                                                                                                       |
+| [ADR 0002](./adr/0002-redis-descartavel.md)                | Redis descartável: só rate limit (fail-open) e pub/sub do Socket.IO; os tickets de socket de 30 s, o intervalo de 60 s do "esqueci minha senha" e as fotos de 5–60 s das leituras da plataforma do MASTER vieram depois, também descartáveis |
+| [ADR 0003](./adr/0003-outbox-transacional.md)              | outbox transacional: o evento nasce na transação do dado                                                                                                                                                                                     |
+| [ADR 0004](./adr/0004-workers-no-mesmo-processo.md)        | workers no mesmo processo da API, separáveis por flag com a mesma imagem                                                                                                                                                                     |
+| [ADR 0005](./adr/0005-retentativa-backoff-dead-letter.md)  | política de retentativa, backoff e dead letter                                                                                                                                                                                               |
+| [ADR 0006](./adr/0006-idempotencia-de-efeitos-externos.md) | idempotência de efeitos externos; na dúvida, guardar o objeto                                                                                                                                                                                |
+| [ADR 0007](./adr/0007-tempo-real-at-most-once.md)          | tempo real distribuído at-most-once; a verdade está no banco                                                                                                                                                                                 |
+| [ADR 0008](./adr/0008-escala-horizontal.md)                | escala horizontal com réplicas idênticas                                                                                                                                                                                                     |
+| [ADR 0009](./adr/0009-comprovante-publico-por-token.md)    | comprovante público por token com prazo                                                                                                                                                                                                      |
+| [ADR 0010](./adr/0010-ia-local.md)                         | IA local (OCR em CPU, serviço `trajetto-ai`); o provedor externo saiu                                                                                                                                                                        |
+| [ADR 0011](./adr/0011-orm-prisma-6-7-8.md)                 | ORM: 6.1 por enquanto; o 7.10.1 deu no-go na 1ª tentativa e go na 2ª (publicação separada); o 8 ainda não saiu; o 6 sai do suporte em 19/11/2026                                                                                             |
+| Decisão 8.1                                                | unicidade por empresa (tabela acima)                                                                                                                                                                                                         |
+| Decisão 12.2                                               | uma imagem por serviço, promovida por digest de staging para produção; staging não fala com cliente real                                                                                                                                     |
+| Decisão 13.1                                               | cobertura medida honestamente, com piso no CI                                                                                                                                                                                                |
+| Decisão 13.5                                               | teste de mutação nas regras críticas                                                                                                                                                                                                         |
+| Decisão 14.1                                               | leitura de fotos sem provedor externo                                                                                                                                                                                                        |
+| Decisão 14.8                                               | comprovante assinado com o A1 ICP-Brasil                                                                                                                                                                                                     |

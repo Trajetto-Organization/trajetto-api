@@ -17,6 +17,8 @@ import {
   setModuleEnabled,
   type ModuleImpact,
 } from "@/shared/entitlements/entitlement-service";
+import { occupiesFleetSlot } from "@/shared/entitlements/entitlement-rules";
+import { VEHICLE_STATUSES } from "@/shared/vehicle/vehicle-rules";
 
 import { sendEntitlementsChangedEvent } from "@/websocket";
 import { OutboxService } from "@/shared/notifications/outbox-service";
@@ -62,20 +64,28 @@ class GetBusinessEntitlementsUseCase {
       throw new BusinessNotFoundError();
     }
 
-    // vehicle_count = active fleet (slots in use); INACTIVE vehicles keep
-    // their history but free their contracted slot.
-    const [modules, activeCount, inactiveCount] = await Promise.all([
+    // One grouped count of the company's fleet instead of two counts side
+    // by side: two reads in parallel at most (the screens' connection
+    // budget), and the breakdown comes from the same rows as the total.
+    const [modules, statusCounts] = await Promise.all([
       getBusinessEntitlements(businessId),
-      this.vehicle.countActiveVehiclesByBusinessId(businessId),
-      this.vehicle.countInactiveVehiclesByBusinessId(businessId),
+      this.vehicle.countVehiclesByStatusForBusiness(businessId),
     ]);
+
+    // vehicle_count = slots in use: every status that occupies one.
+    // INACTIVE vehicles keep their history but free their contracted slot.
+    const occupyingCount = VEHICLE_STATUSES.filter(occupiesFleetSlot).reduce(
+      (sum, status) => sum + statusCounts[status],
+      0,
+    );
 
     return {
       modules,
       vehicle_limit: findBusiness.vehicle_limit ?? 0,
-      vehicle_count: activeCount,
-      vehicle_inactive_count: inactiveCount,
+      vehicle_count: occupyingCount,
+      vehicle_inactive_count: statusCounts.INACTIVE,
       vehicle_limit_enabled: (findBusiness.vehicle_limit ?? 0) > 0,
+      vehicle_status_counts: statusCounts,
     };
   }
 }

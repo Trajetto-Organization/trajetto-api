@@ -28,7 +28,10 @@ import {
   businessResponses,
   businessSchemas,
 } from "./documentation/business-documentation";
-import { errorResponse } from "./documentation/common-responses";
+import {
+  authBusyResponse,
+  errorResponse,
+} from "./documentation/common-responses";
 import {
   ndjsonCursor,
   ndjsonList,
@@ -251,12 +254,15 @@ async function businessRoutes(app: FastifyInstance) {
         summary:
           "Consulta o plano da empresa: módulos contratados e uso da frota",
         description:
-          "Módulos contratados (FLEET, DELIVERIES), o limite de veículos contratado e quantos veículos estão cadastrados. O admin da empresa lê a própria empresa; o MASTER lê qualquer uma.",
+          "Módulos contratados (FLEET, DELIVERIES), o limite de veículos contratado, quantos veículos ocupam vaga do plano (todos menos os inativos) e a frota por situação em `vehicle_status_counts`. O admin da empresa lê a própria empresa; o MASTER lê qualquer uma. Outros papéis recebem 403 AUTH_ROLE_FORBIDDEN, e o id de outra empresa, 403 TENANT_ACCESS_DENIED. Empresa inexistente: 404 BUSINESS_NOT_FOUND.",
         params: businessSchemas.updateDeleteBusiness,
         response: {
           200: businessResponses.entitlementsData,
           400: businessResponses.businessParamErrors,
+          401: errorResponse,
+          403: errorResponse,
           404: businessResponses.businessNotFoundCodedPath,
+          429: errorResponse,
           500: businessResponses.internalServerError,
         },
       },
@@ -329,6 +335,7 @@ async function businessRoutes(app: FastifyInstance) {
           404: businessResponses.businessNotFound,
           409: businessResponses.businessHasChildrenConflict,
           500: businessResponses.internalServerError,
+          503: authBusyResponse,
         },
       },
     },
@@ -354,6 +361,7 @@ async function businessRoutes(app: FastifyInstance) {
           404: businessResponses.businessNotFound,
           409: businessResponses.businessDeletionConflict,
           500: businessResponses.internalServerError,
+          503: authBusyResponse,
         },
       },
     },

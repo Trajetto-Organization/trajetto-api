@@ -1067,3 +1067,92 @@ describe("GET /vehicle-checklist/list-vehicle-checklist", () => {
     expect(status).toBe(400);
   });
 });
+
+describe("search by the id the tables show (spec §5)", () => {
+  // The web shows each record's id compact (its last twelve characters) and
+  // copies it whole from the row menu. These three lists matched only an
+  // exact whole UUID, case-sensitively: the compact id found nothing, nor did
+  // an upper-case paste.
+  const tail = (id: string) => id.slice(-12);
+
+  it("finds a vehicle by its tail and by its whole id in any case", async () => {
+    const target = vehicleIds[0];
+
+    const byTail = await list(`search=${tail(target)}`);
+
+    expect(byTail.status).toBe(200);
+    expect(byTail.rows.map((row) => row.id)).toEqual([target]);
+    expect(byTail.meta.total).toBe(1);
+
+    const byId = await list(`search=${target.toUpperCase()}`);
+
+    expect(byId.rows.map((row) => row.id)).toEqual([target]);
+  });
+
+  it("never finds another company's vehicle by its id", async () => {
+    expect((await list(`search=${tail(FOREIGN_VEHICLE)}`)).rows).toEqual([]);
+    expect((await list(`search=${FOREIGN_VEHICLE}`)).rows).toEqual([]);
+
+    // Its own company finds it, by the same tail.
+    const theirs = await list(
+      `businessId=${OTHER}&search=${tail(FOREIGN_VEHICLE)}`,
+      tokens.master,
+    );
+
+    expect(theirs.rows.map((row) => row.id)).toEqual([FOREIGN_VEHICLE]);
+  });
+
+  async function types(search: string) {
+    const response = await app.inject({
+      method: "GET",
+      url: `/vehicle-type/list-vehicle-type?page=1&pageSize=10&search=${search}`,
+      headers: { authorization: `Bearer ${tokens.admin}` },
+    });
+
+    const [, ...rows] = response.body
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+    return rows.map((row: { id: string }) => row.id);
+  }
+
+  it("finds a vehicle type by its tail, never another company's", async () => {
+    expect(await types(tail(TRUCK_TYPE))).toEqual([TRUCK_TYPE]);
+    expect(await types(TRUCK_TYPE.toUpperCase())).toEqual([TRUCK_TYPE]);
+    expect(await types(tail(FOREIGN_TYPE))).toEqual([]);
+  });
+
+  it("finds a checklist by its tail and by its whole id", async () => {
+    const checklist = await prisma.vehicleChecklist.findFirstOrThrow({
+      where: { businessId: CARRIER },
+      select: { id: true },
+    });
+
+    const search = async (term: string) => {
+      const response = await app.inject({
+        method: "GET",
+        url: `/vehicle-checklist/list-vehicle-checklist?page=1&pageSize=10&search=${term}`,
+        headers: { authorization: `Bearer ${tokens.admin}` },
+      });
+
+      const [first, ...rows] = response.body
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+
+      return {
+        total: first.meta.total as number,
+        ids: rows.map((row: { id: string }) => row.id),
+      };
+    };
+
+    expect(await search(tail(checklist.id))).toEqual({
+      total: 1,
+      ids: [checklist.id],
+    });
+    expect((await search(checklist.id.toUpperCase())).ids).toEqual([
+      checklist.id,
+    ]);
+  });
+});

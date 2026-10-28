@@ -1,26 +1,71 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 # ================================
-# Stage: Base
+# Stage: Node
 # ================================
-# Node 22 LTS on Alpine; version pinned for reproducible builds.
+# The official image: it installs and builds the app, and lends the runtime
+# its node binary. Node 22 LTS on Alpine; version pinned for reproducible
+# builds.
 #
 # Alpine uses musl instead of glibc, which means the `binaryTargets` in
 # prisma/schema.prisma must include `linux-musl-openssl-3.0.x` — the Debian
 # engine does NOT run here. Revert that along with the base image if switching.
 #
 # Pinned by digest too (INFRA-16): a tag can be re-pushed, a digest cannot.
-# Dependabot (docker ecosystem) moves the tag and the digest together.
-FROM node:22.21.1-alpine@sha256:0340fa682d72068edf603c305bfbc10e23219fb0e40df58d9ea4d6f33a9798bf AS base
+# Dependabot (docker ecosystem) moves the tag and the digest together. The
+# tag names its Alpine minor: the runtime base below must be the same one,
+# because this binary is built against that minor's musl and libstdc++
+# (tests/unitaires/lifecycle/image-layers.test.ts holds the two together).
+FROM node:22.21.1-alpine3.23@sha256:0340fa682d72068edf603c305bfbc10e23219fb0e40df58d9ea4d6f33a9798bf AS node
 
-RUN apk add --no-cache \
-    openssl \
-    procps \
-    dumb-init \
-    ca-certificates \
-    # Prisma loads the engine dynamically and expects glibc symbols
-    # to be available via the compatibility layer.
-    libc6-compat
+# ================================
+# Stage: The node binary, as a reproducible tree
+# ================================
+# Copied straight to /usr/local/bin, the layer gets /usr, /usr/local and
+# /usr/local/bin stamped with the build's time: every uncached build (a new
+# runner, an evicted GitHub cache) made a new ~46 MB blob of the same binary,
+# and the server pulled it again (measured 28/10/2026: three builds, three
+# digests). Here the directories take the binary's own mtime, so the layer
+# is a function of the Node image digest alone — the same blob in every
+# build, and in every image that copies it this way.
+FROM node AS node-binary
+
+RUN mkdir -p /out/usr/local/bin \
+    && cp -p /usr/local/bin/node /out/usr/local/bin/node \
+    && touch -h -r /usr/local/bin/node /out/usr/local/bin /out/usr/local /out/usr
+
+# ================================
+# Stage: Runtime base (Alpine + the node binary, nothing else)
+# ================================
+# The container runs ./docker-entrypoint.sh and node, and the release
+# migrations run the same script (`migrate`): no package manager. The runner
+# used to start from the Node image and `rm -rf` its npm, corepack and yarn,
+# which only hid them (the image scan flagged npm's bundled `tar`,
+# CVE-2026-59873, 27/10/2026): layers are additive, so every pull still
+# carried them, with the C headers. Starting from Alpine and copying the one
+# binary leaves them out for real (measured 28/10/2026, same sources, with
+# the prune below: 417 → 285 MB unpacked, 115 → 88 MB compressed).
+FROM alpine:3.23.7@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63 AS base
+
+# First, and `--link`: a layer of its own that does not depend on the
+# Alpine one below, so an Alpine patch bump leaves this layer's digest as it
+# was and the server does not pull it again.
+COPY --link --from=node-binary /out/ /
+
+# What the binaries here link against (ldd): node and bcrypt's musl prebuild
+# need libstdc++ (libgcc comes with it); the Prisma engines need libssl3 and
+# libcrypto3, and Prisma picks the engine by finding libssl.so.3 in /usr/lib,
+# so no `openssl` binary is needed. Node bundles its own OpenSSL, CA store
+# and full ICU: pt-BR dates and America/Sao_Paulo need no tzdata. The
+# engines' TLS to Postgres reads the system CA store (ca-certificates).
+# dumb-init is the ENTRYPOINT; busybox wget, the HEALTHCHECK, is Alpine's
+# own. Nothing is linked against glibc (no libc6-compat) and nothing calls
+# procps.
+#
+# The OpenSSL upgrade takes Alpine's fixes at build time without waiting for
+# a new base digest (the scan once flagged libcrypto3 3.5.4 with 3.5.6 out).
+RUN apk upgrade --no-cache libcrypto3 libssl3 \
+    && apk add --no-cache ca-certificates dumb-init libssl3 libstdc++
 
 RUN addgroup --gid 1001 --system nodejs \
     && adduser --uid 1001 --system --ingroup nodejs --shell /bin/sh nodejs
@@ -28,7 +73,7 @@ RUN addgroup --gid 1001 --system nodejs \
 # ================================
 # Stage: Dependencies
 # ================================
-FROM base AS deps
+FROM node AS deps
 
 WORKDIR /app
 
@@ -36,7 +81,7 @@ COPY package.json yarn.lock* ./
 COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
 
 # Dedicated cache id plus `sharing=locked`: this stage and `prod-deps` both
-# depend only on `base`, so BuildKit runs them in parallel. With the default
+# depend only on `node`, so BuildKit runs them in parallel. With the default
 # shared cache mount, two concurrent `yarn install` runs write to the same
 # directory and corrupt each other's entries, failing with ENOENT on a
 # `.yarn-tarball.tgz`.
@@ -46,7 +91,7 @@ RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-dev,sharing=l
 # ================================
 # Stage: Builder
 # ================================
-FROM base AS builder
+FROM node AS builder
 
 WORKDIR /app
 
@@ -59,6 +104,11 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY prisma/schema.prisma ./prisma/schema.prisma
 RUN yarn prisma generate
+
+# The generated typings (index.d.ts alone is ~7 MB) serve the editor and
+# `tsc`, which run outside this build: tsup does not type-check (no `dts` in
+# tsup.config.ts), and the runner copies this directory as it is.
+RUN find node_modules/.prisma -name '*.d.ts' -delete
 
 COPY . .
 
@@ -73,7 +123,7 @@ RUN yarn build
 # previously installed packages—meaning `devDependencies` would end up in
 # the final image (typescript, vitest, tsup, semantic-release, and @octokit
 # total over 100 MB).
-FROM base AS prod-deps
+FROM node AS prod-deps
 
 WORKDIR /app
 
@@ -84,6 +134,28 @@ COPY prisma/vitest-environment-prisma ./prisma/vitest-environment-prisma
 RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,id=yarn-prod,sharing=locked \
     yarn install --frozen-lockfile --production=true
 
+# `yarn install` brings whole packages; what nothing loads at run time goes
+# before the runner copies them (here, in a stage that is not shipped, a RUN
+# of its own reclaims it — only this stage's result is copied):
+# - source maps, typings and READMEs (Node reads a dependency's .map only
+#   with --enable-source-maps; the API's own build has `sourcemap: false`);
+# - @types (typings only, pulled in as dependencies of engine.io and
+#   @fast-csv) and exceljs/dist, the package's `browser` bundle — its `main`
+#   is excel.js → lib/;
+# - the second copy of the Prisma query engine. @prisma/engines' postinstall
+#   puts one here for the CLI, which only checks that it exists (otherwise
+#   `prisma migrate deploy` downloads it from binaries.prisma.sh, or fails
+#   with no network); the client loads its own, in node_modules/.prisma. The
+#   runner points the CLI at that one (PRISMA_QUERY_ENGINE_LIBRARY). `rm`
+#   without -f: if a Prisma bump renames the file, the build stops here
+#   instead of shipping both copies under a variable that names neither.
+# Measured 28/10/2026: 5,229 files and ~73 MB fewer, nothing else changed;
+# every dependency still loads, the CLI migrates offline, ExcelJS, PDFKit
+# and bcrypt work (and the smoke test in deploy.yml runs the image).
+RUN find node_modules -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -iname '*.md' -o -iname '*.markdown' \) -delete \
+    && rm -rf node_modules/@types node_modules/exceljs/dist \
+    && rm node_modules/@prisma/engines/libquery_engine-linux-musl-openssl-3.0.x.so.node
+
 # ================================
 # Stage: Production Runtime
 # ================================
@@ -91,7 +163,7 @@ FROM base AS runner
 
 LABEL org.opencontainers.image.source="https://github.com/Trajetto-Organization/trajetto-api"
 LABEL org.opencontainers.image.description="Trajetto API (Fastify + Prisma)"
-LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.licenses="LicenseRef-Trajetto-Proprietary"
 
 WORKDIR /app
 
@@ -105,26 +177,25 @@ ENV HOSTNAME="0.0.0.0"
 # the rest, so a login burst cannot delay DNS, gzip or file reads by seconds.
 ENV UV_THREADPOOL_SIZE=8
 
+# The one musl query engine, the client's: the Prisma CLI (`migrate deploy`
+# in docker-entrypoint.sh, on boot and in the release step; `migrate
+# resolve` by hand) takes it from here instead of the copy prod-deps
+# removed. The file name follows the musl entry of `binaryTargets` in
+# prisma/schema.prisma (a test holds the two together).
+ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/libquery_engine-linux-musl-openssl-3.0.x.so.node
+
+# Most stable first: a layer that changes takes every COPY after it along,
+# and each deploy re-sends what changed over the VPS's flaky route to GHCR.
+# The dependencies change with yarn.lock, the generated client with the
+# schema, the rest rarely; build/ changes on every commit, so it goes last
+# (measured: a source-only commit re-ships that one layer, ~1 MB compressed;
+# with build/ third, seven layers after it came along).
 COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules
 
-# The Prisma client is generated (`prisma generate`) and resides in node_modules/.prisma.
-# The clean installation above does not produce it, so we bring the artifact from the builder.
-#
-# The musl query engine (~16 MB) is in the image twice, and both copies are
-# used: this one by @prisma/client at run time, and the one @prisma/engines'
-# postinstall put in node_modules/@prisma/engines by the Prisma CLI — `prisma
-# migrate deploy` (docker-entrypoint.sh, also the release step) checks that
-# the query and schema engines exist there and DOWNLOADS what is missing.
-# Removing that copy would turn every migration into a fetch from
-# binaries.prisma.sh, or a failure with no network. node_modules/prisma has
-# no engine here: only `prisma generate` writes one there, and it runs in
-# the builder, whose node_modules this stage does not copy.
+# The Prisma client is generated (`prisma generate`) and resides in
+# node_modules/.prisma. The clean installation above does not produce it, so
+# we bring the artifact from the builder.
 COPY --from=builder --chown=nodejs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
-
-COPY --from=builder --chown=nodejs:nodejs /app/build ./build
-COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json
-COPY --from=builder --chown=nodejs:nodejs /app/prisma ./prisma
-COPY --from=builder --chown=nodejs:nodejs /app/build/src/modules ./src/modules
 
 # Excel file with traffic violation codes — read by build/import-violation-codes.js
 # (docker-entrypoint.sh, on boot or in the `migrate` release step) from the
@@ -138,14 +209,10 @@ COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-x
 COPY --from=builder --chown=nodejs:nodejs /app/infra/scripts/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN sed -i "s/\r$//" ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 
-# No package manager at run time: the container starts with
-# ./docker-entrypoint.sh and node, and the release migrations run the same
-# script (`migrate`). The Node image ships npm, corepack and yarn, and the
-# image scan flagged npm's bundled `tar` (CVE-2026-59873, 27/10/2026); they
-# are code nothing here needs, so they leave the image.
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
-    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
-    /opt/yarn-v* /usr/local/bin/yarn /usr/local/bin/yarnpkg
+COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json
+COPY --from=builder --chown=nodejs:nodejs /app/prisma ./prisma
+COPY --from=builder --chown=nodejs:nodejs /app/build/src/modules ./src/modules
+COPY --from=builder --chown=nodejs:nodejs /app/build ./build
 
 # The commit this image was built from (deploy.yml passes GIT_SHA), which
 # GET /health/liveness answers as `version`/`commit` (src/shared/build-info.ts)

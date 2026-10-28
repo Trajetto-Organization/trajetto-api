@@ -22,6 +22,11 @@ import {
 } from "./doc-only-responses";
 import { responseExamplesFor } from "./response-examples";
 import { normalizeTagName } from "./api-tags";
+import {
+  GENERIC_CODE_DESCRIPTION,
+  codeList,
+  codesOf,
+} from "./common-responses";
 
 /**
  * The OpenAPI document, completed from what the routes actually run.
@@ -135,7 +140,7 @@ function errorBody(
     properties: {
       code: {
         type: "string",
-        description: `Um destes: ${codes.join(", ")}.`,
+        description: codeList(codes),
         example: codes[0],
       },
       message: {
@@ -188,6 +193,36 @@ function upgradeRequiredBody(): JsonSchema {
 }
 
 /**
+ * One `code` description from the route's and the hook's.
+ *
+ * Two closed lists become one ("Um destes: RATE_LIMITED, EXPORT_BUSY.", not
+ * the two sentences one after the other). errorResponse's placeholder names
+ * no code: on a status the route declares without a word of its own, the
+ * hook's list is the whole story and replaces it. Where the route describes
+ * the status, its prose names codes the list does not, so the placeholder
+ * stays in front of the list, as any other prose does.
+ */
+function mergedCodes(
+  own: string | undefined,
+  hook: string | undefined,
+  routeDescribesStatus: boolean,
+): string | undefined {
+  const route =
+    own === GENERIC_CODE_DESCRIPTION && !routeDescribesStatus ? undefined : own;
+
+  if (!route || !hook || route === hook) return route ?? hook ?? own;
+
+  const routeCodes = codesOf(route);
+  const hookCodes = codesOf(hook);
+
+  if (routeCodes && hookCodes) {
+    return codeList([...new Set([...routeCodes, ...hookCodes])]);
+  }
+
+  return `${route} ${hook}`;
+}
+
+/**
  * Adds a response the route does not document, or completes the description
  * of one it does. The route's own schema always wins: it is what the
  * serializer validates.
@@ -209,13 +244,12 @@ function mergeResponse(
 
   // The codes the hooks produce join the ones the route lists, so the
   // rebuilt schema (canonicalizeErrorResponses) names both.
-  const ownCodes = codeDescriptionOf(existing);
-  const hookCodes = codeDescriptionOf(generated);
   const properties = existing.properties as JsonSchema | undefined;
-  const codes =
-    ownCodes && hookCodes && ownCodes !== hookCodes
-      ? `${ownCodes} ${hookCodes}`
-      : (ownCodes ?? hookCodes);
+  const codes = mergedCodes(
+    codeDescriptionOf(existing),
+    codeDescriptionOf(generated),
+    own !== "",
+  );
 
   responses[status] = {
     ...existing,
@@ -462,9 +496,7 @@ function codeDescriptionOf(response: JsonSchema): string | undefined {
 
   if (typeof code.description === "string") return code.description;
 
-  return Array.isArray(code.enum)
-    ? `Um destes: ${code.enum.join(", ")}.`
-    : undefined;
+  return Array.isArray(code.enum) ? codeList(code.enum as string[]) : undefined;
 }
 
 /** Detail fields a route's refusal carries beyond the handler's; all optional. */

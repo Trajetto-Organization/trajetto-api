@@ -106,19 +106,30 @@ const dashboardResponses = {
         pending: z
           .number()
           .describe(
-            "A vencer: próxima revisão entre hoje e hoje + 30 dias, ou nenhuma revisão registrada",
+            "A vencer: próxima revisão entre hoje e hoje + 30 dias, ou nenhuma revisão registrada (sem a data da última revisão, qualquer que seja a quilometragem)",
           ),
         recent: z
           .number()
-          .describe("Em dia: próxima revisão depois de hoje + 30 dias"),
+          .describe(
+            "Em dia: próxima revisão depois de hoje + 30 dias e quilometragem ainda não atingida",
+          ),
         overdue: z
           .number()
           .describe(
             "Atrasada: o dia da próxima revisão já passou (vencer hoje ainda não é atraso) ou a quilometragem foi atingida",
           ),
+        // Optional only for the shared MASTER snapshot (60 s in Redis): one
+        // written by the previous version has no key, and a required field
+        // would fail its serialisation during a rolling deploy.
+        unrecorded: z
+          .number()
+          .optional()
+          .describe(
+            "Já contados em `pending`: veículos sem a data da última revisão registrada. Ausente só em respostas de uma versão anterior da API.",
+          ),
       })
       .describe(
-        "Próxima revisão = dia da última revisão + intervalo em meses (fim de mês ajustado), comparado com o hoje da empresa (Business.timezone). Zero quando a empresa não contratou Frotas ou o perfil não lê veículos.",
+        "Próxima revisão = dia da última revisão + intervalo em meses (fim de mês ajustado), comparado com o hoje da empresa (Business.timezone), ou quilometragem da última revisão + intervalo em km (sem quilometragem registrada, a conta parte de zero). Conta todos os veículos cadastrados, inclusive os inativos. Zero quando a empresa não contratou Frotas ou o perfil não lê veículos.",
       ),
     deliveryOperation: z
       .object({

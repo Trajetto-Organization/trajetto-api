@@ -517,6 +517,226 @@ describe("the dead letter", () => {
   });
 });
 
+/**
+ * Outbox events in FAILED had a listing (GET /health/dead-letter/events) and
+ * no way back but SQL on production: an event that ran out of expansions
+ * during an outage longer than the retry schedule never notified anybody.
+ */
+describe("the dead letter of outbox events", () => {
+  const replayEvents = (eventIds: string[], token = masterToken) =>
+    app.inject({
+      method: "POST",
+      url: "/health/dead-letter/events/replay",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { eventIds },
+    });
+
+  it("expands a failed event again when a master replays it", async () => {
+    // The cycle under test is the one this test runs.
+    const wake = vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
+
+    const eventId = await publish();
+
+    await prisma.domainOutboxEvent.update({
+      where: { id: eventId },
+      data: { status: "FAILED", attempts: 5, lastError: "banco fora do ar" },
+    });
+
+    const response = await replayEvents([eventId]);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ requeued: 1 });
+    expect(wake).toHaveBeenCalled();
+
+    const requeued = await prisma.domainOutboxEvent.findUniqueOrThrow({
+      where: { id: eventId },
+    });
+
+    expect(requeued).toMatchObject({ status: "PENDING", attempts: 0 });
+    // When, and which master — on the row only until the next expansion.
+    expect(requeued.lastError).toContain("Reenfileirado manualmente");
+    expect(requeued.lastError).toContain(MASTER);
+
+    await pipeline.runOutboxCycle();
+
+    // Published clears it: the durable trail is the route's warn log line,
+    // as its OpenAPI description says.
+    expect(
+      await prisma.domainOutboxEvent.findUniqueOrThrow({
+        where: { id: eventId },
+      }),
+    ).toMatchObject({ status: "PUBLISHED", attempts: 1, lastError: null });
+    expect((await deliveriesOf(eventId)).length).toBeGreaterThan(0);
+  });
+
+  it("creates only the deliveries the event never created, and moves nothing twice", async () => {
+    vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
+
+    const eventId = await publish();
+    await pipeline.runOutboxCycle();
+
+    const before = (await deliveriesOf(eventId)).map((row) => row.id).sort();
+
+    expect(before.length).toBeGreaterThan(0);
+
+    // Failed after its deliveries were written (a crash before the
+    // PUBLISHED mark, then the reclaim ceiling).
+    await prisma.domainOutboxEvent.update({
+      where: { id: eventId },
+      data: { status: "FAILED", attempts: 5 },
+    });
+
+    expect((await replayEvents([eventId])).json()).toEqual({ requeued: 1 });
+
+    await pipeline.runOutboxCycle();
+
+    expect((await deliveriesOf(eventId)).map((row) => row.id).sort()).toEqual(
+      before,
+    );
+
+    // PUBLISHED now: a second click finds nothing to move.
+    expect((await replayEvents([eventId])).json()).toEqual({ requeued: 0 });
+  });
+
+  it("is refused to a company administrator, and the event stays where it was", async () => {
+    const familyId = randomUUID();
+
+    await prisma.refreshToken.create({
+      data: {
+        userId: RECIPIENT,
+        token_hash: randomUUID(),
+        jti: randomUUID(),
+        family_id: familyId,
+        expires_in: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    });
+
+    const adminToken = sign(
+      {
+        tokenType: "access",
+        role: "BUSINESS_ADMIN",
+        businessId: BUSINESS,
+        driverId: null,
+        sessionVersion: 0,
+        familyId,
+      },
+      auth.secret_token,
+      { subject: RECIPIENT, expiresIn: "1h" },
+    );
+
+    const eventId = await publish();
+
+    await prisma.domainOutboxEvent.update({
+      where: { id: eventId },
+      data: { status: "FAILED", attempts: 5 },
+    });
+
+    try {
+      const response = await replayEvents([eventId], adminToken);
+
+      expect(response.statusCode).toBe(403);
+      expect(
+        await prisma.domainOutboxEvent.findUniqueOrThrow({
+          where: { id: eventId },
+        }),
+      ).toMatchObject({ status: "FAILED", attempts: 5 });
+    } finally {
+      await prisma.refreshToken.deleteMany({ where: { userId: RECIPIENT } });
+    }
+  });
+
+  it("refuses a body without events", async () => {
+    expect((await replayEvents([])).statusCode).toBe(400);
+  });
+
+  /**
+   * Another MASTER of its own for each run. The limiter counts per route
+   * and per user in Redis, which outlives the run: under the fixed MASTER
+   * these calls would add to the cases above, and a rerun within the
+   * minute would start from a spent bucket.
+   */
+  async function withFreshMaster(
+    use: (token: string) => Promise<void>,
+  ): Promise<void> {
+    const id = randomUUID();
+    const familyId = randomUUID();
+
+    await prisma.user.create({
+      data: {
+        id,
+        name: "Outra Pessoa Master",
+        email: `master-${id}@exemplo.com.br`,
+        password: "nao-usado",
+        role: "MASTER",
+      },
+    });
+    await prisma.refreshToken.create({
+      data: {
+        userId: id,
+        token_hash: randomUUID(),
+        jti: randomUUID(),
+        family_id: familyId,
+        expires_in: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    });
+
+    try {
+      await use(
+        sign(
+          {
+            tokenType: "access",
+            role: "MASTER",
+            businessId: null,
+            driverId: null,
+            sessionVersion: 0,
+            familyId,
+          },
+          auth.secret_token,
+          { subject: id, expiresIn: "1h" },
+        ),
+      );
+    } finally {
+      await prisma.refreshToken.deleteMany({ where: { userId: id } });
+      await prisma.user.deleteMany({ where: { id } });
+    }
+  }
+
+  it("refuses more than 100 events at once, and moves none of them", async () => {
+    vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
+
+    const eventId = await publish();
+
+    await prisma.domainOutboxEvent.update({
+      where: { id: eventId },
+      data: { status: "FAILED", attempts: 5 },
+    });
+
+    const tooMany = [
+      eventId,
+      ...Array.from({ length: 100 }, () => randomUUID()),
+    ];
+
+    await withFreshMaster(async (token) => {
+      expect((await replayEvents(tooMany, token)).statusCode).toBe(400);
+      expect((await replayEvents(tooMany.slice(0, 100), token)).json()).toEqual(
+        { requeued: 1 },
+      );
+    });
+  });
+
+  it("allows a master 10 replays a minute", async () => {
+    await withFreshMaster(async (token) => {
+      // Counted before the body is read: refused bodies spend it too, and
+      // nothing is written meanwhile.
+      for (let call = 0; call < 10; call += 1) {
+        expect((await replayEvents([], token)).statusCode).toBe(400);
+      }
+
+      expect((await replayEvents([], token)).statusCode).toBe(429);
+    });
+  });
+});
+
 describe("a tower request decided while its messages wait (decision 6.3)", () => {
   // Red before: the "still waiting" check ran only when the notice fanned
   // out. Once the rows existed, an e-mail or WhatsApp still in the queue (or

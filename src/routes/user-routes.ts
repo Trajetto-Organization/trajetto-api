@@ -52,7 +52,10 @@ import {
   ndjsonList,
   offsetMetaWith,
 } from "./documentation/ndjson";
-import { errorResponse } from "./documentation/common-responses";
+import {
+  authBusyResponse,
+  errorResponse,
+} from "./documentation/common-responses";
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 
 const createUserController = new CreateUserController();
@@ -120,6 +123,7 @@ async function userRoutes(app: FastifyInstance) {
           404: userResponses.createUserNotFoundErrors,
           409: userResponses.createUserConflictErrors,
           500: userResponses.internalServerError,
+          503: authBusyResponse,
         },
       },
     },
@@ -196,9 +200,7 @@ async function userRoutes(app: FastifyInstance) {
           401: userResponses.authenticateUserUnauthorized,
           403: userResponses.authenticateUserForbiddenErrors,
           500: userResponses.internalServerError,
-          // AUTH_BUSY with Retry-After: this replica's password checks are
-          // saturated (src/shared/security/bcrypt-gate.ts).
-          503: errorResponse,
+          503: authBusyResponse,
         },
       },
     },
@@ -243,6 +245,7 @@ async function userRoutes(app: FastifyInstance) {
           400: userResponses.resetPasswordErrors,
           404: userResponses.tokenUserNotFound,
           500: userResponses.internalServerError,
+          503: authBusyResponse,
         },
       },
     },
@@ -376,6 +379,7 @@ async function userRoutes(app: FastifyInstance) {
           400: userResponses.twoFactorVerificationErrors,
           403: userResponses.twoFactorVerificationForbiddenErrors,
           500: userResponses.internalServerError,
+          503: authBusyResponse,
         },
       },
     },
@@ -511,6 +515,7 @@ async function userRoutes(app: FastifyInstance) {
           400: userResponses.updatePasswordErrors,
           404: userResponses.resourceNotFound,
           500: userResponses.internalServerError,
+          503: authBusyResponse,
         },
       },
     },
@@ -652,6 +657,7 @@ async function userRoutes(app: FastifyInstance) {
           404: userResponses.createMasterUserNotFoundErrors,
           409: userResponses.createMasterUserConflictErrors,
           500: userResponses.internalServerError,
+          503: authBusyResponse,
         },
       },
     },

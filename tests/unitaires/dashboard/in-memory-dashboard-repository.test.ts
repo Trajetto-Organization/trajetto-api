@@ -110,6 +110,7 @@ describe("the in-memory dashboard repository", () => {
       overdue: 1,
       pending: 0,
       recent: 0,
+      unrecorded: 0,
     });
 
     // The MASTER's global view (no businessId) sees all three.
@@ -117,6 +118,7 @@ describe("the in-memory dashboard repository", () => {
       overdue: 3,
       pending: 0,
       recent: 0,
+      unrecorded: 0,
     });
   });
 });
